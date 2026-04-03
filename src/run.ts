@@ -1,5 +1,11 @@
-import { AjnaSDK, FungiblePool, Signer } from '@ajna-finance/sdk';
-import { configureAjna, KeeperConfig, PoolConfig, validateTakeSettings } from './config-types';
+import { AjnaSDK, Signer } from '@ajna-finance/sdk';
+import {
+  configureAjna,
+  KeeperConfig,
+  PoolConfig,
+  validateAutoDiscoverConfig,
+  validateTakeSettings,
+} from './config-types';
 import {
   delay,
   getProviderAndSigner,
@@ -14,8 +20,37 @@ import { logger } from './logging';
 import { RewardActionTracker } from './reward-action-tracker';
 import { DexRouter } from './dex-router';
 import { handleSettlements, tryReactiveSettlement } from './settlement';
+import {
+  buildDiscoveredSettlementTargets,
+  buildDiscoveredTakeTargets,
+  cacheConfiguredPool,
+  EffectiveSettlementTarget,
+  EffectiveTakeTarget,
+  ensurePoolLoaded,
+  getManualSettlementTargets,
+  getManualTakeTargets,
+  PoolHydrationCooldowns,
+  PoolMap,
+} from './auto-discovery';
+import {
+  handleDiscoveredSettlementTarget,
+  handleDiscoveredTakeTarget,
+} from './auto-discovery-handlers';
 
-type PoolMap = Map<string, FungiblePool>;
+interface KeepPoolParams {
+  poolMap: PoolMap;
+  config: KeeperConfig;
+  signer: Signer;
+}
+
+interface DiscoveryLoopParams extends KeepPoolParams {
+  ajna: AjnaSDK;
+  hydrationCooldowns: PoolHydrationCooldowns;
+}
+
+interface KickLoopParams extends KeepPoolParams {
+  chainId?: number;
+}
 
 export async function startKeeperFromConfig(config: KeeperConfig) {
   const { provider, signer } = await getProviderAndSigner(
@@ -26,13 +61,16 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   const chainId = network.chainId;
 
   configureAjna(config.ajna);
+  validateAutoDiscoverConfig(config);
+
   const ajna = new AjnaSDK(provider);
   logger.info('...and pools:');
   const poolMap = await getPoolsFromConfig(ajna, config);
+  const hydrationCooldowns: PoolHydrationCooldowns = new Map();
 
   kickPoolsLoop({ poolMap, config, signer, chainId });
-  takePoolsLoop({ poolMap, config, signer });
-  settlementLoop({ poolMap, config, signer });
+  takePoolsLoop({ ajna, poolMap, config, signer, hydrationCooldowns });
+  settlementLoop({ ajna, poolMap, config, signer, hydrationCooldowns });
   collectBondLoop({ poolMap, config, signer });
   collectLpRewardsLoop({ poolMap, config, signer });
 }
@@ -48,39 +86,44 @@ async function getPoolsFromConfig(
     const fungiblePool = await ajna.fungiblePoolFactory.getPoolByAddress(
       pool.address
     );
-    // TODO: Should this be a per-pool multicall?
     overrideMulticall(fungiblePool, config);
-    pools.set(pool.address, fungiblePool);
+    cacheConfiguredPool(pools, pool, fungiblePool);
   }
   return pools;
 }
 
-interface KeepPoolParams {
-  poolMap: PoolMap;
-  config: KeeperConfig;
-  signer: Signer;
-  chainId?: number;
+function getPoolFromMap(poolMap: PoolMap, address: string) {
+  return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
 
-async function kickPoolsLoop({ poolMap, config, signer, chainId }: KeepPoolParams) {
-  const poolsWithKickSettings = config.pools.filter(hasKickSettings);
+async function kickPoolsLoop({ poolMap, config, signer, chainId }: KickLoopParams) {
   while (true) {
-    for (const poolConfig of poolsWithKickSettings) {
-      const pool = poolMap.get(poolConfig.address)!;
-      try {
-        await handleKicks({
-          pool,
-          poolConfig,
-          signer,
-          config,
-          chainId,
-        });
-        await delay(config.delayBetweenActions);
-      } catch (error) {
-        logger.error(`Failed to handle kicks for pool: ${pool.name}.`, error);
-      }
-    }
+    await processKickCycle({ poolMap, config, signer, chainId });
     await delay(config.delayBetweenRuns);
+  }
+}
+
+export async function processKickCycle({
+  poolMap,
+  config,
+  signer,
+  chainId,
+}: KickLoopParams): Promise<void> {
+  const poolsWithKickSettings = config.pools.filter(hasKickSettings);
+  for (const poolConfig of poolsWithKickSettings) {
+    const pool = getPoolFromMap(poolMap, poolConfig.address)!;
+    try {
+      await handleKicks({
+        pool,
+        poolConfig,
+        signer,
+        config,
+        chainId,
+      });
+      await delay(config.delayBetweenActions);
+    } catch (error) {
+      logger.error(`Failed to handle kicks for pool: ${pool.name}.`, error);
+    }
   }
 }
 
@@ -90,28 +133,63 @@ function hasKickSettings(
   return !!config.kick;
 }
 
-async function takePoolsLoop({ poolMap, config, signer }: KeepPoolParams) {
-  const poolsWithTakeSettings = config.pools.filter(hasTakeSettings);
+async function takePoolsLoop(params: DiscoveryLoopParams) {
   while (true) {
-    for (const poolConfig of poolsWithTakeSettings) {
-      const pool = poolMap.get(poolConfig.address)!;
-      try {
-        validateTakeSettings(poolConfig.take, config);
+    await processTakeCycle(params);
+    await delay(params.config.delayBetweenRuns);
+  }
+}
+
+export async function processTakeCycle({
+  ajna,
+  poolMap,
+  config,
+  signer,
+  hydrationCooldowns,
+}: DiscoveryLoopParams): Promise<void> {
+  const targets: EffectiveTakeTarget[] = [
+    ...getManualTakeTargets(config),
+    ...(await buildDiscoveredTakeTargets(config)),
+  ];
+
+  for (const target of targets) {
+    const pool =
+      target.source === 'manual'
+        ? getPoolFromMap(poolMap, target.poolAddress)
+        : await ensurePoolLoaded({
+            ajna,
+            poolMap,
+            poolAddress: target.poolAddress,
+            config,
+            hydrationCooldowns,
+          });
+
+    if (!pool) {
+      logger.warn(`Skipping take target ${target.name} because the pool is unavailable`);
+      continue;
+    }
+
+    try {
+      if (target.source === 'manual') {
+        validateTakeSettings(target.poolConfig.take, config);
         await handleTakes({
           pool,
-          poolConfig,
+          poolConfig: target.poolConfig,
           signer,
           config,
         });
-        await delay(config.delayBetweenActions);
-      } catch (error) {
-        logger.error(
-          `Failed to handle take for pool: ${pool.name}.`,
-          error
-        );
+      } else {
+        await handleDiscoveredTakeTarget({
+          pool,
+          signer,
+          target,
+          config,
+        });
       }
+      await delay(config.delayBetweenActions);
+    } catch (error) {
+      logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
     }
-    await delay(config.delayBetweenRuns);
   }
 }
 
@@ -127,17 +205,17 @@ async function collectBondLoop({ poolMap, config, signer }: KeepPoolParams) {
   );
   while (true) {
     for (const poolConfig of poolsWithCollectBondSettings) {
-      const pool = poolMap.get(poolConfig.address)!;
+      const pool = getPoolFromMap(poolMap, poolConfig.address)!;
       try {
-        await collectBondFromPool({ 
-          pool, 
-          signer, 
-          poolConfig,  // Pass full poolConfig instead of just config
+        await collectBondFromPool({
+          pool,
+          signer,
+          poolConfig,
           config: {
             dryRun: config.dryRun,
             subgraphUrl: config.subgraphUrl,
-            delayBetweenActions: config.delayBetweenActions
-          }
+            delayBetweenActions: config.delayBetweenActions,
+          },
         });
         await delay(config.delayBetweenActions);
       } catch (error) {
@@ -148,77 +226,110 @@ async function collectBondLoop({ poolMap, config, signer }: KeepPoolParams) {
   }
 }
 
-async function settlementLoop({ poolMap, config, signer }: KeepPoolParams) {
-  const poolsWithSettlementSettings = config.pools.filter(hasSettlementSettings);
-  
-  logger.info(`Settlement loop started with ${poolsWithSettlementSettings.length} pools`);
-  logger.info(`Settlement pools: ${poolsWithSettlementSettings.map(p => p.name).join(', ')}`);
-  
+async function settlementLoop(params: DiscoveryLoopParams) {
   while (true) {
     try {
       const startTime = new Date().toISOString();
       logger.debug(`Settlement loop iteration starting at ${startTime}`);
-      
-      for (const poolConfig of poolsWithSettlementSettings) {
-        const pool = poolMap.get(poolConfig.address)!;
-        try {
-          logger.debug(`Processing settlement check for pool: ${pool.name}`);
-          
-          await handleSettlements({
-            pool,
-            poolConfig: poolConfig as RequireFields<PoolConfig, 'settlement'>,
-            signer,
-            config: {
-              dryRun: config.dryRun,
-              subgraphUrl: config.subgraphUrl,
-              delayBetweenActions: config.delayBetweenActions
-            }
-          });
-          
-          logger.debug(`Settlement check completed for pool: ${pool.name}`);
-          await delay(config.delayBetweenActions);
-          
-        } catch (poolError) {
-          logger.error(`Failed to handle settlements for pool: ${pool.name}`, poolError);
-          // Continue with other pools instead of crashing the entire settlement loop
-        }
-      }
-      
-      // Calculate settlement check interval
-      const settlementCheckInterval = Math.max(
-        config.delayBetweenRuns * 5, // 5x normal delay 
-        120000 // Minimum 120 seconds between settlement checks
+      await processSettlementCycle(params);
+
+      const settlementCheckIntervalSeconds = Math.max(
+        params.config.delayBetweenRuns * 5,
+        120
       );
-      
-      const nextCheck = new Date(Date.now() + settlementCheckInterval).toISOString();
-      logger.debug(`Settlement loop completed, sleeping for ${settlementCheckInterval/1000}s until ${nextCheck}`);
-      await delay(settlementCheckInterval);
-      
+      const nextCheck = new Date(
+        Date.now() + settlementCheckIntervalSeconds * 1000
+      ).toISOString();
+      logger.debug(
+        `Settlement loop completed, sleeping for ${settlementCheckIntervalSeconds}s until ${nextCheck}`
+      );
+      await delay(settlementCheckIntervalSeconds);
     } catch (outerError) {
-      // Properly handle TypeScript 'unknown' error type
-      const errorMessage = outerError instanceof Error ? outerError.message : String(outerError);
-      const errorStack = outerError instanceof Error ? outerError.stack : undefined;
-  
-       logger.error(`Settlement loop crashed, restarting in 30 seconds: ${errorMessage}`);
-       if (errorStack) {
-         logger.error(`Stack trace:`, errorStack);
-       }
-  
-       // Wait 30 seconds before restarting the loop to prevent rapid crash loops
-       await delay(30000);
-       logger.info(`Restarting settlement loop after crash recovery delay`);
-        
+      const errorMessage =
+        outerError instanceof Error ? outerError.message : String(outerError);
+      const errorStack =
+        outerError instanceof Error ? outerError.stack : undefined;
+
+      logger.error(`Settlement loop crashed, restarting in 30 seconds: ${errorMessage}`);
+      if (errorStack) {
+        logger.error(`Stack trace:`, errorStack);
+      }
+
+      await delay(30);
+      logger.info(`Restarting settlement loop after crash recovery delay`);
     }
   }
-} 
+}
 
+export async function processSettlementCycle({
+  ajna,
+  poolMap,
+  config,
+  signer,
+  hydrationCooldowns,
+}: DiscoveryLoopParams): Promise<void> {
+  const targets: EffectiveSettlementTarget[] = [
+    ...getManualSettlementTargets(config),
+    ...(await buildDiscoveredSettlementTargets(config)),
+  ];
+
+  logger.info(`Settlement loop started with ${targets.length} pools`);
+  logger.info(`Settlement pools: ${targets.map((target) => target.name).join(', ')}`);
+
+  for (const target of targets) {
+    const pool =
+      target.source === 'manual'
+        ? getPoolFromMap(poolMap, target.poolAddress)
+        : await ensurePoolLoaded({
+            ajna,
+            poolMap,
+            poolAddress: target.poolAddress,
+            config,
+            hydrationCooldowns,
+          });
+
+    if (!pool) {
+      logger.warn(
+        `Skipping settlement target ${target.name} because the pool is unavailable`
+      );
+      continue;
+    }
+
+    try {
+      logger.debug(`Processing settlement check for pool: ${pool.name}`);
+      if (target.source === 'manual') {
+        await handleSettlements({
+          pool,
+          poolConfig: target.poolConfig,
+          signer,
+          config: {
+            dryRun: config.dryRun,
+            subgraphUrl: config.subgraphUrl,
+            delayBetweenActions: config.delayBetweenActions,
+          },
+        });
+      } else {
+        await handleDiscoveredSettlementTarget({
+          pool,
+          signer,
+          target,
+          config,
+        });
+      }
+
+      logger.debug(`Settlement check completed for pool: ${pool.name}`);
+      await delay(config.delayBetweenActions);
+    } catch (poolError) {
+      logger.error(`Failed to handle settlements for pool: ${pool.name}`, poolError);
+    }
+  }
+}
 
 function hasSettlementSettings(
   config: PoolConfig
 ): config is RequireFields<PoolConfig, 'settlement'> {
   return !!config.settlement?.enabled;
 }
-
 
 async function collectLpRewardsLoop({
   poolMap,
@@ -230,16 +341,16 @@ async function collectLpRewardsLoop({
   const dexRouter = new DexRouter(signer, {
     oneInchRouters: config?.oneInchRouters ?? {},
     connectorTokens: config?.connectorTokens ?? [],
-    tokenAddresses: config.tokenAddresses
+    tokenAddresses: config.tokenAddresses,
   });
   const exchangeTracker = new RewardActionTracker(
-  signer,
-  config,
-  dexRouter,
-);
+    signer,
+    config,
+    dexRouter
+  );
 
   for (const poolConfig of poolsWithCollectLpSettings) {
-    const pool = poolMap.get(poolConfig.address)!;
+    const pool = getPoolFromMap(poolMap, poolConfig.address)!;
     const collector = new LpCollector(
       pool,
       signer,
@@ -258,42 +369,38 @@ async function collectLpRewardsLoop({
         await collector.collectLpRewards();
         await delay(config.delayBetweenActions);
       } catch (error) {
-        const pool = poolMap.get(poolConfig.address)!;
-
-	//Properly handle TypeScript 'unknown' error type
+        const pool = getPoolFromMap(poolMap, poolConfig.address)!;
         const errorMessage = error instanceof Error ? error.message : String(error);
-        
-        // Check if this is specifically an AuctionNotCleared error
-        if (errorMessage.includes("AuctionNotCleared")) {
+
+        if (errorMessage.includes('AuctionNotCleared')) {
           logger.info(`AuctionNotCleared detected - attempting settlement for ${pool.name}`);
-    
-        try {
-          const settled = await tryReactiveSettlement({
-            pool,
-            poolConfig,
-            signer,
-            config: {
-              dryRun: config.dryRun,
-              subgraphUrl: config.subgraphUrl,
-              delayBetweenActions: config.delayBetweenActions
+
+          try {
+            const settled = await tryReactiveSettlement({
+              pool,
+              poolConfig,
+              signer,
+              config: {
+                dryRun: config.dryRun,
+                subgraphUrl: config.subgraphUrl,
+                delayBetweenActions: config.delayBetweenActions,
+              },
+            });
+
+            if (settled) {
+              logger.info(`Retrying LP collection after settlement in ${pool.name}`);
+              await collector.collectLpRewards();
+              await delay(config.delayBetweenActions);
+            } else {
+              logger.warn(`Settlement attempted but bonds still locked in ${pool.name}`);
             }
-          });
-  
-          if (settled) {
-            logger.info(`Retrying LP collection after settlement in ${pool.name}`);
-            await collector.collectLpRewards();
-            await delay(config.delayBetweenActions);
-          } else {
-            logger.warn(`Settlement attempted but bonds still locked in ${pool.name}`);
+          } catch (settlementError) {
+            logger.error(`Settlement failed for ${pool.name}:`, settlementError);
           }
-        } catch (settlementError) {
-          logger.error(`Settlement failed for ${pool.name}:`, settlementError);
+        } else {
+          logger.error(`Failed to collect LP reward from pool: ${pool.name}.`, error);
         }
-       } else {
-         // Handle all other errors normally
-         logger.error(`Failed to collect LP reward from pool: ${pool.name}.`, error);
-       }
-       }  
+      }
     }
     await exchangeTracker.handleAllTokens();
     await delay(config.delayBetweenRuns);

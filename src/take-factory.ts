@@ -17,6 +17,11 @@ import { convertWadToTokenDecimals, getDecimalsErc20 } from './erc20';
 // FIXED: Import quoteTokenScale function
 import { quoteTokenScale } from '@ajna-finance/sdk/dist/contracts/pool';
 import { DexRouter } from './dex-router';
+import {
+  ArbTakeEvaluation,
+  ExternalTakeQuoteEvaluation,
+  TakeActionConfig,
+} from './take-types';
 
 interface FactoryTakeParams {
   signer: Signer;
@@ -174,18 +179,48 @@ async function checkIfTakeableFactory(
   pool: FungiblePool,
   price: number,
   collateral: BigNumber,
-  poolConfig: RequireFields<PoolConfig, 'take'>,
-  config: Pick<FactoryTakeParams['config'], 'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides'  >,
+  poolConfig: TakeActionConfig,
+  config: Pick<
+    FactoryTakeParams['config'],
+    'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses'
+  >,
   signer: Signer
 ): Promise<boolean> {
-  
+  const evaluation = await getFactoryTakeQuoteEvaluation(
+    pool,
+    price,
+    collateral,
+    poolConfig,
+    config,
+    signer
+  );
+  return evaluation.isTakeable;
+}
+
+export async function getFactoryTakeQuoteEvaluation(
+  pool: FungiblePool,
+  price: number,
+  collateral: BigNumber,
+  poolConfig: TakeActionConfig,
+  config: Pick<
+    FactoryTakeParams['config'],
+    'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses'
+  >,
+  signer: Signer
+): Promise<ExternalTakeQuoteEvaluation> {
   if (!poolConfig.take.marketPriceFactor) {
-    return false;
+    return {
+      isTakeable: false,
+      reason: 'marketPriceFactor is not configured',
+    };
   }
 
   if (!collateral.gt(0)) {
     logger.debug(`Factory: Invalid collateral amount: ${collateral.toString()} for pool ${pool.name}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: 'collateral must be greater than zero',
+    };
   }
 
   try {
@@ -199,14 +234,17 @@ async function checkIfTakeableFactory(
       return await checkCurveQuote(pool, price, collateral, poolConfig, config, signer);
     }
 
-    // Future: Add other DEX sources here
-
     logger.debug(`Factory: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`);
-    return false;
-
+    return {
+      isTakeable: false,
+      reason: `unsupported liquidity source ${poolConfig.take.liquiditySource}`,
+    };
   } catch (error) {
     logger.error(`Factory: Failed to check takeability for pool ${pool.name}: ${error}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -218,14 +256,17 @@ async function checkUniswapV3Quote(
   pool: FungiblePool,
   auctionPrice: number,
   collateral: BigNumber,
-  poolConfig: RequireFields<PoolConfig, 'take'>,
+  poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'universalRouterOverrides'>,
   signer: Signer
-): Promise<boolean> {
+): Promise<ExternalTakeQuoteEvaluation> {
   
   if (!config.universalRouterOverrides) {
     logger.debug(`Factory: No universalRouterOverrides configured for pool ${pool.name}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: 'missing universalRouterOverrides',
+    };
   }
 
   const routerConfig = config.universalRouterOverrides;
@@ -233,7 +274,10 @@ async function checkUniswapV3Quote(
   // Validate required configuration
   if (!routerConfig.universalRouterAddress || !routerConfig.poolFactoryAddress || !routerConfig.wethAddress) {
     logger.debug(`Factory: Missing required router configuration for pool ${pool.name}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: 'missing required Uniswap router configuration',
+    };
   }
 
   try {
@@ -249,7 +293,10 @@ async function checkUniswapV3Quote(
     // Check if the quote provider found a QuoterV2 contract
     if (!quoteProvider.isAvailable()) {
       logger.debug(`Factory: UniswapV3QuoteProvider not available for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'Uniswap V3 quote provider unavailable',
+      };
     }
 
     // Log the QuoterV2 address being used
@@ -274,7 +321,10 @@ async function checkUniswapV3Quote(
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
       logger.debug(`Factory: Failed to get official Uniswap V3 quote for pool ${pool.name}: ${quoteResult.error}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: quoteResult.error ?? 'Uniswap V3 quote failed',
+      };
     }
 
     // PHASE 3: Calculate actual market price from the OFFICIAL quote
@@ -283,7 +333,10 @@ async function checkUniswapV3Quote(
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
       logger.debug(`Factory: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'invalid Uniswap V3 quote amounts',
+      };
     }
 
     // Market price = quoteAmount / collateralAmount (quote tokens per collateral token)
@@ -292,7 +345,10 @@ async function checkUniswapV3Quote(
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
       logger.debug(`Factory: No marketPriceFactor configured for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'marketPriceFactor is not configured',
+      };
     }
 
     // Calculate the maximum price we're willing to pay (including slippage/profit margin)
@@ -302,11 +358,21 @@ async function checkUniswapV3Quote(
     
     logger.debug(`Price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${officialMarketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`);
 
-    return profitable;
+    return {
+      isTakeable: profitable,
+      marketPrice: officialMarketPrice,
+      takeablePrice,
+      quoteAmount,
+      collateralAmount,
+      reason: profitable ? undefined : 'auction price above Uniswap V3 threshold',
+    };
 
   } catch (error) {
     logger.error(`Factory: Error getting official Uniswap V3 quote for pool ${pool.name}: ${error}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -318,14 +384,17 @@ async function checkSushiSwapQuote(
   pool: FungiblePool,
   auctionPrice: number,
   collateral: BigNumber,
-  poolConfig: RequireFields<PoolConfig, 'take'>,
+  poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'sushiswapRouterOverrides'>,
   signer: Signer
-): Promise<boolean> {
+): Promise<ExternalTakeQuoteEvaluation> {
   
   if (!config.sushiswapRouterOverrides) {
     logger.debug(`Factory: No sushiswapRouterOverrides configured for pool ${pool.name}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: 'missing sushiswapRouterOverrides',
+    };
   }
 
   const sushiConfig = config.sushiswapRouterOverrides;
@@ -333,7 +402,10 @@ async function checkSushiSwapQuote(
   // Validate required configuration
   if (!sushiConfig.swapRouterAddress || !sushiConfig.factoryAddress || !sushiConfig.wethAddress) {
     logger.debug(`Factory: Missing required SushiSwap configuration for pool ${pool.name}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: 'missing required SushiSwap configuration',
+    };
   }
 
   try {
@@ -350,7 +422,10 @@ async function checkSushiSwapQuote(
     const initialized = await quoteProvider.initialize();
     if (!initialized) {
       logger.debug(`Factory: SushiSwap quote provider not available for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'SushiSwap quote provider unavailable',
+      };
     }
 
     // Get token decimals for proper formatting
@@ -373,7 +448,10 @@ async function checkSushiSwapQuote(
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
       logger.debug(`Factory: Failed to get SushiSwap quote for pool ${pool.name}: ${quoteResult.error}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: quoteResult.error ?? 'SushiSwap quote failed',
+      };
     }
 
     // Calculate actual market price from the official quote
@@ -382,7 +460,10 @@ async function checkSushiSwapQuote(
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
       logger.debug(`Factory: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'invalid SushiSwap quote amounts',
+      };
     }
 
     // Market price = quoteAmount / collateralAmount (quote tokens per collateral token)
@@ -391,7 +472,10 @@ async function checkSushiSwapQuote(
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
       logger.debug(`Factory: No marketPriceFactor configured for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'marketPriceFactor is not configured',
+      };
     }
 
     // Calculate the maximum price we're willing to pay (including slippage/profit margin)
@@ -401,11 +485,21 @@ async function checkSushiSwapQuote(
     
     logger.debug(`SushiSwap price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${marketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`);
 
-    return profitable;
+    return {
+      isTakeable: profitable,
+      marketPrice,
+      takeablePrice,
+      quoteAmount,
+      collateralAmount,
+      reason: profitable ? undefined : 'auction price above SushiSwap threshold',
+    };
 
   } catch (error) {
     logger.error(`Factory: Error getting SushiSwap quote for pool ${pool.name}: ${error}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -417,14 +511,17 @@ async function checkCurveQuote(
   pool: FungiblePool,
   auctionPrice: number,
   collateral: BigNumber,
-  poolConfig: RequireFields<PoolConfig, 'take'>,
+  poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'curveRouterOverrides' | 'tokenAddresses'>,
   signer: Signer
-): Promise<boolean> {
+): Promise<ExternalTakeQuoteEvaluation> {
   
   if (!config.curveRouterOverrides) {
     logger.debug(`Factory: No curveRouterOverrides configured for pool ${pool.name}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: 'missing curveRouterOverrides',
+    };
   }
 
   const curveConfig = config.curveRouterOverrides;
@@ -432,7 +529,10 @@ async function checkCurveQuote(
   // Validate required configuration
   if (!curveConfig.poolConfigs || !curveConfig.wethAddress) {
     logger.debug(`Factory: Missing required Curve configuration for pool ${pool.name}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: 'missing required Curve configuration',
+    };
   }
 
   try {
@@ -451,7 +551,10 @@ async function checkCurveQuote(
     const initialized = await quoteProvider.initialize();
     if (!initialized) {
       logger.debug(`Factory: Curve quote provider not available for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'Curve quote provider unavailable',
+      };
     }
 
     // Get token decimals for proper formatting
@@ -470,7 +573,10 @@ async function checkCurveQuote(
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
       logger.debug(`Factory: Failed to get Curve quote for pool ${pool.name}: ${quoteResult.error}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: quoteResult.error ?? 'Curve quote failed',
+      };
     }
 
     // Calculate actual market price from the official quote
@@ -479,7 +585,10 @@ async function checkCurveQuote(
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
       logger.debug(`Factory: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'invalid Curve quote amounts',
+      };
     }
 
     // Market price = quoteAmount / collateralAmount (quote tokens per collateral token)
@@ -488,7 +597,10 @@ async function checkCurveQuote(
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
       logger.debug(`Factory: No marketPriceFactor configured for pool ${pool.name}`);
-      return false;
+      return {
+        isTakeable: false,
+        reason: 'marketPriceFactor is not configured',
+      };
     }
 
     // Calculate the maximum price we're willing to pay (including slippage/profit margin)
@@ -498,29 +610,43 @@ async function checkCurveQuote(
     
     logger.debug(`Curve price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${marketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`);
 
-    return profitable;
+    return {
+      isTakeable: profitable,
+      marketPrice,
+      takeablePrice,
+      quoteAmount,
+      collateralAmount,
+      reason: profitable ? undefined : 'auction price above Curve threshold',
+    };
 
   } catch (error) {
     logger.error(`Factory: Error getting Curve quote for pool ${pool.name}: ${error}`);
-    return false;
+    return {
+      isTakeable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
 /**
  * ArbTake check (same logic as existing, copied to avoid dependencies)
  */
-async function checkIfArbTakeableFactory(
+export async function checkIfArbTakeableFactory(
   pool: FungiblePool,
   price: number,
   collateral: BigNumber,
-  poolConfig: RequireFields<PoolConfig, 'take'>,
+  poolConfig: TakeActionConfig,
   subgraphUrl: string,
   minDeposit: string,
   signer: Signer
-): Promise<{ isArbTakeable: boolean; hpbIndex: number }> {
+): Promise<ArbTakeEvaluation> {
   
   if (!poolConfig.take.minCollateral || !poolConfig.take.hpbPriceFactor) {
-    return { isArbTakeable: false, hpbIndex: 0 };
+    return {
+      isArbTakeable: false,
+      hpbIndex: 0,
+      reason: 'arbTake settings are not configured',
+    };
   }
 
   const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
@@ -530,7 +656,11 @@ async function checkIfArbTakeableFactory(
   
   if (collateral.lt(minCollateral)) {
     logger.debug(`Factory: Collateral ${collateral} below minCollateral ${minCollateral} for pool: ${pool.name}`);
-    return { isArbTakeable: false, hpbIndex: 0 };
+    return {
+      isArbTakeable: false,
+      hpbIndex: 0,
+      reason: 'collateral below minCollateral',
+    };
   }
 
   const { buckets } = await subgraph.getHighestMeaningfulBucket(
@@ -540,7 +670,11 @@ async function checkIfArbTakeableFactory(
   );
   
   if (buckets.length === 0) {
-    return { isArbTakeable: false, hpbIndex: 0 };
+    return {
+      isArbTakeable: false,
+      hpbIndex: 0,
+      reason: 'no meaningful bucket found',
+    };
   }
 
   const hmbIndex = buckets[0].bucketIndex;
@@ -550,13 +684,15 @@ async function checkIfArbTakeableFactory(
   return {
     isArbTakeable: price < maxArbPrice,
     hpbIndex: hmbIndex,
+    maxArbTakePrice: maxArbPrice,
+    reason: price < maxArbPrice ? undefined : 'auction price above arbTake threshold',
   };
 }
 
 /**
  * Execute external take using factory pattern
  */
-async function takeLiquidationFactory({
+export async function takeLiquidationFactory({
   pool,
   poolConfig,
   signer,
@@ -564,7 +700,7 @@ async function takeLiquidationFactory({
   config,
 }: {
   pool: FungiblePool;
-  poolConfig: RequireFields<PoolConfig, 'take'>;
+  poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
   config: Pick<FactoryTakeParams['config'], 'dryRun' | 'keeperTakerFactory' | 'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses' >;
@@ -626,7 +762,7 @@ async function takeWithUniswapV3Factory({
   config,
 }: {
   pool: FungiblePool;
-  poolConfig: RequireFields<PoolConfig, 'take'>;
+  poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
   config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'universalRouterOverrides'>;
@@ -719,7 +855,7 @@ async function takeWithSushiSwapFactory({
   config,
 }: {
   pool: FungiblePool;
-  poolConfig: RequireFields<PoolConfig, 'take'>;
+  poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
   config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'sushiswapRouterOverrides'>;
@@ -797,7 +933,7 @@ async function takeWithCurveFactory({
   config,
 }: {
   pool: FungiblePool;
-  poolConfig: RequireFields<PoolConfig, 'take'>;
+  poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
   config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'>;
@@ -933,7 +1069,7 @@ async function takeWithCurveFactory({
 /**
  * ArbTake using existing logic (same as original)
  */
-async function arbTakeLiquidationFactory({
+export async function arbTakeLiquidationFactory({
   pool,
   poolConfig,
   signer,
@@ -941,7 +1077,7 @@ async function arbTakeLiquidationFactory({
   config,
 }: {
   pool: FungiblePool;
-  poolConfig: RequireFields<PoolConfig, 'take'>;
+  poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
   config: Pick<FactoryTakeParams['config'], 'dryRun'>;

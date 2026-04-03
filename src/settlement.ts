@@ -5,6 +5,7 @@ import { logger } from './logging';
 import { poolSettle } from './transactions';
 import { weiToDecimaled, delay, RequireFields } from './utils';
 import subgraph from './subgraph';
+import { SettlementActionConfig } from './settlement-types';
 
 interface SettlementStatus {
   auctionExists: boolean;
@@ -21,7 +22,7 @@ interface SettlementResult {
   reason: string;
 }
 
-interface AuctionToSettle {
+export interface AuctionToSettle {
   borrower: string;
   kickTime: number;
   debtRemaining: BigNumber;
@@ -38,7 +39,7 @@ export class SettlementHandler {
   constructor(
     private pool: FungiblePool,
     private signer: Signer,
-    private poolConfig: RequireFields<PoolConfig, 'settlement'>,
+    private poolConfig: SettlementActionConfig,
     private config: Pick<KeeperConfig, 'dryRun' | 'subgraphUrl' | 'delayBetweenActions'>
   ) {}
 
@@ -56,6 +57,13 @@ export class SettlementHandler {
 
     logger.info(`Found ${auctions.length} potentially settleable auctions in pool: ${this.pool.name}`);
 
+    for (const auction of auctions) {
+      await this.processAuction(auction);
+      await delay(this.config.delayBetweenActions);
+    }
+  }
+
+  async handleCandidateAuctions(auctions: AuctionToSettle[]): Promise<void> {
     for (const auction of auctions) {
       await this.processAuction(auction);
       await delay(this.config.delayBetweenActions);

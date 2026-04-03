@@ -421,6 +421,75 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 ---
 
+## Chain-Wide Auto-Discovery (V1)
+
+V1 can auto-discover `take` and `settlement` opportunities across a chain while keeping `kick` manual.
+
+- `autoDiscover` defines chain-wide safety policy.
+- `discoveredDefaults` defines the default `take` and `settlement` behavior for discovered pools.
+- `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
+- If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
+- If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
+
+```typescript
+const config: KeeperConfig = {
+  dryRun: true,
+  autoDiscover: {
+    enabled: true,
+    take: true,
+    settlement: true,
+    dryRunNewPools: true,
+    logSkips: true,
+    maxPoolsPerRun: 10,
+    takeQuoteBudgetPerRun: 5,
+    maxGasPriceGwei: 5,
+    maxGasCostQuote: 0.01,
+    minExpectedProfitQuote: 0.005,
+    denyPools: [
+      '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    ],
+  },
+  discoveredDefaults: {
+    take: {
+      minCollateral: 0.01,
+      hpbPriceFactor: 0.98,
+      liquiditySource: LiquiditySource.UNISWAPV3,
+      marketPriceFactor: 0.99,
+    },
+    settlement: {
+      enabled: true,
+      minAuctionAge: 18000,
+      maxBucketDepth: 50,
+      maxIterations: 10,
+      checkBotIncentive: true,
+    },
+  },
+  pools: [
+    {
+      name: 'wstETH / WETH',
+      address: '0x...',
+      price: { source: PriceOriginSource.FIXED, value: 1.15 },
+      kick: {
+        minDebt: 0.07,
+        priceFactor: 0.9,
+      },
+      // Manual take override for this pool only. If omitted,
+      // discoveredDefaults.take will be used when the pool is discovered.
+      take: {
+        minCollateral: 0.02,
+        hpbPriceFactor: 0.97,
+      },
+    },
+  ],
+};
+```
+
+Discovery is auction-first, not pool-enumeration-first. The keeper queries chain-wide liquidation activity from the subgraph, groups live work by pool, hydrates only the pools that matter, and then runs the existing `take` and `settlement` execution paths behind the new policy checks.
+
+`kick` auto-discovery is intentionally not part of V1.
+
+---
+
 ## DEX Router Configuration:
 
 ### Configuring for External Takes

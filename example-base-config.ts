@@ -70,6 +70,38 @@ const config: KeeperConfig = {
   // Get a free key from https://www.coingecko.com/en/developers/dashboard
   coinGeckoApiKey: process.env.COINGECKO_API_KEY,
 
+  // Optional chain-wide discovery for take and settlement.
+  // Kick remains manual in V1.
+  autoDiscover: {
+    enabled: true,
+    take: true,
+    settlement: true,
+    dryRunNewPools: true,
+    logSkips: true,
+    maxPoolsPerRun: 10,
+    takeQuoteBudgetPerRun: 5,
+    maxGasPriceGwei: 5,
+    maxGasCostQuote: 0.01,
+    minExpectedProfitQuote: 0.005,
+  },
+
+  // Defaults applied to discovered pools that do not already define the action in pools[].
+  discoveredDefaults: {
+    take: {
+      minCollateral: 0.01,
+      hpbPriceFactor: 0.9,
+      liquiditySource: LiquiditySource.UNISWAPV3,
+      marketPriceFactor: 0.99,
+    },
+    settlement: {
+      enabled: true,
+      minAuctionAge: 18000,
+      maxBucketDepth: 50,
+      maxIterations: 10,
+      checkBotIncentive: true,
+    },
+  },
+
   // Pool configurations - Example pools on Base
   pools: [
     {

@@ -12,6 +12,11 @@ import { convertWadToTokenDecimals, getDecimalsErc20 } from './erc20';
 import { NonceTracker } from './nonce';
 import { SmartDexManager } from './smart-dex-manager';
 import { handleFactoryTakes } from './take-factory';
+import {
+  ArbTakeEvaluation,
+  ExternalTakeQuoteEvaluation,
+  TakeActionConfig,
+} from './take-types';
 
 interface HandleTakeParams {
   signer: Signer;
@@ -167,17 +172,21 @@ interface GetLiquidationsToTakeParams
   >;
 }
 
-async function checkIfArbTakeable(
+export async function checkIfArbTakeable(
   pool: FungiblePool,
   price: number,
   collateral: BigNumber,
-  poolConfig: RequireFields<PoolConfig, 'take'>,
+  poolConfig: TakeActionConfig,
   subgraphUrl: string,
   minDeposit: string,
   signer: Signer
-): Promise<{ isArbTakeable: boolean; hpbIndex: number }> {
+): Promise<ArbTakeEvaluation> {
   if (!poolConfig.take.minCollateral || !poolConfig.take.hpbPriceFactor) {
-    return { isArbTakeable: false, hpbIndex: 0 };
+    return {
+      isArbTakeable: false,
+      hpbIndex: 0,
+      reason: 'arbTake settings are not configured',
+    };
   }
 
   const collateralDecimals = await getDecimalsErc20(
@@ -191,7 +200,11 @@ async function checkIfArbTakeable(
     logger.debug(
       `Collateral ${weiToDecimaled(collateral)} below minCollateral ${poolConfig.take.minCollateral} for pool: ${pool.name}`
     );
-    return { isArbTakeable: false, hpbIndex: 0 };
+    return {
+      isArbTakeable: false,
+      hpbIndex: 0,
+      reason: 'collateral below minCollateral',
+    };
   }
 
   const { buckets } = await subgraph.getHighestMeaningfulBucket(
@@ -201,7 +214,11 @@ async function checkIfArbTakeable(
   );
   if (buckets.length === 0) {
     logger.debug(`No meaningful bucket found for pool ${pool.name} (minDeposit: ${minDeposit}), skipping arb take`);
-    return { isArbTakeable: false, hpbIndex: 0 };
+    return {
+      isArbTakeable: false,
+      hpbIndex: 0,
+      reason: 'no meaningful bucket found',
+    };
   }
 
   const hmbIndex = buckets[0].bucketIndex;
@@ -216,31 +233,39 @@ async function checkIfArbTakeable(
   return {
     isArbTakeable: arbTakeable,
     hpbIndex: hmbIndex,
+    maxArbTakePrice: maxArbPrice,
+    reason: arbTakeable ? undefined : 'auction price above arbTake threshold',
   };
 }
 
-async function checkIfTakeable(
+export async function getOneInchTakeQuoteEvaluation(
   pool: FungiblePool,
   price: number,
   collateral: BigNumber,
-  poolConfig: RequireFields<PoolConfig, 'take'>,
+  poolConfig: TakeActionConfig,
   config: Pick<KeeperConfig, 'delayBetweenActions'>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
   connectorTokens: string[] | undefined
-): Promise<{ isTakeable: boolean }> {
+): Promise<ExternalTakeQuoteEvaluation> {
   if (
     poolConfig.take.liquiditySource !== LiquiditySource.ONEINCH ||
     !poolConfig.take.marketPriceFactor
   ) {
-    return { isTakeable: false };
+    return {
+      isTakeable: false,
+      reason: '1inch take settings are not configured',
+    };
   }
 
   if (!collateral.gt(0)) {
     logger.debug(
       `Invalid collateral amount: ${collateral.toString()} for pool ${pool.name}`
     );
-    return { isTakeable: false };
+    return {
+      isTakeable: false,
+      reason: 'collateral must be greater than zero',
+    };
   }
 
   try {
@@ -249,7 +274,10 @@ async function checkIfTakeable(
       logger.debug(
         `No 1inch router configured for chainId ${chainId} in pool ${pool.name}`
       );
-      return { isTakeable: false };
+      return {
+        isTakeable: false,
+        reason: `missing 1inch router for chain ${chainId}`,
+      };
     }
 
     // Pause between getting a quote for each liquidation to avoid 1inch rate limit
@@ -276,7 +304,10 @@ async function checkIfTakeable(
       logger.debug(
         `No valid quote data for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}: ${quoteResult.error}`	      
       );
-      return { isTakeable: false };
+      return {
+        isTakeable: false,
+        reason: quoteResult.error ?? '1inch quote failed',
+      };
     }
 
     const amountOut = ethers.BigNumber.from(quoteResult.dstAmount);
@@ -284,7 +315,10 @@ async function checkIfTakeable(
       logger.debug(
 	`Zero amountOut for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}`      
       );
-      return { isTakeable: false };
+      return {
+        isTakeable: false,
+        reason: '1inch returned zero amountOut',
+      };
     }
 
     const quoteDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
@@ -307,11 +341,44 @@ async function checkIfTakeable(
       `Take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor} → ${takeable ? 'TAKEABLE' : 'skip'}`
     );
 
-    return { isTakeable: takeable };
+    return {
+      isTakeable: takeable,
+      marketPrice,
+      takeablePrice,
+      quoteAmount,
+      collateralAmount,
+      reason: takeable ? undefined : 'auction price above external take threshold',
+    };
   } catch (error) {
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);
-    return { isTakeable: false };
+    return {
+      isTakeable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+async function checkIfTakeable(
+  pool: FungiblePool,
+  price: number,
+  collateral: BigNumber,
+  poolConfig: TakeActionConfig,
+  config: Pick<KeeperConfig, 'delayBetweenActions'>,
+  signer: Signer,
+  oneInchRouters: { [chainId: number]: string } | undefined,
+  connectorTokens: string[] | undefined
+): Promise<{ isTakeable: boolean }> {
+  const evaluation = await getOneInchTakeQuoteEvaluation(
+    pool,
+    price,
+    collateral,
+    poolConfig,
+    config,
+    signer,
+    oneInchRouters,
+    connectorTokens
+  );
+  return { isTakeable: evaluation.isTakeable };
 }
 
 export async function* getLiquidationsToTake({
@@ -392,7 +459,8 @@ export async function* getLiquidationsToTake({
 }
 
 interface TakeLiquidationParams
-  extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
+  extends Pick<HandleTakeParams, 'pool' | 'signer'> {
+  poolConfig: TakeActionConfig;
   liquidation: LiquidationToTake;
   config: Pick<
     KeeperConfig,
@@ -491,7 +559,8 @@ export async function takeLiquidation({
 }
 
 interface ArbTakeLiquidationParams
-  extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
+  extends Pick<HandleTakeParams, 'pool' | 'signer'> {
+  poolConfig: TakeActionConfig;
   liquidation: LiquidationToTake;
   config: Pick<KeeperConfig, 'dryRun'>;
 }

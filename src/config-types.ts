@@ -183,6 +183,44 @@ export interface SettlementConfig {
   checkBotIncentive?: boolean;   // Only settle if bot has bonds/rewards to claim (default: true)
 }
 
+export interface AutoDiscoverConfig {
+  /** Enables chain-wide auction discovery for take and settlement actions. */
+  enabled: boolean;
+  /** Enables discovered take handling. */
+  take?: boolean;
+  /** Enables discovered settlement handling. */
+  settlement?: boolean;
+  /** Reserved for future work; kick discovery is not supported in V1. */
+  kick?: boolean;
+  /** Restrict discovery to these pool addresses when set. */
+  allowPools?: Address[];
+  /** Exclude these pool addresses from discovery. */
+  denyPools?: Address[];
+  /** Maximum number of discovered pools to hydrate per action run. */
+  maxPoolsPerRun?: number;
+  /** Cooldown after a failed hydration before retrying that pool. */
+  hydrateCooldownSec?: number;
+  /** Force discovered pools into dry-run even when the keeper is live. */
+  dryRunNewPools?: boolean;
+  /** Emit explicit skip logs for discovered pools and auctions. */
+  logSkips?: boolean;
+  /** Require at least this much expected quote-token profit after gas. */
+  minExpectedProfitQuote?: number;
+  /** Reject discovered actions above this gas price. */
+  maxGasPriceGwei?: number;
+  /** Reject discovered actions when estimated gas cost exceeds this quote-token amount. */
+  maxGasCostQuote?: number;
+  /** Limit expensive take quote evaluations per cycle after cheap ranking. */
+  takeQuoteBudgetPerRun?: number;
+}
+
+export interface DiscoveredDefaultsConfig {
+  /** Take settings applied to discovered pools without manual take overrides. */
+  take?: TakeSettings;
+  /** Settlement settings applied to discovered pools without manual settlement overrides. */
+  settlement?: SettlementConfig;
+}
+
 
 export interface PoolConfig {
   name: string;
@@ -275,6 +313,10 @@ export interface KeeperConfig {
   coinGeckoApiKey?: string;
   /** List of pool specific settings. */
   pools: PoolConfig[];
+  /** Optional chain-wide auto-discovery policy for take and settlement. */
+  autoDiscover?: AutoDiscoverConfig;
+  /** Defaults applied to discovered pools when a manual per-action override is absent. */
+  discoveredDefaults?: DiscoveredDefaultsConfig;
   /** Custom address overrides for Uniswap. Only need this if any of the collectLpRewards have the RewardAction: uniswap. */
   uniswapOverrides?: UniswapV3Overrides;
   /** The time between between actions within Kick or ArbTake loops. Higher values reduce load on network and prevent usage errors. */
@@ -469,5 +511,60 @@ export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperC
     if (config.hpbPriceFactor === undefined || config.hpbPriceFactor <= 0) {
       throw new Error('TakeSettings: hpbPriceFactor must be positive');
     }
+  }
+}
+
+export function validateSettlementSettings(config: SettlementConfig): void {
+  if (!config.enabled) {
+    throw new Error('SettlementConfig: enabled must be true for active settlement targets');
+  }
+  if (config.minAuctionAge !== undefined && config.minAuctionAge < 0) {
+    throw new Error('SettlementConfig: minAuctionAge cannot be negative');
+  }
+  if (config.maxBucketDepth !== undefined && config.maxBucketDepth <= 0) {
+    throw new Error('SettlementConfig: maxBucketDepth must be greater than 0');
+  }
+  if (config.maxIterations !== undefined && config.maxIterations <= 0) {
+    throw new Error('SettlementConfig: maxIterations must be greater than 0');
+  }
+}
+
+export function validateAutoDiscoverConfig(config: KeeperConfig): void {
+  const autoDiscover = config.autoDiscover;
+  if (!autoDiscover?.enabled) {
+    return;
+  }
+
+  if (autoDiscover.kick) {
+    throw new Error('AutoDiscoverConfig: kick discovery is not supported in V1');
+  }
+  if (!autoDiscover.take && !autoDiscover.settlement) {
+    throw new Error('AutoDiscoverConfig: enable at least one of take or settlement');
+  }
+  if (autoDiscover.maxPoolsPerRun !== undefined && autoDiscover.maxPoolsPerRun <= 0) {
+    throw new Error('AutoDiscoverConfig: maxPoolsPerRun must be greater than 0');
+  }
+  if (autoDiscover.hydrateCooldownSec !== undefined && autoDiscover.hydrateCooldownSec < 0) {
+    throw new Error('AutoDiscoverConfig: hydrateCooldownSec cannot be negative');
+  }
+  if (autoDiscover.takeQuoteBudgetPerRun !== undefined && autoDiscover.takeQuoteBudgetPerRun <= 0) {
+    throw new Error('AutoDiscoverConfig: takeQuoteBudgetPerRun must be greater than 0');
+  }
+  if (autoDiscover.minExpectedProfitQuote !== undefined && autoDiscover.minExpectedProfitQuote < 0) {
+    throw new Error('AutoDiscoverConfig: minExpectedProfitQuote cannot be negative');
+  }
+  if (autoDiscover.maxGasPriceGwei !== undefined && autoDiscover.maxGasPriceGwei <= 0) {
+    throw new Error('AutoDiscoverConfig: maxGasPriceGwei must be greater than 0');
+  }
+  if (autoDiscover.maxGasCostQuote !== undefined && autoDiscover.maxGasCostQuote < 0) {
+    throw new Error('AutoDiscoverConfig: maxGasCostQuote cannot be negative');
+  }
+
+  if (autoDiscover.take && config.discoveredDefaults?.take) {
+    validateTakeSettings(config.discoveredDefaults.take, config);
+  }
+
+  if (autoDiscover.settlement && config.discoveredDefaults?.settlement) {
+    validateSettlementSettings(config.discoveredDefaults.settlement);
   }
 }

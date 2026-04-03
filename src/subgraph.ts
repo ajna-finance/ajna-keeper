@@ -96,6 +96,23 @@ export interface GetUnsettledAuctionsResponse {
   }[];
 }
 
+export interface ChainwideLiquidationAuction {
+  borrower: string;
+  kickTime: string;
+  debtRemaining: string;
+  collateralRemaining: string;
+  neutralPrice: string;
+  debt: string;
+  collateral: string;
+  pool: {
+    id: string;
+  };
+}
+
+export interface GetChainwideLiquidationAuctionsResponse {
+  liquidationAuctions: ChainwideLiquidationAuction[];
+}
+
 async function getUnsettledAuctions(subgraphUrl: string, poolAddress: string) {
   const query = gql`
     query GetUnsettledAuctions($poolId: String!) {
@@ -122,12 +139,75 @@ async function getUnsettledAuctions(subgraphUrl: string, poolAddress: string) {
   return result;
 }
 
+const getChainwideLiquidationAuctionsQuery = gql`
+  query GetChainwideLiquidationAuctions($first: Int!, $skip: Int!) {
+    liquidationAuctions(
+      first: $first
+      skip: $skip
+      orderBy: kickTime
+      orderDirection: desc
+      where: {
+        settled: false
+      }
+    ) {
+      borrower
+      kickTime
+      debtRemaining
+      collateralRemaining
+      neutralPrice
+      debt
+      collateral
+      pool {
+        id
+      }
+    }
+  }
+`;
+
+async function getChainwideLiquidationAuctionsPage(
+  subgraphUrl: string,
+  first: number = 100,
+  skip: number = 0
+) {
+  const result: GetChainwideLiquidationAuctionsResponse = await request(
+    subgraphUrl,
+    getChainwideLiquidationAuctionsQuery,
+    { first, skip }
+  );
+  return result;
+}
+
+async function getChainwideLiquidationAuctions(
+  subgraphUrl: string,
+  pageSize: number = 100,
+  maxPages: number = 100
+) {
+  const liquidationAuctions: ChainwideLiquidationAuction[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const pageResult = await getChainwideLiquidationAuctionsPage(
+      subgraphUrl,
+      pageSize,
+      page * pageSize
+    );
+    liquidationAuctions.push.apply(
+      liquidationAuctions,
+      pageResult.liquidationAuctions
+    );
+    if (pageResult.liquidationAuctions.length < pageSize) {
+      break;
+    }
+  }
+
+  return { liquidationAuctions };
+}
+
 
 // Exported as default module to enable mocking in tests.
 export default { 
   getLoans, 
   getLiquidations, 
   getHighestMeaningfulBucket, 
-  getUnsettledAuctions 
+  getUnsettledAuctions,
+  getChainwideLiquidationAuctionsPage,
+  getChainwideLiquidationAuctions,
 };
-
