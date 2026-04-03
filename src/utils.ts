@@ -73,6 +73,34 @@ export async function delay(seconds: number) {
   return new Promise((res) => setTimeout(res, seconds * 1000));
 }
 
+export function withGasLimitBuffer(
+  estimatedGas: BigNumber,
+  basisPoints: number = 13000
+): BigNumber {
+  return estimatedGas.mul(basisPoints).add(9999).div(10000);
+}
+
+export async function estimateGasWithBuffer(
+  estimateFn: () => Promise<BigNumber>,
+  fallbackGasLimit: BigNumber,
+  label: string,
+  basisPoints: number = 13000
+): Promise<BigNumber> {
+  try {
+    const estimatedGas = await estimateFn();
+    const gasLimit = withGasLimitBuffer(estimatedGas, basisPoints);
+    logger.debug(
+      `${label} gas estimate: ${estimatedGas.toString()} -> buffered ${gasLimit.toString()}`
+    );
+    return gasLimit;
+  } catch (error) {
+    logger.warn(
+      `${label} gas estimation failed, using fallback ${fallbackGasLimit.toString()}: ${error}`
+    );
+    return fallbackGasLimit;
+  }
+}
+
 function bigToScientific(bn: BigNumber): {
   mantissa: number;
   exponent10: number;

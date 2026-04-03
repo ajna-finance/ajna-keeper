@@ -3,7 +3,13 @@
 
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import subgraph from './subgraph';
-import { decimaledToWei, delay, RequireFields, weiToDecimaled } from './utils';
+import {
+  decimaledToWei,
+  delay,
+  estimateGasWithBuffer,
+  RequireFields,
+  weiToDecimaled,
+} from './utils';
 import { KeeperConfig, LiquiditySource, PoolConfig } from './config-types';
 import { logger } from './logging';
 import { liquidationArbTake } from './transactions';
@@ -814,20 +820,29 @@ async function takeWithUniswapV3Factory({
   try {
     logger.debug(`Factory: Sending Uniswap V3 Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`);
 
-    await NonceTracker.queueTransaction(signer, async (nonce: number) => {
-      // FIXED: Send WAD amounts directly - no decimal pre-conversion
-      const tx = await factory.takeWithAtomicSwap(
+	    await NonceTracker.queueTransaction(signer, async (nonce: number) => {
+      const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
+      const txArgs = [
         pool.poolAddress,
         liquidation.borrower,
-        liquidation.auctionPrice,  // WAD amount
-        liquidation.collateral,    // WAD amount
-        Number(poolConfig.take.liquiditySource), // LiquiditySource.UNISWAPV3 = 2
+        liquidation.auctionPrice,
+        liquidation.collateral,
+        Number(poolConfig.take.liquiditySource),
         swapDetails.universalRouter,
         encodedSwapDetails,
-        { nonce: nonce.toString() }
+      ] as const;
+      const gasLimit = await estimateGasWithBuffer(
+        () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
+        fallbackGasLimit,
+        `Factory Uniswap take ${pool.name}/${liquidation.borrower}`
       );
-      return await tx.wait();
-    });
+	      // FIXED: Send WAD amounts directly - no decimal pre-conversion
+	      const tx = await factory.takeWithAtomicSwap(
+	        ...txArgs,
+	        { gasLimit, nonce: nonce.toString() }
+	      );
+	      return await tx.wait();
+	    });
 
     logger.info(`Factory Uniswap V3 Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`);
 
@@ -899,20 +914,29 @@ async function takeWithSushiSwapFactory({
   try {
     logger.debug(`Factory: Sending SushiSwap Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`);
     
-    await NonceTracker.queueTransaction(signer, async (nonce: number) => {
-      // FIXED: Send WAD amounts directly - no decimal pre-conversion
-      const tx = await factory.takeWithAtomicSwap(
+	    await NonceTracker.queueTransaction(signer, async (nonce: number) => {
+      const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
+      const txArgs = [
         pool.poolAddress,
         liquidation.borrower,
-        liquidation.auctionPrice,  // WAD amount
-        liquidation.collateral,    // WAD amount  
-        Number(poolConfig.take.liquiditySource), // LiquiditySource.SUSHISWAP = 3
+        liquidation.auctionPrice,
+        liquidation.collateral,
+        Number(poolConfig.take.liquiditySource),
         swapDetails.swapRouter,
         encodedSwapDetails,
-        { nonce: nonce.toString() }
+      ] as const;
+      const gasLimit = await estimateGasWithBuffer(
+        () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
+        fallbackGasLimit,
+        `Factory Sushi take ${pool.name}/${liquidation.borrower}`
       );
-      return await tx.wait();
-    });
+	      // FIXED: Send WAD amounts directly - no decimal pre-conversion
+	      const tx = await factory.takeWithAtomicSwap(
+	        ...txArgs,
+	        { gasLimit, nonce: nonce.toString() }
+	      );
+	      return await tx.wait();
+	    });
 
     logger.info(`Factory SushiSwap Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`);
     
@@ -1043,20 +1067,29 @@ async function takeWithCurveFactory({
     logger.debug(`Adding 2000ms state propagation delay before factory take (L2 sequencer protection)`);
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    await NonceTracker.queueTransaction(signer, async (nonce: number) => {
-      // FIXED: Send WAD amounts directly - no decimal pre-conversion (follows SushiSwap pattern)
-      const tx = await factory.takeWithAtomicSwap(
+	    await NonceTracker.queueTransaction(signer, async (nonce: number) => {
+      const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
+      const txArgs = [
         pool.poolAddress,
         liquidation.borrower,
-        liquidation.auctionPrice,  // WAD amount
-        liquidation.collateral,    // WAD amount
-        Number(poolConfig.take.liquiditySource), // LiquiditySource.CURVE = 4
-        selectedPoolConfig.address, // swapRouter parameter (use pool address for Curve)
+        liquidation.auctionPrice,
+        liquidation.collateral,
+        Number(poolConfig.take.liquiditySource),
+        selectedPoolConfig.address,
         encodedSwapDetails,
-        { nonce: nonce.toString() }
+      ] as const;
+      const gasLimit = await estimateGasWithBuffer(
+        () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
+        fallbackGasLimit,
+        `Factory Curve take ${pool.name}/${liquidation.borrower}`
       );
-      return await tx.wait();
-    });
+	      // FIXED: Send WAD amounts directly - no decimal pre-conversion (follows SushiSwap pattern)
+	      const tx = await factory.takeWithAtomicSwap(
+	        ...txArgs,
+	        { gasLimit, nonce: nonce.toString() }
+	      );
+	      return await tx.wait();
+	    });
 
     logger.info(`Factory Curve Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`);
 

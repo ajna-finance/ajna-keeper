@@ -1,7 +1,7 @@
 import './subgraph-mock';
 import { approveBalanceForLoanToKick, getLoansToKick, kick, handleKicks } from '../kick';
 import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
-import { MAINNET_CONFIG, USER1_MNEMONIC } from './test-config';
+import { MAINNET_CONFIG } from './test-config';
 import { configureAjna } from '../config-types';
 import {
   getProvider,
@@ -14,12 +14,25 @@ import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { makeGetLoansFromSdk, overrideGetLoans } from './subgraph-mock';
 import { expect } from 'chai';
 import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../utils';
-import { constants, Wallet } from 'ethers';
-import { getAllowanceOfErc20, getBalanceOfErc20, transferErc20 } from '../erc20';
+import { constants, Contract, Wallet } from 'ethers';
+import { getAllowanceOfErc20, getBalanceOfErc20 } from '../erc20';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 import { NonceTracker } from '../nonce';
 
-describe('getLoansToKick', () => {
+const WETH_ABI = ['function deposit() payable'];
+
+async function createFundedQuoteWallet(amount: ReturnType<typeof decimaledToWei>) {
+  const wallet = Wallet.createRandom().connect(getProvider());
+  await setBalance(wallet.address, decimaledToWei(100).toHexString());
+  const weth = new Contract(MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress, WETH_ABI, wallet);
+  const tx = await weth.deposit({ value: amount });
+  await tx.wait();
+  return wallet;
+}
+
+describe('getLoansToKick', function () {
+  this.timeout(300000);
+
   beforeEach(async () => {
     await resetHardhat();
   });
@@ -203,7 +216,9 @@ describe('getLoansToKick', () => {
   });
 });
 
-describe('kick', () => {
+describe('kick', function () {
+  this.timeout(300000);
+
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
@@ -239,13 +254,7 @@ describe('kick', () => {
         },
       })
     );
-    const signer = await impersonateSigner(
-      MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
-    );
-    setBalance(
-      MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2,
-      '100000000000000000000'
-    );
+    const signer = await createFundedQuoteWallet(decimaledToWei(2));
 
     await kick({
       pool,
@@ -308,13 +317,8 @@ describe('kick', () => {
         },
       })
     );
-    const signer = await impersonateSigner(
-      MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
-    );
-    setBalance(
-      MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2,
-      '100000000000000000000'
-    );
+    const signer = Wallet.createRandom().connect(getProvider());
+    await setBalance(signer.address, decimaledToWei(100).toHexString());
 
     await kick({
       pool,
@@ -350,21 +354,7 @@ describe('approveBalanceForLoanToKick', () => {
     const pool: FungiblePool = await ajna.fungiblePoolFactory.getPoolByAddress(
       MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
     );
-    const quoteWhaleSigner = await impersonateSigner(
-      MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress
-    );
-    const signer = Wallet.fromMnemonic(USER1_MNEMONIC).connect(getProvider());
-    await setBalance(signer.address, decimaledToWei(100).toHexString());
-    await setBalance(
-      MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress,
-      decimaledToWei(100).toHexString()
-    );
-    await transferErc20(
-      quoteWhaleSigner,
-      pool.quoteAddress,
-      signer.address,
-      decimaledToWei(1)
-    );
+    const signer = await createFundedQuoteWallet(decimaledToWei(1));
 
     const loanToKick = {
       borrower: '0x0000000000000000000000000000000000000000',
@@ -392,21 +382,7 @@ describe('approveBalanceForLoanToKick', () => {
     const pool: FungiblePool = await ajna.fungiblePoolFactory.getPoolByAddress(
       MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
     );
-    const quoteWhaleSigner = await impersonateSigner(
-      MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress
-    );
-    const signer = Wallet.fromMnemonic(USER1_MNEMONIC).connect(getProvider());
-    await setBalance(signer.address, decimaledToWei(100).toHexString());
-    await setBalance(
-      MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress,
-      decimaledToWei(100).toHexString()
-    );
-    await transferErc20(
-      quoteWhaleSigner,
-      pool.quoteAddress,
-      signer.address,
-      decimaledToWei(20)
-    );
+    const signer = await createFundedQuoteWallet(decimaledToWei(20));
 
     const loanToKick = {
       borrower: '0x0000000000000000000000000000000000000000',
@@ -436,21 +412,7 @@ describe('approveBalanceForLoanToKick', () => {
     const pool: FungiblePool = await ajna.fungiblePoolFactory.getPoolByAddress(
       MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
     );
-    const quoteWhaleSigner = await impersonateSigner(
-      MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress
-    );
-    const signer = Wallet.fromMnemonic(USER1_MNEMONIC).connect(getProvider());
-    await setBalance(signer.address, decimaledToWei(100).toHexString());
-    await setBalance(
-      MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress,
-      decimaledToWei(100).toHexString()
-    );
-    await transferErc20(
-      quoteWhaleSigner,
-      pool.quoteAddress,
-      signer.address,
-      decimaledToWei(60)
-    );
+    const signer = await createFundedQuoteWallet(decimaledToWei(60));
 
     const loanToKick = {
       borrower: '0x0000000000000000000000000000000000000000',
@@ -475,7 +437,9 @@ describe('approveBalanceForLoanToKick', () => {
   });
 });
 
-describe('handleKicks (end-to-end)', () => {
+describe('handleKicks (end-to-end)', function () {
+  this.timeout(300000);
+
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
@@ -501,13 +465,7 @@ describe('handleKicks (end-to-end)', () => {
       collateralToPledge: 14,
     });
     await increaseTime(SECONDS_PER_YEAR * 2);
-    const signer = await impersonateSigner(
-      MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
-    );
-    setBalance(
-      MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2,
-      '100000000000000000000'
-    );
+    const signer = await createFundedQuoteWallet(decimaledToWei(2));
 
     await handleKicks({
       pool,

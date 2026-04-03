@@ -2,7 +2,6 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import {
   removeQuoteToken,
   withdrawBonds,
-  quoteTokenScale,
   kick,
   bucketTake,
 } from '@ajna-finance/sdk/dist/contracts/pool';
@@ -19,6 +18,27 @@ import { settle } from '@ajna-finance/sdk/dist/contracts/pool';
 import { getAllowanceOfErc20, getDecimalsErc20, convertWadToTokenDecimals } from './erc20';
 import { weiToDecimaled } from './utils';
 import { logger } from './logging';
+
+const quoteScaleCache = new Map<string, BigNumber>();
+
+async function getQuoteTokenScaleFromDecimals(pool: FungiblePool): Promise<BigNumber> {
+  const cacheKey = pool.quoteAddress.toLowerCase();
+  const cachedScale = quoteScaleCache.get(cacheKey);
+  if (cachedScale) {
+    return cachedScale;
+  }
+
+  const quoteDecimals = await getDecimalsErc20(pool.contract.provider, pool.quoteAddress);
+  if (quoteDecimals > 18) {
+    throw new Error(
+      `Unsupported quote token decimals for ${pool.name}: expected <= 18, got ${quoteDecimals}`
+    );
+  }
+
+  const scale = BigNumber.from(10).pow(18 - quoteDecimals);
+  quoteScaleCache.set(cacheKey, scale);
+  return scale;
+}
 
 export async function poolWithdrawBonds(pool: FungiblePool, signer: Signer) {
   const contractPoolWithSigner = pool.contract.connect(signer);
@@ -83,7 +103,7 @@ export async function poolQuoteApprove(
   allowance: BigNumber
 ) {
   const denormalizedAllowance = allowance.div(
-    await quoteTokenScale(pool.contract)
+    await getQuoteTokenScaleFromDecimals(pool)
   );
   
   await NonceTracker.queueTransaction(signer, async (nonce) => {
@@ -163,4 +183,3 @@ export async function poolSettle(
     return receipt;
   });
 }
-

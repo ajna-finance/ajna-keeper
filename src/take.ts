@@ -1,6 +1,12 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import subgraph from './subgraph';
-import { decimaledToWei, delay, RequireFields, weiToDecimaled } from './utils';
+import {
+  decimaledToWei,
+  delay,
+  estimateGasWithBuffer,
+  RequireFields,
+  weiToDecimaled,
+} from './utils';
 import { KeeperConfig, LiquiditySource, PoolConfig } from './config-types';
 import { logger } from './logging';
 import { liquidationArbTake } from './transactions';
@@ -523,24 +529,33 @@ export async function takeLiquidation({
         `  Swap Data Length: ${swapData.data.length} chars`
       );
 
-      try {
-        logger.debug(
-          `Sending Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
-        );
-        await NonceTracker.queueTransaction(signer, async (nonce: number) => {
-          const tx = await keeperTaker.takeWithAtomicSwap(
-          pool.poolAddress,
-          liquidation.borrower,
-          liquidation.auctionPrice,
-          liquidation.collateral,
-          Number(poolConfig.take.liquiditySource),
-          dexRouter.getRouter(await signer.getChainId())!!,
-          convertSwapApiResponseToDetailsBytes(swapData.data),
-          { nonce: nonce.toString() }
+	      try {
+	        logger.debug(
+	          `Sending Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
+	        );
+	        await NonceTracker.queueTransaction(signer, async (nonce: number) => {
+          const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
+          const txArgs = [
+            pool.poolAddress,
+            liquidation.borrower,
+            liquidation.auctionPrice,
+            liquidation.collateral,
+            Number(poolConfig.take.liquiditySource),
+            dexRouter.getRouter(await signer.getChainId())!!,
+            convertSwapApiResponseToDetailsBytes(swapData.data),
+          ] as const;
+          const gasLimit = await estimateGasWithBuffer(
+            () => keeperTaker.estimateGas.takeWithAtomicSwap(...txArgs),
+            fallbackGasLimit,
+            `Take ${pool.name}/${borrower}`
           );
-          const receipt = await tx.wait();
-          logger.info(
-            `Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
+	          const tx = await keeperTaker.takeWithAtomicSwap(
+	          ...txArgs,
+	          { gasLimit, nonce: nonce.toString() }
+	          );
+	          const receipt = await tx.wait();
+	          logger.info(
+	            `Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
           );
           return receipt;
         });

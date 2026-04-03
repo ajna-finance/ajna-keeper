@@ -11,6 +11,79 @@ interface CoinGeckoResponse {
   };
 }
 
+interface CoinGeckoErrorResponse {
+  error_code?: number;
+  timestamp?: string;
+  status?: {
+    error_code?: number;
+    error_message?: string;
+    timestamp?: string;
+  };
+}
+
+const COINGECKO_REQUEST_VARIANTS = [
+  {
+    label: 'demo',
+    baseUrl: 'https://api.coingecko.com/api/v3/simple/',
+    headerName: 'x-cg-demo-api-key',
+  },
+  {
+    label: 'pro',
+    baseUrl: 'https://pro-api.coingecko.com/api/v3/simple/',
+    headerName: 'x-cg-pro-api-key',
+  },
+] as const;
+
+function getCoinGeckoErrorMessage(
+  response: CoinGeckoErrorResponse,
+  status: number,
+  variantLabel: string
+): string {
+  return (
+    response.status?.error_message ??
+    `CoinGecko ${variantLabel} request failed with status ${status}`
+  );
+}
+
+function extractCoinGeckoPrice(response: unknown): number | undefined {
+  if (!response || typeof response !== 'object') return undefined;
+  const firstEntry = Object.values(response)[0];
+  if (!firstEntry || typeof firstEntry !== 'object') return undefined;
+  const firstValue = Object.values(firstEntry)[0];
+  return typeof firstValue === 'number' && Number.isFinite(firstValue)
+    ? firstValue
+    : undefined;
+}
+
+async function fetchCoinGeckoPrice(query: string, apiKey: string): Promise<number> {
+  let lastError = 'CoinGecko request failed';
+
+  for (const variant of COINGECKO_REQUEST_VARIANTS) {
+    const response = await fetch(variant.baseUrl + query, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        [variant.headerName]: apiKey,
+      },
+    });
+    const payload = await response.json();
+    const price = extractCoinGeckoPrice(payload);
+
+    if (response.ok && price !== undefined) {
+      return price;
+    }
+
+    lastError = getCoinGeckoErrorMessage(
+      payload as CoinGeckoErrorResponse,
+      response.status,
+      variant.label
+    );
+    logger.debug(`CoinGecko ${variant.label} request failed: ${lastError}`);
+  }
+
+  throw new Error(lastError);
+}
+
 // Map CoinGecko token IDs to contract addresses for Alchemy fallback
 // This mapping is chain-specific and should be expanded as needed
 function getTokenAddress(tokenId: string, chainId: number, tokenAddresses?: { [key: string]: string }): string | null {
@@ -46,6 +119,8 @@ function getTokenAddress(tokenId: string, chainId: number, tokenAddresses?: { [k
       'usdt': '0xdAC17F958D2ee523a2206206994597C13D831ec7',
       'wrapped-bitcoin': '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', // WBTC
       'wbtc': '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599',
+      'wrapped-steth': '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0', // wstETH
+      'wsteth': '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0',
       'cana': '0x01995A697752266d8E748738aAa3F06464B8350B', // CANA on Ethereum mainnet
       'cana-holdings-california-carbon-credits': '0x01995A697752266d8E748738aAa3F06464B8350B', // CANA full CoinGecko ID
     },
@@ -93,15 +168,7 @@ async function getPrice(
   // Try CoinGecko first if API key is provided
   if (apiKey && apiKey.trim() !== '' && apiKey !== 'YOUR_COINGECKO_API_KEY_HERE') {
     try {
-      const url = 'https://api.coingecko.com/api/v3/simple/' + query;
-      const options = {
-        method: 'GET',
-        headers: { accept: 'application/json', 'x-cg-demo-api-key': apiKey },
-      };
-
-      const res = await fetch(url, options);
-      const resJson: CoinGeckoResponse = await res.json();
-      const price = Object.values(Object.values(resJson)[0])[0];
+      const price = await fetchCoinGeckoPrice(query, apiKey);
       logger.debug(`CoinGecko price fetched successfully: $${price}`);
       return price;
     } catch (error) {

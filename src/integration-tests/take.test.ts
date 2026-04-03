@@ -416,7 +416,7 @@ describe('ArbTake → LP Collection chain', () => {
     NonceTracker.clearNonces();
   });
 
-  it('collects LP rewards after successful arb take', async () => {
+  it('tracks LP rewards after successful arb take when direct redemption is blocked', async () => {
     const { pool } = await setup();
     await increaseTime(SECONDS_PER_DAY * 1);
 
@@ -488,19 +488,22 @@ describe('ArbTake → LP Collection chain', () => {
     const lpBalance = await bucket.lpBalance(signerAddress);
     expect(weiToDecimaled(lpBalance)).to.be.greaterThan(0);
 
-    // Attempt to redeem LP rewards. When the arb take consumed the entire
-    // bucket deposit, the redemption will fail on-chain (nothing to withdraw).
-    // This is expected Ajna behavior — the LP represents a claim on an empty bucket.
-    // The collectLpRewards() call handles this gracefully (logs error, continues).
-    await lpCollector.collectLpRewards();
+    let collectionError: unknown;
+    try {
+      await lpCollector.collectLpRewards();
+    } catch (error) {
+      collectionError = error;
+    } finally {
+      await lpCollector.stopSubscription();
+    }
 
-    // The LP reward should still be tracked (redemption from empty bucket
-    // returns 0 tokens, so the reward isn't subtracted)
+    expect(String(collectionError)).to.include('AuctionNotCleared');
+
+    // The LP reward should still be tracked because redemption was blocked
+    // by the active auction and the collector re-throws for reactive settlement.
     const remainingReward = lpCollector.lpMap.get(bucketIndex);
     expect(remainingReward).to.not.be.undefined;
     expect(remainingReward!.gt(constants.Zero)).to.be.true;
-
-    await lpCollector.stopSubscription();
   });
 });
 
