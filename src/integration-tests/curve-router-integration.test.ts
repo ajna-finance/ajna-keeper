@@ -14,9 +14,6 @@ describe('Curve Router Module', () => {
   let queueTransactionStub: sinon.SinonStub;
   
   beforeEach(() => {
-    // Reset sinon after each test
-    sinon.restore();
-    
     // Use REAL wallet from test mnemonic (same pattern as working tests)
     const wallet = Wallet.fromMnemonic(USER1_MNEMONIC);
     mockSigner = wallet.connect(getProvider());
@@ -29,6 +26,10 @@ describe('Curve Router Module', () => {
     
     // Create a spy for swapWithCurveRouter
     swapStub = sinon.stub(curveRouterModule, 'swapWithCurveRouter');
+  });
+
+  afterEach(() => {
+    sinon.restore();
   });
 
   it('should execute swap with STABLE pool type and real wallet', async () => {

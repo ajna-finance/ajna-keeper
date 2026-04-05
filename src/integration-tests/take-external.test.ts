@@ -34,7 +34,10 @@ import {
 import { NonceTracker } from '../nonce';
 import { getBalanceOfErc20 } from '../erc20';
 
-describe('External Take with MockSwapRouter', () => {
+const FORK_INTEGRATION_TIMEOUT_MS = 120_000;
+
+describe('External Take with MockSwapRouter', function () {
+  this.timeout(FORK_INTEGRATION_TIMEOUT_MS);
   let provider: Provider;
   let pool: FungiblePool;
   let signer: Wallet;
@@ -48,12 +51,12 @@ describe('External Take with MockSwapRouter', () => {
   before(async () => {
     process.env.ONEINCH_API = 'https://api.1inch.io/v6.0';
     process.env.ONEINCH_API_KEY = 'mock_api_key';
-    provider = getProvider();
   });
 
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
+    provider = getProvider();
 
     // Stub axios to return mock 1inch API responses
     axiosGetStub = sinon.stub(axios, 'get');
@@ -349,7 +352,8 @@ describe('External Take with MockSwapRouter', () => {
   });
 });
 
-describe('Real Uniswap V3 External Take', () => {
+describe('Real Uniswap V3 External Take', function () {
+  this.timeout(FORK_INTEGRATION_TIMEOUT_MS);
   // This test uses NO mocks for the swap — real Uniswap V3 liquidity on the fork.
   // The UniswapV3SwapAdapter wraps the real Uniswap V3 SwapRouter behind
   // the 1inch IGenericRouter interface so the AjnaKeeperTaker can use it.
@@ -375,14 +379,14 @@ describe('Real Uniswap V3 External Take', () => {
   before(async () => {
     process.env.ONEINCH_API = 'https://api.1inch.io/v6.0';
     process.env.ONEINCH_API_KEY = 'mock_api_key';
-    provider = getProvider();
+    const forkProvider = getProvider();
 
     // Verify the fork has Uniswap V3 liquidity for SOL/WETH before running tests.
     // This prevents cryptic reverts if the fork block is updated.
     const uniV3Quoter = new Contract(
       '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6', // Uniswap V3 Quoter V1
       ['function quoteExactInputSingle(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn, uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)'],
-      provider
+      forkProvider
     );
     try {
       const quote = await uniV3Quoter.callStatic.quoteExactInputSingle(
@@ -406,6 +410,7 @@ describe('Real Uniswap V3 External Take', () => {
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
+    provider = getProvider();
 
     configureAjna(MAINNET_CONFIG.AJNA_CONFIG);
     const ajna = new AjnaSDK(provider);
