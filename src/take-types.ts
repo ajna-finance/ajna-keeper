@@ -1,3 +1,4 @@
+import { BigNumber } from 'ethers';
 import { TakeSettings } from './config-types';
 
 export interface TakeActionConfig {
@@ -10,6 +11,7 @@ export interface ExternalTakeQuoteEvaluation {
   marketPrice?: number;
   takeablePrice?: number;
   quoteAmount?: number;
+  quoteAmountRaw?: BigNumber;
   collateralAmount?: number;
   reason?: string;
 }

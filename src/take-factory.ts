@@ -54,6 +54,106 @@ interface LiquidationToTake {
   auctionPrice: BigNumber;
   isTakeable: boolean;
   isArbTakeable: boolean;
+  externalTakeQuoteEvaluation?: ExternalTakeQuoteEvaluation;
+}
+
+const WAD = ethers.constants.WeiPerEther;
+const BASIS_POINTS_DENOMINATOR = 10_000;
+const MARKET_FACTOR_SCALE = 1_000_000;
+
+function ceilWmul(x: BigNumber, y: BigNumber): BigNumber {
+  return x.mul(y).add(WAD.sub(1)).div(WAD);
+}
+
+function ceilDiv(x: BigNumber, y: BigNumber): BigNumber {
+  return x.add(y).sub(1).div(y);
+}
+
+function maxBigNumber(...values: BigNumber[]): BigNumber {
+  return values.reduce((max, value) => (value.gt(max) ? value : max), values[0]);
+}
+
+async function getSwapDeadline(signer: Signer, ttlSeconds: number = 1800): Promise<number> {
+  const latestBlock = await signer.provider?.getBlock('latest');
+  const baseTimestamp = latestBlock?.timestamp ?? Math.floor(Date.now() / 1000);
+  return baseTimestamp + ttlSeconds;
+}
+
+function getMarketPriceFactorUnits(marketPriceFactor: number): number {
+  const scaled = Math.floor(marketPriceFactor * MARKET_FACTOR_SCALE);
+  if (scaled <= 0) {
+    throw new Error(`Factory: invalid marketPriceFactor ${marketPriceFactor}`);
+  }
+  return scaled;
+}
+
+function getSlippageBasisPoints(defaultSlippage: number | undefined): number {
+  const slippagePercentage = defaultSlippage ?? 1.0;
+  const basisPoints = Math.floor(slippagePercentage * 100);
+  return Math.max(0, Math.min(BASIS_POINTS_DENOMINATOR, basisPoints));
+}
+
+async function getQuoteAmountDueRaw(
+  pool: FungiblePool,
+  auctionPrice: BigNumber,
+  collateral: BigNumber
+): Promise<BigNumber> {
+  const scale = await quoteTokenScale(pool.contract);
+  return ceilDiv(ceilWmul(collateral, auctionPrice), scale);
+}
+
+export async function computeFactoryAmountOutMinimum({
+  pool,
+  liquidation,
+  quoteEvaluation,
+  liquiditySource,
+  config,
+  marketPriceFactor,
+}: {
+  pool: FungiblePool;
+  liquidation: Pick<LiquidationToTake, 'auctionPrice' | 'collateral'>;
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  liquiditySource: LiquiditySource;
+  config: Pick<
+    FactoryTakeParams['config'],
+    'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides'
+  >;
+  marketPriceFactor: number;
+}): Promise<BigNumber> {
+  if (!quoteEvaluation.quoteAmountRaw) {
+    throw new Error('Factory: quoteAmountRaw missing from evaluation');
+  }
+
+  const quoteAmountDueRaw = await getQuoteAmountDueRaw(
+    pool,
+    liquidation.auctionPrice,
+    liquidation.collateral
+  );
+  const profitabilityFloor = ceilDiv(
+    quoteAmountDueRaw.mul(MARKET_FACTOR_SCALE),
+    BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
+  );
+
+  let slippageBasisPoints = 100;
+  if (liquiditySource === LiquiditySource.UNISWAPV3) {
+    slippageBasisPoints = getSlippageBasisPoints(
+      config.universalRouterOverrides?.defaultSlippage
+    );
+  } else if (liquiditySource === LiquiditySource.SUSHISWAP) {
+    slippageBasisPoints = getSlippageBasisPoints(
+      config.sushiswapRouterOverrides?.defaultSlippage
+    );
+  } else if (liquiditySource === LiquiditySource.CURVE) {
+    slippageBasisPoints = getSlippageBasisPoints(
+      config.curveRouterOverrides?.defaultSlippage
+    );
+  }
+
+  const slippageFloor = quoteEvaluation.quoteAmountRaw
+    .mul(BASIS_POINTS_DENOMINATOR - slippageBasisPoints)
+    .div(BASIS_POINTS_DENOMINATOR);
+
+  return maxBigNumber(quoteAmountDueRaw, profitabilityFloor, slippageFloor);
 }
 
 /**
@@ -125,17 +225,19 @@ async function* getLiquidationsToTakeFactory({
     let isTakeable = false;
     let isArbTakeable = false;
     let arbHpbIndex = 0;
+    let externalTakeQuoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
 
     // Check if external take is possible with configured DEX
     if (poolConfig.take.marketPriceFactor && poolConfig.take.liquiditySource) {
-      isTakeable = await checkIfTakeableFactory(
+      externalTakeQuoteEvaluation = await getFactoryTakeQuoteEvaluation(
         pool,
-        price,
+        liquidationStatus.price,
         collateral,
         poolConfig,
         config,
         signer
       );
+      isTakeable = externalTakeQuoteEvaluation.isTakeable;
     }
 
     // Check arbTake (same logic as existing)
@@ -169,6 +271,7 @@ async function* getLiquidationsToTakeFactory({
         auctionPrice: liquidationStatus.price,
         isTakeable,
         isArbTakeable,
+        externalTakeQuoteEvaluation,
       };
     } else {
       logger.debug(
@@ -178,34 +281,9 @@ async function* getLiquidationsToTakeFactory({
   }
 }
 
-/**
- * Check if external take is profitable using factory DEX sources
- */
-async function checkIfTakeableFactory(
-  pool: FungiblePool,
-  price: number,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  config: Pick<
-    FactoryTakeParams['config'],
-    'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses'
-  >,
-  signer: Signer
-): Promise<boolean> {
-  const evaluation = await getFactoryTakeQuoteEvaluation(
-    pool,
-    price,
-    collateral,
-    poolConfig,
-    config,
-    signer
-  );
-  return evaluation.isTakeable;
-}
-
 export async function getFactoryTakeQuoteEvaluation(
   pool: FungiblePool,
-  price: number,
+  auctionPriceWad: BigNumber,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   config: Pick<
@@ -231,13 +309,13 @@ export async function getFactoryTakeQuoteEvaluation(
 
   try {
     if (poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3) {
-      return await checkUniswapV3Quote(pool, price, collateral, poolConfig, config, signer);
+      return await checkUniswapV3Quote(pool, auctionPriceWad, collateral, poolConfig, config, signer);
     }
     if (poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP) {
-      return await checkSushiSwapQuote(pool, price, collateral, poolConfig, config, signer);
+      return await checkSushiSwapQuote(pool, auctionPriceWad, collateral, poolConfig, config, signer);
     }
     if (poolConfig.take.liquiditySource === LiquiditySource.CURVE) {
-      return await checkCurveQuote(pool, price, collateral, poolConfig, config, signer);
+      return await checkCurveQuote(pool, auctionPriceWad, collateral, poolConfig, config, signer);
     }
 
     logger.debug(`Factory: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`);
@@ -260,7 +338,7 @@ export async function getFactoryTakeQuoteEvaluation(
  */
 async function checkUniswapV3Quote(
   pool: FungiblePool,
-  auctionPrice: number,
+  auctionPriceWad: BigNumber,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'universalRouterOverrides'>,
@@ -334,8 +412,10 @@ async function checkUniswapV3Quote(
     }
 
     // PHASE 3: Calculate actual market price from the OFFICIAL quote
+    const quoteAmountRaw = BigNumber.from(quoteResult.dstAmount);
     const collateralAmount = Number(ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals));
-    const quoteAmount = Number(ethers.utils.formatUnits(quoteResult.dstAmount, quoteDecimals));
+    const quoteAmount = Number(ethers.utils.formatUnits(quoteAmountRaw, quoteDecimals));
+    const auctionPrice = Number(weiToDecimaled(auctionPriceWad));
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
       logger.debug(`Factory: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`);
@@ -360,7 +440,11 @@ async function checkUniswapV3Quote(
     // Calculate the maximum price we're willing to pay (including slippage/profit margin)
     const takeablePrice = officialMarketPrice * marketPriceFactor;
     
-    const profitable = auctionPrice <= takeablePrice;
+    const profitabilityFloor = ceilDiv(
+      (await getQuoteAmountDueRaw(pool, auctionPriceWad, collateral)).mul(MARKET_FACTOR_SCALE),
+      BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
+    );
+    const profitable = quoteAmountRaw.gte(profitabilityFloor);
     
     logger.debug(`Price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${officialMarketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`);
 
@@ -369,8 +453,9 @@ async function checkUniswapV3Quote(
       marketPrice: officialMarketPrice,
       takeablePrice,
       quoteAmount,
+      quoteAmountRaw,
       collateralAmount,
-      reason: profitable ? undefined : 'auction price above Uniswap V3 threshold',
+      reason: profitable ? undefined : 'quoted output below required Uniswap V3 profitability floor',
     };
 
   } catch (error) {
@@ -388,7 +473,7 @@ async function checkUniswapV3Quote(
  */
 async function checkSushiSwapQuote(
   pool: FungiblePool,
-  auctionPrice: number,
+  auctionPriceWad: BigNumber,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'sushiswapRouterOverrides'>,
@@ -462,7 +547,9 @@ async function checkSushiSwapQuote(
 
     // Calculate actual market price from the official quote
     const collateralAmount = Number(ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)); 
-    const quoteAmount = Number(ethers.utils.formatUnits(quoteResult.dstAmount, quoteDecimals));
+    const quoteAmountRaw = quoteResult.dstAmount;
+    const quoteAmount = Number(ethers.utils.formatUnits(quoteAmountRaw, quoteDecimals));
+    const auctionPrice = Number(weiToDecimaled(auctionPriceWad));
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
       logger.debug(`Factory: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`);
@@ -487,7 +574,11 @@ async function checkSushiSwapQuote(
     // Calculate the maximum price we're willing to pay (including slippage/profit margin)
     const takeablePrice = marketPrice * marketPriceFactor;
     
-    const profitable = auctionPrice <= takeablePrice;
+    const profitabilityFloor = ceilDiv(
+      (await getQuoteAmountDueRaw(pool, auctionPriceWad, collateral)).mul(MARKET_FACTOR_SCALE),
+      BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
+    );
+    const profitable = quoteAmountRaw.gte(profitabilityFloor);
     
     logger.debug(`SushiSwap price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${marketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`);
 
@@ -496,8 +587,9 @@ async function checkSushiSwapQuote(
       marketPrice,
       takeablePrice,
       quoteAmount,
+      quoteAmountRaw,
       collateralAmount,
-      reason: profitable ? undefined : 'auction price above SushiSwap threshold',
+      reason: profitable ? undefined : 'quoted output below required SushiSwap profitability floor',
     };
 
   } catch (error) {
@@ -515,7 +607,7 @@ async function checkSushiSwapQuote(
  */
 async function checkCurveQuote(
   pool: FungiblePool,
-  auctionPrice: number,
+  auctionPriceWad: BigNumber,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'curveRouterOverrides' | 'tokenAddresses'>,
@@ -587,7 +679,9 @@ async function checkCurveQuote(
 
     // Calculate actual market price from the official quote
     const collateralAmount = Number(ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals));
-    const quoteAmount = Number(ethers.utils.formatUnits(quoteResult.dstAmount, quoteDecimals));
+    const quoteAmountRaw = quoteResult.dstAmount;
+    const quoteAmount = Number(ethers.utils.formatUnits(quoteAmountRaw, quoteDecimals));
+    const auctionPrice = Number(weiToDecimaled(auctionPriceWad));
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
       logger.debug(`Factory: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`);
@@ -612,7 +706,11 @@ async function checkCurveQuote(
     // Calculate the maximum price we're willing to pay (including slippage/profit margin)
     const takeablePrice = marketPrice * marketPriceFactor;
     
-    const profitable = auctionPrice <= takeablePrice;
+    const profitabilityFloor = ceilDiv(
+      (await getQuoteAmountDueRaw(pool, auctionPriceWad, collateral)).mul(MARKET_FACTOR_SCALE),
+      BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
+    );
+    const profitable = quoteAmountRaw.gte(profitabilityFloor);
     
     logger.debug(`Curve price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${marketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`);
 
@@ -621,8 +719,9 @@ async function checkCurveQuote(
       marketPrice,
       takeablePrice,
       quoteAmount,
+      quoteAmountRaw,
       collateralAmount,
-      reason: profitable ? undefined : 'auction price above Curve threshold',
+      reason: profitable ? undefined : 'quoted output below required Curve profitability floor',
     };
 
   } catch (error) {
@@ -727,12 +826,38 @@ export async function takeLiquidationFactory({
     return;
   }
 
+  const externalTakeQuoteEvaluation =
+    liquidation.externalTakeQuoteEvaluation ??
+    (await getFactoryTakeQuoteEvaluation(
+      pool,
+      liquidation.auctionPrice,
+      liquidation.collateral,
+      poolConfig,
+      config,
+      signer
+    ));
+
+  if (!externalTakeQuoteEvaluation.isTakeable) {
+    logger.error(
+      `Factory: Take quote no longer satisfies execution policy for ${pool.name}/${borrower}: ${externalTakeQuoteEvaluation.reason ?? 'not takeable'}`
+    );
+    return;
+  }
+
+  if (!externalTakeQuoteEvaluation.quoteAmountRaw) {
+    logger.error(
+      `Factory: Missing raw quote amount for ${pool.name}/${borrower}; refusing to send an unbounded swap`
+    );
+    return;
+  }
+
   if (poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3) {
     await takeWithUniswapV3Factory({
       pool,
       poolConfig,
       signer,
       liquidation,
+      quoteEvaluation: externalTakeQuoteEvaluation,
       config,
     });
   } else if (poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP) {
@@ -741,6 +866,7 @@ export async function takeLiquidationFactory({
     poolConfig,
     signer,
     liquidation,
+    quoteEvaluation: externalTakeQuoteEvaluation,
     config,
   });
   } else if (poolConfig.take.liquiditySource === LiquiditySource.CURVE) {
@@ -749,6 +875,7 @@ export async function takeLiquidationFactory({
     poolConfig,
     signer,
     liquidation,
+    quoteEvaluation: externalTakeQuoteEvaluation,
     config,
   });
   } else {
@@ -765,12 +892,14 @@ async function takeWithUniswapV3Factory({
   poolConfig,
   signer,
   liquidation,
+  quoteEvaluation,
   config,
 }: {
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'universalRouterOverrides'>;
 }) {
 
@@ -781,16 +910,21 @@ async function takeWithUniswapV3Factory({
     return;
   }
 
-  // FIXED: Use minimal amountOutMinimum instead of complex decimal calculations
-  // Let Ajna's liquidation contract enforce the actual minimum requirements
-  // This follows the 1inch pattern where smart contracts handle decimal conversion
-  const minimalAmountOut = BigNumber.from(1); // 1 wei - trust Ajna liquidation contract
+  const minimalAmountOut = await computeFactoryAmountOutMinimum({
+    pool,
+    liquidation,
+    quoteEvaluation,
+    liquiditySource: LiquiditySource.UNISWAPV3,
+    config,
+    marketPriceFactor: poolConfig.take.marketPriceFactor!,
+  });
+  const deadline = await getSwapDeadline(signer);
 
   logger.debug(
     `Factory: Executing Uniswap V3 take for pool ${pool.name}:\n` +
     `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
     `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
-    `  Minimal Amount Out: ${minimalAmountOut.toString()} (let Ajna enforce)`
+    `  Minimal Amount Out: ${minimalAmountOut.toString()} (quoted bound)`
   );
 
   // FIXED: Prepare Uniswap V3 swap details with minimal output requirement
@@ -800,8 +934,8 @@ async function takeWithUniswapV3Factory({
     permit2: config.universalRouterOverrides.permit2Address!,
     targetToken: pool.quoteAddress,
     feeTier: config.universalRouterOverrides.defaultFeeTier || 3000,
-    amountOutMinimum: minimalAmountOut, // FIXED: Minimal amount, not pre-calculated
-    deadline: Math.floor(Date.now() / 1000) + 1800,
+    amountOutMinimum: minimalAmountOut,
+    deadline,
   };
 
   // FIXED: Encode struct exactly like SushiSwap pattern
@@ -867,12 +1001,14 @@ async function takeWithSushiSwapFactory({
   poolConfig,
   signer,
   liquidation,
+  quoteEvaluation,
   config,
 }: {
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'sushiswapRouterOverrides'>;
 }) {
   
@@ -883,16 +1019,21 @@ async function takeWithSushiSwapFactory({
     return;
   }
 
-  // FIXED: Use minimal amountOutMinimum instead of complex decimal calculations
-  // Let Ajna's liquidation contract enforce the actual minimum requirements  
-  // This mirrors the working 1inch implementation pattern
-  const minimalAmountOut = BigNumber.from(1); // 1 wei - trust Ajna liquidation contract
+  const minimalAmountOut = await computeFactoryAmountOutMinimum({
+    pool,
+    liquidation,
+    quoteEvaluation,
+    liquiditySource: LiquiditySource.SUSHISWAP,
+    config,
+    marketPriceFactor: poolConfig.take.marketPriceFactor!,
+  });
+  const deadline = await getSwapDeadline(signer);
 
   logger.debug(
     `Factory: Using WAD amounts for SushiSwap pool ${pool.name}:\n` +
     `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
     `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
-    `  Minimal Amount Out: ${minimalAmountOut.toString()} (let Ajna enforce)`
+    `  Minimal Amount Out: ${minimalAmountOut.toString()} (quoted bound)`
   );
 
   // FIXED: Prepare SushiSwap swap details with minimal output requirement
@@ -901,8 +1042,8 @@ async function takeWithSushiSwapFactory({
     swapRouter: config.sushiswapRouterOverrides.swapRouterAddress!,
     targetToken: pool.quoteAddress,
     feeTier: config.sushiswapRouterOverrides.defaultFeeTier || 500,
-    amountOutMinimum: minimalAmountOut, // FIXED: Minimal amount, not pre-calculated
-    deadline: Math.floor(Date.now() / 1000) + 1800,
+    amountOutMinimum: minimalAmountOut,
+    deadline,
   };
 
   // FIXED: Encode with new parameter structure (no change needed here)
@@ -954,12 +1095,14 @@ async function takeWithCurveFactory({
   poolConfig,
   signer,
   liquidation,
+  quoteEvaluation,
   config,
 }: {
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'>;
 }) {
 
@@ -1033,8 +1176,15 @@ async function takeWithCurveFactory({
 
     logger.debug(`Factory: Found Curve pool tokens: ${pool.collateralAddress}@${tokenInIndex}, ${pool.quoteAddress}@${tokenOutIndex}`);
 
-    // FIXED: Use minimal amountOutMinimum - let Ajna's liquidation contract enforce actual requirements
-    const minimalAmountOut = ethers.BigNumber.from(1); // 1 wei - trust Ajna liquidation contract
+    const minimalAmountOut = await computeFactoryAmountOutMinimum({
+      pool,
+      liquidation,
+      quoteEvaluation,
+      liquiditySource: LiquiditySource.CURVE,
+      config,
+      marketPriceFactor: poolConfig.take.marketPriceFactor!,
+    });
+    const deadline = await getSwapDeadline(signer);
 
     logger.debug(
       `Factory: Executing Curve take for pool ${pool.name}:\n` +
@@ -1043,7 +1193,7 @@ async function takeWithCurveFactory({
       `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
       `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
       `  Token Indices: ${tokenInIndex} -> ${tokenOutIndex}\n` +
-      `  Minimal Amount Out: ${minimalAmountOut.toString()} (let Ajna enforce)`
+      `  Minimal Amount Out: ${minimalAmountOut.toString()} (quoted bound)`
     );
 
     // FIXED: Encode individual parameters exactly like contract expects
@@ -1055,7 +1205,7 @@ async function takeWithCurveFactory({
         tokenInIndex,                  // Pre-computed index
         tokenOutIndex,                 // Pre-computed index
         minimalAmountOut,             // Pre-calculated minimum
-        Math.floor(Date.now() / 1000) + 1800 // 30 minutes deadline
+        deadline
       ]
     );
 

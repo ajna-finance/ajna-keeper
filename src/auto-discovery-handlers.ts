@@ -21,6 +21,7 @@ import {
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
 } from './take-factory';
+import { ExternalTakeQuoteEvaluation } from './take-types';
 import { weiToDecimaled } from './utils';
 import { DexRouter } from './dex-router';
 import { UniswapV3QuoteProvider } from './dex-providers/uniswap-quote-provider';
@@ -66,6 +67,7 @@ interface DiscoveredTakeDecision {
   auctionPrice: BigNumber;
   takeablePrice?: number;
   maxArbTakePrice?: number;
+  quoteEvaluation?: ExternalTakeQuoteEvaluation;
   reason?: string;
 }
 
@@ -422,6 +424,7 @@ async function evaluateTakeCandidate(params: {
   let maxArbTakePrice: number | undefined;
   let hpbIndex = 0;
   let reason: string | undefined;
+  let selectedQuoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
 
   if (
     params.target.take.marketPriceFactor !== undefined &&
@@ -441,7 +444,7 @@ async function evaluateTakeCandidate(params: {
           )
         : await getFactoryTakeQuoteEvaluation(
             params.pool,
-            auctionPriceNumber,
+            liquidationStatus.price,
             collateral,
             params.target,
             {
@@ -484,6 +487,7 @@ async function evaluateTakeCandidate(params: {
         } else {
           approvedTake = true;
           takeablePrice = quoteEvaluation.takeablePrice;
+          selectedQuoteEvaluation = quoteEvaluation;
         }
       }
     }
@@ -558,6 +562,7 @@ async function evaluateTakeCandidate(params: {
     auctionPrice: liquidationStatus.price,
     takeablePrice,
     maxArbTakePrice,
+    quoteEvaluation: selectedQuoteEvaluation,
     reason,
   };
 }
@@ -626,6 +631,7 @@ export async function handleDiscoveredTakeTarget(params: {
             auctionPrice: revalidated.auctionPrice,
             isTakeable: true,
             isArbTakeable: false,
+            externalTakeQuoteEvaluation: decision.quoteEvaluation,
           },
           config: {
             dryRun: params.target.dryRun,
