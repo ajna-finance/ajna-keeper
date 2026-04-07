@@ -72,6 +72,15 @@ export type EffectiveSettlementTarget =
   | ManualSettlementTarget
   | ResolvedSettlementTarget;
 
+const candidateDebtRemainingCache = new WeakMap<
+  DiscoveredAuctionCandidate,
+  DecimalValue
+>();
+const candidateTakePriorityCache = new WeakMap<
+  DiscoveredAuctionCandidate,
+  DecimalValue
+>();
+
 function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
@@ -133,24 +142,191 @@ function candidateKey(candidate: { poolAddress: string; borrower: string }): str
   return `${normalizeAddress(candidate.poolAddress)}:${candidate.borrower.toLowerCase()}`;
 }
 
-function computeTakeHeuristicScore(candidate: ChainwideLiquidationAuction): number {
-  const collateralRemaining = Number(candidate.collateralRemaining || '0');
-  const neutralPrice = Number(candidate.neutralPrice || '0');
-  const debtRemaining = Number(candidate.debtRemaining || '0');
-  const baseScore = collateralRemaining * neutralPrice;
-  return Number.isFinite(baseScore) && baseScore > 0 ? baseScore : debtRemaining;
+interface DecimalValue {
+  digits: string;
+  scale: number;
 }
 
-function computeSettlementHeuristicScore(candidate: ChainwideLiquidationAuction): number {
-  const kickTime = Number(candidate.kickTime || '0');
-  const debtRemaining = Number(candidate.debtRemaining || '0');
-  return debtRemaining + Math.max(0, Date.now() / 1000 - kickTime);
+function normalizeIntegerString(value: string): string {
+  const normalized = value.replace(/^0+/, '');
+  return normalized === '' ? '0' : normalized;
 }
 
-function hydrateCandidate(
-  candidate: ChainwideLiquidationAuction,
-  heuristicScore: number
-): DiscoveredAuctionCandidate {
+function parseDecimalValue(value: string | undefined): DecimalValue {
+  const trimmed = (value ?? '0').trim();
+  if (trimmed === '') {
+    return { digits: '0', scale: 0 };
+  }
+
+  const negative = trimmed.startsWith('-');
+  const unsigned = negative ? trimmed.slice(1) : trimmed;
+  const [integerPartRaw, fractionalPartRaw = ''] = unsigned.split('.');
+  const integerPart = normalizeIntegerString(integerPartRaw || '0');
+  let fractionalPart = fractionalPartRaw.replace(/0+$/, '');
+
+  if (integerPart === '0' && fractionalPart === '') {
+    return { digits: '0', scale: 0 };
+  }
+
+  const digits = normalizeIntegerString(`${integerPart}${fractionalPart}`);
+  if (digits === '0') {
+    fractionalPart = '';
+  }
+
+  return {
+    digits: negative ? `-${digits}` : digits,
+    scale: fractionalPart.length,
+  };
+}
+
+function compareIntegerStrings(left: string, right: string): number {
+  const leftNegative = left.startsWith('-');
+  const rightNegative = right.startsWith('-');
+  if (leftNegative !== rightNegative) {
+    return leftNegative ? -1 : 1;
+  }
+
+  const leftUnsigned = normalizeIntegerString(leftNegative ? left.slice(1) : left);
+  const rightUnsigned = normalizeIntegerString(rightNegative ? right.slice(1) : right);
+  const multiplier = leftNegative ? -1 : 1;
+
+  if (leftUnsigned.length !== rightUnsigned.length) {
+    return leftUnsigned.length > rightUnsigned.length ? multiplier : -multiplier;
+  }
+  if (leftUnsigned === rightUnsigned) {
+    return 0;
+  }
+  return leftUnsigned > rightUnsigned ? multiplier : -multiplier;
+}
+
+function compareDecimalValues(left: DecimalValue, right: DecimalValue): number {
+  const targetScale = Math.max(left.scale, right.scale);
+  const leftScaled = `${left.digits}${'0'.repeat(targetScale - left.scale)}`;
+  const rightScaled = `${right.digits}${'0'.repeat(targetScale - right.scale)}`;
+  return compareIntegerStrings(leftScaled, rightScaled);
+}
+
+function multiplyIntegerStrings(left: string, right: string): string {
+  const leftUnsigned = normalizeIntegerString(left.startsWith('-') ? left.slice(1) : left);
+  const rightUnsigned = normalizeIntegerString(right.startsWith('-') ? right.slice(1) : right);
+  if (leftUnsigned === '0' || rightUnsigned === '0') {
+    return '0';
+  }
+
+  const digits = new Array(leftUnsigned.length + rightUnsigned.length).fill(0);
+  for (let leftIndex = leftUnsigned.length - 1; leftIndex >= 0; leftIndex--) {
+    const leftDigit = Number(leftUnsigned[leftIndex]);
+    for (let rightIndex = rightUnsigned.length - 1; rightIndex >= 0; rightIndex--) {
+      const rightDigit = Number(rightUnsigned[rightIndex]);
+      const offset = leftIndex + rightIndex + 1;
+      const total = digits[offset] + leftDigit * rightDigit;
+      digits[offset] = total % 10;
+      digits[offset - 1] += Math.floor(total / 10);
+    }
+  }
+
+  for (let index = digits.length - 1; index > 0; index--) {
+    const carry = Math.floor(digits[index] / 10);
+    if (carry > 0) {
+      digits[index] %= 10;
+      digits[index - 1] += carry;
+    }
+  }
+
+  return normalizeIntegerString(digits.join(''));
+}
+
+function multiplyDecimalValues(left: DecimalValue, right: DecimalValue): DecimalValue {
+  return {
+    digits: multiplyIntegerStrings(left.digits, right.digits),
+    scale: left.scale + right.scale,
+  };
+}
+
+function compareCandidateIdentity(left: DiscoveredAuctionCandidate, right: DiscoveredAuctionCandidate): number {
+  const poolComparison = normalizeAddress(left.poolAddress).localeCompare(normalizeAddress(right.poolAddress));
+  if (poolComparison !== 0) {
+    return poolComparison;
+  }
+  return left.borrower.toLowerCase().localeCompare(right.borrower.toLowerCase());
+}
+
+function debtRemainingValue(candidate: DiscoveredAuctionCandidate): DecimalValue {
+  const cached = candidateDebtRemainingCache.get(candidate);
+  if (cached) {
+    return cached;
+  }
+
+  const parsed = parseDecimalValue(candidate.debtRemaining);
+  candidateDebtRemainingCache.set(candidate, parsed);
+  return parsed;
+}
+
+function takePriorityValue(candidate: DiscoveredAuctionCandidate): DecimalValue {
+  const cached = candidateTakePriorityCache.get(candidate);
+  if (cached) {
+    return cached;
+  }
+
+  const collateralValue = multiplyDecimalValues(
+    parseDecimalValue(candidate.collateralRemaining),
+    parseDecimalValue(candidate.neutralPrice)
+  );
+  const debtRemaining = debtRemainingValue(candidate);
+  const priority =
+    compareDecimalValues(collateralValue, debtRemaining) >= 0
+    ? collateralValue
+    : debtRemaining;
+  candidateTakePriorityCache.set(candidate, priority);
+  return priority;
+}
+
+function compareTakeCandidates(left: DiscoveredAuctionCandidate, right: DiscoveredAuctionCandidate): number {
+  const priorityComparison = compareDecimalValues(
+    takePriorityValue(right),
+    takePriorityValue(left)
+  );
+  if (priorityComparison !== 0) {
+    return priorityComparison;
+  }
+
+  const debtComparison = compareDecimalValues(
+    debtRemainingValue(right),
+    debtRemainingValue(left)
+  );
+  if (debtComparison !== 0) {
+    return debtComparison;
+  }
+
+  const kickTimeComparison = left.kickTime - right.kickTime;
+  if (kickTimeComparison !== 0) {
+    return kickTimeComparison;
+  }
+
+  return compareCandidateIdentity(left, right);
+}
+
+function compareSettlementCandidates(
+  left: DiscoveredAuctionCandidate,
+  right: DiscoveredAuctionCandidate
+): number {
+  const debtComparison = compareDecimalValues(
+    debtRemainingValue(right),
+    debtRemainingValue(left)
+  );
+  if (debtComparison !== 0) {
+    return debtComparison;
+  }
+
+  const kickTimeComparison = left.kickTime - right.kickTime;
+  if (kickTimeComparison !== 0) {
+    return kickTimeComparison;
+  }
+
+  return compareCandidateIdentity(left, right);
+}
+
+function hydrateCandidate(candidate: ChainwideLiquidationAuction): DiscoveredAuctionCandidate {
   return {
     poolAddress: candidate.pool.id,
     borrower: candidate.borrower,
@@ -160,7 +336,8 @@ function hydrateCandidate(
     neutralPrice: candidate.neutralPrice,
     debt: candidate.debt,
     collateral: candidate.collateral,
-    heuristicScore,
+    // Retained for compatibility with existing tests/fixtures.
+    heuristicScore: 0,
   };
 }
 
@@ -193,14 +370,15 @@ function groupCandidatesByPool(
   return grouped;
 }
 
-function candidateGroupScore(candidates: DiscoveredAuctionCandidate[]): number {
-  let bestScore = 0;
-  for (const candidate of candidates) {
-    if (candidate.heuristicScore > bestScore) {
-      bestScore = candidate.heuristicScore;
-    }
-  }
-  return bestScore;
+function compareCandidateGroups(
+  leftCandidates: DiscoveredAuctionCandidate[],
+  rightCandidates: DiscoveredAuctionCandidate[],
+  compareCandidates: (
+    left: DiscoveredAuctionCandidate,
+    right: DiscoveredAuctionCandidate
+  ) => number
+): number {
+  return compareCandidates(leftCandidates[0], rightCandidates[0]);
 }
 
 export function getManualTakeTargets(config: KeeperConfig): ManualTakeTarget[] {
@@ -272,12 +450,10 @@ export async function buildDiscoveredTakeTargets(
         }
         return true;
       })
-      .map((candidate) =>
-        hydrateCandidate(candidate, computeTakeHeuristicScore(candidate))
-      )
+      .map((candidate) => hydrateCandidate(candidate))
   );
 
-  takeCandidates.sort((left, right) => right.heuristicScore - left.heuristicScore);
+  takeCandidates.sort(compareTakeCandidates);
 
   const discoveredTakeDefaults = config.discoveredDefaults?.take;
   const appliesQuoteBudget =
@@ -297,7 +473,7 @@ export async function buildDiscoveredTakeTargets(
   const grouped = groupCandidatesByPool(budgetedCandidates);
   const groupedEntries = Array.from(grouped.entries()).sort(
     ([, leftCandidates], [, rightCandidates]) =>
-      candidateGroupScore(rightCandidates) - candidateGroupScore(leftCandidates)
+      compareCandidateGroups(leftCandidates, rightCandidates, compareTakeCandidates)
   );
   const maxPoolsPerRun = takePolicy.maxPoolsPerRun ?? groupedEntries.length;
 
@@ -366,15 +542,19 @@ export async function buildDiscoveredSettlementTargets(
         }
         return true;
       })
-      .map((candidate) =>
-        hydrateCandidate(candidate, computeSettlementHeuristicScore(candidate))
-      )
+      .map((candidate) => hydrateCandidate(candidate))
   );
+
+  settlementCandidates.sort(compareSettlementCandidates);
 
   const grouped = groupCandidatesByPool(settlementCandidates);
   const groupedEntries = Array.from(grouped.entries()).sort(
     ([, leftCandidates], [, rightCandidates]) =>
-      candidateGroupScore(rightCandidates) - candidateGroupScore(leftCandidates)
+      compareCandidateGroups(
+        leftCandidates,
+        rightCandidates,
+        compareSettlementCandidates
+      )
   );
   const maxPoolsPerRun =
     settlementPolicy.maxPoolsPerRun ?? groupedEntries.length;

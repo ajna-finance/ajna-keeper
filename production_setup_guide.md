@@ -472,7 +472,7 @@ The recommended approach uses the [BuiltByMom/Ajna-subgraph](https://github.com/
 **Curve:**
 - No API rate limits (direct pool contract interaction)
 - May have RPC rate limits depending on provider
-- Pool discovery requires manual configuration
+- V1 auto-discovery can find live `take` and `settlement` work chain-wide, but Curve routing still needs explicit `curveRouterOverrides.poolConfigs` and `tokenAddresses`
 
 **Goldsky:**
 - 50 requests/second (generous for subgraph queries)
@@ -494,6 +494,24 @@ The keeper is configured with conservative timing to respect rate limits:
 ```
 
 **For faster operation:** Upgrade to paid API tiers. The bot timing can be reduced with higher-tier service plans.
+
+### Auto-Discovery Rollout (V1)
+
+V1 auto-discovery is auction-first: the keeper scans chain-wide liquidation activity, hydrates only pools with live work, and then feeds discovered targets into the existing `take` and `settlement` execution paths. `kick` remains manual in V1.
+
+- `autoDiscover` holds shared discovery controls such as allow/deny lists, `dryRunNewPools`, and hydration cooldowns.
+- `autoDiscover.take` and `autoDiscover.settlement` carry separate per-action limits.
+- `discoveredDefaults.take` defines how newly discovered pools should run `take`.
+- `discoveredDefaults.settlement` defines how newly discovered pools should run `settlement`.
+- Manual `pools[]` entries still control `kick`, LP reward collection, bond collection, and per-action overrides.
+
+Use [`example-base-rollout-config.ts`](./example-base-rollout-config.ts) as the conservative starting point for the first live rollout.
+
+Recommended rollout order:
+1. Keep `dryRunNewPools: true` and inspect discovered skip/action logs first.
+2. Enable discovered `settlement` before discovered external `take` if you want the lower-risk path first.
+3. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
+4. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
 
 ## Step 6: DEX Configuration Best Practices
 

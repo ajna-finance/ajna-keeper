@@ -549,6 +549,9 @@ export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperC
       if (!keeperConfig.curveRouterOverrides) {
         throw new Error('TakeSettings: curveRouterOverrides required when liquiditySource is CURVE');
       }
+      if (!keeperConfig.tokenAddresses || Object.keys(keeperConfig.tokenAddresses).length === 0) {
+        throw new Error('TakeSettings: tokenAddresses required when liquiditySource is CURVE');
+      }
     }
   }
 
