@@ -43,26 +43,32 @@ const config: KeeperConfig = {
 
   autoDiscover: {
     enabled: true,
-    take: true,
-    settlement: true,
+    take: {
+      enabled: true,
+      maxPoolsPerRun: 3,
+      takeQuoteBudgetPerRun: 3,
+      maxGasPriceGwei: 2,
+      // These are quote-token denominated. Leave them unset until dry-run data
+      // shows sensible values for your discovered external take routes.
+      // maxGasCostQuote: 1,
+      // minExpectedProfitQuote: 1,
+    },
+    settlement: {
+      enabled: true,
+      maxPoolsPerRun: 3,
+      maxGasPriceGwei: 2,
+      // This is quote-token denominated. Leave it unset until dry-run data shows
+      // sensible values across the mix of WETH- and USDC-quoted pools you expect to hit.
+      // maxGasCostQuote: 1,
+    },
     dryRunNewPools: true,
     logSkips: true,
-    maxPoolsPerRun: 3,
-    takeQuoteBudgetPerRun: 3,
     hydrateCooldownSec: 900,
-    maxGasPriceGwei: 2,
     // If you want an even smaller first blast radius, uncomment allowPools
     // and start with one or two known pools.
     // allowPools: [
     //   '0x63a366fc5976ff72999c89f69366f388b7d233e8',
     // ],
-    //
-    // These are quote-token denominated. minExpectedProfitQuote applies to discovered
-    // takes only; gas caps still apply to discovered settlement too. Leave them unset
-    // until dry-run data shows sensible values across the mix of WETH- and USDC-quoted
-    // pools you expect to hit.
-    // maxGasCostQuote: 1,
-    // minExpectedProfitQuote: 1,
   },
 
   discoveredDefaults: {

@@ -212,7 +212,10 @@ describe('Auto Discovery Handlers', () => {
         autoDiscover: {
           enabled: true,
           settlement: true,
-          minExpectedProfitQuote: 9999,
+          take: {
+            enabled: true,
+            minExpectedProfitQuote: 9999,
+          },
         },
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',

@@ -1,8 +1,12 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import {
+  AutoDiscoverActionPolicy,
+  AutoDiscoverTakePolicy,
   KeeperConfig,
   LiquiditySource,
+  getAutoDiscoverSettlementPolicy,
+  getAutoDiscoverTakePolicy,
 } from './config-types';
 import {
   ResolvedSettlementTarget,
@@ -253,6 +257,11 @@ async function quoteTokensByLiquiditySource(params: {
 async function evaluateGasPolicy(params: {
   signer: Signer;
   config: DiscoveryExecutionConfig;
+  policy?: Pick<
+    AutoDiscoverActionPolicy,
+    'maxGasCostQuote' | 'maxGasPriceGwei'
+  > &
+    Pick<AutoDiscoverTakePolicy, 'minExpectedProfitQuote'>;
   gasLimit: BigNumber;
   quoteTokenAddress: string;
   preferredLiquiditySource?: LiquiditySource;
@@ -270,7 +279,7 @@ async function evaluateGasPolicy(params: {
 
   const gasPrice = await provider.getGasPrice();
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
-  const maxGasPriceGwei = params.config.autoDiscover?.maxGasPriceGwei;
+  const maxGasPriceGwei = params.policy?.maxGasPriceGwei;
   if (maxGasPriceGwei !== undefined && gasPriceGwei > maxGasPriceGwei) {
     return {
       approved: false,
@@ -281,9 +290,8 @@ async function evaluateGasPolicy(params: {
   }
 
   const requiresGasCostQuote =
-    params.config.autoDiscover?.maxGasCostQuote !== undefined ||
-    (params.useProfitFloor &&
-      params.config.autoDiscover?.minExpectedProfitQuote !== undefined);
+    params.policy?.maxGasCostQuote !== undefined ||
+    (params.useProfitFloor && params.policy?.minExpectedProfitQuote !== undefined);
   if (!requiresGasCostQuote) {
     return {
       approved: true,
@@ -344,7 +352,7 @@ async function evaluateGasPolicy(params: {
     gasCostQuote = Number(ethers.utils.formatUnits(quotedAmount, quoteDecimals));
   }
 
-  const maxGasCostQuote = params.config.autoDiscover?.maxGasCostQuote;
+  const maxGasCostQuote = params.policy?.maxGasCostQuote;
   if (maxGasCostQuote !== undefined && gasCostQuote > maxGasCostQuote) {
     return {
       approved: false,
@@ -427,6 +435,7 @@ async function evaluateTakeCandidate(params: {
   let hpbIndex = 0;
   let reason: string | undefined;
   let selectedQuoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
+  const takePolicy = getAutoDiscoverTakePolicy(params.config.autoDiscover);
 
   if (
     params.target.take.marketPriceFactor !== undefined &&
@@ -464,6 +473,7 @@ async function evaluateTakeCandidate(params: {
       const gasPolicy = await evaluateGasPolicy({
         signer: params.signer,
         config: params.config,
+        policy: takePolicy,
         gasLimit: EXTERNAL_TAKE_GAS_LIMIT,
         quoteTokenAddress: params.pool.quoteAddress,
         preferredLiquiditySource: params.target.take.liquiditySource,
@@ -479,8 +489,7 @@ async function evaluateTakeCandidate(params: {
           (quoteEvaluation.quoteAmount ?? 0) -
           auctionCostQuote -
           gasPolicy.gasCostQuote;
-        const minExpectedProfitQuote =
-          params.config.autoDiscover?.minExpectedProfitQuote;
+        const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
 
         if (
           minExpectedProfitQuote !== undefined &&
@@ -500,7 +509,7 @@ async function evaluateTakeCandidate(params: {
     params.target.take.minCollateral !== undefined &&
     params.target.take.hpbPriceFactor !== undefined
   ) {
-    if (params.config.autoDiscover?.minExpectedProfitQuote !== undefined) {
+    if (takePolicy?.minExpectedProfitQuote !== undefined) {
       logDiscoveryDecision(
         params.config,
         `Skipping discovered arbTake for ${params.pool.poolAddress}/${params.borrower} because quote-normalized profit is not available`
@@ -539,6 +548,7 @@ async function evaluateTakeCandidate(params: {
         const gasPolicy = await evaluateGasPolicy({
           signer: params.signer,
           config: params.config,
+          policy: takePolicy,
           gasLimit: ARB_TAKE_GAS_LIMIT,
           quoteTokenAddress: params.pool.quoteAddress,
           preferredLiquiditySource: params.target.take.liquiditySource,
@@ -735,6 +745,9 @@ export async function handleDiscoveredSettlementTarget(params: {
   );
 
   const approvedAuctions: AuctionToSettle[] = [];
+  const settlementPolicy = getAutoDiscoverSettlementPolicy(
+    params.config.autoDiscover
+  );
   for (const candidate of params.target.candidates) {
     const needsSettlement = await handler.needsSettlement(candidate.borrower);
     if (!needsSettlement.needs) {
@@ -759,6 +772,7 @@ export async function handleDiscoveredSettlementTarget(params: {
     const gasPolicy = await evaluateGasPolicy({
       signer: params.signer,
       config: params.config,
+      policy: settlementPolicy,
       gasLimit: SETTLEMENT_GAS_LIMIT,
       quoteTokenAddress: params.pool.quoteAddress,
       useProfitFloor: false,

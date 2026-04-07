@@ -201,6 +201,48 @@ describe('Auto Discovery Target Resolution', () => {
     expect(settlementTargets).to.deep.equal([]);
   });
 
+  it('does not apply take quote budget to arb-only discovered take defaults', async () => {
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        ...BASE_CONFIG.autoDiscover!,
+        take: {
+          enabled: true,
+          takeQuoteBudgetPerRun: 1,
+        },
+      },
+    };
+
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '3',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '3',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+        {
+          borrower: '0xBorrowerB',
+          kickTime: '1',
+          debtRemaining: '5',
+          collateralRemaining: '6',
+          neutralPrice: '7',
+          debt: '5',
+          collateral: '6',
+          pool: { id: '0x2222222222222222222222222222222222222222' },
+        },
+      ],
+    });
+
+    const targets = await buildDiscoveredTakeTargets(config);
+
+    expect(targets).to.have.length(2);
+  });
+
   it('validates resolved runtime targets separately from config-file validation', () => {
     expect(() =>
       validateResolvedTakeTarget(

@@ -70,16 +70,23 @@ const config: KeeperConfig = {
   // Kick remains manual in V1.
   autoDiscover: {
     enabled: true,
-    take: true,
-    settlement: true,
+    take: {
+      enabled: true,
+      maxPoolsPerRun: 10,
+      takeQuoteBudgetPerRun: 5,
+      maxGasPriceGwei: 5,
+      maxGasCostQuote: 0.01,
+      // Set minExpectedProfitQuote only after discovered external takes are enabled.
+      // minExpectedProfitQuote: 0.005,
+    },
+    settlement: {
+      enabled: true,
+      maxPoolsPerRun: 10,
+      maxGasPriceGwei: 5,
+      maxGasCostQuote: 0.01,
+    },
     dryRunNewPools: true,
     logSkips: true,
-    maxPoolsPerRun: 10,
-    takeQuoteBudgetPerRun: 5,
-    maxGasPriceGwei: 5,
-    maxGasCostQuote: 0.01,
-    // Set minExpectedProfitQuote only after discovered external takes are enabled.
-    // minExpectedProfitQuote: 0.005,
   },
 
   // Defaults applied to discovered pools that do not already define the action in pools[].

@@ -425,7 +425,8 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 V1 can auto-discover `take` and `settlement` opportunities across a chain while keeping `kick` manual.
 
-- `autoDiscover` defines chain-wide safety policy.
+- `autoDiscover` defines shared discovery controls like allow/deny lists, dry-run behavior, and hydration cooldowns.
+- `autoDiscover.take` and `autoDiscover.settlement` carry independent per-action limits.
 - `discoveredDefaults` defines the default `take` and `settlement` behavior for discovered pools.
 - `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
@@ -438,14 +439,21 @@ const config: KeeperConfig = {
   dryRun: true,
   autoDiscover: {
     enabled: true,
-    take: true,
-    settlement: true,
+    take: {
+      enabled: true,
+      maxPoolsPerRun: 10,
+      takeQuoteBudgetPerRun: 5,
+      maxGasPriceGwei: 5,
+      maxGasCostQuote: 0.01,
+    },
+    settlement: {
+      enabled: true,
+      maxPoolsPerRun: 10,
+      maxGasPriceGwei: 5,
+      maxGasCostQuote: 0.01,
+    },
     dryRunNewPools: true,
     logSkips: true,
-    maxPoolsPerRun: 10,
-    takeQuoteBudgetPerRun: 5,
-    maxGasPriceGwei: 5,
-    maxGasCostQuote: 0.01,
     denyPools: [
       '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
     ],
@@ -485,7 +493,7 @@ const config: KeeperConfig = {
 
 Discovery is auction-first, not pool-enumeration-first. The keeper queries chain-wide liquidation activity from the subgraph, groups live work by pool, hydrates only the pools that matter, and then runs the existing `take` and `settlement` execution paths behind the new policy checks.
 
-`minExpectedProfitQuote` applies to discovered external `take` decisions only. Do not combine it with arb-only discovered take defaults. `maxGasCostQuote` and `maxGasPriceGwei` still apply to discovered `take` and `settlement` actions. All quote-denominated thresholds are per-pool quote token amounts. If your rollout spans mixed quote assets like WETH and USDC, leave them unset until you have dry-run data that supports chain-specific thresholds.
+`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. `maxGasCostQuote` and `maxGasPriceGwei` are now action-specific under `autoDiscover.take` and `autoDiscover.settlement`. All quote-denominated thresholds are per-pool quote token amounts. If your rollout spans mixed quote assets like WETH and USDC, leave them unset until you have dry-run data that supports chain-specific thresholds.
 
 `kick` auto-discovery is intentionally not part of V1.
 

@@ -182,35 +182,82 @@ export interface SettlementConfig {
   checkBotIncentive?: boolean;   // Only settle if bot has bonds/rewards to claim (default: true)
 }
 
+export interface AutoDiscoverActionPolicy {
+  /** Enable this discovery action. */
+  enabled?: boolean;
+  /** Maximum number of discovered pools to hydrate per action run. */
+  maxPoolsPerRun?: number;
+  /** Reject discovered actions above this gas price. */
+  maxGasPriceGwei?: number;
+  /** Reject discovered actions when estimated gas cost exceeds this quote-token amount. */
+  maxGasCostQuote?: number;
+}
+
+export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
+  /** Require at least this much expected quote-token profit after gas for discovered external takes. */
+  minExpectedProfitQuote?: number;
+  /** Limit expensive external take quote evaluations per cycle after cheap ranking. */
+  takeQuoteBudgetPerRun?: number;
+}
+
+export interface AutoDiscoverSettlementPolicy extends AutoDiscoverActionPolicy {}
+
 export interface AutoDiscoverConfig {
   /** Enables chain-wide auction discovery for take and settlement actions. */
   enabled: boolean;
-  /** Enables discovered take handling. */
-  take?: boolean;
-  /** Enables discovered settlement handling. */
-  settlement?: boolean;
+  /** Enables discovered take handling and take-specific policy. */
+  take?: boolean | AutoDiscoverTakePolicy;
+  /** Enables discovered settlement handling and settlement-specific policy. */
+  settlement?: boolean | AutoDiscoverSettlementPolicy;
   /** Reserved for future work; kick discovery is not supported in V1. */
   kick?: boolean;
   /** Restrict discovery to these pool addresses when set. */
   allowPools?: Address[];
   /** Exclude these pool addresses from discovery. */
   denyPools?: Address[];
-  /** Maximum number of discovered pools to hydrate per action run. */
-  maxPoolsPerRun?: number;
   /** Cooldown after a failed hydration before retrying that pool. */
   hydrateCooldownSec?: number;
   /** Force discovered pools into dry-run even when the keeper is live. */
   dryRunNewPools?: boolean;
   /** Emit explicit skip logs for discovered pools and auctions. */
   logSkips?: boolean;
-  /** Require at least this much expected quote-token profit after gas for discovered takes. */
-  minExpectedProfitQuote?: number;
-  /** Reject discovered actions above this gas price. */
-  maxGasPriceGwei?: number;
-  /** Reject discovered actions when estimated gas cost exceeds this quote-token amount. */
-  maxGasCostQuote?: number;
-  /** Limit expensive take quote evaluations per cycle after cheap ranking. */
-  takeQuoteBudgetPerRun?: number;
+}
+
+function normalizeAutoDiscoverActionPolicy<T extends AutoDiscoverActionPolicy>(
+  policy?: boolean | T
+): T | undefined {
+  if (policy === undefined || policy === false) {
+    return undefined;
+  }
+  if (policy === true) {
+    return { enabled: true } as T;
+  }
+  if (policy.enabled === false) {
+    return undefined;
+  }
+  return {
+    ...policy,
+    enabled: policy.enabled ?? true,
+  };
+}
+
+export function getAutoDiscoverTakePolicy(
+  autoDiscover?: AutoDiscoverConfig
+): AutoDiscoverTakePolicy | undefined {
+  return normalizeAutoDiscoverActionPolicy(autoDiscover?.take);
+}
+
+export function getAutoDiscoverSettlementPolicy(
+  autoDiscover?: AutoDiscoverConfig
+): AutoDiscoverSettlementPolicy | undefined {
+  return normalizeAutoDiscoverActionPolicy(autoDiscover?.settlement);
+}
+
+export function hasExternalTakeSettings(config: TakeSettings): boolean {
+  return (
+    config.liquiditySource !== undefined &&
+    config.marketPriceFactor !== undefined
+  );
 }
 
 export interface DiscoveredDefaultsConfig {
@@ -441,7 +488,7 @@ export function configureAjna(ajnaConfig: AjnaConfigParams): void {
 
 export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperConfig): void {
   const hasArbTake = config.minCollateral !== undefined && config.hpbPriceFactor !== undefined;
-  const hasTake = config.liquiditySource !== undefined && config.marketPriceFactor !== undefined;
+  const hasTake = hasExternalTakeSettings(config);
 
   if (!hasArbTake && !hasTake) {
     throw new Error('TakeSettings: Must configure arbTake (minCollateral, hpbPriceFactor) or take (liquiditySource, marketPriceFactor)');
@@ -535,33 +582,36 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
   if (!autoDiscover?.enabled) {
     return;
   }
+  const takePolicy = getAutoDiscoverTakePolicy(autoDiscover);
+  const settlementPolicy = getAutoDiscoverSettlementPolicy(autoDiscover);
 
   if (autoDiscover.kick) {
     throw new Error('AutoDiscoverConfig: kick discovery is not supported in V1');
   }
-  if (!autoDiscover.take && !autoDiscover.settlement) {
+  if (!takePolicy && !settlementPolicy) {
     throw new Error('AutoDiscoverConfig: enable at least one of take or settlement');
-  }
-  if (autoDiscover.maxPoolsPerRun !== undefined && autoDiscover.maxPoolsPerRun <= 0) {
-    throw new Error('AutoDiscoverConfig: maxPoolsPerRun must be greater than 0');
   }
   if (autoDiscover.hydrateCooldownSec !== undefined && autoDiscover.hydrateCooldownSec < 0) {
     throw new Error('AutoDiscoverConfig: hydrateCooldownSec cannot be negative');
   }
-  if (autoDiscover.takeQuoteBudgetPerRun !== undefined && autoDiscover.takeQuoteBudgetPerRun <= 0) {
-    throw new Error('AutoDiscoverConfig: takeQuoteBudgetPerRun must be greater than 0');
-  }
-  if (autoDiscover.minExpectedProfitQuote !== undefined && autoDiscover.minExpectedProfitQuote < 0) {
-    throw new Error('AutoDiscoverConfig: minExpectedProfitQuote cannot be negative');
-  }
-  if (autoDiscover.maxGasPriceGwei !== undefined && autoDiscover.maxGasPriceGwei <= 0) {
-    throw new Error('AutoDiscoverConfig: maxGasPriceGwei must be greater than 0');
-  }
-  if (autoDiscover.maxGasCostQuote !== undefined && autoDiscover.maxGasCostQuote < 0) {
-    throw new Error('AutoDiscoverConfig: maxGasCostQuote cannot be negative');
-  }
 
-  if (autoDiscover.take) {
+  if (takePolicy) {
+    if (takePolicy.maxPoolsPerRun !== undefined && takePolicy.maxPoolsPerRun <= 0) {
+      throw new Error('AutoDiscoverConfig.take: maxPoolsPerRun must be greater than 0');
+    }
+    if (takePolicy.takeQuoteBudgetPerRun !== undefined && takePolicy.takeQuoteBudgetPerRun <= 0) {
+      throw new Error('AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be greater than 0');
+    }
+    if (takePolicy.minExpectedProfitQuote !== undefined && takePolicy.minExpectedProfitQuote < 0) {
+      throw new Error('AutoDiscoverConfig.take: minExpectedProfitQuote cannot be negative');
+    }
+    if (takePolicy.maxGasPriceGwei !== undefined && takePolicy.maxGasPriceGwei <= 0) {
+      throw new Error('AutoDiscoverConfig.take: maxGasPriceGwei must be greater than 0');
+    }
+    if (takePolicy.maxGasCostQuote !== undefined && takePolicy.maxGasCostQuote < 0) {
+      throw new Error('AutoDiscoverConfig.take: maxGasCostQuote cannot be negative');
+    }
+
     const discoveredTake = config.discoveredDefaults?.take;
     if (!discoveredTake) {
       throw new Error(
@@ -571,17 +621,27 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
 
     validateTakeSettings(discoveredTake, config);
 
-    const hasExternalTake =
-      discoveredTake.liquiditySource !== undefined &&
-      discoveredTake.marketPriceFactor !== undefined;
-    if (autoDiscover.minExpectedProfitQuote !== undefined && !hasExternalTake) {
+    if (
+      takePolicy.minExpectedProfitQuote !== undefined &&
+      !hasExternalTakeSettings(discoveredTake)
+    ) {
       throw new Error(
         'AutoDiscoverConfig: minExpectedProfitQuote requires discoveredDefaults.take to configure an external take path'
       );
     }
   }
 
-  if (autoDiscover.settlement) {
+  if (settlementPolicy) {
+    if (settlementPolicy.maxPoolsPerRun !== undefined && settlementPolicy.maxPoolsPerRun <= 0) {
+      throw new Error('AutoDiscoverConfig.settlement: maxPoolsPerRun must be greater than 0');
+    }
+    if (settlementPolicy.maxGasPriceGwei !== undefined && settlementPolicy.maxGasPriceGwei <= 0) {
+      throw new Error('AutoDiscoverConfig.settlement: maxGasPriceGwei must be greater than 0');
+    }
+    if (settlementPolicy.maxGasCostQuote !== undefined && settlementPolicy.maxGasCostQuote < 0) {
+      throw new Error('AutoDiscoverConfig.settlement: maxGasCostQuote cannot be negative');
+    }
+
     const discoveredSettlement = config.discoveredDefaults?.settlement;
     if (!discoveredSettlement?.enabled) {
       throw new Error(

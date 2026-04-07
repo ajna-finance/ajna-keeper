@@ -5,6 +5,9 @@ import {
   PoolConfig,
   SettlementConfig,
   TakeSettings,
+  getAutoDiscoverSettlementPolicy,
+  getAutoDiscoverTakePolicy,
+  hasExternalTakeSettings,
   validateSettlementSettings,
   validateTakeSettings,
 } from './config-types';
@@ -236,7 +239,8 @@ export async function buildDiscoveredTakeTargets(
   config: KeeperConfig
 ): Promise<ResolvedTakeTarget[]> {
   const autoDiscover = config.autoDiscover;
-  if (!autoDiscover?.enabled || !autoDiscover.take) {
+  const takePolicy = getAutoDiscoverTakePolicy(autoDiscover);
+  if (!autoDiscover?.enabled || !takePolicy) {
     return [];
   }
 
@@ -275,7 +279,13 @@ export async function buildDiscoveredTakeTargets(
 
   takeCandidates.sort((left, right) => right.heuristicScore - left.heuristicScore);
 
-  const quoteBudget = autoDiscover.takeQuoteBudgetPerRun ?? takeCandidates.length;
+  const discoveredTakeDefaults = config.discoveredDefaults?.take;
+  const appliesQuoteBudget =
+    discoveredTakeDefaults !== undefined &&
+    hasExternalTakeSettings(discoveredTakeDefaults);
+  const quoteBudget = appliesQuoteBudget
+    ? takePolicy.takeQuoteBudgetPerRun ?? takeCandidates.length
+    : takeCandidates.length;
   const budgetedCandidates = takeCandidates.slice(0, quoteBudget);
   if (budgetedCandidates.length < takeCandidates.length) {
     logDiscoverySkip(
@@ -289,7 +299,7 @@ export async function buildDiscoveredTakeTargets(
     ([, leftCandidates], [, rightCandidates]) =>
       candidateGroupScore(rightCandidates) - candidateGroupScore(leftCandidates)
   );
-  const maxPoolsPerRun = autoDiscover.maxPoolsPerRun ?? groupedEntries.length;
+  const maxPoolsPerRun = takePolicy.maxPoolsPerRun ?? groupedEntries.length;
 
   const targets: ResolvedTakeTarget[] = [];
   for (const [poolAddress, candidates] of groupedEntries.slice(0, maxPoolsPerRun)) {
@@ -323,7 +333,8 @@ export async function buildDiscoveredSettlementTargets(
   config: KeeperConfig
 ): Promise<ResolvedSettlementTarget[]> {
   const autoDiscover = config.autoDiscover;
-  if (!autoDiscover?.enabled || !autoDiscover.settlement) {
+  const settlementPolicy = getAutoDiscoverSettlementPolicy(autoDiscover);
+  if (!autoDiscover?.enabled || !settlementPolicy) {
     return [];
   }
 
@@ -365,7 +376,8 @@ export async function buildDiscoveredSettlementTargets(
     ([, leftCandidates], [, rightCandidates]) =>
       candidateGroupScore(rightCandidates) - candidateGroupScore(leftCandidates)
   );
-  const maxPoolsPerRun = autoDiscover.maxPoolsPerRun ?? groupedEntries.length;
+  const maxPoolsPerRun =
+    settlementPolicy.maxPoolsPerRun ?? groupedEntries.length;
 
   const targets: ResolvedSettlementTarget[] = [];
   for (const [poolAddress, candidates] of groupedEntries.slice(0, maxPoolsPerRun)) {
