@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber } from 'ethers';
+import { clearSharedDiscoveryScans } from '../auto-discovery';
 import { processKickCycle, processSettlementCycle, processTakeCycle } from '../run';
 import { KeeperConfig, PriceOriginSource } from '../config-types';
 import * as takeModule from '../take';
@@ -29,6 +30,7 @@ const BASE_CONFIG: KeeperConfig = {
 describe('Run Loop Discovery Integration', () => {
   afterEach(() => {
     sinon.restore();
+    clearSharedDiscoveryScans();
   });
 
   it('keeps the manual-only take path unchanged when auto discovery is disabled', async () => {
@@ -145,7 +147,7 @@ describe('Run Loop Discovery Integration', () => {
     const handleDiscoveredSettlementTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
       .resolves();
-    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
       liquidationAuctions: [
         {
           borrower: '0xBorrowerA',
@@ -231,5 +233,6 @@ describe('Run Loop Discovery Integration', () => {
       handleDiscoveredSettlementTargetStub.firstCall.args[0].target.candidates
     ).to.have.length(1);
     expect(getPoolByAddressStub.calledOnce).to.be.true;
+    expect(discoveryStub.calledOnce).to.be.true;
   });
 });

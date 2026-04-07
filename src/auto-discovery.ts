@@ -17,6 +17,7 @@ import { overrideMulticall, RequireFields } from './utils';
 
 const DISCOVERY_PAGE_SIZE = 100;
 const DISCOVERY_MAX_PAGES = 100;
+const DISCOVERY_SCAN_CACHE_WINDOW_MS = 1000;
 
 export type PoolMap = Map<string, FungiblePool>;
 export type PoolHydrationCooldowns = Map<string, number>;
@@ -72,6 +73,12 @@ export type EffectiveSettlementTarget =
   | ManualSettlementTarget
   | ResolvedSettlementTarget;
 
+interface SharedDiscoveryScan {
+  promise?: Promise<ChainwideLiquidationAuction[]>;
+  fetchedAt?: number;
+  liquidationAuctions?: ChainwideLiquidationAuction[];
+}
+
 const candidateDebtRemainingCache = new WeakMap<
   DiscoveredAuctionCandidate,
   DecimalValue
@@ -80,6 +87,7 @@ const candidateTakePriorityCache = new WeakMap<
   DiscoveredAuctionCandidate,
   DecimalValue
 >();
+const sharedDiscoveryScans = new Map<string, SharedDiscoveryScan>();
 
 function normalizeAddress(address: string): string {
   return address.toLowerCase();
@@ -381,6 +389,69 @@ function compareCandidateGroups(
   return compareCandidates(leftCandidates[0], rightCandidates[0]);
 }
 
+function discoveryCacheKey(config: KeeperConfig): string {
+  return `${config.subgraphUrl}|${DISCOVERY_PAGE_SIZE}|${DISCOVERY_MAX_PAGES}`;
+}
+
+export function clearSharedDiscoveryScans(): void {
+  sharedDiscoveryScans.clear();
+}
+
+async function getChainwideLiquidationAuctionsShared(
+  config: KeeperConfig
+): Promise<ChainwideLiquidationAuction[]> {
+  const cacheKey = discoveryCacheKey(config);
+  const now = Date.now();
+  const existing = sharedDiscoveryScans.get(cacheKey);
+
+  if (
+    existing?.liquidationAuctions !== undefined &&
+    existing.fetchedAt !== undefined &&
+    now - existing.fetchedAt <= DISCOVERY_SCAN_CACHE_WINDOW_MS
+  ) {
+    return existing.liquidationAuctions;
+  }
+
+  if (existing?.promise) {
+    return existing.promise;
+  }
+
+  const promise = subgraph
+    .getChainwideLiquidationAuctions(
+      config.subgraphUrl,
+      DISCOVERY_PAGE_SIZE,
+      DISCOVERY_MAX_PAGES
+    )
+    .then(({ liquidationAuctions }) => {
+      sharedDiscoveryScans.set(cacheKey, {
+        liquidationAuctions,
+        fetchedAt: Date.now(),
+      });
+      return liquidationAuctions;
+    })
+    .finally(() => {
+      const current = sharedDiscoveryScans.get(cacheKey);
+      if (current?.promise === promise) {
+        if (current.liquidationAuctions !== undefined) {
+          sharedDiscoveryScans.set(cacheKey, {
+            liquidationAuctions: current.liquidationAuctions,
+            fetchedAt: current.fetchedAt,
+          });
+        } else {
+          sharedDiscoveryScans.delete(cacheKey);
+        }
+      }
+    });
+
+  sharedDiscoveryScans.set(cacheKey, {
+    promise,
+    fetchedAt: existing?.fetchedAt,
+    liquidationAuctions: existing?.liquidationAuctions,
+  });
+
+  return promise;
+}
+
 export function getManualTakeTargets(config: KeeperConfig): ManualTakeTarget[] {
   return config.pools
     .filter(
@@ -414,7 +485,8 @@ export function getManualSettlementTargets(
 }
 
 export async function buildDiscoveredTakeTargets(
-  config: KeeperConfig
+  config: KeeperConfig,
+  liquidationAuctionsInput?: ChainwideLiquidationAuction[]
 ): Promise<ResolvedTakeTarget[]> {
   const autoDiscover = config.autoDiscover;
   const takePolicy = getAutoDiscoverTakePolicy(autoDiscover);
@@ -429,11 +501,8 @@ export async function buildDiscoveredTakeTargets(
       .map((poolConfig) => normalizeAddress(poolConfig.address))
   );
 
-  const { liquidationAuctions } = await subgraph.getChainwideLiquidationAuctions(
-    config.subgraphUrl,
-    DISCOVERY_PAGE_SIZE,
-    DISCOVERY_MAX_PAGES
-  );
+  const liquidationAuctions =
+    liquidationAuctionsInput ?? (await getChainwideLiquidationAuctionsShared(config));
 
   const takeCandidates = dedupeCandidates(
     liquidationAuctions
@@ -506,7 +575,8 @@ export async function buildDiscoveredTakeTargets(
 }
 
 export async function buildDiscoveredSettlementTargets(
-  config: KeeperConfig
+  config: KeeperConfig,
+  liquidationAuctionsInput?: ChainwideLiquidationAuction[]
 ): Promise<ResolvedSettlementTarget[]> {
   const autoDiscover = config.autoDiscover;
   const settlementPolicy = getAutoDiscoverSettlementPolicy(autoDiscover);
@@ -521,11 +591,8 @@ export async function buildDiscoveredSettlementTargets(
       .map((poolConfig) => normalizeAddress(poolConfig.address))
   );
 
-  const { liquidationAuctions } = await subgraph.getChainwideLiquidationAuctions(
-    config.subgraphUrl,
-    DISCOVERY_PAGE_SIZE,
-    DISCOVERY_MAX_PAGES
-  );
+  const liquidationAuctions =
+    liquidationAuctionsInput ?? (await getChainwideLiquidationAuctionsShared(config));
 
   const settlementCandidates = dedupeCandidates(
     liquidationAuctions

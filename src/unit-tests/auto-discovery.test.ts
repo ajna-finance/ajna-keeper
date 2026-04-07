@@ -3,6 +3,7 @@ import sinon from 'sinon';
 import {
   buildDiscoveredSettlementTargets,
   buildDiscoveredTakeTargets,
+  clearSharedDiscoveryScans,
   validateResolvedSettlementTarget,
   validateResolvedTakeTarget,
 } from '../auto-discovery';
@@ -48,6 +49,7 @@ const BASE_CONFIG: KeeperConfig = {
 describe('Auto Discovery Target Resolution', () => {
   afterEach(() => {
     sinon.restore();
+    clearSharedDiscoveryScans();
   });
 
   it('dedupes duplicate discovered take candidates by pool and borrower', async () => {
@@ -199,6 +201,34 @@ describe('Auto Discovery Target Resolution', () => {
 
     expect(takeTargets).to.deep.equal([]);
     expect(settlementTargets).to.deep.equal([]);
+  });
+
+  it('reuses the same chain-wide discovery scan across take and settlement builders', async () => {
+    const discoveryStub = sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerA',
+            kickTime: '1',
+            debtRemaining: '2',
+            collateralRemaining: '3',
+            neutralPrice: '4',
+            debt: '2',
+            collateral: '3',
+            pool: { id: '0x1111111111111111111111111111111111111111' },
+          },
+        ],
+      });
+
+    const [takeTargets, settlementTargets] = await Promise.all([
+      buildDiscoveredTakeTargets(BASE_CONFIG),
+      buildDiscoveredSettlementTargets(BASE_CONFIG),
+    ]);
+
+    expect(discoveryStub.calledOnce).to.be.true;
+    expect(takeTargets).to.have.length(1);
+    expect(settlementTargets).to.have.length(1);
   });
 
   it('does not apply take quote budget to arb-only discovered take defaults', async () => {
