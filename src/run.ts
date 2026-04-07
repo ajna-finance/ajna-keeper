@@ -7,6 +7,7 @@ import {
   PoolConfig,
   validateAutoDiscoverConfig,
   validateTakeSettings,
+  validateTakeSettingsForChain,
 } from './config-types';
 import {
   delay,
@@ -82,6 +83,7 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
 
   configureAjna(config.ajna);
   validateAutoDiscoverConfig(config);
+  validateTakeSettingsForChain(config, chainId);
 
   const ajna = new AjnaSDK(provider);
   logger.info('...and pools:');

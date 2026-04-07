@@ -262,6 +262,17 @@ export function hasExternalTakeSettings(config: TakeSettings): boolean {
   );
 }
 
+function hasNonEmptyObject(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value).length > 0
+  );
+}
+
 export interface DiscoveredDefaultsConfig {
   /** Take settings applied to discovered pools without manual take overrides. */
   take?: TakeSettings;
@@ -488,7 +499,11 @@ export function configureAjna(ajnaConfig: AjnaConfigParams): void {
 // }
 
 
-export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperConfig): void {
+export function validateTakeSettings(
+  config: TakeSettings,
+  keeperConfig: KeeperConfig,
+  chainId?: number
+): void {
   const hasArbTake = config.minCollateral !== undefined && config.hpbPriceFactor !== undefined;
   const hasTake = hasExternalTakeSettings(config);
 
@@ -518,6 +533,16 @@ export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperC
       if (!keeperConfig.keeperTaker) {
         throw new Error('TakeSettings: keeperTaker required when liquiditySource is ONEINCH');
       }
+      if (!keeperConfig.oneInchRouters || Object.keys(keeperConfig.oneInchRouters).length === 0) {
+        throw new Error(
+          'TakeSettings: oneInchRouters required when liquiditySource is ONEINCH'
+        );
+      }
+      if (chainId !== undefined && !keeperConfig.oneInchRouters[chainId]) {
+        throw new Error(
+          `TakeSettings: oneInchRouters missing router for chain ${chainId}`
+        );
+      }
     }
 
     if (config.liquiditySource === LiquiditySource.UNISWAPV3) {
@@ -529,6 +554,17 @@ export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperC
       }
       if (!keeperConfig.universalRouterOverrides) {
         throw new Error('TakeSettings: universalRouterOverrides required when liquiditySource is UNISWAPV3');
+      }
+      const routerOverrides = keeperConfig.universalRouterOverrides;
+      if (
+        !routerOverrides.universalRouterAddress ||
+        !routerOverrides.permit2Address ||
+        !routerOverrides.poolFactoryAddress ||
+        !routerOverrides.wethAddress
+      ) {
+        throw new Error(
+          'TakeSettings: universalRouterOverrides.universalRouterAddress, permit2Address, poolFactoryAddress, and wethAddress required when liquiditySource is UNISWAPV3'
+        );
       }
     }
 
@@ -542,6 +578,16 @@ export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperC
       if (!keeperConfig.sushiswapRouterOverrides) {
         throw new Error('TakeSettings: sushiswapRouterOverrides required when liquiditySource is SUSHISWAP');
       }
+      const routerOverrides = keeperConfig.sushiswapRouterOverrides;
+      if (
+        !routerOverrides.swapRouterAddress ||
+        !routerOverrides.factoryAddress ||
+        !routerOverrides.wethAddress
+      ) {
+        throw new Error(
+          'TakeSettings: sushiswapRouterOverrides.swapRouterAddress, factoryAddress, and wethAddress required when liquiditySource is SUSHISWAP'
+        );
+      }
     }
 
     if (config.liquiditySource === LiquiditySource.CURVE) {
@@ -553,6 +599,15 @@ export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperC
       }
       if (!keeperConfig.curveRouterOverrides) {
         throw new Error('TakeSettings: curveRouterOverrides required when liquiditySource is CURVE');
+      }
+      const routerOverrides = keeperConfig.curveRouterOverrides;
+      if (
+        !hasNonEmptyObject(routerOverrides.poolConfigs) ||
+        !routerOverrides.wethAddress
+      ) {
+        throw new Error(
+          'TakeSettings: curveRouterOverrides.poolConfigs and wethAddress required when liquiditySource is CURVE'
+        );
       }
       if (!keeperConfig.tokenAddresses || Object.keys(keeperConfig.tokenAddresses).length === 0) {
         throw new Error('TakeSettings: tokenAddresses required when liquiditySource is CURVE');
@@ -663,5 +718,21 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
       );
     }
     validateSettlementSettings(discoveredSettlement);
+  }
+}
+
+export function validateTakeSettingsForChain(
+  config: KeeperConfig,
+  chainId: number
+): void {
+  for (const poolConfig of config.pools) {
+    if (poolConfig.take) {
+      validateTakeSettings(poolConfig.take, config, chainId);
+    }
+  }
+
+  const discoveredTake = config.discoveredDefaults?.take;
+  if (discoveredTake && getAutoDiscoverTakePolicy(config.autoDiscover)) {
+    validateTakeSettings(discoveredTake, config, chainId);
   }
 }

@@ -45,26 +45,39 @@ interface HandleTakeParams {
   >;
 }
 
+function stripExternalTakeSettings(
+  poolConfig: RequireFields<PoolConfig, 'take'>
+): RequireFields<PoolConfig, 'take'> {
+  return {
+    ...poolConfig,
+    take: {
+      ...poolConfig.take,
+      liquiditySource: undefined,
+      marketPriceFactor: undefined,
+    },
+  };
+}
+
 export async function handleTakes({
   signer,
   pool,
   poolConfig,
   config,
 }: HandleTakeParams) {
-  // Smart Detection - route to appropriate take handler
   const dexManager = new SmartDexManager(signer, config);
-  const deploymentType = await dexManager.detectDeploymentType();
-  const validation = await dexManager.validateDeployment();
+  const requestedLiquiditySource = poolConfig.take.liquiditySource;
+  const deploymentType = await dexManager.detectDeploymentTypeForPool(poolConfig);
+  const validation = await dexManager.validateDeploymentForPool(poolConfig);
 
-  logger.debug(`Detection Results - Type: ${deploymentType}, Valid: ${validation.valid}`);
+  logger.debug(
+    `Detection Results - Pool: ${pool.name}, Requested Source: ${requestedLiquiditySource ?? 'arb-only'}, Type: ${deploymentType}, Valid: ${validation.valid}`
+  );
   if (!validation.valid) {
     logger.error(`Configuration errors: ${validation.errors.join(', ')}`);
   }
 
-  // Route based on deployment type
   switch (deploymentType) {
     case 'single':
-      // EXISTING 1inch path - zero changes to existing code
       logger.debug(`Using single contract (1inch) take handler for pool: ${pool.name}`);
       await handleTakesWith1inch({
         signer,
@@ -75,7 +88,6 @@ export async function handleTakes({
       break;
 
     case 'factory':
-      // NEW factory path - completely separate code
       logger.debug(`Using factory (multi-DEX) take handler for pool: ${pool.name}`);
       await handleFactoryTakes({
         signer,
@@ -96,13 +108,13 @@ export async function handleTakes({
       break;
 
     case 'none':
-      // External DEX unavailable, but arbTake should still work!
-      // Use the existing 1inch handler since it already supports arbTake fallback
-      logger.warn(`External DEX integration unavailable for pool ${pool.name} - checking arbTake only`);
+      logger.warn(
+        `External liquidity source ${requestedLiquiditySource ?? 'none'} unavailable for pool ${pool.name} - checking arbTake only`
+      );
       await handleTakesWith1inch({
         signer,
         pool,
-        poolConfig,
+        poolConfig: stripExternalTakeSettings(poolConfig),
         config,
       });
       break;

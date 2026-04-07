@@ -277,6 +277,9 @@ describe('Auto Discovery Target Resolution', () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
       keeperTaker: '0x1234567890123456789012345678901234567890',
+      oneInchRouters: {
+        1: '0x1111111111111111111111111111111111111111',
+      },
       autoDiscover: {
         ...BASE_CONFIG.autoDiscover!,
         take: {

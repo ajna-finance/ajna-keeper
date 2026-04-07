@@ -9,7 +9,7 @@ import { handleKicks } from '../kick';
 import { arrayFromAsync, decimaledToWei } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { NonceTracker } from '../nonce';
-import { MAINNET_CONFIG } from './test-config';
+import { HARDHAT_RPC_URL, MAINNET_CONFIG } from './test-config';
 import {
   getProvider,
   impersonateSigner,
@@ -39,7 +39,9 @@ import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
  * 3. New factory routing for Uniswap V3
  * 4. Error handling and graceful degradation
  */
-describe('Take Integration Tests', () => {
+describe('Take Integration Tests', function () {
+  this.timeout(30000);
+
   let ajna: AjnaSDK;
   let pool: FungiblePool;
   let signer: Signer;
@@ -72,6 +74,7 @@ describe('Take Integration Tests', () => {
       signer,
       config: {
         dryRun: false,
+        ethRpcUrl: HARDHAT_RPC_URL,
         subgraphUrl: '',
         coinGeckoApiKey: '',
         delayBetweenActions: 0,

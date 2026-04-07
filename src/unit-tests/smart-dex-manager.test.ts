@@ -198,8 +198,7 @@ describe('SmartDexManager', () => {
       expect(result).to.be.false;
     });
 
-    // 🚨 CRITICAL FIX: Update this test to reflect reality
-    it('should return false for factory deployment (implementation pending)', async () => {
+    it('should return true for factory deployment with factory-backed source', async () => {
       const config = {
         keeperTakerFactory: '0xFactory123',
         takerContracts: { UniswapV3: '0xTaker123' },
@@ -216,9 +215,40 @@ describe('SmartDexManager', () => {
       const manager = new SmartDexManager(mockSigner, config);
       const result = await manager.canTakeLiquidation(poolConfig as any);
 
-      // NOTE: Currently returns false until smart-dex-manager.ts is updated to support factory takes
-      // But production configs show factory takes ARE working via take-factory.ts
-      expect(result).to.be.false;
+      expect(result).to.be.true;
+    });
+
+    it('should route mixed configs by pool source instead of preferring factory globally', async () => {
+      const config = {
+        keeperTaker: '0xOldTaker123',
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { UniswapV3: '0xNewTaker123' },
+        oneInchRouters: { 43114: '0xRouter123' },
+      };
+
+      const oneInchPoolConfig = {
+        name: 'Legacy 1inch Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const uniswapPoolConfig = {
+        name: 'Factory Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      };
+
+      const manager = new SmartDexManager(mockSigner, config);
+
+      expect(await manager.detectDeploymentTypeForPool(oneInchPoolConfig as any)).to.equal(
+        'single'
+      );
+      expect(await manager.detectDeploymentTypeForPool(uniswapPoolConfig as any)).to.equal(
+        'factory'
+      );
     });
 
     it('should return false for none deployment', async () => {
