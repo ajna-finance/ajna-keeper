@@ -5,6 +5,7 @@ import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from '../auto-discovery-handlers';
+import * as erc20Module from '../erc20';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import { LiquiditySource } from '../config-types';
@@ -157,5 +158,74 @@ describe('Auto Discovery Handlers', () => {
     });
 
     expect(handleCandidateAuctionsStub.called).to.be.false;
+  });
+
+  it('does not apply minExpectedProfitQuote to discovered settlement candidates', async () => {
+    const handleCandidateAuctionsStub = sinon
+      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .resolves();
+    sinon
+      .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
+      .resolves({ needs: true, reason: 'Bad debt detected' });
+    sinon.stub(erc20Module, 'getDecimalsErc20').resolves(18);
+
+    const pool = {
+      name: 'Settlement Pool',
+      poolAddress: '0x7777777777777777777777777777777777777777',
+      quoteAddress: '0x8888888888888888888888888888888888888888',
+      contract: {},
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+      },
+    };
+
+    await handleDiscoveredSettlementTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: false,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerC',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '0',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '0',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          settlement: true,
+          minExpectedProfitQuote: 9999,
+        },
+        tokenAddresses: {
+          weth: pool.quoteAddress,
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+    });
+
+    expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
+    expect(handleCandidateAuctionsStub.firstCall.args[0]).to.have.length(1);
+    expect(handleCandidateAuctionsStub.firstCall.args[0][0].borrower).to.equal('0xBorrowerC');
   });
 });

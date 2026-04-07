@@ -57,8 +57,10 @@ const config: KeeperConfig = {
     //   '0x63a366fc5976ff72999c89f69366f388b7d233e8',
     // ],
     //
-    // These are quote-token denominated. Leave them unset until dry-run data shows
-    // sensible values across the mix of WETH- and USDC-quoted pools you expect to hit.
+    // These are quote-token denominated. minExpectedProfitQuote applies to discovered
+    // takes only; gas caps still apply to discovered settlement too. Leave them unset
+    // until dry-run data shows sensible values across the mix of WETH- and USDC-quoted
+    // pools you expect to hit.
     // maxGasCostQuote: 1,
     // minExpectedProfitQuote: 1,
   },

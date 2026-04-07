@@ -78,6 +78,7 @@ const config: KeeperConfig = {
     takeQuoteBudgetPerRun: 5,
     maxGasPriceGwei: 5,
     maxGasCostQuote: 0.01,
+    // Take-only profitability floor for discovered external takes.
     minExpectedProfitQuote: 0.005,
   },
 

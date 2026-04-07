@@ -431,7 +431,7 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
 
-For a conservative first live rollout on Base, start from [example-base-rollout-config.ts](/home/mike/Projects-2026/ajna-keeper/example-base-rollout-config.ts).
+For a conservative first live rollout on Base, start from [`example-base-rollout-config.ts`](./example-base-rollout-config.ts).
 
 ```typescript
 const config: KeeperConfig = {
@@ -486,7 +486,7 @@ const config: KeeperConfig = {
 
 Discovery is auction-first, not pool-enumeration-first. The keeper queries chain-wide liquidation activity from the subgraph, groups live work by pool, hydrates only the pools that matter, and then runs the existing `take` and `settlement` execution paths behind the new policy checks.
 
-`minExpectedProfitQuote` and `maxGasCostQuote` are denominated in each pool's quote token. If your rollout spans mixed quote assets like WETH and USDC, leave them unset until you have dry-run data that supports chain-specific thresholds.
+`minExpectedProfitQuote` applies to discovered `take` decisions only. `maxGasCostQuote` and `maxGasPriceGwei` still apply to discovered `take` and `settlement` actions. All quote-denominated thresholds are per-pool quote token amounts. If your rollout spans mixed quote assets like WETH and USDC, leave them unset until you have dry-run data that supports chain-specific thresholds.
 
 `kick` auto-discovery is intentionally not part of V1.
 

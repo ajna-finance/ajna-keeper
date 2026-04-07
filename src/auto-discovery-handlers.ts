@@ -766,20 +766,6 @@ export async function handleDiscoveredSettlementTarget(params: {
       continue;
     }
 
-    const minExpectedProfitQuote = params.config.autoDiscover?.minExpectedProfitQuote;
-    if (minExpectedProfitQuote !== undefined) {
-      const botAddress = await params.signer.getAddress();
-      const kickerInfo = await params.pool.contract.kickerInfo(botAddress);
-      const expectedQuoteReturn = weiToDecimaled(kickerInfo.claimable_);
-      if (expectedQuoteReturn - gasPolicy.gasCostQuote < minExpectedProfitQuote) {
-        logDiscoveryDecision(
-          params.config,
-          `Skipping discovered settlement candidate ${params.pool.poolAddress}/${candidate.borrower}: expected settlement profit ${(expectedQuoteReturn - gasPolicy.gasCostQuote).toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`
-        );
-        continue;
-      }
-    }
-
     approvedAuctions.push(hydrateSettlementAuction(candidate));
   }
 

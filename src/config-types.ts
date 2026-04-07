@@ -1,5 +1,4 @@
 // src/config-types.ts
-// CURVE INTEGRATION: Only additions for Curve DEX support, no existing code modified
 
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -204,7 +203,7 @@ export interface AutoDiscoverConfig {
   dryRunNewPools?: boolean;
   /** Emit explicit skip logs for discovered pools and auctions. */
   logSkips?: boolean;
-  /** Require at least this much expected quote-token profit after gas. */
+  /** Require at least this much expected quote-token profit after gas for discovered takes. */
   minExpectedProfitQuote?: number;
   /** Reject discovered actions above this gas price. */
   maxGasPriceGwei?: number;
@@ -496,8 +495,10 @@ export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperC
       }
     }
 
-    // CURVE INTEGRATION: Added minimal validation for Curve
     if (config.liquiditySource === LiquiditySource.CURVE) {
+      if (!keeperConfig.keeperTakerFactory) {
+        throw new Error('TakeSettings: keeperTakerFactory required when liquiditySource is CURVE');
+      }
       if (!keeperConfig.curveRouterOverrides) {
         throw new Error('TakeSettings: curveRouterOverrides required when liquiditySource is CURVE');
       }
