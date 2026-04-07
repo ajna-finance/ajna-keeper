@@ -505,7 +505,7 @@ V1 auto-discovery is auction-first: the keeper scans chain-wide liquidation acti
 - `discoveredDefaults.settlement` defines how newly discovered pools should run `settlement`.
 - Manual `pools[]` entries still control `kick`, LP reward collection, bond collection, and per-action overrides.
 
-Operationally, the `take` cadence refreshes one shared in-memory chain-wide auction snapshot. Discovered `settlement` reuses that snapshot instead of issuing its own chain-wide discovery scan, which keeps background subgraph traffic tied to the `take` cadence. The snapshot is not persisted across restarts; discovered settlement resumes after the next take refresh.
+Operationally, discovered `take` refreshes one shared in-memory chain-wide auction snapshot when `autoDiscover.take` is enabled. Discovered `settlement` reuses that snapshot instead of issuing its own chain-wide discovery scan, which keeps background subgraph traffic tied to the `take` cadence in the common case. If you run settlement-only discovery, the settlement loop refreshes the snapshot on its own slower cadence. The snapshot is not persisted across restarts; discovered settlement resumes after the next discovery refresh for the actions you enabled.
 
 Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh, so crossing 100 active auctions does not require any operator action.
 

@@ -493,7 +493,7 @@ const config: KeeperConfig = {
 
 Discovery is auction-first, not pool-enumeration-first. The keeper queries chain-wide liquidation activity from the subgraph, groups live work by pool, hydrates only the pools that matter, and then runs the existing `take` and `settlement` execution paths behind the new policy checks.
 
-At runtime, the `take` cadence refreshes the shared chain-wide auction snapshot. Discovered `settlement` reuses the latest in-memory snapshot instead of issuing its own chain-wide fetch, so settlement no longer doubles discovery traffic. The snapshot is not persisted across restarts; after process restart, discovered settlement waits for the next take refresh.
+At runtime, discovered `take` refreshes the shared chain-wide auction snapshot when `autoDiscover.take` is enabled. Discovered `settlement` reuses that in-memory snapshot instead of issuing its own chain-wide fetch, so settlement no longer doubles discovery traffic in the common case. If you run settlement-only discovery, the settlement loop refreshes the snapshot on its own slower cadence. The snapshot is not persisted across restarts; after process restart, discovered settlement resumes after the next discovery refresh for the actions you enabled.
 
 Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh. No extra operator action is needed to discover 101 active auctions.
 

@@ -342,22 +342,11 @@ export async function processSettlementCycle({
   )
     ? await refreshDiscoverySnapshot(config, discoverySnapshotState)
     : undefined;
-  const hasDiscoverySnapshot =
-    refreshedLiquidationAuctions !== undefined ||
-    discoverySnapshotState?.latestLiquidationAuctions !== undefined;
   const discoveredLiquidationAuctions =
     refreshedLiquidationAuctions ??
     (discoverySnapshotState
       ? discoverySnapshotState.latestLiquidationAuctions ?? []
       : undefined);
-  if (
-    discoverySnapshotState &&
-    shouldRefreshDiscoverySnapshotOnSettlementCycle(config) &&
-    !hasDiscoverySnapshot &&
-    discoverySnapshotState.fetchedAt === undefined
-  ) {
-    logger.debug('Settlement loop has no discovery snapshot yet; discovered settlement targets will wait for the next take refresh');
-  }
 
   const targets: EffectiveSettlementTarget[] = [
     ...getManualSettlementTargets(config),
