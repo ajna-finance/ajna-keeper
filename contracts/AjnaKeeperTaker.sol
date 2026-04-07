@@ -5,6 +5,7 @@ import { IERC20Pool, IERC20Taker, PoolDeployer } from "./AjnaInterfaces.sol";
 import { IAggregationExecutor, IERC20, IGenericRouter, SwapDescription } from "./OneInchInterfaces.sol";
 // SECURITY FIX: Add SafeERC20 import
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @notice Allows a keeper to take auctions using external liquidity sources.
 contract AjnaKeeperTaker is IERC20Taker {
@@ -97,7 +98,7 @@ contract AjnaKeeperTaker is IERC20Taker {
         );
 
         // SECURITY FIX: Use safe approve with reset pattern to prevent "non-zero to non-zero allowance" error
-        uint256 approvalAmount = _ceilWmul(maxAmount, auctionPrice) / pool.quoteTokenScale(); // convert WAD to token precision
+        uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale()); // convert WAD to token precision
         _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), approvalAmount);
 
         // invoke the take

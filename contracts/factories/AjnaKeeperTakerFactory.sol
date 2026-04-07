@@ -62,6 +62,12 @@ contract AjnaKeeperTakerFactory {
             } catch {
                 revert InvalidTaker();
             }
+
+            try IAjnaKeeperTaker(takerAddress).authorizedFactory() returns (address factoryAddress) {
+                require(factoryAddress == address(this), "Factory mismatch");
+            } catch {
+                revert InvalidTaker();
+            }
         }
         
         takerContracts[source] = takerAddress;
