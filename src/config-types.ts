@@ -548,6 +548,9 @@ export function validateTakeSettings(config: TakeSettings, keeperConfig: KeeperC
       if (!keeperConfig.keeperTakerFactory) {
         throw new Error('TakeSettings: keeperTakerFactory required when liquiditySource is CURVE');
       }
+      if (!keeperConfig.takerContracts || !keeperConfig.takerContracts['Curve']) {
+        throw new Error('TakeSettings: takerContracts.Curve required when liquiditySource is CURVE');
+      }
       if (!keeperConfig.curveRouterOverrides) {
         throw new Error('TakeSettings: curveRouterOverrides required when liquiditySource is CURVE');
       }

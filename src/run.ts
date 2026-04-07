@@ -1,6 +1,8 @@
 import { AjnaSDK, Signer } from '@ajna-finance/sdk';
 import {
   configureAjna,
+  getAutoDiscoverSettlementPolicy,
+  getAutoDiscoverTakePolicy,
   KeeperConfig,
   PoolConfig,
   validateAutoDiscoverConfig,
@@ -62,6 +64,13 @@ interface DiscoverySnapshotState {
   >;
   fetchedAt?: number;
 }
+
+interface LoopIterationResult {
+  delaySeconds: number;
+  recovered: boolean;
+}
+
+const LOOP_CRASH_RECOVERY_DELAY_SECONDS = 30;
 
 export async function startKeeperFromConfig(config: KeeperConfig) {
   const { provider, signer } = await getProviderAndSigner(
@@ -161,8 +170,29 @@ function hasKickSettings(
 
 async function takePoolsLoop(params: DiscoveryLoopParams) {
   while (true) {
+    const result = await runTakeLoopIteration(params);
+    await delay(result.delaySeconds);
+    if (result.recovered) {
+      logger.info(`Restarting take loop after crash recovery delay`);
+    }
+  }
+}
+
+export async function runTakeLoopIteration(
+  params: DiscoveryLoopParams
+): Promise<LoopIterationResult> {
+  try {
     await processTakeCycle(params);
-    await delay(params.config.delayBetweenRuns);
+    return {
+      delaySeconds: params.config.delayBetweenRuns,
+      recovered: false,
+    };
+  } catch (outerError) {
+    logLoopCrash('Take', outerError);
+    return {
+      delaySeconds: LOOP_CRASH_RECOVERY_DELAY_SECONDS,
+      recovered: true,
+    };
   }
 }
 
@@ -174,13 +204,9 @@ export async function processTakeCycle({
   hydrationCooldowns,
   discoverySnapshotState,
 }: DiscoveryLoopParams): Promise<void> {
-  const liquidationAuctions = config.autoDiscover?.enabled
-    ? await getChainwideLiquidationAuctionsShared(config)
+  const liquidationAuctions = shouldRefreshDiscoverySnapshotOnTakeCycle(config)
+    ? await refreshDiscoverySnapshot(config, discoverySnapshotState)
     : undefined;
-  if (discoverySnapshotState && liquidationAuctions !== undefined) {
-    discoverySnapshotState.latestLiquidationAuctions = liquidationAuctions;
-    discoverySnapshotState.fetchedAt = Date.now();
-  }
 
   const targets: EffectiveTakeTarget[] = [
     ...getManualTakeTargets(config),
@@ -276,9 +302,8 @@ async function settlementLoop(params: DiscoveryLoopParams) {
       logger.debug(`Settlement loop iteration starting at ${startTime}`);
       await processSettlementCycle(params);
 
-      const settlementCheckIntervalSeconds = Math.max(
-        params.config.delayBetweenRuns * 5,
-        120
+      const settlementCheckIntervalSeconds = getSettlementCheckIntervalSeconds(
+        params.config
       );
       const nextCheck = new Date(
         Date.now() + settlementCheckIntervalSeconds * 1000
@@ -298,7 +323,7 @@ async function settlementLoop(params: DiscoveryLoopParams) {
         logger.error(`Stack trace:`, errorStack);
       }
 
-      await delay(30);
+      await delay(LOOP_CRASH_RECOVERY_DELAY_SECONDS);
       logger.info(`Restarting settlement loop after crash recovery delay`);
     }
   }
@@ -312,14 +337,22 @@ export async function processSettlementCycle({
   hydrationCooldowns,
   discoverySnapshotState,
 }: DiscoveryLoopParams): Promise<void> {
-  const hasDiscoverySnapshot =
-    discoverySnapshotState?.latestLiquidationAuctions !== undefined;
-  const discoveredLiquidationAuctions = discoverySnapshotState
-    ? discoverySnapshotState.latestLiquidationAuctions ?? []
+  const refreshedLiquidationAuctions = shouldRefreshDiscoverySnapshotOnSettlementCycle(
+    config
+  )
+    ? await refreshDiscoverySnapshot(config, discoverySnapshotState)
     : undefined;
+  const hasDiscoverySnapshot =
+    refreshedLiquidationAuctions !== undefined ||
+    discoverySnapshotState?.latestLiquidationAuctions !== undefined;
+  const discoveredLiquidationAuctions =
+    refreshedLiquidationAuctions ??
+    (discoverySnapshotState
+      ? discoverySnapshotState.latestLiquidationAuctions ?? []
+      : undefined);
   if (
     discoverySnapshotState &&
-    config.autoDiscover?.enabled &&
+    shouldRefreshDiscoverySnapshotOnSettlementCycle(config) &&
     !hasDiscoverySnapshot &&
     discoverySnapshotState.fetchedAt === undefined
   ) {
@@ -394,6 +427,49 @@ function hasSettlementSettings(
   config: PoolConfig
 ): config is RequireFields<PoolConfig, 'settlement'> {
   return !!config.settlement?.enabled;
+}
+
+function shouldRefreshDiscoverySnapshotOnTakeCycle(config: KeeperConfig): boolean {
+  return !!config.autoDiscover?.enabled && !!getAutoDiscoverTakePolicy(config.autoDiscover);
+}
+
+function shouldRefreshDiscoverySnapshotOnSettlementCycle(
+  config: KeeperConfig
+): boolean {
+  return (
+    !!config.autoDiscover?.enabled &&
+    !getAutoDiscoverTakePolicy(config.autoDiscover) &&
+    !!getAutoDiscoverSettlementPolicy(config.autoDiscover)
+  );
+}
+
+async function refreshDiscoverySnapshot(
+  config: KeeperConfig,
+  discoverySnapshotState?: DiscoverySnapshotState
+) {
+  const liquidationAuctions = await getChainwideLiquidationAuctionsShared(config);
+  if (discoverySnapshotState) {
+    discoverySnapshotState.latestLiquidationAuctions = liquidationAuctions;
+    discoverySnapshotState.fetchedAt = Date.now();
+  }
+  return liquidationAuctions;
+}
+
+function getSettlementCheckIntervalSeconds(config: KeeperConfig): number {
+  return Math.max(config.delayBetweenRuns * 5, 120);
+}
+
+function logLoopCrash(loopName: string, outerError: unknown): void {
+  const errorMessage =
+    outerError instanceof Error ? outerError.message : String(outerError);
+  const errorStack = outerError instanceof Error ? outerError.stack : undefined;
+
+  logger.error(
+    `${loopName} loop crashed, restarting in ${LOOP_CRASH_RECOVERY_DELAY_SECONDS} seconds: ${errorMessage}`
+  );
+  if (errorStack) {
+    logger.error(`Stack trace:`, errorStack);
+  }
 }
 
 async function collectLpRewardsLoop({

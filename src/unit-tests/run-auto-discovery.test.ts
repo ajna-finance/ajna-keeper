@@ -2,7 +2,12 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber } from 'ethers';
 import { clearSharedDiscoveryScans } from '../auto-discovery';
-import { processKickCycle, processSettlementCycle, processTakeCycle } from '../run';
+import {
+  processKickCycle,
+  processSettlementCycle,
+  processTakeCycle,
+  runTakeLoopIteration,
+} from '../run';
 import { KeeperConfig, PriceOriginSource } from '../config-types';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
@@ -325,5 +330,210 @@ describe('Run Loop Discovery Integration', () => {
     const secondRpcCache = handleDiscoveredTakeTargetStub.secondCall.args[0].rpcCache!;
     expect(firstRpcCache.gasPrice!.toString()).to.equal('123');
     expect(secondRpcCache.gasPrice!.toString()).to.equal('123');
+  });
+
+  it('refreshes the shared discovery snapshot from the settlement cadence when take discovery is disabled', async () => {
+    const handleDiscoveredSettlementTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
+      .resolves();
+    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '0',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+
+    const getPoolByAddressStub = sinon.stub().resolves({
+      name: 'Discovered Settlement Pool',
+      poolAddress: '0x4444444444444444444444444444444444444444',
+      quoteAddress: '0x5555555555555555555555555555555555555555',
+      collateralAddress: '0x6666666666666666666666666666666666666666',
+    });
+    const ajna = {
+      fungiblePoolFactory: {
+        getPoolByAddress: getPoolByAddressStub,
+      },
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+      },
+      getAddress: sinon
+        .stub()
+        .resolves('0x7777777777777777777777777777777777777777'),
+    };
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        enabled: true,
+        take: false,
+        settlement: true,
+      },
+      discoveredDefaults: {
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: true,
+        },
+      },
+    };
+    const discoverySnapshotState = {};
+
+    await processTakeCycle({
+      ajna: ajna as any,
+      poolMap: new Map(),
+      config,
+      signer: signer as any,
+      hydrationCooldowns: new Map(),
+      discoverySnapshotState,
+    });
+
+    expect(discoveryStub.called).to.be.false;
+
+    await processSettlementCycle({
+      ajna: ajna as any,
+      poolMap: new Map(),
+      config,
+      signer: signer as any,
+      hydrationCooldowns: new Map(),
+      discoverySnapshotState,
+    });
+
+    expect(discoveryStub.calledOnce).to.be.true;
+    expect(handleDiscoveredSettlementTargetStub.calledOnce).to.be.true;
+  });
+
+  it('reuses one gas price read across multiple discovered settlement targets in the same cycle', async () => {
+    const handleDiscoveredSettlementTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
+      .resolves();
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '0',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+        {
+          borrower: '0xBorrowerB',
+          kickTime: '2',
+          debtRemaining: '4',
+          collateralRemaining: '0',
+          neutralPrice: '5',
+          debt: '4',
+          collateral: '0',
+          pool: { id: '0x5555555555555555555555555555555555555555' },
+        },
+      ],
+    });
+
+    const getPoolByAddressStub = sinon.stub();
+    getPoolByAddressStub
+      .withArgs('0x4444444444444444444444444444444444444444')
+      .resolves({
+        name: 'Discovered Settlement Pool A',
+        poolAddress: '0x4444444444444444444444444444444444444444',
+        quoteAddress: '0x6666666666666666666666666666666666666666',
+        collateralAddress: '0x7777777777777777777777777777777777777777',
+      })
+      .withArgs('0x5555555555555555555555555555555555555555')
+      .resolves({
+        name: 'Discovered Settlement Pool B',
+        poolAddress: '0x5555555555555555555555555555555555555555',
+        quoteAddress: '0x8888888888888888888888888888888888888888',
+        collateralAddress: '0x9999999999999999999999999999999999999999',
+      });
+
+    const gasPriceStub = sinon.stub().resolves(BigNumber.from(456));
+    const signer = {
+      provider: {
+        getGasPrice: gasPriceStub,
+      },
+      getAddress: sinon
+        .stub()
+        .resolves('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+    };
+    const ajna = {
+      fungiblePoolFactory: {
+        getPoolByAddress: getPoolByAddressStub,
+      },
+    };
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        enabled: true,
+        take: false,
+        settlement: true,
+      },
+      discoveredDefaults: {
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: true,
+        },
+      },
+    };
+
+    await processSettlementCycle({
+      ajna: ajna as any,
+      poolMap: new Map(),
+      config,
+      signer: signer as any,
+      hydrationCooldowns: new Map(),
+      discoverySnapshotState: {},
+    });
+
+    expect(handleDiscoveredSettlementTargetStub.calledTwice).to.be.true;
+    expect(gasPriceStub.calledOnce).to.be.true;
+    const firstRpcCache =
+      handleDiscoveredSettlementTargetStub.firstCall.args[0].rpcCache!;
+    const secondRpcCache =
+      handleDiscoveredSettlementTargetStub.secondCall.args[0].rpcCache!;
+    expect(firstRpcCache.gasPrice!.toString()).to.equal('456');
+    expect(secondRpcCache.gasPrice!.toString()).to.equal('456');
+  });
+
+  it('recovers take loop iterations from pre-target discovery failures', async () => {
+    const discoveryError = new Error('temporary discovery outage');
+    sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .rejects(discoveryError);
+
+    const result = await runTakeLoopIteration({
+      ajna: {} as any,
+      poolMap: new Map(),
+      config: {
+        ...BASE_CONFIG,
+        autoDiscover: {
+          enabled: true,
+          take: true,
+        },
+      },
+      signer: {} as any,
+      hydrationCooldowns: new Map(),
+      discoverySnapshotState: {},
+    });
+
+    expect(result).to.deep.equal({
+      delaySeconds: 30,
+      recovered: true,
+    });
   });
 });

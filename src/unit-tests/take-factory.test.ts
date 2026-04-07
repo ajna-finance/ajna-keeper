@@ -1,10 +1,12 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { LiquiditySource } from '../config-types';
+import { CurvePoolType, LiquiditySource } from '../config-types';
 import { logger } from '../logging';
 import * as takeFactory from '../take-factory';
 import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
+import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
+import { CurveQuoteProvider } from '../dex-providers/curve-quote-provider';
 import * as erc20 from '../erc20';
 
 describe('Take Factory', () => {
@@ -419,6 +421,68 @@ describe('Take Factory', () => {
   });
 
   describe('Quote Provider Reuse', () => {
+    it('reuses a shared Uniswap V3 quote provider cache across quote evaluations', async () => {
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'getQuote').resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('120', 6).toString(),
+      } as any);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Test Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon.stub().resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'Test Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        universalRouterOverrides: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          defaultFeeTier: 3000,
+          wethAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+        },
+      };
+      const quoteSigner = ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      );
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+
+      await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('1'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        quoteSigner as any,
+        runtimeCache
+      );
+      const cachedProvider = runtimeCache.uniswapV3;
+      expect(cachedProvider).to.not.equal(undefined);
+      expect(cachedProvider).to.not.equal(null);
+
+      await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('1'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        quoteSigner as any,
+        runtimeCache
+      );
+
+      expect(runtimeCache.uniswapV3).to.equal(cachedProvider);
+    });
+
     it('reuses a shared SushiSwap quote provider cache across quote evaluations', async () => {
       const initializeStub = sinon
         .stub(SushiSwapQuoteProvider.prototype, 'initialize')
@@ -482,6 +546,79 @@ describe('Take Factory', () => {
 
       expect(initializeStub.called).to.be.true;
       expect(runtimeCache.sushiswap).to.equal(cachedProvider);
+    });
+
+    it('reuses a shared Curve quote provider cache across quote evaluations', async () => {
+      const initializeStub = sinon
+        .stub(CurveQuoteProvider.prototype, 'initialize')
+        .resolves(true);
+      sinon.stub(CurveQuoteProvider.prototype, 'getQuote').resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('120', 6),
+      } as any);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Test Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon.stub().resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'Test Pool',
+        take: {
+          liquiditySource: LiquiditySource.CURVE,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        curveRouterOverrides: {
+          poolConfigs: {
+            'COLLATERAL-QUOTE': {
+              address: '0x3333333333333333333333333333333333333333',
+              poolType: CurvePoolType.STABLE,
+            },
+          },
+          defaultSlippage: 0.5,
+          wethAddress: '0x4444444444444444444444444444444444444444',
+        },
+        tokenAddresses: {
+          COLLATERAL: '0x1111111111111111111111111111111111111111',
+          QUOTE: '0x2222222222222222222222222222222222222222',
+        },
+      };
+      const quoteSigner = ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      );
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+
+      await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('1'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        quoteSigner as any,
+        runtimeCache
+      );
+      const cachedProvider = runtimeCache.curve;
+      expect(cachedProvider).to.not.equal(undefined);
+      expect(cachedProvider).to.not.equal(null);
+
+      await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('1'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        quoteSigner as any,
+        runtimeCache
+      );
+
+      expect(initializeStub.calledOnce).to.be.true;
+      expect(runtimeCache.curve).to.equal(cachedProvider);
     });
   });
 
