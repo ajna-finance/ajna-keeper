@@ -397,7 +397,7 @@ export function clearSharedDiscoveryScans(): void {
   sharedDiscoveryScans.clear();
 }
 
-async function getChainwideLiquidationAuctionsShared(
+export async function getChainwideLiquidationAuctionsShared(
   config: KeeperConfig
 ): Promise<ChainwideLiquidationAuction[]> {
   const cacheKey = discoveryCacheKey(config);

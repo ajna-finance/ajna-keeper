@@ -27,6 +27,7 @@ import {
   EffectiveSettlementTarget,
   EffectiveTakeTarget,
   ensurePoolLoaded,
+  getChainwideLiquidationAuctionsShared,
   getManualSettlementTargets,
   getManualTakeTargets,
   PoolHydrationCooldowns,
@@ -46,10 +47,18 @@ interface KeepPoolParams {
 interface DiscoveryLoopParams extends KeepPoolParams {
   ajna: AjnaSDK;
   hydrationCooldowns: PoolHydrationCooldowns;
+  discoverySnapshotState?: DiscoverySnapshotState;
 }
 
 interface KickLoopParams extends KeepPoolParams {
   chainId?: number;
+}
+
+interface DiscoverySnapshotState {
+  latestLiquidationAuctions?: Awaited<
+    ReturnType<typeof getChainwideLiquidationAuctionsShared>
+  >;
+  fetchedAt?: number;
 }
 
 export async function startKeeperFromConfig(config: KeeperConfig) {
@@ -67,10 +76,25 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   logger.info('...and pools:');
   const poolMap = await getPoolsFromConfig(ajna, config);
   const hydrationCooldowns: PoolHydrationCooldowns = new Map();
+  const discoverySnapshotState: DiscoverySnapshotState = {};
 
   kickPoolsLoop({ poolMap, config, signer, chainId });
-  takePoolsLoop({ ajna, poolMap, config, signer, hydrationCooldowns });
-  settlementLoop({ ajna, poolMap, config, signer, hydrationCooldowns });
+  takePoolsLoop({
+    ajna,
+    poolMap,
+    config,
+    signer,
+    hydrationCooldowns,
+    discoverySnapshotState,
+  });
+  settlementLoop({
+    ajna,
+    poolMap,
+    config,
+    signer,
+    hydrationCooldowns,
+    discoverySnapshotState,
+  });
   collectBondLoop({ poolMap, config, signer });
   collectLpRewardsLoop({ poolMap, config, signer });
 }
@@ -146,10 +170,19 @@ export async function processTakeCycle({
   config,
   signer,
   hydrationCooldowns,
+  discoverySnapshotState,
 }: DiscoveryLoopParams): Promise<void> {
+  const liquidationAuctions = config.autoDiscover?.enabled
+    ? await getChainwideLiquidationAuctionsShared(config)
+    : undefined;
+  if (discoverySnapshotState && liquidationAuctions !== undefined) {
+    discoverySnapshotState.latestLiquidationAuctions = liquidationAuctions;
+    discoverySnapshotState.fetchedAt = Date.now();
+  }
+
   const targets: EffectiveTakeTarget[] = [
     ...getManualTakeTargets(config),
-    ...(await buildDiscoveredTakeTargets(config)),
+    ...(await buildDiscoveredTakeTargets(config, liquidationAuctions)),
   ];
 
   for (const target of targets) {
@@ -267,10 +300,25 @@ export async function processSettlementCycle({
   config,
   signer,
   hydrationCooldowns,
+  discoverySnapshotState,
 }: DiscoveryLoopParams): Promise<void> {
+  const hasDiscoverySnapshot =
+    discoverySnapshotState?.latestLiquidationAuctions !== undefined;
+  const discoveredLiquidationAuctions = discoverySnapshotState
+    ? discoverySnapshotState.latestLiquidationAuctions ?? []
+    : undefined;
+  if (
+    discoverySnapshotState &&
+    config.autoDiscover?.enabled &&
+    !hasDiscoverySnapshot &&
+    discoverySnapshotState.fetchedAt === undefined
+  ) {
+    logger.debug('Settlement loop has no discovery snapshot yet; discovered settlement targets will wait for the next take refresh');
+  }
+
   const targets: EffectiveSettlementTarget[] = [
     ...getManualSettlementTargets(config),
-    ...(await buildDiscoveredSettlementTargets(config)),
+    ...(await buildDiscoveredSettlementTargets(config, discoveredLiquidationAuctions)),
   ];
 
   logger.info(`Settlement loop started with ${targets.length} pools`);

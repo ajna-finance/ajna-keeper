@@ -207,6 +207,7 @@ describe('Run Loop Discovery Integration', () => {
       },
     };
     const poolMap = new Map();
+    const discoverySnapshotState = {};
 
     await processTakeCycle({
       ajna: ajna as any,
@@ -214,6 +215,7 @@ describe('Run Loop Discovery Integration', () => {
       config,
       signer: signer as any,
       hydrationCooldowns: new Map(),
+      discoverySnapshotState,
     });
     await processSettlementCycle({
       ajna: ajna as any,
@@ -221,6 +223,7 @@ describe('Run Loop Discovery Integration', () => {
       config,
       signer: signer as any,
       hydrationCooldowns: new Map(),
+      discoverySnapshotState,
     });
 
     expect(handleDiscoveredTakeTargetStub.calledOnce).to.be.true;
