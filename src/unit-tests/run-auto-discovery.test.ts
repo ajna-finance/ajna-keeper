@@ -238,4 +238,92 @@ describe('Run Loop Discovery Integration', () => {
     expect(getPoolByAddressStub.calledOnce).to.be.true;
     expect(discoveryStub.calledOnce).to.be.true;
   });
+
+  it('reuses one gas price read across multiple discovered take targets in the same cycle', async () => {
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
+      .resolves();
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '2',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '2',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+        {
+          borrower: '0xBorrowerB',
+          kickTime: '2',
+          debtRemaining: '4',
+          collateralRemaining: '3',
+          neutralPrice: '5',
+          debt: '4',
+          collateral: '3',
+          pool: { id: '0x5555555555555555555555555555555555555555' },
+        },
+      ],
+    });
+
+    const getPoolByAddressStub = sinon.stub();
+    getPoolByAddressStub
+      .withArgs('0x4444444444444444444444444444444444444444')
+      .resolves({
+        name: 'Discovered Pool A',
+        poolAddress: '0x4444444444444444444444444444444444444444',
+        quoteAddress: '0x6666666666666666666666666666666666666666',
+        collateralAddress: '0x7777777777777777777777777777777777777777',
+      })
+      .withArgs('0x5555555555555555555555555555555555555555')
+      .resolves({
+        name: 'Discovered Pool B',
+        poolAddress: '0x5555555555555555555555555555555555555555',
+        quoteAddress: '0x8888888888888888888888888888888888888888',
+        collateralAddress: '0x9999999999999999999999999999999999999999',
+      });
+
+    const gasPriceStub = sinon.stub().resolves(BigNumber.from(123));
+    const signer = {
+      provider: {
+        getGasPrice: gasPriceStub,
+      },
+    };
+    const ajna = {
+      fungiblePoolFactory: {
+        getPoolByAddress: getPoolByAddressStub,
+      },
+    };
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        enabled: true,
+        take: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+      },
+    };
+
+    await processTakeCycle({
+      ajna: ajna as any,
+      poolMap: new Map(),
+      config,
+      signer: signer as any,
+      hydrationCooldowns: new Map(),
+      discoverySnapshotState: {},
+    });
+
+    expect(handleDiscoveredTakeTargetStub.calledTwice).to.be.true;
+    expect(gasPriceStub.calledOnce).to.be.true;
+    const firstRpcCache = handleDiscoveredTakeTargetStub.firstCall.args[0].rpcCache!;
+    const secondRpcCache = handleDiscoveredTakeTargetStub.secondCall.args[0].rpcCache!;
+    expect(firstRpcCache.gasPrice!.toString()).to.equal('123');
+    expect(secondRpcCache.gasPrice!.toString()).to.equal('123');
+  });
 });

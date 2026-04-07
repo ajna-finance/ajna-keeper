@@ -1,9 +1,11 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { BigNumber } from 'ethers';
+import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../config-types';
 import { logger } from '../logging';
 import * as takeFactory from '../take-factory';
+import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
+import * as erc20 from '../erc20';
 
 describe('Take Factory', () => {
   let mockSigner: any;
@@ -413,6 +415,73 @@ describe('Take Factory', () => {
           expect(canUse1inch).to.be.true;
         }
       });
+    });
+  });
+
+  describe('Quote Provider Reuse', () => {
+    it('reuses a shared SushiSwap quote provider cache across quote evaluations', async () => {
+      const initializeStub = sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'initialize')
+        .resolves(true);
+      sinon.stub(SushiSwapQuoteProvider.prototype, 'getQuote').resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('120', 6),
+      } as any);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Test Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon.stub().resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'Test Pool',
+        take: {
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        sushiswapRouterOverrides: {
+          swapRouterAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
+          factoryAddress: '0x5555555555555555555555555555555555555555',
+          defaultFeeTier: 500,
+          wethAddress: '0x6666666666666666666666666666666666666666',
+        },
+      };
+      const quoteSigner = ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      );
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+
+      await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('1'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        quoteSigner as any,
+        runtimeCache
+      );
+      const cachedProvider = runtimeCache.sushiswap;
+      expect(cachedProvider).to.not.equal(undefined);
+      expect(cachedProvider).to.not.equal(null);
+      await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('1'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        quoteSigner as any,
+        runtimeCache
+      );
+
+      expect(initializeStub.called).to.be.true;
+      expect(runtimeCache.sushiswap).to.equal(cachedProvider);
     });
   });
 

@@ -5,17 +5,44 @@ import { NonceTracker } from './nonce';
 import { TransactionResponse } from '@ethersproject/abstract-provider';
 import { logger } from './logging';
 
-// TODO: Remove caching. This performance improvement is not worth the complexity.
-const cachedDecimals: Map<string, number> = new Map(); // Map of address to int decimals.
+// Process-wide decimals cache. Normalize addresses so mixed-case config and runtime
+// paths do not trigger duplicate RPC calls.
+const cachedDecimals: Map<string, number> = new Map();
+const pendingDecimals: Map<string, Promise<number>> = new Map();
+
+function normalizeTokenAddress(tokenAddress: string): string {
+  return tokenAddress.toLowerCase();
+}
+
+export function clearErc20DecimalCache(): void {
+  cachedDecimals.clear();
+  pendingDecimals.clear();
+}
+
 export async function getDecimalsErc20(
   signer: SignerOrProvider,
   tokenAddress: string
 ) {
-  if (!cachedDecimals.has(tokenAddress)) {
-    const decimals = await _getDecimalsErc20(signer, tokenAddress);
-    cachedDecimals.set(tokenAddress, decimals);
+  const normalizedAddress = normalizeTokenAddress(tokenAddress);
+  if (cachedDecimals.has(normalizedAddress)) {
+    return cachedDecimals.get(normalizedAddress)!;
   }
-  return cachedDecimals.get(tokenAddress)!;
+
+  if (!pendingDecimals.has(normalizedAddress)) {
+    const pending = _getDecimalsErc20(signer, tokenAddress)
+      .then((decimals) => {
+        cachedDecimals.set(normalizedAddress, decimals);
+        pendingDecimals.delete(normalizedAddress);
+        return decimals;
+      })
+      .catch((error) => {
+        pendingDecimals.delete(normalizedAddress);
+        throw error;
+      });
+    pendingDecimals.set(normalizedAddress, pending);
+  }
+
+  return await pendingDecimals.get(normalizedAddress)!;
 }
 
 async function _getDecimalsErc20(

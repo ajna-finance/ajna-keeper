@@ -21,6 +21,8 @@ import {
 } from './take';
 import {
   arbTakeLiquidationFactory,
+  createFactoryQuoteProviderRuntimeCache,
+  FactoryQuoteProviderRuntimeCache,
   checkIfArbTakeableFactory,
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
@@ -79,6 +81,11 @@ interface DiscoveredTakeDecision {
   maxArbTakePrice?: number;
   quoteEvaluation?: ExternalTakeQuoteEvaluation;
   reason?: string;
+}
+
+export interface DiscoveryRpcCache {
+  gasPrice?: BigNumber;
+  factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
 }
 
 function logDiscoveryDecision(config: DiscoveryExecutionConfig, message: string): void {
@@ -272,6 +279,7 @@ async function evaluateGasPolicy(params: {
   quoteTokenAddress: string;
   preferredLiquiditySource?: LiquiditySource;
   useProfitFloor?: boolean;
+  gasPrice?: BigNumber;
   nativeToQuoteConversion?: NativeToQuoteConversion;
 }): Promise<GasPolicyResult> {
   const provider = params.signer.provider;
@@ -285,7 +293,7 @@ async function evaluateGasPolicy(params: {
     };
   }
 
-  const gasPrice = await provider.getGasPrice();
+  const gasPrice = params.gasPrice ?? (await provider.getGasPrice());
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
   const maxGasPriceGwei = params.policy?.maxGasPriceGwei;
   if (maxGasPriceGwei !== undefined && gasPriceGwei > maxGasPriceGwei) {
@@ -445,6 +453,7 @@ async function evaluateTakeCandidate(params: {
   target: ResolvedTakeTarget;
   config: DiscoveryExecutionConfig;
   borrower: string;
+  rpcCache?: DiscoveryRpcCache;
 }): Promise<DiscoveredTakeDecision> {
   const liquidationStatus = await params.pool
     .getLiquidation(params.borrower)
@@ -499,7 +508,8 @@ async function evaluateTakeCandidate(params: {
               curveRouterOverrides: params.config.curveRouterOverrides,
               tokenAddresses: params.config.tokenAddresses,
             },
-            params.signer
+            params.signer,
+            params.rpcCache?.factoryQuoteProviders
           );
 
     if (!quoteEvaluation.isTakeable) {
@@ -527,6 +537,7 @@ async function evaluateTakeCandidate(params: {
         preferredLiquiditySource: params.target.take.liquiditySource,
         useProfitFloor: true,
         nativeToQuoteConversion,
+        gasPrice: params.rpcCache?.gasPrice,
       });
 
       if (!gasPolicy.approved) {
@@ -602,6 +613,7 @@ async function evaluateTakeCandidate(params: {
           quoteTokenAddress: params.pool.quoteAddress,
           preferredLiquiditySource: params.target.take.liquiditySource,
           useProfitFloor: false,
+          gasPrice: params.rpcCache?.gasPrice,
         });
         if (!gasPolicy.approved) {
           if (!approvedTake) {
@@ -635,7 +647,16 @@ export async function handleDiscoveredTakeTarget(params: {
   signer: Signer;
   target: ResolvedTakeTarget;
   config: DiscoveryExecutionConfig;
+  rpcCache?: DiscoveryRpcCache;
 }): Promise<void> {
+  const rpcCache =
+    params.rpcCache ??
+    (params.signer.provider
+      ? {
+          gasPrice: await params.signer.provider.getGasPrice(),
+          factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
+        }
+      : undefined);
   for (const candidate of params.target.candidates) {
     const decision = await evaluateTakeCandidate({
       pool: params.pool,
@@ -643,6 +664,7 @@ export async function handleDiscoveredTakeTarget(params: {
       target: params.target,
       config: params.config,
       borrower: candidate.borrower,
+      rpcCache,
     });
 
     if (!decision.approvedTake && !decision.approvedArbTake) {
@@ -781,6 +803,7 @@ export async function handleDiscoveredSettlementTarget(params: {
   signer: Signer;
   target: ResolvedSettlementTarget;
   config: DiscoveryExecutionConfig;
+  rpcCache?: DiscoveryRpcCache;
 }): Promise<void> {
   const handler = new SettlementHandler(
     params.pool,
@@ -792,6 +815,13 @@ export async function handleDiscoveredSettlementTarget(params: {
       delayBetweenActions: params.config.delayBetweenActions,
     }
   );
+  const rpcCache =
+    params.rpcCache ??
+    (params.signer.provider
+      ? {
+          gasPrice: await params.signer.provider.getGasPrice(),
+        }
+      : undefined);
 
   const approvedAuctions: AuctionToSettle[] = [];
   const settlementPolicy = getAutoDiscoverSettlementPolicy(
@@ -825,6 +855,7 @@ export async function handleDiscoveredSettlementTarget(params: {
       gasLimit: SETTLEMENT_GAS_LIMIT,
       quoteTokenAddress: params.pool.quoteAddress,
       useProfitFloor: false,
+      gasPrice: rpcCache?.gasPrice,
     });
     if (!gasPolicy.approved) {
       logDiscoveryDecision(

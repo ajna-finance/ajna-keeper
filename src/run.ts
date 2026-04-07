@@ -34,9 +34,11 @@ import {
   PoolMap,
 } from './auto-discovery';
 import {
+  DiscoveryRpcCache,
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from './auto-discovery-handlers';
+import { createFactoryQuoteProviderRuntimeCache } from './take-factory';
 
 interface KeepPoolParams {
   poolMap: PoolMap;
@@ -184,6 +186,13 @@ export async function processTakeCycle({
     ...getManualTakeTargets(config),
     ...(await buildDiscoveredTakeTargets(config, liquidationAuctions)),
   ];
+  const takeDiscoveryRpcCache: DiscoveryRpcCache | undefined =
+    targets.some((target) => target.source === 'discovered') && signer.provider
+      ? {
+          gasPrice: await signer.provider.getGasPrice(),
+          factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
+        }
+      : undefined;
 
   for (const target of targets) {
     const pool =
@@ -217,6 +226,7 @@ export async function processTakeCycle({
           signer,
           target,
           config,
+          rpcCache: takeDiscoveryRpcCache,
         });
       }
       await delay(config.delayBetweenActions);
@@ -320,6 +330,12 @@ export async function processSettlementCycle({
     ...getManualSettlementTargets(config),
     ...(await buildDiscoveredSettlementTargets(config, discoveredLiquidationAuctions)),
   ];
+  const settlementDiscoveryRpcCache: DiscoveryRpcCache | undefined =
+    targets.some((target) => target.source === 'discovered') && signer.provider
+      ? {
+          gasPrice: await signer.provider.getGasPrice(),
+        }
+      : undefined;
 
   logger.info(`Settlement loop started with ${targets.length} pools`);
   logger.info(`Settlement pools: ${targets.map((target) => target.name).join(', ')}`);
@@ -362,6 +378,7 @@ export async function processSettlementCycle({
           signer,
           target,
           config,
+          rpcCache: settlementDiscoveryRpcCache,
         });
       }
 

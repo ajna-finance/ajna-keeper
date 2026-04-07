@@ -57,6 +57,16 @@ interface LiquidationToTake {
   externalTakeQuoteEvaluation?: ExternalTakeQuoteEvaluation;
 }
 
+export interface FactoryQuoteProviderRuntimeCache {
+  uniswapV3?: UniswapV3QuoteProvider | null;
+  sushiswap?: SushiSwapQuoteProvider | null;
+  curve?: any | null;
+}
+
+export function createFactoryQuoteProviderRuntimeCache(): FactoryQuoteProviderRuntimeCache {
+  return {};
+}
+
 const WAD = ethers.constants.WeiPerEther;
 const BASIS_POINTS_DENOMINATOR = 10_000;
 const MARKET_FACTOR_SCALE = 1_000_000;
@@ -167,12 +177,14 @@ export async function handleFactoryTakes({
   config,
 }: FactoryTakeParams) {
   logger.debug(`Factory take handler starting for pool: ${pool.name}`);
+  const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
 
   for await (const liquidation of getLiquidationsToTakeFactory({
     pool,
     poolConfig,
     signer,
     config,
+    quoteProviderCache,
   })) {
     if (liquidation.isTakeable) {
       await takeLiquidationFactory({
@@ -206,7 +218,10 @@ async function* getLiquidationsToTakeFactory({
   poolConfig,
   signer,
   config,
-}: Pick<FactoryTakeParams, 'pool' | 'poolConfig' | 'signer' | 'config'>): AsyncGenerator<LiquidationToTake> {
+  quoteProviderCache,
+}: Pick<FactoryTakeParams, 'pool' | 'poolConfig' | 'signer' | 'config'> & {
+  quoteProviderCache?: FactoryQuoteProviderRuntimeCache;
+}): AsyncGenerator<LiquidationToTake> {
   
   const {
     pool: { hpb, hpbIndex, liquidationAuctions },
@@ -235,7 +250,8 @@ async function* getLiquidationsToTakeFactory({
         collateral,
         poolConfig,
         config,
-        signer
+        signer,
+        quoteProviderCache
       );
       isTakeable = externalTakeQuoteEvaluation.isTakeable;
     }
@@ -290,7 +306,8 @@ export async function getFactoryTakeQuoteEvaluation(
     FactoryTakeParams['config'],
     'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses'
   >,
-  signer: Signer
+  signer: Signer,
+  runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<ExternalTakeQuoteEvaluation> {
   if (!poolConfig.take.marketPriceFactor) {
     return {
@@ -309,13 +326,13 @@ export async function getFactoryTakeQuoteEvaluation(
 
   try {
     if (poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3) {
-      return await checkUniswapV3Quote(pool, auctionPriceWad, collateral, poolConfig, config, signer);
+      return await checkUniswapV3Quote(pool, auctionPriceWad, collateral, poolConfig, config, signer, runtimeCache);
     }
     if (poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP) {
-      return await checkSushiSwapQuote(pool, auctionPriceWad, collateral, poolConfig, config, signer);
+      return await checkSushiSwapQuote(pool, auctionPriceWad, collateral, poolConfig, config, signer, runtimeCache);
     }
     if (poolConfig.take.liquiditySource === LiquiditySource.CURVE) {
-      return await checkCurveQuote(pool, auctionPriceWad, collateral, poolConfig, config, signer);
+      return await checkCurveQuote(pool, auctionPriceWad, collateral, poolConfig, config, signer, runtimeCache);
     }
 
     logger.debug(`Factory: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`);
@@ -342,7 +359,8 @@ async function checkUniswapV3Quote(
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'universalRouterOverrides'>,
-  signer: Signer
+  signer: Signer,
+  runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<ExternalTakeQuoteEvaluation> {
   
   if (!config.universalRouterOverrides) {
@@ -365,17 +383,22 @@ async function checkUniswapV3Quote(
   }
 
   try {
-    // PHASE 3: Create official UniswapV3QuoteProvider (now using config address)
-    const quoteProvider = new UniswapV3QuoteProvider(signer, {
-      universalRouterAddress: routerConfig.universalRouterAddress,
-      poolFactoryAddress: routerConfig.poolFactoryAddress,
-      defaultFeeTier: routerConfig.defaultFeeTier || 3000,
-      wethAddress: routerConfig.wethAddress,
-      quoterV2Address: routerConfig.quoterV2Address,  // NEW: Pass from config
-    });
+    let quoteProvider = runtimeCache?.uniswapV3;
+    if (quoteProvider === undefined) {
+      quoteProvider = new UniswapV3QuoteProvider(signer, {
+        universalRouterAddress: routerConfig.universalRouterAddress,
+        poolFactoryAddress: routerConfig.poolFactoryAddress,
+        defaultFeeTier: routerConfig.defaultFeeTier || 3000,
+        wethAddress: routerConfig.wethAddress,
+        quoterV2Address: routerConfig.quoterV2Address,
+      });
+      if (runtimeCache) {
+        runtimeCache.uniswapV3 = quoteProvider.isAvailable() ? quoteProvider : null;
+      }
+    }
 
     // Check if the quote provider found a QuoterV2 contract
-    if (!quoteProvider.isAvailable()) {
+    if (!quoteProvider || !quoteProvider.isAvailable()) {
       logger.debug(`Factory: UniswapV3QuoteProvider not available for pool ${pool.name}`);
       return {
         isTakeable: false,
@@ -477,7 +500,8 @@ async function checkSushiSwapQuote(
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'sushiswapRouterOverrides'>,
-  signer: Signer
+  signer: Signer,
+  runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<ExternalTakeQuoteEvaluation> {
   
   if (!config.sushiswapRouterOverrides) {
@@ -500,18 +524,23 @@ async function checkSushiSwapQuote(
   }
 
   try {
-    // Create SushiSwap quote provider
-    const quoteProvider = new SushiSwapQuoteProvider(signer, {
-      swapRouterAddress: sushiConfig.swapRouterAddress,
-      quoterV2Address: sushiConfig.quoterV2Address,
-      factoryAddress: sushiConfig.factoryAddress,
-      defaultFeeTier: sushiConfig.defaultFeeTier || 500,
-      wethAddress: sushiConfig.wethAddress,
-    });
+    let quoteProvider = runtimeCache?.sushiswap;
+    if (quoteProvider === undefined) {
+      const candidateProvider = new SushiSwapQuoteProvider(signer, {
+        swapRouterAddress: sushiConfig.swapRouterAddress,
+        quoterV2Address: sushiConfig.quoterV2Address,
+        factoryAddress: sushiConfig.factoryAddress,
+        defaultFeeTier: sushiConfig.defaultFeeTier || 500,
+        wethAddress: sushiConfig.wethAddress,
+      });
+      const initialized = await candidateProvider.initialize();
+      quoteProvider = initialized ? candidateProvider : null;
+      if (runtimeCache) {
+        runtimeCache.sushiswap = quoteProvider;
+      }
+    }
 
-    // Check if the quote provider is available
-    const initialized = await quoteProvider.initialize();
-    if (!initialized) {
+    if (!quoteProvider) {
       logger.debug(`Factory: SushiSwap quote provider not available for pool ${pool.name}`);
       return {
         isTakeable: false,
@@ -611,7 +640,8 @@ async function checkCurveQuote(
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'curveRouterOverrides' | 'tokenAddresses'>,
-  signer: Signer
+  signer: Signer,
+  runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<ExternalTakeQuoteEvaluation> {
   
   if (!config.curveRouterOverrides) {
@@ -634,20 +664,23 @@ async function checkCurveQuote(
   }
 
   try {
-    // Import CurveQuoteProvider dynamically to avoid circular dependencies
-    const { CurveQuoteProvider } = await import('./dex-providers/curve-quote-provider');
-    
-    // FIXED: Create Curve quote provider with tokenAddresses mapping
-    const quoteProvider = new CurveQuoteProvider(signer, {
-      poolConfigs: curveConfig.poolConfigs,
-      defaultSlippage: curveConfig.defaultSlippage || 1.0,
-      wethAddress: curveConfig.wethAddress,
-      tokenAddresses: config.tokenAddresses || {}, // FIXED: Pass tokenAddresses for reliable pool discovery
-    });
+    let quoteProvider = runtimeCache?.curve;
+    if (quoteProvider === undefined) {
+      const { CurveQuoteProvider } = await import('./dex-providers/curve-quote-provider');
+      const candidateProvider = new CurveQuoteProvider(signer, {
+        poolConfigs: curveConfig.poolConfigs,
+        defaultSlippage: curveConfig.defaultSlippage || 1.0,
+        wethAddress: curveConfig.wethAddress,
+        tokenAddresses: config.tokenAddresses || {},
+      });
+      const initialized = await candidateProvider.initialize();
+      quoteProvider = initialized ? candidateProvider : null;
+      if (runtimeCache) {
+        runtimeCache.curve = quoteProvider;
+      }
+    }
 
-    // Initialize and check availability
-    const initialized = await quoteProvider.initialize();
-    if (!initialized) {
+    if (!quoteProvider) {
       logger.debug(`Factory: Curve quote provider not available for pool ${pool.name}`);
       return {
         isTakeable: false,
