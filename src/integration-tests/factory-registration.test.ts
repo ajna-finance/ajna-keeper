@@ -65,4 +65,31 @@ describe('Factory taker registration', () => {
       taker.address
     );
   });
+
+  it('rejects takers bound to a different Ajna pool factory', async () => {
+    const owner = Wallet.createRandom().connect(getProvider());
+    const otherAjnaFactory = Wallet.createRandom();
+    await fundSigner(owner.address);
+
+    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+      constants.AddressZero
+    );
+    await factory.deployed();
+
+    const taker = await new SushiSwapKeeperTaker__factory(owner).deploy(
+      otherAjnaFactory.address,
+      factory.address
+    );
+    await taker.deployed();
+
+    let error: unknown;
+    try {
+      await factory.setTaker(LiquiditySource.SUSHISWAP, taker.address);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).to.be.instanceOf(Error);
+    expect((error as Error).message).to.contain('Pool factory mismatch');
+  });
 });

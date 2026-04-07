@@ -68,6 +68,12 @@ contract AjnaKeeperTakerFactory {
             } catch {
                 revert InvalidTaker();
             }
+
+            try IAjnaKeeperTaker(takerAddress).poolFactory() returns (PoolDeployer takerPoolFactory) {
+                require(address(takerPoolFactory) == address(poolFactory), "Pool factory mismatch");
+            } catch {
+                revert InvalidTaker();
+            }
         }
         
         takerContracts[source] = takerAddress;

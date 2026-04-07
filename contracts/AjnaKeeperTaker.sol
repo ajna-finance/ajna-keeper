@@ -88,6 +88,8 @@ contract AjnaKeeperTaker is IERC20Taker {
         address swapRouter,
         bytes calldata swapDetails
     ) external onlyOwner {
+        if (!_validatePool(pool)) revert InvalidPool();
+
         // configuration passed through to the callback function instructing this contract how to swap
         bytes memory data = abi.encode(
             SwapData({
