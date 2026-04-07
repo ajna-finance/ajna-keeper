@@ -5,7 +5,6 @@ import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from '../auto-discovery-handlers';
-import * as erc20Module from '../erc20';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import { LiquiditySource } from '../config-types';
@@ -160,14 +159,13 @@ describe('Auto Discovery Handlers', () => {
     expect(handleCandidateAuctionsStub.called).to.be.false;
   });
 
-  it('does not apply minExpectedProfitQuote to discovered settlement candidates', async () => {
+  it('does not require take profit-floor gas quoting for discovered settlement candidates', async () => {
     const handleCandidateAuctionsStub = sinon
       .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
       .resolves();
     sinon
       .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
       .resolves({ needs: true, reason: 'Bad debt detected' });
-    sinon.stub(erc20Module, 'getDecimalsErc20').resolves(18);
 
     const pool = {
       name: 'Settlement Pool',
@@ -215,9 +213,6 @@ describe('Auto Discovery Handlers', () => {
           enabled: true,
           settlement: true,
           minExpectedProfitQuote: 9999,
-        },
-        tokenAddresses: {
-          weth: pool.quoteAddress,
         },
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',

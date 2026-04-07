@@ -446,7 +446,6 @@ const config: KeeperConfig = {
     takeQuoteBudgetPerRun: 5,
     maxGasPriceGwei: 5,
     maxGasCostQuote: 0.01,
-    minExpectedProfitQuote: 0.005,
     denyPools: [
       '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
     ],
@@ -486,7 +485,7 @@ const config: KeeperConfig = {
 
 Discovery is auction-first, not pool-enumeration-first. The keeper queries chain-wide liquidation activity from the subgraph, groups live work by pool, hydrates only the pools that matter, and then runs the existing `take` and `settlement` execution paths behind the new policy checks.
 
-`minExpectedProfitQuote` applies to discovered `take` decisions only. `maxGasCostQuote` and `maxGasPriceGwei` still apply to discovered `take` and `settlement` actions. All quote-denominated thresholds are per-pool quote token amounts. If your rollout spans mixed quote assets like WETH and USDC, leave them unset until you have dry-run data that supports chain-specific thresholds.
+`minExpectedProfitQuote` applies to discovered external `take` decisions only. Do not combine it with arb-only discovered take defaults. `maxGasCostQuote` and `maxGasPriceGwei` still apply to discovered `take` and `settlement` actions. All quote-denominated thresholds are per-pool quote token amounts. If your rollout spans mixed quote assets like WETH and USDC, leave them unset until you have dry-run data that supports chain-specific thresholds.
 
 `kick` auto-discovery is intentionally not part of V1.
 

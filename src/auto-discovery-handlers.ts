@@ -256,6 +256,7 @@ async function evaluateGasPolicy(params: {
   gasLimit: BigNumber;
   quoteTokenAddress: string;
   preferredLiquiditySource?: LiquiditySource;
+  useProfitFloor?: boolean;
 }): Promise<GasPolicyResult> {
   const provider = params.signer.provider;
   if (!provider) {
@@ -281,7 +282,8 @@ async function evaluateGasPolicy(params: {
 
   const requiresGasCostQuote =
     params.config.autoDiscover?.maxGasCostQuote !== undefined ||
-    params.config.autoDiscover?.minExpectedProfitQuote !== undefined;
+    (params.useProfitFloor &&
+      params.config.autoDiscover?.minExpectedProfitQuote !== undefined);
   if (!requiresGasCostQuote) {
     return {
       approved: true,
@@ -465,6 +467,7 @@ async function evaluateTakeCandidate(params: {
         gasLimit: EXTERNAL_TAKE_GAS_LIMIT,
         quoteTokenAddress: params.pool.quoteAddress,
         preferredLiquiditySource: params.target.take.liquiditySource,
+        useProfitFloor: true,
       });
 
       if (!gasPolicy.approved) {
@@ -539,6 +542,7 @@ async function evaluateTakeCandidate(params: {
           gasLimit: ARB_TAKE_GAS_LIMIT,
           quoteTokenAddress: params.pool.quoteAddress,
           preferredLiquiditySource: params.target.take.liquiditySource,
+          useProfitFloor: false,
         });
         if (!gasPolicy.approved) {
           if (!approvedTake) {
@@ -757,6 +761,7 @@ export async function handleDiscoveredSettlementTarget(params: {
       config: params.config,
       gasLimit: SETTLEMENT_GAS_LIMIT,
       quoteTokenAddress: params.pool.quoteAddress,
+      useProfitFloor: false,
     });
     if (!gasPolicy.approved) {
       logDiscoveryDecision(

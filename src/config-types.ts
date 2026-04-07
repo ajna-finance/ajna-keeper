@@ -561,11 +561,33 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
     throw new Error('AutoDiscoverConfig: maxGasCostQuote cannot be negative');
   }
 
-  if (autoDiscover.take && config.discoveredDefaults?.take) {
-    validateTakeSettings(config.discoveredDefaults.take, config);
+  if (autoDiscover.take) {
+    const discoveredTake = config.discoveredDefaults?.take;
+    if (!discoveredTake) {
+      throw new Error(
+        'AutoDiscoverConfig: discoveredDefaults.take required when autoDiscover.take is enabled'
+      );
+    }
+
+    validateTakeSettings(discoveredTake, config);
+
+    const hasExternalTake =
+      discoveredTake.liquiditySource !== undefined &&
+      discoveredTake.marketPriceFactor !== undefined;
+    if (autoDiscover.minExpectedProfitQuote !== undefined && !hasExternalTake) {
+      throw new Error(
+        'AutoDiscoverConfig: minExpectedProfitQuote requires discoveredDefaults.take to configure an external take path'
+      );
+    }
   }
 
-  if (autoDiscover.settlement && config.discoveredDefaults?.settlement) {
-    validateSettlementSettings(config.discoveredDefaults.settlement);
+  if (autoDiscover.settlement) {
+    const discoveredSettlement = config.discoveredDefaults?.settlement;
+    if (!discoveredSettlement?.enabled) {
+      throw new Error(
+        'AutoDiscoverConfig: enabled discoveredDefaults.settlement required when autoDiscover.settlement is enabled'
+      );
+    }
+    validateSettlementSettings(discoveredSettlement);
   }
 }
