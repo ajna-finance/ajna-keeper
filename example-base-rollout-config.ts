@@ -48,8 +48,9 @@ const config: KeeperConfig = {
       maxPoolsPerRun: 3,
       takeQuoteBudgetPerRun: 3,
       maxGasPriceGwei: 2,
-      // These are quote-token denominated. Leave them unset until dry-run data
-      // shows sensible values for your discovered external take routes.
+      maxGasCostNative: 0.00005,
+      // These are quote-token denominated. Leave them unset unless you explicitly
+      // want native->quote conversion during policy checks.
       // maxGasCostQuote: 1,
       // minExpectedProfitQuote: 1,
     },
@@ -57,8 +58,9 @@ const config: KeeperConfig = {
       enabled: true,
       maxPoolsPerRun: 3,
       maxGasPriceGwei: 2,
-      // This is quote-token denominated. Leave it unset until dry-run data shows
-      // sensible values across the mix of WETH- and USDC-quoted pools you expect to hit.
+      maxGasCostNative: 0.00005,
+      // This is quote-token denominated. Leave it unset unless you explicitly want
+      // native->quote conversion across mixed quote assets.
       // maxGasCostQuote: 1,
     },
     dryRunNewPools: true,

@@ -352,6 +352,7 @@ export async function getOneInchTakeQuoteEvaluation(
       marketPrice,
       takeablePrice,
       quoteAmount,
+      quoteAmountRaw: amountOut,
       collateralAmount,
       reason: takeable ? undefined : 'auction price above external take threshold',
     };

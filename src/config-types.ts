@@ -189,6 +189,8 @@ export interface AutoDiscoverActionPolicy {
   maxPoolsPerRun?: number;
   /** Reject discovered actions above this gas price. */
   maxGasPriceGwei?: number;
+  /** Reject discovered actions when estimated gas cost exceeds this native-token amount. */
+  maxGasCostNative?: number;
   /** Reject discovered actions when estimated gas cost exceeds this quote-token amount. */
   maxGasCostQuote?: number;
 }
@@ -611,6 +613,9 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
     if (takePolicy.maxGasPriceGwei !== undefined && takePolicy.maxGasPriceGwei <= 0) {
       throw new Error('AutoDiscoverConfig.take: maxGasPriceGwei must be greater than 0');
     }
+    if (takePolicy.maxGasCostNative !== undefined && takePolicy.maxGasCostNative < 0) {
+      throw new Error('AutoDiscoverConfig.take: maxGasCostNative cannot be negative');
+    }
     if (takePolicy.maxGasCostQuote !== undefined && takePolicy.maxGasCostQuote < 0) {
       throw new Error('AutoDiscoverConfig.take: maxGasCostQuote cannot be negative');
     }
@@ -640,6 +645,9 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
     }
     if (settlementPolicy.maxGasPriceGwei !== undefined && settlementPolicy.maxGasPriceGwei <= 0) {
       throw new Error('AutoDiscoverConfig.settlement: maxGasPriceGwei must be greater than 0');
+    }
+    if (settlementPolicy.maxGasCostNative !== undefined && settlementPolicy.maxGasCostNative < 0) {
+      throw new Error('AutoDiscoverConfig.settlement: maxGasCostNative cannot be negative');
     }
     if (settlementPolicy.maxGasCostQuote !== undefined && settlementPolicy.maxGasCostQuote < 0) {
       throw new Error('AutoDiscoverConfig.settlement: maxGasCostQuote cannot be negative');

@@ -57,9 +57,15 @@ type DiscoveryExecutionConfig = Pick<
 
 interface GasPolicyResult {
   approved: boolean;
+  gasCostNative: number;
   gasCostQuote: number;
   gasPriceGwei: number;
   reason?: string;
+}
+
+interface NativeToQuoteConversion {
+  amountInNative: BigNumber;
+  amountOutQuoteRaw: BigNumber;
 }
 
 interface DiscoveredTakeDecision {
@@ -259,18 +265,20 @@ async function evaluateGasPolicy(params: {
   config: DiscoveryExecutionConfig;
   policy?: Pick<
     AutoDiscoverActionPolicy,
-    'maxGasCostQuote' | 'maxGasPriceGwei'
+    'maxGasCostNative' | 'maxGasCostQuote' | 'maxGasPriceGwei'
   > &
     Pick<AutoDiscoverTakePolicy, 'minExpectedProfitQuote'>;
   gasLimit: BigNumber;
   quoteTokenAddress: string;
   preferredLiquiditySource?: LiquiditySource;
   useProfitFloor?: boolean;
+  nativeToQuoteConversion?: NativeToQuoteConversion;
 }): Promise<GasPolicyResult> {
   const provider = params.signer.provider;
   if (!provider) {
     return {
       approved: false,
+      gasCostNative: 0,
       gasCostQuote: 0,
       gasPriceGwei: 0,
       reason: 'signer has no provider',
@@ -283,9 +291,23 @@ async function evaluateGasPolicy(params: {
   if (maxGasPriceGwei !== undefined && gasPriceGwei > maxGasPriceGwei) {
     return {
       approved: false,
+      gasCostNative: 0,
       gasCostQuote: 0,
       gasPriceGwei,
       reason: `gas price ${gasPriceGwei.toFixed(2)} gwei exceeds maxGasPriceGwei ${maxGasPriceGwei}`,
+    };
+  }
+
+  const gasCostNativeRaw = gasPrice.mul(params.gasLimit);
+  const gasCostNative = Number(ethers.utils.formatEther(gasCostNativeRaw));
+  const maxGasCostNative = params.policy?.maxGasCostNative;
+  if (maxGasCostNative !== undefined && gasCostNative > maxGasCostNative) {
+    return {
+      approved: false,
+      gasCostNative,
+      gasCostQuote: 0,
+      gasPriceGwei,
+      reason: `estimated gas cost ${gasCostNative.toFixed(6)} exceeds maxGasCostNative ${maxGasCostNative}`,
     };
   }
 
@@ -295,6 +317,7 @@ async function evaluateGasPolicy(params: {
   if (!requiresGasCostQuote) {
     return {
       approved: true,
+      gasCostNative,
       gasCostQuote: 0,
       gasPriceGwei,
     };
@@ -306,13 +329,12 @@ async function evaluateGasPolicy(params: {
   if (!wrappedNativeAddress) {
     return {
       approved: false,
+      gasCostNative,
       gasCostQuote: 0,
       gasPriceGwei,
       reason: 'no wrapped native token configured for gas cost conversion',
     };
   }
-
-  const gasCostNative = gasPrice.mul(params.gasLimit);
   const quoteDecimals = await getDecimalsErc20(
     params.signer,
     params.quoteTokenAddress
@@ -320,13 +342,23 @@ async function evaluateGasPolicy(params: {
 
   let gasCostQuote: number;
   if (wrappedNativeAddress.toLowerCase() === params.quoteTokenAddress.toLowerCase()) {
-    gasCostQuote = Number(ethers.utils.formatUnits(gasCostNative, quoteDecimals));
+    gasCostQuote = Number(ethers.utils.formatUnits(gasCostNativeRaw, quoteDecimals));
+  } else if (
+    params.nativeToQuoteConversion &&
+    params.nativeToQuoteConversion.amountInNative.gt(0)
+  ) {
+    const gasCostQuoteRaw = gasCostNativeRaw
+      .mul(params.nativeToQuoteConversion.amountOutQuoteRaw)
+      .add(params.nativeToQuoteConversion.amountInNative.sub(1))
+      .div(params.nativeToQuoteConversion.amountInNative);
+    gasCostQuote = Number(ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals));
   } else {
     const liquiditySource =
       params.preferredLiquiditySource ?? resolveGasQuoteSource(params.config);
     if (liquiditySource === undefined) {
       return {
         approved: false,
+        gasCostNative,
         gasCostQuote: 0,
         gasPriceGwei,
         reason: 'no liquidity source available for gas cost conversion',
@@ -337,13 +369,14 @@ async function evaluateGasPolicy(params: {
       signer: params.signer,
       config: params.config,
       liquiditySource,
-      amountIn: gasCostNative,
+      amountIn: gasCostNativeRaw,
       tokenIn: wrappedNativeAddress,
       tokenOut: params.quoteTokenAddress,
     });
     if (!quotedAmount) {
       return {
         approved: false,
+        gasCostNative,
         gasCostQuote: 0,
         gasPriceGwei,
         reason: 'failed to quote gas cost into quote token',
@@ -356,6 +389,7 @@ async function evaluateGasPolicy(params: {
   if (maxGasCostQuote !== undefined && gasCostQuote > maxGasCostQuote) {
     return {
       approved: false,
+      gasCostNative,
       gasCostQuote,
       gasPriceGwei,
       reason: `estimated gas cost ${gasCostQuote.toFixed(6)} exceeds maxGasCostQuote ${maxGasCostQuote}`,
@@ -364,6 +398,7 @@ async function evaluateGasPolicy(params: {
 
   return {
     approved: true,
+    gasCostNative,
     gasCostQuote,
     gasPriceGwei,
   };
@@ -470,6 +505,19 @@ async function evaluateTakeCandidate(params: {
     if (!quoteEvaluation.isTakeable) {
       reason = quoteEvaluation.reason;
     } else {
+      const wrappedNativeAddress = resolveWrappedNativeAddress(
+        params.config,
+        params.target.take.liquiditySource
+      );
+      const nativeToQuoteConversion =
+        wrappedNativeAddress &&
+        wrappedNativeAddress.toLowerCase() === params.pool.collateralAddress.toLowerCase() &&
+        quoteEvaluation.quoteAmountRaw
+          ? {
+              amountInNative: collateral,
+              amountOutQuoteRaw: quoteEvaluation.quoteAmountRaw,
+            }
+          : undefined;
       const gasPolicy = await evaluateGasPolicy({
         signer: params.signer,
         config: params.config,
@@ -478,6 +526,7 @@ async function evaluateTakeCandidate(params: {
         quoteTokenAddress: params.pool.quoteAddress,
         preferredLiquiditySource: params.target.take.liquiditySource,
         useProfitFloor: true,
+        nativeToQuoteConversion,
       });
 
       if (!gasPolicy.approved) {

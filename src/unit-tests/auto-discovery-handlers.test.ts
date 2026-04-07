@@ -8,6 +8,8 @@ import {
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import { LiquiditySource } from '../config-types';
+import * as erc20 from '../erc20';
+import { DexRouter } from '../dex-router';
 
 describe('Auto Discovery Handlers', () => {
   afterEach(() => {
@@ -225,5 +227,152 @@ describe('Auto Discovery Handlers', () => {
     expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
     expect(handleCandidateAuctionsStub.firstCall.args[0]).to.have.length(1);
     expect(handleCandidateAuctionsStub.firstCall.args[0][0].borrower).to.equal('0xBorrowerC');
+  });
+
+  it('allows discovered settlement to use a native gas cap without quote conversion config', async () => {
+    const handleCandidateAuctionsStub = sinon
+      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .resolves();
+    sinon
+      .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
+      .resolves({ needs: true, reason: 'Bad debt detected' });
+
+    const pool = {
+      name: 'Settlement Pool',
+      poolAddress: '0x9999999999999999999999999999999999999999',
+      quoteAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      contract: {},
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('1', 'gwei')),
+      },
+    };
+
+    await handleDiscoveredSettlementTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: false,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerD',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '0',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '0',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          settlement: {
+            enabled: true,
+            maxGasCostNative: 0.01,
+          },
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+    });
+
+    expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
+  });
+
+  it('reuses the discovered take quote for native gas conversion when collateral is wrapped native', async () => {
+    const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
+    sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
+      isTakeable: true,
+      quoteAmount: 2100,
+      quoteAmountRaw: ethers.utils.parseUnits('2100', 6),
+      collateralAmount: 1,
+      marketPrice: 2100,
+      takeablePrice: 2200,
+    });
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const oneInchQuoteStub = sinon.stub(DexRouter.prototype, 'getQuoteFromOneInch').resolves({
+      success: true,
+      dstAmount: ethers.utils.parseUnits('1', 6).toString(),
+    });
+
+    const pool = {
+      name: 'WETH / USDC',
+      poolAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      quoteAddress: '0xcccccccccccccccccccccccccccccccccccccccc',
+      collateralAddress: '0x4200000000000000000000000000000000000006',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('1'),
+        }),
+      }),
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('1', 'gwei')),
+      },
+      getChainId: sinon.stub().resolves(8453),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerE',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+            minExpectedProfitQuote: 1,
+          },
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+    });
+
+    expect(takeLiquidationStub.calledOnce).to.be.true;
+    expect(oneInchQuoteStub.called).to.be.false;
   });
 });

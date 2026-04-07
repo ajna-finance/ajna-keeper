@@ -75,7 +75,10 @@ const config: KeeperConfig = {
       maxPoolsPerRun: 10,
       takeQuoteBudgetPerRun: 5,
       maxGasPriceGwei: 5,
-      maxGasCostQuote: 0.01,
+      maxGasCostNative: 0.0001,
+      // Quote-denominated gas caps require native->quote conversion.
+      // Leave them unset unless you explicitly want quote-token thresholds.
+      // maxGasCostQuote: 0.01,
       // Set minExpectedProfitQuote only after discovered external takes are enabled.
       // minExpectedProfitQuote: 0.005,
     },
@@ -83,7 +86,8 @@ const config: KeeperConfig = {
       enabled: true,
       maxPoolsPerRun: 10,
       maxGasPriceGwei: 5,
-      maxGasCostQuote: 0.01,
+      maxGasCostNative: 0.0001,
+      // maxGasCostQuote: 0.01,
     },
     dryRunNewPools: true,
     logSkips: true,

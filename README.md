@@ -444,13 +444,13 @@ const config: KeeperConfig = {
       maxPoolsPerRun: 10,
       takeQuoteBudgetPerRun: 5,
       maxGasPriceGwei: 5,
-      maxGasCostQuote: 0.01,
+      maxGasCostNative: 0.0001,
     },
     settlement: {
       enabled: true,
       maxPoolsPerRun: 10,
       maxGasPriceGwei: 5,
-      maxGasCostQuote: 0.01,
+      maxGasCostNative: 0.0001,
     },
     dryRunNewPools: true,
     logSkips: true,
@@ -497,7 +497,9 @@ At runtime, the `take` cadence refreshes the shared chain-wide auction snapshot.
 
 Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh. No extra operator action is needed to discover 101 active auctions.
 
-`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. `maxGasCostQuote` and `maxGasPriceGwei` are now action-specific under `autoDiscover.take` and `autoDiscover.settlement`. All quote-denominated thresholds are per-pool quote token amounts. If your rollout spans mixed quote assets like WETH and USDC, leave them unset until you have dry-run data that supports chain-specific thresholds.
+`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. `maxGasCostNative`, `maxGasCostQuote`, and `maxGasPriceGwei` are action-specific under `autoDiscover.take` and `autoDiscover.settlement`.
+
+Prefer `maxGasCostNative` on L2s and mixed-quote deployments. It uses the RPC gas price directly and does not require an extra native-to-quote conversion fetch. `maxGasCostQuote` remains available as an explicit quote-denominated mode; when it is enabled the keeper may need to convert native gas cost into the pool quote token. If the pool collateral is already wrapped native, the keeper reuses the existing take quote instead of fetching a second conversion quote. All quote-denominated thresholds are per-pool quote token amounts.
 
 `kick` auto-discovery is intentionally not part of V1.
 
