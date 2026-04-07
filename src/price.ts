@@ -12,7 +12,7 @@ import { logger } from './logging';
 export async function getPrice(
   priceOrigin: PriceOrigin,
   coinGeckoApiKey: string | undefined = '',
-  poolPrices: PriceInfo,
+  poolPrices?: PriceInfo,
   chainId?: number,
   rpcUrl?: string,
   tokenAddresses?: { [key: string]: string }
@@ -26,6 +26,9 @@ export async function getPrice(
       price = priceOrigin.value;
       break;
     case PriceOriginSource.POOL:
+      if (!poolPrices) {
+        throw new Error('Pool prices required for pool price origin');
+      }
       price = await getPoolPrice(poolPrices, priceOrigin.reference);
       break;
     default:

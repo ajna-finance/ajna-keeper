@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, constants } from 'ethers';
-import { KeeperConfig, PoolConfig } from './config-types';
+import { KeeperConfig, PoolConfig, PriceOriginSource } from './config-types';
 import {
   getAllowanceOfErc20,
   getBalanceOfErc20,
@@ -84,6 +84,20 @@ export async function* getLoansToKick({
       (sum, borrower) => sum.add(loanMap.get(borrower)!.liquidationBond),
       constants.Zero
     );
+  // Fixed and CoinGecko kick references are pool-wide for the duration of a kick pass.
+  // Pool-derived references must stay per-iteration because a prior kick can change pool
+  // prices before this async generator resumes on the next borrower.
+  const staticLimitPrice =
+    poolConfig.price.source === PriceOriginSource.POOL
+      ? undefined
+      : await getPrice(
+          poolConfig.price,
+          config.coinGeckoApiKey,
+          undefined,
+          chainId,
+          config.ethRpcUrl,
+          config.tokenAddresses
+        );
 
   for (let i = 0; i < borrowersSortedByBond.length; i++) {
     const borrower = borrowersSortedByBond[i];
@@ -124,14 +138,16 @@ export async function* getLoansToKick({
     */
 
     // Only kick loans with a neutralPrice above price (with some margin) to ensure they are profitable.
-    const limitPrice = await getPrice(
-      poolConfig.price,
-      config.coinGeckoApiKey,
-      poolPrices,
-      chainId,
-      config.ethRpcUrl,
-      config.tokenAddresses
-    );
+    const limitPrice =
+      staticLimitPrice ??
+      (await getPrice(
+        poolConfig.price,
+        config.coinGeckoApiKey,
+        poolPrices,
+        chainId,
+        config.ethRpcUrl,
+        config.tokenAddresses
+      ));
     if (
       weiToDecimaled(neutralPrice) * poolConfig.kick.priceFactor <
       limitPrice
