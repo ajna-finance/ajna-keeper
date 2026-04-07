@@ -493,6 +493,10 @@ const config: KeeperConfig = {
 
 Discovery is auction-first, not pool-enumeration-first. The keeper queries chain-wide liquidation activity from the subgraph, groups live work by pool, hydrates only the pools that matter, and then runs the existing `take` and `settlement` execution paths behind the new policy checks.
 
+At runtime, the `take` cadence refreshes the shared chain-wide auction snapshot. Discovered `settlement` reuses the latest in-memory snapshot instead of issuing its own chain-wide fetch, so settlement no longer doubles discovery traffic. The snapshot is not persisted across restarts; after process restart, discovered settlement waits for the next take refresh.
+
+Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh. No extra operator action is needed to discover 101 active auctions.
+
 `minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. `maxGasCostQuote` and `maxGasPriceGwei` are now action-specific under `autoDiscover.take` and `autoDiscover.settlement`. All quote-denominated thresholds are per-pool quote token amounts. If your rollout spans mixed quote assets like WETH and USDC, leave them unset until you have dry-run data that supports chain-specific thresholds.
 
 `kick` auto-discovery is intentionally not part of V1.

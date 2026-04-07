@@ -505,6 +505,10 @@ V1 auto-discovery is auction-first: the keeper scans chain-wide liquidation acti
 - `discoveredDefaults.settlement` defines how newly discovered pools should run `settlement`.
 - Manual `pools[]` entries still control `kick`, LP reward collection, bond collection, and per-action overrides.
 
+Operationally, the `take` cadence refreshes one shared in-memory chain-wide auction snapshot. Discovered `settlement` reuses that snapshot instead of issuing its own chain-wide discovery scan, which keeps background subgraph traffic tied to the `take` cadence. The snapshot is not persisted across restarts; discovered settlement resumes after the next take refresh.
+
+Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh, so crossing 100 active auctions does not require any operator action.
+
 Use [`example-base-rollout-config.ts`](./example-base-rollout-config.ts) as the conservative starting point for the first live rollout.
 
 Recommended rollout order:
