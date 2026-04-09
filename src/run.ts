@@ -24,12 +24,7 @@ import {
   PoolHydrationCooldowns,
   PoolMap,
 } from './discovery-targets';
-import {
-  DiscoverySnapshotState,
-  getSettlementCheckIntervalSeconds,
-  runSettlementDiscoveryCycle,
-  runTakeDiscoveryCycle,
-} from './discovery-runtime';
+import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery-runtime';
 
 interface KeepPoolParams {
   poolMap: PoolMap;
@@ -38,9 +33,7 @@ interface KeepPoolParams {
 }
 
 interface DiscoveryLoopParams extends KeepPoolParams {
-  ajna: AjnaSDK;
-  hydrationCooldowns: PoolHydrationCooldowns;
-  discoverySnapshotState?: DiscoverySnapshotState;
+  discoveryRuntime: DiscoveryRuntime;
 }
 
 interface KickLoopParams extends KeepPoolParams {
@@ -70,25 +63,19 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   logger.info('...and pools:');
   const poolMap = await getPoolsFromConfig(ajna, config);
   const hydrationCooldowns: PoolHydrationCooldowns = new Map();
-  const discoverySnapshotState: DiscoverySnapshotState = {};
+  const discoverySnapshotState = {};
+  const discoveryRuntime = createDiscoveryRuntime({
+    ajna,
+    poolMap,
+    config,
+    signer,
+    hydrationCooldowns,
+    discoverySnapshotState,
+  });
 
   kickPoolsLoop({ poolMap, config, signer, chainId });
-  takePoolsLoop({
-    ajna,
-    poolMap,
-    config,
-    signer,
-    hydrationCooldowns,
-    discoverySnapshotState,
-  });
-  settlementLoop({
-    ajna,
-    poolMap,
-    config,
-    signer,
-    hydrationCooldowns,
-    discoverySnapshotState,
-  });
+  takePoolsLoop({ config, signer, poolMap, discoveryRuntime });
+  settlementLoop({ config, signer, poolMap, discoveryRuntime });
   collectBondLoop({ poolMap, config, signer });
   collectLpRewardsLoop({ poolMap, config, signer });
 }
@@ -165,7 +152,7 @@ export async function runTakeLoopIteration(
   params: DiscoveryLoopParams
 ): Promise<LoopIterationResult> {
   try {
-    await processTakeCycle(params);
+    await params.discoveryRuntime.runTakeCycle();
     return {
       delaySeconds: params.config.delayBetweenRuns,
       recovered: false,
@@ -177,24 +164,6 @@ export async function runTakeLoopIteration(
       recovered: true,
     };
   }
-}
-
-export async function processTakeCycle({
-  ajna,
-  poolMap,
-  config,
-  signer,
-  hydrationCooldowns,
-  discoverySnapshotState,
-}: DiscoveryLoopParams): Promise<void> {
-  await runTakeDiscoveryCycle({
-    ajna,
-    poolMap,
-    config,
-    signer,
-    hydrationCooldowns,
-    discoverySnapshotState,
-  });
 }
 
 async function collectBondLoop({ poolMap, config, signer }: KeepPoolParams) {
@@ -229,11 +198,10 @@ async function settlementLoop(params: DiscoveryLoopParams) {
     try {
       const startTime = new Date().toISOString();
       logger.debug(`Settlement loop iteration starting at ${startTime}`);
-      await processSettlementCycle(params);
+      await params.discoveryRuntime.runSettlementCycle();
 
-      const settlementCheckIntervalSeconds = getSettlementCheckIntervalSeconds(
-        params.config
-      );
+      const settlementCheckIntervalSeconds =
+        params.discoveryRuntime.getSettlementCheckIntervalSeconds();
       const nextCheck = new Date(
         Date.now() + settlementCheckIntervalSeconds * 1000
       ).toISOString();
@@ -242,38 +210,11 @@ async function settlementLoop(params: DiscoveryLoopParams) {
       );
       await delay(settlementCheckIntervalSeconds);
     } catch (outerError) {
-      const errorMessage =
-        outerError instanceof Error ? outerError.message : String(outerError);
-      const errorStack =
-        outerError instanceof Error ? outerError.stack : undefined;
-
-      logger.error(`Settlement loop crashed, restarting in 30 seconds: ${errorMessage}`);
-      if (errorStack) {
-        logger.error(`Stack trace:`, errorStack);
-      }
-
+      logLoopCrash('Settlement', outerError);
       await delay(LOOP_CRASH_RECOVERY_DELAY_SECONDS);
       logger.info(`Restarting settlement loop after crash recovery delay`);
     }
   }
-}
-
-export async function processSettlementCycle({
-  ajna,
-  poolMap,
-  config,
-  signer,
-  hydrationCooldowns,
-  discoverySnapshotState,
-}: DiscoveryLoopParams): Promise<void> {
-  await runSettlementDiscoveryCycle({
-    ajna,
-    poolMap,
-    config,
-    signer,
-    hydrationCooldowns,
-    discoverySnapshotState,
-  });
 }
 
 function logLoopCrash(loopName: string, outerError: unknown): void {

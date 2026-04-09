@@ -2,12 +2,8 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber } from 'ethers';
 import { clearSharedDiscoveryScans } from '../discovery-targets';
-import {
-  processKickCycle,
-  processSettlementCycle,
-  processTakeCycle,
-  runTakeLoopIteration,
-} from '../run';
+import { createDiscoveryRuntime } from '../discovery-runtime';
+import { processKickCycle, runTakeLoopIteration } from '../run';
 import { KeeperConfig, PriceOriginSource } from '../config-types';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
@@ -31,6 +27,24 @@ const BASE_CONFIG: KeeperConfig = {
   delayBetweenRuns: 1,
   pools: [],
 };
+
+function createTestDiscoveryRuntime(params: {
+  config: KeeperConfig;
+  ajna?: any;
+  poolMap?: Map<string, any>;
+  signer?: any;
+  hydrationCooldowns?: any;
+  discoverySnapshotState?: any;
+}) {
+  return createDiscoveryRuntime({
+    ajna: (params.ajna ?? {}) as any,
+    poolMap: (params.poolMap ?? new Map()) as any,
+    config: params.config,
+    signer: (params.signer ?? {}) as any,
+    hydrationCooldowns: params.hydrationCooldowns ?? new Map(),
+    discoverySnapshotState: params.discoverySnapshotState,
+  });
+}
 
 describe('Run Loop Discovery Integration', () => {
   afterEach(() => {
@@ -63,13 +77,10 @@ describe('Run Loop Discovery Integration', () => {
       poolAddress: '0x1111111111111111111111111111111111111111',
     };
 
-    await processTakeCycle({
-      ajna: {} as any,
-      poolMap: new Map([[config.pools[0].address, pool as any]]),
+    await createTestDiscoveryRuntime({
       config,
-      signer: {} as any,
-      hydrationCooldowns: new Map(),
-    });
+      poolMap: new Map([[config.pools[0].address, pool as any]]),
+    }).runTakeCycle();
 
     expect(handleTakesStub.calledOnce).to.be.true;
     expect(handleDiscoveredTakeTargetStub.called).to.be.false;
@@ -102,13 +113,10 @@ describe('Run Loop Discovery Integration', () => {
       poolAddress: '0x2222222222222222222222222222222222222222',
     };
 
-    await processSettlementCycle({
-      ajna: {} as any,
-      poolMap: new Map([[config.pools[0].address, pool as any]]),
+    await createTestDiscoveryRuntime({
       config,
-      signer: {} as any,
-      hydrationCooldowns: new Map(),
-    });
+      poolMap: new Map([[config.pools[0].address, pool as any]]),
+    }).runSettlementCycle();
 
     expect(handleSettlementsStub.calledOnce).to.be.true;
     expect(handleDiscoveredSettlementTargetStub.called).to.be.false;
@@ -214,22 +222,15 @@ describe('Run Loop Discovery Integration', () => {
     const poolMap = new Map();
     const discoverySnapshotState = {};
 
-    await processTakeCycle({
+    const discoveryRuntime = createTestDiscoveryRuntime({
       ajna: ajna as any,
       poolMap,
       config,
       signer: signer as any,
-      hydrationCooldowns: new Map(),
       discoverySnapshotState,
     });
-    await processSettlementCycle({
-      ajna: ajna as any,
-      poolMap,
-      config,
-      signer: signer as any,
-      hydrationCooldowns: new Map(),
-      discoverySnapshotState,
-    });
+    await discoveryRuntime.runTakeCycle();
+    await discoveryRuntime.runSettlementCycle();
 
     expect(handleDiscoveredTakeTargetStub.calledOnce).to.be.true;
     expect(handleDiscoveredSettlementTargetStub.calledOnce).to.be.true;
@@ -315,14 +316,12 @@ describe('Run Loop Discovery Integration', () => {
       },
     };
 
-    await processTakeCycle({
+    await createTestDiscoveryRuntime({
       ajna: ajna as any,
-      poolMap: new Map(),
       config,
       signer: signer as any,
-      hydrationCooldowns: new Map(),
       discoverySnapshotState: {},
-    });
+    }).runTakeCycle();
 
     expect(handleDiscoveredTakeTargetStub.calledTwice).to.be.true;
     expect(gasPriceStub.calledOnce).to.be.true;
@@ -389,25 +388,17 @@ describe('Run Loop Discovery Integration', () => {
     };
     const discoverySnapshotState = {};
 
-    await processTakeCycle({
+    const discoveryRuntime = createTestDiscoveryRuntime({
       ajna: ajna as any,
-      poolMap: new Map(),
       config,
       signer: signer as any,
-      hydrationCooldowns: new Map(),
       discoverySnapshotState,
     });
+    await discoveryRuntime.runTakeCycle();
 
     expect(discoveryStub.called).to.be.false;
 
-    await processSettlementCycle({
-      ajna: ajna as any,
-      poolMap: new Map(),
-      config,
-      signer: signer as any,
-      hydrationCooldowns: new Map(),
-      discoverySnapshotState,
-    });
+    await discoveryRuntime.runSettlementCycle();
 
     expect(discoveryStub.calledOnce).to.be.true;
     expect(handleDiscoveredSettlementTargetStub.calledOnce).to.be.true;
@@ -491,14 +482,12 @@ describe('Run Loop Discovery Integration', () => {
       },
     };
 
-    await processSettlementCycle({
+    await createTestDiscoveryRuntime({
       ajna: ajna as any,
-      poolMap: new Map(),
       config,
       signer: signer as any,
-      hydrationCooldowns: new Map(),
       discoverySnapshotState: {},
-    });
+    }).runSettlementCycle();
 
     expect(handleDiscoveredSettlementTargetStub.calledTwice).to.be.true;
     expect(gasPriceStub.calledOnce).to.be.true;
@@ -516,19 +505,21 @@ describe('Run Loop Discovery Integration', () => {
       .stub(subgraph, 'getChainwideLiquidationAuctions')
       .rejects(discoveryError);
 
-    const result = await runTakeLoopIteration({
-      ajna: {} as any,
-      poolMap: new Map(),
-      config: {
-        ...BASE_CONFIG,
-        autoDiscover: {
-          enabled: true,
-          take: true,
-        },
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        enabled: true,
+        take: true,
       },
+    };
+    const result = await runTakeLoopIteration({
+      config,
       signer: {} as any,
-      hydrationCooldowns: new Map(),
-      discoverySnapshotState: {},
+      poolMap: new Map(),
+      discoveryRuntime: createTestDiscoveryRuntime({
+        config,
+        discoverySnapshotState: {},
+      }),
     });
 
     expect(result).to.deep.equal({

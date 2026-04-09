@@ -34,31 +34,28 @@ export interface DiscoverySnapshotState {
   fetchedAt?: number;
 }
 
-export interface DiscoveryRuntimeContext {
+export interface CreateDiscoveryRuntimeParams {
   ajna: AjnaSDK;
   poolMap: PoolMap;
   config: KeeperConfig;
-  hydrationCooldowns: PoolHydrationCooldowns;
-}
-
-export interface DiscoveryCycleParams extends DiscoveryRuntimeContext {
   signer: Signer;
+  hydrationCooldowns: PoolHydrationCooldowns;
   discoverySnapshotState?: DiscoverySnapshotState;
 }
 
-function getPoolFromMap(poolMap: PoolMap, address: string) {
-  return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
+export interface DiscoveryRuntime {
+  runTakeCycle(): Promise<void>;
+  runSettlementCycle(): Promise<void>;
+  getSettlementCheckIntervalSeconds(): number;
 }
 
-function createDiscoveryRuntimeContext(
-  params: DiscoveryCycleParams
-): DiscoveryRuntimeContext {
-  return {
-    ajna: params.ajna,
-    poolMap: params.poolMap,
-    config: params.config,
-    hydrationCooldowns: params.hydrationCooldowns,
-  };
+type DiscoveryRuntimeState = CreateDiscoveryRuntimeParams;
+type EffectiveTargetIdentity =
+  | Pick<EffectiveTakeTarget, 'source' | 'poolAddress' | 'name'>
+  | Pick<EffectiveSettlementTarget, 'source' | 'poolAddress' | 'name'>;
+
+function getPoolFromMap(poolMap: PoolMap, address: string) {
+  return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
 
 function shouldRefreshDiscoverySnapshotOnTakeCycle(config: KeeperConfig): boolean {
@@ -75,104 +72,98 @@ function shouldRefreshDiscoverySnapshotOnSettlementCycle(
   );
 }
 
-export async function refreshDiscoverySnapshot(
-  config: KeeperConfig,
-  discoverySnapshotState?: DiscoverySnapshotState
+async function refreshDiscoverySnapshot(
+  state: DiscoveryRuntimeState
 ): Promise<ChainwideLiquidationAuction[]> {
-  const liquidationAuctions = await getChainwideLiquidationAuctionsShared(config);
-  if (discoverySnapshotState) {
-    discoverySnapshotState.latestLiquidationAuctions = liquidationAuctions;
-    discoverySnapshotState.fetchedAt = Date.now();
+  const liquidationAuctions = await getChainwideLiquidationAuctionsShared(state.config);
+  if (state.discoverySnapshotState) {
+    state.discoverySnapshotState.latestLiquidationAuctions = liquidationAuctions;
+    state.discoverySnapshotState.fetchedAt = Date.now();
   }
   return liquidationAuctions;
 }
 
-export async function getTakeCycleLiquidationAuctions(params: {
-  config: KeeperConfig;
-  discoverySnapshotState?: DiscoverySnapshotState;
-}): Promise<ChainwideLiquidationAuction[] | undefined> {
-  return shouldRefreshDiscoverySnapshotOnTakeCycle(params.config)
-    ? await refreshDiscoverySnapshot(params.config, params.discoverySnapshotState)
+async function getTakeCycleLiquidationAuctions(
+  state: DiscoveryRuntimeState
+): Promise<ChainwideLiquidationAuction[] | undefined> {
+  return shouldRefreshDiscoverySnapshotOnTakeCycle(state.config)
+    ? await refreshDiscoverySnapshot(state)
     : undefined;
 }
 
-export async function getSettlementCycleLiquidationAuctions(params: {
-  config: KeeperConfig;
-  discoverySnapshotState?: DiscoverySnapshotState;
-}): Promise<ChainwideLiquidationAuction[] | undefined> {
+async function getSettlementCycleLiquidationAuctions(
+  state: DiscoveryRuntimeState
+): Promise<ChainwideLiquidationAuction[] | undefined> {
   const refreshedLiquidationAuctions =
-    shouldRefreshDiscoverySnapshotOnSettlementCycle(params.config)
-      ? await refreshDiscoverySnapshot(params.config, params.discoverySnapshotState)
+    shouldRefreshDiscoverySnapshotOnSettlementCycle(state.config)
+      ? await refreshDiscoverySnapshot(state)
       : undefined;
 
   return (
     refreshedLiquidationAuctions ??
-    (params.discoverySnapshotState
-      ? params.discoverySnapshotState.latestLiquidationAuctions ?? []
-      : undefined)
+    state.discoverySnapshotState?.latestLiquidationAuctions ??
+    undefined
   );
 }
 
-export async function resolveTakeCycleTargets(params: {
-  config: KeeperConfig;
-  liquidationAuctions?: ChainwideLiquidationAuction[];
-}): Promise<EffectiveTakeTarget[]> {
+async function resolveTakeCycleTargets(
+  state: DiscoveryRuntimeState,
+  liquidationAuctions?: ChainwideLiquidationAuction[]
+): Promise<EffectiveTakeTarget[]> {
   return [
-    ...getManualTakeTargets(params.config),
-    ...(await buildDiscoveredTakeTargets(params.config, params.liquidationAuctions)),
+    ...getManualTakeTargets(state.config),
+    ...(await buildDiscoveredTakeTargets(state.config, liquidationAuctions)),
   ];
 }
 
-export async function resolveSettlementCycleTargets(params: {
-  config: KeeperConfig;
-  liquidationAuctions?: ChainwideLiquidationAuction[];
-}): Promise<EffectiveSettlementTarget[]> {
+async function resolveSettlementCycleTargets(
+  state: DiscoveryRuntimeState,
+  liquidationAuctions?: ChainwideLiquidationAuction[]
+): Promise<EffectiveSettlementTarget[]> {
   return [
-    ...getManualSettlementTargets(params.config),
-    ...(await buildDiscoveredSettlementTargets(
-      params.config,
-      params.liquidationAuctions
-    )),
+    ...getManualSettlementTargets(state.config),
+    ...(await buildDiscoveredSettlementTargets(state.config, liquidationAuctions)),
   ];
 }
 
-export async function createTakeCycleRpcCache(
-  targets: EffectiveTakeTarget[],
-  signer: Signer
+async function createTakeCycleRpcCache(
+  state: DiscoveryRuntimeState,
+  targets: EffectiveTakeTarget[]
 ): Promise<DiscoveryRpcCache | undefined> {
-  return targets.some((target) => target.source === 'discovered') && signer.provider
+  return targets.some((target) => target.source === 'discovered') &&
+    state.signer.provider
     ? {
-        gasPrice: await signer.provider.getGasPrice(),
+        gasPrice: await state.signer.provider.getGasPrice(),
         factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
       }
     : undefined;
 }
 
-export async function createSettlementCycleRpcCache(
-  targets: EffectiveSettlementTarget[],
-  signer: Signer
+async function createSettlementCycleRpcCache(
+  state: DiscoveryRuntimeState,
+  targets: EffectiveSettlementTarget[]
 ): Promise<DiscoveryRpcCache | undefined> {
-  return targets.some((target) => target.source === 'discovered') && signer.provider
+  return targets.some((target) => target.source === 'discovered') &&
+    state.signer.provider
     ? {
-        gasPrice: await signer.provider.getGasPrice(),
+        gasPrice: await state.signer.provider.getGasPrice(),
       }
     : undefined;
 }
 
-export async function resolveEffectiveTargetPool(params: {
-  target: Pick<EffectiveTakeTarget, 'source' | 'poolAddress' | 'name'>;
-  runtime: DiscoveryRuntimeContext;
-}): Promise<FungiblePool | undefined> {
-  const { target, runtime } = params;
+async function resolveEffectiveTargetPool(
+  state: DiscoveryRuntimeState,
+  target: EffectiveTargetIdentity
+): Promise<FungiblePool | undefined> {
   const pool =
     target.source === 'manual'
-      ? getPoolFromMap(runtime.poolMap, target.poolAddress)
+      ? getPoolFromMap(state.poolMap, target.poolAddress)
       : await ensurePoolLoaded({
-          ajna: runtime.ajna,
-          poolMap: runtime.poolMap,
+          ajna: state.ajna,
+          poolMap: state.poolMap,
           poolAddress: target.poolAddress,
-          config: runtime.config,
-          hydrationCooldowns: runtime.hydrationCooldowns,
+          config: state.config,
+          hydrationCooldowns: state.hydrationCooldowns,
         });
 
   if (!pool) {
@@ -183,117 +174,100 @@ export async function resolveEffectiveTargetPool(params: {
   return pool;
 }
 
-export async function executeEffectiveTakeTarget(params: {
+async function executeEffectiveTakeTarget(params: {
+  state: DiscoveryRuntimeState;
   pool: FungiblePool;
-  signer: Signer;
   target: EffectiveTakeTarget;
-  config: KeeperConfig;
   rpcCache?: DiscoveryRpcCache;
 }): Promise<void> {
-  if (params.target.source === 'manual') {
-    validateTakeSettings(params.target.poolConfig.take, params.config);
+  const { state, pool, target, rpcCache } = params;
+  if (target.source === 'manual') {
+    validateTakeSettings(target.poolConfig.take, state.config);
     await handleTakes({
-      pool: params.pool,
-      poolConfig: params.target.poolConfig,
-      signer: params.signer,
-      config: params.config,
+      pool,
+      poolConfig: target.poolConfig,
+      signer: state.signer,
+      config: state.config,
     });
     return;
   }
 
   await handleDiscoveredTakeTarget({
-    pool: params.pool,
-    signer: params.signer,
-    target: params.target,
-    config: params.config,
-    rpcCache: params.rpcCache,
+    pool,
+    signer: state.signer,
+    target,
+    config: state.config,
+    rpcCache,
   });
 }
 
-export async function executeEffectiveSettlementTarget(params: {
+async function executeEffectiveSettlementTarget(params: {
+  state: DiscoveryRuntimeState;
   pool: FungiblePool;
-  signer: Signer;
   target: EffectiveSettlementTarget;
-  config: KeeperConfig;
   rpcCache?: DiscoveryRpcCache;
 }): Promise<void> {
-  if (params.target.source === 'manual') {
+  const { state, pool, target, rpcCache } = params;
+  if (target.source === 'manual') {
     await handleSettlements({
-      pool: params.pool,
-      poolConfig: params.target.poolConfig,
-      signer: params.signer,
+      pool,
+      poolConfig: target.poolConfig,
+      signer: state.signer,
       config: {
-        dryRun: params.config.dryRun,
-        subgraphUrl: params.config.subgraphUrl,
-        delayBetweenActions: params.config.delayBetweenActions,
+        dryRun: state.config.dryRun,
+        subgraphUrl: state.config.subgraphUrl,
+        delayBetweenActions: state.config.delayBetweenActions,
       },
     });
     return;
   }
 
   await handleDiscoveredSettlementTarget({
-    pool: params.pool,
-    signer: params.signer,
-    target: params.target,
-    config: params.config,
-    rpcCache: params.rpcCache,
+    pool,
+    signer: state.signer,
+    target,
+    config: state.config,
+    rpcCache,
   });
 }
 
-export async function runTakeDiscoveryCycle(
-  params: DiscoveryCycleParams
-): Promise<void> {
-  const runtime = createDiscoveryRuntimeContext(params);
-  const liquidationAuctions = await getTakeCycleLiquidationAuctions({
-    config: params.config,
-    discoverySnapshotState: params.discoverySnapshotState,
-  });
-  const targets = await resolveTakeCycleTargets({
-    config: params.config,
-    liquidationAuctions,
-  });
-  const rpcCache = await createTakeCycleRpcCache(targets, params.signer);
+async function runTakeDiscoveryCycle(state: DiscoveryRuntimeState): Promise<void> {
+  const liquidationAuctions = await getTakeCycleLiquidationAuctions(state);
+  const targets = await resolveTakeCycleTargets(state, liquidationAuctions);
+  const rpcCache = await createTakeCycleRpcCache(state, targets);
 
   for (const target of targets) {
-    const pool = await resolveEffectiveTargetPool({ target, runtime });
+    const pool = await resolveEffectiveTargetPool(state, target);
     if (!pool) {
       continue;
     }
 
     try {
       await executeEffectiveTakeTarget({
+        state,
         pool,
-        signer: params.signer,
         target,
-        config: params.config,
         rpcCache,
       });
-      await delay(params.config.delayBetweenActions);
+      await delay(state.config.delayBetweenActions);
     } catch (error) {
       logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
     }
   }
 }
 
-export async function runSettlementDiscoveryCycle(
-  params: DiscoveryCycleParams
+async function runSettlementDiscoveryCycle(
+  state: DiscoveryRuntimeState
 ): Promise<void> {
-  const runtime = createDiscoveryRuntimeContext(params);
-  const liquidationAuctions = await getSettlementCycleLiquidationAuctions({
-    config: params.config,
-    discoverySnapshotState: params.discoverySnapshotState,
-  });
-  const targets = await resolveSettlementCycleTargets({
-    config: params.config,
-    liquidationAuctions,
-  });
-  const rpcCache = await createSettlementCycleRpcCache(targets, params.signer);
+  const liquidationAuctions = await getSettlementCycleLiquidationAuctions(state);
+  const targets = await resolveSettlementCycleTargets(state, liquidationAuctions);
+  const rpcCache = await createSettlementCycleRpcCache(state, targets);
 
   logger.info(`Settlement loop started with ${targets.length} pools`);
   logger.info(`Settlement pools: ${targets.map((target) => target.name).join(', ')}`);
 
   for (const target of targets) {
-    const pool = await resolveEffectiveTargetPool({ target, runtime });
+    const pool = await resolveEffectiveTargetPool(state, target);
     if (!pool) {
       continue;
     }
@@ -301,20 +275,37 @@ export async function runSettlementDiscoveryCycle(
     try {
       logger.debug(`Processing settlement check for pool: ${pool.name}`);
       await executeEffectiveSettlementTarget({
+        state,
         pool,
-        signer: params.signer,
         target,
-        config: params.config,
         rpcCache,
       });
       logger.debug(`Settlement check completed for pool: ${pool.name}`);
-      await delay(params.config.delayBetweenActions);
+      await delay(state.config.delayBetweenActions);
     } catch (error) {
       logger.error(`Failed to handle settlements for pool: ${pool.name}`, error);
     }
   }
 }
 
-export function getSettlementCheckIntervalSeconds(config: KeeperConfig): number {
+function computeSettlementCheckIntervalSeconds(config: KeeperConfig): number {
   return Math.max(config.delayBetweenRuns * 5, 120);
+}
+
+export function createDiscoveryRuntime(
+  params: CreateDiscoveryRuntimeParams
+): DiscoveryRuntime {
+  const state: DiscoveryRuntimeState = params;
+
+  return {
+    async runTakeCycle() {
+      await runTakeDiscoveryCycle(state);
+    },
+    async runSettlementCycle() {
+      await runSettlementDiscoveryCycle(state);
+    },
+    getSettlementCheckIntervalSeconds() {
+      return computeSettlementCheckIntervalSeconds(state.config);
+    },
+  };
 }
