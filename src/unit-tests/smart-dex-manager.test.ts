@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { SmartDexManager } from '../smart-dex-manager';
 import { LiquiditySource } from '../config-types';
+import { SmartDexManager } from '../smart-dex-manager';
 
 describe('SmartDexManager', () => {
   let mockSigner: any;
@@ -16,363 +16,234 @@ describe('SmartDexManager', () => {
     sinon.restore();
   });
 
-  describe('detectDeploymentType()', () => {
-    it('should return factory when keeperTakerFactory and takerContracts are configured', async () => {
-      const config = {
-        keeperTakerFactory: '0xFactory123',
-        takerContracts: { UniswapV3: '0xTaker123' },
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.detectDeploymentType();
-
-      expect(result).to.equal('factory');
-    });
-
-    it('should detect real Hemi factory deployment', async () => {
-      // Real working Hemi configuration
-      const hemiConfig = {
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
-        takerContracts: {
-          'UniswapV3': '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
-        },
-      };
-
-      const manager = new SmartDexManager(mockSigner, hemiConfig);
-      const result = await manager.detectDeploymentType();
-
-      expect(result).to.equal('factory');
-    });
-
-    it('should return single when only keeperTaker is configured', async () => {
-      const config = {
+  describe('detectDeploymentTypeForPool()', () => {
+    it('returns single for a 1inch pool when the legacy taker is configured', async () => {
+      const manager = new SmartDexManager(mockSigner, {
         keeperTaker: '0xTaker123',
-      };
+        oneInchRouters: { 43114: '0xRouter123' },
+      });
 
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.detectDeploymentType();
+      const result = await manager.detectDeploymentTypeForPool({
+        name: '1inch Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
 
       expect(result).to.equal('single');
     });
 
-    it('should return none when no DEX integration is configured', async () => {
-      const config = {};
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.detectDeploymentType();
-
-      expect(result).to.equal('none');
-    });
-
-    it('should prioritize factory over single when both are configured', async () => {
-      const config = {
-        keeperTaker: '0xOldTaker123',
-        keeperTakerFactory: '0xFactory123',
-        takerContracts: { UniswapV3: '0xNewTaker123' },
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.detectDeploymentType();
-
-      expect(result).to.equal('factory');
-    });
-  });
-
-  describe('validateDeployment()', () => {
-    it('should validate factory deployment successfully', async () => {
-      const config = {
+    it('returns factory for a factory-backed pool when factory contracts are configured', async () => {
+      const manager = new SmartDexManager(mockSigner, {
         keeperTakerFactory: '0xFactory123',
         takerContracts: { UniswapV3: '0xTaker123' },
-      };
+      });
 
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.validateDeployment();
-
-      expect(result.valid).to.be.true;
-      expect(result.errors).to.be.empty;
-    });
-
-    it('should validate real Hemi factory deployment', async () => {
-      // Real working Hemi configuration
-      const hemiConfig = {
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
-        takerContracts: {
-          'UniswapV3': '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
-        },
-      };
-
-      const manager = new SmartDexManager(mockSigner, hemiConfig);
-      const result = await manager.validateDeployment();
-
-      expect(result.valid).to.be.true;
-      expect(result.errors).to.be.empty;
-    });
-
-    it('should validate single deployment successfully', async () => {
-      const config = {
-        keeperTaker: '0xTaker123',
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.validateDeployment();
-
-      expect(result.valid).to.be.true;
-      expect(result.errors).to.be.empty;
-    });
-
-    it('should return errors for incomplete factory deployment', async () => {
-      const config = {
-        keeperTakerFactory: '0xFactory123',
-        takerContracts: {}, // Empty takerContracts should trigger validation error
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.validateDeployment();
-
-      expect(result.valid).to.be.false;
-      expect(result.errors).to.include('Factory deployment requires at least one takerContracts entry');
-    });
-
-    it('should validate none deployment (no errors expected)', async () => {
-      const config = {
-        // No DEX integration configured
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.validateDeployment();
-
-      expect(result.valid).to.be.true;
-      expect(result.errors).to.be.empty;
-    });
-
-    it('should validate deployment with only takerContracts as none type', async () => {
-      const config = {
-        // Missing keeperTakerFactory but has takerContracts - should detect as 'none'
-        takerContracts: { UniswapV3: '0xTaker123' },
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.validateDeployment();
-
-      expect(result.valid).to.be.true; // 'none' type is valid
-      expect(result.errors).to.be.empty;
-    });
-  });
-
-  describe('canTakeLiquidation()', () => {
-    it('should return true for single deployment with valid take config', async () => {
-      const config = {
-        keeperTaker: '0xTaker123',
-      };
-
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.canTakeLiquidation(poolConfig as any);
-
-      expect(result).to.be.true;
-    });
-
-    it('should return false for single deployment without liquiditySource', async () => {
-      const config = {
-        keeperTaker: '0xTaker123',
-      };
-
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          // Missing liquiditySource
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.canTakeLiquidation(poolConfig as any);
-
-      expect(result).to.be.false;
-    });
-
-    it('should return true for factory deployment with factory-backed source', async () => {
-      const config = {
-        keeperTakerFactory: '0xFactory123',
-        takerContracts: { UniswapV3: '0xTaker123' },
-      };
-
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.canTakeLiquidation(poolConfig as any);
-
-      expect(result).to.be.true;
-    });
-
-    it('should route mixed configs by pool source instead of preferring factory globally', async () => {
-      const config = {
-        keeperTaker: '0xOldTaker123',
-        keeperTakerFactory: '0xFactory123',
-        takerContracts: { UniswapV3: '0xNewTaker123' },
-        oneInchRouters: { 43114: '0xRouter123' },
-      };
-
-      const oneInchPoolConfig = {
-        name: 'Legacy 1inch Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.99,
-        },
-      };
-      const uniswapPoolConfig = {
+      const result = await manager.detectDeploymentTypeForPool({
         name: 'Factory Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.99,
         },
-      };
+      } as any);
 
-      const manager = new SmartDexManager(mockSigner, config);
-
-      expect(await manager.detectDeploymentTypeForPool(oneInchPoolConfig as any)).to.equal(
-        'single'
-      );
-      expect(await manager.detectDeploymentTypeForPool(uniswapPoolConfig as any)).to.equal(
-        'factory'
-      );
+      expect(result).to.equal('factory');
     });
 
-    it('should return false for none deployment', async () => {
-      const config = {};
+    it('returns none for arb-only pools', async () => {
+      const manager = new SmartDexManager(mockSigner, {});
 
-      const poolConfig = {
-        name: 'Test Pool',
+      const result = await manager.detectDeploymentTypeForPool({
+        name: 'Arb Pool',
+        take: {
+          minCollateral: 1,
+          hpbPriceFactor: 0.9,
+        },
+      } as any);
+
+      expect(result).to.equal('none');
+    });
+
+    it('routes mixed configs by pool liquidity source instead of globally', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTaker: '0xOldTaker123',
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { UniswapV3: '0xNewTaker123' },
+        oneInchRouters: { 43114: '0xRouter123' },
+      });
+
+      const oneInchResult = await manager.detectDeploymentTypeForPool({
+        name: 'Legacy Pool',
         take: {
           liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.99,
         },
-      };
+      } as any);
+      const uniswapResult = await manager.detectDeploymentTypeForPool({
+        name: 'Factory Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
 
-      const manager = new SmartDexManager(mockSigner, config);
-      const result = await manager.canTakeLiquidation(poolConfig as any);
+      expect(oneInchResult).to.equal('single');
+      expect(uniswapResult).to.equal('factory');
+    });
+  });
+
+  describe('validateDeploymentForPool()', () => {
+    it('validates a complete 1inch pool deployment', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTaker: '0xTaker123',
+        oneInchRouters: { 43114: '0xRouter123' },
+      });
+
+      const result = await manager.validateDeploymentForPool({
+        name: '1inch Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result.valid).to.be.true;
+      expect(result.errors).to.be.empty;
+    });
+
+    it('reports missing router config for 1inch pools', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTaker: '0xTaker123',
+      });
+
+      const result = await manager.validateDeploymentForPool({
+        name: '1inch Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors).to.include('1inch deployment requires oneInchRouters configuration');
+    });
+
+    it('validates a complete factory-backed pool deployment', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { UniswapV3: '0xTaker123' },
+      });
+
+      const result = await manager.validateDeploymentForPool({
+        name: 'Factory Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result.valid).to.be.true;
+      expect(result.errors).to.be.empty;
+    });
+
+    it('treats missing factory config as arb-only fallback instead of a valid factory deployment', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xFactory123',
+      });
+
+      const result = await manager.validateDeploymentForPool({
+        name: 'Factory Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result.valid).to.be.true;
+      expect(result.errors).to.be.empty;
+    });
+
+    it('treats arb-only pools as valid without external contracts', async () => {
+      const manager = new SmartDexManager(mockSigner, {});
+
+      const result = await manager.validateDeploymentForPool({
+        name: 'Arb Pool',
+        take: {
+          minCollateral: 1,
+          hpbPriceFactor: 0.9,
+        },
+      } as any);
+
+      expect(result.valid).to.be.true;
+      expect(result.errors).to.be.empty;
+    });
+  });
+
+  describe('canTakeLiquidation()', () => {
+    it('returns true for 1inch external takes when the legacy deployment is available', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTaker: '0xTaker123',
+        oneInchRouters: { 43114: '0xRouter123' },
+      });
+
+      const result = await manager.canTakeLiquidation({
+        name: '1inch Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result).to.be.true;
+    });
+
+    it('returns true for factory-backed external takes when factory contracts are available', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { UniswapV3: '0xTaker123' },
+      });
+
+      const result = await manager.canTakeLiquidation({
+        name: 'Factory Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result).to.be.true;
+    });
+
+    it('returns false for arb-only pools because they do not use external liquidity', async () => {
+      const manager = new SmartDexManager(mockSigner, {});
+
+      const result = await manager.canTakeLiquidation({
+        name: 'Arb Pool',
+        take: {
+          minCollateral: 1,
+          hpbPriceFactor: 0.9,
+        },
+      } as any);
 
       expect(result).to.be.false;
     });
-  });
 
-  describe('Real Production Configuration Tests', () => {
-    it('should handle complete Hemi configuration correctly', async () => {
-      // Real Hemi config that works in production
-      const hemiConfig = {
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
-        takerContracts: {
-          'UniswapV3': '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
-        },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
-          quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        },
-      };
+    it('returns false when a pool asks for a deployment type that is not configured', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { UniswapV3: '0xTaker123' },
+      });
 
-      const manager = new SmartDexManager(mockSigner, hemiConfig);
-      
-      // Should detect as factory
-      const deploymentType = await manager.detectDeploymentType();
-      expect(deploymentType).to.equal('factory');
-      
-      // Should validate successfully
-      const validation = await manager.validateDeployment();
-      expect(validation.valid).to.be.true;
-      expect(validation.errors).to.be.empty;
-    });
-
-    it('should handle mixed arbTake and external take configuration', async () => {
-      const config = {
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
-        takerContracts: { 'UniswapV3': '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7' },
-      };
-
-      // Pool config with both arbTake and external take (like real Hemi pools)
-      const poolConfig = {
-        name: 'USD_T1 / USD_T2',
+      const result = await manager.canTakeLiquidation({
+        name: '1inch Pool',
         take: {
-          minCollateral: 0.1,           // ArbTake settings
-          hpbPriceFactor: 0.98,
-          liquiditySource: LiquiditySource.UNISWAPV3,  // External take settings  
+          liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.99,
         },
-      };
+      } as any);
 
-      const manager = new SmartDexManager(mockSigner, config);
-      
-      // Should validate deployment
-      const validation = await manager.validateDeployment();
-      expect(validation.valid).to.be.true;
-      
-      // Test both strategies are configured
-      const hasArbTake = !!(poolConfig.take.minCollateral && poolConfig.take.hpbPriceFactor);
-      const hasExternalTake = !!(poolConfig.take.liquiditySource && poolConfig.take.marketPriceFactor);
-      
-      expect(hasArbTake).to.be.true;
-      expect(hasExternalTake).to.be.true;
-    });
-  });
-
-  describe('Chain-Specific Configuration', () => {
-    it('should handle different chain configurations appropriately', async () => {
-      const chains = [
-        {
-          name: 'Ethereum',
-          chainId: 1,
-          hasFactory: true,
-          hasSingle: true,
-        },
-        {
-          name: 'Hemi',
-          chainId: 43111, // Real Hemi chain ID
-          hasFactory: true,
-          hasSingle: false,
-        },
-        {
-          name: 'New Chain',
-          chainId: 999999,
-          hasFactory: false,
-          hasSingle: false,
-        },
-      ];
-
-      for (const chain of chains) {
-        let config: any = {};
-        
-        if (chain.hasFactory) {
-          config.keeperTakerFactory = '0xFactory123';
-          config.takerContracts = { 'UniswapV3': '0xTaker123' };
-        }
-        
-        if (chain.hasSingle) {
-          config.keeperTaker = '0xTaker123';
-        }
-
-        const manager = new SmartDexManager(mockSigner, config);
-        const deploymentType = await manager.detectDeploymentType();
-        
-        if (chain.hasFactory) {
-          expect(deploymentType).to.equal('factory', `${chain.name} should detect factory`);
-        } else if (chain.hasSingle) {
-          expect(deploymentType).to.equal('single', `${chain.name} should detect single`);
-        } else {
-          expect(deploymentType).to.equal('none', `${chain.name} should detect none`);
-        }
-      }
+      expect(result).to.be.false;
     });
   });
 });

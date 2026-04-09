@@ -19,7 +19,6 @@ interface SmartDexConfig {
   keeperTakerFactory?: string;
   takerContracts?: { [source: string]: string };
   oneInchRouters?: { [chainId: number]: string };
-  pools?: Array<{ take?: { liquiditySource?: any } }>;
   [key: string]: unknown;
 }
 
@@ -47,28 +46,6 @@ export class SmartDexManager {
   constructor(signer: Signer, config: SmartDexConfig) {
     this.signer = signer;
     this.config = config;
-  }
-
-  /**
-   * Analyzes the configuration to determine what type of deployment is available
-   * Priority order: factory > single > none
-   */
-  async detectDeploymentType(): Promise<DeploymentType> {
-    // Factory pattern deployment - new approach for multi-DEX support
-    if (this.config.keeperTakerFactory && this.config.takerContracts) {
-      logger.debug('Smart Detection: Factory deployment detected - multi-DEX support available');
-      return 'factory';
-    }
-    
-    // Single contract deployment - existing approach for major chains
-    if (this.config.keeperTaker) {
-      logger.debug('Smart Detection: Single contract deployment detected - using existing 1inch integration');
-      return 'single';
-    }
-    
-    // No DEX integration available - arbTake and settlement only
-    logger.warn('Smart Detection: No DEX integration configured - arbTake and settlement only');
-    return 'none';
   }
 
   async detectDeploymentTypeForPool(poolConfig: Pick<PoolConfig, 'name' | 'take'>): Promise<DeploymentType> {
@@ -135,50 +112,6 @@ export class SmartDexManager {
         logger.debug(`No DEX deployment - external takes not possible for pool ${poolConfig.name}`);
         return false;
     }
-  }
-
-  /**
-   * Validates that the detected deployment type has all required configuration
-   * Helps catch configuration errors early
-   */
-  async validateDeployment(): Promise<{ valid: boolean; errors: string[] }> {
-    const deploymentType = await this.detectDeploymentType();
-    const errors: string[] = [];
-
-    switch (deploymentType) {
-      case 'single':
-        if (!this.config.keeperTaker) {
-          errors.push('Single deployment requires keeperTaker address');
-        }
-        // Check if any pools are configured for takes
-        const poolsWithTakes = (this.config.pools || []).filter(p => p.take?.liquiditySource);
-        if (poolsWithTakes.length > 0) {
-          // Validate 1inch-specific requirements
-          if (!this.config.oneInchRouters) {
-            errors.push('Pools configured for takes but oneInchRouters missing');
-          }
-        }
-        break;
-        
-      case 'factory':
-        if (!this.config.keeperTakerFactory) {
-          errors.push('Factory deployment requires keeperTakerFactory address');
-        }
-        if (!this.config.takerContracts || Object.keys(this.config.takerContracts).length === 0) {
-          errors.push('Factory deployment requires at least one takerContracts entry');
-        }
-        break;
-        
-      case 'none':
-        // No validation needed - arbTake/settlement doesn't require external contracts
-        logger.debug('No external take capability - this is valid for arbTake/settlement only operation');
-        break;
-    }
-
-    return {
-      valid: errors.length === 0,
-      errors
-    };
   }
 
   async validateDeploymentForPool(
