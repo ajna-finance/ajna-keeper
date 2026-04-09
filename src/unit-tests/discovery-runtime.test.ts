@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber } from 'ethers';
-import { clearSharedDiscoveryScans } from '../auto-discovery';
+import { clearSharedDiscoveryScans } from '../discovery-targets';
 import {
   processKickCycle,
   processSettlementCycle,
@@ -12,7 +12,7 @@ import { KeeperConfig, PriceOriginSource } from '../config-types';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import * as kickModule from '../kick';
-import * as discoveryHandlers from '../auto-discovery-handlers';
+import * as discoveryHandlers from '../discovery-handlers';
 import subgraph from '../subgraph';
 
 const BASE_CONFIG: KeeperConfig = {

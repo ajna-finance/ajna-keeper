@@ -11,7 +11,7 @@ import {
 import {
   ResolvedSettlementTarget,
   ResolvedTakeTarget,
-} from './auto-discovery';
+} from './discovery-targets';
 import { logger } from './logging';
 import * as takeModule from './take';
 import {

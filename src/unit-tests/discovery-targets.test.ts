@@ -6,7 +6,7 @@ import {
   clearSharedDiscoveryScans,
   validateResolvedSettlementTarget,
   validateResolvedTakeTarget,
-} from '../auto-discovery';
+} from '../discovery-targets';
 import { KeeperConfig, LiquiditySource, PriceOriginSource } from '../config-types';
 import subgraph from '../subgraph';
 
@@ -46,7 +46,7 @@ const BASE_CONFIG: KeeperConfig = {
   },
 };
 
-describe('Auto Discovery Target Resolution', () => {
+describe('Discovery Target Resolution', () => {
   afterEach(() => {
     sinon.restore();
     clearSharedDiscoveryScans();

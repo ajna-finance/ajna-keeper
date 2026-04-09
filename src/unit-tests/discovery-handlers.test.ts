@@ -4,14 +4,14 @@ import { BigNumber, ethers } from 'ethers';
 import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
-} from '../auto-discovery-handlers';
+} from '../discovery-handlers';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import { LiquiditySource } from '../config-types';
 import * as erc20 from '../erc20';
 import { DexRouter } from '../dex-router';
 
-describe('Auto Discovery Handlers', () => {
+describe('Discovery Handlers', () => {
   afterEach(() => {
     sinon.restore();
   });

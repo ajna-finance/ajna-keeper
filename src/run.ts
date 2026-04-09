@@ -23,20 +23,12 @@ import {
   cacheConfiguredPool,
   PoolHydrationCooldowns,
   PoolMap,
-} from './auto-discovery';
+} from './discovery-targets';
 import {
-  createSettlementCycleRpcCache,
-  createTakeCycleRpcCache,
-  DiscoveryRuntimeContext,
   DiscoverySnapshotState,
-  executeEffectiveSettlementTarget,
-  executeEffectiveTakeTarget,
   getSettlementCheckIntervalSeconds,
-  getSettlementCycleLiquidationAuctions,
-  getTakeCycleLiquidationAuctions,
-  resolveEffectiveTargetPool,
-  resolveSettlementCycleTargets,
-  resolveTakeCycleTargets,
+  runSettlementDiscoveryCycle,
+  runTakeDiscoveryCycle,
 } from './discovery-runtime';
 
 interface KeepPoolParams {
@@ -122,17 +114,6 @@ function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
 
-function getDiscoveryRuntimeContext(
-  params: DiscoveryLoopParams
-): DiscoveryRuntimeContext {
-  return {
-    ajna: params.ajna,
-    poolMap: params.poolMap,
-    config: params.config,
-    hydrationCooldowns: params.hydrationCooldowns,
-  };
-}
-
 async function kickPoolsLoop({ poolMap, config, signer, chainId }: KickLoopParams) {
   while (true) {
     await processKickCycle({ poolMap, config, signer, chainId });
@@ -206,7 +187,7 @@ export async function processTakeCycle({
   hydrationCooldowns,
   discoverySnapshotState,
 }: DiscoveryLoopParams): Promise<void> {
-  const runtime = getDiscoveryRuntimeContext({
+  await runTakeDiscoveryCycle({
     ajna,
     poolMap,
     config,
@@ -214,41 +195,6 @@ export async function processTakeCycle({
     hydrationCooldowns,
     discoverySnapshotState,
   });
-  const liquidationAuctions = await getTakeCycleLiquidationAuctions({
-    config,
-    discoverySnapshotState,
-  });
-  const targets = await resolveTakeCycleTargets({
-    config,
-    liquidationAuctions,
-  });
-  const takeDiscoveryRpcCache = await createTakeCycleRpcCache(targets, signer);
-
-  for (const target of targets) {
-    const pool = await resolveEffectiveTargetPool({ target, runtime });
-    if (!pool) {
-      continue;
-    }
-
-    try {
-      await executeEffectiveTakeTarget({
-        pool,
-        signer,
-        target,
-        config,
-        rpcCache: takeDiscoveryRpcCache,
-      });
-      await delay(config.delayBetweenActions);
-    } catch (error) {
-      logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
-    }
-  }
-}
-
-function hasTakeSettings(
-  config: PoolConfig
-): config is RequireFields<PoolConfig, 'take'> {
-  return !!config.take;
 }
 
 async function collectBondLoop({ poolMap, config, signer }: KeepPoolParams) {
@@ -320,7 +266,7 @@ export async function processSettlementCycle({
   hydrationCooldowns,
   discoverySnapshotState,
 }: DiscoveryLoopParams): Promise<void> {
-  const runtime = getDiscoveryRuntimeContext({
+  await runSettlementDiscoveryCycle({
     ajna,
     poolMap,
     config,
@@ -328,50 +274,6 @@ export async function processSettlementCycle({
     hydrationCooldowns,
     discoverySnapshotState,
   });
-  const liquidationAuctions = await getSettlementCycleLiquidationAuctions({
-    config,
-    discoverySnapshotState,
-  });
-  const targets = await resolveSettlementCycleTargets({
-    config,
-    liquidationAuctions,
-  });
-  const settlementDiscoveryRpcCache = await createSettlementCycleRpcCache(
-    targets,
-    signer
-  );
-
-  logger.info(`Settlement loop started with ${targets.length} pools`);
-  logger.info(`Settlement pools: ${targets.map((target) => target.name).join(', ')}`);
-
-  for (const target of targets) {
-    const pool = await resolveEffectiveTargetPool({ target, runtime });
-    if (!pool) {
-      continue;
-    }
-
-    try {
-      logger.debug(`Processing settlement check for pool: ${pool.name}`);
-      await executeEffectiveSettlementTarget({
-        pool,
-        signer,
-        target,
-        config,
-        rpcCache: settlementDiscoveryRpcCache,
-      });
-
-      logger.debug(`Settlement check completed for pool: ${pool.name}`);
-      await delay(config.delayBetweenActions);
-    } catch (poolError) {
-      logger.error(`Failed to handle settlements for pool: ${pool.name}`, poolError);
-    }
-  }
-}
-
-function hasSettlementSettings(
-  config: PoolConfig
-): config is RequireFields<PoolConfig, 'settlement'> {
-  return !!config.settlement?.enabled;
 }
 
 function logLoopCrash(loopName: string, outerError: unknown): void {

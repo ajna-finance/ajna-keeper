@@ -18,7 +18,7 @@
 
 **What:** Continue shrinking the discovery/runtime orchestration surface now that `discovery-runtime.ts` owns snapshot lifecycle, cycle target assembly, cycle-scoped RPC caches, and target dispatch.
 
-**Why:** The biggest maintainability win is already landed, but the discovery/runtime layer is still the largest remaining orchestration surface. The code is correct, though `run.ts`, `auto-discovery.ts`, `auto-discovery-handlers.ts`, and `discovery-runtime.ts` can still be made easier to extend.
+**Why:** The biggest maintainability win is already landed, but the discovery/runtime layer is still the largest remaining orchestration surface. The code is correct, though `run.ts`, `discovery-targets.ts`, `discovery-handlers.ts`, and `discovery-runtime.ts` can still be made easier to extend.
 
 **Context:** The keeper now has:
 - shared take processing in `take-engine.ts`
@@ -30,7 +30,7 @@ The next cleanup should keep behavior the same while further tightening ownershi
 
 **Next Steps:**
 - keep narrowing `run.ts` toward pure loop/control concerns
-- decide whether `auto-discovery-handlers.ts` should split by action executor
+- decide whether `discovery-handlers.ts` should split by action executor
 - keep target selection separate from action execution, but make the runtime interfaces smaller and more explicit
 - reduce any remaining cross-file "discovered target -> handler" wiring that is still orchestration rather than policy
 

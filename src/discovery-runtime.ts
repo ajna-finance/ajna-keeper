@@ -10,7 +10,7 @@ import {
   getManualTakeTargets,
   PoolHydrationCooldowns,
   PoolMap,
-} from './auto-discovery';
+} from './discovery-targets';
 import {
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
@@ -21,12 +21,13 @@ import {
   DiscoveryRpcCache,
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
-} from './auto-discovery-handlers';
+} from './discovery-handlers';
 import { logger } from './logging';
 import { handleSettlements } from './settlement';
 import { ChainwideLiquidationAuction } from './subgraph';
 import { createFactoryQuoteProviderRuntimeCache } from './take-factory';
 import { handleTakes } from './take';
+import { delay } from './utils';
 
 export interface DiscoverySnapshotState {
   latestLiquidationAuctions?: ChainwideLiquidationAuction[];
@@ -40,8 +41,24 @@ export interface DiscoveryRuntimeContext {
   hydrationCooldowns: PoolHydrationCooldowns;
 }
 
+export interface DiscoveryCycleParams extends DiscoveryRuntimeContext {
+  signer: Signer;
+  discoverySnapshotState?: DiscoverySnapshotState;
+}
+
 function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
+}
+
+function createDiscoveryRuntimeContext(
+  params: DiscoveryCycleParams
+): DiscoveryRuntimeContext {
+  return {
+    ajna: params.ajna,
+    poolMap: params.poolMap,
+    config: params.config,
+    hydrationCooldowns: params.hydrationCooldowns,
+  };
 }
 
 function shouldRefreshDiscoverySnapshotOnTakeCycle(config: KeeperConfig): boolean {
@@ -221,6 +238,81 @@ export async function executeEffectiveSettlementTarget(params: {
     config: params.config,
     rpcCache: params.rpcCache,
   });
+}
+
+export async function runTakeDiscoveryCycle(
+  params: DiscoveryCycleParams
+): Promise<void> {
+  const runtime = createDiscoveryRuntimeContext(params);
+  const liquidationAuctions = await getTakeCycleLiquidationAuctions({
+    config: params.config,
+    discoverySnapshotState: params.discoverySnapshotState,
+  });
+  const targets = await resolveTakeCycleTargets({
+    config: params.config,
+    liquidationAuctions,
+  });
+  const rpcCache = await createTakeCycleRpcCache(targets, params.signer);
+
+  for (const target of targets) {
+    const pool = await resolveEffectiveTargetPool({ target, runtime });
+    if (!pool) {
+      continue;
+    }
+
+    try {
+      await executeEffectiveTakeTarget({
+        pool,
+        signer: params.signer,
+        target,
+        config: params.config,
+        rpcCache,
+      });
+      await delay(params.config.delayBetweenActions);
+    } catch (error) {
+      logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
+    }
+  }
+}
+
+export async function runSettlementDiscoveryCycle(
+  params: DiscoveryCycleParams
+): Promise<void> {
+  const runtime = createDiscoveryRuntimeContext(params);
+  const liquidationAuctions = await getSettlementCycleLiquidationAuctions({
+    config: params.config,
+    discoverySnapshotState: params.discoverySnapshotState,
+  });
+  const targets = await resolveSettlementCycleTargets({
+    config: params.config,
+    liquidationAuctions,
+  });
+  const rpcCache = await createSettlementCycleRpcCache(targets, params.signer);
+
+  logger.info(`Settlement loop started with ${targets.length} pools`);
+  logger.info(`Settlement pools: ${targets.map((target) => target.name).join(', ')}`);
+
+  for (const target of targets) {
+    const pool = await resolveEffectiveTargetPool({ target, runtime });
+    if (!pool) {
+      continue;
+    }
+
+    try {
+      logger.debug(`Processing settlement check for pool: ${pool.name}`);
+      await executeEffectiveSettlementTarget({
+        pool,
+        signer: params.signer,
+        target,
+        config: params.config,
+        rpcCache,
+      });
+      logger.debug(`Settlement check completed for pool: ${pool.name}`);
+      await delay(params.config.delayBetweenActions);
+    } catch (error) {
+      logger.error(`Failed to handle settlements for pool: ${pool.name}`, error);
+    }
+  }
 }
 
 export function getSettlementCheckIntervalSeconds(config: KeeperConfig): number {
