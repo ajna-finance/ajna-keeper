@@ -1,12 +1,9 @@
 import { AjnaSDK, Signer } from '@ajna-finance/sdk';
 import {
   configureAjna,
-  getAutoDiscoverSettlementPolicy,
-  getAutoDiscoverTakePolicy,
   KeeperConfig,
   PoolConfig,
   validateAutoDiscoverConfig,
-  validateTakeSettings,
   validateTakeSettingsForChain,
 } from './config-types';
 import {
@@ -16,32 +13,31 @@ import {
   RequireFields,
 } from './utils';
 import { handleKicks } from './kick';
-import { handleTakes } from './take';
 import { collectBondFromPool } from './collect-bond';
 import { LpCollector } from './collect-lp';
 import { logger } from './logging';
 import { RewardActionTracker } from './reward-action-tracker';
 import { DexRouter } from './dex-router';
-import { handleSettlements, tryReactiveSettlement } from './settlement';
+import { tryReactiveSettlement } from './settlement';
 import {
-  buildDiscoveredSettlementTargets,
-  buildDiscoveredTakeTargets,
   cacheConfiguredPool,
-  EffectiveSettlementTarget,
-  EffectiveTakeTarget,
-  ensurePoolLoaded,
-  getChainwideLiquidationAuctionsShared,
-  getManualSettlementTargets,
-  getManualTakeTargets,
   PoolHydrationCooldowns,
   PoolMap,
 } from './auto-discovery';
 import {
-  DiscoveryRpcCache,
-  handleDiscoveredSettlementTarget,
-  handleDiscoveredTakeTarget,
-} from './auto-discovery-handlers';
-import { createFactoryQuoteProviderRuntimeCache } from './take-factory';
+  createSettlementCycleRpcCache,
+  createTakeCycleRpcCache,
+  DiscoveryRuntimeContext,
+  DiscoverySnapshotState,
+  executeEffectiveSettlementTarget,
+  executeEffectiveTakeTarget,
+  getSettlementCheckIntervalSeconds,
+  getSettlementCycleLiquidationAuctions,
+  getTakeCycleLiquidationAuctions,
+  resolveEffectiveTargetPool,
+  resolveSettlementCycleTargets,
+  resolveTakeCycleTargets,
+} from './discovery-runtime';
 
 interface KeepPoolParams {
   poolMap: PoolMap;
@@ -57,13 +53,6 @@ interface DiscoveryLoopParams extends KeepPoolParams {
 
 interface KickLoopParams extends KeepPoolParams {
   chainId?: number;
-}
-
-interface DiscoverySnapshotState {
-  latestLiquidationAuctions?: Awaited<
-    ReturnType<typeof getChainwideLiquidationAuctionsShared>
-  >;
-  fetchedAt?: number;
 }
 
 interface LoopIterationResult {
@@ -131,6 +120,17 @@ async function getPoolsFromConfig(
 
 function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
+}
+
+function getDiscoveryRuntimeContext(
+  params: DiscoveryLoopParams
+): DiscoveryRuntimeContext {
+  return {
+    ajna: params.ajna,
+    poolMap: params.poolMap,
+    config: params.config,
+    hydrationCooldowns: params.hydrationCooldowns,
+  };
 }
 
 async function kickPoolsLoop({ poolMap, config, signer, chainId }: KickLoopParams) {
@@ -206,57 +206,38 @@ export async function processTakeCycle({
   hydrationCooldowns,
   discoverySnapshotState,
 }: DiscoveryLoopParams): Promise<void> {
-  const liquidationAuctions = shouldRefreshDiscoverySnapshotOnTakeCycle(config)
-    ? await refreshDiscoverySnapshot(config, discoverySnapshotState)
-    : undefined;
-
-  const targets: EffectiveTakeTarget[] = [
-    ...getManualTakeTargets(config),
-    ...(await buildDiscoveredTakeTargets(config, liquidationAuctions)),
-  ];
-  const takeDiscoveryRpcCache: DiscoveryRpcCache | undefined =
-    targets.some((target) => target.source === 'discovered') && signer.provider
-      ? {
-          gasPrice: await signer.provider.getGasPrice(),
-          factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
-        }
-      : undefined;
+  const runtime = getDiscoveryRuntimeContext({
+    ajna,
+    poolMap,
+    config,
+    signer,
+    hydrationCooldowns,
+    discoverySnapshotState,
+  });
+  const liquidationAuctions = await getTakeCycleLiquidationAuctions({
+    config,
+    discoverySnapshotState,
+  });
+  const targets = await resolveTakeCycleTargets({
+    config,
+    liquidationAuctions,
+  });
+  const takeDiscoveryRpcCache = await createTakeCycleRpcCache(targets, signer);
 
   for (const target of targets) {
-    const pool =
-      target.source === 'manual'
-        ? getPoolFromMap(poolMap, target.poolAddress)
-        : await ensurePoolLoaded({
-            ajna,
-            poolMap,
-            poolAddress: target.poolAddress,
-            config,
-            hydrationCooldowns,
-          });
-
+    const pool = await resolveEffectiveTargetPool({ target, runtime });
     if (!pool) {
-      logger.warn(`Skipping take target ${target.name} because the pool is unavailable`);
       continue;
     }
 
     try {
-      if (target.source === 'manual') {
-        validateTakeSettings(target.poolConfig.take, config);
-        await handleTakes({
-          pool,
-          poolConfig: target.poolConfig,
-          signer,
-          config,
-        });
-      } else {
-        await handleDiscoveredTakeTarget({
-          pool,
-          signer,
-          target,
-          config,
-          rpcCache: takeDiscoveryRpcCache,
-        });
-      }
+      await executeEffectiveTakeTarget({
+        pool,
+        signer,
+        target,
+        config,
+        rpcCache: takeDiscoveryRpcCache,
+      });
       await delay(config.delayBetweenActions);
     } catch (error) {
       logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
@@ -339,72 +320,45 @@ export async function processSettlementCycle({
   hydrationCooldowns,
   discoverySnapshotState,
 }: DiscoveryLoopParams): Promise<void> {
-  const refreshedLiquidationAuctions = shouldRefreshDiscoverySnapshotOnSettlementCycle(
-    config
-  )
-    ? await refreshDiscoverySnapshot(config, discoverySnapshotState)
-    : undefined;
-  const discoveredLiquidationAuctions =
-    refreshedLiquidationAuctions ??
-    (discoverySnapshotState
-      ? discoverySnapshotState.latestLiquidationAuctions ?? []
-      : undefined);
-
-  const targets: EffectiveSettlementTarget[] = [
-    ...getManualSettlementTargets(config),
-    ...(await buildDiscoveredSettlementTargets(config, discoveredLiquidationAuctions)),
-  ];
-  const settlementDiscoveryRpcCache: DiscoveryRpcCache | undefined =
-    targets.some((target) => target.source === 'discovered') && signer.provider
-      ? {
-          gasPrice: await signer.provider.getGasPrice(),
-        }
-      : undefined;
+  const runtime = getDiscoveryRuntimeContext({
+    ajna,
+    poolMap,
+    config,
+    signer,
+    hydrationCooldowns,
+    discoverySnapshotState,
+  });
+  const liquidationAuctions = await getSettlementCycleLiquidationAuctions({
+    config,
+    discoverySnapshotState,
+  });
+  const targets = await resolveSettlementCycleTargets({
+    config,
+    liquidationAuctions,
+  });
+  const settlementDiscoveryRpcCache = await createSettlementCycleRpcCache(
+    targets,
+    signer
+  );
 
   logger.info(`Settlement loop started with ${targets.length} pools`);
   logger.info(`Settlement pools: ${targets.map((target) => target.name).join(', ')}`);
 
   for (const target of targets) {
-    const pool =
-      target.source === 'manual'
-        ? getPoolFromMap(poolMap, target.poolAddress)
-        : await ensurePoolLoaded({
-            ajna,
-            poolMap,
-            poolAddress: target.poolAddress,
-            config,
-            hydrationCooldowns,
-          });
-
+    const pool = await resolveEffectiveTargetPool({ target, runtime });
     if (!pool) {
-      logger.warn(
-        `Skipping settlement target ${target.name} because the pool is unavailable`
-      );
       continue;
     }
 
     try {
       logger.debug(`Processing settlement check for pool: ${pool.name}`);
-      if (target.source === 'manual') {
-        await handleSettlements({
-          pool,
-          poolConfig: target.poolConfig,
-          signer,
-          config: {
-            dryRun: config.dryRun,
-            subgraphUrl: config.subgraphUrl,
-            delayBetweenActions: config.delayBetweenActions,
-          },
-        });
-      } else {
-        await handleDiscoveredSettlementTarget({
-          pool,
-          signer,
-          target,
-          config,
-          rpcCache: settlementDiscoveryRpcCache,
-        });
-      }
+      await executeEffectiveSettlementTarget({
+        pool,
+        signer,
+        target,
+        config,
+        rpcCache: settlementDiscoveryRpcCache,
+      });
 
       logger.debug(`Settlement check completed for pool: ${pool.name}`);
       await delay(config.delayBetweenActions);
@@ -418,36 +372,6 @@ function hasSettlementSettings(
   config: PoolConfig
 ): config is RequireFields<PoolConfig, 'settlement'> {
   return !!config.settlement?.enabled;
-}
-
-function shouldRefreshDiscoverySnapshotOnTakeCycle(config: KeeperConfig): boolean {
-  return !!config.autoDiscover?.enabled && !!getAutoDiscoverTakePolicy(config.autoDiscover);
-}
-
-function shouldRefreshDiscoverySnapshotOnSettlementCycle(
-  config: KeeperConfig
-): boolean {
-  return (
-    !!config.autoDiscover?.enabled &&
-    !getAutoDiscoverTakePolicy(config.autoDiscover) &&
-    !!getAutoDiscoverSettlementPolicy(config.autoDiscover)
-  );
-}
-
-async function refreshDiscoverySnapshot(
-  config: KeeperConfig,
-  discoverySnapshotState?: DiscoverySnapshotState
-) {
-  const liquidationAuctions = await getChainwideLiquidationAuctionsShared(config);
-  if (discoverySnapshotState) {
-    discoverySnapshotState.latestLiquidationAuctions = liquidationAuctions;
-    discoverySnapshotState.fetchedAt = Date.now();
-  }
-  return liquidationAuctions;
-}
-
-function getSettlementCheckIntervalSeconds(config: KeeperConfig): number {
-  return Math.max(config.delayBetweenRuns * 5, 120);
 }
 
 function logLoopCrash(loopName: string, outerError: unknown): void {
