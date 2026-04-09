@@ -1,0 +1,491 @@
+import { FungiblePool, Signer } from '@ajna-finance/sdk';
+import { BigNumber, ethers } from 'ethers';
+import subgraph from './subgraph';
+import { logger } from './logging';
+import { delay, weiToDecimaled } from './utils';
+import { arbTakeLiquidation, checkIfArbTakeable } from './arb-take';
+import {
+  ArbTakeEvaluation,
+  ExternalTakeQuoteEvaluation,
+  ExternalTakeStrategyKind,
+  TakeActionConfig,
+  TakeBorrowerCandidate,
+  TakeDecision,
+  TakeLiquidationPlan,
+} from './take-types';
+
+export interface ExternalTakeAdapter<
+  TPoolConfig extends TakeActionConfig = TakeActionConfig,
+  TExecutionConfig = unknown,
+> {
+  kind: ExternalTakeStrategyKind;
+  evaluateExternalTake?: (params: {
+    pool: FungiblePool;
+    signer: Signer;
+    poolConfig: TPoolConfig;
+    price: number;
+    auctionPrice: BigNumber;
+    collateral: BigNumber;
+  }) => Promise<ExternalTakeQuoteEvaluation>;
+  executeExternalTake?: (params: {
+    pool: FungiblePool;
+    signer: Signer;
+    poolConfig: TPoolConfig;
+    liquidation: TakeLiquidationPlan;
+    config: TExecutionConfig;
+  }) => Promise<void>;
+}
+
+interface TakeApprovalResult {
+  approved: boolean;
+  reason?: string;
+}
+
+interface EvaluateTakeDecisionParams<
+  TPoolConfig extends TakeActionConfig = TakeActionConfig,
+> {
+  pool: FungiblePool;
+  signer: Signer;
+  poolConfig: TPoolConfig;
+  candidate: TakeBorrowerCandidate;
+  subgraphUrl: string;
+  externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, unknown>;
+  approveExternalTake?: (params: {
+    pool: FungiblePool;
+    signer: Signer;
+    poolConfig: TPoolConfig;
+    candidate: TakeBorrowerCandidate;
+    price: number;
+    auctionPrice: BigNumber;
+    collateral: BigNumber;
+    quoteEvaluation: ExternalTakeQuoteEvaluation;
+  }) => Promise<TakeApprovalResult>;
+  approveArbTake?: (params: {
+    pool: FungiblePool;
+    signer: Signer;
+    poolConfig: TPoolConfig;
+    candidate: TakeBorrowerCandidate;
+    price: number;
+    auctionPrice: BigNumber;
+    collateral: BigNumber;
+    arbEvaluation: ArbTakeEvaluation;
+  }) => Promise<TakeApprovalResult>;
+}
+
+interface ExecuteTakeDecisionParams<
+  TPoolConfig extends TakeActionConfig = TakeActionConfig,
+  TExecutionConfig = unknown,
+> {
+  pool: FungiblePool;
+  signer: Signer;
+  poolConfig: TPoolConfig;
+  decision: TakeDecision;
+  externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
+  externalExecutionConfig: TExecutionConfig;
+  dryRun: boolean;
+  delayBetweenActions: number;
+  revalidateBeforeExecution?: boolean;
+  onSkip?: (params: {
+    candidate: TakeBorrowerCandidate;
+    stage: 'evaluation' | 'revalidation';
+    reason: string;
+    decision?: TakeDecision;
+  }) => void;
+  arbTakeActionLabel?: string;
+  arbTakeLogPrefix?: string;
+}
+
+interface ProcessTakeCandidatesParams<
+  TPoolConfig extends TakeActionConfig = TakeActionConfig,
+  TExecutionConfig = unknown,
+> extends Omit<
+    EvaluateTakeDecisionParams<TPoolConfig>,
+    'candidate' | 'approveExternalTake' | 'approveArbTake'
+  >,
+    Pick<
+      ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>,
+      | 'externalExecutionConfig'
+      | 'dryRun'
+      | 'delayBetweenActions'
+      | 'revalidateBeforeExecution'
+      | 'onSkip'
+      | 'arbTakeActionLabel'
+      | 'arbTakeLogPrefix'
+    > {
+  candidates: TakeBorrowerCandidate[];
+  approveExternalTake?: EvaluateTakeDecisionParams<TPoolConfig>['approveExternalTake'];
+  approveArbTake?: EvaluateTakeDecisionParams<TPoolConfig>['approveArbTake'];
+  onFound?: (decision: TakeDecision) => void;
+}
+
+export async function getTakeBorrowerCandidates(params: {
+  subgraphUrl: string;
+  poolAddress: string;
+  minCollateral: number;
+}): Promise<TakeBorrowerCandidate[]> {
+  const {
+    pool: { liquidationAuctions },
+  } = await subgraph.getLiquidations(
+    params.subgraphUrl,
+    params.poolAddress,
+    params.minCollateral
+  );
+
+  return liquidationAuctions.map(({ borrower }) => ({ borrower }));
+}
+
+export async function revalidateTakeDecision(params: {
+  pool: FungiblePool;
+  borrower: string;
+  takeablePrice?: number;
+  maxArbTakePrice?: number;
+}): Promise<{
+  approvedTake: boolean;
+  approvedArbTake: boolean;
+  collateral: BigNumber;
+  auctionPrice: BigNumber;
+}> {
+  const liquidationStatus = await params.pool
+    .getLiquidation(params.borrower)
+    .getStatus();
+  const currentPrice = Number(weiToDecimaled(liquidationStatus.price));
+  const collateral = liquidationStatus.collateral;
+  if (!collateral.gt(0)) {
+    return {
+      approvedTake: false,
+      approvedArbTake: false,
+      collateral,
+      auctionPrice: liquidationStatus.price,
+    };
+  }
+
+  return {
+    approvedTake:
+      params.takeablePrice !== undefined && currentPrice <= params.takeablePrice,
+    approvedArbTake:
+      params.maxArbTakePrice !== undefined && currentPrice < params.maxArbTakePrice,
+    collateral,
+    auctionPrice: liquidationStatus.price,
+  };
+}
+
+export async function evaluateTakeDecision<
+  TPoolConfig extends TakeActionConfig = TakeActionConfig,
+>({
+  pool,
+  signer,
+  poolConfig,
+  candidate,
+  subgraphUrl,
+  externalTakeAdapter,
+  approveExternalTake,
+  approveArbTake,
+}: EvaluateTakeDecisionParams<TPoolConfig>): Promise<TakeDecision> {
+  const liquidationStatus = await pool
+    .getLiquidation(candidate.borrower)
+    .getStatus();
+  const collateral = liquidationStatus.collateral;
+  const auctionPrice = liquidationStatus.price;
+  const price = Number(weiToDecimaled(auctionPrice));
+
+  if (!collateral.gt(0)) {
+    return {
+      approvedTake: false,
+      approvedArbTake: false,
+      borrower: candidate.borrower,
+      hpbIndex: 0,
+      collateral,
+      auctionPrice,
+      reason: 'auction no longer has collateral onchain',
+    };
+  }
+
+  let approvedTake = false;
+  let approvedArbTake = false;
+  let reason: string | undefined;
+  let hpbIndex = 0;
+  let takeablePrice: number | undefined;
+  let maxArbTakePrice: number | undefined;
+  let selectedQuoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
+
+  if (
+    poolConfig.take.marketPriceFactor !== undefined &&
+    poolConfig.take.liquiditySource !== undefined &&
+    externalTakeAdapter.evaluateExternalTake
+  ) {
+    const quoteEvaluation = await externalTakeAdapter.evaluateExternalTake({
+      pool,
+      signer,
+      poolConfig,
+      price,
+      auctionPrice,
+      collateral,
+    });
+
+    if (!quoteEvaluation.isTakeable) {
+      reason = quoteEvaluation.reason;
+    } else {
+      const approval = approveExternalTake
+        ? await approveExternalTake({
+            pool,
+            signer,
+            poolConfig,
+            candidate,
+            price,
+            auctionPrice,
+            collateral,
+            quoteEvaluation,
+          })
+        : { approved: true };
+
+      if (approval.approved) {
+        approvedTake = true;
+        takeablePrice = quoteEvaluation.takeablePrice;
+        selectedQuoteEvaluation = quoteEvaluation;
+      } else {
+        reason = approval.reason ?? reason;
+      }
+    }
+  }
+
+  if (
+    poolConfig.take.minCollateral !== undefined &&
+    poolConfig.take.hpbPriceFactor !== undefined
+  ) {
+    const prices = await pool.getPrices();
+    const hpb = Number(weiToDecimaled(prices.hpb));
+    const minDeposit = poolConfig.take.minCollateral / hpb;
+    const arbEvaluation = await checkIfArbTakeable(
+      pool,
+      price,
+      collateral,
+      poolConfig,
+      subgraphUrl,
+      minDeposit.toString(),
+      signer
+    );
+
+    if (!arbEvaluation.isArbTakeable) {
+      if (!approvedTake) {
+        reason = arbEvaluation.reason ?? reason;
+      }
+    } else {
+      const approval = approveArbTake
+        ? await approveArbTake({
+            pool,
+            signer,
+            poolConfig,
+            candidate,
+            price,
+            auctionPrice,
+            collateral,
+            arbEvaluation,
+          })
+        : { approved: true };
+
+      if (approval.approved) {
+        approvedArbTake = true;
+        hpbIndex = arbEvaluation.hpbIndex;
+        maxArbTakePrice = arbEvaluation.maxArbTakePrice;
+      } else if (!approvedTake) {
+        reason = approval.reason ?? reason;
+      }
+    }
+  }
+
+  return {
+    approvedTake,
+    approvedArbTake,
+    borrower: candidate.borrower,
+    hpbIndex,
+    collateral,
+    auctionPrice,
+    takeablePrice,
+    maxArbTakePrice,
+    quoteEvaluation: selectedQuoteEvaluation,
+    reason,
+  };
+}
+
+export async function executeTakeDecision<
+  TPoolConfig extends TakeActionConfig = TakeActionConfig,
+  TExecutionConfig = unknown,
+>({
+  pool,
+  signer,
+  poolConfig,
+  decision,
+  externalTakeAdapter,
+  externalExecutionConfig,
+  dryRun,
+  delayBetweenActions,
+  revalidateBeforeExecution,
+  onSkip,
+  arbTakeActionLabel,
+  arbTakeLogPrefix,
+}: ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>): Promise<void> {
+  let approvedTake = decision.approvedTake;
+  let approvedArbTake = decision.approvedArbTake;
+  let collateral = decision.collateral;
+  let auctionPrice = decision.auctionPrice;
+
+  if (revalidateBeforeExecution) {
+    const revalidated = await revalidateTakeDecision({
+      pool,
+      borrower: decision.borrower,
+      takeablePrice: decision.takeablePrice,
+      maxArbTakePrice: decision.maxArbTakePrice,
+    });
+
+    approvedTake = approvedTake && revalidated.approvedTake;
+    approvedArbTake = approvedArbTake && revalidated.approvedArbTake;
+    collateral = revalidated.collateral;
+    auctionPrice = revalidated.auctionPrice;
+
+    if (!approvedTake && !approvedArbTake) {
+      onSkip?.({
+        candidate: { borrower: decision.borrower },
+        stage: 'revalidation',
+        reason: 'onchain revalidation changed the auction state',
+        decision,
+      });
+      return;
+    }
+  }
+
+  if (approvedTake && externalTakeAdapter.executeExternalTake) {
+    await externalTakeAdapter.executeExternalTake({
+      pool,
+      signer,
+      poolConfig,
+      liquidation: {
+        borrower: decision.borrower,
+        hpbIndex: decision.hpbIndex,
+        collateral,
+        auctionPrice,
+        isTakeable: true,
+        isArbTakeable: approvedArbTake,
+        externalTakeQuoteEvaluation: decision.quoteEvaluation,
+      },
+      config: externalExecutionConfig,
+    });
+
+    if (approvedArbTake) {
+      await delay(delayBetweenActions);
+    }
+  }
+
+  if (approvedArbTake) {
+    await arbTakeLiquidation({
+      pool,
+      signer,
+      liquidation: {
+        borrower: decision.borrower,
+        hpbIndex: decision.hpbIndex,
+      },
+      config: {
+        dryRun,
+      },
+      actionLabel: arbTakeActionLabel,
+      logPrefix: arbTakeLogPrefix,
+    });
+  }
+}
+
+export async function processTakeCandidates<
+  TPoolConfig extends TakeActionConfig = TakeActionConfig,
+  TExecutionConfig = unknown,
+>({
+  pool,
+  signer,
+  poolConfig,
+  candidates,
+  subgraphUrl,
+  externalTakeAdapter,
+  externalExecutionConfig,
+  dryRun,
+  delayBetweenActions,
+  approveExternalTake,
+  approveArbTake,
+  revalidateBeforeExecution,
+  onSkip,
+  onFound,
+  arbTakeActionLabel,
+  arbTakeLogPrefix,
+}: ProcessTakeCandidatesParams<TPoolConfig, TExecutionConfig>): Promise<void> {
+  for (const candidate of candidates) {
+    const decision = await evaluateTakeDecision({
+      pool,
+      signer,
+      poolConfig,
+      candidate,
+      subgraphUrl,
+      externalTakeAdapter,
+      approveExternalTake,
+      approveArbTake,
+    });
+
+    if (!decision.approvedTake && !decision.approvedArbTake) {
+      onSkip?.({
+        candidate,
+        stage: 'evaluation',
+        reason: decision.reason ?? 'policy rejected candidate',
+        decision,
+      });
+      continue;
+    }
+
+    onFound?.(decision);
+
+    await executeTakeDecision({
+      pool,
+      signer,
+      poolConfig,
+      decision,
+      externalTakeAdapter,
+      externalExecutionConfig,
+      dryRun,
+      delayBetweenActions,
+      revalidateBeforeExecution,
+      onSkip,
+      arbTakeActionLabel,
+      arbTakeLogPrefix,
+    });
+  }
+}
+
+export function formatTakeStrategyLog(
+  strategyKind: ExternalTakeStrategyKind,
+  approvedTake: boolean,
+  approvedArbTake: boolean
+): string {
+  if (approvedTake && approvedArbTake) {
+    return strategyKind === 'factory' ? 'factory take and arbTake' : 'take and arbTake';
+  }
+  if (approvedTake) {
+    return strategyKind === 'factory' ? 'factory take' : 'take';
+  }
+  if (approvedArbTake) {
+    return 'arbTake';
+  }
+  return 'none';
+}
+
+export function logSkippedTakeCandidate(params: {
+  pool: FungiblePool;
+  borrower: string;
+  price?: number;
+  reason: string;
+  prefix?: string;
+}): void {
+  if (params.price !== undefined) {
+    logger.debug(
+      `${params.prefix ?? ''}Not taking liquidation since price ${params.price} is too high - pool: ${params.pool.name}, borrower: ${params.borrower}`
+    );
+    return;
+  }
+
+  logger.debug(
+    `${params.prefix ?? ''}Skipping liquidation for pool ${params.pool.name}, borrower: ${params.borrower}: ${params.reason}`
+  );
+}

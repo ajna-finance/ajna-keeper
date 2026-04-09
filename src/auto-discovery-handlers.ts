@@ -13,24 +13,19 @@ import {
   ResolvedTakeTarget,
 } from './auto-discovery';
 import { logger } from './logging';
-import {
-  getOneInchTakeQuoteEvaluation,
-  takeLiquidation,
-} from './take';
-import { arbTakeLiquidation, checkIfArbTakeable } from './arb-take';
+import * as takeModule from './take';
 import {
   createFactoryQuoteProviderRuntimeCache,
   FactoryQuoteProviderRuntimeCache,
-  getFactoryTakeQuoteEvaluation,
-  takeLiquidationFactory,
 } from './take-factory';
-import { ExternalTakeQuoteEvaluation } from './take-types';
+import { ExternalTakeAdapter, processTakeCandidates } from './take-engine';
 import { weiToDecimaled } from './utils';
 import { DexRouter } from './dex-router';
 import { UniswapV3QuoteProvider } from './dex-providers/uniswap-quote-provider';
 import { SushiSwapQuoteProvider } from './dex-providers/sushiswap-quote-provider';
 import { getDecimalsErc20 } from './erc20';
 import { AuctionToSettle, SettlementHandler } from './settlement';
+import * as takeFactoryModule from './take-factory';
 
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
@@ -65,19 +60,6 @@ interface GasPolicyResult {
 interface NativeToQuoteConversion {
   amountInNative: BigNumber;
   amountOutQuoteRaw: BigNumber;
-}
-
-interface DiscoveredTakeDecision {
-  approvedTake: boolean;
-  approvedArbTake: boolean;
-  borrower: string;
-  hpbIndex: number;
-  collateral: BigNumber;
-  auctionPrice: BigNumber;
-  takeablePrice?: number;
-  maxArbTakePrice?: number;
-  quoteEvaluation?: ExternalTakeQuoteEvaluation;
-  reason?: string;
 }
 
 export interface DiscoveryRpcCache {
@@ -409,225 +391,6 @@ async function evaluateGasPolicy(params: {
   };
 }
 
-async function revalidateTakeDecision(params: {
-  pool: FungiblePool;
-  borrower: string;
-  takeablePrice?: number;
-  maxArbTakePrice?: number;
-}): Promise<{
-  approvedTake: boolean;
-  approvedArbTake: boolean;
-  collateral: BigNumber;
-  auctionPrice: BigNumber;
-}> {
-  const liquidationStatus = await params.pool
-    .getLiquidation(params.borrower)
-    .getStatus();
-  const currentPrice = Number(weiToDecimaled(liquidationStatus.price));
-  const collateral = liquidationStatus.collateral;
-  if (!collateral.gt(0)) {
-    return {
-      approvedTake: false,
-      approvedArbTake: false,
-      collateral,
-      auctionPrice: liquidationStatus.price,
-    };
-  }
-
-  return {
-    approvedTake:
-      params.takeablePrice !== undefined && currentPrice <= params.takeablePrice,
-    approvedArbTake:
-      params.maxArbTakePrice !== undefined && currentPrice < params.maxArbTakePrice,
-    collateral,
-    auctionPrice: liquidationStatus.price,
-  };
-}
-
-async function evaluateTakeCandidate(params: {
-  pool: FungiblePool;
-  signer: Signer;
-  target: ResolvedTakeTarget;
-  config: DiscoveryExecutionConfig;
-  borrower: string;
-  rpcCache?: DiscoveryRpcCache;
-}): Promise<DiscoveredTakeDecision> {
-  const liquidationStatus = await params.pool
-    .getLiquidation(params.borrower)
-    .getStatus();
-  const collateral = liquidationStatus.collateral;
-  if (!collateral.gt(0)) {
-    return {
-      approvedTake: false,
-      approvedArbTake: false,
-      borrower: params.borrower,
-      hpbIndex: 0,
-      collateral,
-      auctionPrice: liquidationStatus.price,
-      reason: 'auction no longer has collateral onchain',
-    };
-  }
-
-  const auctionPriceNumber = Number(weiToDecimaled(liquidationStatus.price));
-  let approvedTake = false;
-  let approvedArbTake = false;
-  let takeablePrice: number | undefined;
-  let maxArbTakePrice: number | undefined;
-  let hpbIndex = 0;
-  let reason: string | undefined;
-  let selectedQuoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
-  const takePolicy = getAutoDiscoverTakePolicy(params.config.autoDiscover);
-
-  if (
-    params.target.take.marketPriceFactor !== undefined &&
-    params.target.take.liquiditySource !== undefined
-  ) {
-    const quoteEvaluation =
-      params.target.take.liquiditySource === LiquiditySource.ONEINCH
-        ? await getOneInchTakeQuoteEvaluation(
-            params.pool,
-            auctionPriceNumber,
-            collateral,
-            params.target,
-            { delayBetweenActions: params.config.delayBetweenActions },
-            params.signer,
-            params.config.oneInchRouters,
-            params.config.connectorTokens
-          )
-        : await getFactoryTakeQuoteEvaluation(
-            params.pool,
-            liquidationStatus.price,
-            collateral,
-            params.target,
-            {
-              universalRouterOverrides: params.config.universalRouterOverrides,
-              sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
-              curveRouterOverrides: params.config.curveRouterOverrides,
-              tokenAddresses: params.config.tokenAddresses,
-            },
-            params.signer,
-            params.rpcCache?.factoryQuoteProviders
-          );
-
-    if (!quoteEvaluation.isTakeable) {
-      reason = quoteEvaluation.reason;
-    } else {
-      const wrappedNativeAddress = resolveWrappedNativeAddress(
-        params.config,
-        params.target.take.liquiditySource
-      );
-      const nativeToQuoteConversion =
-        wrappedNativeAddress &&
-        wrappedNativeAddress.toLowerCase() === params.pool.collateralAddress.toLowerCase() &&
-        quoteEvaluation.quoteAmountRaw
-          ? {
-              amountInNative: collateral,
-              amountOutQuoteRaw: quoteEvaluation.quoteAmountRaw,
-            }
-          : undefined;
-      const gasPolicy = await evaluateGasPolicy({
-        signer: params.signer,
-        config: params.config,
-        policy: takePolicy,
-        gasLimit: EXTERNAL_TAKE_GAS_LIMIT,
-        quoteTokenAddress: params.pool.quoteAddress,
-        preferredLiquiditySource: params.target.take.liquiditySource,
-        useProfitFloor: true,
-        nativeToQuoteConversion,
-        gasPrice: params.rpcCache?.gasPrice,
-      });
-
-      if (!gasPolicy.approved) {
-        reason = gasPolicy.reason;
-      } else {
-        const auctionCostQuote =
-          auctionPriceNumber * (quoteEvaluation.collateralAmount ?? 0);
-        const expectedProfit =
-          (quoteEvaluation.quoteAmount ?? 0) -
-          auctionCostQuote -
-          gasPolicy.gasCostQuote;
-        const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
-
-        if (
-          minExpectedProfitQuote !== undefined &&
-          expectedProfit < minExpectedProfitQuote
-        ) {
-          reason = `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`;
-        } else {
-          approvedTake = true;
-          takeablePrice = quoteEvaluation.takeablePrice;
-          selectedQuoteEvaluation = quoteEvaluation;
-        }
-      }
-    }
-  }
-
-  if (
-    params.target.take.minCollateral !== undefined &&
-    params.target.take.hpbPriceFactor !== undefined
-  ) {
-    if (takePolicy?.minExpectedProfitQuote !== undefined) {
-      logDiscoveryDecision(
-        params.config,
-        `Skipping discovered arbTake for ${params.pool.poolAddress}/${params.borrower} because quote-normalized profit is not available`
-      );
-    } else {
-      const prices = await params.pool.getPrices();
-      const hpb = Number(weiToDecimaled(prices.hpb));
-      const minDeposit = params.target.take.minCollateral / hpb;
-      const arbEvaluation =
-        await checkIfArbTakeable(
-          params.pool,
-          auctionPriceNumber,
-          collateral,
-          params.target,
-          params.config.subgraphUrl,
-          minDeposit.toString(),
-          params.signer
-        );
-
-      if (!arbEvaluation.isArbTakeable) {
-        if (!approvedTake) {
-          reason = arbEvaluation.reason ?? reason;
-        }
-      } else {
-        const gasPolicy = await evaluateGasPolicy({
-          signer: params.signer,
-          config: params.config,
-          policy: takePolicy,
-          gasLimit: ARB_TAKE_GAS_LIMIT,
-          quoteTokenAddress: params.pool.quoteAddress,
-          preferredLiquiditySource: params.target.take.liquiditySource,
-          useProfitFloor: false,
-          gasPrice: params.rpcCache?.gasPrice,
-        });
-        if (!gasPolicy.approved) {
-          if (!approvedTake) {
-            reason = gasPolicy.reason;
-          }
-        } else {
-          approvedArbTake = true;
-          hpbIndex = arbEvaluation.hpbIndex;
-          maxArbTakePrice = arbEvaluation.maxArbTakePrice;
-        }
-      }
-    }
-  }
-
-  return {
-    approvedTake,
-    approvedArbTake,
-    borrower: params.borrower,
-    hpbIndex,
-    collateral,
-    auctionPrice: liquidationStatus.price,
-    takeablePrice,
-    maxArbTakePrice,
-    quoteEvaluation: selectedQuoteEvaluation,
-    reason,
-  };
-}
-
 export async function handleDiscoveredTakeTarget(params: {
   pool: FungiblePool;
   signer: Signer;
@@ -643,109 +406,211 @@ export async function handleDiscoveredTakeTarget(params: {
           factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
         }
       : undefined);
-  for (const candidate of params.target.candidates) {
-    const decision = await evaluateTakeCandidate({
-      pool: params.pool,
-      signer: params.signer,
-      target: params.target,
-      config: params.config,
-      borrower: candidate.borrower,
-      rpcCache,
-    });
+  const takePolicy = getAutoDiscoverTakePolicy(params.config.autoDiscover);
+  const externalTakeAdapter: ExternalTakeAdapter<any, any> =
+    params.target.take.liquiditySource === LiquiditySource.ONEINCH
+      ? {
+          kind: 'oneinch',
+          evaluateExternalTake: async ({
+            pool,
+            signer,
+            poolConfig,
+            price,
+            collateral,
+          }) =>
+            takeModule.getOneInchTakeQuoteEvaluation(
+              pool,
+              price,
+              collateral,
+              poolConfig,
+              { delayBetweenActions: params.config.delayBetweenActions },
+              signer,
+              params.config.oneInchRouters,
+              params.config.connectorTokens
+            ),
+          executeExternalTake: async ({
+            pool,
+            signer,
+            poolConfig,
+            liquidation,
+            config,
+          }) =>
+            takeModule.takeLiquidation({
+              pool,
+              signer,
+              poolConfig,
+              liquidation,
+              config,
+            }),
+        }
+      : params.target.take.liquiditySource !== undefined
+        ? {
+            kind: 'factory',
+            evaluateExternalTake: async ({
+              pool,
+              signer,
+              poolConfig,
+              auctionPrice,
+              collateral,
+            }) =>
+              takeFactoryModule.getFactoryTakeQuoteEvaluation(
+                pool,
+                auctionPrice,
+                collateral,
+                poolConfig,
+                {
+                  universalRouterOverrides: params.config.universalRouterOverrides,
+                  sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
+                  curveRouterOverrides: params.config.curveRouterOverrides,
+                  tokenAddresses: params.config.tokenAddresses,
+                },
+                signer,
+                rpcCache?.factoryQuoteProviders
+              ),
+            executeExternalTake: async ({
+              pool,
+              signer,
+              poolConfig,
+              liquidation,
+              config,
+            }) =>
+              takeFactoryModule.takeLiquidationFactory({
+                pool,
+                signer,
+                poolConfig,
+                liquidation,
+                config,
+              }),
+          }
+        : takeModule.createNoExternalTakeAdapter();
 
-    if (!decision.approvedTake && !decision.approvedArbTake) {
-      logDiscoveryDecision(
-        params.config,
-        `Skipping discovered take candidate ${params.pool.poolAddress}/${candidate.borrower}: ${decision.reason ?? 'policy rejected candidate'}`
-      );
-      continue;
-    }
-
-    const revalidated = await revalidateTakeDecision({
-      pool: params.pool,
-      borrower: candidate.borrower,
-      takeablePrice: decision.takeablePrice,
-      maxArbTakePrice: decision.maxArbTakePrice,
-    });
-
-    if (decision.approvedTake && revalidated.approvedTake) {
-      if (params.target.take.liquiditySource === LiquiditySource.ONEINCH) {
-        await takeLiquidation({
-          pool: params.pool,
-          poolConfig: params.target,
-          signer: params.signer,
-          liquidation: {
-            borrower: candidate.borrower,
-            hpbIndex: decision.hpbIndex,
-            collateral: revalidated.collateral,
-            auctionPrice: revalidated.auctionPrice,
-            isTakeable: true,
-            isArbTakeable: false,
-          },
-          config: {
-            dryRun: params.target.dryRun,
-            delayBetweenActions: params.config.delayBetweenActions,
-            connectorTokens: params.config.connectorTokens,
-            oneInchRouters: params.config.oneInchRouters,
-            keeperTaker: params.config.keeperTaker,
-          },
-        });
-      } else {
-        await takeLiquidationFactory({
-          pool: params.pool,
-          poolConfig: params.target,
-          signer: params.signer,
-          liquidation: {
-            borrower: candidate.borrower,
-            hpbIndex: decision.hpbIndex,
-            collateral: revalidated.collateral,
-            auctionPrice: revalidated.auctionPrice,
-            isTakeable: true,
-            isArbTakeable: false,
-            externalTakeQuoteEvaluation: decision.quoteEvaluation,
-          },
-          config: {
-            dryRun: params.target.dryRun,
-            keeperTakerFactory: params.config.keeperTakerFactory,
-            universalRouterOverrides: params.config.universalRouterOverrides,
-            sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
-            curveRouterOverrides: params.config.curveRouterOverrides,
-            tokenAddresses: params.config.tokenAddresses,
-          },
-        });
-      }
-
-      if (decision.approvedArbTake && revalidated.approvedArbTake) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, params.config.delayBetweenActions * 1000)
-        );
-      }
-    }
-
-    if (decision.approvedArbTake && revalidated.approvedArbTake) {
-      await arbTakeLiquidation({
-        pool: params.pool,
-        signer: params.signer,
-        liquidation: {
-          borrower: candidate.borrower,
-          hpbIndex: decision.hpbIndex,
-        },
-        config: {
+  const externalExecutionConfig =
+    params.target.take.liquiditySource === LiquiditySource.ONEINCH
+      ? {
           dryRun: params.target.dryRun,
-        },
-      });
-    }
+          delayBetweenActions: params.config.delayBetweenActions,
+          connectorTokens: params.config.connectorTokens,
+          oneInchRouters: params.config.oneInchRouters,
+          keeperTaker: params.config.keeperTaker,
+        }
+      : {
+          dryRun: params.target.dryRun,
+          keeperTakerFactory: params.config.keeperTakerFactory,
+          universalRouterOverrides: params.config.universalRouterOverrides,
+          sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
+          curveRouterOverrides: params.config.curveRouterOverrides,
+          tokenAddresses: params.config.tokenAddresses,
+        };
 
-    if (
-      (decision.approvedTake && !revalidated.approvedTake) ||
-      (decision.approvedArbTake && !revalidated.approvedArbTake)
-    ) {
+  await processTakeCandidates({
+    pool: params.pool,
+    signer: params.signer,
+    poolConfig: params.target,
+    candidates: params.target.candidates.map(({ borrower }) => ({ borrower })),
+    subgraphUrl: params.config.subgraphUrl,
+    externalTakeAdapter,
+    externalExecutionConfig: externalExecutionConfig as any,
+    dryRun: params.target.dryRun,
+    delayBetweenActions: params.config.delayBetweenActions,
+    revalidateBeforeExecution: true,
+    approveExternalTake: async ({
+      price,
+      collateral,
+      quoteEvaluation,
+    }) => {
+      const wrappedNativeAddress = resolveWrappedNativeAddress(
+        params.config,
+        params.target.take.liquiditySource
+      );
+      const nativeToQuoteConversion =
+        wrappedNativeAddress &&
+        wrappedNativeAddress.toLowerCase() ===
+          params.pool.collateralAddress.toLowerCase() &&
+        quoteEvaluation.quoteAmountRaw
+          ? {
+              amountInNative: collateral,
+              amountOutQuoteRaw: quoteEvaluation.quoteAmountRaw,
+            }
+          : undefined;
+
+      const gasPolicy = await evaluateGasPolicy({
+        signer: params.signer,
+        config: params.config,
+        policy: takePolicy,
+        gasLimit: EXTERNAL_TAKE_GAS_LIMIT,
+        quoteTokenAddress: params.pool.quoteAddress,
+        preferredLiquiditySource: params.target.take.liquiditySource,
+        useProfitFloor: true,
+        nativeToQuoteConversion,
+        gasPrice: rpcCache?.gasPrice,
+      });
+      if (!gasPolicy.approved) {
+        return {
+          approved: false,
+          reason: gasPolicy.reason,
+        };
+      }
+
+      const auctionCostQuote = price * (quoteEvaluation.collateralAmount ?? 0);
+      const expectedProfit =
+        (quoteEvaluation.quoteAmount ?? 0) -
+        auctionCostQuote -
+        gasPolicy.gasCostQuote;
+      const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
+      if (
+        minExpectedProfitQuote !== undefined &&
+        expectedProfit < minExpectedProfitQuote
+      ) {
+        return {
+          approved: false,
+          reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
+        };
+      }
+
+      return { approved: true };
+    },
+    approveArbTake: async () => {
+      if (takePolicy?.minExpectedProfitQuote !== undefined) {
+        return {
+          approved: false,
+          reason: 'quote-normalized profit is not available',
+        };
+      }
+
+      const gasPolicy = await evaluateGasPolicy({
+        signer: params.signer,
+        config: params.config,
+        policy: takePolicy,
+        gasLimit: ARB_TAKE_GAS_LIMIT,
+        quoteTokenAddress: params.pool.quoteAddress,
+        preferredLiquiditySource: params.target.take.liquiditySource,
+        useProfitFloor: false,
+        gasPrice: rpcCache?.gasPrice,
+      });
+      if (!gasPolicy.approved) {
+        return {
+          approved: false,
+          reason: gasPolicy.reason,
+        };
+      }
+
+      return { approved: true };
+    },
+    onSkip: ({ candidate, stage, reason }) => {
+      if (stage === 'revalidation') {
+        logDiscoveryDecision(
+          params.config,
+          `Skipping discovered take execution for ${params.pool.poolAddress}/${candidate.borrower} because ${reason}`
+        );
+        return;
+      }
+
       logDiscoveryDecision(
         params.config,
-        `Skipping discovered take execution for ${params.pool.poolAddress}/${candidate.borrower} because onchain revalidation changed the auction state`
+        `Skipping discovered take candidate ${params.pool.poolAddress}/${candidate.borrower}: ${reason}`
       );
-    }
-  }
+    },
+  });
 }
 
 function hydrateSettlementAuction(candidate: ResolvedSettlementTarget['candidates'][number]): AuctionToSettle {

@@ -21,7 +21,7 @@ import {
 import { expect } from 'chai';
 import {
   getLiquidationsToTake,
-  handleTakesWith1inch,
+  handleLegacyOrArbTakes,
 } from '../take';
 import { arbTakeLiquidation } from '../arb-take';
 import { BigNumber, constants, Wallet } from 'ethers';
@@ -314,7 +314,7 @@ describe('arbTakeLiquidation', () => {
   });
 });
 
-describe('handleTakesWith1inch', () => {
+describe('handleLegacyOrArbTakes', () => {
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
@@ -373,7 +373,7 @@ describe('handleTakesWith1inch', () => {
     // Record initial deposits for comparison
     const bucket2DepositBefore = weiToDecimaled((await bucket2.getStatus()).deposit);
 
-    await handleTakesWith1inch({
+    await handleLegacyOrArbTakes({
       signer,
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -389,7 +389,7 @@ describe('handleTakesWith1inch', () => {
       'Bucket 1 should only have dust remaining'
     );
 
-    await handleTakesWith1inch({
+    await handleLegacyOrArbTakes({
       signer,
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -456,7 +456,7 @@ describe('ArbTake → LP Collection chain', () => {
     await lpCollector.startSubscription();
 
     // Execute arb take
-    await handleTakesWith1inch({
+    await handleLegacyOrArbTakes({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
@@ -516,7 +516,7 @@ describe('ArbTake → Settlement → Bond Collection chain', () => {
     await increaseTime(SECONDS_PER_DAY * 2);
 
     // Execute arb take — consumes all collateral
-    await handleTakesWith1inch({
+    await handleLegacyOrArbTakes({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,

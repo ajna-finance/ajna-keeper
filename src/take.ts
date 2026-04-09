@@ -23,7 +23,15 @@ import {
 import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
+  TakeLiquidationPlan,
 } from './take-types';
+import {
+  ExternalTakeAdapter,
+  formatTakeStrategyLog,
+  getTakeBorrowerCandidates,
+  logSkippedTakeCandidate,
+  processTakeCandidates,
+} from './take-engine';
 
 interface HandleTakeParams {
   signer: Signer;
@@ -45,6 +53,20 @@ interface HandleTakeParams {
     | 'tokenAddresses'
   >;
 }
+
+type OneInchExecutionConfig = Pick<
+  KeeperConfig,
+  | 'dryRun'
+  | 'delayBetweenActions'
+  | 'connectorTokens'
+  | 'oneInchRouters'
+  | 'keeperTaker'
+>;
+
+type OneInchQuoteConfig = Pick<
+  KeeperConfig,
+  'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'
+>;
 
 function stripExternalTakeSettings(
   poolConfig: RequireFields<PoolConfig, 'take'>
@@ -80,7 +102,7 @@ export async function handleTakes({
   switch (deploymentType) {
     case 'single':
       logger.debug(`Using single contract (1inch) take handler for pool: ${pool.name}`);
-      await handleTakesWith1inch({
+      await handleLegacyOrArbTakes({
         signer,
         pool,
         poolConfig,
@@ -112,7 +134,7 @@ export async function handleTakes({
       logger.warn(
         `External liquidity source ${requestedLiquiditySource ?? 'none'} unavailable for pool ${pool.name} - checking arbTake only`
       );
-      await handleTakesWith1inch({
+      await handleLegacyOrArbTakes({
         signer,
         pool,
         poolConfig: stripExternalTakeSettings(poolConfig),
@@ -124,62 +146,117 @@ export async function handleTakes({
 
 
 /**
- * Handle liquidations for all scenarios: 1inch external takes, factory takes, and arbTake-only
- * 
- * Despite the name, this function handles multiple take strategies:
- * - External takes via 1inch (when keeperTaker contract is available)
- * - External takes via factory system (when keeperTakerFactory + takerContracts available) 
- * - ArbTake-only (when no external DEX contracts deployed)
- * - LP reward collection and settlement (works in all scenarios)
- * 
- * The function automatically skips external takes when they're not profitable or possible,
- * and falls back to arbTake when configured. This provides a unified interface for
- * all liquidation scenarios while maintaining backward compatibility.
+ * Handle the non-factory take path:
+ * - legacy 1inch external takes when available
+ * - arbTake-only fallback when no external DEX deployment exists
  */
 
-export async function handleTakesWith1inch({
+export async function handleLegacyOrArbTakes({
   signer,
   pool,
   poolConfig,
   config,
 }: HandleTakeParams) {
-  
-  for await (const liquidation of getLiquidationsToTake({
+  const candidates = await getTakeBorrowerCandidates({
+    subgraphUrl: config.subgraphUrl,
+    poolAddress: pool.poolAddress,
+    minCollateral: poolConfig.take.minCollateral ?? 0,
+  });
+
+  const externalTakeAdapter: ExternalTakeAdapter<any, any> =
+    poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
+      ? createOneInchTakeAdapter({
+          delayBetweenActions: config.delayBetweenActions ?? 0,
+          oneInchRouters: config.oneInchRouters,
+          connectorTokens: config.connectorTokens,
+        })
+      : createNoExternalTakeAdapter();
+
+  await processTakeCandidates({
     pool,
-    poolConfig,
     signer,
-    config,
-  })) {
-    if (liquidation.isTakeable) {
-      await takeLiquidation({
+    poolConfig,
+    candidates,
+    subgraphUrl: config.subgraphUrl,
+    externalTakeAdapter,
+    externalExecutionConfig: {
+      dryRun: config.dryRun,
+      delayBetweenActions: config.delayBetweenActions ?? 0,
+      connectorTokens: config.connectorTokens,
+      oneInchRouters: config.oneInchRouters,
+      keeperTaker: config.keeperTaker,
+    },
+    dryRun: config.dryRun ?? false,
+    delayBetweenActions: config.delayBetweenActions ?? 0,
+    onFound: (decision) => {
+      logger.info(
+        `Found liquidation to ${formatTakeStrategyLog(
+          externalTakeAdapter.kind,
+          decision.approvedTake,
+          decision.approvedArbTake
+        )} - pool: ${pool.name}, borrower: ${decision.borrower}, auctionPrice: ${Number(
+          weiToDecimaled(decision.auctionPrice)
+        ).toFixed(6)}, collateral: ${weiToDecimaled(decision.collateral)}`
+      );
+    },
+    onSkip: ({ candidate, reason }) => {
+      logSkippedTakeCandidate({
         pool,
-        poolConfig,
-        signer,
-        liquidation,
-        config,
+        borrower: candidate.borrower,
+        reason,
       });
-      // If an arbTake is also possible, give the take transaction some time to be included
-      // in a block before proceeding with the arbTake.
-      if (liquidation.isArbTakeable) await delay(config.delayBetweenActions);
-    }
-    if (liquidation.isArbTakeable) {
-      await arbTakeLiquidation({
-        pool,
-        signer,
-        liquidation,
-        config,
-      });
-    }
-  }
+    },
+  });
 }
 
-interface LiquidationToTake {
-  borrower: string;
-  hpbIndex: number;
-  collateral: BigNumber; // WAD
-  auctionPrice: BigNumber; // WAD
-  isTakeable: boolean;
-  isArbTakeable: boolean;
+type LiquidationToTake = TakeLiquidationPlan;
+
+export function createNoExternalTakeAdapter(): ExternalTakeAdapter<
+  TakeActionConfig,
+  OneInchExecutionConfig
+> {
+  return {
+    kind: 'none',
+  };
+}
+
+export function createOneInchTakeAdapter(
+  quoteConfig: OneInchQuoteConfig
+): ExternalTakeAdapter<TakeActionConfig, OneInchExecutionConfig> {
+  return {
+    kind: 'oneinch',
+    evaluateExternalTake: async ({
+      pool,
+      signer,
+      poolConfig,
+      price,
+      collateral,
+    }) =>
+      getOneInchTakeQuoteEvaluation(
+        pool,
+        price,
+        collateral,
+        poolConfig,
+        { delayBetweenActions: quoteConfig.delayBetweenActions },
+        signer,
+        quoteConfig.oneInchRouters,
+        quoteConfig.connectorTokens
+      ),
+    executeExternalTake: async ({
+      pool,
+      signer,
+      poolConfig,
+      liquidation,
+      config,
+    }) =>
+      takeLiquidation({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config,
+      }),
+  };
 }
 
 interface GetLiquidationsToTakeParams

@@ -22,13 +22,20 @@ import { convertWadToTokenDecimals, getDecimalsErc20 } from './erc20';
 import { quoteTokenScale } from '@ajna-finance/sdk/dist/contracts/pool';
 import { DexRouter } from './dex-router';
 import {
-  arbTakeLiquidation,
   checkIfArbTakeable,
 } from './arb-take';
 import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
+  TakeLiquidationPlan,
 } from './take-types';
+import {
+  ExternalTakeAdapter,
+  formatTakeStrategyLog,
+  getTakeBorrowerCandidates,
+  logSkippedTakeCandidate,
+  processTakeCandidates,
+} from './take-engine';
 
 interface FactoryTakeParams {
   signer: Signer;
@@ -48,15 +55,25 @@ interface FactoryTakeParams {
   >;
 }
 
-interface LiquidationToTake {
-  borrower: string;
-  hpbIndex: number;
-  collateral: BigNumber;
-  auctionPrice: BigNumber;
-  isTakeable: boolean;
-  isArbTakeable: boolean;
-  externalTakeQuoteEvaluation?: ExternalTakeQuoteEvaluation;
-}
+type LiquidationToTake = TakeLiquidationPlan;
+
+type FactoryExecutionConfig = Pick<
+  FactoryTakeParams['config'],
+  | 'dryRun'
+  | 'keeperTakerFactory'
+  | 'universalRouterOverrides'
+  | 'sushiswapRouterOverrides'
+  | 'curveRouterOverrides'
+  | 'tokenAddresses'
+>;
+
+type FactoryQuoteConfig = Pick<
+  FactoryTakeParams['config'],
+  | 'universalRouterOverrides'
+  | 'sushiswapRouterOverrides'
+  | 'curveRouterOverrides'
+  | 'tokenAddresses'
+>;
 
 export interface FactoryQuoteProviderRuntimeCache {
   uniswapV3?: UniswapV3QuoteProvider | null;
@@ -179,37 +196,100 @@ export async function handleFactoryTakes({
 }: FactoryTakeParams) {
   logger.debug(`Factory take handler starting for pool: ${pool.name}`);
   const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
+  const candidates = await getTakeBorrowerCandidates({
+    subgraphUrl: config.subgraphUrl,
+    poolAddress: pool.poolAddress,
+    minCollateral: poolConfig.take.minCollateral ?? 0,
+  });
 
-  for await (const liquidation of getLiquidationsToTakeFactory({
+  const externalTakeAdapter: ExternalTakeAdapter<any, any> = createFactoryTakeAdapter({
+    quoteConfig: {
+      universalRouterOverrides: config.universalRouterOverrides,
+      sushiswapRouterOverrides: config.sushiswapRouterOverrides,
+      curveRouterOverrides: config.curveRouterOverrides,
+      tokenAddresses: config.tokenAddresses,
+    },
+    runtimeCache: quoteProviderCache,
+  });
+
+  await processTakeCandidates({
     pool,
-    poolConfig,
     signer,
-    config,
-    quoteProviderCache,
-  })) {
-    if (liquidation.isTakeable) {
-      await takeLiquidationFactory({
+    poolConfig,
+    candidates,
+    subgraphUrl: config.subgraphUrl,
+    externalTakeAdapter,
+    externalExecutionConfig: {
+      dryRun: config.dryRun,
+      keeperTakerFactory: config.keeperTakerFactory,
+      universalRouterOverrides: config.universalRouterOverrides,
+      sushiswapRouterOverrides: config.sushiswapRouterOverrides,
+      curveRouterOverrides: config.curveRouterOverrides,
+      tokenAddresses: config.tokenAddresses,
+    },
+    dryRun: config.dryRun ?? false,
+    delayBetweenActions: config.delayBetweenActions ?? 0,
+    arbTakeActionLabel: 'Factory ArbTake',
+    arbTakeLogPrefix: 'Factory: ',
+    onFound: (decision) => {
+      logger.debug(
+        `Found liquidation to ${formatTakeStrategyLog(
+          externalTakeAdapter.kind,
+          decision.approvedTake,
+          decision.approvedArbTake
+        )} - pool: ${pool.name}, borrower: ${decision.borrower}, price: ${Number(
+          weiToDecimaled(decision.auctionPrice)
+        )}`
+      );
+    },
+    onSkip: ({ candidate, reason }) => {
+      logSkippedTakeCandidate({
         pool,
+        borrower: candidate.borrower,
+        reason,
+        prefix: 'Factory: ',
+      });
+    },
+  });
+}
+
+export function createFactoryTakeAdapter(params: {
+  quoteConfig: FactoryQuoteConfig;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): ExternalTakeAdapter<TakeActionConfig, FactoryExecutionConfig> {
+  return {
+    kind: 'factory',
+    evaluateExternalTake: async ({
+      pool,
+      signer,
+      poolConfig,
+      auctionPrice,
+      collateral,
+    }) =>
+      getFactoryTakeQuoteEvaluation(
+        pool,
+        auctionPrice,
+        collateral,
         poolConfig,
+        params.quoteConfig,
         signer,
-        liquidation,
-        config,
-      });
-      
-      if (liquidation.isArbTakeable) await delay(config.delayBetweenActions);
-    }
-    
-    if (liquidation.isArbTakeable) {
-      await arbTakeLiquidation({
+        params.runtimeCache
+      ),
+    executeExternalTake: async ({
+      pool,
+      signer,
+      poolConfig,
+      liquidation,
+      config,
+    }) =>
+      takeLiquidationFactory({
         pool,
         signer,
+        poolConfig,
         liquidation,
         config,
-        actionLabel: 'Factory ArbTake',
-        logPrefix: 'Factory: ',
-      });
-    }
-  }
+      }),
+  };
 }
 
 /**
@@ -1221,4 +1301,3 @@ async function takeWithCurveFactory({
     logger.error(`Factory: Failed to Curve Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`, error);
   }
 }
-
