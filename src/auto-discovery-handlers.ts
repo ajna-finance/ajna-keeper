@@ -14,16 +14,13 @@ import {
 } from './auto-discovery';
 import { logger } from './logging';
 import {
-  arbTakeLiquidation,
-  checkIfArbTakeable,
   getOneInchTakeQuoteEvaluation,
   takeLiquidation,
 } from './take';
+import { arbTakeLiquidation, checkIfArbTakeable } from './arb-take';
 import {
-  arbTakeLiquidationFactory,
   createFactoryQuoteProviderRuntimeCache,
   FactoryQuoteProviderRuntimeCache,
-  checkIfArbTakeableFactory,
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
 } from './take-factory';
@@ -579,26 +576,15 @@ async function evaluateTakeCandidate(params: {
       const hpb = Number(weiToDecimaled(prices.hpb));
       const minDeposit = params.target.take.minCollateral / hpb;
       const arbEvaluation =
-        params.target.take.liquiditySource === LiquiditySource.ONEINCH ||
-        params.target.take.liquiditySource === undefined
-          ? await checkIfArbTakeable(
-              params.pool,
-              auctionPriceNumber,
-              collateral,
-              params.target,
-              params.config.subgraphUrl,
-              minDeposit.toString(),
-              params.signer
-            )
-          : await checkIfArbTakeableFactory(
-              params.pool,
-              auctionPriceNumber,
-              collateral,
-              params.target,
-              params.config.subgraphUrl,
-              minDeposit.toString(),
-              params.signer
-            );
+        await checkIfArbTakeable(
+          params.pool,
+          auctionPriceNumber,
+          collateral,
+          params.target,
+          params.config.subgraphUrl,
+          minDeposit.toString(),
+          params.signer
+        );
 
       if (!arbEvaluation.isArbTakeable) {
         if (!approvedTake) {
@@ -737,44 +723,17 @@ export async function handleDiscoveredTakeTarget(params: {
     }
 
     if (decision.approvedArbTake && revalidated.approvedArbTake) {
-      if (
-        params.target.take.liquiditySource === LiquiditySource.ONEINCH ||
-        params.target.take.liquiditySource === undefined
-      ) {
-        await arbTakeLiquidation({
-          pool: params.pool,
-          poolConfig: params.target,
-          signer: params.signer,
-          liquidation: {
-            borrower: candidate.borrower,
-            hpbIndex: decision.hpbIndex,
-            collateral: revalidated.collateral,
-            auctionPrice: revalidated.auctionPrice,
-            isTakeable: false,
-            isArbTakeable: true,
-          },
-          config: {
-            dryRun: params.target.dryRun,
-          },
-        });
-      } else {
-        await arbTakeLiquidationFactory({
-          pool: params.pool,
-          poolConfig: params.target,
-          signer: params.signer,
-          liquidation: {
-            borrower: candidate.borrower,
-            hpbIndex: decision.hpbIndex,
-            collateral: revalidated.collateral,
-            auctionPrice: revalidated.auctionPrice,
-            isTakeable: false,
-            isArbTakeable: true,
-          },
-          config: {
-            dryRun: params.target.dryRun,
-          },
-        });
-      }
+      await arbTakeLiquidation({
+        pool: params.pool,
+        signer: params.signer,
+        liquidation: {
+          borrower: candidate.borrower,
+          hpbIndex: decision.hpbIndex,
+        },
+        config: {
+          dryRun: params.target.dryRun,
+        },
+      });
     }
 
     if (

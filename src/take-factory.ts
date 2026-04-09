@@ -4,7 +4,6 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import subgraph from './subgraph';
 import {
-  decimaledToWei,
   delay,
   estimateGasWithBuffer,
   RequireFields,
@@ -12,7 +11,6 @@ import {
 } from './utils';
 import { KeeperConfig, LiquiditySource, PoolConfig } from './config-types';
 import { logger } from './logging';
-import { liquidationArbTake } from './transactions';
 import { BigNumber, ethers } from 'ethers';
 import { NonceTracker } from './nonce';
 import { AjnaKeeperTakerFactory__factory } from '../typechain-types';
@@ -24,7 +22,10 @@ import { convertWadToTokenDecimals, getDecimalsErc20 } from './erc20';
 import { quoteTokenScale } from '@ajna-finance/sdk/dist/contracts/pool';
 import { DexRouter } from './dex-router';
 import {
-  ArbTakeEvaluation,
+  arbTakeLiquidation,
+  checkIfArbTakeable,
+} from './arb-take';
+import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
 } from './take-types';
@@ -199,12 +200,13 @@ export async function handleFactoryTakes({
     }
     
     if (liquidation.isArbTakeable) {
-      await arbTakeLiquidationFactory({
+      await arbTakeLiquidation({
         pool,
-        poolConfig,
         signer,
         liquidation,
         config,
+        actionLabel: 'Factory ArbTake',
+        logPrefix: 'Factory: ',
       });
     }
   }
@@ -259,7 +261,7 @@ async function* getLiquidationsToTakeFactory({
     // Check arbTake (same logic as existing)
     if (poolConfig.take.minCollateral && poolConfig.take.hpbPriceFactor) {
       const minDeposit = poolConfig.take.minCollateral / hpb;
-      const arbTakeCheck = await checkIfArbTakeableFactory(
+      const arbTakeCheck = await checkIfArbTakeable(
         pool,
         price,
         collateral,
@@ -767,67 +769,6 @@ async function checkCurveQuote(
 }
 
 /**
- * ArbTake check (same logic as existing, copied to avoid dependencies)
- */
-export async function checkIfArbTakeableFactory(
-  pool: FungiblePool,
-  price: number,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  subgraphUrl: string,
-  minDeposit: string,
-  signer: Signer
-): Promise<ArbTakeEvaluation> {
-  
-  if (!poolConfig.take.minCollateral || !poolConfig.take.hpbPriceFactor) {
-    return {
-      isArbTakeable: false,
-      hpbIndex: 0,
-      reason: 'arbTake settings are not configured',
-    };
-  }
-
-  const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
-  const minCollateral = ethers.BigNumber.from(
-    decimaledToWei(poolConfig.take.minCollateral, collateralDecimals)
-  );
-  
-  if (collateral.lt(minCollateral)) {
-    logger.debug(`Factory: Collateral ${collateral} below minCollateral ${minCollateral} for pool: ${pool.name}`);
-    return {
-      isArbTakeable: false,
-      hpbIndex: 0,
-      reason: 'collateral below minCollateral',
-    };
-  }
-
-  const { buckets } = await subgraph.getHighestMeaningfulBucket(
-    subgraphUrl,
-    pool.poolAddress,
-    minDeposit
-  );
-  
-  if (buckets.length === 0) {
-    return {
-      isArbTakeable: false,
-      hpbIndex: 0,
-      reason: 'no meaningful bucket found',
-    };
-  }
-
-  const hmbIndex = buckets[0].bucketIndex;
-  const hmbPrice = Number(weiToDecimaled(pool.getBucketByIndex(hmbIndex).price));
-  const maxArbPrice = hmbPrice * poolConfig.take.hpbPriceFactor;
-  
-  return {
-    isArbTakeable: price < maxArbPrice,
-    hpbIndex: hmbIndex,
-    maxArbTakePrice: maxArbPrice,
-    reason: price < maxArbPrice ? undefined : 'auction price above arbTake threshold',
-  };
-}
-
-/**
  * Execute external take using factory pattern
  */
 export async function takeLiquidationFactory({
@@ -1281,41 +1222,3 @@ async function takeWithCurveFactory({
   }
 }
 
-
-/**
- * ArbTake using existing logic (same as original)
- */
-export async function arbTakeLiquidationFactory({
-  pool,
-  poolConfig,
-  signer,
-  liquidation,
-  config,
-}: {
-  pool: FungiblePool;
-  poolConfig: TakeActionConfig;
-  signer: Signer;
-  liquidation: LiquidationToTake;
-  config: Pick<FactoryTakeParams['config'], 'dryRun'>;
-}) {
-  
-  const { borrower, hpbIndex } = liquidation;
-  const { dryRun } = config;
-
-  if (dryRun) {
-    logger.info(`DryRun - would Factory ArbTake - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`);
-    return;
-  }
-
-  try {
-    logger.debug(`Factory: Sending ArbTake Tx - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, hpbIndex: ${hpbIndex}`);
-    
-    const liquidationSdk = pool.getLiquidation(borrower);
-    await liquidationArbTake(liquidationSdk, signer, hpbIndex);
-    
-    logger.info(`Factory ArbTake successful - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`);
-    
-  } catch (error) {
-    logger.error(`Factory: Failed to ArbTake. pool: ${pool.name}, borrower: ${borrower}`, error);
-  }
-}

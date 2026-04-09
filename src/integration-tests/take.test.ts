@@ -20,10 +20,10 @@ import {
 } from './subgraph-mock';
 import { expect } from 'chai';
 import {
-  arbTakeLiquidation,
   getLiquidationsToTake,
   handleTakesWith1inch,
 } from '../take';
+import { arbTakeLiquidation } from '../arb-take';
 import { BigNumber, constants, Wallet } from 'ethers';
 import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
@@ -251,7 +251,6 @@ describe('arbTakeLiquidation', () => {
 
     await arbTakeLiquidation({
       pool,
-      poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
       config: {
         dryRun: false,
@@ -295,7 +294,6 @@ describe('arbTakeLiquidation', () => {
 
     await arbTakeLiquidation({
       pool,
-      poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
       config: {
         dryRun: true, // DRY RUN

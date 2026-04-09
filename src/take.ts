@@ -1,7 +1,6 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import subgraph from './subgraph';
 import {
-  decimaledToWei,
   delay,
   estimateGasWithBuffer,
   RequireFields,
@@ -9,7 +8,6 @@ import {
 } from './utils';
 import { KeeperConfig, LiquiditySource, PoolConfig } from './config-types';
 import { logger } from './logging';
-import { liquidationArbTake } from './transactions';
 import { DexRouter } from './dex-router';
 import { BigNumber, ethers } from 'ethers';
 import { convertSwapApiResponseToDetailsBytes } from './1inch';
@@ -19,7 +17,10 @@ import { NonceTracker } from './nonce';
 import { SmartDexManager } from './smart-dex-manager';
 import { handleFactoryTakes } from './take-factory';
 import {
-  ArbTakeEvaluation,
+  arbTakeLiquidation,
+  checkIfArbTakeable,
+} from './arb-take';
+import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
 } from './take-types';
@@ -164,7 +165,6 @@ export async function handleTakesWith1inch({
     if (liquidation.isArbTakeable) {
       await arbTakeLiquidation({
         pool,
-        poolConfig,
         signer,
         liquidation,
         config,
@@ -188,72 +188,6 @@ interface GetLiquidationsToTakeParams
     KeeperConfig,
     'subgraphUrl' | 'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'
   >;
-}
-
-export async function checkIfArbTakeable(
-  pool: FungiblePool,
-  price: number,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  subgraphUrl: string,
-  minDeposit: string,
-  signer: Signer
-): Promise<ArbTakeEvaluation> {
-  if (!poolConfig.take.minCollateral || !poolConfig.take.hpbPriceFactor) {
-    return {
-      isArbTakeable: false,
-      hpbIndex: 0,
-      reason: 'arbTake settings are not configured',
-    };
-  }
-
-  const collateralDecimals = await getDecimalsErc20(
-    signer,
-    pool.collateralAddress
-  );
-  const minCollateral = ethers.BigNumber.from(
-    decimaledToWei(poolConfig.take.minCollateral, collateralDecimals)
-  );
-  if (collateral.lt(minCollateral)) {
-    logger.debug(
-      `Collateral ${weiToDecimaled(collateral)} below minCollateral ${poolConfig.take.minCollateral} for pool: ${pool.name}`
-    );
-    return {
-      isArbTakeable: false,
-      hpbIndex: 0,
-      reason: 'collateral below minCollateral',
-    };
-  }
-
-  const { buckets } = await subgraph.getHighestMeaningfulBucket(
-    subgraphUrl,
-    pool.poolAddress,
-    minDeposit
-  );
-  if (buckets.length === 0) {
-    logger.debug(`No meaningful bucket found for pool ${pool.name} (minDeposit: ${minDeposit}), skipping arb take`);
-    return {
-      isArbTakeable: false,
-      hpbIndex: 0,
-      reason: 'no meaningful bucket found',
-    };
-  }
-
-  const hmbIndex = buckets[0].bucketIndex;
-  const hmbPrice = Number(
-    weiToDecimaled(pool.getBucketByIndex(hmbIndex).price)
-  );
-  const maxArbPrice = hmbPrice * poolConfig.take.hpbPriceFactor;
-  const arbTakeable = price < maxArbPrice;
-  logger.info(
-    `ArbTake check for pool ${pool.name}: hmbPrice=${hmbPrice.toFixed(6)}, maxArbPrice=${maxArbPrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, factor=${poolConfig.take.hpbPriceFactor} → ${arbTakeable ? 'ARB-TAKEABLE' : 'skip'}`
-  );
-  return {
-    isArbTakeable: arbTakeable,
-    hpbIndex: hmbIndex,
-    maxArbTakePrice: maxArbPrice,
-    reason: arbTakeable ? undefined : 'auction price above arbTake threshold',
-  };
 }
 
 export async function getOneInchTakeQuoteEvaluation(
@@ -581,46 +515,6 @@ export async function takeLiquidation({
     } else {
       logger.error(
         `Valid liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
-      );
-    }
-  }
-}
-
-interface ArbTakeLiquidationParams
-  extends Pick<HandleTakeParams, 'pool' | 'signer'> {
-  poolConfig: TakeActionConfig;
-  liquidation: LiquidationToTake;
-  config: Pick<KeeperConfig, 'dryRun'>;
-}
-
-export async function arbTakeLiquidation({
-  pool,
-  poolConfig,
-  signer,
-  liquidation,
-  config,
-}: ArbTakeLiquidationParams) {
-  const { borrower, hpbIndex } = liquidation;
-  const { dryRun } = config;
-
-  if (dryRun) {
-    logger.info(
-      `DryRun - would ArbTake - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
-    );
-  } else {
-    try {
-      logger.debug(
-        `Sending ArbTake Tx - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, hpbIndex: ${hpbIndex}`
-      );
-      const liquidationSdk = pool.getLiquidation(borrower);
-      await liquidationArbTake(liquidationSdk, signer, hpbIndex);
-      logger.info(
-        `ArbTake successful - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
-      );
-    } catch (error) {
-      logger.error(
-        `Failed to ArbTake. pool: ${pool.name}, borrower: ${borrower}`,
-        error
       );
     }
   }
