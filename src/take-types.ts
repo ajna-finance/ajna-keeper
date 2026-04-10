@@ -2,7 +2,7 @@ import { BigNumber } from 'ethers';
 import { TakeSettings } from './config-types';
 
 export interface TakeActionConfig {
-  name: string;
+  name?: string;
   take: TakeSettings;
 }
 

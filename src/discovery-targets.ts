@@ -30,7 +30,7 @@ export type PoolHydrationCooldowns = Map<string, number>;
 export interface ManualTakeTarget {
   source: 'manual';
   poolAddress: Address;
-  name: string;
+  name?: string;
   dryRun: boolean;
   poolConfig: RequireFields<PoolConfig, 'take'>;
 }
@@ -38,7 +38,7 @@ export interface ManualTakeTarget {
 export interface ManualSettlementTarget {
   source: 'manual';
   poolAddress: Address;
-  name: string;
+  name?: string;
   dryRun: boolean;
   poolConfig: RequireFields<PoolConfig, 'settlement'>;
 }

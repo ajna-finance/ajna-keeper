@@ -10,7 +10,11 @@ import { swapWithUniversalRouter } from './universal-router-module';
 import { swapWithSushiswapRouter } from './sushiswap-router-module';
 import { swapWithCurveRouter } from './curve-router-module';
 import { NonceTracker } from './nonce';
-import { PostAuctionDex, CurvePoolType } from './config-types';
+import {
+  CurvePoolType,
+  CurveRouterOverrides,
+  PostAuctionDex,
+} from './config-types';
 
 export class DexRouter {
   private signer: Signer;
@@ -428,16 +432,7 @@ export class DexRouter {
         defaultSlippage?: number;
       };
       sushiswap?: any;
-      curve?: {
-        poolConfigs?: {
-          [tokenPair: string]: {
-            address: string;
-            poolType: CurvePoolType;
-          }
-        };
-        defaultSlippage?: number;
-        wethAddress?: string;
-      };
+      curve?: CurveRouterOverrides;
     }
   ): Promise<{ success: boolean; error?: string }> {
     if (!chainId || !amount || !tokenIn || !tokenOut || !to) {

@@ -16,6 +16,9 @@ base-config.ts
 .DS_Store
 config*.json
 config*.ts
+!src/config-load.ts
+!src/config-schema.ts
+!src/config-validation.ts
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

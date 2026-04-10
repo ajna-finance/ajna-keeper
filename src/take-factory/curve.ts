@@ -64,7 +64,7 @@ export async function evaluateCurveFactoryQuote({
     let quoteProvider = runtimeCache?.curve;
     if (quoteProvider === undefined) {
       const candidateProvider = new CurveQuoteProvider(signer, {
-        poolConfigs: curveConfig.poolConfigs,
+        poolConfigs: curveConfig.poolConfigs as any,
         defaultSlippage: curveConfig.defaultSlippage || 1.0,
         wethAddress: curveConfig.wethAddress,
         tokenAddresses: config.tokenAddresses || {},
@@ -196,7 +196,7 @@ export async function executeCurveFactoryTake({
 
   try {
     const quoteProvider = new CurveQuoteProvider(signer, {
-      poolConfigs: config.curveRouterOverrides.poolConfigs!,
+      poolConfigs: config.curveRouterOverrides.poolConfigs! as any,
       defaultSlippage: config.curveRouterOverrides.defaultSlippage || 1.0,
       wethAddress: config.curveRouterOverrides.wethAddress!,
     });
