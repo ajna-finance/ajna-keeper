@@ -29,9 +29,9 @@ import {
 } from '../read-transports';
 import { handleSettlements } from '../settlement';
 import { ChainwideLiquidationAuction } from '../subgraph';
-import { createFactoryQuoteProviderRuntimeCache } from '../take-factory';
+import { createFactoryQuoteProviderRuntimeCache } from '../take/factory';
 import { handleTakes } from '../take';
-import { TakeWriteTransport } from '../take-write-transport';
+import { TakeWriteTransport } from '../take/write-transport';
 import { delay } from '../utils';
 
 export interface DiscoverySnapshotState {

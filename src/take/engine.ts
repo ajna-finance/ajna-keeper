@@ -1,9 +1,9 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { logger } from './logging';
-import { SubgraphReader } from './read-transports';
-import { delay, weiToDecimaled } from './utils';
-import { arbTakeLiquidation, checkIfArbTakeable } from './arb-take';
+import { logger } from '../logging';
+import { SubgraphReader } from '../read-transports';
+import { delay, weiToDecimaled } from '../utils';
+import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
 import {
   ArbTakeEvaluation,
   ExternalTakeQuoteEvaluation,
@@ -12,7 +12,7 @@ import {
   TakeBorrowerCandidate,
   TakeDecision,
   TakeLiquidationPlan,
-} from './take-types';
+} from './types';
 
 export interface ExternalTakeAdapter<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,

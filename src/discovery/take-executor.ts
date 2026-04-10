@@ -15,10 +15,10 @@ import {
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
 import * as takeModule from '../take';
-import * as takeFactoryModule from '../take-factory';
-import { ExternalTakeAdapter, processTakeCandidates } from '../take-engine';
-import { TakeWriteTransport } from '../take-write-transport';
-import { createFactoryQuoteProviderRuntimeCache } from '../take-factory';
+import * as takeFactoryModule from '../take/factory';
+import { ExternalTakeAdapter, processTakeCandidates } from '../take/engine';
+import { TakeWriteTransport } from '../take/write-transport';
+import { createFactoryQuoteProviderRuntimeCache } from '../take/factory';
 
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);

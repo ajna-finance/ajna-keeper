@@ -28,7 +28,7 @@ import { configureAjna } from '../config-types';
 import {
   computeFactoryAmountOutMinimum,
   takeLiquidationFactory,
-} from '../take-factory';
+} from '../take/factory';
 import { arrayFromAsync } from '../utils';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
 import { SushiSwapKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';

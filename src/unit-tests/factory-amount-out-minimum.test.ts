@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../config-types';
-import { computeFactoryAmountOutMinimum } from '../take-factory';
+import { computeFactoryAmountOutMinimum } from '../take/factory';
 
 describe('Factory amountOutMinimum', () => {
   it('uses the stricter of the slippage floor and profitability floor', async () => {

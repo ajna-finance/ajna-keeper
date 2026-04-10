@@ -3,7 +3,7 @@ import sinon from 'sinon';
 import { ethers } from 'ethers';
 import * as erc20 from '../erc20';
 import { LiquiditySource } from '../config-types';
-import { arbTakeLiquidation, checkIfArbTakeable } from '../arb-take';
+import { arbTakeLiquidation, checkIfArbTakeable } from '../take/arb';
 import * as transactions from '../transactions';
 
 describe('shared arbTake helpers', () => {

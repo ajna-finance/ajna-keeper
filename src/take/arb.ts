@@ -1,11 +1,11 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { getDecimalsErc20 } from './erc20';
-import { logger } from './logging';
-import { SubgraphReader } from './read-transports';
-import { ArbTakeEvaluation, TakeActionConfig } from './take-types';
-import { liquidationArbTake } from './transactions';
-import { decimaledToWei, weiToDecimaled } from './utils';
+import { getDecimalsErc20 } from '../erc20';
+import { logger } from '../logging';
+import { SubgraphReader } from '../read-transports';
+import { ArbTakeEvaluation, TakeActionConfig } from './types';
+import { liquidationArbTake } from '../transactions';
+import { decimaledToWei, weiToDecimaled } from '../utils';
 
 interface ArbTakeExecutionParams {
   pool: FungiblePool;

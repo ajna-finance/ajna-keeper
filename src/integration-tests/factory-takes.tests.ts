@@ -5,7 +5,7 @@ import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
 import sinon from 'sinon';
 import { configureAjna, LiquiditySource, KeeperConfig, PoolConfig } from '../config-types';
-import { handleFactoryTakes } from '../take-factory';
+import { handleFactoryTakes } from '../take/factory';
 import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
 import { handleKicks } from '../kick';
 import { arrayFromAsync, decimaledToWei } from '../utils';
@@ -32,7 +32,7 @@ import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 /**
  * Integration tests for factory take implementation and quote provider.
  * 
- * Purpose: Ensure take-factory.ts and UniswapV3QuoteProvider work together correctly.
+ * Purpose: Ensure take/factory and UniswapV3QuoteProvider work together correctly.
  * Critical for: Future developers modifying factory take logic or quote providers.
  * 
  * Focus Areas:

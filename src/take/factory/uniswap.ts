@@ -1,13 +1,13 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { LiquiditySource } from '../config-types';
-import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
-import { logger } from '../logging';
-import { NonceTracker } from '../nonce';
-import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../take-types';
-import { estimateGasWithBuffer, weiToDecimaled } from '../utils';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types';
+import { LiquiditySource } from '../../config-types';
+import { UniswapV3QuoteProvider } from '../../dex-providers/uniswap-quote-provider';
+import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
+import { logger } from '../../logging';
+import { NonceTracker } from '../../nonce';
+import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
+import { estimateGasWithBuffer, weiToDecimaled } from '../../utils';
+import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types';
 import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
@@ -22,7 +22,7 @@ import {
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
-} from '../take-write-transport';
+} from '../write-transport';
 
 export async function evaluateUniswapV3FactoryQuote({
   pool,

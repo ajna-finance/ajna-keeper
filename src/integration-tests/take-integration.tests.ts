@@ -4,7 +4,7 @@ import sinon from 'sinon';
 import { KeeperConfig, LiquiditySource, PoolConfig } from '../config-types';
 import subgraph from '../subgraph';
 import { handleTakes } from '../take';
-import * as takeFactory from '../take-factory';
+import * as takeFactory from '../take/factory';
 
 describe('Take Integration Tests', () => {
   const basePool = {

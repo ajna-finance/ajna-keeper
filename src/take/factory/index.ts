@@ -1,21 +1,21 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
-import { weiToDecimaled } from './utils';
-import { LiquiditySource } from './config-types';
-import { logger } from './logging';
+import { weiToDecimaled } from '../../utils';
+import { LiquiditySource } from '../../config-types';
+import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
 import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
-} from './take-types';
+} from '../types';
 import {
   ExternalTakeAdapter,
   formatTakeStrategyLog,
   getTakeBorrowerCandidates,
   logSkippedTakeCandidate,
   processTakeCandidates,
-} from './take-engine';
-import { resolveSubgraphConfig } from './read-transports';
+} from '../engine';
+import { resolveSubgraphConfig } from '../../read-transports';
 import {
   FactoryExecutionConfig,
   FactoryTakeConfig,
@@ -23,19 +23,19 @@ import {
   FactoryQuoteProviderRuntimeCache,
   FactoryTakeParams,
   createFactoryQuoteProviderRuntimeCache,
-} from './take-factory/shared';
+} from './shared';
 import {
   evaluateCurveFactoryQuote,
   executeCurveFactoryTake,
-} from './take-factory/curve';
+} from './curve';
 import {
   evaluateSushiSwapFactoryQuote,
   executeSushiSwapFactoryTake,
-} from './take-factory/sushiswap';
+} from './sushiswap';
 import {
   evaluateUniswapV3FactoryQuote,
   executeUniswapV3FactoryTake,
-} from './take-factory/uniswap';
+} from './uniswap';
 
 type LiquidationToTake = TakeLiquidationPlan;
 
@@ -44,11 +44,11 @@ export type {
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
   FactoryTakeParams,
-} from './take-factory/shared';
+} from './shared';
 export {
   computeFactoryAmountOutMinimum,
   createFactoryQuoteProviderRuntimeCache,
-} from './take-factory/shared';
+} from './shared';
 
 /**
  * Handle takes using factory pattern (Uniswap V3, future DEXs)

@@ -7,8 +7,8 @@ import * as oneInch from '../1inch';
 import { NonceTracker } from '../nonce';
 import { takeLiquidation } from '../take';
 import { DexRouter } from '../dex-router';
-import { executeUniswapV3FactoryTake } from '../take-factory/uniswap';
-import * as shared from '../take-factory/shared';
+import { executeUniswapV3FactoryTake } from '../take/factory/uniswap';
+import * as shared from '../take/factory/shared';
 import {
   AjnaKeeperTaker__factory,
   AjnaKeeperTakerFactory__factory,

@@ -1,16 +1,16 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { quoteTokenScale } from '@ajna-finance/sdk/dist/contracts/pool';
 import { BigNumber, ethers } from 'ethers';
-import { KeeperConfig, LiquiditySource, PoolConfig } from '../config-types';
+import { KeeperConfig, LiquiditySource, PoolConfig } from '../../config-types';
 import {
   SubgraphConfigInput,
   WithSubgraph,
-} from '../read-transports';
-import { RequireFields } from '../utils';
-import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
-import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
-import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../take-types';
-import { TakeWriteTransport } from '../take-write-transport';
+} from '../../read-transports';
+import { RequireFields } from '../../utils';
+import { SushiSwapQuoteProvider } from '../../dex-providers/sushiswap-quote-provider';
+import { UniswapV3QuoteProvider } from '../../dex-providers/uniswap-quote-provider';
+import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../types';
+import { TakeWriteTransport } from '../write-transport';
 
 type FactoryTakeConfigBase = Pick<
   KeeperConfig,

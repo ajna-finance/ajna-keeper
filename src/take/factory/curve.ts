@@ -1,14 +1,14 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { CurvePoolType, LiquiditySource } from '../config-types';
-import { CurveQuoteProvider } from '../dex-providers/curve-quote-provider';
-import { DexRouter } from '../dex-router';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
-import { logger } from '../logging';
-import { NonceTracker } from '../nonce';
-import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../take-types';
-import { estimateGasWithBuffer, weiToDecimaled } from '../utils';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types';
+import { CurvePoolType, LiquiditySource } from '../../config-types';
+import { CurveQuoteProvider } from '../../dex-providers/curve-quote-provider';
+import { DexRouter } from '../../dex-router';
+import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
+import { logger } from '../../logging';
+import { NonceTracker } from '../../nonce';
+import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
+import { estimateGasWithBuffer, weiToDecimaled } from '../../utils';
+import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types';
 import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
@@ -23,7 +23,7 @@ import {
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
-} from '../take-write-transport';
+} from '../write-transport';
 
 export async function evaluateCurveFactoryQuote({
   pool,

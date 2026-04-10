@@ -4,43 +4,43 @@ import {
   estimateGasWithBuffer,
   RequireFields,
   weiToDecimaled,
-} from './utils';
-import { KeeperConfig, LiquiditySource, PoolConfig } from './config-types';
-import { logger } from './logging';
-import { DexRouter } from './dex-router';
+} from '../utils';
+import { KeeperConfig, LiquiditySource, PoolConfig } from '../config-types';
+import { logger } from '../logging';
+import { DexRouter } from '../dex-router';
 import { BigNumber, ethers } from 'ethers';
-import { convertSwapApiResponseToDetailsBytes } from './1inch';
-import { AjnaKeeperTaker__factory } from '../typechain-types';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from './erc20';
-import { NonceTracker } from './nonce';
-import { SmartDexManager } from './smart-dex-manager';
+import { convertSwapApiResponseToDetailsBytes } from '../1inch';
+import { AjnaKeeperTaker__factory } from '../../typechain-types';
+import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
+import { NonceTracker } from '../nonce';
+import { SmartDexManager } from '../smart-dex-manager';
 import {
   resolveSubgraphConfig,
   SubgraphConfigInput,
   WithSubgraph,
-} from './read-transports';
-import { handleFactoryTakes } from './take-factory';
+} from '../read-transports';
+import { handleFactoryTakes } from './factory';
 import {
   arbTakeLiquidation,
   checkIfArbTakeable,
-} from './arb-take';
+} from './arb';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
   TakeWriteTransportConfig,
-} from './take-write-transport';
+} from './write-transport';
 import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
-} from './take-types';
+} from './types';
 import {
   ExternalTakeAdapter,
   formatTakeStrategyLog,
   getTakeBorrowerCandidates,
   logSkippedTakeCandidate,
   processTakeCandidates,
-} from './take-engine';
+} from './engine';
 
 type HandleTakeConfigBase = Pick<
   KeeperConfig,

@@ -3,7 +3,7 @@ import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../config-types';
 import { logger } from '../logging';
-import * as takeFactory from '../take-factory';
+import * as takeFactory from '../take/factory';
 import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
 import { CurveQuoteProvider } from '../dex-providers/curve-quote-provider';

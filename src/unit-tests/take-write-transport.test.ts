@@ -10,7 +10,7 @@ import {
 import {
   createTakeWriteTransport,
   resolveTakeWriteConfig,
-} from '../take-write-transport';
+} from '../take/write-transport';
 import { NonceTracker, isNonceConsumedTransactionError } from '../nonce';
 
 describe('take write transport', () => {

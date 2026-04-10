@@ -27,7 +27,7 @@ import {
 } from './discovery/targets';
 import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery/runtime';
 import { createSubgraphReader, SubgraphReader } from './read-transports';
-import { createTakeWriteTransport } from './take-write-transport';
+import { createTakeWriteTransport } from './take/write-transport';
 
 interface KeepPoolParams {
   poolMap: PoolMap;

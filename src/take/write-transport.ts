@@ -6,10 +6,10 @@ import {
   TakeWriteConfig,
   TakeWriteRelayConfig,
   TakeWriteTransportMode,
-} from './config-types';
-import { logger } from './logging';
-import { JsonRpcProvider } from './provider';
-import { NonceConsumedTransactionError, NonceTracker } from './nonce';
+} from '../config-types';
+import { logger } from '../logging';
+import { JsonRpcProvider } from '../provider';
+import { NonceConsumedTransactionError, NonceTracker } from '../nonce';
 
 const DEFAULT_RELAY_SEND_METHOD = 'eth_sendPrivateTransaction';
 const DEFAULT_RELAY_RECEIPT_TIMEOUT_MS = 120_000;

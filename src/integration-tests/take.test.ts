@@ -23,7 +23,7 @@ import {
   getLiquidationsToTake,
   handleLegacyOrArbTakes,
 } from '../take';
-import { arbTakeLiquidation } from '../arb-take';
+import { arbTakeLiquidation } from '../take/arb';
 import { BigNumber, constants, Wallet } from 'ethers';
 import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
