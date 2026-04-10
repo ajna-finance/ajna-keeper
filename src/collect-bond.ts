@@ -1,19 +1,16 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { constants } from 'ethers';
-import { KeeperConfig, PoolConfig } from './config-types';
+import { PoolConfig } from './config-types';
 import { logger } from './logging';
 import { poolWithdrawBonds } from './transactions';
 import { weiToDecimaled } from './utils';
-import { tryReactiveSettlement } from './settlement';
+import { SettlementConfigInput, tryReactiveSettlement } from './settlement';
 
 interface CollectBondParams {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: PoolConfig; // Changed to include full poolConfig for settlement access
-  config: Pick<
-    KeeperConfig,
-    'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
-  >;
+  config: SettlementConfigInput;
 }
 
 export async function collectBondFromPool({

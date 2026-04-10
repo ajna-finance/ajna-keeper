@@ -9,7 +9,6 @@ import {
 } from './erc20';
 import { logger } from './logging';
 import { getPrice } from './price';
-import subgraph from './subgraph';
 import {
   decimaledToWei,
   delay,
@@ -18,21 +17,29 @@ import {
   weiToDecimaled,
 } from './utils';
 import { poolKick, poolQuoteApprove } from './transactions';
+import {
+  resolveSubgraphConfig,
+  SubgraphConfigInput,
+  WithSubgraph,
+} from './read-transports';
+
+type KickConfigBase = Pick<
+  KeeperConfig,
+  | 'dryRun'
+  | 'delayBetweenActions'
+  | 'coinGeckoApiKey'
+  | 'ethRpcUrl'
+  | 'tokenAddresses'
+>;
+
+type KickConfig = WithSubgraph<KickConfigBase>;
+type KickConfigInput = SubgraphConfigInput<KickConfigBase>;
 
 interface HandleKickParams {
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'kick'>;
   signer: Signer;
-  config: Pick<
-    KeeperConfig,
-    | 'dryRun'
-    | 'subgraphUrl'
-    | 'subgraphFallbackUrls'
-    | 'delayBetweenActions'
-    | 'coinGeckoApiKey'
-    | 'ethRpcUrl'
-    | 'tokenAddresses'
-  >;
+  config: KickConfigInput;
   chainId?: number;
 }
 
@@ -45,14 +52,15 @@ export async function handleKicks({
   config,
   chainId,
 }: HandleKickParams) {
+  const resolvedConfig = resolveSubgraphConfig(config);
   for await (const loanToKick of getLoansToKick({
     pool,
     poolConfig,
-    config,
+    config: resolvedConfig,
     chainId,
   })) {
-    await kick({ signer, pool, loanToKick, config });
-    await delay(config.delayBetweenActions);
+    await kick({ signer, pool, loanToKick, config: resolvedConfig });
+    await delay(resolvedConfig.delayBetweenActions);
   }
   await clearAllowances({ pool, signer });
 }
@@ -66,9 +74,8 @@ interface LoanToKick {
 
 interface GetLoansToKickParams
   extends Pick<HandleKickParams, 'pool' | 'poolConfig' | 'chainId'> {
-  config: Pick<
-    KeeperConfig,
-    'subgraphUrl' | 'subgraphFallbackUrls' | 'coinGeckoApiKey' | 'ethRpcUrl' | 'tokenAddresses'
+  config: SubgraphConfigInput<
+    Pick<KeeperConfig, 'coinGeckoApiKey' | 'ethRpcUrl' | 'tokenAddresses'>
   >;
 }
 
@@ -78,10 +85,8 @@ export async function* getLoansToKick({
   poolConfig,
   chainId,
 }: GetLoansToKickParams): AsyncGenerator<LoanToKick> {
-  const { subgraphUrl, subgraphFallbackUrls } = config;
-  const { loans } = await subgraph.getLoans(subgraphUrl, pool.poolAddress, {
-    fallbackUrls: subgraphFallbackUrls,
-  });
+  const resolvedConfig = resolveSubgraphConfig(config);
+  const { loans } = await resolvedConfig.subgraph.getLoans(pool.poolAddress);
   const loanMap = await pool.getLoans(loans.map(({ borrower }) => borrower));
   const borrowersSortedByBond = Array.from(loanMap.keys()).sort(
     (borrowerA, borrowerB) => {
@@ -103,11 +108,11 @@ export async function* getLoansToKick({
       ? undefined
       : await getPrice(
           poolConfig.price,
-          config.coinGeckoApiKey,
+          resolvedConfig.coinGeckoApiKey,
           undefined,
           chainId,
-          config.ethRpcUrl,
-          config.tokenAddresses
+          resolvedConfig.ethRpcUrl,
+          resolvedConfig.tokenAddresses
         );
 
   for (let i = 0; i < borrowersSortedByBond.length; i++) {
@@ -153,11 +158,11 @@ export async function* getLoansToKick({
       staticLimitPrice ??
       (await getPrice(
         poolConfig.price,
-        config.coinGeckoApiKey,
+        resolvedConfig.coinGeckoApiKey,
         poolPrices,
         chainId,
-        config.ethRpcUrl,
-        config.tokenAddresses
+        resolvedConfig.ethRpcUrl,
+        resolvedConfig.tokenAddresses
       ));
     if (
       weiToDecimaled(neutralPrice) * poolConfig.kick.priceFactor <

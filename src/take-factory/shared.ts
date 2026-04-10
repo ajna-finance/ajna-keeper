@@ -2,32 +2,39 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { quoteTokenScale } from '@ajna-finance/sdk/dist/contracts/pool';
 import { BigNumber, ethers } from 'ethers';
 import { KeeperConfig, LiquiditySource, PoolConfig } from '../config-types';
+import {
+  SubgraphConfigInput,
+  WithSubgraph,
+} from '../read-transports';
 import { RequireFields } from '../utils';
 import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
 import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../take-types';
 
+type FactoryTakeConfigBase = Pick<
+  KeeperConfig,
+  | 'dryRun'
+  | 'delayBetweenActions'
+  | 'keeperTakerFactory'
+  | 'takerContracts'
+  | 'universalRouterOverrides'
+  | 'sushiswapRouterOverrides'
+  | 'curveRouterOverrides'
+  | 'tokenAddresses'
+>;
+
+export type FactoryTakeConfig = WithSubgraph<FactoryTakeConfigBase>;
+export type FactoryTakeConfigInput = SubgraphConfigInput<FactoryTakeConfigBase>;
+
 export interface FactoryTakeParams {
   signer: Signer;
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'take'>;
-  config: Pick<
-    KeeperConfig,
-    | 'dryRun'
-    | 'subgraphUrl'
-    | 'subgraphFallbackUrls'
-    | 'delayBetweenActions'
-    | 'keeperTakerFactory'
-    | 'takerContracts'
-    | 'universalRouterOverrides'
-    | 'sushiswapRouterOverrides'
-    | 'curveRouterOverrides'
-    | 'tokenAddresses'
-  >;
+  config: FactoryTakeConfigInput;
 }
 
 export type FactoryExecutionConfig = Pick<
-  FactoryTakeParams['config'],
+  FactoryTakeConfig,
   | 'dryRun'
   | 'keeperTakerFactory'
   | 'universalRouterOverrides'
@@ -37,7 +44,7 @@ export type FactoryExecutionConfig = Pick<
 >;
 
 export type FactoryQuoteConfig = Pick<
-  FactoryTakeParams['config'],
+  FactoryTakeConfig,
   | 'universalRouterOverrides'
   | 'sushiswapRouterOverrides'
   | 'curveRouterOverrides'

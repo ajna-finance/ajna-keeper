@@ -52,54 +52,63 @@ The next cleanup should keep behavior the same while further tightening ownershi
 - public submission paths unless operators layer in private routing themselves
 
 **Next Steps:**
-- support primary/fallback RPC and subgraph endpoints with explicit health/backoff behavior
-- add better observability for stale discovery snapshots, repeated hydration failures, quote failures, and skipped actions
+- extend the landed read-path failover and endpoint health tracking to the remaining high-value read paths, especially SDK-backed reads where practical
+- extend the landed cycle/action health summaries into clearer degraded-mode signals and operator-facing alerts
 - add or formalize private relay / private RPC submission for take paths where MEV matters
 - document recommended production thresholds and failure modes more explicitly for operators
-- consider lightweight runtime metrics around quote rate, discovery lag, and execution success/failure reasons
+- consider lightweight runtime metrics around quote rate, discovery lag, endpoint cooldowns, and execution success/failure reasons
 
 **Effort:** M
 **Priority:** P1
 **Depends on:** preserving the current green test baseline while hardening live behavior
 
-### Add Read-Path Endpoint Failover Without Write-Path Ambiguity
+### Extend Read-Path Endpoint Failover Coverage Without Write-Path Ambiguity
 
-**What:** Introduce primary/fallback RPC and subgraph endpoints for read-heavy keeper operations, with bounded retries, timeouts, and simple health tracking.
+**What:** Extend the newly landed primary/fallback RPC and subgraph support so more of the keeper’s read-heavy paths consistently use the same resilient transport boundary.
 
-**Why:** The keeper is now architecturally clean, but it still assumes a single healthy RPC and a single healthy subgraph. Read-path failover is the highest-value resilience improvement because discovery, hydration, and quote evaluation all depend on upstream availability.
+**Why:** The first slice is in place, but coverage is still uneven. Some paths now use resilient `ReadRpc` / `SubgraphReader` transports, while other reads still rely on direct provider or SDK behavior. Finishing that convergence will reduce drift and make fallback behavior easier to reason about.
 
 **Context:** The main read-path touchpoints are:
-- `provider.ts` and `utils.ts` for RPC connectivity and fee data
-- `subgraph.ts` for manual and chain-wide discovery queries
-- `discovery-runtime.ts` and `discovery-targets.ts` for cycle-level discovery refreshes
+- landed:
+  - `read-rpc.ts` for resilient gas-price reads
+  - `subgraph.ts` for timeout/failover-aware subgraph requests
+  - `read-transports.ts` for explicit `ReadRpc` / `SubgraphReader` adapters
+  - discovery, manual take/factory take, kick, settlement, and bond-collection read consumers now using that boundary
+- remaining:
+  - SDK-backed reads that still bypass the shared fallback/cooldown semantics
+  - clearer degraded-mode policy when all read endpoints are unhealthy
 
 Keep this scoped to reads first. Transaction submission should not silently rotate across write endpoints until nonce and replacement behavior are intentionally designed.
 
 **Next Steps:**
-- define config for ordered read endpoints, health windows, and retry budgets
-- wrap subgraph requests with timeout, retry, and endpoint rotation behavior
-- add RPC read failover for gas, hydration, and revalidation reads
-- expose clear logs when the keeper enters fallback mode and when the primary recovers
+- decide where SDK-backed hydration/revalidation reads should stay explicit versus share transport policy
+- add clearer degraded-mode/backoff behavior when all read endpoints are failing
+- expose clearer logs when the keeper enters fallback mode and when the primary recovers
 
 **Effort:** M
 **Priority:** P1
 **Depends on:** keeping write-path behavior explicit and unchanged during the first hardening pass
 
-### Add Discovery and Execution Health Signals
+### Extend Discovery and Execution Health Signals
 
-**What:** Add cycle-level and action-level observability so operators can tell whether the keeper is healthy, degraded, or silently skipping work for environmental reasons.
+**What:** Extend the newly landed cycle-level and action-level observability so operators can tell whether the keeper is healthy, degraded, or silently skipping work for environmental reasons.
 
-**Why:** The current code is test-clean, but live debugging still depends too much on reading raw logs after the fact. Discovery lag, repeated hydrate failures, and quote-source instability should be visible as first-class signals.
+**Why:** The first summary layer is already useful, but it is still mostly informational. The next layer should make degradation explicit and actionable, especially around endpoint cooldowns, repeated hydration failures, and persistent upstream instability.
 
 **Context:** The best attachment points are:
 - `discovery-runtime.ts` for per-cycle snapshot age, pages fetched, target counts, and consecutive cycle failures
 - `discovery-handlers.ts` for quote failures, gas-policy skips, stale revalidation, and execution failures by liquidity source
 - `run.ts` for loop-level degraded mode and crash recovery visibility
 
+The current baseline already logs:
+- discovery take/settlement cycle summaries
+- discovered take/settlement target summaries
+- endpoint failure/failover events for the first read-resilience slice
+
 **Next Steps:**
-- add counters or structured logs for discovery lag, failed refreshes, and skipped actions
-- record repeated pool hydration failures and cooldown hits
-- distinguish economic skips from infrastructure failures in logs and metrics
+- add threshold warnings and repeated-failure aggregation instead of only per-cycle summaries
+- record repeated pool hydration failures and cooldown hits more explicitly
+- distinguish economic skips from infrastructure failures more clearly in summary outputs
 - document the expected operator response to each degraded-mode signal
 
 **Effort:** M

@@ -237,7 +237,20 @@ async function executeEffectiveTakeTarget(params: {
       pool,
       poolConfig: target.poolConfig,
       signer: state.signer,
-      config: state.config,
+      config: {
+        dryRun: state.config.dryRun,
+        delayBetweenActions: state.config.delayBetweenActions,
+        connectorTokens: state.config.connectorTokens,
+        oneInchRouters: state.config.oneInchRouters,
+        keeperTaker: state.config.keeperTaker,
+        keeperTakerFactory: state.config.keeperTakerFactory,
+        takerContracts: state.config.takerContracts,
+        universalRouterOverrides: state.config.universalRouterOverrides,
+        sushiswapRouterOverrides: state.config.sushiswapRouterOverrides,
+        curveRouterOverrides: state.config.curveRouterOverrides,
+        tokenAddresses: state.config.tokenAddresses,
+        subgraph: state.readTransports.subgraph,
+      },
     });
     return;
   }

@@ -25,6 +25,7 @@ import {
   PoolMap,
 } from './discovery-targets';
 import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery-runtime';
+import { createSubgraphReader, SubgraphReader } from './read-transports';
 
 interface KeepPoolParams {
   poolMap: PoolMap;
@@ -38,6 +39,7 @@ interface DiscoveryLoopParams extends KeepPoolParams {
 
 interface KickLoopParams extends KeepPoolParams {
   chainId?: number;
+  subgraph: SubgraphReader;
 }
 
 interface LoopIterationResult {
@@ -64,6 +66,7 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   const poolMap = await getPoolsFromConfig(ajna, config);
   const hydrationCooldowns: PoolHydrationCooldowns = new Map();
   const discoverySnapshotState = {};
+  const subgraph = createSubgraphReader(config);
   const discoveryRuntime = createDiscoveryRuntime({
     ajna,
     poolMap,
@@ -73,11 +76,11 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     discoverySnapshotState,
   });
 
-  kickPoolsLoop({ poolMap, config, signer, chainId });
+  kickPoolsLoop({ poolMap, config, signer, chainId, subgraph });
   takePoolsLoop({ config, signer, poolMap, discoveryRuntime });
   settlementLoop({ config, signer, poolMap, discoveryRuntime });
-  collectBondLoop({ poolMap, config, signer });
-  collectLpRewardsLoop({ poolMap, config, signer });
+  collectBondLoop({ poolMap, config, signer, subgraph });
+  collectLpRewardsLoop({ poolMap, config, signer, subgraph });
 }
 
 async function getPoolsFromConfig(
@@ -101,9 +104,15 @@ function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
 
-async function kickPoolsLoop({ poolMap, config, signer, chainId }: KickLoopParams) {
+async function kickPoolsLoop({
+  poolMap,
+  config,
+  signer,
+  chainId,
+  subgraph,
+}: KickLoopParams) {
   while (true) {
-    await processKickCycle({ poolMap, config, signer, chainId });
+    await processKickCycle({ poolMap, config, signer, chainId, subgraph });
     await delay(config.delayBetweenRuns);
   }
 }
@@ -113,6 +122,7 @@ export async function processKickCycle({
   config,
   signer,
   chainId,
+  subgraph,
 }: KickLoopParams): Promise<void> {
   const poolsWithKickSettings = config.pools.filter(hasKickSettings);
   for (const poolConfig of poolsWithKickSettings) {
@@ -122,7 +132,14 @@ export async function processKickCycle({
         pool,
         poolConfig,
         signer,
-        config,
+        config: {
+          dryRun: config.dryRun,
+          delayBetweenActions: config.delayBetweenActions,
+          coinGeckoApiKey: config.coinGeckoApiKey,
+          ethRpcUrl: config.ethRpcUrl,
+          tokenAddresses: config.tokenAddresses,
+          subgraph,
+        },
         chainId,
       });
       await delay(config.delayBetweenActions);
@@ -166,7 +183,12 @@ export async function runTakeLoopIteration(
   }
 }
 
-async function collectBondLoop({ poolMap, config, signer }: KeepPoolParams) {
+async function collectBondLoop({
+  poolMap,
+  config,
+  signer,
+  subgraph,
+}: KeepPoolParams & { subgraph: SubgraphReader }) {
   const poolsWithCollectBondSettings = config.pools.filter(
     ({ collectBond }) => !!collectBond
   );
@@ -180,9 +202,8 @@ async function collectBondLoop({ poolMap, config, signer }: KeepPoolParams) {
           poolConfig,
           config: {
             dryRun: config.dryRun,
-            subgraphUrl: config.subgraphUrl,
-            subgraphFallbackUrls: config.subgraphFallbackUrls,
             delayBetweenActions: config.delayBetweenActions,
+            subgraph,
           },
         });
         await delay(config.delayBetweenActions);
@@ -235,7 +256,8 @@ async function collectLpRewardsLoop({
   poolMap,
   config,
   signer,
-}: KeepPoolParams) {
+  subgraph,
+}: KeepPoolParams & { subgraph: SubgraphReader }) {
   const poolsWithCollectLpSettings = config.pools.filter(hasCollectLpSettings);
   const lpCollectors: Map<string, LpCollector> = new Map();
   const dexRouter = new DexRouter(signer, {
@@ -282,9 +304,8 @@ async function collectLpRewardsLoop({
               signer,
               config: {
                 dryRun: config.dryRun,
-                subgraphUrl: config.subgraphUrl,
-                subgraphFallbackUrls: config.subgraphFallbackUrls,
                 delayBetweenActions: config.delayBetweenActions,
+                subgraph,
               },
             });
 

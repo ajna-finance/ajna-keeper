@@ -12,6 +12,7 @@ import * as kickModule from '../kick';
 import * as discoveryHandlers from '../discovery-handlers';
 import subgraph from '../subgraph';
 import { logger } from '../logging';
+import { createSubgraphReader } from '../read-transports';
 
 const BASE_CONFIG: KeeperConfig = {
   ethRpcUrl: 'http://localhost:8545',
@@ -150,6 +151,7 @@ describe('Run Loop Discovery Integration', () => {
       config,
       signer: {} as any,
       chainId: 1,
+      subgraph: createSubgraphReader(config),
     });
 
     expect(handleKicksStub.calledOnce).to.be.true;

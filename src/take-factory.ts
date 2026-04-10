@@ -15,9 +15,10 @@ import {
   logSkippedTakeCandidate,
   processTakeCandidates,
 } from './take-engine';
-import { createSubgraphReader } from './read-transports';
+import { resolveSubgraphConfig } from './read-transports';
 import {
   FactoryExecutionConfig,
+  FactoryTakeConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
   FactoryTakeParams,
@@ -59,21 +60,21 @@ export async function handleFactoryTakes({
   poolConfig,
   config,
 }: FactoryTakeParams) {
+  const resolvedConfig: FactoryTakeConfig = resolveSubgraphConfig(config);
   logger.debug(`Factory take handler starting for pool: ${pool.name}`);
   const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
-  const subgraphReader = createSubgraphReader(config);
   const candidates = await getTakeBorrowerCandidates({
-    subgraph: subgraphReader,
+    subgraph: resolvedConfig.subgraph,
     poolAddress: pool.poolAddress,
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
 
   const externalTakeAdapter: ExternalTakeAdapter<any, any> = createFactoryTakeAdapter({
     quoteConfig: {
-      universalRouterOverrides: config.universalRouterOverrides,
-      sushiswapRouterOverrides: config.sushiswapRouterOverrides,
-      curveRouterOverrides: config.curveRouterOverrides,
-      tokenAddresses: config.tokenAddresses,
+      universalRouterOverrides: resolvedConfig.universalRouterOverrides,
+      sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
+      curveRouterOverrides: resolvedConfig.curveRouterOverrides,
+      tokenAddresses: resolvedConfig.tokenAddresses,
     },
     runtimeCache: quoteProviderCache,
   });
@@ -83,18 +84,18 @@ export async function handleFactoryTakes({
     signer,
     poolConfig,
     candidates,
-    subgraph: subgraphReader,
+    subgraph: resolvedConfig.subgraph,
     externalTakeAdapter,
     externalExecutionConfig: {
-      dryRun: config.dryRun,
-      keeperTakerFactory: config.keeperTakerFactory,
-      universalRouterOverrides: config.universalRouterOverrides,
-      sushiswapRouterOverrides: config.sushiswapRouterOverrides,
-      curveRouterOverrides: config.curveRouterOverrides,
-      tokenAddresses: config.tokenAddresses,
+      dryRun: resolvedConfig.dryRun,
+      keeperTakerFactory: resolvedConfig.keeperTakerFactory,
+      universalRouterOverrides: resolvedConfig.universalRouterOverrides,
+      sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
+      curveRouterOverrides: resolvedConfig.curveRouterOverrides,
+      tokenAddresses: resolvedConfig.tokenAddresses,
     },
-    dryRun: config.dryRun ?? false,
-    delayBetweenActions: config.delayBetweenActions ?? 0,
+    dryRun: resolvedConfig.dryRun ?? false,
+    delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
     arbTakeActionLabel: 'Factory ArbTake',
     arbTakeLogPrefix: 'Factory: ',
     onFound: (decision) => {

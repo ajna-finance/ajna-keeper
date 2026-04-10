@@ -4,7 +4,11 @@ import { KeeperConfig, PoolConfig, SettlementConfig } from './config-types';
 import { logger } from './logging';
 import { poolSettle } from './transactions';
 import { weiToDecimaled, delay, RequireFields } from './utils';
-import { createSubgraphReader, SubgraphReader } from './read-transports';
+import {
+  resolveSubgraphConfig,
+  SubgraphConfigInput,
+  WithSubgraph,
+} from './read-transports';
 import { SettlementActionConfig } from './settlement-types';
 
 interface SettlementStatus {
@@ -29,31 +33,18 @@ export interface AuctionToSettle {
   collateralRemaining: BigNumber;
 }
 
-export type SettlementReadConfig = Pick<
-  KeeperConfig,
-  'dryRun' | 'delayBetweenActions'
-> & {
-  subgraph: SubgraphReader;
-};
+export type SettlementReadConfig = WithSubgraph<
+  Pick<KeeperConfig, 'dryRun' | 'delayBetweenActions'>
+>;
 
-type SettlementConfigInput =
-  | SettlementReadConfig
-  | Pick<
-      KeeperConfig,
-      'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
-    >;
+export type SettlementConfigInput = SubgraphConfigInput<
+  Pick<KeeperConfig, 'dryRun' | 'delayBetweenActions'>
+>;
 
 function resolveSettlementReadConfig(
   config: SettlementConfigInput
 ): SettlementReadConfig {
-  if ('subgraph' in config) {
-    return config;
-  }
-  return {
-    dryRun: config.dryRun,
-    delayBetweenActions: config.delayBetweenActions,
-    subgraph: createSubgraphReader(config),
-  };
+  return resolveSubgraphConfig(config);
 }
 
 export class SettlementHandler {

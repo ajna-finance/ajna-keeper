@@ -14,7 +14,11 @@ import { AjnaKeeperTaker__factory } from '../typechain-types';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from './erc20';
 import { NonceTracker } from './nonce';
 import { SmartDexManager } from './smart-dex-manager';
-import { createSubgraphReader } from './read-transports';
+import {
+  resolveSubgraphConfig,
+  SubgraphConfigInput,
+  WithSubgraph,
+} from './read-transports';
 import { handleFactoryTakes } from './take-factory';
 import {
   arbTakeLiquidation,
@@ -33,26 +37,29 @@ import {
   processTakeCandidates,
 } from './take-engine';
 
+type HandleTakeConfigBase = Pick<
+  KeeperConfig,
+  | 'dryRun'
+  | 'delayBetweenActions'
+  | 'connectorTokens'
+  | 'oneInchRouters'
+  | 'keeperTaker'
+  | 'keeperTakerFactory'
+  | 'takerContracts'
+  | 'universalRouterOverrides'
+  | 'sushiswapRouterOverrides'
+  | 'curveRouterOverrides'
+  | 'tokenAddresses'
+>;
+
+type HandleTakeConfig = WithSubgraph<HandleTakeConfigBase>;
+type HandleTakeConfigInput = SubgraphConfigInput<HandleTakeConfigBase>;
+
 interface HandleTakeParams {
   signer: Signer;
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'take'>;
-  config: Pick<
-    KeeperConfig,
-    | 'dryRun'
-    | 'subgraphUrl'
-    | 'subgraphFallbackUrls'
-    | 'delayBetweenActions'
-    | 'connectorTokens'
-    | 'oneInchRouters'
-    | 'keeperTaker'
-    | 'keeperTakerFactory'   
-    | 'takerContracts'
-    | 'universalRouterOverrides'
-    | 'sushiswapRouterOverrides'     
-    | 'curveRouterOverrides'    
-    | 'tokenAddresses'
-  >;
+  config: HandleTakeConfigInput;
 }
 
 type OneInchExecutionConfig = Pick<
@@ -88,7 +95,8 @@ export async function handleTakes({
   poolConfig,
   config,
 }: HandleTakeParams) {
-  const dexManager = new SmartDexManager(signer, config);
+  const resolvedConfig: HandleTakeConfig = resolveSubgraphConfig(config);
+  const dexManager = new SmartDexManager(signer, resolvedConfig);
   const requestedLiquiditySource = poolConfig.take.liquiditySource;
   const deploymentType = await dexManager.detectDeploymentTypeForPool(poolConfig);
   const validation = await dexManager.validateDeploymentForPool(poolConfig);
@@ -107,7 +115,7 @@ export async function handleTakes({
         signer,
         pool,
         poolConfig,
-        config,
+        config: resolvedConfig,
       });
       break;
 
@@ -118,16 +126,15 @@ export async function handleTakes({
         pool,
         poolConfig,
         config: {
-          dryRun: config.dryRun,
-          subgraphUrl: config.subgraphUrl,
-          subgraphFallbackUrls: config.subgraphFallbackUrls,
-          delayBetweenActions: config.delayBetweenActions,
-          keeperTakerFactory: config.keeperTakerFactory,
-          takerContracts: config.takerContracts,
-          universalRouterOverrides: (config as any).universalRouterOverrides, // Type fix
-	  sushiswapRouterOverrides: (config as any).sushiswapRouterOverrides,
-	  curveRouterOverrides: (config as any).curveRouterOverrides,
-          tokenAddresses: config.tokenAddresses,
+          subgraph: resolvedConfig.subgraph,
+          dryRun: resolvedConfig.dryRun,
+          delayBetweenActions: resolvedConfig.delayBetweenActions,
+          keeperTakerFactory: resolvedConfig.keeperTakerFactory,
+          takerContracts: resolvedConfig.takerContracts,
+          universalRouterOverrides: resolvedConfig.universalRouterOverrides,
+          sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
+          curveRouterOverrides: resolvedConfig.curveRouterOverrides,
+          tokenAddresses: resolvedConfig.tokenAddresses,
         },
       });
       break;
@@ -140,7 +147,7 @@ export async function handleTakes({
         signer,
         pool,
         poolConfig: stripExternalTakeSettings(poolConfig),
-        config,
+        config: resolvedConfig,
       });
       break;
   }
@@ -159,9 +166,9 @@ export async function handleLegacyOrArbTakes({
   poolConfig,
   config,
 }: HandleTakeParams) {
-  const subgraphReader = createSubgraphReader(config);
+  const resolvedConfig: HandleTakeConfig = resolveSubgraphConfig(config);
   const candidates = await getTakeBorrowerCandidates({
-    subgraph: subgraphReader,
+    subgraph: resolvedConfig.subgraph,
     poolAddress: pool.poolAddress,
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
@@ -169,9 +176,9 @@ export async function handleLegacyOrArbTakes({
   const externalTakeAdapter: ExternalTakeAdapter<any, any> =
     poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
       ? createOneInchTakeAdapter({
-          delayBetweenActions: config.delayBetweenActions ?? 0,
-          oneInchRouters: config.oneInchRouters,
-          connectorTokens: config.connectorTokens,
+          delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
+          oneInchRouters: resolvedConfig.oneInchRouters,
+          connectorTokens: resolvedConfig.connectorTokens,
         })
       : createNoExternalTakeAdapter();
 
@@ -180,17 +187,17 @@ export async function handleLegacyOrArbTakes({
     signer,
     poolConfig,
     candidates,
-    subgraph: subgraphReader,
+    subgraph: resolvedConfig.subgraph,
     externalTakeAdapter,
     externalExecutionConfig: {
-      dryRun: config.dryRun,
-      delayBetweenActions: config.delayBetweenActions ?? 0,
-      connectorTokens: config.connectorTokens,
-      oneInchRouters: config.oneInchRouters,
-      keeperTaker: config.keeperTaker,
+      dryRun: resolvedConfig.dryRun,
+      delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
+      connectorTokens: resolvedConfig.connectorTokens,
+      oneInchRouters: resolvedConfig.oneInchRouters,
+      keeperTaker: resolvedConfig.keeperTaker,
     },
-    dryRun: config.dryRun ?? false,
-    delayBetweenActions: config.delayBetweenActions ?? 0,
+    dryRun: resolvedConfig.dryRun ?? false,
+    delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
     onFound: (decision) => {
       logger.info(
         `Found liquidation to ${formatTakeStrategyLog(
@@ -264,13 +271,8 @@ export function createOneInchTakeAdapter(
 
 interface GetLiquidationsToTakeParams
   extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
-  config: Pick<
-    KeeperConfig,
-    | 'subgraphUrl'
-    | 'subgraphFallbackUrls'
-    | 'delayBetweenActions'
-    | 'oneInchRouters'
-    | 'connectorTokens'
+  config: SubgraphConfigInput<
+    Pick<KeeperConfig, 'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'>
   >;
 }
 
@@ -424,11 +426,11 @@ export async function* getLiquidationsToTake({
   signer,
   config,
 }: GetLiquidationsToTakeParams): AsyncGenerator<LiquidationToTake> {
-  const { oneInchRouters, connectorTokens } = config;
-  const subgraphReader = createSubgraphReader(config);
+  const resolvedConfig = resolveSubgraphConfig(config);
+  const { oneInchRouters, connectorTokens } = resolvedConfig;
   const {
     pool: { hpb, hpbIndex, liquidationAuctions },
-  } = await subgraphReader.getLiquidations(
+  } = await resolvedConfig.subgraph.getLiquidations(
     pool.poolAddress,
     poolConfig.take.minCollateral ?? 0
   );
@@ -448,7 +450,7 @@ export async function* getLiquidationsToTake({
         price,
         collateral,
         poolConfig,
-        config,
+        resolvedConfig,
         signer,
         oneInchRouters,
         connectorTokens
@@ -462,7 +464,7 @@ export async function* getLiquidationsToTake({
         price,
         collateral,
         poolConfig,
-        subgraphReader,
+        resolvedConfig.subgraph,
         minDeposit.toString(),
         signer
       );

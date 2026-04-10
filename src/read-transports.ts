@@ -49,6 +49,14 @@ export interface DiscoveryReadTransports {
   readRpc: ReadRpc;
 }
 
+export type WithSubgraph<T extends object> = T & {
+  subgraph: SubgraphReader;
+};
+
+export type SubgraphConfigInput<T extends object> =
+  | WithSubgraph<T>
+  | (T & SubgraphTransportConfig);
+
 function getSubgraphCacheKey(config: SubgraphTransportConfig): string {
   return `${config.subgraphUrl}|${(config.subgraphFallbackUrls ?? []).join(',')}`;
 }
@@ -98,6 +106,19 @@ export function createSubgraphReader(
         }
       );
     },
+  };
+}
+
+export function resolveSubgraphConfig<T extends object>(
+  config: SubgraphConfigInput<T>
+): WithSubgraph<T> {
+  if ('subgraph' in config) {
+    return config;
+  }
+
+  return {
+    ...config,
+    subgraph: createSubgraphReader(config),
   };
 }
 
