@@ -15,6 +15,7 @@ import {
   logSkippedTakeCandidate,
   processTakeCandidates,
 } from './take-engine';
+import { createSubgraphReader } from './read-transports';
 import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
@@ -60,9 +61,9 @@ export async function handleFactoryTakes({
 }: FactoryTakeParams) {
   logger.debug(`Factory take handler starting for pool: ${pool.name}`);
   const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
+  const subgraphReader = createSubgraphReader(config);
   const candidates = await getTakeBorrowerCandidates({
-    subgraphUrl: config.subgraphUrl,
-    subgraphFallbackUrls: config.subgraphFallbackUrls,
+    subgraph: subgraphReader,
     poolAddress: pool.poolAddress,
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
@@ -82,8 +83,7 @@ export async function handleFactoryTakes({
     signer,
     poolConfig,
     candidates,
-    subgraphUrl: config.subgraphUrl,
-    subgraphFallbackUrls: config.subgraphFallbackUrls,
+    subgraph: subgraphReader,
     externalTakeAdapter,
     externalExecutionConfig: {
       dryRun: config.dryRun,

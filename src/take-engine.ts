@@ -1,7 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import subgraph from './subgraph';
 import { logger } from './logging';
+import { SubgraphReader } from './read-transports';
 import { delay, weiToDecimaled } from './utils';
 import { arbTakeLiquidation, checkIfArbTakeable } from './arb-take';
 import {
@@ -48,8 +48,7 @@ interface EvaluateTakeDecisionParams<
   signer: Signer;
   poolConfig: TPoolConfig;
   candidate: TakeBorrowerCandidate;
-  subgraphUrl: string;
-  subgraphFallbackUrls?: string[];
+  subgraph: SubgraphReader;
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, unknown>;
   approveExternalTake?: (params: {
     pool: FungiblePool;
@@ -126,18 +125,15 @@ interface ProcessTakeCandidatesParams<
 }
 
 export async function getTakeBorrowerCandidates(params: {
-  subgraphUrl: string;
-  subgraphFallbackUrls?: string[];
+  subgraph: SubgraphReader;
   poolAddress: string;
   minCollateral: number;
 }): Promise<TakeBorrowerCandidate[]> {
   const {
     pool: { liquidationAuctions },
-  } = await subgraph.getLiquidations(
-    params.subgraphUrl,
+  } = await params.subgraph.getLiquidations(
     params.poolAddress,
-    params.minCollateral,
-    { fallbackUrls: params.subgraphFallbackUrls }
+    params.minCollateral
   );
 
   return liquidationAuctions.map(({ borrower }) => ({ borrower }));
@@ -185,8 +181,7 @@ export async function evaluateTakeDecision<
   signer,
   poolConfig,
   candidate,
-  subgraphUrl,
-  subgraphFallbackUrls,
+  subgraph,
   externalTakeAdapter,
   approveExternalTake,
   approveArbTake,
@@ -270,8 +265,7 @@ export async function evaluateTakeDecision<
       price,
       collateral,
       poolConfig,
-      subgraphUrl,
-      subgraphFallbackUrls,
+      subgraph,
       minDeposit.toString(),
       signer
     );
@@ -422,8 +416,7 @@ export async function processTakeCandidates<
   signer,
   poolConfig,
   candidates,
-  subgraphUrl,
-  subgraphFallbackUrls,
+  subgraph,
   externalTakeAdapter,
   externalExecutionConfig,
   dryRun,
@@ -443,8 +436,7 @@ export async function processTakeCandidates<
       signer,
       poolConfig,
       candidate,
-      subgraphUrl,
-      subgraphFallbackUrls,
+      subgraph,
       externalTakeAdapter,
       approveExternalTake,
       approveArbTake,

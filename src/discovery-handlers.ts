@@ -13,7 +13,11 @@ import {
   ResolvedTakeTarget,
 } from './discovery-targets';
 import { logger } from './logging';
-import { getResilientReadGasPrice } from './read-rpc';
+import {
+  createDiscoveryReadTransports,
+  DiscoveryReadTransportConfig,
+  DiscoveryReadTransports,
+} from './read-transports';
 import * as takeModule from './take';
 import {
   createFactoryQuoteProviderRuntimeCache,
@@ -40,13 +44,9 @@ type DiscoveryExecutionConfig = Pick<
   | 'delayBetweenActions'
   | 'dryRun'
   | 'discoveredDefaults'
-  | 'ethRpcUrl'
   | 'keeperTaker'
   | 'keeperTakerFactory'
   | 'oneInchRouters'
-  | 'readRpcUrls'
-  | 'subgraphUrl'
-  | 'subgraphFallbackUrls'
   | 'sushiswapRouterOverrides'
   | 'takerContracts'
   | 'tokenAddresses'
@@ -275,6 +275,7 @@ async function quoteTokensByLiquiditySource(params: {
 async function evaluateGasPolicy(params: {
   signer: Signer;
   config: DiscoveryExecutionConfig;
+  transports: Pick<DiscoveryReadTransports, 'readRpc'>;
   policy?: Pick<
     AutoDiscoverActionPolicy,
     'maxGasCostNative' | 'maxGasCostQuote' | 'maxGasPriceGwei'
@@ -300,10 +301,7 @@ async function evaluateGasPolicy(params: {
 
   const gasPrice =
     params.gasPrice ??
-    (await getResilientReadGasPrice({
-      config: params.config,
-      primaryProvider: provider,
-    }));
+    (await params.transports.readRpc.getGasPrice());
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
   const maxGasPriceGwei = params.policy?.maxGasPriceGwei;
   if (maxGasPriceGwei !== undefined && gasPriceGwei > maxGasPriceGwei) {
@@ -447,8 +445,15 @@ export async function handleDiscoveredTakeTarget(params: {
   signer: Signer;
   target: ResolvedTakeTarget;
   config: DiscoveryExecutionConfig;
+  transports?: DiscoveryReadTransports;
   rpcCache?: DiscoveryRpcCache;
 }): Promise<void> {
+  const transports =
+    params.transports ??
+    createDiscoveryReadTransports(
+      params.config as unknown as DiscoveryReadTransportConfig,
+      params.signer.provider
+    );
   const stats: DiscoveredTakeTargetStats = {
     candidateCount: params.target.candidates.length,
     approvedTakeDecisions: 0,
@@ -465,10 +470,7 @@ export async function handleDiscoveredTakeTarget(params: {
     params.rpcCache ??
     (params.signer.provider
       ? {
-          gasPrice: await getResilientReadGasPrice({
-            config: params.config,
-            primaryProvider: params.signer.provider,
-          }),
+          gasPrice: await transports.readRpc.getGasPrice(),
           factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
         }
       : undefined);
@@ -574,8 +576,7 @@ export async function handleDiscoveredTakeTarget(params: {
       signer: params.signer,
       poolConfig: params.target,
       candidates: params.target.candidates.map(({ borrower }) => ({ borrower })),
-      subgraphUrl: params.config.subgraphUrl,
-      subgraphFallbackUrls: params.config.subgraphFallbackUrls,
+      subgraph: transports.subgraph,
       externalTakeAdapter,
       externalExecutionConfig: externalExecutionConfig as any,
       dryRun: params.target.dryRun,
@@ -604,6 +605,7 @@ export async function handleDiscoveredTakeTarget(params: {
         const gasPolicy = await evaluateGasPolicy({
           signer: params.signer,
           config: params.config,
+          transports,
           policy: takePolicy,
           gasLimit: EXTERNAL_TAKE_GAS_LIMIT,
           quoteTokenAddress: params.pool.quoteAddress,
@@ -651,6 +653,7 @@ export async function handleDiscoveredTakeTarget(params: {
         const gasPolicy = await evaluateGasPolicy({
           signer: params.signer,
           config: params.config,
+          transports,
           policy: takePolicy,
           gasLimit: ARB_TAKE_GAS_LIMIT,
           quoteTokenAddress: params.pool.quoteAddress,
@@ -727,8 +730,15 @@ export async function handleDiscoveredSettlementTarget(params: {
   signer: Signer;
   target: ResolvedSettlementTarget;
   config: DiscoveryExecutionConfig;
+  transports?: DiscoveryReadTransports;
   rpcCache?: DiscoveryRpcCache;
 }): Promise<void> {
+  const transports =
+    params.transports ??
+    createDiscoveryReadTransports(
+      params.config as unknown as DiscoveryReadTransportConfig,
+      params.signer.provider
+    );
   const stats: DiscoveredSettlementTargetStats = {
     candidateCount: params.target.candidates.length,
     needsSettlementSkips: 0,
@@ -743,19 +753,15 @@ export async function handleDiscoveredSettlementTarget(params: {
     { settlement: params.target.settlement },
     {
       dryRun: params.target.dryRun,
-      subgraphUrl: params.config.subgraphUrl,
-      subgraphFallbackUrls: params.config.subgraphFallbackUrls,
       delayBetweenActions: params.config.delayBetweenActions,
+      subgraph: transports.subgraph,
     }
   );
   const rpcCache =
     params.rpcCache ??
     (params.signer.provider
       ? {
-          gasPrice: await getResilientReadGasPrice({
-            config: params.config,
-            primaryProvider: params.signer.provider,
-          }),
+          gasPrice: await transports.readRpc.getGasPrice(),
         }
       : undefined);
 
@@ -790,6 +796,7 @@ export async function handleDiscoveredSettlementTarget(params: {
       const gasPolicy = await evaluateGasPolicy({
         signer: params.signer,
         config: params.config,
+        transports,
         policy: settlementPolicy,
         gasLimit: SETTLEMENT_GAS_LIMIT,
         quoteTokenAddress: params.pool.quoteAddress,

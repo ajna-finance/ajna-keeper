@@ -105,7 +105,8 @@ describe('Take Integration Tests', () => {
     expect((subgraph.getLiquidations as sinon.SinonStub).calledOnceWithExactly(
       'http://test-url',
       basePool.poolAddress,
-      0.1
+      0.1,
+      { fallbackUrls: undefined }
     )).to.be.true;
   });
 
@@ -127,7 +128,8 @@ describe('Take Integration Tests', () => {
     expect((subgraph.getLiquidations as sinon.SinonStub).calledOnceWithExactly(
       'http://test-url',
       basePool.poolAddress,
-      0.1
+      0.1,
+      { fallbackUrls: undefined }
     )).to.be.true;
   });
 
@@ -202,7 +204,8 @@ describe('Take Integration Tests', () => {
     expect((subgraph.getLiquidations as sinon.SinonStub).calledOnceWithExactly(
       'http://test-url',
       basePool.poolAddress,
-      0.1
+      0.1,
+      { fallbackUrls: undefined }
     )).to.be.true;
   });
 });

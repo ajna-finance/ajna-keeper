@@ -2,7 +2,7 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { getDecimalsErc20 } from './erc20';
 import { logger } from './logging';
-import subgraph from './subgraph';
+import { SubgraphReader } from './read-transports';
 import { ArbTakeEvaluation, TakeActionConfig } from './take-types';
 import { liquidationArbTake } from './transactions';
 import { decimaledToWei, weiToDecimaled } from './utils';
@@ -26,8 +26,7 @@ export async function checkIfArbTakeable(
   price: number,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
-  subgraphUrl: string,
-  subgraphFallbackUrls: string[] | undefined,
+  subgraph: SubgraphReader,
   minDeposit: string,
   signer: Signer
 ): Promise<ArbTakeEvaluation> {
@@ -59,10 +58,8 @@ export async function checkIfArbTakeable(
   }
 
   const { buckets } = await subgraph.getHighestMeaningfulBucket(
-    subgraphUrl,
     pool.poolAddress,
-    minDeposit,
-    { fallbackUrls: subgraphFallbackUrls }
+    minDeposit
   );
   if (buckets.length === 0) {
     logger.debug(

@@ -1,5 +1,4 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
-import subgraph from './subgraph';
 import {
   delay,
   estimateGasWithBuffer,
@@ -15,6 +14,7 @@ import { AjnaKeeperTaker__factory } from '../typechain-types';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from './erc20';
 import { NonceTracker } from './nonce';
 import { SmartDexManager } from './smart-dex-manager';
+import { createSubgraphReader } from './read-transports';
 import { handleFactoryTakes } from './take-factory';
 import {
   arbTakeLiquidation,
@@ -159,9 +159,9 @@ export async function handleLegacyOrArbTakes({
   poolConfig,
   config,
 }: HandleTakeParams) {
+  const subgraphReader = createSubgraphReader(config);
   const candidates = await getTakeBorrowerCandidates({
-    subgraphUrl: config.subgraphUrl,
-    subgraphFallbackUrls: config.subgraphFallbackUrls,
+    subgraph: subgraphReader,
     poolAddress: pool.poolAddress,
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
@@ -180,8 +180,7 @@ export async function handleLegacyOrArbTakes({
     signer,
     poolConfig,
     candidates,
-    subgraphUrl: config.subgraphUrl,
-    subgraphFallbackUrls: config.subgraphFallbackUrls,
+    subgraph: subgraphReader,
     externalTakeAdapter,
     externalExecutionConfig: {
       dryRun: config.dryRun,
@@ -425,14 +424,13 @@ export async function* getLiquidationsToTake({
   signer,
   config,
 }: GetLiquidationsToTakeParams): AsyncGenerator<LiquidationToTake> {
-  const { subgraphUrl, oneInchRouters, connectorTokens } = config;
+  const { oneInchRouters, connectorTokens } = config;
+  const subgraphReader = createSubgraphReader(config);
   const {
     pool: { hpb, hpbIndex, liquidationAuctions },
-  } = await subgraph.getLiquidations(
-    subgraphUrl,
+  } = await subgraphReader.getLiquidations(
     pool.poolAddress,
-    poolConfig.take.minCollateral ?? 0,
-    { fallbackUrls: config.subgraphFallbackUrls }
+    poolConfig.take.minCollateral ?? 0
   );
   for (const auction of liquidationAuctions) {
     const { borrower } = auction;
@@ -464,8 +462,7 @@ export async function* getLiquidationsToTake({
         price,
         collateral,
         poolConfig,
-        subgraphUrl,
-        config.subgraphFallbackUrls,
+        subgraphReader,
         minDeposit.toString(),
         signer
       );

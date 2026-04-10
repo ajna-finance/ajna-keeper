@@ -2,7 +2,6 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { ethers } from 'ethers';
 import * as erc20 from '../erc20';
-import subgraph from '../subgraph';
 import { LiquiditySource } from '../config-types';
 import { arbTakeLiquidation, checkIfArbTakeable } from '../arb-take';
 import * as transactions from '../transactions';
@@ -14,9 +13,6 @@ describe('shared arbTake helpers', () => {
 
   it('returns the expected arbTake evaluation', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    sinon.stub(subgraph, 'getHighestMeaningfulBucket').resolves({
-      buckets: [{ bucketIndex: 321 }],
-    } as any);
 
     const pool = {
       name: 'Test Pool',
@@ -41,8 +37,12 @@ describe('shared arbTake helpers', () => {
       8,
       ethers.utils.parseEther('2'),
       poolConfig as any,
-      'http://test-subgraph',
-      undefined,
+      {
+        cacheKey: 'test-subgraph',
+        getHighestMeaningfulBucket: async () => ({
+          buckets: [{ bucketIndex: 321 }],
+        }),
+      } as any,
       '0.1',
       {} as any,
     ] as const;

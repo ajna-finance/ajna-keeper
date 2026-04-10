@@ -4,7 +4,7 @@ import { KeeperConfig, PoolConfig, SettlementConfig } from './config-types';
 import { logger } from './logging';
 import { poolSettle } from './transactions';
 import { weiToDecimaled, delay, RequireFields } from './utils';
-import subgraph from './subgraph';
+import { createSubgraphReader, SubgraphReader } from './read-transports';
 import { SettlementActionConfig } from './settlement-types';
 
 interface SettlementStatus {
@@ -29,6 +29,33 @@ export interface AuctionToSettle {
   collateralRemaining: BigNumber;
 }
 
+export type SettlementReadConfig = Pick<
+  KeeperConfig,
+  'dryRun' | 'delayBetweenActions'
+> & {
+  subgraph: SubgraphReader;
+};
+
+type SettlementConfigInput =
+  | SettlementReadConfig
+  | Pick<
+      KeeperConfig,
+      'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
+    >;
+
+function resolveSettlementReadConfig(
+  config: SettlementConfigInput
+): SettlementReadConfig {
+  if ('subgraph' in config) {
+    return config;
+  }
+  return {
+    dryRun: config.dryRun,
+    delayBetweenActions: config.delayBetweenActions,
+    subgraph: createSubgraphReader(config),
+  };
+}
+
 export class SettlementHandler {
   // Add caching properties for optimization
   private lastSubgraphQuery: number = 0;
@@ -36,15 +63,15 @@ export class SettlementHandler {
   private readonly QUERY_CACHE_DURATION = 300000; // 5 minutes
   // ADD: Global lock to prevent duplicate processing
   private static activeSettlements: Set<string> = new Set();
+  private config: SettlementReadConfig;
   constructor(
     private pool: FungiblePool,
     private signer: Signer,
     private poolConfig: SettlementActionConfig,
-    private config: Pick<
-      KeeperConfig,
-      'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
-    >
-  ) {}
+    config: SettlementConfigInput
+  ) {
+    this.config = resolveSettlementReadConfig(config);
+  }
 
   /**
    * Main entry point - handle all settlements for this pool
@@ -106,10 +133,8 @@ export class SettlementHandler {
     logger.debug(`Querying subgraph for settlement data: ${this.pool.name} (cache age: ${Math.round(cacheAge / 1000)}s)`);
     
     try {
-      const result = await subgraph.getUnsettledAuctions(
-        this.config.subgraphUrl,
-        this.pool.poolAddress,
-        { fallbackUrls: this.config.subgraphFallbackUrls }
+      const result = await this.config.subgraph.getUnsettledAuctions(
+        this.pool.poolAddress
       );
       
       this.lastSubgraphQuery = now;
@@ -444,12 +469,14 @@ export async function handleSettlements({
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'settlement'>;
   signer: Signer;
-  config: Pick<
-    KeeperConfig,
-    'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
-  >;
+  config: SettlementConfigInput;
 }): Promise<void> {
-  const handler = new SettlementHandler(pool, signer, poolConfig, config);
+  const handler = new SettlementHandler(
+    pool,
+    signer,
+    poolConfig,
+    resolveSettlementReadConfig(config)
+  );
   await handler.handleSettlements();
 }
 
@@ -465,10 +492,7 @@ export async function tryReactiveSettlement({
   pool: FungiblePool;
   poolConfig: PoolConfig;
   signer: Signer;
-  config: Pick<
-    KeeperConfig,
-    'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
-  >;
+  config: SettlementConfigInput;
 }): Promise<boolean> {
   if (!poolConfig.settlement?.enabled) {
     return false;
@@ -479,7 +503,7 @@ export async function tryReactiveSettlement({
     pool,
     signer,
     poolConfig as RequireFields<PoolConfig, 'settlement'>,
-    config
+    resolveSettlementReadConfig(config)
   );
 
   const auctions = await handler.findSettleableAuctions();

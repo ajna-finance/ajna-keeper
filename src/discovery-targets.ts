@@ -12,7 +12,12 @@ import {
   validateTakeSettings,
 } from './config-types';
 import { logger } from './logging';
-import subgraph, { ChainwideLiquidationAuction } from './subgraph';
+import {
+  createSubgraphReader,
+  SubgraphReader,
+  SubgraphTransportConfig,
+} from './read-transports';
+import { ChainwideLiquidationAuction } from './subgraph';
 import { overrideMulticall, RequireFields } from './utils';
 
 const DISCOVERY_PAGE_SIZE = 100;
@@ -389,8 +394,8 @@ function compareCandidateGroups(
   return compareCandidates(leftCandidates[0], rightCandidates[0]);
 }
 
-function discoveryCacheKey(config: KeeperConfig): string {
-  return `${config.subgraphUrl}|${(config.subgraphFallbackUrls ?? []).join(',')}|${DISCOVERY_PAGE_SIZE}|${DISCOVERY_MAX_PAGES}`;
+function discoveryCacheKey(subgraph: SubgraphReader): string {
+  return `${subgraph.cacheKey}|${DISCOVERY_PAGE_SIZE}|${DISCOVERY_MAX_PAGES}`;
 }
 
 export function clearSharedDiscoveryScans(): void {
@@ -398,9 +403,10 @@ export function clearSharedDiscoveryScans(): void {
 }
 
 export async function getChainwideLiquidationAuctionsShared(
-  config: KeeperConfig
+  config: SubgraphTransportConfig,
+  subgraphReader: SubgraphReader = createSubgraphReader(config)
 ): Promise<ChainwideLiquidationAuction[]> {
-  const cacheKey = discoveryCacheKey(config);
+  const cacheKey = discoveryCacheKey(subgraphReader);
   const now = Date.now();
   const existing = sharedDiscoveryScans.get(cacheKey);
 
@@ -416,12 +422,10 @@ export async function getChainwideLiquidationAuctionsShared(
     return existing.promise;
   }
 
-  const promise = subgraph
+  const promise = subgraphReader
     .getChainwideLiquidationAuctions(
-      config.subgraphUrl,
       DISCOVERY_PAGE_SIZE,
-      DISCOVERY_MAX_PAGES,
-      { fallbackUrls: config.subgraphFallbackUrls }
+      DISCOVERY_MAX_PAGES
     )
     .then(({ liquidationAuctions }) => {
       sharedDiscoveryScans.set(cacheKey, {
@@ -487,7 +491,8 @@ export function getManualSettlementTargets(
 
 export async function buildDiscoveredTakeTargets(
   config: KeeperConfig,
-  liquidationAuctionsInput?: ChainwideLiquidationAuction[]
+  liquidationAuctionsInput?: ChainwideLiquidationAuction[],
+  subgraphReader: SubgraphReader = createSubgraphReader(config)
 ): Promise<ResolvedTakeTarget[]> {
   const autoDiscover = config.autoDiscover;
   const takePolicy = getAutoDiscoverTakePolicy(autoDiscover);
@@ -503,7 +508,8 @@ export async function buildDiscoveredTakeTargets(
   );
 
   const liquidationAuctions =
-    liquidationAuctionsInput ?? (await getChainwideLiquidationAuctionsShared(config));
+    liquidationAuctionsInput ??
+    (await getChainwideLiquidationAuctionsShared(config, subgraphReader));
 
   const takeCandidates = dedupeCandidates(
     liquidationAuctions
@@ -577,7 +583,8 @@ export async function buildDiscoveredTakeTargets(
 
 export async function buildDiscoveredSettlementTargets(
   config: KeeperConfig,
-  liquidationAuctionsInput?: ChainwideLiquidationAuction[]
+  liquidationAuctionsInput?: ChainwideLiquidationAuction[],
+  subgraphReader: SubgraphReader = createSubgraphReader(config)
 ): Promise<ResolvedSettlementTarget[]> {
   const autoDiscover = config.autoDiscover;
   const settlementPolicy = getAutoDiscoverSettlementPolicy(autoDiscover);
@@ -593,7 +600,8 @@ export async function buildDiscoveredSettlementTargets(
   );
 
   const liquidationAuctions =
-    liquidationAuctionsInput ?? (await getChainwideLiquidationAuctionsShared(config));
+    liquidationAuctionsInput ??
+    (await getChainwideLiquidationAuctionsShared(config, subgraphReader));
 
   const settlementCandidates = dedupeCandidates(
     liquidationAuctions

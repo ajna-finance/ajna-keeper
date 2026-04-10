@@ -23,7 +23,10 @@ import {
   handleDiscoveredTakeTarget,
 } from './discovery-handlers';
 import { logger } from './logging';
-import { getResilientReadGasPrice } from './read-rpc';
+import {
+  createDiscoveryReadTransports,
+  DiscoveryReadTransports,
+} from './read-transports';
 import { handleSettlements } from './settlement';
 import { ChainwideLiquidationAuction } from './subgraph';
 import { createFactoryQuoteProviderRuntimeCache } from './take-factory';
@@ -51,6 +54,9 @@ export interface DiscoveryRuntime {
 }
 
 type DiscoveryRuntimeState = CreateDiscoveryRuntimeParams;
+type BoundDiscoveryRuntimeState = DiscoveryRuntimeState & {
+  readTransports: DiscoveryReadTransports;
+};
 type EffectiveTargetIdentity =
   | Pick<EffectiveTakeTarget, 'source' | 'poolAddress' | 'name'>
   | Pick<EffectiveSettlementTarget, 'source' | 'poolAddress' | 'name'>;
@@ -89,9 +95,12 @@ function shouldRefreshDiscoverySnapshotOnSettlementCycle(
 }
 
 async function refreshDiscoverySnapshot(
-  state: DiscoveryRuntimeState
+  state: BoundDiscoveryRuntimeState
 ): Promise<ChainwideLiquidationAuction[]> {
-  const liquidationAuctions = await getChainwideLiquidationAuctionsShared(state.config);
+  const liquidationAuctions = await getChainwideLiquidationAuctionsShared(
+    state.config,
+    state.readTransports.subgraph
+  );
   if (state.discoverySnapshotState) {
     state.discoverySnapshotState.latestLiquidationAuctions = liquidationAuctions;
     state.discoverySnapshotState.fetchedAt = Date.now();
@@ -100,7 +109,7 @@ async function refreshDiscoverySnapshot(
 }
 
 async function getTakeCycleLiquidationAuctions(
-  state: DiscoveryRuntimeState
+  state: BoundDiscoveryRuntimeState
 ): Promise<DiscoveryCycleSnapshotInfo> {
   const liquidationAuctions = shouldRefreshDiscoverySnapshotOnTakeCycle(state.config)
     ? await refreshDiscoverySnapshot(state)
@@ -117,7 +126,7 @@ async function getTakeCycleLiquidationAuctions(
 }
 
 async function getSettlementCycleLiquidationAuctions(
-  state: DiscoveryRuntimeState
+  state: BoundDiscoveryRuntimeState
 ): Promise<DiscoveryCycleSnapshotInfo> {
   const refreshedLiquidationAuctions =
     shouldRefreshDiscoverySnapshotOnSettlementCycle(state.config)
@@ -140,58 +149,60 @@ async function getSettlementCycleLiquidationAuctions(
 }
 
 async function resolveTakeCycleTargets(
-  state: DiscoveryRuntimeState,
+  state: BoundDiscoveryRuntimeState,
   liquidationAuctions?: ChainwideLiquidationAuction[]
 ): Promise<EffectiveTakeTarget[]> {
   return [
     ...getManualTakeTargets(state.config),
-    ...(await buildDiscoveredTakeTargets(state.config, liquidationAuctions)),
+    ...(await buildDiscoveredTakeTargets(
+      state.config,
+      liquidationAuctions,
+      state.readTransports.subgraph
+    )),
   ];
 }
 
 async function resolveSettlementCycleTargets(
-  state: DiscoveryRuntimeState,
+  state: BoundDiscoveryRuntimeState,
   liquidationAuctions?: ChainwideLiquidationAuction[]
 ): Promise<EffectiveSettlementTarget[]> {
   return [
     ...getManualSettlementTargets(state.config),
-    ...(await buildDiscoveredSettlementTargets(state.config, liquidationAuctions)),
+    ...(await buildDiscoveredSettlementTargets(
+      state.config,
+      liquidationAuctions,
+      state.readTransports.subgraph
+    )),
   ];
 }
 
 async function createTakeCycleRpcCache(
-  state: DiscoveryRuntimeState,
+  state: BoundDiscoveryRuntimeState,
   targets: EffectiveTakeTarget[]
 ): Promise<DiscoveryRpcCache | undefined> {
   return targets.some((target) => target.source === 'discovered') &&
     state.signer.provider
     ? {
-        gasPrice: await getResilientReadGasPrice({
-          config: state.config,
-          primaryProvider: state.signer.provider,
-        }),
+        gasPrice: await state.readTransports.readRpc.getGasPrice(),
         factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
       }
     : undefined;
 }
 
 async function createSettlementCycleRpcCache(
-  state: DiscoveryRuntimeState,
+  state: BoundDiscoveryRuntimeState,
   targets: EffectiveSettlementTarget[]
 ): Promise<DiscoveryRpcCache | undefined> {
   return targets.some((target) => target.source === 'discovered') &&
     state.signer.provider
     ? {
-        gasPrice: await getResilientReadGasPrice({
-          config: state.config,
-          primaryProvider: state.signer.provider,
-        }),
+        gasPrice: await state.readTransports.readRpc.getGasPrice(),
       }
     : undefined;
 }
 
 async function resolveEffectiveTargetPool(
-  state: DiscoveryRuntimeState,
+  state: BoundDiscoveryRuntimeState,
   target: EffectiveTargetIdentity
 ): Promise<FungiblePool | undefined> {
   const pool =
@@ -214,7 +225,7 @@ async function resolveEffectiveTargetPool(
 }
 
 async function executeEffectiveTakeTarget(params: {
-  state: DiscoveryRuntimeState;
+  state: BoundDiscoveryRuntimeState;
   pool: FungiblePool;
   target: EffectiveTakeTarget;
   rpcCache?: DiscoveryRpcCache;
@@ -236,12 +247,13 @@ async function executeEffectiveTakeTarget(params: {
     signer: state.signer,
     target,
     config: state.config,
+    transports: state.readTransports,
     rpcCache,
   });
 }
 
 async function executeEffectiveSettlementTarget(params: {
-  state: DiscoveryRuntimeState;
+  state: BoundDiscoveryRuntimeState;
   pool: FungiblePool;
   target: EffectiveSettlementTarget;
   rpcCache?: DiscoveryRpcCache;
@@ -252,12 +264,11 @@ async function executeEffectiveSettlementTarget(params: {
       pool,
       poolConfig: target.poolConfig,
       signer: state.signer,
-        config: {
-          dryRun: state.config.dryRun,
-          subgraphUrl: state.config.subgraphUrl,
-          subgraphFallbackUrls: state.config.subgraphFallbackUrls,
-          delayBetweenActions: state.config.delayBetweenActions,
-        },
+      config: {
+        dryRun: state.config.dryRun,
+        delayBetweenActions: state.config.delayBetweenActions,
+        subgraph: state.readTransports.subgraph,
+      },
     });
     return;
   }
@@ -267,6 +278,7 @@ async function executeEffectiveSettlementTarget(params: {
     signer: state.signer,
     target,
     config: state.config,
+    transports: state.readTransports,
     rpcCache,
   });
 }
@@ -312,7 +324,7 @@ function logDiscoveryCycleFailure(params: {
   );
 }
 
-async function runTakeDiscoveryCycle(state: DiscoveryRuntimeState): Promise<void> {
+async function runTakeDiscoveryCycle(state: BoundDiscoveryRuntimeState): Promise<void> {
   const startedAt = Date.now();
   let phase = 'snapshot';
   let snapshotInfo: DiscoveryCycleSnapshotInfo = {
@@ -381,7 +393,7 @@ async function runTakeDiscoveryCycle(state: DiscoveryRuntimeState): Promise<void
 }
 
 async function runSettlementDiscoveryCycle(
-  state: DiscoveryRuntimeState
+  state: BoundDiscoveryRuntimeState
 ): Promise<void> {
   const startedAt = Date.now();
   let phase = 'snapshot';
@@ -459,7 +471,13 @@ function computeSettlementCheckIntervalSeconds(config: KeeperConfig): number {
 export function createDiscoveryRuntime(
   params: CreateDiscoveryRuntimeParams
 ): DiscoveryRuntime {
-  const state: DiscoveryRuntimeState = params;
+  const state: BoundDiscoveryRuntimeState = {
+    ...params,
+    readTransports: createDiscoveryReadTransports(
+      params.config,
+      params.signer.provider
+    ),
+  };
 
   return {
     async runTakeCycle() {
