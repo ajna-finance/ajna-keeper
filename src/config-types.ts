@@ -343,9 +343,41 @@ export interface CurveRouterOverrides {
   wethAddress?: string; 
 }
 
+export enum TakeWriteTransportMode {
+  PUBLIC_RPC = 'public_rpc',
+  PRIVATE_RPC = 'private_rpc',
+  RELAY = 'relay',
+}
+
+export interface TakeWriteRelayConfig {
+  /** Relay endpoint that accepts privately submitted take transactions. */
+  url: string;
+  /** Optional JSON-RPC method or provider-specific submission method. */
+  sendMethod?: string;
+  /** Optional static headers for relay submission. */
+  headers?: Record<string, string>;
+  /** When using private relay JSON-RPC, stop honoring the submission after this many blocks. */
+  maxBlockNumberOffset?: number;
+  /** Optional receipt wait timeout after relay acceptance. */
+  receiptTimeoutMs?: number;
+}
+
+export interface TakeWriteConfig {
+  /** Transport mode used only for take transaction submission. */
+  mode: TakeWriteTransportMode;
+  /** RPC URL used when mode is private_rpc. */
+  rpcUrl?: string;
+  /** Relay-specific options reserved for future relay mode support. */
+  relay?: TakeWriteRelayConfig;
+}
+
 export interface KeeperConfig {
   /** The url of RPC endpoint. Should include API key. example: https://avax-mainnet.g.alchemy.com/v2/asf... */
   ethRpcUrl: string;
+  /** Optional write RPC used only for take transaction submission. Useful for private RPC / relay-backed endpoints. */
+  takeWriteRpcUrl?: string;
+  /** Optional explicit take write transport. When unset, takeWriteRpcUrl remains supported as a shorthand for private_rpc. */
+  takeWrite?: TakeWriteConfig;
   /** Optional read-only RPC endpoints used for resilient read failover. Defaults to ethRpcUrl when unset. */
   readRpcUrls?: string[];
   /** The log level of the keeper. */
@@ -722,6 +754,55 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
       );
     }
     validateSettlementSettings(discoveredSettlement);
+  }
+}
+
+export function validateTakeWriteConfig(config: KeeperConfig): void {
+  if (config.takeWrite && config.takeWriteRpcUrl) {
+    throw new Error(
+      'KeeperConfig: configure only one of takeWrite or takeWriteRpcUrl'
+    );
+  }
+
+  if (!config.takeWrite) {
+    return;
+  }
+
+  switch (config.takeWrite.mode) {
+    case TakeWriteTransportMode.PUBLIC_RPC:
+      return;
+
+    case TakeWriteTransportMode.PRIVATE_RPC:
+      if (!config.takeWrite.rpcUrl) {
+        throw new Error(
+          'KeeperConfig.takeWrite: rpcUrl required when mode is private_rpc'
+        );
+      }
+      return;
+
+    case TakeWriteTransportMode.RELAY:
+      if (!config.takeWrite.relay?.url) {
+        throw new Error(
+          'KeeperConfig.takeWrite: relay.url required when mode is relay'
+        );
+      }
+      if (
+        config.takeWrite.relay.maxBlockNumberOffset !== undefined &&
+        config.takeWrite.relay.maxBlockNumberOffset <= 0
+      ) {
+        throw new Error(
+          'KeeperConfig.takeWrite: relay.maxBlockNumberOffset must be greater than 0 when provided'
+        );
+      }
+      if (
+        config.takeWrite.relay.receiptTimeoutMs !== undefined &&
+        config.takeWrite.relay.receiptTimeoutMs <= 0
+      ) {
+        throw new Error(
+          'KeeperConfig.takeWrite: relay.receiptTimeoutMs must be greater than 0 when provided'
+        );
+      }
+      return;
   }
 }
 

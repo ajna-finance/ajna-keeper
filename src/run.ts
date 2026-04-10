@@ -4,6 +4,7 @@ import {
   KeeperConfig,
   PoolConfig,
   validateAutoDiscoverConfig,
+  validateTakeWriteConfig,
   validateTakeSettingsForChain,
 } from './config-types';
 import {
@@ -26,6 +27,7 @@ import {
 } from './discovery-targets';
 import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery-runtime';
 import { createSubgraphReader, SubgraphReader } from './read-transports';
+import { createTakeWriteTransport } from './take-write-transport';
 
 interface KeepPoolParams {
   poolMap: PoolMap;
@@ -59,6 +61,7 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
 
   configureAjna(config.ajna);
   validateAutoDiscoverConfig(config);
+  validateTakeWriteConfig(config);
   validateTakeSettingsForChain(config, chainId);
 
   const ajna = new AjnaSDK(provider);
@@ -67,11 +70,17 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   const hydrationCooldowns: PoolHydrationCooldowns = new Map();
   const discoverySnapshotState = {};
   const subgraph = createSubgraphReader(config);
+  const takeWriteTransport = await createTakeWriteTransport({
+    signer,
+    config,
+    expectedChainId: chainId,
+  });
   const discoveryRuntime = createDiscoveryRuntime({
     ajna,
     poolMap,
     config,
     signer,
+    takeWriteTransport,
     hydrationCooldowns,
     discoverySnapshotState,
   });

@@ -19,6 +19,10 @@ import {
   getQuoteAmountDueRaw,
   getSwapDeadline,
 } from './shared';
+import {
+  resolveTakeWriteTransport,
+  submitTakeTransaction,
+} from '../take-write-transport';
 
 export async function evaluateSushiSwapFactoryQuote({
   pool,
@@ -181,11 +185,15 @@ export async function executeSushiSwapFactoryTake({
   signer: Signer;
   liquidation: TakeLiquidationPlan;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  config: Pick<FactoryExecutionConfig, 'keeperTakerFactory' | 'sushiswapRouterOverrides'>;
+  config: Pick<
+    FactoryExecutionConfig,
+    'keeperTakerFactory' | 'sushiswapRouterOverrides' | 'takeWriteTransport'
+  >;
 }): Promise<void> {
+  const takeWriteTransport = resolveTakeWriteTransport(signer, config);
   const factory = AjnaKeeperTakerFactory__factory.connect(
     config.keeperTakerFactory!,
-    signer
+    takeWriteTransport.signer
   );
 
   if (!config.sushiswapRouterOverrides) {
@@ -201,7 +209,7 @@ export async function executeSushiSwapFactoryTake({
     config,
     marketPriceFactor: poolConfig.take.marketPriceFactor!,
   });
-  const deadline = await getSwapDeadline(signer);
+  const deadline = await getSwapDeadline(takeWriteTransport.signer);
 
   logger.debug(
     `Factory: Using WAD amounts for SushiSwap pool ${pool.name}:\n` +
@@ -228,7 +236,7 @@ export async function executeSushiSwapFactoryTake({
       `Factory: Sending SushiSwap Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
     );
 
-    await NonceTracker.queueTransaction(signer, async (nonce: number) => {
+    await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {
       const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
       const txArgs = [
         pool.poolAddress,
@@ -244,11 +252,11 @@ export async function executeSushiSwapFactoryTake({
         fallbackGasLimit,
         `Factory Sushi take ${pool.name}/${liquidation.borrower}`
       );
-      const tx = await factory.takeWithAtomicSwap(...txArgs, {
+      const txRequest = await factory.populateTransaction.takeWithAtomicSwap(...txArgs, {
         gasLimit,
         nonce: nonce.toString(),
       });
-      return await tx.wait();
+      return await submitTakeTransaction(takeWriteTransport, txRequest);
     });
 
     logger.info(

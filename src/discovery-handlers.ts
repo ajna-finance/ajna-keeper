@@ -31,6 +31,7 @@ import { SushiSwapQuoteProvider } from './dex-providers/sushiswap-quote-provider
 import { getDecimalsErc20 } from './erc20';
 import { AuctionToSettle, SettlementHandler } from './settlement';
 import * as takeFactoryModule from './take-factory';
+import { TakeWriteTransport } from './take-write-transport';
 
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
@@ -443,6 +444,7 @@ function logDiscoveredSettlementTargetSummary(params: {
 export async function handleDiscoveredTakeTarget(params: {
   pool: FungiblePool;
   signer: Signer;
+  takeWriteTransport?: TakeWriteTransport;
   target: ResolvedTakeTarget;
   config: DiscoveryExecutionConfig;
   transports?: DiscoveryReadTransports;
@@ -560,6 +562,7 @@ export async function handleDiscoveredTakeTarget(params: {
           connectorTokens: params.config.connectorTokens,
           oneInchRouters: params.config.oneInchRouters,
           keeperTaker: params.config.keeperTaker,
+          takeWriteTransport: params.takeWriteTransport,
         }
       : {
           dryRun: params.target.dryRun,
@@ -568,6 +571,7 @@ export async function handleDiscoveredTakeTarget(params: {
           sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
           curveRouterOverrides: params.config.curveRouterOverrides,
           tokenAddresses: params.config.tokenAddresses,
+          takeWriteTransport: params.takeWriteTransport,
         };
 
   try {

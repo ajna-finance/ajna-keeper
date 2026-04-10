@@ -13,6 +13,22 @@ const config: KeeperConfig = {
   logLevel: 'info',
 
   ethRpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+  // Optional: route take tx submission through a dedicated private/write RPC.
+  // Kick, settlement, LP, and bond flows continue using ethRpcUrl until write transport
+  // hardening is expanded beyond take.
+  // takeWrite: {
+  //   mode: 'private_rpc',
+  //   rpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
+  // },
+  // Or route take submission through a JSON-RPC private relay.
+  // takeWrite: {
+  //   mode: 'relay',
+  //   relay: {
+  //     url: process.env.BASE_PRIVATE_RELAY_URL!,
+  //     sendMethod: 'eth_sendPrivateTransaction',
+  //     maxBlockNumberOffset: 25,
+  //   },
+  // },
   subgraphUrl: `https://gateway.thegraph.com/api/${process.env.GRAPH_API_KEY}/subgraphs/id/9npza28cZyi8R94SJjm9Y3fuWeBZZK4CHr2r8NCvsr98`,
   keeperKeystore: '/path/to/your/keystore.json',
 

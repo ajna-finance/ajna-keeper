@@ -25,6 +25,11 @@ import {
   checkIfArbTakeable,
 } from './arb-take';
 import {
+  resolveTakeWriteTransport,
+  submitTakeTransaction,
+  TakeWriteTransportConfig,
+} from './take-write-transport';
+import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -57,6 +62,7 @@ type HandleTakeConfigInput = SubgraphConfigInput<HandleTakeConfigBase>;
 
 interface HandleTakeParams {
   signer: Signer;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'take'>;
   config: HandleTakeConfigInput;
@@ -69,7 +75,8 @@ type OneInchExecutionConfig = Pick<
   | 'connectorTokens'
   | 'oneInchRouters'
   | 'keeperTaker'
->;
+> &
+  TakeWriteTransportConfig;
 
 type OneInchQuoteConfig = Pick<
   KeeperConfig,
@@ -91,6 +98,7 @@ function stripExternalTakeSettings(
 
 export async function handleTakes({
   signer,
+  takeWriteTransport,
   pool,
   poolConfig,
   config,
@@ -113,6 +121,7 @@ export async function handleTakes({
       logger.debug(`Using single contract (1inch) take handler for pool: ${pool.name}`);
       await handleLegacyOrArbTakes({
         signer,
+        takeWriteTransport,
         pool,
         poolConfig,
         config: resolvedConfig,
@@ -123,6 +132,7 @@ export async function handleTakes({
       logger.debug(`Using factory (multi-DEX) take handler for pool: ${pool.name}`);
       await handleFactoryTakes({
         signer,
+        takeWriteTransport,
         pool,
         poolConfig,
         config: {
@@ -145,6 +155,7 @@ export async function handleTakes({
       );
       await handleLegacyOrArbTakes({
         signer,
+        takeWriteTransport,
         pool,
         poolConfig: stripExternalTakeSettings(poolConfig),
         config: resolvedConfig,
@@ -162,6 +173,7 @@ export async function handleTakes({
 
 export async function handleLegacyOrArbTakes({
   signer,
+  takeWriteTransport,
   pool,
   poolConfig,
   config,
@@ -195,6 +207,7 @@ export async function handleLegacyOrArbTakes({
       connectorTokens: resolvedConfig.connectorTokens,
       oneInchRouters: resolvedConfig.oneInchRouters,
       keeperTaker: resolvedConfig.keeperTaker,
+      takeWriteTransport,
     },
     dryRun: resolvedConfig.dryRun ?? false,
     delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
@@ -504,7 +517,8 @@ interface TakeLiquidationParams
   config: Pick<
     KeeperConfig,
     'dryRun' | 'delayBetweenActions' | 'connectorTokens' | 'oneInchRouters' | 'keeperTaker'
-  >;
+  > &
+    TakeWriteTransportConfig;
 }
 
 export async function takeLiquidation({
@@ -523,9 +537,10 @@ export async function takeLiquidation({
     );
   } else {
     if (poolConfig.take.liquiditySource === LiquiditySource.ONEINCH) {
+      const takeWriteTransport = resolveTakeWriteTransport(signer, config);
       const keeperTaker = AjnaKeeperTaker__factory.connect(
         config.keeperTaker!!,
-        signer
+        takeWriteTransport.signer
       );
 
       // pause between getting the 1inch quote and requesting the swap to avoid 1inch rate limit
@@ -566,7 +581,7 @@ export async function takeLiquidation({
 	        logger.debug(
 	          `Sending Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
 	        );
-	        await NonceTracker.queueTransaction(signer, async (nonce: number) => {
+	        await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {
           const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
           const txArgs = [
             pool.poolAddress,
@@ -582,11 +597,15 @@ export async function takeLiquidation({
             fallbackGasLimit,
             `Take ${pool.name}/${borrower}`
           );
-	          const tx = await keeperTaker.takeWithAtomicSwap(
-	          ...txArgs,
-	          { gasLimit, nonce: nonce.toString() }
-	          );
-	          const receipt = await tx.wait();
+          const txRequest =
+            await keeperTaker.populateTransaction.takeWithAtomicSwap(...txArgs, {
+              gasLimit,
+              nonce: nonce.toString(),
+            });
+	          const receipt = await submitTakeTransaction(
+              takeWriteTransport,
+              txRequest
+            );
 	          logger.info(
 	            `Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
           );

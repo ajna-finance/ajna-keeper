@@ -314,6 +314,37 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 To enable 1inch swaps, you need to set up environment variables and add specific fields to config.ts. Also be sure to set `delayBetweenActions` to 1 second or greater to avoid 1inch API rate limiting.
 
+If you want take transactions to go through a dedicated private/write path, set
+`takeWrite` in your keeper config:
+
+```ts
+takeWrite: {
+  mode: 'private_rpc',
+  rpcUrl: 'https://your-private-rpc',
+}
+```
+
+Or for JSON-RPC relay/private orderflow endpoints:
+
+```ts
+takeWrite: {
+  mode: 'relay',
+  relay: {
+    url: 'https://your-relay-endpoint',
+    sendMethod: 'eth_sendPrivateTransaction',
+    maxBlockNumberOffset: 25,
+    receiptTimeoutMs: 120000,
+  },
+}
+```
+
+`takeWriteRpcUrl` remains supported as a shorthand for the same `private_rpc`
+mode. This write path is currently scoped to `take` only; the rest of the
+keeper still uses `ethRpcUrl` for transaction submission. Relay mode persists
+accepted take nonces under `local/take-write-relay-state.json` so a process
+restart does not accidentally reuse a private nonce before the public provider
+can observe it.
+
 ##### Environment Variables
 
 Create a .env file in your project root with:

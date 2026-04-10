@@ -31,6 +31,7 @@ import { handleSettlements } from './settlement';
 import { ChainwideLiquidationAuction } from './subgraph';
 import { createFactoryQuoteProviderRuntimeCache } from './take-factory';
 import { handleTakes } from './take';
+import { TakeWriteTransport } from './take-write-transport';
 import { delay } from './utils';
 
 export interface DiscoverySnapshotState {
@@ -43,6 +44,7 @@ export interface CreateDiscoveryRuntimeParams {
   poolMap: PoolMap;
   config: KeeperConfig;
   signer: Signer;
+  takeWriteTransport?: TakeWriteTransport;
   hydrationCooldowns: PoolHydrationCooldowns;
   discoverySnapshotState?: DiscoverySnapshotState;
 }
@@ -237,6 +239,7 @@ async function executeEffectiveTakeTarget(params: {
       pool,
       poolConfig: target.poolConfig,
       signer: state.signer,
+      takeWriteTransport: state.takeWriteTransport,
       config: {
         dryRun: state.config.dryRun,
         delayBetweenActions: state.config.delayBetweenActions,
@@ -258,6 +261,7 @@ async function executeEffectiveTakeTarget(params: {
   await handleDiscoveredTakeTarget({
     pool,
     signer: state.signer,
+    takeWriteTransport: state.takeWriteTransport,
     target,
     config: state.config,
     transports: state.readTransports,

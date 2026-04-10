@@ -36,6 +36,7 @@ function createTestDiscoveryRuntime(params: {
   ajna?: any;
   poolMap?: Map<string, any>;
   signer?: any;
+  takeWriteTransport?: any;
   hydrationCooldowns?: any;
   discoverySnapshotState?: any;
 }) {
@@ -44,6 +45,7 @@ function createTestDiscoveryRuntime(params: {
     poolMap: (params.poolMap ?? new Map()) as any,
     config: params.config,
     signer: (params.signer ?? {}) as any,
+    takeWriteTransport: params.takeWriteTransport as any,
     hydrationCooldowns: params.hydrationCooldowns ?? new Map(),
     discoverySnapshotState: params.discoverySnapshotState,
   });
@@ -87,6 +89,49 @@ describe('Run Loop Discovery Integration', () => {
 
     expect(handleTakesStub.calledOnce).to.be.true;
     expect(handleDiscoveredTakeTargetStub.called).to.be.false;
+  });
+
+  it('passes the take write transport through the manual take runtime path', async () => {
+    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
+    const takeWriteTransport = {
+      mode: 'private_rpc',
+      signer: {
+        getAddress: sinon
+          .stub()
+          .resolves('0x9999999999999999999999999999999999999999'),
+      },
+      submitTransaction: sinon.stub(),
+    };
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Take Pool',
+          address: '0x1111111111111111111111111111111111111111',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
+        },
+      ],
+    };
+    const pool = {
+      name: 'Manual Take Pool',
+      poolAddress: '0x1111111111111111111111111111111111111111',
+    };
+
+    await createTestDiscoveryRuntime({
+      config,
+      poolMap: new Map([[config.pools[0].address, pool as any]]),
+      takeWriteTransport: takeWriteTransport as any,
+    }).runTakeCycle();
+
+    expect(handleTakesStub.calledOnce).to.be.true;
+    expect(handleTakesStub.firstCall.args[0].takeWriteTransport).to.equal(
+      takeWriteTransport
+    );
   });
 
   it('keeps the manual-only settlement path unchanged when auto discovery is disabled', async () => {

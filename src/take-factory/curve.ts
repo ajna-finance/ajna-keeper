@@ -20,6 +20,10 @@ import {
   getQuoteAmountDueRaw,
   getSwapDeadline,
 } from './shared';
+import {
+  resolveTakeWriteTransport,
+  submitTakeTransaction,
+} from '../take-write-transport';
 
 export async function evaluateCurveFactoryQuote({
   pool,
@@ -174,11 +178,15 @@ export async function executeCurveFactoryTake({
   signer: Signer;
   liquidation: TakeLiquidationPlan;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  config: Pick<FactoryExecutionConfig, 'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'>;
+  config: Pick<
+    FactoryExecutionConfig,
+    'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses' | 'takeWriteTransport'
+  >;
 }): Promise<void> {
+  const takeWriteTransport = resolveTakeWriteTransport(signer, config);
   const factory = AjnaKeeperTakerFactory__factory.connect(
     config.keeperTakerFactory!,
-    signer
+    takeWriteTransport.signer
   );
 
   if (!config.curveRouterOverrides) {
@@ -260,7 +268,7 @@ export async function executeCurveFactoryTake({
       config,
       marketPriceFactor: poolConfig.take.marketPriceFactor!,
     });
-    const deadline = await getSwapDeadline(signer);
+    const deadline = await getSwapDeadline(takeWriteTransport.signer);
 
     logger.debug(
       `Factory: Executing Curve take for pool ${pool.name}:\n` +
@@ -293,7 +301,7 @@ export async function executeCurveFactoryTake({
     );
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    await NonceTracker.queueTransaction(signer, async (nonce: number) => {
+    await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {
       const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
       const txArgs = [
         pool.poolAddress,
@@ -309,11 +317,11 @@ export async function executeCurveFactoryTake({
         fallbackGasLimit,
         `Factory Curve take ${pool.name}/${liquidation.borrower}`
       );
-      const tx = await factory.takeWithAtomicSwap(...txArgs, {
+      const txRequest = await factory.populateTransaction.takeWithAtomicSwap(...txArgs, {
         gasLimit,
         nonce: nonce.toString(),
       });
-      return await tx.wait();
+      return await submitTakeTransaction(takeWriteTransport, txRequest);
     });
 
     logger.info(

@@ -10,6 +10,7 @@ import { RequireFields } from '../utils';
 import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
 import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../take-types';
+import { TakeWriteTransport } from '../take-write-transport';
 
 type FactoryTakeConfigBase = Pick<
   KeeperConfig,
@@ -28,6 +29,7 @@ export type FactoryTakeConfigInput = SubgraphConfigInput<FactoryTakeConfigBase>;
 
 export interface FactoryTakeParams {
   signer: Signer;
+  takeWriteTransport?: TakeWriteTransport;
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'take'>;
   config: FactoryTakeConfigInput;
@@ -41,7 +43,9 @@ export type FactoryExecutionConfig = Pick<
   | 'sushiswapRouterOverrides'
   | 'curveRouterOverrides'
   | 'tokenAddresses'
->;
+> & {
+  takeWriteTransport?: TakeWriteTransport;
+};
 
 export type FactoryQuoteConfig = Pick<
   FactoryTakeConfig,

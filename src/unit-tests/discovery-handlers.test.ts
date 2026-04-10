@@ -95,6 +95,102 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationStub.called).to.be.false;
   });
 
+  it('passes the take write transport into discovered take execution', async () => {
+    const takeWriteTransport = {
+      mode: 'private_rpc',
+      signer: {
+        getAddress: sinon
+          .stub()
+          .resolves('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+      },
+      submitTransaction: sinon.stub(),
+    };
+    const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
+    sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
+      isTakeable: true,
+      quoteAmount: 10,
+      collateralAmount: 1,
+      marketPrice: 10,
+      takeablePrice: 12,
+      quoteAmountRaw: BigNumber.from(10),
+    });
+
+    const pool = {
+      name: 'Discovered Pool',
+      poolAddress: '0x1111111111111111111111111111111111111111',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('1'),
+        }),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        getChainId: sinon.stub().resolves(1),
+        provider: {},
+      } as any,
+      takeWriteTransport: takeWriteTransport as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerA',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: true,
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+        keeperTaker: '0x4444444444444444444444444444444444444444',
+        oneInchRouters: {
+          1: '0x5555555555555555555555555555555555555555',
+        },
+      } as any,
+      transports: {
+        subgraph: {
+          cacheKey: 'test-subgraph',
+          getLoans: sinon.stub().rejects(new Error('unused')),
+          getLiquidations: sinon.stub().rejects(new Error('unused')),
+          getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
+          getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
+          getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
+        },
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+      },
+    });
+
+    expect(takeLiquidationStub.calledOnce).to.be.true;
+    expect(
+      takeLiquidationStub.firstCall.args[0].config.takeWriteTransport
+    ).to.equal(takeWriteTransport);
+  });
+
   it('skips a discovered settlement when onchain revalidation says the auction no longer needs settlement', async () => {
     const handleCandidateAuctionsStub = sinon
       .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')

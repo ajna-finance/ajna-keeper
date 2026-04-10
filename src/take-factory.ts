@@ -56,6 +56,7 @@ export {
  */
 export async function handleFactoryTakes({
   signer,
+  takeWriteTransport,
   pool,
   poolConfig,
   config,
@@ -93,6 +94,7 @@ export async function handleFactoryTakes({
       sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
       curveRouterOverrides: resolvedConfig.curveRouterOverrides,
       tokenAddresses: resolvedConfig.tokenAddresses,
+      takeWriteTransport,
     },
     dryRun: resolvedConfig.dryRun ?? false,
     delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
@@ -321,7 +323,7 @@ export async function takeLiquidationFactory({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
-  config: Pick<FactoryTakeParams['config'], 'dryRun' | 'keeperTakerFactory' | 'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses' >;
+  config: Pick<FactoryTakeParams['config'], 'dryRun' | 'keeperTakerFactory' | 'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses' > & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
 }) {
   
   const { borrower } = liquidation;
@@ -413,7 +415,7 @@ async function takeWithUniswapV3Factory({
   signer: Signer;
   liquidation: LiquidationToTake;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'universalRouterOverrides'>;
+  config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'universalRouterOverrides'> & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
 }) {
   await executeUniswapV3FactoryTake({
     pool,
@@ -449,7 +451,7 @@ async function takeWithSushiSwapFactory({
   signer: Signer;
   liquidation: LiquidationToTake;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'sushiswapRouterOverrides'>;
+  config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'sushiswapRouterOverrides'> & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
 }) {
   await executeSushiSwapFactoryTake({
     pool,
@@ -478,7 +480,7 @@ async function takeWithCurveFactory({
   signer: Signer;
   liquidation: LiquidationToTake;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'>;
+  config: Pick<FactoryTakeParams['config'], 'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'> & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
 }) {
   await executeCurveFactoryTake({
     pool,

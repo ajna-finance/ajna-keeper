@@ -624,6 +624,20 @@ const config: KeeperConfig = {
   keeperKeystore: 'PUT_YOUR_FULL_PATH_HERE/keystore.json',
   logLevel: 'debug',
   ethRpcUrl: 'https://avax-mainnet.g.alchemy.com/v2/YOUR_API_KEY',
+  // Optional: private/write RPC used only for take submissions
+  // takeWrite: {
+  //   mode: 'private_rpc',
+  //   rpcUrl: 'https://avax-mainnet.g.alchemy.com/v2/YOUR_PRIVATE_TX_API_KEY',
+  // },
+  // Optional: relay/private-orderflow submission for take only
+  // takeWrite: {
+  //   mode: 'relay',
+  //   relay: {
+  //     url: 'https://YOUR_PRIVATE_RELAY_ENDPOINT',
+  //     sendMethod: 'eth_sendPrivateTransaction',
+  //     maxBlockNumberOffset: 25,
+  //   },
+  // },
   subgraphUrl: 'https://api.goldsky.com/api/public/project_[id]/subgraphs/ajna-avalanche/1.0.0/gn',
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',
   multicallBlock: 11907934,
@@ -715,6 +729,20 @@ const config: KeeperConfig = {
   keeperKeystore: 'PUT_YOUR_FULL_PATH_HERE/keystore.json',
   logLevel: 'debug',
   ethRpcUrl: 'https://rpc.hemi.network/rpc',  //you can put in your own Quicknode RPC here
+  // Optional: private/write RPC used only for take submissions
+  // takeWrite: {
+  //   mode: 'private_rpc',
+  //   rpcUrl: 'https://YOUR_PRIVATE_RPC_HERE',
+  // },
+  // Optional: relay/private-orderflow submission for take only
+  // takeWrite: {
+  //   mode: 'relay',
+  //   relay: {
+  //     url: 'https://YOUR_PRIVATE_RELAY_ENDPOINT',
+  //     sendMethod: 'eth_sendPrivateTransaction',
+  //     maxBlockNumberOffset: 25,
+  //   },
+  // },
   subgraphUrl: 'https://api.goldsky.com/api/public/project_[id]/subgraphs/ajna-hemi/1.0.0/gn',
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',
   multicallBlock: 484490,
