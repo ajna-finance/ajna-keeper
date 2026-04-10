@@ -231,6 +231,36 @@ describe('Discovery Target Resolution', () => {
     expect(settlementTargets).to.have.length(1);
   });
 
+  it('does not reuse shared discovery scans across different subgraph fallback endpoint sets', async () => {
+    const discoveryStub = sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerA',
+            kickTime: '1',
+            debtRemaining: '2',
+            collateralRemaining: '3',
+            neutralPrice: '4',
+            debt: '2',
+            collateral: '3',
+            pool: { id: '0x1111111111111111111111111111111111111111' },
+          },
+        ],
+      });
+
+    await buildDiscoveredTakeTargets({
+      ...BASE_CONFIG,
+      subgraphFallbackUrls: ['http://fallback-a'],
+    });
+    await buildDiscoveredTakeTargets({
+      ...BASE_CONFIG,
+      subgraphFallbackUrls: ['http://fallback-b'],
+    });
+
+    expect(discoveryStub.calledTwice).to.be.true;
+  });
+
   it('does not apply take quote budget to arb-only discovered take defaults', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,

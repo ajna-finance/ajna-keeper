@@ -49,6 +49,7 @@ interface EvaluateTakeDecisionParams<
   poolConfig: TPoolConfig;
   candidate: TakeBorrowerCandidate;
   subgraphUrl: string;
+  subgraphFallbackUrls?: string[];
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, unknown>;
   approveExternalTake?: (params: {
     pool: FungiblePool;
@@ -91,6 +92,11 @@ interface ExecuteTakeDecisionParams<
     reason: string;
     decision?: TakeDecision;
   }) => void;
+  onExecuted?: (params: {
+    decision: TakeDecision;
+    executedTake: boolean;
+    executedArbTake: boolean;
+  }) => void;
   arbTakeActionLabel?: string;
   arbTakeLogPrefix?: string;
 }
@@ -109,6 +115,7 @@ interface ProcessTakeCandidatesParams<
       | 'delayBetweenActions'
       | 'revalidateBeforeExecution'
       | 'onSkip'
+      | 'onExecuted'
       | 'arbTakeActionLabel'
       | 'arbTakeLogPrefix'
     > {
@@ -120,6 +127,7 @@ interface ProcessTakeCandidatesParams<
 
 export async function getTakeBorrowerCandidates(params: {
   subgraphUrl: string;
+  subgraphFallbackUrls?: string[];
   poolAddress: string;
   minCollateral: number;
 }): Promise<TakeBorrowerCandidate[]> {
@@ -128,7 +136,8 @@ export async function getTakeBorrowerCandidates(params: {
   } = await subgraph.getLiquidations(
     params.subgraphUrl,
     params.poolAddress,
-    params.minCollateral
+    params.minCollateral,
+    { fallbackUrls: params.subgraphFallbackUrls }
   );
 
   return liquidationAuctions.map(({ borrower }) => ({ borrower }));
@@ -177,6 +186,7 @@ export async function evaluateTakeDecision<
   poolConfig,
   candidate,
   subgraphUrl,
+  subgraphFallbackUrls,
   externalTakeAdapter,
   approveExternalTake,
   approveArbTake,
@@ -261,6 +271,7 @@ export async function evaluateTakeDecision<
       collateral,
       poolConfig,
       subgraphUrl,
+      subgraphFallbackUrls,
       minDeposit.toString(),
       signer
     );
@@ -321,6 +332,7 @@ export async function executeTakeDecision<
   delayBetweenActions,
   revalidateBeforeExecution,
   onSkip,
+  onExecuted,
   arbTakeActionLabel,
   arbTakeLogPrefix,
 }: ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>): Promise<void> {
@@ -328,6 +340,8 @@ export async function executeTakeDecision<
   let approvedArbTake = decision.approvedArbTake;
   let collateral = decision.collateral;
   let auctionPrice = decision.auctionPrice;
+  let executedTake = false;
+  let executedArbTake = false;
 
   if (revalidateBeforeExecution) {
     const revalidated = await revalidateTakeDecision({
@@ -369,6 +383,7 @@ export async function executeTakeDecision<
       },
       config: externalExecutionConfig,
     });
+    executedTake = true;
 
     if (approvedArbTake) {
       await delay(delayBetweenActions);
@@ -389,7 +404,14 @@ export async function executeTakeDecision<
       actionLabel: arbTakeActionLabel,
       logPrefix: arbTakeLogPrefix,
     });
+    executedArbTake = true;
   }
+
+  onExecuted?.({
+    decision,
+    executedTake,
+    executedArbTake,
+  });
 }
 
 export async function processTakeCandidates<
@@ -401,6 +423,7 @@ export async function processTakeCandidates<
   poolConfig,
   candidates,
   subgraphUrl,
+  subgraphFallbackUrls,
   externalTakeAdapter,
   externalExecutionConfig,
   dryRun,
@@ -409,6 +432,7 @@ export async function processTakeCandidates<
   approveArbTake,
   revalidateBeforeExecution,
   onSkip,
+  onExecuted,
   onFound,
   arbTakeActionLabel,
   arbTakeLogPrefix,
@@ -420,6 +444,7 @@ export async function processTakeCandidates<
       poolConfig,
       candidate,
       subgraphUrl,
+      subgraphFallbackUrls,
       externalTakeAdapter,
       approveExternalTake,
       approveArbTake,
@@ -448,6 +473,7 @@ export async function processTakeCandidates<
       delayBetweenActions,
       revalidateBeforeExecution,
       onSkip,
+      onExecuted,
       arbTakeActionLabel,
       arbTakeLogPrefix,
     });

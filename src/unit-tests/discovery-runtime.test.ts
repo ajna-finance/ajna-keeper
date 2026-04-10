@@ -5,11 +5,13 @@ import { clearSharedDiscoveryScans } from '../discovery-targets';
 import { createDiscoveryRuntime } from '../discovery-runtime';
 import { processKickCycle, runTakeLoopIteration } from '../run';
 import { KeeperConfig, PriceOriginSource } from '../config-types';
+import * as readRpc from '../read-rpc';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import * as kickModule from '../kick';
 import * as discoveryHandlers from '../discovery-handlers';
 import subgraph from '../subgraph';
+import { logger } from '../logging';
 
 const BASE_CONFIG: KeeperConfig = {
   ethRpcUrl: 'http://localhost:8545',
@@ -331,6 +333,78 @@ describe('Run Loop Discovery Integration', () => {
     expect(secondRpcCache.gasPrice!.toString()).to.equal('123');
   });
 
+  it('uses the resilient read-rpc helper when readRpcUrls are configured for discovered take cycles', async () => {
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
+      .resolves();
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '2',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '2',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+    const resilientGasPriceStub = sinon
+      .stub(readRpc, 'getResilientReadGasPrice')
+      .resolves(BigNumber.from(789));
+
+    const discoveredPool = {
+      name: 'Discovered Pool',
+      poolAddress: '0x4444444444444444444444444444444444444444',
+      quoteAddress: '0x5555555555555555555555555555555555555555',
+      collateralAddress: '0x6666666666666666666666666666666666666666',
+    };
+    const ajna = {
+      fungiblePoolFactory: {
+        getPoolByAddress: sinon.stub().resolves(discoveredPool),
+      },
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().rejects(new Error('should use read-rpc helper')),
+      },
+      getChainId: sinon.stub().resolves(1),
+      getAddress: sinon
+        .stub()
+        .resolves('0x7777777777777777777777777777777777777777'),
+    };
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      readRpcUrls: ['http://read-rpc-a', 'http://read-rpc-b'],
+      autoDiscover: {
+        enabled: true,
+        take: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      ajna: ajna as any,
+      poolMap: new Map(),
+      config,
+      signer: signer as any,
+      discoverySnapshotState: {},
+    }).runTakeCycle();
+
+    const firstCallParams = handleDiscoveredTakeTargetStub.firstCall.args[0] as any;
+    expect(resilientGasPriceStub.calledOnce).to.be.true;
+    expect(handleDiscoveredTakeTargetStub.calledOnce).to.be.true;
+    expect(firstCallParams.rpcCache.gasPrice.toString()).to.equal('789');
+  });
+
   it('refreshes the shared discovery snapshot from the settlement cadence when take discovery is disabled', async () => {
     const handleDiscoveredSettlementTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
@@ -497,6 +571,91 @@ describe('Run Loop Discovery Integration', () => {
       handleDiscoveredSettlementTargetStub.secondCall.args[0].rpcCache!;
     expect(firstRpcCache.gasPrice!.toString()).to.equal('456');
     expect(secondRpcCache.gasPrice!.toString()).to.equal('456');
+  });
+
+  it('logs a take cycle summary with target counts and snapshot status', async () => {
+    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
+    const loggerInfoStub = sinon.stub(logger, 'info');
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Take Pool',
+          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
+        },
+      ],
+    };
+    const pool = {
+      name: 'Manual Take Pool',
+      poolAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    };
+
+    await createTestDiscoveryRuntime({
+      config,
+      poolMap: new Map([[config.pools[0].address, pool as any]]),
+    }).runTakeCycle();
+
+    expect(handleTakesStub.calledOnce).to.be.true;
+    const summaryLog = loggerInfoStub
+      .getCalls()
+      .map((call) => call.args[0])
+      .find(
+        (message: any) =>
+          typeof message === 'string' &&
+          message.includes('Discovery take cycle summary:')
+      );
+    expect(summaryLog).to.be.a('string');
+    expect(summaryLog).to.include('snapshotRefreshed=false');
+    expect(summaryLog).to.include('targets=1');
+    expect(summaryLog).to.include('manualTargets=1');
+    expect(summaryLog).to.include('discoveredTargets=0');
+    expect(summaryLog).to.include('targetSuccesses=1');
+    expect(summaryLog).to.include('targetFailures=0');
+  });
+
+  it('logs a take cycle failure summary when snapshot refresh fails', async () => {
+    const loggerErrorStub = sinon.stub(logger, 'error');
+    sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .rejects(new Error('subgraph unavailable'));
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        enabled: true,
+        take: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+      },
+    };
+
+    await expect(
+      createTestDiscoveryRuntime({
+        config,
+      }).runTakeCycle()
+    ).to.be.rejectedWith('subgraph unavailable');
+
+    const failureLog = loggerErrorStub
+      .getCalls()
+      .map((call) => call.args[0])
+      .find(
+        (message: any) =>
+          typeof message === 'string' &&
+          message.includes('Discovery take cycle failed:')
+      );
+    expect(failureLog).to.be.a('string');
+    expect(failureLog).to.include('phase=snapshot');
+    expect(failureLog).to.include('snapshotRefreshed=false');
   });
 
   it('recovers take loop iterations from pre-target discovery failures', async () => {

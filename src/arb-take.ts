@@ -27,6 +27,7 @@ export async function checkIfArbTakeable(
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   subgraphUrl: string,
+  subgraphFallbackUrls: string[] | undefined,
   minDeposit: string,
   signer: Signer
 ): Promise<ArbTakeEvaluation> {
@@ -60,7 +61,8 @@ export async function checkIfArbTakeable(
   const { buckets } = await subgraph.getHighestMeaningfulBucket(
     subgraphUrl,
     pool.poolAddress,
-    minDeposit
+    minDeposit,
+    { fallbackUrls: subgraphFallbackUrls }
   );
   if (buckets.length === 0) {
     logger.debug(

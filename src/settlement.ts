@@ -40,7 +40,10 @@ export class SettlementHandler {
     private pool: FungiblePool,
     private signer: Signer,
     private poolConfig: SettlementActionConfig,
-    private config: Pick<KeeperConfig, 'dryRun' | 'subgraphUrl' | 'delayBetweenActions'>
+    private config: Pick<
+      KeeperConfig,
+      'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
+    >
   ) {}
 
   /**
@@ -105,7 +108,8 @@ export class SettlementHandler {
     try {
       const result = await subgraph.getUnsettledAuctions(
         this.config.subgraphUrl,
-        this.pool.poolAddress
+        this.pool.poolAddress,
+        { fallbackUrls: this.config.subgraphFallbackUrls }
       );
       
       this.lastSubgraphQuery = now;
@@ -440,7 +444,10 @@ export async function handleSettlements({
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'settlement'>;
   signer: Signer;
-  config: Pick<KeeperConfig, 'dryRun' | 'subgraphUrl' | 'delayBetweenActions'>;
+  config: Pick<
+    KeeperConfig,
+    'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
+  >;
 }): Promise<void> {
   const handler = new SettlementHandler(pool, signer, poolConfig, config);
   await handler.handleSettlements();
@@ -458,7 +465,10 @@ export async function tryReactiveSettlement({
   pool: FungiblePool;
   poolConfig: PoolConfig;
   signer: Signer;
-  config: Pick<KeeperConfig, 'dryRun' | 'subgraphUrl' | 'delayBetweenActions'>;
+  config: Pick<
+    KeeperConfig,
+    'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
+  >;
 }): Promise<boolean> {
   if (!poolConfig.settlement?.enabled) {
     return false;

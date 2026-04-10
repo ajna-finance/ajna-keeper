@@ -390,7 +390,7 @@ function compareCandidateGroups(
 }
 
 function discoveryCacheKey(config: KeeperConfig): string {
-  return `${config.subgraphUrl}|${DISCOVERY_PAGE_SIZE}|${DISCOVERY_MAX_PAGES}`;
+  return `${config.subgraphUrl}|${(config.subgraphFallbackUrls ?? []).join(',')}|${DISCOVERY_PAGE_SIZE}|${DISCOVERY_MAX_PAGES}`;
 }
 
 export function clearSharedDiscoveryScans(): void {
@@ -420,7 +420,8 @@ export async function getChainwideLiquidationAuctionsShared(
     .getChainwideLiquidationAuctions(
       config.subgraphUrl,
       DISCOVERY_PAGE_SIZE,
-      DISCOVERY_MAX_PAGES
+      DISCOVERY_MAX_PAGES,
+      { fallbackUrls: config.subgraphFallbackUrls }
     )
     .then(({ liquidationAuctions }) => {
       sharedDiscoveryScans.set(cacheKey, {

@@ -25,7 +25,13 @@ interface HandleKickParams {
   signer: Signer;
   config: Pick<
     KeeperConfig,
-    'dryRun' | 'subgraphUrl' | 'delayBetweenActions' | 'coinGeckoApiKey' | 'ethRpcUrl' | 'tokenAddresses'
+    | 'dryRun'
+    | 'subgraphUrl'
+    | 'subgraphFallbackUrls'
+    | 'delayBetweenActions'
+    | 'coinGeckoApiKey'
+    | 'ethRpcUrl'
+    | 'tokenAddresses'
   >;
   chainId?: number;
 }
@@ -60,7 +66,10 @@ interface LoanToKick {
 
 interface GetLoansToKickParams
   extends Pick<HandleKickParams, 'pool' | 'poolConfig' | 'chainId'> {
-  config: Pick<KeeperConfig, 'subgraphUrl' | 'coinGeckoApiKey' | 'ethRpcUrl' | 'tokenAddresses'>;
+  config: Pick<
+    KeeperConfig,
+    'subgraphUrl' | 'subgraphFallbackUrls' | 'coinGeckoApiKey' | 'ethRpcUrl' | 'tokenAddresses'
+  >;
 }
 
 export async function* getLoansToKick({
@@ -69,8 +78,10 @@ export async function* getLoansToKick({
   poolConfig,
   chainId,
 }: GetLoansToKickParams): AsyncGenerator<LoanToKick> {
-  const { subgraphUrl } = config;
-  const { loans } = await subgraph.getLoans(subgraphUrl, pool.poolAddress);
+  const { subgraphUrl, subgraphFallbackUrls } = config;
+  const { loans } = await subgraph.getLoans(subgraphUrl, pool.poolAddress, {
+    fallbackUrls: subgraphFallbackUrls,
+  });
   const loanMap = await pool.getLoans(loans.map(({ borrower }) => borrower));
   const borrowersSortedByBond = Array.from(loanMap.keys()).sort(
     (borrowerA, borrowerB) => {

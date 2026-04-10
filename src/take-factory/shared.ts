@@ -15,6 +15,7 @@ export interface FactoryTakeParams {
     KeeperConfig,
     | 'dryRun'
     | 'subgraphUrl'
+    | 'subgraphFallbackUrls'
     | 'delayBetweenActions'
     | 'keeperTakerFactory'
     | 'takerContracts'

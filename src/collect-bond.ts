@@ -10,7 +10,10 @@ interface CollectBondParams {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: PoolConfig; // Changed to include full poolConfig for settlement access
-  config: Pick<KeeperConfig, 'dryRun' | 'subgraphUrl' | 'delayBetweenActions'>;
+  config: Pick<
+    KeeperConfig,
+    'dryRun' | 'subgraphUrl' | 'subgraphFallbackUrls' | 'delayBetweenActions'
+  >;
 }
 
 export async function collectBondFromPool({

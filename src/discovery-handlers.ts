@@ -13,6 +13,7 @@ import {
   ResolvedTakeTarget,
 } from './discovery-targets';
 import { logger } from './logging';
+import { getResilientReadGasPrice } from './read-rpc';
 import * as takeModule from './take';
 import {
   createFactoryQuoteProviderRuntimeCache,
@@ -39,10 +40,13 @@ type DiscoveryExecutionConfig = Pick<
   | 'delayBetweenActions'
   | 'dryRun'
   | 'discoveredDefaults'
+  | 'ethRpcUrl'
   | 'keeperTaker'
   | 'keeperTakerFactory'
   | 'oneInchRouters'
+  | 'readRpcUrls'
   | 'subgraphUrl'
+  | 'subgraphFallbackUrls'
   | 'sushiswapRouterOverrides'
   | 'takerContracts'
   | 'tokenAddresses'
@@ -65,6 +69,28 @@ interface NativeToQuoteConversion {
 export interface DiscoveryRpcCache {
   gasPrice?: BigNumber;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
+}
+
+interface DiscoveredTakeTargetStats {
+  candidateCount: number;
+  approvedTakeDecisions: number;
+  approvedArbTakeDecisions: number;
+  evaluationSkips: number;
+  revalidationSkips: number;
+  gasPolicyRejects: number;
+  profitFloorRejects: number;
+  arbProfitUnavailableRejects: number;
+  executedExternalTakes: number;
+  executedArbTakes: number;
+}
+
+interface DiscoveredSettlementTargetStats {
+  candidateCount: number;
+  needsSettlementSkips: number;
+  incentiveSkips: number;
+  gasPolicyRejects: number;
+  approvedCandidates: number;
+  executionAttempted: boolean;
 }
 
 function logDiscoveryDecision(config: DiscoveryExecutionConfig, message: string): void {
@@ -272,7 +298,12 @@ async function evaluateGasPolicy(params: {
     };
   }
 
-  const gasPrice = params.gasPrice ?? (await provider.getGasPrice());
+  const gasPrice =
+    params.gasPrice ??
+    (await getResilientReadGasPrice({
+      config: params.config,
+      primaryProvider: provider,
+    }));
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
   const maxGasPriceGwei = params.policy?.maxGasPriceGwei;
   if (maxGasPriceGwei !== undefined && gasPriceGwei > maxGasPriceGwei) {
@@ -391,6 +422,26 @@ async function evaluateGasPolicy(params: {
   };
 }
 
+function logDiscoveredTakeTargetSummary(params: {
+  pool: FungiblePool;
+  target: ResolvedTakeTarget;
+  stats: DiscoveredTakeTargetStats;
+}): void {
+  logger.info(
+    `Discovered take target summary: pool=${params.pool.poolAddress} name="${params.target.name}" source=${params.target.take.liquiditySource ?? 'none'} dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} approvedTakeDecisions=${params.stats.approvedTakeDecisions} approvedArbTakeDecisions=${params.stats.approvedArbTakeDecisions} evaluationSkips=${params.stats.evaluationSkips} revalidationSkips=${params.stats.revalidationSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} profitFloorRejects=${params.stats.profitFloorRejects} arbProfitUnavailableRejects=${params.stats.arbProfitUnavailableRejects} executedExternalTakes=${params.stats.executedExternalTakes} executedArbTakes=${params.stats.executedArbTakes}`
+  );
+}
+
+function logDiscoveredSettlementTargetSummary(params: {
+  pool: FungiblePool;
+  target: ResolvedSettlementTarget;
+  stats: DiscoveredSettlementTargetStats;
+}): void {
+  logger.info(
+    `Discovered settlement target summary: pool=${params.pool.poolAddress} name="${params.target.name}" dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} needsSettlementSkips=${params.stats.needsSettlementSkips} incentiveSkips=${params.stats.incentiveSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} approvedCandidates=${params.stats.approvedCandidates} executionAttempted=${params.stats.executionAttempted}`
+  );
+}
+
 export async function handleDiscoveredTakeTarget(params: {
   pool: FungiblePool;
   signer: Signer;
@@ -398,11 +449,26 @@ export async function handleDiscoveredTakeTarget(params: {
   config: DiscoveryExecutionConfig;
   rpcCache?: DiscoveryRpcCache;
 }): Promise<void> {
+  const stats: DiscoveredTakeTargetStats = {
+    candidateCount: params.target.candidates.length,
+    approvedTakeDecisions: 0,
+    approvedArbTakeDecisions: 0,
+    evaluationSkips: 0,
+    revalidationSkips: 0,
+    gasPolicyRejects: 0,
+    profitFloorRejects: 0,
+    arbProfitUnavailableRejects: 0,
+    executedExternalTakes: 0,
+    executedArbTakes: 0,
+  };
   const rpcCache =
     params.rpcCache ??
     (params.signer.provider
       ? {
-          gasPrice: await params.signer.provider.getGasPrice(),
+          gasPrice: await getResilientReadGasPrice({
+            config: params.config,
+            primaryProvider: params.signer.provider,
+          }),
           factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
         }
       : undefined);
@@ -502,115 +568,149 @@ export async function handleDiscoveredTakeTarget(params: {
           tokenAddresses: params.config.tokenAddresses,
         };
 
-  await processTakeCandidates({
-    pool: params.pool,
-    signer: params.signer,
-    poolConfig: params.target,
-    candidates: params.target.candidates.map(({ borrower }) => ({ borrower })),
-    subgraphUrl: params.config.subgraphUrl,
-    externalTakeAdapter,
-    externalExecutionConfig: externalExecutionConfig as any,
-    dryRun: params.target.dryRun,
-    delayBetweenActions: params.config.delayBetweenActions,
-    revalidateBeforeExecution: true,
-    approveExternalTake: async ({
-      price,
-      collateral,
-      quoteEvaluation,
-    }) => {
-      const wrappedNativeAddress = resolveWrappedNativeAddress(
-        params.config,
-        params.target.take.liquiditySource
-      );
-      const nativeToQuoteConversion =
-        wrappedNativeAddress &&
-        wrappedNativeAddress.toLowerCase() ===
-          params.pool.collateralAddress.toLowerCase() &&
-        quoteEvaluation.quoteAmountRaw
-          ? {
-              amountInNative: collateral,
-              amountOutQuoteRaw: quoteEvaluation.quoteAmountRaw,
-            }
-          : undefined;
+  try {
+    await processTakeCandidates({
+      pool: params.pool,
+      signer: params.signer,
+      poolConfig: params.target,
+      candidates: params.target.candidates.map(({ borrower }) => ({ borrower })),
+      subgraphUrl: params.config.subgraphUrl,
+      subgraphFallbackUrls: params.config.subgraphFallbackUrls,
+      externalTakeAdapter,
+      externalExecutionConfig: externalExecutionConfig as any,
+      dryRun: params.target.dryRun,
+      delayBetweenActions: params.config.delayBetweenActions,
+      revalidateBeforeExecution: true,
+      approveExternalTake: async ({
+        price,
+        collateral,
+        quoteEvaluation,
+      }) => {
+        const wrappedNativeAddress = resolveWrappedNativeAddress(
+          params.config,
+          params.target.take.liquiditySource
+        );
+        const nativeToQuoteConversion =
+          wrappedNativeAddress &&
+          wrappedNativeAddress.toLowerCase() ===
+            params.pool.collateralAddress.toLowerCase() &&
+          quoteEvaluation.quoteAmountRaw
+            ? {
+                amountInNative: collateral,
+                amountOutQuoteRaw: quoteEvaluation.quoteAmountRaw,
+              }
+            : undefined;
 
-      const gasPolicy = await evaluateGasPolicy({
-        signer: params.signer,
-        config: params.config,
-        policy: takePolicy,
-        gasLimit: EXTERNAL_TAKE_GAS_LIMIT,
-        quoteTokenAddress: params.pool.quoteAddress,
-        preferredLiquiditySource: params.target.take.liquiditySource,
-        useProfitFloor: true,
-        nativeToQuoteConversion,
-        gasPrice: rpcCache?.gasPrice,
-      });
-      if (!gasPolicy.approved) {
-        return {
-          approved: false,
-          reason: gasPolicy.reason,
-        };
-      }
+        const gasPolicy = await evaluateGasPolicy({
+          signer: params.signer,
+          config: params.config,
+          policy: takePolicy,
+          gasLimit: EXTERNAL_TAKE_GAS_LIMIT,
+          quoteTokenAddress: params.pool.quoteAddress,
+          preferredLiquiditySource: params.target.take.liquiditySource,
+          useProfitFloor: true,
+          nativeToQuoteConversion,
+          gasPrice: rpcCache?.gasPrice,
+        });
+        if (!gasPolicy.approved) {
+          stats.gasPolicyRejects += 1;
+          return {
+            approved: false,
+            reason: gasPolicy.reason,
+          };
+        }
 
-      const auctionCostQuote = price * (quoteEvaluation.collateralAmount ?? 0);
-      const expectedProfit =
-        (quoteEvaluation.quoteAmount ?? 0) -
-        auctionCostQuote -
-        gasPolicy.gasCostQuote;
-      const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
-      if (
-        minExpectedProfitQuote !== undefined &&
-        expectedProfit < minExpectedProfitQuote
-      ) {
-        return {
-          approved: false,
-          reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
-        };
-      }
+        const auctionCostQuote = price * (quoteEvaluation.collateralAmount ?? 0);
+        const expectedProfit =
+          (quoteEvaluation.quoteAmount ?? 0) -
+          auctionCostQuote -
+          gasPolicy.gasCostQuote;
+        const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
+        if (
+          minExpectedProfitQuote !== undefined &&
+          expectedProfit < minExpectedProfitQuote
+        ) {
+          stats.profitFloorRejects += 1;
+          return {
+            approved: false,
+            reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
+          };
+        }
 
-      return { approved: true };
-    },
-    approveArbTake: async () => {
-      if (takePolicy?.minExpectedProfitQuote !== undefined) {
-        return {
-          approved: false,
-          reason: 'quote-normalized profit is not available',
-        };
-      }
+        return { approved: true };
+      },
+      approveArbTake: async () => {
+        if (takePolicy?.minExpectedProfitQuote !== undefined) {
+          stats.arbProfitUnavailableRejects += 1;
+          return {
+            approved: false,
+            reason: 'quote-normalized profit is not available',
+          };
+        }
 
-      const gasPolicy = await evaluateGasPolicy({
-        signer: params.signer,
-        config: params.config,
-        policy: takePolicy,
-        gasLimit: ARB_TAKE_GAS_LIMIT,
-        quoteTokenAddress: params.pool.quoteAddress,
-        preferredLiquiditySource: params.target.take.liquiditySource,
-        useProfitFloor: false,
-        gasPrice: rpcCache?.gasPrice,
-      });
-      if (!gasPolicy.approved) {
-        return {
-          approved: false,
-          reason: gasPolicy.reason,
-        };
-      }
+        const gasPolicy = await evaluateGasPolicy({
+          signer: params.signer,
+          config: params.config,
+          policy: takePolicy,
+          gasLimit: ARB_TAKE_GAS_LIMIT,
+          quoteTokenAddress: params.pool.quoteAddress,
+          preferredLiquiditySource: params.target.take.liquiditySource,
+          useProfitFloor: false,
+          gasPrice: rpcCache?.gasPrice,
+        });
+        if (!gasPolicy.approved) {
+          stats.gasPolicyRejects += 1;
+          return {
+            approved: false,
+            reason: gasPolicy.reason,
+          };
+        }
 
-      return { approved: true };
-    },
-    onSkip: ({ candidate, stage, reason }) => {
-      if (stage === 'revalidation') {
+        return { approved: true };
+      },
+      onFound: (decision) => {
+        if (decision.approvedTake) {
+          stats.approvedTakeDecisions += 1;
+        }
+        if (decision.approvedArbTake) {
+          stats.approvedArbTakeDecisions += 1;
+        }
+      },
+      onSkip: ({ candidate, stage, reason }) => {
+        if (stage === 'revalidation') {
+          stats.revalidationSkips += 1;
+        } else {
+          stats.evaluationSkips += 1;
+        }
+        if (stage === 'revalidation') {
+          logDiscoveryDecision(
+            params.config,
+            `Skipping discovered take execution for ${params.pool.poolAddress}/${candidate.borrower} because ${reason}`
+          );
+          return;
+        }
+
         logDiscoveryDecision(
           params.config,
-          `Skipping discovered take execution for ${params.pool.poolAddress}/${candidate.borrower} because ${reason}`
+          `Skipping discovered take candidate ${params.pool.poolAddress}/${candidate.borrower}: ${reason}`
         );
-        return;
-      }
-
-      logDiscoveryDecision(
-        params.config,
-        `Skipping discovered take candidate ${params.pool.poolAddress}/${candidate.borrower}: ${reason}`
-      );
-    },
-  });
+      },
+      onExecuted: ({ executedTake, executedArbTake }) => {
+        if (executedTake) {
+          stats.executedExternalTakes += 1;
+        }
+        if (executedArbTake) {
+          stats.executedArbTakes += 1;
+        }
+      },
+    });
+  } finally {
+    logDiscoveredTakeTargetSummary({
+      pool: params.pool,
+      target: params.target,
+      stats,
+    });
+  }
 }
 
 function hydrateSettlementAuction(candidate: ResolvedSettlementTarget['candidates'][number]): AuctionToSettle {
@@ -629,6 +729,14 @@ export async function handleDiscoveredSettlementTarget(params: {
   config: DiscoveryExecutionConfig;
   rpcCache?: DiscoveryRpcCache;
 }): Promise<void> {
+  const stats: DiscoveredSettlementTargetStats = {
+    candidateCount: params.target.candidates.length,
+    needsSettlementSkips: 0,
+    incentiveSkips: 0,
+    gasPolicyRejects: 0,
+    approvedCandidates: 0,
+    executionAttempted: false,
+  };
   const handler = new SettlementHandler(
     params.pool,
     params.signer,
@@ -636,6 +744,7 @@ export async function handleDiscoveredSettlementTarget(params: {
     {
       dryRun: params.target.dryRun,
       subgraphUrl: params.config.subgraphUrl,
+      subgraphFallbackUrls: params.config.subgraphFallbackUrls,
       delayBetweenActions: params.config.delayBetweenActions,
     }
   );
@@ -643,7 +752,10 @@ export async function handleDiscoveredSettlementTarget(params: {
     params.rpcCache ??
     (params.signer.provider
       ? {
-          gasPrice: await params.signer.provider.getGasPrice(),
+          gasPrice: await getResilientReadGasPrice({
+            config: params.config,
+            primaryProvider: params.signer.provider,
+          }),
         }
       : undefined);
 
@@ -651,50 +763,63 @@ export async function handleDiscoveredSettlementTarget(params: {
   const settlementPolicy = getAutoDiscoverSettlementPolicy(
     params.config.autoDiscover
   );
-  for (const candidate of params.target.candidates) {
-    const needsSettlement = await handler.needsSettlement(candidate.borrower);
-    if (!needsSettlement.needs) {
-      logDiscoveryDecision(
-        params.config,
-        `Skipping discovered settlement candidate ${params.pool.poolAddress}/${candidate.borrower}: ${needsSettlement.reason}`
-      );
-      continue;
-    }
-
-    if (params.target.settlement.checkBotIncentive) {
-      const incentiveCheck = await handler.checkBotIncentive(candidate.borrower);
-      if (!incentiveCheck.hasIncentive) {
+  try {
+    for (const candidate of params.target.candidates) {
+      const needsSettlement = await handler.needsSettlement(candidate.borrower);
+      if (!needsSettlement.needs) {
+        stats.needsSettlementSkips += 1;
         logDiscoveryDecision(
           params.config,
-          `Skipping discovered settlement candidate ${params.pool.poolAddress}/${candidate.borrower}: ${incentiveCheck.reason}`
+          `Skipping discovered settlement candidate ${params.pool.poolAddress}/${candidate.borrower}: ${needsSettlement.reason}`
         );
         continue;
       }
+
+      if (params.target.settlement.checkBotIncentive) {
+        const incentiveCheck = await handler.checkBotIncentive(candidate.borrower);
+        if (!incentiveCheck.hasIncentive) {
+          stats.incentiveSkips += 1;
+          logDiscoveryDecision(
+            params.config,
+            `Skipping discovered settlement candidate ${params.pool.poolAddress}/${candidate.borrower}: ${incentiveCheck.reason}`
+          );
+          continue;
+        }
+      }
+
+      const gasPolicy = await evaluateGasPolicy({
+        signer: params.signer,
+        config: params.config,
+        policy: settlementPolicy,
+        gasLimit: SETTLEMENT_GAS_LIMIT,
+        quoteTokenAddress: params.pool.quoteAddress,
+        useProfitFloor: false,
+        gasPrice: rpcCache?.gasPrice,
+      });
+      if (!gasPolicy.approved) {
+        stats.gasPolicyRejects += 1;
+        logDiscoveryDecision(
+          params.config,
+          `Skipping discovered settlement candidate ${params.pool.poolAddress}/${candidate.borrower}: ${gasPolicy.reason}`
+        );
+        continue;
+      }
+
+      approvedAuctions.push(hydrateSettlementAuction(candidate));
     }
 
-    const gasPolicy = await evaluateGasPolicy({
-      signer: params.signer,
-      config: params.config,
-      policy: settlementPolicy,
-      gasLimit: SETTLEMENT_GAS_LIMIT,
-      quoteTokenAddress: params.pool.quoteAddress,
-      useProfitFloor: false,
-      gasPrice: rpcCache?.gasPrice,
+    stats.approvedCandidates = approvedAuctions.length;
+    if (approvedAuctions.length === 0) {
+      return;
+    }
+
+    stats.executionAttempted = true;
+    await handler.handleCandidateAuctions(approvedAuctions);
+  } finally {
+    logDiscoveredSettlementTargetSummary({
+      pool: params.pool,
+      target: params.target,
+      stats,
     });
-    if (!gasPolicy.approved) {
-      logDiscoveryDecision(
-        params.config,
-        `Skipping discovered settlement candidate ${params.pool.poolAddress}/${candidate.borrower}: ${gasPolicy.reason}`
-      );
-      continue;
-    }
-
-    approvedAuctions.push(hydrateSettlementAuction(candidate));
   }
-
-  if (approvedAuctions.length === 0) {
-    return;
-  }
-
-  await handler.handleCandidateAuctions(approvedAuctions);
 }

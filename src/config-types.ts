@@ -346,10 +346,14 @@ export interface CurveRouterOverrides {
 export interface KeeperConfig {
   /** The url of RPC endpoint. Should include API key. example: https://avax-mainnet.g.alchemy.com/v2/asf... */
   ethRpcUrl: string;
+  /** Optional read-only RPC endpoints used for resilient read failover. Defaults to ethRpcUrl when unset. */
+  readRpcUrls?: string[];
   /** The log level of the keeper. */
   logLevel: string;
   /** The url of the subgraph. */
   subgraphUrl: string;
+  /** Optional fallback subgraph endpoints used for resilient read failover. */
+  subgraphFallbackUrls?: string[];
   /** Path to encrypted keystore json file. See README for instructions on how to create this file.*/
   keeperKeystore: string;
   /** Contract used for atomically taking liquidations with external liquidity */

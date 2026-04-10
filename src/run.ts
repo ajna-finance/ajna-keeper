@@ -181,6 +181,7 @@ async function collectBondLoop({ poolMap, config, signer }: KeepPoolParams) {
           config: {
             dryRun: config.dryRun,
             subgraphUrl: config.subgraphUrl,
+            subgraphFallbackUrls: config.subgraphFallbackUrls,
             delayBetweenActions: config.delayBetweenActions,
           },
         });
@@ -282,6 +283,7 @@ async function collectLpRewardsLoop({
               config: {
                 dryRun: config.dryRun,
                 subgraphUrl: config.subgraphUrl,
+                subgraphFallbackUrls: config.subgraphFallbackUrls,
                 delayBetweenActions: config.delayBetweenActions,
               },
             });

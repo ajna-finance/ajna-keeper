@@ -23,6 +23,7 @@ import {
   handleDiscoveredTakeTarget,
 } from './discovery-handlers';
 import { logger } from './logging';
+import { getResilientReadGasPrice } from './read-rpc';
 import { handleSettlements } from './settlement';
 import { ChainwideLiquidationAuction } from './subgraph';
 import { createFactoryQuoteProviderRuntimeCache } from './take-factory';
@@ -53,6 +54,21 @@ type DiscoveryRuntimeState = CreateDiscoveryRuntimeParams;
 type EffectiveTargetIdentity =
   | Pick<EffectiveTakeTarget, 'source' | 'poolAddress' | 'name'>
   | Pick<EffectiveSettlementTarget, 'source' | 'poolAddress' | 'name'>;
+
+interface DiscoveryCycleSnapshotInfo {
+  liquidationAuctions?: ChainwideLiquidationAuction[];
+  snapshotRefreshed: boolean;
+  snapshotAgeMs?: number;
+}
+
+interface DiscoveryCycleStats {
+  targets: number;
+  manualTargets: number;
+  discoveredTargets: number;
+  poolsUnavailable: number;
+  targetSuccesses: number;
+  targetFailures: number;
+}
 
 function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
@@ -85,25 +101,42 @@ async function refreshDiscoverySnapshot(
 
 async function getTakeCycleLiquidationAuctions(
   state: DiscoveryRuntimeState
-): Promise<ChainwideLiquidationAuction[] | undefined> {
-  return shouldRefreshDiscoverySnapshotOnTakeCycle(state.config)
+): Promise<DiscoveryCycleSnapshotInfo> {
+  const liquidationAuctions = shouldRefreshDiscoverySnapshotOnTakeCycle(state.config)
     ? await refreshDiscoverySnapshot(state)
     : undefined;
+  const snapshotAgeMs =
+    state.discoverySnapshotState?.fetchedAt !== undefined
+      ? Math.max(0, Date.now() - state.discoverySnapshotState.fetchedAt)
+      : undefined;
+  return {
+    liquidationAuctions,
+    snapshotRefreshed: liquidationAuctions !== undefined,
+    snapshotAgeMs,
+  };
 }
 
 async function getSettlementCycleLiquidationAuctions(
   state: DiscoveryRuntimeState
-): Promise<ChainwideLiquidationAuction[] | undefined> {
+): Promise<DiscoveryCycleSnapshotInfo> {
   const refreshedLiquidationAuctions =
     shouldRefreshDiscoverySnapshotOnSettlementCycle(state.config)
       ? await refreshDiscoverySnapshot(state)
       : undefined;
 
-  return (
+  const liquidationAuctions =
     refreshedLiquidationAuctions ??
     state.discoverySnapshotState?.latestLiquidationAuctions ??
-    undefined
-  );
+    undefined;
+  const snapshotAgeMs =
+    state.discoverySnapshotState?.fetchedAt !== undefined
+      ? Math.max(0, Date.now() - state.discoverySnapshotState.fetchedAt)
+      : undefined;
+  return {
+    liquidationAuctions,
+    snapshotRefreshed: refreshedLiquidationAuctions !== undefined,
+    snapshotAgeMs,
+  };
 }
 
 async function resolveTakeCycleTargets(
@@ -133,7 +166,10 @@ async function createTakeCycleRpcCache(
   return targets.some((target) => target.source === 'discovered') &&
     state.signer.provider
     ? {
-        gasPrice: await state.signer.provider.getGasPrice(),
+        gasPrice: await getResilientReadGasPrice({
+          config: state.config,
+          primaryProvider: state.signer.provider,
+        }),
         factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
       }
     : undefined;
@@ -146,7 +182,10 @@ async function createSettlementCycleRpcCache(
   return targets.some((target) => target.source === 'discovered') &&
     state.signer.provider
     ? {
-        gasPrice: await state.signer.provider.getGasPrice(),
+        gasPrice: await getResilientReadGasPrice({
+          config: state.config,
+          primaryProvider: state.signer.provider,
+        }),
       }
     : undefined;
 }
@@ -213,11 +252,12 @@ async function executeEffectiveSettlementTarget(params: {
       pool,
       poolConfig: target.poolConfig,
       signer: state.signer,
-      config: {
-        dryRun: state.config.dryRun,
-        subgraphUrl: state.config.subgraphUrl,
-        delayBetweenActions: state.config.delayBetweenActions,
-      },
+        config: {
+          dryRun: state.config.dryRun,
+          subgraphUrl: state.config.subgraphUrl,
+          subgraphFallbackUrls: state.config.subgraphFallbackUrls,
+          delayBetweenActions: state.config.delayBetweenActions,
+        },
     });
     return;
   }
@@ -231,60 +271,184 @@ async function executeEffectiveSettlementTarget(params: {
   });
 }
 
-async function runTakeDiscoveryCycle(state: DiscoveryRuntimeState): Promise<void> {
-  const liquidationAuctions = await getTakeCycleLiquidationAuctions(state);
-  const targets = await resolveTakeCycleTargets(state, liquidationAuctions);
-  const rpcCache = await createTakeCycleRpcCache(state, targets);
-
+function summarizeCycleTargets(
+  targets: EffectiveTakeTarget[] | EffectiveSettlementTarget[]
+): Pick<DiscoveryCycleStats, 'targets' | 'manualTargets' | 'discoveredTargets'> {
+  let manualTargets = 0;
   for (const target of targets) {
-    const pool = await resolveEffectiveTargetPool(state, target);
-    if (!pool) {
-      continue;
+    if (target.source === 'manual') {
+      manualTargets += 1;
+    }
+  }
+  return {
+    targets: targets.length,
+    manualTargets,
+    discoveredTargets: targets.length - manualTargets,
+  };
+}
+
+function logDiscoveryCycleSummary(params: {
+  cycleType: 'take' | 'settlement';
+  stats: DiscoveryCycleStats;
+  durationMs: number;
+  snapshotInfo: DiscoveryCycleSnapshotInfo;
+}): void {
+  logger.info(
+    `Discovery ${params.cycleType} cycle summary: durationMs=${params.durationMs} snapshotRefreshed=${params.snapshotInfo.snapshotRefreshed} snapshotAgeMs=${params.snapshotInfo.snapshotAgeMs ?? -1} auctionCount=${params.snapshotInfo.liquidationAuctions?.length ?? 0} targets=${params.stats.targets} manualTargets=${params.stats.manualTargets} discoveredTargets=${params.stats.discoveredTargets} poolsUnavailable=${params.stats.poolsUnavailable} targetSuccesses=${params.stats.targetSuccesses} targetFailures=${params.stats.targetFailures}`
+  );
+}
+
+function logDiscoveryCycleFailure(params: {
+  cycleType: 'take' | 'settlement';
+  phase: string;
+  durationMs: number;
+  snapshotInfo?: DiscoveryCycleSnapshotInfo;
+  stats?: Partial<DiscoveryCycleStats>;
+  error: unknown;
+}): void {
+  logger.error(
+    `Discovery ${params.cycleType} cycle failed: phase=${params.phase} durationMs=${params.durationMs} snapshotRefreshed=${params.snapshotInfo?.snapshotRefreshed ?? false} snapshotAgeMs=${params.snapshotInfo?.snapshotAgeMs ?? -1} auctionCount=${params.snapshotInfo?.liquidationAuctions?.length ?? 0} targets=${params.stats?.targets ?? 0} manualTargets=${params.stats?.manualTargets ?? 0} discoveredTargets=${params.stats?.discoveredTargets ?? 0} poolsUnavailable=${params.stats?.poolsUnavailable ?? 0} targetSuccesses=${params.stats?.targetSuccesses ?? 0} targetFailures=${params.stats?.targetFailures ?? 0}`,
+    params.error
+  );
+}
+
+async function runTakeDiscoveryCycle(state: DiscoveryRuntimeState): Promise<void> {
+  const startedAt = Date.now();
+  let phase = 'snapshot';
+  let snapshotInfo: DiscoveryCycleSnapshotInfo = {
+    snapshotRefreshed: false,
+  };
+  const stats: DiscoveryCycleStats = {
+    targets: 0,
+    manualTargets: 0,
+    discoveredTargets: 0,
+    poolsUnavailable: 0,
+    targetSuccesses: 0,
+    targetFailures: 0,
+  };
+
+  try {
+    snapshotInfo = await getTakeCycleLiquidationAuctions(state);
+    phase = 'targets';
+    const targets = await resolveTakeCycleTargets(
+      state,
+      snapshotInfo.liquidationAuctions
+    );
+    Object.assign(stats, summarizeCycleTargets(targets));
+    phase = 'rpc-cache';
+    const rpcCache = await createTakeCycleRpcCache(state, targets);
+    phase = 'dispatch';
+
+    for (const target of targets) {
+      const pool = await resolveEffectiveTargetPool(state, target);
+      if (!pool) {
+        stats.poolsUnavailable += 1;
+        continue;
+      }
+
+      try {
+        await executeEffectiveTakeTarget({
+          state,
+          pool,
+          target,
+          rpcCache,
+        });
+        stats.targetSuccesses += 1;
+        await delay(state.config.delayBetweenActions);
+      } catch (error) {
+        stats.targetFailures += 1;
+        logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
+      }
     }
 
-    try {
-      await executeEffectiveTakeTarget({
-        state,
-        pool,
-        target,
-        rpcCache,
-      });
-      await delay(state.config.delayBetweenActions);
-    } catch (error) {
-      logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
-    }
+    logDiscoveryCycleSummary({
+      cycleType: 'take',
+      stats,
+      durationMs: Date.now() - startedAt,
+      snapshotInfo,
+    });
+  } catch (error) {
+    logDiscoveryCycleFailure({
+      cycleType: 'take',
+      phase,
+      durationMs: Date.now() - startedAt,
+      snapshotInfo,
+      stats,
+      error,
+    });
+    throw error;
   }
 }
 
 async function runSettlementDiscoveryCycle(
   state: DiscoveryRuntimeState
 ): Promise<void> {
-  const liquidationAuctions = await getSettlementCycleLiquidationAuctions(state);
-  const targets = await resolveSettlementCycleTargets(state, liquidationAuctions);
-  const rpcCache = await createSettlementCycleRpcCache(state, targets);
+  const startedAt = Date.now();
+  let phase = 'snapshot';
+  let snapshotInfo: DiscoveryCycleSnapshotInfo = {
+    snapshotRefreshed: false,
+  };
+  const stats: DiscoveryCycleStats = {
+    targets: 0,
+    manualTargets: 0,
+    discoveredTargets: 0,
+    poolsUnavailable: 0,
+    targetSuccesses: 0,
+    targetFailures: 0,
+  };
 
-  logger.info(`Settlement loop started with ${targets.length} pools`);
-  logger.info(`Settlement pools: ${targets.map((target) => target.name).join(', ')}`);
+  try {
+    snapshotInfo = await getSettlementCycleLiquidationAuctions(state);
+    phase = 'targets';
+    const targets = await resolveSettlementCycleTargets(
+      state,
+      snapshotInfo.liquidationAuctions
+    );
+    Object.assign(stats, summarizeCycleTargets(targets));
+    phase = 'rpc-cache';
+    const rpcCache = await createSettlementCycleRpcCache(state, targets);
+    phase = 'dispatch';
 
-  for (const target of targets) {
-    const pool = await resolveEffectiveTargetPool(state, target);
-    if (!pool) {
-      continue;
+    for (const target of targets) {
+      const pool = await resolveEffectiveTargetPool(state, target);
+      if (!pool) {
+        stats.poolsUnavailable += 1;
+        continue;
+      }
+
+      try {
+        logger.debug(`Processing settlement check for pool: ${pool.name}`);
+        await executeEffectiveSettlementTarget({
+          state,
+          pool,
+          target,
+          rpcCache,
+        });
+        stats.targetSuccesses += 1;
+        logger.debug(`Settlement check completed for pool: ${pool.name}`);
+        await delay(state.config.delayBetweenActions);
+      } catch (error) {
+        stats.targetFailures += 1;
+        logger.error(`Failed to handle settlements for pool: ${pool.name}`, error);
+      }
     }
 
-    try {
-      logger.debug(`Processing settlement check for pool: ${pool.name}`);
-      await executeEffectiveSettlementTarget({
-        state,
-        pool,
-        target,
-        rpcCache,
-      });
-      logger.debug(`Settlement check completed for pool: ${pool.name}`);
-      await delay(state.config.delayBetweenActions);
-    } catch (error) {
-      logger.error(`Failed to handle settlements for pool: ${pool.name}`, error);
-    }
+    logDiscoveryCycleSummary({
+      cycleType: 'settlement',
+      stats,
+      durationMs: Date.now() - startedAt,
+      snapshotInfo,
+    });
+  } catch (error) {
+    logDiscoveryCycleFailure({
+      cycleType: 'settlement',
+      phase,
+      durationMs: Date.now() - startedAt,
+      snapshotInfo,
+      stats,
+      error,
+    });
+    throw error;
   }
 }
 

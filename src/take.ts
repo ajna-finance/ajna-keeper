@@ -41,6 +41,7 @@ interface HandleTakeParams {
     KeeperConfig,
     | 'dryRun'
     | 'subgraphUrl'
+    | 'subgraphFallbackUrls'
     | 'delayBetweenActions'
     | 'connectorTokens'
     | 'oneInchRouters'
@@ -119,6 +120,7 @@ export async function handleTakes({
         config: {
           dryRun: config.dryRun,
           subgraphUrl: config.subgraphUrl,
+          subgraphFallbackUrls: config.subgraphFallbackUrls,
           delayBetweenActions: config.delayBetweenActions,
           keeperTakerFactory: config.keeperTakerFactory,
           takerContracts: config.takerContracts,
@@ -159,6 +161,7 @@ export async function handleLegacyOrArbTakes({
 }: HandleTakeParams) {
   const candidates = await getTakeBorrowerCandidates({
     subgraphUrl: config.subgraphUrl,
+    subgraphFallbackUrls: config.subgraphFallbackUrls,
     poolAddress: pool.poolAddress,
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
@@ -178,6 +181,7 @@ export async function handleLegacyOrArbTakes({
     poolConfig,
     candidates,
     subgraphUrl: config.subgraphUrl,
+    subgraphFallbackUrls: config.subgraphFallbackUrls,
     externalTakeAdapter,
     externalExecutionConfig: {
       dryRun: config.dryRun,
@@ -263,7 +267,11 @@ interface GetLiquidationsToTakeParams
   extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
   config: Pick<
     KeeperConfig,
-    'subgraphUrl' | 'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'
+    | 'subgraphUrl'
+    | 'subgraphFallbackUrls'
+    | 'delayBetweenActions'
+    | 'oneInchRouters'
+    | 'connectorTokens'
   >;
 }
 
@@ -423,7 +431,8 @@ export async function* getLiquidationsToTake({
   } = await subgraph.getLiquidations(
     subgraphUrl,
     pool.poolAddress,
-    poolConfig.take.minCollateral ?? 0
+    poolConfig.take.minCollateral ?? 0,
+    { fallbackUrls: config.subgraphFallbackUrls }
   );
   for (const auction of liquidationAuctions) {
     const { borrower } = auction;
@@ -456,6 +465,7 @@ export async function* getLiquidationsToTake({
         collateral,
         poolConfig,
         subgraphUrl,
+        config.subgraphFallbackUrls,
         minDeposit.toString(),
         signer
       );

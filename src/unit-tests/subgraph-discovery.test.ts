@@ -1,11 +1,13 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import * as graphqlRequest from 'graphql-request';
+import { clearEndpointHealthState } from '../endpoint-health';
 import subgraph from '../subgraph';
 
 describe('Subgraph Discovery Pagination', () => {
   afterEach(() => {
     sinon.restore();
+    clearEndpointHealthState();
   });
 
   it('paginates chain-wide liquidation auctions until the final short page', async () => {
@@ -55,8 +57,44 @@ describe('Subgraph Discovery Pagination', () => {
 
     expect(result.liquidationAuctions).to.have.length(220);
     expect(requestStub.callCount).to.equal(3);
-    expect(requestStub.firstCall.args[2]).to.deep.equal({ first: 100, skip: 0 });
-    expect(requestStub.secondCall.args[2]).to.deep.equal({ first: 100, skip: 100 });
-    expect(requestStub.thirdCall.args[2]).to.deep.equal({ first: 100, skip: 200 });
+    const firstRequest = requestStub.firstCall.args[0] as any;
+    const secondRequest = requestStub.secondCall.args[0] as any;
+    const thirdRequest = requestStub.thirdCall.args[0] as any;
+    expect(firstRequest).to.include({
+      url: 'http://example-subgraph',
+    });
+    expect(firstRequest.variables).to.deep.equal({ first: 100, skip: 0 });
+    expect(secondRequest.variables).to.deep.equal({
+      first: 100,
+      skip: 100,
+    });
+    expect(thirdRequest.variables).to.deep.equal({
+      first: 100,
+      skip: 200,
+    });
+  });
+
+  it('fails over to fallback subgraph endpoints on request failure', async () => {
+    const requestStub = sinon.stub(graphqlRequest, 'request');
+    requestStub.onCall(0).rejects(new Error('primary unavailable'));
+    requestStub.onCall(1).resolves({
+      liquidationAuctions: [],
+    });
+
+    const result = await subgraph.getChainwideLiquidationAuctions(
+      'http://primary-subgraph',
+      100,
+      1,
+      { fallbackUrls: ['http://fallback-subgraph'] }
+    );
+
+    expect(result.liquidationAuctions).to.deep.equal([]);
+    expect(requestStub.callCount).to.equal(2);
+    expect(requestStub.firstCall.args[0] as any).to.include({
+      url: 'http://primary-subgraph',
+    });
+    expect(requestStub.secondCall.args[0] as any).to.include({
+      url: 'http://fallback-subgraph',
+    });
   });
 });

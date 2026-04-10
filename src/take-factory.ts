@@ -62,6 +62,7 @@ export async function handleFactoryTakes({
   const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
   const candidates = await getTakeBorrowerCandidates({
     subgraphUrl: config.subgraphUrl,
+    subgraphFallbackUrls: config.subgraphFallbackUrls,
     poolAddress: pool.poolAddress,
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
@@ -82,6 +83,7 @@ export async function handleFactoryTakes({
     poolConfig,
     candidates,
     subgraphUrl: config.subgraphUrl,
+    subgraphFallbackUrls: config.subgraphFallbackUrls,
     externalTakeAdapter,
     externalExecutionConfig: {
       dryRun: config.dryRun,

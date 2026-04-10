@@ -42,6 +42,7 @@ describe('shared arbTake helpers', () => {
       ethers.utils.parseEther('2'),
       poolConfig as any,
       'http://test-subgraph',
+      undefined,
       '0.1',
       {} as any,
     ] as const;
