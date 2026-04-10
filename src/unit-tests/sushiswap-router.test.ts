@@ -13,7 +13,7 @@ describe('SushiSwap Router Module', () => {
     // Reset sinon after each test
     sinon.restore();
     
-    // Create basic mocks - same pattern as universal-router-module.test.ts
+    // Create basic mocks - same pattern as universal-router.test.ts
     mockSigner = {
       getAddress: sinon.stub().resolves('0xTestAddress'),
       getChainId: sinon.stub().resolves(43111), // Hemi chain ID
@@ -29,7 +29,7 @@ describe('SushiSwap Router Module', () => {
       }),
     };
     
-    // Mock NonceTracker - same pattern as universal-router-module.test.ts
+    // Mock NonceTracker - same pattern as universal-router.test.ts
     queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (signer, txFunc) => {
       return await txFunc(10);
     });
@@ -109,7 +109,7 @@ describe('SushiSwap Router Module', () => {
     });
   });
 
-  // Test NonceTracker integration - same pattern as universal-router-module.test.ts
+  // Test NonceTracker integration - same pattern as universal-router.test.ts
   describe('Integration with NonceTracker', () => {
     it('should use NonceTracker.queueTransaction for transactions', async () => {
       // Restore the original method before this test

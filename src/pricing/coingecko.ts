@@ -1,9 +1,9 @@
-import { logger } from './logging';
+import { logger } from '../logging';
 import {
   PriceOriginCoinGecko,
   PriceOriginCoinGeckoQuery,
-} from './config';
-import { getPriceFromAlchemy, getPoolPriceFromAlchemy } from './alchemy-prices';
+} from '../config';
+import { getPriceFromAlchemy, getPoolPriceFromAlchemy } from './alchemy';
 
 interface CoinGeckoResponse {
   [coinName: string]: {
@@ -195,7 +195,7 @@ async function getPrice(
   if (!tokenAddress) {
     throw new Error(
       `No token address mapping found for "${tokenId}" on chain ${chainId}. ` +
-      `Add it to tokenAddresses config or update the token mapping in coingecko.ts`
+      `Add it to tokenAddresses config or update the token mapping in pricing/coingecko.ts`
     );
   }
 
@@ -235,7 +235,7 @@ async function getPoolPrice(
   if (!quoteAddress || !collateralAddress) {
     throw new Error(
       `No token address mapping found for "${quoteId}" or "${collateralId}" on chain ${chainId}. ` +
-      `Add them to tokenAddresses config or update the token mapping in coingecko.ts`
+      `Add them to tokenAddresses config or update the token mapping in pricing/coingecko.ts`
     );
   }
 

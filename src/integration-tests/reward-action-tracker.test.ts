@@ -6,7 +6,7 @@ import {
   setBalance,
 } from './test-utils';
 import { MAINNET_CONFIG } from './test-config';
-import { RewardActionTracker } from '../reward-action-tracker';
+import { RewardActionTracker } from '../rewards';
 import { decimaledToWei } from '../utils';
 import { Wallet } from 'ethers';
 import { getBalanceOfErc20, transferErc20 } from '../erc20';

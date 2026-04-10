@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { ethers } from 'ethers';
 import { getLoansToKick } from '../kick';
-import * as priceModule from '../price';
+import * as priceModule from '../pricing';
 import subgraph from '../subgraph';
 import { PriceOriginPoolReference, PriceOriginSource } from '../config';
 

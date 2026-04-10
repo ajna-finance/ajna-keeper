@@ -24,7 +24,7 @@ import {
 import { expect } from 'chai';
 import { weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
-import { collectBondFromPool } from '../collect-bond';
+import { collectBondFromPool } from '../rewards';
 import { handleKicks } from '../kick';
 import { handleLegacyOrArbTakes, handleTakes } from '../take';
 import { NonceTracker } from '../nonce';

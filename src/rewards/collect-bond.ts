@@ -1,10 +1,10 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { constants } from 'ethers';
-import { PoolConfig } from './config';
-import { logger } from './logging';
-import { poolWithdrawBonds } from './transactions';
-import { weiToDecimaled } from './utils';
-import { SettlementConfigInput, tryReactiveSettlement } from './settlement';
+import { PoolConfig } from '../config';
+import { logger } from '../logging';
+import { poolWithdrawBonds } from '../transactions';
+import { weiToDecimaled } from '../utils';
+import { SettlementConfigInput, tryReactiveSettlement } from '../settlement';
 
 interface CollectBondParams {
   pool: FungiblePool;

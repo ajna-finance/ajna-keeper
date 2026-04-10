@@ -1,4 +1,4 @@
-// src/integration-tests/curve-router-module.test.ts
+// src/integration-tests/curve-router.test.ts
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers, Wallet } from 'ethers';

@@ -2,11 +2,11 @@ import {
   PriceOrigin,
   PriceOriginPoolReference,
   PriceOriginSource,
-} from './config';
+} from '../config';
 import { getPriceCoinGecko } from './coingecko';
-import { weiToDecimaled } from './utils';
+import { weiToDecimaled } from '../utils';
 import { PriceInfo } from '@ajna-finance/sdk';
-import { logger } from './logging';
+import { logger } from '../logging';
 
 // Retrieves the market price using the configured source
 export async function getPrice(
@@ -67,3 +67,5 @@ export async function getPoolPrice(
   }
   return weiToDecimaled(price);
 }
+
+export { getPriceCoinGecko } from './coingecko';

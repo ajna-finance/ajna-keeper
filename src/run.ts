@@ -14,10 +14,8 @@ import {
   RequireFields,
 } from './utils';
 import { handleKicks } from './kick';
-import { collectBondFromPool } from './collect-bond';
-import { LpCollector } from './collect-lp';
 import { logger } from './logging';
-import { RewardActionTracker } from './reward-action-tracker';
+import { collectBondFromPool, LpCollector, RewardActionTracker } from './rewards';
 import { DexRouter } from './dex/router';
 import { tryReactiveSettlement } from './settlement';
 import {

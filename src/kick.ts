@@ -8,7 +8,7 @@ import {
   convertWadToTokenDecimals,
 } from './erc20';
 import { logger } from './logging';
-import { getPrice } from './price';
+import { getPrice } from './pricing';
 import {
   decimaledToWei,
   delay,

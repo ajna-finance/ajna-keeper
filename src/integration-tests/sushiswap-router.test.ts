@@ -1,4 +1,4 @@
-// src/integration-tests/sushiswap-router-module.test.ts
+// src/integration-tests/sushiswap-router.test.ts
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers, Wallet } from 'ethers';

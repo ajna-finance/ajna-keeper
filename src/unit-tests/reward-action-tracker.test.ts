@@ -8,7 +8,7 @@ import { MAINNET_CONFIG } from '../integration-tests/test-config';
 import {
   deterministicJsonStringify,
   RewardActionTracker,
-} from '../reward-action-tracker';
+} from '../rewards';
 import { decimaledToWei } from '../utils';
 
 // Helper function to create a mock KeeperConfig for testing

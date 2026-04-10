@@ -2,14 +2,13 @@ import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
 
 import { expect } from 'chai';
 import { BigNumber, Wallet, constants } from 'ethers';
-import { LpCollector } from '../collect-lp';
+import { LpCollector, RewardActionTracker } from '../rewards';
 
 import { configureAjna, TokenToCollect } from '../config';
 import { DexRouter } from '../dex/router';
 import { getBalanceOfErc20 } from '../erc20';
 import { handleKicks } from '../kick';
 import { NonceTracker } from '../nonce';
-import { RewardActionTracker } from '../reward-action-tracker';
 import { handleLegacyOrArbTakes, handleTakes } from '../take';
 import { delay, waitForConditionToBeTrue } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';

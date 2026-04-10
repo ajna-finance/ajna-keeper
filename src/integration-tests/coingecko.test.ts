@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import 'dotenv';
 import { PriceOriginSource } from '../config';
-import { getPriceCoinGecko } from '../coingecko';
+import { getPriceCoinGecko } from '../pricing';
 
 const MAINNET_CHAIN_ID = 1;
 const MAINNET_RPC_URL = process.env.ALCHEMY_API_KEY

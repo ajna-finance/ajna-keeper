@@ -18,14 +18,14 @@ import {
   PoolConfig,
   RewardAction,
   TokenToCollect,
-} from './config';
-import { logger } from './logging';
-import { RewardActionTracker } from './reward-action-tracker';
+} from '../config';
+import { logger } from '../logging';
+import { RewardActionTracker } from './action-tracker';
 import {
   bucketRemoveCollateralToken,
   bucketRemoveQuoteToken,
-} from './transactions';
-import { decimaledToWei, weiToDecimaled } from './utils';
+} from '../transactions';
+import { decimaledToWei, weiToDecimaled } from '../utils';
 import { FungibleBucket } from '@ajna-finance/sdk/dist/classes/FungibleBucket';
 
 /**

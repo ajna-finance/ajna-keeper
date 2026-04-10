@@ -8,11 +8,11 @@ import {
   TransferReward,
   PostAuctionDex,
   validatePostAuctionDex,
-} from './config';
-import { DexRouter } from './dex/router';
-import { getDecimalsErc20, transferErc20 } from './erc20';
-import { logger } from './logging';
-import { delay, tokenChangeDecimals, weiToDecimaled } from './utils';
+} from '../config';
+import { DexRouter } from '../dex/router';
+import { getDecimalsErc20, transferErc20 } from '../erc20';
+import { logger } from '../logging';
+import { delay, tokenChangeDecimals, weiToDecimaled } from '../utils';
 
 export interface TokenConfig {
   address: string;

@@ -29,10 +29,8 @@ import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 import { NonceTracker } from '../nonce';
-import { LpCollector } from '../collect-lp';
+import { LpCollector, RewardActionTracker, collectBondFromPool } from '../rewards';
 import { DexRouter } from '../dex/router';
-import { RewardActionTracker } from '../reward-action-tracker';
-import { collectBondFromPool } from '../collect-bond';
 
 const setup = async () => {
   configureAjna(MAINNET_CONFIG.AJNA_CONFIG);
