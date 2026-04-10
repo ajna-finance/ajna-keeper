@@ -6,7 +6,7 @@ import {
   clearSharedDiscoveryScans,
   validateResolvedSettlementTarget,
   validateResolvedTakeTarget,
-} from '../discovery-targets';
+} from '../discovery/targets';
 import { KeeperConfig, LiquiditySource, PriceOriginSource } from '../config-types';
 import subgraph from '../subgraph';
 

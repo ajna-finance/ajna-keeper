@@ -10,15 +10,15 @@ import {
   hasExternalTakeSettings,
   validateSettlementSettings,
   validateTakeSettings,
-} from './config-types';
-import { logger } from './logging';
+} from '../config-types';
+import { logger } from '../logging';
 import {
   createSubgraphReader,
   SubgraphReader,
   SubgraphTransportConfig,
-} from './read-transports';
-import { ChainwideLiquidationAuction } from './subgraph';
-import { overrideMulticall, RequireFields } from './utils';
+} from '../read-transports';
+import { ChainwideLiquidationAuction } from '../subgraph';
+import { overrideMulticall, RequireFields } from '../utils';
 
 const DISCOVERY_PAGE_SIZE = 100;
 const DISCOVERY_MAX_PAGES = 100;

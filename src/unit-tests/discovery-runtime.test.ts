@@ -1,15 +1,15 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber } from 'ethers';
-import { clearSharedDiscoveryScans } from '../discovery-targets';
-import { createDiscoveryRuntime } from '../discovery-runtime';
+import { clearSharedDiscoveryScans } from '../discovery/targets';
+import { createDiscoveryRuntime } from '../discovery/runtime';
 import { processKickCycle, runTakeLoopIteration } from '../run';
 import { KeeperConfig, PriceOriginSource } from '../config-types';
 import * as readRpc from '../read-rpc';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import * as kickModule from '../kick';
-import * as discoveryHandlers from '../discovery-handlers';
+import * as discoveryHandlers from '../discovery/handlers';
 import subgraph from '../subgraph';
 import { logger } from '../logging';
 import { createSubgraphReader } from '../read-transports';

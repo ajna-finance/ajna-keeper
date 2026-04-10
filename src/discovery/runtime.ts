@@ -10,29 +10,29 @@ import {
   getManualTakeTargets,
   PoolHydrationCooldowns,
   PoolMap,
-} from './discovery-targets';
+} from './targets';
 import {
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   KeeperConfig,
   validateTakeSettings,
-} from './config-types';
+} from '../config-types';
 import {
   DiscoveryRpcCache,
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
-} from './discovery-handlers';
-import { logger } from './logging';
+} from './handlers';
+import { logger } from '../logging';
 import {
   createDiscoveryReadTransports,
   DiscoveryReadTransports,
-} from './read-transports';
-import { handleSettlements } from './settlement';
-import { ChainwideLiquidationAuction } from './subgraph';
-import { createFactoryQuoteProviderRuntimeCache } from './take-factory';
-import { handleTakes } from './take';
-import { TakeWriteTransport } from './take-write-transport';
-import { delay } from './utils';
+} from '../read-transports';
+import { handleSettlements } from '../settlement';
+import { ChainwideLiquidationAuction } from '../subgraph';
+import { createFactoryQuoteProviderRuntimeCache } from '../take-factory';
+import { handleTakes } from '../take';
+import { TakeWriteTransport } from '../take-write-transport';
+import { delay } from '../utils';
 
 export interface DiscoverySnapshotState {
   latestLiquidationAuctions?: ChainwideLiquidationAuction[];

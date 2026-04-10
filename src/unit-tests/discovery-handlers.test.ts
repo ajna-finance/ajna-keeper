@@ -4,7 +4,7 @@ import { BigNumber, ethers } from 'ethers';
 import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
-} from '../discovery-handlers';
+} from '../discovery/handlers';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import { LiquiditySource } from '../config-types';

@@ -24,8 +24,8 @@ import {
   cacheConfiguredPool,
   PoolHydrationCooldowns,
   PoolMap,
-} from './discovery-targets';
-import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery-runtime';
+} from './discovery/targets';
+import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery/runtime';
 import { createSubgraphReader, SubgraphReader } from './read-transports';
 import { createTakeWriteTransport } from './take-write-transport';
 

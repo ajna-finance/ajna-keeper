@@ -1,7 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { getAutoDiscoverSettlementPolicy } from '../config-types';
-import { ResolvedSettlementTarget } from '../discovery-targets';
+import { ResolvedSettlementTarget } from './targets';
 import { logger } from '../logging';
 import {
   createDiscoveryTransportsForConfig,
