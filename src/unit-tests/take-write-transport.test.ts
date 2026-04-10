@@ -6,7 +6,7 @@ import { BigNumber, Wallet } from 'ethers';
 import { JsonRpcProvider } from '../provider';
 import {
   TakeWriteTransportMode,
-} from '../config-types';
+} from '../config';
 import {
   createTakeWriteTransport,
   resolveTakeWriteConfig,

@@ -5,7 +5,7 @@ import {
   SettlementIncentiveResult,
   SettlementNeedResult,
 } from './model';
-import { SettlementActionConfig } from '../settlement-types';
+import { SettlementActionConfig } from './types';
 
 export function isAuctionOldEnough(
   auction: AuctionToSettle,

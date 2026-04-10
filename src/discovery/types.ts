@@ -1,5 +1,5 @@
 import { BigNumber } from 'ethers';
-import { KeeperConfig } from '../config-types';
+import { KeeperConfig } from '../config';
 import { FactoryQuoteProviderRuntimeCache } from '../take/factory';
 
 export type DiscoveryExecutionConfig = Pick<

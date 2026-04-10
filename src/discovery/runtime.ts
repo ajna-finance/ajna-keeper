@@ -16,7 +16,7 @@ import {
   getAutoDiscoverTakePolicy,
   KeeperConfig,
   validateTakeSettings,
-} from '../config-types';
+} from '../config';
 import {
   DiscoveryRpcCache,
   handleDiscoveredSettlementTarget,

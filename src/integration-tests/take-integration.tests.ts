@@ -1,7 +1,7 @@
 // src/integration-tests/take-integration.test.ts
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { KeeperConfig, LiquiditySource, PoolConfig } from '../config-types';
+import { KeeperConfig, LiquiditySource, PoolConfig } from '../config';
 import subgraph from '../subgraph';
 import { handleTakes } from '../take';
 import * as takeFactory from '../take/factory';

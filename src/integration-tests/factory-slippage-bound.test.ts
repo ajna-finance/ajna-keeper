@@ -3,7 +3,7 @@ import { AjnaSDK, FungiblePool, Provider } from '@ajna-finance/sdk';
 import { expect } from 'chai';
 import { BigNumber, Contract, Wallet, ethers, utils } from 'ethers';
 import ERC20_ABI from '../abis/erc20.abi.json';
-import { LiquiditySource } from '../config-types';
+import { LiquiditySource } from '../config';
 import { SECONDS_PER_DAY } from '../constants';
 import { getLoansToKick, kick } from '../kick';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
@@ -24,7 +24,7 @@ import {
   setBalance,
 } from './test-utils';
 import { NonceTracker } from '../nonce';
-import { configureAjna } from '../config-types';
+import { configureAjna } from '../config';
 import {
   computeFactoryAmountOutMinimum,
   takeLiquidationFactory,

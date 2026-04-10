@@ -1,6 +1,6 @@
 // src/smart-dex-manager.ts
 import { Signer } from 'ethers';
-import { PoolConfig, LiquiditySource } from './config-types';
+import { PoolConfig, LiquiditySource } from './config';
 import { logger } from './logging';
 
 /**

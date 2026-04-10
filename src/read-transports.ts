@@ -1,5 +1,5 @@
 import { BigNumber, providers } from 'ethers';
-import { KeeperConfig } from './config-types';
+import { KeeperConfig } from './config';
 import { getResilientReadGasPrice } from './read-rpc';
 import subgraph, {
   GetChainwideLiquidationAuctionsResponse,

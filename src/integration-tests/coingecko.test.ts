@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import 'dotenv';
-import { PriceOriginSource } from '../config-types';
+import { PriceOriginSource } from '../config';
 import { getPriceCoinGecko } from '../coingecko';
 
 const MAINNET_CHAIN_ID = 1;

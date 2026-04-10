@@ -2,7 +2,7 @@ import './subgraph-mock';
 import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
 import { expect } from 'chai';
 import { BigNumber, constants } from 'ethers';
-import { configureAjna, KeeperConfig, PoolConfig } from '../config-types';
+import { configureAjna, KeeperConfig, PoolConfig } from '../config';
 import { NonceTracker } from '../nonce';
 import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../settlement';
 import { LpCollector } from '../collect-lp';

@@ -3,7 +3,7 @@ import { logger } from '../logging';
 import { poolSettle } from '../transactions';
 import { delay } from '../utils';
 import { SettlementReadConfig, SettlementResult } from './model';
-import { SettlementActionConfig } from '../settlement-types';
+import { SettlementActionConfig } from './types';
 
 export async function settleAuctionCompletely(params: {
   pool: FungiblePool;

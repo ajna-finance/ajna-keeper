@@ -1,7 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { quoteTokenScale } from '@ajna-finance/sdk/dist/contracts/pool';
 import { BigNumber, ethers } from 'ethers';
-import { KeeperConfig, LiquiditySource, PoolConfig } from '../../config-types';
+import { KeeperConfig, LiquiditySource, PoolConfig } from '../../config';
 import {
   SubgraphConfigInput,
   WithSubgraph,

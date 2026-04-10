@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { LiquiditySource } from '../../config-types';
+import { LiquiditySource } from '../../config';
 import { SushiSwapQuoteProvider } from '../../dex-providers/sushiswap-quote-provider';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';

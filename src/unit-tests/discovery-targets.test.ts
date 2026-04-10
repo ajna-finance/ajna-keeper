@@ -7,7 +7,7 @@ import {
   validateResolvedSettlementTarget,
   validateResolvedTakeTarget,
 } from '../discovery/targets';
-import { KeeperConfig, LiquiditySource, PriceOriginSource } from '../config-types';
+import { KeeperConfig, LiquiditySource, PriceOriginSource } from '../config';
 import subgraph from '../subgraph';
 
 const BASE_CONFIG: KeeperConfig = {

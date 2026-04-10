@@ -1,4 +1,4 @@
-import { KeeperConfig } from '../config-types';
+import { KeeperConfig } from '../config';
 import {
   resolveSubgraphConfig,
   SubgraphConfigInput,

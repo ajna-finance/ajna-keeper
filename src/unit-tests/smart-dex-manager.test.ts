@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { LiquiditySource } from '../config-types';
+import { LiquiditySource } from '../config';
 import { SmartDexManager } from '../smart-dex-manager';
 
 describe('SmartDexManager', () => {

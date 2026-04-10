@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { LiquiditySource, getAutoDiscoverTakePolicy } from '../config-types';
+import { LiquiditySource, getAutoDiscoverTakePolicy } from '../config';
 import { ResolvedTakeTarget } from './targets';
 import { logger } from '../logging';
 import {

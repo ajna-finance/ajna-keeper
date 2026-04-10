@@ -2,7 +2,7 @@ import { logger } from './logging';
 import {
   PriceOriginCoinGecko,
   PriceOriginCoinGeckoQuery,
-} from './config-types';
+} from './config';
 import { getPriceFromAlchemy, getPoolPriceFromAlchemy } from './alchemy-prices';
 
 interface CoinGeckoResponse {

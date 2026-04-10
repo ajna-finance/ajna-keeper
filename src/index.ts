@@ -2,7 +2,7 @@
 
 import yargs from 'yargs/yargs';
 
-import { readConfigFile } from './config-types';
+import { readConfigFile } from './config';
 import { startKeeperFromConfig } from './run';
 import { logger, setLoggerConfig } from './logging';
 

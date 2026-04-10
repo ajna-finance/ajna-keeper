@@ -5,7 +5,7 @@
 import { ethers, BigNumber, Signer } from 'ethers';
 import { logger } from '../logging';
 import { getDecimalsErc20 } from '../erc20';
-import { CurvePoolType } from '../config-types';
+import { CurvePoolType } from '../config';
 
 // StableSwap ABI (int128 indices) - from working test scripts
 const STABLESWAP_ABI = [

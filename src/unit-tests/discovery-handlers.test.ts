@@ -7,7 +7,7 @@ import {
 } from '../discovery/handlers';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
-import { LiquiditySource } from '../config-types';
+import { LiquiditySource } from '../config';
 import * as erc20 from '../erc20';
 import { DexRouter } from '../dex-router';
 import { logger } from '../logging';

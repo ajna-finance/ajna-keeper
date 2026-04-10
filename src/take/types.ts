@@ -1,5 +1,5 @@
 import { BigNumber } from 'ethers';
-import { TakeSettings } from '../config-types';
+import { TakeSettings } from '../config';
 
 export interface TakeActionConfig {
   name?: string;

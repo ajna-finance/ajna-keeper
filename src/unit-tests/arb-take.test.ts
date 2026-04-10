@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { ethers } from 'ethers';
 import * as erc20 from '../erc20';
-import { LiquiditySource } from '../config-types';
+import { LiquiditySource } from '../config';
 import { arbTakeLiquidation, checkIfArbTakeable } from '../take/arb';
 import * as transactions from '../transactions';
 

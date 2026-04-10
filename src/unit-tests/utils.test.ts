@@ -5,7 +5,7 @@ import chaiAsPromised from 'chai-as-promised';
 import { BigNumber, providers, Wallet } from 'ethers';
 
 chai.use(chaiAsPromised);
-import { KeeperConfig } from '../config-types';
+import { KeeperConfig } from '../config';
 import {
   overrideMulticall,
   decimaledToWei,

@@ -4,7 +4,7 @@ import {
   AutoDiscoverActionPolicy,
   AutoDiscoverTakePolicy,
   LiquiditySource,
-} from '../config-types';
+} from '../config';
 import {
   createDiscoveryReadTransports,
   DiscoveryReadTransportConfig,

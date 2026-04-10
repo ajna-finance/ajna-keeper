@@ -5,7 +5,7 @@ import {
   RequireFields,
   weiToDecimaled,
 } from '../utils';
-import { KeeperConfig, LiquiditySource, PoolConfig } from '../config-types';
+import { KeeperConfig, LiquiditySource, PoolConfig } from '../config';
 import { logger } from '../logging';
 import { DexRouter } from '../dex-router';
 import { BigNumber, ethers } from 'ethers';

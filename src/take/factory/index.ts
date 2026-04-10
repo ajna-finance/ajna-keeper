@@ -1,6 +1,6 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import { weiToDecimaled } from '../../utils';
-import { LiquiditySource } from '../../config-types';
+import { LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
 import {

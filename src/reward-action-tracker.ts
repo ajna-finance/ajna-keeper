@@ -8,7 +8,7 @@ import {
   TransferReward,
   PostAuctionDex,
   validatePostAuctionDex,
-} from './config-types';
+} from './config';
 import { DexRouter } from './dex-router';
 import { getDecimalsErc20, transferErc20 } from './erc20';
 import { logger } from './logging';

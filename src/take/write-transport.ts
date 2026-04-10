@@ -6,7 +6,7 @@ import {
   TakeWriteConfig,
   TakeWriteRelayConfig,
   TakeWriteTransportMode,
-} from '../config-types';
+} from '../config';
 import { logger } from '../logging';
 import { JsonRpcProvider } from '../provider';
 import { NonceConsumedTransactionError, NonceTracker } from '../nonce';

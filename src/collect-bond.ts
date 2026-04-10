@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { constants } from 'ethers';
-import { PoolConfig } from './config-types';
+import { PoolConfig } from './config';
 import { logger } from './logging';
 import { poolWithdrawBonds } from './transactions';
 import { weiToDecimaled } from './utils';

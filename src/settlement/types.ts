@@ -1,4 +1,4 @@
-import { SettlementConfig } from './config-types';
+import { SettlementConfig } from '../config';
 
 export interface SettlementActionConfig {
   settlement: SettlementConfig;

@@ -3,7 +3,7 @@ import { Wallet, constants, providers, utils } from 'ethers';
 import { network } from 'hardhat';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
 import { SushiSwapKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
-import { LiquiditySource } from '../config-types';
+import { LiquiditySource } from '../config';
 
 function getProvider() {
   return new providers.Web3Provider(network.provider as any);

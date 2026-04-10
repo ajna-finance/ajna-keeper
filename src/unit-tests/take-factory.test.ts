@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { CurvePoolType, LiquiditySource } from '../config-types';
+import { CurvePoolType, LiquiditySource } from '../config';
 import { logger } from '../logging';
 import * as takeFactory from '../take/factory';
 import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';

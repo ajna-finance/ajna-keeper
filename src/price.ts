@@ -2,7 +2,7 @@ import {
   PriceOrigin,
   PriceOriginPoolReference,
   PriceOriginSource,
-} from './config-types';
+} from './config';
 import { getPriceCoinGecko } from './coingecko';
 import { weiToDecimaled } from './utils';
 import { PriceInfo } from '@ajna-finance/sdk';

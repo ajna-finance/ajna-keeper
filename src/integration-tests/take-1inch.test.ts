@@ -6,7 +6,7 @@ import sinon from 'sinon';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
 import * as oneInch from '../1inch';
 import ERC20_ABI from '../abis/erc20.abi.json';
-import { configureAjna, LiquiditySource } from '../config-types';
+import { configureAjna, LiquiditySource } from '../config';
 import { SECONDS_PER_DAY } from '../constants';
 import { getLoansToKick, kick } from '../kick';
 import { getLiquidationsToTake, takeLiquidation } from '../take';

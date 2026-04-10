@@ -2,7 +2,7 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { ethers } from 'ethers';
 import { logger } from '../logging';
 import { AuctionToSettle, SettlementReadConfig } from './model';
-import { SettlementActionConfig } from '../settlement-types';
+import { SettlementActionConfig } from './types';
 import { needsSettlement } from './checks';
 
 export class SettlementScanner {

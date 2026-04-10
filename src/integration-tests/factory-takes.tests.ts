@@ -4,7 +4,7 @@ import { AjnaSDK, FungiblePool, Signer } from '@ajna-finance/sdk';
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
 import sinon from 'sinon';
-import { configureAjna, LiquiditySource, KeeperConfig, PoolConfig } from '../config-types';
+import { configureAjna, LiquiditySource, KeeperConfig, PoolConfig } from '../config';
 import { handleFactoryTakes } from '../take/factory';
 import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
 import { handleKicks } from '../kick';

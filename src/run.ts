@@ -6,7 +6,7 @@ import {
   validateAutoDiscoverConfig,
   validateTakeWriteConfig,
   validateTakeSettingsForChain,
-} from './config-types';
+} from './config';
 import {
   delay,
   getProviderAndSigner,

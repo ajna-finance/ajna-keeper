@@ -2,7 +2,7 @@ import { BigNumber, providers, Wallet } from 'ethers';
 import { promises as fs } from 'fs';
 import { password } from '@inquirer/prompts';
 import { FungiblePool } from '@ajna-finance/sdk';
-import { KeeperConfig } from './config-types';
+import { KeeperConfig } from './config';
 import { logger } from './logging';
 import { JsonRpcProvider } from './provider';
 

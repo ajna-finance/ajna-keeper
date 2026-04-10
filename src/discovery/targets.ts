@@ -10,7 +10,7 @@ import {
   hasExternalTakeSettings,
   validateSettlementSettings,
   validateTakeSettings,
-} from '../config-types';
+} from '../config';
 import { logger } from '../logging';
 import {
   createSubgraphReader,

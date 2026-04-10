@@ -2,7 +2,7 @@ import './subgraph-mock';
 import { getLoansToKick, handleKicks, kick } from '../kick';
 import { AjnaSDK, ERC20Pool__factory, FungiblePool } from '@ajna-finance/sdk';
 import { MAINNET_CONFIG, USER1_MNEMONIC } from './test-config';
-import { configureAjna, LiquiditySource, TokenToCollect } from '../config-types';
+import { configureAjna, LiquiditySource, TokenToCollect } from '../config';
 import {
   getProvider,
   resetHardhat,

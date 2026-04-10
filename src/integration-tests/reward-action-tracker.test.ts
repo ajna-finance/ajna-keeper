@@ -1,4 +1,4 @@
-import { RewardActionLabel } from '../config-types';
+import { RewardActionLabel } from '../config';
 import {
   getProvider,
   impersonateSigner,

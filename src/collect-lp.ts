@@ -18,7 +18,7 @@ import {
   PoolConfig,
   RewardAction,
   TokenToCollect,
-} from './config-types';
+} from './config';
 import { logger } from './logging';
 import { RewardActionTracker } from './reward-action-tracker';
 import {

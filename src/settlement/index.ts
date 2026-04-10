@@ -1,23 +1,24 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { PoolConfig } from './config-types';
-import { logger } from './logging';
+import { PoolConfig } from '../config';
+import { logger } from '../logging';
 import {
   AuctionToSettle,
   SettlementConfigInput,
   SettlementStatus,
   resolveSettlementReadConfig,
-} from './settlement/model';
-import { SettlementActionConfig } from './settlement-types';
+} from './model';
+import { SettlementActionConfig } from './types';
 import {
   checkBotIncentive,
   isAuctionOldEnough,
   needsSettlement,
-} from './settlement/checks';
-import { SettlementScanner } from './settlement/scanner';
-import { settleAuctionCompletely } from './settlement/execution';
-import { delay, RequireFields } from './utils';
+} from './checks';
+import { SettlementScanner } from './scanner';
+import { settleAuctionCompletely } from './execution';
+import { delay, RequireFields } from '../utils';
 
-export * from './settlement/model';
+export * from './model';
+export * from './types';
 
 export class SettlementHandler {
   private static activeSettlements: Set<string> = new Set();

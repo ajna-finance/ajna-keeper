@@ -5,7 +5,7 @@ import { logger } from './logging';
 import { NonceTracker } from './nonce';
 import { weiToDecimaled } from './utils';
 import { getTokenFromAddress } from './uniswap';
-import { CurvePoolType } from './config-types';
+import { CurvePoolType } from './config';
 
 // ABIs - Based on working test scripts
 const ERC20_ABI = [

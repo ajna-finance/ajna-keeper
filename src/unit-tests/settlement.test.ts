@@ -2,7 +2,7 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../settlement';
-import { KeeperConfig, PoolConfig } from '../config-types';
+import { KeeperConfig, PoolConfig } from '../config';
 import subgraph from '../subgraph';
 import * as transactions from '../transactions';
 

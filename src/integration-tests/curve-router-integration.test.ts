@@ -4,7 +4,7 @@ import sinon from 'sinon';
 import { BigNumber, ethers, Wallet } from 'ethers';
 import * as curveRouterModule from '../curve-router-module';
 import { NonceTracker } from '../nonce';
-import { CurvePoolType } from '../config-types';
+import { CurvePoolType } from '../config';
 import { USER1_MNEMONIC } from './test-config';
 import { getProvider } from './test-utils';
 

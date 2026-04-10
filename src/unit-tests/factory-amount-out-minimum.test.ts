@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
-import { LiquiditySource } from '../config-types';
+import { LiquiditySource } from '../config';
 import { computeFactoryAmountOutMinimum } from '../take/factory';
 
 describe('Factory amountOutMinimum', () => {

@@ -3,7 +3,7 @@ import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import * as curveRouterModule from '../curve-router-module';
 import { NonceTracker } from '../nonce';
-import { CurvePoolType } from '../config-types';
+import { CurvePoolType } from '../config';
 
 describe('Curve Router Module', () => {
   let swapStub: sinon.SinonStub;

@@ -4,7 +4,7 @@ import { Wallet } from 'ethers';
 import {
   LiquiditySource,
   validateTakeSettings,
-} from '../config-types';
+} from '../config';
 import { SmartDexManager } from '../smart-dex-manager';
 import { USER1_MNEMONIC } from './test-config';
 import { getProvider } from './test-utils';

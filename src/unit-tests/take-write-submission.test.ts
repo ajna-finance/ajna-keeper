@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { LiquiditySource } from '../config-types';
+import { LiquiditySource } from '../config';
 import * as erc20 from '../erc20';
 import * as oneInch from '../1inch';
 import { NonceTracker } from '../nonce';

@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { BigNumber, Wallet, constants } from 'ethers';
 import { LpCollector } from '../collect-lp';
 
-import { configureAjna, TokenToCollect } from '../config-types';
+import { configureAjna, TokenToCollect } from '../config';
 import { DexRouter } from '../dex-router';
 import { getBalanceOfErc20 } from '../erc20';
 import { handleKicks } from '../kick';

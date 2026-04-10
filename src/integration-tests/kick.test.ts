@@ -2,7 +2,7 @@ import './subgraph-mock';
 import { approveBalanceForLoanToKick, getLoansToKick, kick, handleKicks } from '../kick';
 import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
 import { MAINNET_CONFIG } from './test-config';
-import { configureAjna } from '../config-types';
+import { configureAjna } from '../config';
 import {
   getProvider,
   resetHardhat,

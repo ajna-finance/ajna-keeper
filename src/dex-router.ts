@@ -14,7 +14,7 @@ import {
   CurvePoolType,
   CurveRouterOverrides,
   PostAuctionDex,
-} from './config-types';
+} from './config';
 
 export class DexRouter {
   private signer: Signer;

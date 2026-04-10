@@ -4,7 +4,7 @@ import { ethers } from 'ethers';
 import { getLoansToKick } from '../kick';
 import * as priceModule from '../price';
 import subgraph from '../subgraph';
-import { PriceOriginPoolReference, PriceOriginSource } from '../config-types';
+import { PriceOriginPoolReference, PriceOriginSource } from '../config';
 
 function buildLoanDetails() {
   return {
