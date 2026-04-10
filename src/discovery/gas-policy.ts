@@ -11,9 +11,9 @@ import {
   DiscoveryReadTransports,
 } from '../read-transports';
 import { logger } from '../logging';
-import { DexRouter } from '../dex-router';
-import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
-import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
+import { DexRouter } from '../dex/router';
+import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
+import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provider';
 import { getDecimalsErc20 } from '../erc20';
 import { DiscoveryExecutionConfig } from './types';
 
@@ -201,7 +201,7 @@ async function quoteTokensByLiquiditySource(params: {
       return undefined;
     }
     const { CurveQuoteProvider } = await import(
-      '../dex-providers/curve-quote-provider'
+      '../dex/providers/curve-quote-provider'
     );
     const quoteProvider = new CurveQuoteProvider(params.signer, {
       poolConfigs: curveConfig.poolConfigs as any,

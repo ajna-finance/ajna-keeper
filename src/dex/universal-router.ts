@@ -1,11 +1,11 @@
-// src/universal-router-module.ts
+// src/dex/universal-router.ts
 // FIXED: Now mirrors working SushiSwap patterns for decimal handling and conservative approach
 import { Contract, BigNumber, Signer, providers, constants, ethers } from 'ethers';
-import { logger } from './logging';
-import { NonceTracker } from './nonce';
-import { weiToDecimaled } from './utils';
+import { logger } from '../logging';
+import { NonceTracker } from '../nonce';
+import { weiToDecimaled } from '../utils';
 import { getTokenFromAddress } from './uniswap';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from './erc20';
+import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
 
 // ABIs
 const ERC20_ABI = [

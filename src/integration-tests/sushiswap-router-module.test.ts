@@ -2,7 +2,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers, Wallet } from 'ethers';
-import * as sushiswapRouterModule from '../sushiswap-router-module';
+import * as sushiswapRouterModule from '../dex/sushiswap-router';
 import { NonceTracker } from '../nonce';
 import { USER1_MNEMONIC } from './test-config';
 import { getProvider } from './test-utils';

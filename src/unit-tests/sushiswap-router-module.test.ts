@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import * as sushiswapRouterModule from '../sushiswap-router-module';
+import * as sushiswapRouterModule from '../dex/sushiswap-router';
 import { NonceTracker } from '../nonce';
 
 describe('SushiSwap Router Module', () => {

@@ -1,20 +1,20 @@
 import axios from 'axios';
 import 'dotenv/config';
 import { BigNumber, Contract, Signer, providers } from 'ethers';
-import ERC20_ABI from './abis/erc20.abi.json';
-import { approveErc20, getAllowanceOfErc20, getDecimalsErc20 } from './erc20';
-import { logger } from './logging';
+import ERC20_ABI from '../abis/erc20.abi.json';
+import { approveErc20, getAllowanceOfErc20, getDecimalsErc20 } from '../erc20';
+import { logger } from '../logging';
 import { swapToWeth } from './uniswap';
-import { tokenChangeDecimals } from './utils';
-import { swapWithUniversalRouter } from './universal-router-module';
-import { swapWithSushiswapRouter } from './sushiswap-router-module';
-import { swapWithCurveRouter } from './curve-router-module';
-import { NonceTracker } from './nonce';
+import { tokenChangeDecimals } from '../utils';
+import { swapWithUniversalRouter } from './universal-router';
+import { swapWithSushiswapRouter } from './sushiswap-router';
+import { swapWithCurveRouter } from './curve-router';
+import { NonceTracker } from '../nonce';
 import {
   CurvePoolType,
   CurveRouterOverrides,
   PostAuctionDex,
-} from './config';
+} from '../config';
 
 export class DexRouter {
   private signer: Signer;

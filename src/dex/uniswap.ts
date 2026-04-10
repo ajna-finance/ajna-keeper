@@ -26,12 +26,12 @@ import {
   Signer,
   constants,
 } from 'ethers';
-import ERC20_ABI from './abis/erc20.abi.json';
-import { logger } from './logging';
-import { NonceTracker } from './nonce';
-import { weiToDecimaled } from './utils';
-import { approveErc20, getAllowanceOfErc20 } from './erc20';
-import { UniswapV3Overrides } from './config';
+import ERC20_ABI from '../abis/erc20.abi.json';
+import { logger } from '../logging';
+import { NonceTracker } from '../nonce';
+import { weiToDecimaled } from '../utils';
+import { approveErc20, getAllowanceOfErc20 } from '../erc20';
+import { UniswapV3Overrides } from '../config';
 
 interface PoolInfo {
   sqrtPriceX96: BigNumber;

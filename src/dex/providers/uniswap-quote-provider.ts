@@ -1,9 +1,9 @@
-// src/dex-providers/uniswap-quote-provider.ts
+// src/dex/providers/uniswap-quote-provider.ts
 // OFFICIAL UNISWAP APPROACH: Using QuoterV2 contract with callStatic
 
 import { BigNumber, ethers } from 'ethers';
-import { logger } from '../logging';
-import { getDecimalsErc20 } from '../erc20';
+import { logger } from '../../logging';
+import { getDecimalsErc20 } from '../../erc20';
 
 interface QuoteResult {
   success: boolean;

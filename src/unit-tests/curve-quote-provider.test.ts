@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { CurveQuoteProvider } from '../dex-providers/curve-quote-provider';
+import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
 import { CurvePoolType } from '../config';
 
 describe('Curve Quote Provider', () => {

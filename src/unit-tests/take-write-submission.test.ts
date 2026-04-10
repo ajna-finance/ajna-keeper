@@ -3,10 +3,10 @@ import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../config';
 import * as erc20 from '../erc20';
-import * as oneInch from '../1inch';
+import * as oneInch from '../dex/one-inch';
 import { NonceTracker } from '../nonce';
 import { takeLiquidation } from '../take';
-import { DexRouter } from '../dex-router';
+import { DexRouter } from '../dex/router';
 import { executeUniswapV3FactoryTake } from '../take/factory/uniswap';
 import * as shared from '../take/factory/shared';
 import {

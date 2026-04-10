@@ -3,7 +3,7 @@ import { expect } from 'chai';
 import { BigNumber, Wallet } from 'ethers';
 import sinon, { SinonStub } from 'sinon';
 import { RewardAction, RewardActionLabel, KeeperConfig, PostAuctionDex } from '../config';
-import { DexRouter } from '../dex-router';
+import { DexRouter } from '../dex/router';
 import { MAINNET_CONFIG } from '../integration-tests/test-config';
 import {
   deterministicJsonStringify,

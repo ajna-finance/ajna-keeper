@@ -3,9 +3,9 @@ import { BigNumber } from 'ethers';
 // Had to modify ABI plucked from Etherscan to resolve:
 // duplicate definition - ETHTransferFailed()
 // duplicate definition - InvalidMsgValue()
-import genericRouterABI from './abis/1inch-genericrouter.abi.json';
-import { AjnaKeeperTaker, SwapDescriptionStructOutput } from '../typechain-types/contracts/AjnaKeeperTaker';
-import { logger } from './logging';
+import genericRouterABI from '../abis/1inch-genericrouter.abi.json';
+import { AjnaKeeperTaker, SwapDescriptionStructOutput } from '../../typechain-types/contracts/AjnaKeeperTaker';
+import { logger } from '../logging';
 
 export interface SwapCalldata {
   aggregationExecutor: string;

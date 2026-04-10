@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import * as universalRouterModule from '../universal-router-module';
+import * as universalRouterModule from '../dex/universal-router';
 import { NonceTracker } from '../nonce';
 
 describe('Universal Router Module', () => {

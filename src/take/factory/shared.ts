@@ -7,8 +7,8 @@ import {
   WithSubgraph,
 } from '../../read-transports';
 import { RequireFields } from '../../utils';
-import { SushiSwapQuoteProvider } from '../../dex-providers/sushiswap-quote-provider';
-import { UniswapV3QuoteProvider } from '../../dex-providers/uniswap-quote-provider';
+import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
+import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
 import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../types';
 import { TakeWriteTransport } from '../write-transport';
 

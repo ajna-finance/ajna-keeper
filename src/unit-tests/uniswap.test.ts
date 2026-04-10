@@ -4,7 +4,7 @@ import chaiAsPromised from 'chai-as-promised';
 import { BigNumber, Contract, ethers, providers, Signer } from 'ethers';
 import sinon from 'sinon';
 import { logger } from '../logging';
-import Uniswap, * as uniswap from '../uniswap';
+import Uniswap, * as uniswap from '../dex/uniswap';
 
 chai.use(chaiAsPromised);
 

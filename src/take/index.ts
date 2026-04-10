@@ -7,13 +7,13 @@ import {
 } from '../utils';
 import { KeeperConfig, LiquiditySource, PoolConfig } from '../config';
 import { logger } from '../logging';
-import { DexRouter } from '../dex-router';
+import { DexRouter } from '../dex/router';
 import { BigNumber, ethers } from 'ethers';
-import { convertSwapApiResponseToDetailsBytes } from '../1inch';
+import { convertSwapApiResponseToDetailsBytes } from '../dex/one-inch';
 import { AjnaKeeperTaker__factory } from '../../typechain-types';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
 import { NonceTracker } from '../nonce';
-import { SmartDexManager } from '../smart-dex-manager';
+import { SmartDexManager } from '../dex/manager';
 import {
   resolveSubgraphConfig,
   SubgraphConfigInput,

@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
+import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
 
 describe('UniswapV3QuoteProvider', () => {
   let mockSigner: any;

@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { LiquiditySource } from '../config';
-import { SmartDexManager } from '../smart-dex-manager';
+import { SmartDexManager } from '../dex/manager';
 
 describe('SmartDexManager', () => {
   let mockSigner: any;

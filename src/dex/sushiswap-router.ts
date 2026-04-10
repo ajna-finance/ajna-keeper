@@ -1,9 +1,9 @@
-// src/sushiswap-router-module.ts
+// src/dex/sushiswap-router.ts
 // Based on working production patterns from test-sushiswap-bypass-quoter.ts
 import { Contract, BigNumber, Signer, providers, ethers } from 'ethers';
-import { logger } from './logging';
-import { NonceTracker } from './nonce';
-import { weiToDecimaled } from './utils';
+import { logger } from '../logging';
+import { NonceTracker } from '../nonce';
+import { weiToDecimaled } from '../utils';
 import { getTokenFromAddress } from './uniswap';
 
 // ABIs - Based on working production test file

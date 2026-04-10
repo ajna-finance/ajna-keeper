@@ -1,10 +1,10 @@
-// src/dex-providers/sushiswap-quote-provider.ts
+// src/dex/providers/sushiswap-quote-provider.ts
 // SushiSwap V3 Quote Provider for accurate price discovery during external takes
 // Based on working production patterns from test-sushiswap-bypass-quoter.ts
 
 import { ethers, BigNumber, Signer } from 'ethers';
-import { logger } from '../logging';
-import { getDecimalsErc20 } from '../erc20';
+import { logger } from '../../logging';
+import { getDecimalsErc20 } from '../../erc20';
 
 // SushiSwap V3 QuoterV2 ABI with CORRECT field order (from production testing)
 const SUSHI_QUOTER_ABI = [

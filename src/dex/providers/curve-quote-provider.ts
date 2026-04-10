@@ -1,11 +1,11 @@
-// src/dex-providers/curve-quote-provider.ts
+// src/dex/providers/curve-quote-provider.ts
 // Curve Quote Provider for accurate price discovery during external takes
 // FIXED: Uses tokenAddresses mapping for reliable pool discovery
 
 import { ethers, BigNumber, Signer } from 'ethers';
-import { logger } from '../logging';
-import { getDecimalsErc20 } from '../erc20';
-import { CurvePoolType } from '../config';
+import { logger } from '../../logging';
+import { getDecimalsErc20 } from '../../erc20';
+import { CurvePoolType } from '../../config';
 
 // StableSwap ABI (int128 indices) - from working test scripts
 const STABLESWAP_ABI = [

@@ -5,7 +5,7 @@ import {
   LiquiditySource,
   validateTakeSettings,
 } from '../config';
-import { SmartDexManager } from '../smart-dex-manager';
+import { SmartDexManager } from '../dex/manager';
 import { USER1_MNEMONIC } from './test-config';
 import { getProvider } from './test-utils';
 

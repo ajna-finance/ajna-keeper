@@ -1,8 +1,8 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../../config';
-import { CurveQuoteProvider } from '../../dex-providers/curve-quote-provider';
-import { DexRouter } from '../../dex-router';
+import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
+import { DexRouter } from '../../dex/router';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';

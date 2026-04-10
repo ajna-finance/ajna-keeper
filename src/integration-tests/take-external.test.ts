@@ -6,7 +6,7 @@ import sinon from 'sinon';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
 import { MockSwapRouter__factory } from '../../typechain-types/factories/contracts/mocks';
 import { UniswapV3SwapAdapter__factory } from '../../typechain-types/factories/contracts/mocks/UniswapV3SwapAdapter.sol';
-import * as oneInch from '../1inch';
+import * as oneInch from '../dex/one-inch';
 import ERC20_ABI from '../abis/erc20.abi.json';
 import { configureAjna, LiquiditySource } from '../config';
 import { SECONDS_PER_DAY } from '../constants';

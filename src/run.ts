@@ -18,7 +18,7 @@ import { collectBondFromPool } from './collect-bond';
 import { LpCollector } from './collect-lp';
 import { logger } from './logging';
 import { RewardActionTracker } from './reward-action-tracker';
-import { DexRouter } from './dex-router';
+import { DexRouter } from './dex/router';
 import { tryReactiveSettlement } from './settlement';
 import {
   cacheConfiguredPool,

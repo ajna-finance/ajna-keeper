@@ -1,7 +1,7 @@
-// src/smart-dex-manager.ts
+// src/dex/manager.ts
 import { Signer } from 'ethers';
-import { PoolConfig, LiquiditySource } from './config';
-import { logger } from './logging';
+import { PoolConfig, LiquiditySource } from '../config';
+import { logger } from '../logging';
 
 /**
  * Deployment types supported by the smart detection system

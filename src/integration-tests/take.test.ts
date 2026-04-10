@@ -30,7 +30,7 @@ import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 import { NonceTracker } from '../nonce';
 import { LpCollector } from '../collect-lp';
-import { DexRouter } from '../dex-router';
+import { DexRouter } from '../dex/router';
 import { RewardActionTracker } from '../reward-action-tracker';
 import { collectBondFromPool } from '../collect-bond';
 

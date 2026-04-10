@@ -4,9 +4,9 @@ import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../config';
 import { logger } from '../logging';
 import * as takeFactory from '../take/factory';
-import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
-import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
-import { CurveQuoteProvider } from '../dex-providers/curve-quote-provider';
+import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provider';
+import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
+import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
 import * as erc20 from '../erc20';
 
 describe('Take Factory', () => {

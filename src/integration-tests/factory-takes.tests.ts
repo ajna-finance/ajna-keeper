@@ -6,7 +6,7 @@ import { BigNumber, ethers } from 'ethers';
 import sinon from 'sinon';
 import { configureAjna, LiquiditySource, KeeperConfig, PoolConfig } from '../config';
 import { handleFactoryTakes } from '../take/factory';
-import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
+import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
 import { handleKicks } from '../kick';
 import { arrayFromAsync, decimaledToWei } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';

@@ -1,11 +1,11 @@
-// src/curve-router-module.ts
+// src/dex/curve-router.ts
 // Simplified Curve integration for Base L2 - follows sushiswap-router-module.ts patterns
 import { Contract, BigNumber, Signer, providers, ethers } from 'ethers';
-import { logger } from './logging';
-import { NonceTracker } from './nonce';
-import { weiToDecimaled } from './utils';
+import { logger } from '../logging';
+import { NonceTracker } from '../nonce';
+import { weiToDecimaled } from '../utils';
 import { getTokenFromAddress } from './uniswap';
-import { CurvePoolType } from './config';
+import { CurvePoolType } from '../config';
 
 // ABIs - Based on working test scripts
 const ERC20_ABI = [

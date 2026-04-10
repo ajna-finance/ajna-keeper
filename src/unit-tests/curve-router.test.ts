@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import * as curveRouterModule from '../curve-router-module';
+import * as curveRouterModule from '../dex/curve-router';
 import { NonceTracker } from '../nonce';
 import { CurvePoolType } from '../config';
 

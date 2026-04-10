@@ -11,7 +11,7 @@ import { decimaledToWei } from '../utils';
 import { Wallet } from 'ethers';
 import { getBalanceOfErc20, transferErc20 } from '../erc20';
 import { expect } from 'chai';
-import { DexRouter } from '../dex-router';
+import { DexRouter } from '../dex/router';
 
 describe('RewardActionTracker', () => {
   beforeEach(async () => {

@@ -8,7 +8,7 @@ import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../
 import { LpCollector } from '../collect-lp';
 import { collectBondFromPool } from '../collect-bond';
 import { RewardActionTracker } from '../reward-action-tracker';
-import { DexRouter } from '../dex-router';
+import { DexRouter } from '../dex/router';
 import { decimaledToWei, weiToDecimaled, delay } from '../utils';
 import { logger } from '../logging';
 import { MAINNET_CONFIG } from './test-config';

@@ -3,7 +3,7 @@ import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import { BigNumber, Contract, ethers, providers, Signer } from 'ethers';
 import sinon from 'sinon';
-import { DexRouter } from '../dex-router';
+import { DexRouter } from '../dex/router';
 import { PostAuctionDex } from '../config';
 import * as erc20 from '../erc20';
 import { MAINNET_CONFIG } from '../integration-tests/test-config';
