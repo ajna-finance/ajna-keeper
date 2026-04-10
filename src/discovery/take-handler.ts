@@ -1,24 +1,24 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { LiquiditySource, getAutoDiscoverTakePolicy } from './config-types';
-import { ResolvedTakeTarget } from './discovery-targets';
-import { logger } from './logging';
+import { LiquiditySource, getAutoDiscoverTakePolicy } from '../config-types';
+import { ResolvedTakeTarget } from '../discovery-targets';
+import { logger } from '../logging';
 import {
   createDiscoveryTransportsForConfig,
   evaluateGasPolicy,
   logDiscoveryDecision,
   resolveWrappedNativeAddress,
-} from './discovery-gas-policy';
+} from './gas-policy';
 import {
   DiscoveryExecutionConfig,
   DiscoveryRpcCache,
-} from './discovery-handler-types';
-import { DiscoveryReadTransports } from './read-transports';
-import * as takeModule from './take';
-import * as takeFactoryModule from './take-factory';
-import { ExternalTakeAdapter, processTakeCandidates } from './take-engine';
-import { TakeWriteTransport } from './take-write-transport';
-import { createFactoryQuoteProviderRuntimeCache } from './take-factory';
+} from './types';
+import { DiscoveryReadTransports } from '../read-transports';
+import * as takeModule from '../take';
+import * as takeFactoryModule from '../take-factory';
+import { ExternalTakeAdapter, processTakeCandidates } from '../take-engine';
+import { TakeWriteTransport } from '../take-write-transport';
+import { createFactoryQuoteProviderRuntimeCache } from '../take-factory';
 
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);

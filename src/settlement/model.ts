@@ -1,9 +1,9 @@
-import { KeeperConfig } from './config-types';
+import { KeeperConfig } from '../config-types';
 import {
   resolveSubgraphConfig,
   SubgraphConfigInput,
   WithSubgraph,
-} from './read-transports';
+} from '../read-transports';
 
 export interface SettlementStatus {
   auctionExists: boolean;

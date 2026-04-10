@@ -1,7 +1,11 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { weiToDecimaled } from './utils';
-import { AuctionToSettle, SettlementIncentiveResult, SettlementNeedResult } from './settlement-model';
-import { SettlementActionConfig } from './settlement-types';
+import { weiToDecimaled } from '../utils';
+import {
+  AuctionToSettle,
+  SettlementIncentiveResult,
+  SettlementNeedResult,
+} from './model';
+import { SettlementActionConfig } from '../settlement-types';
 
 export function isAuctionOldEnough(
   auction: AuctionToSettle,

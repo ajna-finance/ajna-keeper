@@ -1,9 +1,9 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { logger } from './logging';
-import { poolSettle } from './transactions';
-import { delay } from './utils';
-import { SettlementReadConfig, SettlementResult } from './settlement-model';
-import { SettlementActionConfig } from './settlement-types';
+import { logger } from '../logging';
+import { poolSettle } from '../transactions';
+import { delay } from '../utils';
+import { SettlementReadConfig, SettlementResult } from './model';
+import { SettlementActionConfig } from '../settlement-types';
 
 export async function settleAuctionCompletely(params: {
   pool: FungiblePool;

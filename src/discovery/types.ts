@@ -1,6 +1,6 @@
 import { BigNumber } from 'ethers';
-import { KeeperConfig } from './config-types';
-import { FactoryQuoteProviderRuntimeCache } from './take-factory';
+import { KeeperConfig } from '../config-types';
+import { FactoryQuoteProviderRuntimeCache } from '../take-factory';
 
 export type DiscoveryExecutionConfig = Pick<
   KeeperConfig,

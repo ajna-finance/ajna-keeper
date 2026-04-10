@@ -9,7 +9,7 @@ import {
   getAutoDiscoverTakePolicy,
   hasExternalTakeSettings,
   hasNonEmptyObject,
-} from './config-schema';
+} from './schema';
 
 export function validatePostAuctionDex(
   dexProvider: PostAuctionDex,

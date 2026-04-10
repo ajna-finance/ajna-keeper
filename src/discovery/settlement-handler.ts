@@ -1,19 +1,19 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { getAutoDiscoverSettlementPolicy } from './config-types';
-import { ResolvedSettlementTarget } from './discovery-targets';
-import { logger } from './logging';
+import { getAutoDiscoverSettlementPolicy } from '../config-types';
+import { ResolvedSettlementTarget } from '../discovery-targets';
+import { logger } from '../logging';
 import {
   createDiscoveryTransportsForConfig,
   evaluateGasPolicy,
   logDiscoveryDecision,
-} from './discovery-gas-policy';
+} from './gas-policy';
 import {
   DiscoveryExecutionConfig,
   DiscoveryRpcCache,
-} from './discovery-handler-types';
-import { DiscoveryReadTransports } from './read-transports';
-import { AuctionToSettle, SettlementHandler } from './settlement';
+} from './types';
+import { DiscoveryReadTransports } from '../read-transports';
+import { AuctionToSettle, SettlementHandler } from '../settlement';
 
 const SETTLEMENT_GAS_LIMIT = BigNumber.from(800000);
 

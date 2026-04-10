@@ -1,16 +1,16 @@
 export type {
   DiscoveryExecutionConfig,
   DiscoveryRpcCache,
-} from './discovery-handler-types';
+} from './discovery/types';
 
 import {
   handleDiscoveredSettlementTarget as handleDiscoveredSettlementTargetImpl,
   type HandleDiscoveredSettlementTargetParams,
-} from './discovery-settlement-handler';
+} from './discovery/settlement-handler';
 import {
   handleDiscoveredTakeTarget as handleDiscoveredTakeTargetImpl,
   type HandleDiscoveredTakeTargetParams,
-} from './discovery-take-handler';
+} from './discovery/take-handler';
 
 export async function handleDiscoveredTakeTarget(
   params: HandleDiscoveredTakeTargetParams

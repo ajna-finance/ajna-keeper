@@ -1,8 +1,8 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { Config } from '@ajna-finance/sdk';
-import type { AjnaConfigParams, KeeperConfig } from './config-schema';
-import { logger } from './logging';
+import type { AjnaConfigParams, KeeperConfig } from './schema';
+import { logger } from '../logging';
 
 export async function readConfigFile(filePath: string): Promise<KeeperConfig> {
   try {

@@ -6,18 +6,18 @@ import {
   SettlementConfigInput,
   SettlementStatus,
   resolveSettlementReadConfig,
-} from './settlement-model';
+} from './settlement/model';
 import { SettlementActionConfig } from './settlement-types';
 import {
   checkBotIncentive,
   isAuctionOldEnough,
   needsSettlement,
-} from './settlement-checks';
-import { SettlementScanner } from './settlement-scanner';
-import { settleAuctionCompletely } from './settlement-execution';
+} from './settlement/checks';
+import { SettlementScanner } from './settlement/scanner';
+import { settleAuctionCompletely } from './settlement/execution';
 import { delay, RequireFields } from './utils';
 
-export * from './settlement-model';
+export * from './settlement/model';
 
 export class SettlementHandler {
   private static activeSettlements: Set<string> = new Set();
