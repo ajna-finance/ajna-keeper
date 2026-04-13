@@ -44,9 +44,8 @@ export class SettlementScanner {
       const result = await this.config.subgraph.getUnsettledAuctions(
         this.pool.poolAddress
       );
-
-      this.lastSubgraphQuery = now;
       const actuallySettleable: AuctionToSettle[] = [];
+      let hadRetryableCheckFailures = false;
 
       for (const auction of result.liquidationAuctions) {
         const borrower = auction.borrower;
@@ -73,6 +72,14 @@ export class SettlementScanner {
           signer: this.signer,
           borrower,
         });
+
+        if (settlementCheck.retryable) {
+          hadRetryableCheckFailures = true;
+          logger.warn(
+            `Retryable settlement check failure for ${borrower.slice(0, 8)} in ${this.pool.name}; leaving cache stale so the auction is retried soon: ${settlementCheck.reason}`
+          );
+          continue;
+        }
 
         if (settlementCheck.needs) {
           logger.debug(
@@ -105,7 +112,10 @@ export class SettlementScanner {
         );
       }
 
-      this.cachedAuctions = actuallySettleable;
+      if (!hadRetryableCheckFailures) {
+        this.lastSubgraphQuery = now;
+        this.cachedAuctions = actuallySettleable;
+      }
       return actuallySettleable;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

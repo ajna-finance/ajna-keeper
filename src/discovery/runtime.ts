@@ -84,6 +84,8 @@ interface DiscoveryRpcCacheState {
   error?: Error;
 }
 
+const DISCOVERY_GAS_PRICE_TTL_MS = 30_000;
+
 function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
@@ -93,13 +95,26 @@ function shouldRefreshDiscoverySnapshotOnTakeCycle(config: KeeperConfig): boolea
 }
 
 function shouldRefreshDiscoverySnapshotOnSettlementCycle(
-  config: KeeperConfig
+  config: KeeperConfig,
+  discoverySnapshotState?: DiscoverySnapshotState
 ): boolean {
-  return (
-    !!config.autoDiscover?.enabled &&
-    !getAutoDiscoverTakePolicy(config.autoDiscover) &&
-    !!getAutoDiscoverSettlementPolicy(config.autoDiscover)
-  );
+  if (
+    !config.autoDiscover?.enabled ||
+    !getAutoDiscoverSettlementPolicy(config.autoDiscover)
+  ) {
+    return false;
+  }
+
+  if (!getAutoDiscoverTakePolicy(config.autoDiscover)) {
+    return true;
+  }
+
+  if (discoverySnapshotState?.fetchedAt === undefined) {
+    return true;
+  }
+
+  const maxSnapshotAgeMs = computeSettlementCheckIntervalSeconds(config) * 1000;
+  return Date.now() - discoverySnapshotState.fetchedAt >= maxSnapshotAgeMs;
 }
 
 async function refreshDiscoverySnapshot(
@@ -137,7 +152,10 @@ async function getSettlementCycleLiquidationAuctions(
   state: BoundDiscoveryRuntimeState
 ): Promise<DiscoveryCycleSnapshotInfo> {
   const refreshedLiquidationAuctions =
-    shouldRefreshDiscoverySnapshotOnSettlementCycle(state.config)
+    shouldRefreshDiscoverySnapshotOnSettlementCycle(
+      state.config,
+      state.discoverySnapshotState
+    )
       ? await refreshDiscoverySnapshot(state)
       : undefined;
 
@@ -153,6 +171,12 @@ async function getSettlementCycleLiquidationAuctions(
     liquidationAuctions,
     snapshotRefreshed: refreshedLiquidationAuctions !== undefined,
     snapshotAgeMs,
+  };
+}
+
+function createEmptyDiscoveryRpcCache(): DiscoveryRpcCache {
+  return {
+    gasQuoteConversions: new Map(),
   };
 }
 
@@ -189,7 +213,9 @@ async function createTakeCycleRpcCache(
 ): Promise<DiscoveryRpcCache | undefined> {
   return state.signer.provider
     ? {
+        ...createEmptyDiscoveryRpcCache(),
         gasPrice: await state.readTransports.readRpc.getGasPrice(),
+        gasPriceFetchedAt: Date.now(),
         factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
       }
     : undefined;
@@ -200,9 +226,35 @@ async function createSettlementCycleRpcCache(
 ): Promise<DiscoveryRpcCache | undefined> {
   return state.signer.provider
     ? {
+        ...createEmptyDiscoveryRpcCache(),
         gasPrice: await state.readTransports.readRpc.getGasPrice(),
+        gasPriceFetchedAt: Date.now(),
       }
     : undefined;
+}
+
+async function ensureFreshDiscoveryGasPrice(params: {
+  state: BoundDiscoveryRuntimeState;
+  cache?: DiscoveryRpcCache;
+}): Promise<void> {
+  if (!params.cache || !params.state.signer.provider) {
+    return;
+  }
+
+  const gasPriceAgeMs =
+    params.cache.gasPriceFetchedAt !== undefined
+      ? Math.max(0, Date.now() - params.cache.gasPriceFetchedAt)
+      : undefined;
+  if (
+    params.cache.gasPrice !== undefined &&
+    gasPriceAgeMs !== undefined &&
+    gasPriceAgeMs < DISCOVERY_GAS_PRICE_TTL_MS
+  ) {
+    return;
+  }
+
+  params.cache.gasPrice = await params.state.readTransports.readRpc.getGasPrice();
+  params.cache.gasPriceFetchedAt = Date.now();
 }
 
 async function getTakeTargetRpcCache(params: {
@@ -228,6 +280,20 @@ async function getTakeTargetRpcCache(params: {
   }
 
   if (params.cacheState.error) {
+    throw params.cacheState.error;
+  }
+
+  try {
+    await ensureFreshDiscoveryGasPrice({
+      state: params.state,
+      cache: params.cacheState.cache,
+    });
+  } catch (error) {
+    params.cacheState.error =
+      error instanceof Error ? error : new Error(String(error));
+    logger.warn(
+      `Discovery take gas price refresh unavailable for this cycle; discovered take targets will fail: ${params.cacheState.error.message}`
+    );
     throw params.cacheState.error;
   }
 
@@ -259,6 +325,20 @@ async function getSettlementTargetRpcCache(params: {
   }
 
   if (params.cacheState.error) {
+    throw params.cacheState.error;
+  }
+
+  try {
+    await ensureFreshDiscoveryGasPrice({
+      state: params.state,
+      cache: params.cacheState.cache,
+    });
+  } catch (error) {
+    params.cacheState.error =
+      error instanceof Error ? error : new Error(String(error));
+    logger.warn(
+      `Discovery settlement gas price refresh unavailable for this cycle; discovered settlement targets will fail: ${params.cacheState.error.message}`
+    );
     throw params.cacheState.error;
   }
 

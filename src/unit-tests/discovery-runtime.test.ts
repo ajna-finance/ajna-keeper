@@ -380,6 +380,104 @@ describe('Run Loop Discovery Integration', () => {
     expect(secondRpcCache.gasPrice!.toString()).to.equal('123');
   });
 
+  it('refreshes the discovered take gas price when the per-cycle cache becomes stale', async () => {
+    let nowMs = 0;
+    sinon.stub(Date, 'now').callsFake(() => nowMs);
+    const observedGasPrices: string[] = [];
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget');
+    handleDiscoveredTakeTargetStub
+      .onFirstCall()
+      .callsFake(async (params: any) => {
+        observedGasPrices.push(params.rpcCache.gasPrice.toString());
+        nowMs = 31_000;
+      });
+    handleDiscoveredTakeTargetStub
+      .onSecondCall()
+      .callsFake(async (params: any) => {
+        observedGasPrices.push(params.rpcCache.gasPrice.toString());
+      });
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '2',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '2',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+        {
+          borrower: '0xBorrowerB',
+          kickTime: '2',
+          debtRemaining: '4',
+          collateralRemaining: '3',
+          neutralPrice: '5',
+          debt: '4',
+          collateral: '3',
+          pool: { id: '0x5555555555555555555555555555555555555555' },
+        },
+      ],
+    });
+
+    const getPoolByAddressStub = sinon.stub();
+    getPoolByAddressStub
+      .withArgs('0x4444444444444444444444444444444444444444')
+      .resolves({
+        name: 'Discovered Pool A',
+        poolAddress: '0x4444444444444444444444444444444444444444',
+        quoteAddress: '0x6666666666666666666666666666666666666666',
+        collateralAddress: '0x7777777777777777777777777777777777777777',
+      })
+      .withArgs('0x5555555555555555555555555555555555555555')
+      .resolves({
+        name: 'Discovered Pool B',
+        poolAddress: '0x5555555555555555555555555555555555555555',
+        quoteAddress: '0x8888888888888888888888888888888888888888',
+        collateralAddress: '0x9999999999999999999999999999999999999999',
+      });
+
+    const gasPriceStub = sinon.stub();
+    gasPriceStub.onCall(0).resolves(BigNumber.from(123));
+    gasPriceStub.onCall(1).resolves(BigNumber.from(456));
+    const signer = {
+      provider: {
+        getGasPrice: gasPriceStub,
+      },
+    };
+    const ajna = {
+      fungiblePoolFactory: {
+        getPoolByAddress: getPoolByAddressStub,
+      },
+    };
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        enabled: true,
+        take: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      ajna: ajna as any,
+      config,
+      signer: signer as any,
+      discoverySnapshotState: {},
+    }).runTakeCycle();
+
+    expect(handleDiscoveredTakeTargetStub.calledTwice).to.be.true;
+    expect(gasPriceStub.calledTwice).to.be.true;
+    expect(observedGasPrices).to.deep.equal(['123', '456']);
+  });
+
   it('uses the resilient read-rpc helper when readRpcUrls are configured for discovered take cycles', async () => {
     const handleDiscoveredTakeTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
@@ -611,6 +709,94 @@ describe('Run Loop Discovery Integration', () => {
 
     expect(discoveryStub.calledOnce).to.be.true;
     expect(handleDiscoveredSettlementTargetStub.calledOnce).to.be.true;
+  });
+
+  it('refreshes the settlement discovery snapshot when the take-owned snapshot is stale', async () => {
+    const handleDiscoveredSettlementTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
+      .resolves();
+    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerFresh',
+          kickTime: '2',
+          debtRemaining: '3',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '0',
+          pool: { id: '0x9999999999999999999999999999999999999999' },
+        },
+      ],
+    });
+
+    const ajna = {
+      fungiblePoolFactory: {
+        getPoolByAddress: sinon.stub().resolves({
+          name: 'Fresh Settlement Pool',
+          poolAddress: '0x9999999999999999999999999999999999999999',
+          quoteAddress: '0x5555555555555555555555555555555555555555',
+          collateralAddress: '0x6666666666666666666666666666666666666666',
+        }),
+      },
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+      },
+      getAddress: sinon
+        .stub()
+        .resolves('0x7777777777777777777777777777777777777777'),
+    };
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        enabled: true,
+        take: true,
+        settlement: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: true,
+        },
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      ajna: ajna as any,
+      config,
+      signer: signer as any,
+      discoverySnapshotState: {
+        latestLiquidationAuctions: [
+          {
+            borrower: '0xBorrowerStale',
+            kickTime: '1',
+            debtRemaining: '1',
+            collateralRemaining: '0',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '0',
+            pool: { id: '0x4444444444444444444444444444444444444444' },
+          },
+        ],
+        fetchedAt: Date.now() - 121_000,
+      },
+    }).runSettlementCycle();
+
+    expect(discoveryStub.calledOnce).to.be.true;
+    expect(handleDiscoveredSettlementTargetStub.calledOnce).to.be.true;
+    expect(
+      handleDiscoveredSettlementTargetStub.firstCall.args[0].target.candidates[0]
+        .borrower
+    ).to.equal('0xBorrowerFresh');
   });
 
   it('reuses one gas price read across multiple discovered settlement targets in the same cycle', async () => {

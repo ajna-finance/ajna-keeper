@@ -79,6 +79,8 @@ export async function handleDiscoveredTakeTarget(
     (params.signer.provider
       ? {
           gasPrice: await transports.readRpc.getGasPrice(),
+          gasPriceFetchedAt: Date.now(),
+          gasQuoteConversions: new Map(),
           factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
         }
       : undefined);
@@ -225,6 +227,7 @@ export async function handleDiscoveredTakeTarget(
           useProfitFloor: true,
           nativeToQuoteConversion,
           gasPrice: rpcCache?.gasPrice,
+          rpcCache,
         });
         if (!gasPolicy.approved) {
           stats.gasPolicyRejects += 1;
@@ -272,6 +275,7 @@ export async function handleDiscoveredTakeTarget(
           preferredLiquiditySource: params.target.take.liquiditySource,
           useProfitFloor: false,
           gasPrice: rpcCache?.gasPrice,
+          rpcCache,
         });
         if (!gasPolicy.approved) {
           stats.gasPolicyRejects += 1;

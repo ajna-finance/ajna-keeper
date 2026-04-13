@@ -20,6 +20,7 @@ const SETTLEMENT_GAS_LIMIT = BigNumber.from(800000);
 interface DiscoveredSettlementTargetStats {
   candidateCount: number;
   needsSettlementSkips: number;
+  retryableNeedsSettlementFailures: number;
   incentiveSkips: number;
   gasPolicyRejects: number;
   approvedCandidates: number;
@@ -54,7 +55,7 @@ function logDiscoveredSettlementTargetSummary(params: {
   stats: DiscoveredSettlementTargetStats;
 }): void {
   logger.info(
-    `Discovered settlement target summary: pool=${params.pool.poolAddress} name="${params.target.name}" dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} needsSettlementSkips=${params.stats.needsSettlementSkips} incentiveSkips=${params.stats.incentiveSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} approvedCandidates=${params.stats.approvedCandidates} executionAttempted=${params.stats.executionAttempted}`
+    `Discovered settlement target summary: pool=${params.pool.poolAddress} name="${params.target.name}" dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} needsSettlementSkips=${params.stats.needsSettlementSkips} retryableNeedsSettlementFailures=${params.stats.retryableNeedsSettlementFailures} incentiveSkips=${params.stats.incentiveSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} approvedCandidates=${params.stats.approvedCandidates} executionAttempted=${params.stats.executionAttempted}`
   );
 }
 
@@ -67,6 +68,7 @@ export async function handleDiscoveredSettlementTarget(
   const stats: DiscoveredSettlementTargetStats = {
     candidateCount: params.target.candidates.length,
     needsSettlementSkips: 0,
+    retryableNeedsSettlementFailures: 0,
     incentiveSkips: 0,
     gasPolicyRejects: 0,
     approvedCandidates: 0,
@@ -87,6 +89,8 @@ export async function handleDiscoveredSettlementTarget(
     (params.signer.provider
       ? {
           gasPrice: await transports.readRpc.getGasPrice(),
+          gasPriceFetchedAt: Date.now(),
+          gasQuoteConversions: new Map(),
         }
       : undefined);
   const approvedAuctions: AuctionToSettle[] = [];
@@ -98,6 +102,13 @@ export async function handleDiscoveredSettlementTarget(
     for (const candidate of params.target.candidates) {
       const needsSettlement = await handler.needsSettlement(candidate.borrower);
       if (!needsSettlement.needs) {
+        if (needsSettlement.retryable) {
+          stats.retryableNeedsSettlementFailures += 1;
+          logger.warn(
+            `Retryable discovered settlement check failure for ${params.pool.poolAddress}/${candidate.borrower}: ${needsSettlement.reason}`
+          );
+          continue;
+        }
         stats.needsSettlementSkips += 1;
         logDiscoveryDecision(
           params.config,
@@ -129,6 +140,7 @@ export async function handleDiscoveredSettlementTarget(
         quoteTokenAddress: params.pool.quoteAddress,
         useProfitFloor: false,
         gasPrice: rpcCache?.gasPrice,
+        rpcCache,
       });
       if (!gasPolicy.approved) {
         stats.gasPolicyRejects += 1;

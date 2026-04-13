@@ -11,6 +11,40 @@ describe('Subgraph Discovery Pagination', () => {
     clearEndpointHealthState();
   });
 
+  it('paginates pool loan discovery until the final short page', async () => {
+    const requestStub = sinon.stub(graphqlRequest, 'request');
+    requestStub.onCall(0).resolves({
+      loans: Array.from({ length: 1000 }, (_, index) => ({
+        borrower: `0xborrower-${index}`,
+        thresholdPrice: 1,
+      })),
+    });
+    requestStub.onCall(1).resolves({
+      loans: Array.from({ length: 250 }, (_, index) => ({
+        borrower: `0xborrower-next-${index}`,
+        thresholdPrice: 1,
+      })),
+    });
+
+    const result = await subgraph.getLoans(
+      'http://example-subgraph',
+      '0x1111111111111111111111111111111111111111'
+    );
+
+    expect(result.loans).to.have.length(1250);
+    expect(requestStub.callCount).to.equal(2);
+    expect((requestStub.firstCall.args[0] as any).variables).to.deep.equal({
+      poolId: '0x1111111111111111111111111111111111111111',
+      first: 1000,
+      skip: 0,
+    });
+    expect((requestStub.secondCall.args[0] as any).variables).to.deep.equal({
+      poolId: '0x1111111111111111111111111111111111111111',
+      first: 1000,
+      skip: 1000,
+    });
+  });
+
   it('paginates chain-wide liquidation auctions until the final short page', async () => {
     const requestStub = sinon.stub(graphqlRequest, 'request');
     requestStub.onCall(0).resolves({

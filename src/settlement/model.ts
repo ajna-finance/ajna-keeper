@@ -30,6 +30,7 @@ export interface AuctionToSettle {
 export interface SettlementNeedResult {
   needs: boolean;
   reason: string;
+  retryable?: boolean;
   details?: any;
 }
 

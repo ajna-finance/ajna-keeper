@@ -21,5 +21,7 @@ export type DiscoveryExecutionConfig = Pick<
 
 export interface DiscoveryRpcCache {
   gasPrice?: BigNumber;
+  gasPriceFetchedAt?: number;
+  gasQuoteConversions?: Map<string, BigNumber | null>;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
 }

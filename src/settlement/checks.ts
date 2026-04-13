@@ -7,6 +7,52 @@ import {
 } from './model';
 import { SettlementActionConfig } from './types';
 
+function formatSettlementCheckError(error: unknown): string {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null && 'message' in error
+        ? String((error as { message?: unknown }).message ?? error)
+        : String(error);
+  return message.slice(0, 100);
+}
+
+function isRetryableSettlementCheckError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+  if (
+    code === 'NETWORK_ERROR' ||
+    code === 'SERVER_ERROR' ||
+    code === 'TIMEOUT' ||
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ENOTFOUND' ||
+    code === 'EAI_AGAIN'
+  ) {
+    return true;
+  }
+
+  const message = formatSettlementCheckError(error).toLowerCase();
+  return (
+    message.includes('network error') ||
+    message.includes('timeout') ||
+    message.includes('timed out') ||
+    message.includes('econnreset') ||
+    message.includes('econnrefused') ||
+    message.includes('enotfound') ||
+    message.includes('eai_again') ||
+    message.includes('429') ||
+    message.includes('rate limit') ||
+    message.includes('socket hang up') ||
+    message.includes('bad gateway') ||
+    message.includes('service unavailable') ||
+    message.includes('gateway timeout')
+  );
+}
+
 export function isAuctionOldEnough(
   auction: AuctionToSettle,
   poolConfig: SettlementActionConfig
@@ -69,13 +115,13 @@ export async function needsSettlement(params: {
           details,
         };
       } catch (settleError) {
+        const retryable = isRetryableSettlementCheckError(settleError);
         return {
           needs: false,
-          reason: `Settlement call would fail: ${
-            settleError instanceof Error
-              ? settleError.message.slice(0, 100)
-              : String(settleError)
-          }`,
+          retryable,
+          reason: retryable
+            ? `Retryable settlement check failure: ${formatSettlementCheckError(settleError)}`
+            : `Settlement call would fail: ${formatSettlementCheckError(settleError)}`,
           details,
         };
       }
@@ -87,11 +133,13 @@ export async function needsSettlement(params: {
       details,
     };
   } catch (error) {
+    const retryable = isRetryableSettlementCheckError(error);
     return {
       needs: false,
-      reason: `Error checking settlement: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      retryable,
+      reason: retryable
+        ? `Retryable settlement check failure: ${formatSettlementCheckError(error)}`
+        : `Error checking settlement: ${formatSettlementCheckError(error)}`,
     };
   }
 }

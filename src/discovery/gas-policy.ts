@@ -15,7 +15,7 @@ import { DexRouter } from '../dex/router';
 import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
 import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provider';
 import { getDecimalsErc20 } from '../erc20';
-import { DiscoveryExecutionConfig } from './types';
+import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
 
 export interface GasPolicyResult {
   approved: boolean;
@@ -226,6 +226,20 @@ async function quoteTokensByLiquiditySource(params: {
   return undefined;
 }
 
+function gasQuoteConversionCacheKey(params: {
+  liquiditySource: LiquiditySource;
+  amountIn: BigNumber;
+  tokenIn: string;
+  tokenOut: string;
+}): string {
+  return [
+    params.liquiditySource,
+    params.amountIn.toString(),
+    params.tokenIn.toLowerCase(),
+    params.tokenOut.toLowerCase(),
+  ].join('|');
+}
+
 export async function evaluateGasPolicy(params: {
   signer: Signer;
   config: DiscoveryExecutionConfig;
@@ -241,6 +255,7 @@ export async function evaluateGasPolicy(params: {
   useProfitFloor?: boolean;
   gasPrice?: BigNumber;
   nativeToQuoteConversion?: NativeToQuoteConversion;
+  rpcCache?: DiscoveryRpcCache;
 }): Promise<GasPolicyResult> {
   const provider = params.signer.provider;
   if (!provider) {
@@ -342,14 +357,26 @@ export async function evaluateGasPolicy(params: {
       };
     }
 
-    const quotedAmount = await quoteTokensByLiquiditySource({
-      signer: params.signer,
-      config: params.config,
+    const cacheKey = gasQuoteConversionCacheKey({
       liquiditySource,
       amountIn: gasCostNativeRaw,
       tokenIn: wrappedNativeAddress,
       tokenOut: params.quoteTokenAddress,
     });
+    const quoteCache = params.rpcCache?.gasQuoteConversions;
+    let quotedAmount = quoteCache?.get(cacheKey);
+    if (quotedAmount === undefined) {
+      quotedAmount =
+        (await quoteTokensByLiquiditySource({
+          signer: params.signer,
+          config: params.config,
+          liquiditySource,
+          amountIn: gasCostNativeRaw,
+          tokenIn: wrappedNativeAddress,
+          tokenOut: params.quoteTokenAddress,
+        })) ?? null;
+      quoteCache?.set(cacheKey, quotedAmount);
+    }
     if (!quotedAmount) {
       return {
         approved: false,

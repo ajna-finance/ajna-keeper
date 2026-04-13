@@ -265,6 +265,38 @@ describe('Settlement Module Tests', () => {
       expect(result.needs).to.be.false;
       expect(result.reason).to.include('Settlement call would fail');
     });
+
+    it('marks transport failures during settlement checks as retryable', async () => {
+      mockPool.contract.auctionInfo.resolves({
+        kickTime_: BigNumber.from(Math.floor(Date.now() / 1000)),
+        debtToCollateral_: BigNumber.from('1000000000000000000'),
+      });
+
+      mockPool.getLiquidation.returns({
+        getStatus: async () => ({
+          collateral: BigNumber.from(0),
+          price: BigNumber.from('1000000000000'),
+        }),
+      });
+
+      mockPool.contract.callStatic.settle.rejects({
+        code: 'NETWORK_ERROR',
+        message: 'timeout while checking settle',
+      });
+
+      const handler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      const result = await handler.needsSettlement('0xBorrower123');
+
+      expect(result.needs).to.be.false;
+      expect(result.retryable).to.be.true;
+      expect(result.reason).to.include('Retryable settlement check failure');
+    });
   });
 
   describe('SettlementHandler.checkBotIncentive()', () => {
@@ -557,6 +589,59 @@ describe('Settlement Module Tests', () => {
       expect(firstResult).to.have.length(1);
       expect(secondResult).to.deep.equal(firstResult);
       expect(getUnsettledAuctionsStub.calledOnce).to.be.true;
+    });
+
+    it('does not cache empty settlement results caused by retryable on-chain check failures', async () => {
+      const oldKickTime = Math.floor(Date.now() / 1000) - 7200;
+
+      getUnsettledAuctionsStub.resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrower2',
+            kickTime: oldKickTime.toString(),
+            debtRemaining: '2.0',
+            collateralRemaining: '0.0',
+            neutralPrice: '0.05',
+            debt: '2.0',
+            collateral: '0.0',
+          },
+        ],
+      });
+
+      mockPool.contract.auctionInfo.withArgs('0xBorrower2').resolves({
+        kickTime_: BigNumber.from(oldKickTime),
+        debtToCollateral_: BigNumber.from('2000000000000000000'),
+      });
+
+      mockPool.getLiquidation.withArgs('0xBorrower2').returns({
+        getStatus: async () => ({
+          collateral: BigNumber.from(0),
+          price: BigNumber.from('1000000000000'),
+        }),
+      });
+
+      mockPool.contract.callStatic.settle
+        .onFirstCall()
+        .rejects({
+          code: 'NETWORK_ERROR',
+          message: 'timeout while checking settle',
+        })
+        .onSecondCall()
+        .resolves();
+
+      const handler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      const firstResult = await handler.findSettleableAuctions();
+      const secondResult = await handler.findSettleableAuctions();
+
+      expect(firstResult).to.be.empty;
+      expect(secondResult).to.have.length(1);
+      expect(getUnsettledAuctionsStub.calledTwice).to.be.true;
     });
   });
 

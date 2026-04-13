@@ -102,26 +102,64 @@ export interface GetLoanResponse {
   }[];
 }
 
+const GET_LOANS_PAGE_SIZE = 1000;
+const GET_LOANS_MAX_PAGES = 100;
+
+const getLoansQuery = gql`
+  query GetLoans($poolId: String!, $first: Int!, $skip: Int!) {
+    loans(
+      first: $first
+      skip: $skip
+      where: {
+        inLiquidation: false
+        poolAddress: $poolId
+      }
+    ) {
+      borrower
+      thresholdPrice
+    }
+  }
+`;
+
 async function getLoans(
   subgraphUrl: string,
   poolAddress: string,
   options?: SubgraphRequestOptions
 ) {
-  const query = gql`
-    query {
-      loans (where: {inLiquidation: false, poolAddress: "${poolAddress.toLowerCase()}"}){
-        borrower
-        thresholdPrice
-      }
-    }
-  `;
+  const loans: GetLoanResponse['loans'] = [];
+  const poolId = poolAddress.toLowerCase();
 
-  const result = await requestSubgraph<GetLoanResponse>({
-    subgraphUrl,
-    document: query,
-    options,
-  });
-  return result;
+  for (let page = 0; page < GET_LOANS_MAX_PAGES; page++) {
+    const pageResult = await requestSubgraph<
+      GetLoanResponse,
+      { poolId: string; first: number; skip: number }
+    >({
+      subgraphUrl,
+      document: getLoansQuery,
+      variables: {
+        poolId,
+        first: GET_LOANS_PAGE_SIZE,
+        skip: page * GET_LOANS_PAGE_SIZE,
+      },
+      options,
+    });
+    loans.push(...pageResult.loans);
+
+    if (
+      page === GET_LOANS_MAX_PAGES - 1 &&
+      pageResult.loans.length === GET_LOANS_PAGE_SIZE
+    ) {
+      logger.warn(
+        `Loan discovery reached maxPages=${GET_LOANS_MAX_PAGES} with pageSize=${GET_LOANS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
+      );
+    }
+
+    if (pageResult.loans.length < GET_LOANS_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return { loans };
 }
 
 export interface GetLiquidationResponse {

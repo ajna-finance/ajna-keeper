@@ -141,6 +141,12 @@ export class SettlementHandler {
 
       const settlementCheck = await this.needsSettlement(borrower);
       if (!settlementCheck.needs) {
+        if (settlementCheck.retryable) {
+          logger.warn(
+            `Retryable settlement check failure for ${borrower.slice(0, 8)} in ${this.pool.name}: ${settlementCheck.reason}`
+          );
+          return;
+        }
         logger.debug(
           `Settlement not needed for ${borrower.slice(0, 8)}: ${settlementCheck.reason}`
         );
