@@ -580,8 +580,14 @@ export async function buildDiscoveredTakeTargets(
       candidates,
     };
 
-    validateResolvedTakeTarget(target, config);
-    targets.push(target);
+    try {
+      validateResolvedTakeTarget(target, config);
+      targets.push(target);
+    } catch (error) {
+      logger.warn(
+        `Skipping discovered take target ${poolAddress}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   return targets;
@@ -663,8 +669,14 @@ export async function buildDiscoveredSettlementTargets(
       candidates,
     };
 
-    validateResolvedSettlementTarget(target);
-    targets.push(target);
+    try {
+      validateResolvedSettlementTarget(target);
+      targets.push(target);
+    } catch (error) {
+      logger.warn(
+        `Skipping discovered settlement target ${poolAddress}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   return targets;

@@ -58,6 +58,7 @@ export interface DiscoveryRuntime {
 type DiscoveryRuntimeState = CreateDiscoveryRuntimeParams;
 type BoundDiscoveryRuntimeState = DiscoveryRuntimeState & {
   readTransports: DiscoveryReadTransports;
+  lastDiscoveredSettlementCycleStartedAtMs?: number;
 };
 type EffectiveTargetIdentity =
   | Pick<EffectiveTakeTarget, 'source' | 'poolAddress' | 'name'>
@@ -81,7 +82,6 @@ interface DiscoveryCycleStats {
 interface DiscoveryRpcCacheState {
   initialized: boolean;
   cache?: DiscoveryRpcCache;
-  error?: Error;
 }
 
 const DISCOVERY_GAS_PRICE_TTL_MS = 30_000;
@@ -113,7 +113,8 @@ function shouldRefreshDiscoverySnapshotOnSettlementCycle(
     return true;
   }
 
-  const maxSnapshotAgeMs = computeSettlementCheckIntervalSeconds(config) * 1000;
+  const maxSnapshotAgeMs =
+    computeDiscoveredSettlementCheckIntervalSeconds(config) * 1000;
   return Date.now() - discoverySnapshotState.fetchedAt >= maxSnapshotAgeMs;
 }
 
@@ -267,20 +268,17 @@ async function getTakeTargetRpcCache(params: {
   }
 
   if (!params.cacheState.initialized) {
-    params.cacheState.initialized = true;
     try {
       params.cacheState.cache = await createTakeCycleRpcCache(params.state);
+      params.cacheState.initialized = true;
     } catch (error) {
-      params.cacheState.error =
+      const discoveryError =
         error instanceof Error ? error : new Error(String(error));
       logger.warn(
-        `Discovery take rpc cache unavailable for this cycle; discovered take targets will fail: ${params.cacheState.error.message}`
+        `Discovery take rpc cache unavailable for this target; discovered take target will fail: ${discoveryError.message}`
       );
+      throw discoveryError;
     }
-  }
-
-  if (params.cacheState.error) {
-    throw params.cacheState.error;
   }
 
   try {
@@ -289,12 +287,12 @@ async function getTakeTargetRpcCache(params: {
       cache: params.cacheState.cache,
     });
   } catch (error) {
-    params.cacheState.error =
+    const discoveryError =
       error instanceof Error ? error : new Error(String(error));
     logger.warn(
-      `Discovery take gas price refresh unavailable for this cycle; discovered take targets will fail: ${params.cacheState.error.message}`
+      `Discovery take gas price refresh unavailable for this target; discovered take target will fail: ${discoveryError.message}`
     );
-    throw params.cacheState.error;
+    throw discoveryError;
   }
 
   return params.cacheState.cache;
@@ -310,22 +308,19 @@ async function getSettlementTargetRpcCache(params: {
   }
 
   if (!params.cacheState.initialized) {
-    params.cacheState.initialized = true;
     try {
       params.cacheState.cache = await createSettlementCycleRpcCache(
         params.state
       );
+      params.cacheState.initialized = true;
     } catch (error) {
-      params.cacheState.error =
+      const discoveryError =
         error instanceof Error ? error : new Error(String(error));
       logger.warn(
-        `Discovery settlement rpc cache unavailable for this cycle; discovered settlement targets will fail: ${params.cacheState.error.message}`
+        `Discovery settlement rpc cache unavailable for this target; discovered settlement target will fail: ${discoveryError.message}`
       );
+      throw discoveryError;
     }
-  }
-
-  if (params.cacheState.error) {
-    throw params.cacheState.error;
   }
 
   try {
@@ -334,12 +329,12 @@ async function getSettlementTargetRpcCache(params: {
       cache: params.cacheState.cache,
     });
   } catch (error) {
-    params.cacheState.error =
+    const discoveryError =
       error instanceof Error ? error : new Error(String(error));
     logger.warn(
-      `Discovery settlement gas price refresh unavailable for this cycle; discovered settlement targets will fail: ${params.cacheState.error.message}`
+      `Discovery settlement gas price refresh unavailable for this target; discovered settlement target will fail: ${discoveryError.message}`
     );
-    throw params.cacheState.error;
+    throw discoveryError;
   }
 
   return params.cacheState.cache;
@@ -578,12 +573,27 @@ async function runSettlementDiscoveryCycle(
   };
 
   try {
-    snapshotInfo = await getSettlementCycleLiquidationAuctions(state);
+    const includeDiscoveredTargets = shouldRunDiscoveredSettlementCycle(state);
+    if (includeDiscoveredTargets) {
+      state.lastDiscoveredSettlementCycleStartedAtMs = Date.now();
+      snapshotInfo = await getSettlementCycleLiquidationAuctions(state);
+    } else {
+      snapshotInfo = {
+        liquidationAuctions: state.discoverySnapshotState?.latestLiquidationAuctions,
+        snapshotRefreshed: false,
+        snapshotAgeMs:
+          state.discoverySnapshotState?.fetchedAt !== undefined
+            ? Math.max(0, Date.now() - state.discoverySnapshotState.fetchedAt)
+            : undefined,
+      };
+    }
     phase = 'targets';
-    const targets = await resolveSettlementCycleTargets(
-      state,
-      snapshotInfo.liquidationAuctions
-    );
+    const targets = includeDiscoveredTargets
+      ? await resolveSettlementCycleTargets(
+          state,
+          snapshotInfo.liquidationAuctions
+        )
+      : getManualSettlementTargets(state.config);
     Object.assign(stats, summarizeCycleTargets(targets));
     phase = 'dispatch';
 
@@ -635,8 +645,34 @@ async function runSettlementDiscoveryCycle(
   }
 }
 
-function computeSettlementCheckIntervalSeconds(config: KeeperConfig): number {
+function computeSettlementLoopIntervalSeconds(config: KeeperConfig): number {
+  return config.delayBetweenRuns;
+}
+
+function computeDiscoveredSettlementCheckIntervalSeconds(
+  config: KeeperConfig
+): number {
   return Math.max(config.delayBetweenRuns * 5, 120);
+}
+
+function shouldRunDiscoveredSettlementCycle(
+  state: BoundDiscoveryRuntimeState
+): boolean {
+  if (
+    !state.config.autoDiscover?.enabled ||
+    !getAutoDiscoverSettlementPolicy(state.config.autoDiscover)
+  ) {
+    return false;
+  }
+
+  if (state.lastDiscoveredSettlementCycleStartedAtMs === undefined) {
+    return true;
+  }
+
+  return (
+    Date.now() - state.lastDiscoveredSettlementCycleStartedAtMs >=
+    computeDiscoveredSettlementCheckIntervalSeconds(state.config) * 1000
+  );
 }
 
 export function createDiscoveryRuntime(
@@ -658,7 +694,7 @@ export function createDiscoveryRuntime(
       await runSettlementDiscoveryCycle(state);
     },
     getSettlementCheckIntervalSeconds() {
-      return computeSettlementCheckIntervalSeconds(state.config);
+      return computeSettlementLoopIntervalSeconds(state.config);
     },
   };
 }

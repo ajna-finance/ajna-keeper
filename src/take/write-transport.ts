@@ -276,6 +276,10 @@ async function createRelayTakeWriteTransport(params: {
           'Content-Type': 'application/json',
           ...(params.relay.headers ?? {}),
         },
+        timeout:
+          params.relay.receiptTimeoutMs ??
+          params.defaultReceiptTimeoutMs ??
+          DEFAULT_RELAY_RECEIPT_TIMEOUT_MS,
       });
       const txHash = extractRelayTxHash(response.data, localTxHash);
 

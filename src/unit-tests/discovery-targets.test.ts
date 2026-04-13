@@ -9,6 +9,7 @@ import {
 } from '../discovery/targets';
 import { KeeperConfig, LiquiditySource, PriceOriginSource } from '../config';
 import subgraph from '../subgraph';
+import { logger } from '../logging';
 
 const BASE_CONFIG: KeeperConfig = {
   ethRpcUrl: 'http://localhost:8545',
@@ -452,6 +453,87 @@ describe('Discovery Target Resolution', () => {
     expect(targets[0].poolAddress).to.equal(
       '0x1111111111111111111111111111111111111111'
     );
+  });
+
+  it('skips an invalid discovered take target without aborting the whole build', async () => {
+    const warnStub = sinon.stub(logger, 'warn');
+
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerInvalid',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '3',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '3',
+          pool: { id: 'not-an-address' },
+        },
+        {
+          borrower: '0xBorrowerValid',
+          kickTime: '2',
+          debtRemaining: '5',
+          collateralRemaining: '6',
+          neutralPrice: '7',
+          debt: '5',
+          collateral: '6',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+      ],
+    });
+
+    const targets = await buildDiscoveredTakeTargets(BASE_CONFIG);
+
+    expect(targets).to.have.length(1);
+    expect(targets[0].poolAddress).to.equal(
+      '0x1111111111111111111111111111111111111111'
+    );
+    expect(warnStub.called).to.equal(true);
+  });
+
+  it('skips an invalid discovered settlement target without aborting the whole build', async () => {
+    const warnStub = sinon.stub(logger, 'warn');
+
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerInvalid',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '0',
+          pool: { id: 'not-an-address' },
+        },
+        {
+          borrower: '0xBorrowerValid',
+          kickTime: '2',
+          debtRemaining: '5',
+          collateralRemaining: '0',
+          neutralPrice: '7',
+          debt: '5',
+          collateral: '0',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+      ],
+    });
+
+    const targets = await buildDiscoveredSettlementTargets({
+      ...BASE_CONFIG,
+      autoDiscover: {
+        ...BASE_CONFIG.autoDiscover!,
+        take: false,
+        settlement: true,
+      },
+    });
+
+    expect(targets).to.have.length(1);
+    expect(targets[0].poolAddress).to.equal(
+      '0x1111111111111111111111111111111111111111'
+    );
+    expect(warnStub.called).to.equal(true);
   });
 
   it('validates resolved runtime targets separately from config-file validation', () => {

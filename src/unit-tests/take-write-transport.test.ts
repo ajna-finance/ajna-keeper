@@ -238,6 +238,9 @@ describe('take write transport', () => {
         maxBlockNumber: '0x7d',
       },
     ]);
+    expect(axiosPostStub.firstCall.args[2]).to.include({
+      timeout: 120000,
+    });
 
     NonceTracker.clearNonces();
     const nextNonce = await NonceTracker.getNonce(signer);
@@ -289,6 +292,11 @@ describe('take write transport', () => {
       to: '0x00000000000000000000000000000000000000bb',
       data: '0xdeadbeef',
       nonce: 7,
+    });
+
+    const axiosPostStub = axios.post as sinon.SinonStub;
+    expect(axiosPostStub.firstCall.args[2]).to.include({
+      timeout: 1000,
     });
 
     try {

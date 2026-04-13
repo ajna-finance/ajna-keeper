@@ -6,13 +6,13 @@ import { logger } from '../logging';
 
 export async function readConfigFile(filePath: string): Promise<KeeperConfig> {
   try {
-    if (filePath.endsWith('.ts')) {
-      // FIXME: this prevents users from reading config files from other folders
-      const imported = await import('../' + filePath);
-      return imported.default;
-    }
-
     const absolutePath = path.resolve(filePath);
+    if (filePath.endsWith('.ts')) {
+      const imported = require(absolutePath);
+      const config = imported.default ?? imported;
+      assertIsValidConfig(config);
+      return config;
+    }
     const fileContents = await fs.readFile(absolutePath, 'utf-8');
     const parsedFile = JSON.parse(fileContents);
     assertIsValidConfig(parsedFile);
