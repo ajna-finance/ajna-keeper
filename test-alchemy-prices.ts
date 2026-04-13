@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { getPriceFromAlchemy, getPoolPriceFromAlchemy } from './src/alchemy-prices';
+import { getPriceFromAlchemy, getPoolPriceFromAlchemy } from './src/pricing/alchemy';
 
 async function testAlchemyPrices() {
   const chainId = 8453; // Base

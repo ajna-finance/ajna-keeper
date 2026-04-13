@@ -23,7 +23,6 @@ export class SettlementScanner {
     const cacheAge = now - this.lastSubgraphQuery;
     const shouldUseCache =
       cacheAge < this.QUERY_CACHE_DURATION &&
-      this.cachedAuctions.length === 0 &&
       cacheAge < minAge * 1000;
 
     if (shouldUseCache) {

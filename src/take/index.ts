@@ -539,7 +539,7 @@ export async function takeLiquidation({
     if (poolConfig.take.liquiditySource === LiquiditySource.ONEINCH) {
       const takeWriteTransport = resolveTakeWriteTransport(signer, config);
       const keeperTaker = AjnaKeeperTaker__factory.connect(
-        config.keeperTaker!!,
+        config.keeperTaker!,
         takeWriteTransport.signer
       );
 
@@ -589,7 +589,7 @@ export async function takeLiquidation({
             liquidation.auctionPrice,
             liquidation.collateral,
             Number(poolConfig.take.liquiditySource),
-            dexRouter.getRouter(await signer.getChainId())!!,
+            dexRouter.getRouter(await signer.getChainId())!,
             convertSwapApiResponseToDetailsBytes(swapData.data),
           ] as const;
           const gasLimit = await estimateGasWithBuffer(

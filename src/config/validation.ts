@@ -209,7 +209,7 @@ export function validateTakeSettings(
   }
 
   if (hasArbTake) {
-    if (config.minCollateral!! <= 0) {
+    if (config.minCollateral! <= 0) {
       throw new Error('TakeSettings: minCollateral must be greater than 0');
     }
     if (

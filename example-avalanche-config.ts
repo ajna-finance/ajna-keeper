@@ -6,7 +6,7 @@ import {
   TokenToCollect,
   LiquiditySource,  // Import for external takes
   PostAuctionDex    // NEW: Import for LP reward swaps
-} from './src/config-types';
+} from './src/config';
 import { FeeAmount } from '@uniswap/v3-sdk';
 
 const config: KeeperConfig = {

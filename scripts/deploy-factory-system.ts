@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import { readFileSync } from 'fs';
 import * as path from 'path';
 import { password } from '@inquirer/prompts';
-import { readConfigFile, KeeperConfig } from '../src/config-types';
+import { readConfigFile, KeeperConfig } from '../src/config';
 
 /**
  * Universal Factory System Deployment Script

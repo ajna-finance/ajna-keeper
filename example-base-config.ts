@@ -4,7 +4,7 @@ import {
   PriceOriginPoolReference,
   PriceOriginSource,
   TokenToCollect,
-} from './src/config-types';
+} from './src/config';
 
 const config: KeeperConfig = {
   // Start in dry-run mode for testing

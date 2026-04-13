@@ -27,9 +27,12 @@ export function assertIsValidConfig(
   config: Partial<KeeperConfig>
 ): asserts config is KeeperConfig {
   expectProperty(config, 'ethRpcUrl');
+  expectProperty(config, 'logLevel');
   expectProperty(config, 'subgraphUrl');
   expectProperty(config, 'keeperKeystore');
   expectProperty(config, 'ajna');
+  expectProperty(config, 'delayBetweenActions');
+  expectProperty(config, 'delayBetweenRuns');
   expectProperty(config, 'pools');
 }
 

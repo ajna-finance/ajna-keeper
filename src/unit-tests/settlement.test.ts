@@ -510,6 +510,54 @@ describe('Settlement Module Tests', () => {
       // Verify: Should return empty array on network error
       expect(result).to.be.empty;
     });
+
+    it('reuses non-empty cached auctions within the cache window', async () => {
+      const oldKickTime = Math.floor(Date.now() / 1000) - 7200;
+
+      getUnsettledAuctionsStub.resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrower2',
+            kickTime: oldKickTime.toString(),
+            debtRemaining: '2.0',
+            collateralRemaining: '0.0',
+            neutralPrice: '0.05',
+            debt: '2.0',
+            collateral: '0.0',
+          },
+        ],
+      });
+
+      mockPool.contract.auctionInfo.withArgs('0xBorrower2').resolves({
+        kickTime_: BigNumber.from(oldKickTime),
+        debtToCollateral_: BigNumber.from('2000000000000000000'),
+      });
+
+      mockPool.getLiquidation.withArgs('0xBorrower2').returns({
+        getStatus: async () => ({
+          collateral: BigNumber.from(0),
+          price: BigNumber.from('1000000000000'),
+        }),
+      });
+
+      mockPool.contract.callStatic.settle
+        .withArgs('0xBorrower2', 10)
+        .resolves();
+
+      const handler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      const firstResult = await handler.findSettleableAuctions();
+      const secondResult = await handler.findSettleableAuctions();
+
+      expect(firstResult).to.have.length(1);
+      expect(secondResult).to.deep.equal(firstResult);
+      expect(getUnsettledAuctionsStub.calledOnce).to.be.true;
+    });
   });
 
   describe('SettlementHandler.settleAuctionCompletely()', () => {

@@ -4,7 +4,7 @@ import {
   PriceOriginPoolReference,
   PriceOriginSource,
   TokenToCollect,
-} from './src/config-types';
+} from './src/config';
 
 const config: KeeperConfig = {
   // Keep the existing manual keeper behavior live.

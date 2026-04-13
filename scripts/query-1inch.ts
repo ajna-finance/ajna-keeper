@@ -6,11 +6,11 @@ import { ContractFactory, ethers } from 'ethers';
 import { promises as fs } from 'fs';
 import { exit } from 'process';
 
-import { configureAjna, readConfigFile } from "../src/config-types";
+import { configureAjna, readConfigFile } from "../src/config";
 import { approveErc20, getAllowanceOfErc20, transferErc20 } from '../src/erc20';
-import { DexRouter } from '../src/dex-router';
+import { DexRouter } from '../src/dex';
 import { getProviderAndSigner } from '../src/utils';
-import { convertSwapApiResponseToDetailsBytes } from '../src/1inch';
+import { convertSwapApiResponseToDetailsBytes } from '../src/dex';
 import { AjnaKeeperTaker__factory } from '../typechain-types';
 import { getDecimalsErc20 } from '../src/erc20';
 

@@ -8,7 +8,7 @@ import {
   TokenToCollect,
   LiquiditySource,  // Import for external takes
   PostAuctionDex,   // Import for LP reward swaps
-} from './src/config-types';
+} from './src/config';
 
 const config: KeeperConfig = {
   dryRun: true,
