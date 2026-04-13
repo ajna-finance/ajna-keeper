@@ -1,5 +1,5 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber } from 'ethers';
+import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource, getAutoDiscoverTakePolicy } from '../config';
 import { ResolvedTakeTarget } from './targets';
 import { logger } from '../logging';
@@ -19,9 +19,47 @@ import * as takeFactoryModule from '../take/factory';
 import { ExternalTakeAdapter, processTakeCandidates } from '../take/engine';
 import { TakeWriteTransport } from '../take/write-transport';
 import { createFactoryQuoteProviderRuntimeCache } from '../take/factory';
+import { decimaledToWei } from '../utils';
 
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
+const WAD = ethers.constants.WeiPerEther;
+
+function getQuoteTokenScaleFromDecimals(
+  quoteTokenDecimals: number
+): BigNumber | undefined {
+  if (quoteTokenDecimals > 18) {
+    return undefined;
+  }
+
+  return BigNumber.from(10).pow(18 - quoteTokenDecimals);
+}
+
+function getAuctionCostQuoteRaw(params: {
+  price: BigNumber;
+  collateral: BigNumber;
+  quoteTokenDecimals: number;
+}): BigNumber | undefined {
+  const scale = getQuoteTokenScaleFromDecimals(params.quoteTokenDecimals);
+  if (!scale) {
+    return undefined;
+  }
+
+  const quoteDueWad = params.collateral.mul(params.price).add(WAD.sub(1)).div(WAD);
+  return quoteDueWad.add(scale.sub(1)).div(scale);
+}
+
+function formatSignedQuoteAmount(params: {
+  rawAmount: BigNumber;
+  quoteTokenDecimals: number;
+  negative?: boolean;
+}): string {
+  const formatted = ethers.utils.formatUnits(
+    params.rawAmount,
+    params.quoteTokenDecimals
+  );
+  return params.negative ? `-${formatted}` : formatted;
+}
 
 interface DiscoveredTakeTargetStats {
   candidateCount: number;
@@ -198,6 +236,7 @@ export async function handleDiscoveredTakeTarget(
       revalidateBeforeExecution: true,
       approveExternalTake: async ({
         price,
+        auctionPrice,
         collateral,
         quoteEvaluation,
       }) => {
@@ -237,21 +276,62 @@ export async function handleDiscoveredTakeTarget(
           };
         }
 
-        const auctionCostQuote = price * (quoteEvaluation.collateralAmount ?? 0);
-        const expectedProfit =
-          (quoteEvaluation.quoteAmount ?? 0) -
-          auctionCostQuote -
-          gasPolicy.gasCostQuote;
         const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
-        if (
-          minExpectedProfitQuote !== undefined &&
-          expectedProfit < minExpectedProfitQuote
-        ) {
-          stats.profitFloorRejects += 1;
-          return {
-            approved: false,
-            reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
-          };
+        if (minExpectedProfitQuote !== undefined) {
+          const quoteAmountRaw = quoteEvaluation.quoteAmountRaw;
+          const gasCostQuoteRaw = gasPolicy.gasCostQuoteRaw;
+          const quoteTokenDecimals = gasPolicy.quoteTokenDecimals;
+          const auctionCostQuoteRaw =
+            quoteTokenDecimals !== undefined
+              ? getAuctionCostQuoteRaw({
+                  price: auctionPrice,
+                  collateral,
+                  quoteTokenDecimals,
+                })
+              : undefined;
+
+          if (
+            quoteAmountRaw &&
+            gasCostQuoteRaw &&
+            quoteTokenDecimals !== undefined &&
+            auctionCostQuoteRaw
+          ) {
+            const breakEvenQuoteAmountRaw = auctionCostQuoteRaw.add(gasCostQuoteRaw);
+            const minExpectedProfitQuoteRaw = decimaledToWei(
+              minExpectedProfitQuote,
+              quoteTokenDecimals
+            );
+            const requiredQuoteAmountRaw = breakEvenQuoteAmountRaw.add(
+              minExpectedProfitQuoteRaw
+            );
+            if (quoteAmountRaw.lt(requiredQuoteAmountRaw)) {
+              const expectedProfitRaw = quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
+                ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
+                : breakEvenQuoteAmountRaw.sub(quoteAmountRaw);
+              stats.profitFloorRejects += 1;
+              return {
+                approved: false,
+                reason: `expected take profit ${formatSignedQuoteAmount({
+                  rawAmount: expectedProfitRaw,
+                  quoteTokenDecimals,
+                  negative: quoteAmountRaw.lt(breakEvenQuoteAmountRaw),
+                })} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
+              };
+            }
+          } else {
+            const auctionCostQuote = price * (quoteEvaluation.collateralAmount ?? 0);
+            const expectedProfit =
+              (quoteEvaluation.quoteAmount ?? 0) -
+              auctionCostQuote -
+              gasPolicy.gasCostQuote;
+            if (expectedProfit < minExpectedProfitQuote) {
+              stats.profitFloorRejects += 1;
+              return {
+                approved: false,
+                reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
+              };
+            }
+          }
         }
 
         return { approved: true };

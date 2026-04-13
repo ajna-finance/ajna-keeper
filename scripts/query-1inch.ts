@@ -79,13 +79,13 @@ async function main() {
     oneInchRouters: config?.oneInchRouters ?? {},
     connectorTokens: config?.connectorTokens ?? [],
   });
-  //const amount = ethers.utils.parseEther(argv.amount!!.toString());
+  //const amount = ethers.utils.parseEther(argv.amount!.toString());
   const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
-  const amount = ethers.utils.parseUnits(argv.amount!!.toString(), collateralDecimals);
+  const amount = ethers.utils.parseUnits(argv.amount!.toString(), collateralDecimals);
 
   if (argv.action === 'approve' && pool && dexRouter) {
     // 1inch API will error out if approval not run before calling API
-    const oneInchRouter: string = dexRouter.getRouter(chainId)!!
+    const oneInchRouter: string = dexRouter.getRouter(chainId)!
     const currentAllowance = await getAllowanceOfErc20(
       signer,
       pool.collateralAddress,
@@ -152,7 +152,7 @@ async function main() {
       console.log('Attempting to transact with keeperTaker at', config.keeperTaker);
       const keeperTaker = AjnaKeeperTaker__factory.connect(config.keeperTaker, signer);
       const tx = await keeperTaker.testOneInchSwapBytes(
-        dexRouter.getRouter(chainId)!!,
+        dexRouter.getRouter(chainId)!,
         convertSwapApiResponseToDetailsBytes(swapData.data),
         amount.mul(9).div(10), // 90% of the amount
       );

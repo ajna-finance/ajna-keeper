@@ -473,6 +473,82 @@ describe('Discovery Handlers', () => {
     expect(oneInchQuoteStub.called).to.be.false;
   });
 
+  it('uses raw quote units for discovered take profit-floor checks', async () => {
+    const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
+    sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
+      isTakeable: true,
+      quoteAmount: Number('9007199254740993'),
+      quoteAmountRaw: ethers.utils.parseUnits('9007199254740993', 6),
+      collateralAmount: 1,
+      marketPrice: Number('9007199254740993'),
+      takeablePrice: Number('9007199254740993'),
+    });
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+    const pool = {
+      name: 'Large WETH / USDC',
+      poolAddress: '0xbebebebebebebebebebebebebebebebebebebebe',
+      quoteAddress: '0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',
+      collateralAddress: '0x4200000000000000000000000000000000000006',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseUnits('9007199254740992', 18),
+        }),
+      }),
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(0)),
+      },
+      getChainId: sinon.stub().resolves(8453),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerRawProfit',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            minExpectedProfitQuote: 1,
+          },
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+    });
+
+    expect(takeLiquidationStub.calledOnce).to.be.true;
+  });
+
   it('logs a discovered take summary with skip counters', async () => {
     sinon.stub(takeModule, 'takeLiquidation').resolves();
     sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({

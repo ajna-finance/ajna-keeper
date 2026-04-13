@@ -21,7 +21,9 @@ export interface GasPolicyResult {
   approved: boolean;
   gasCostNative: number;
   gasCostQuote: number;
+  gasCostQuoteRaw?: BigNumber;
   gasPriceGwei: number;
+  quoteTokenDecimals?: number;
   reason?: string;
 }
 
@@ -329,15 +331,17 @@ export async function evaluateGasPolicy(params: {
   );
 
   let gasCostQuote: number;
+  let gasCostQuoteRaw: BigNumber;
   if (wrappedNativeAddress.toLowerCase() === params.quoteTokenAddress.toLowerCase()) {
+    gasCostQuoteRaw = gasCostNativeRaw;
     gasCostQuote = Number(
-      ethers.utils.formatUnits(gasCostNativeRaw, quoteDecimals)
+      ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals)
     );
   } else if (
     params.nativeToQuoteConversion &&
     params.nativeToQuoteConversion.amountInNative.gt(0)
   ) {
-    const gasCostQuoteRaw = gasCostNativeRaw
+    gasCostQuoteRaw = gasCostNativeRaw
       .mul(params.nativeToQuoteConversion.amountOutQuoteRaw)
       .add(params.nativeToQuoteConversion.amountInNative.sub(1))
       .div(params.nativeToQuoteConversion.amountInNative);
@@ -386,7 +390,8 @@ export async function evaluateGasPolicy(params: {
         reason: 'failed to quote gas cost into quote token',
       };
     }
-    gasCostQuote = Number(ethers.utils.formatUnits(quotedAmount, quoteDecimals));
+    gasCostQuoteRaw = quotedAmount;
+    gasCostQuote = Number(ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals));
   }
 
   const maxGasCostQuote = params.policy?.maxGasCostQuote;
@@ -395,7 +400,9 @@ export async function evaluateGasPolicy(params: {
       approved: false,
       gasCostNative,
       gasCostQuote,
+      gasCostQuoteRaw,
       gasPriceGwei,
+      quoteTokenDecimals: quoteDecimals,
       reason: `estimated gas cost ${gasCostQuote.toFixed(6)} exceeds maxGasCostQuote ${maxGasCostQuote}`,
     };
   }
@@ -404,6 +411,8 @@ export async function evaluateGasPolicy(params: {
     approved: true,
     gasCostNative,
     gasCostQuote,
+    gasCostQuoteRaw,
     gasPriceGwei,
+    quoteTokenDecimals: quoteDecimals,
   };
 }

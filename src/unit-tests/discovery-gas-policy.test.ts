@@ -65,6 +65,8 @@ describe('Discovery Gas Policy', () => {
 
     expect(firstResult.approved).to.be.true;
     expect(secondResult.approved).to.be.true;
+    expect(firstResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to.be.true;
+    expect(firstResult.quoteTokenDecimals).to.equal(6);
     expect(oneInchQuoteStub.calledOnce).to.be.true;
     expect(rpcCache.gasQuoteConversions.size).to.equal(1);
   });
