@@ -54,6 +54,48 @@ describe('take write transport', () => {
     expect(transport.signer).to.equal(signer);
   });
 
+  it('times out public rpc receipt waits using the configured timeout', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+    try {
+      const signer = {
+        sendTransaction: sinon.stub().resolves({
+          hash: '0xpublic',
+          wait: sinon.stub().returns(new Promise(() => {})),
+        }),
+      } as any;
+
+      const transport = await createTakeWriteTransport({
+        signer,
+        config: {
+          takeWrite: {
+            mode: TakeWriteTransportMode.PUBLIC_RPC,
+            receiptTimeoutMs: 25,
+          },
+        } as any,
+        expectedChainId: 1,
+      });
+
+      const submission = await transport.submitTransaction({
+        to: '0x00000000000000000000000000000000000000bb',
+      });
+      const waitPromise = submission.wait().then(
+        () => {
+          expect.fail('Expected public rpc wait to time out');
+        },
+        (error) => {
+          expect((error as Error).message).to.include(
+            'Transaction confirmation timeout after 25ms'
+          );
+        }
+      );
+
+      await clock.tickAsync(26);
+      await waitPromise;
+    } finally {
+      clock.restore();
+    }
+  });
+
   it('creates a private transport from explicit private_rpc config', async () => {
     const signer = Wallet.createRandom();
     sinon
@@ -73,6 +115,56 @@ describe('take write transport', () => {
 
     expect(transport.mode).to.equal(TakeWriteTransportMode.PRIVATE_RPC);
     expect(transport.signer).to.not.equal(signer);
+  });
+
+  it('times out private rpc receipt waits using the configured timeout', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+    try {
+      const writeSigner = {
+        address: '0x00000000000000000000000000000000000000aa',
+        sendTransaction: sinon.stub().resolves({
+          hash: '0xprivate',
+          wait: sinon.stub().returns(new Promise(() => {})),
+        }),
+      };
+      const signer = {
+        connect: sinon.stub().returns(writeSigner),
+      } as any;
+      sinon
+        .stub(JsonRpcProvider.prototype, 'getNetwork')
+        .resolves({ chainId: 1 } as any);
+
+      const transport = await createTakeWriteTransport({
+        signer,
+        config: {
+          takeWrite: {
+            mode: TakeWriteTransportMode.PRIVATE_RPC,
+            rpcUrl: 'http://private-rpc',
+            receiptTimeoutMs: 25,
+          },
+        } as any,
+        expectedChainId: 1,
+      });
+
+      const submission = await transport.submitTransaction({
+        to: '0x00000000000000000000000000000000000000bb',
+      });
+      const waitPromise = submission.wait().then(
+        () => {
+          expect.fail('Expected private rpc wait to time out');
+        },
+        (error) => {
+          expect((error as Error).message).to.include(
+            'Transaction confirmation timeout after 25ms'
+          );
+        }
+      );
+
+      await clock.tickAsync(26);
+      await waitPromise;
+    } finally {
+      clock.restore();
+    }
   });
 
   it('creates a relay transport and submits a private transaction with a durable nonce floor', async () => {

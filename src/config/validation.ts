@@ -393,11 +393,27 @@ export function validateTakeWriteConfig(config: KeeperConfig): void {
 
   switch (config.takeWrite.mode) {
     case TakeWriteTransportMode.PUBLIC_RPC:
+      if (
+        config.takeWrite.receiptTimeoutMs !== undefined &&
+        config.takeWrite.receiptTimeoutMs <= 0
+      ) {
+        throw new Error(
+          'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+        );
+      }
       return;
     case TakeWriteTransportMode.PRIVATE_RPC:
       if (!config.takeWrite.rpcUrl) {
         throw new Error(
           'KeeperConfig.takeWrite: rpcUrl required when mode is private_rpc'
+        );
+      }
+      if (
+        config.takeWrite.receiptTimeoutMs !== undefined &&
+        config.takeWrite.receiptTimeoutMs <= 0
+      ) {
+        throw new Error(
+          'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
         );
       }
       return;
@@ -413,6 +429,14 @@ export function validateTakeWriteConfig(config: KeeperConfig): void {
       ) {
         throw new Error(
           'KeeperConfig.takeWrite: relay.maxBlockNumberOffset must be greater than 0 when provided'
+        );
+      }
+      if (
+        config.takeWrite.receiptTimeoutMs !== undefined &&
+        config.takeWrite.receiptTimeoutMs <= 0
+      ) {
+        throw new Error(
+          'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
         );
       }
       if (

@@ -98,7 +98,7 @@ export class DexRouter {
     slippage: number,
     fromAddress: string,
     usePatching: boolean = false,
-  ) : Promise<{ success: boolean; data?: any; error?: string }> {
+  ) : Promise<{ success: boolean; data?: any; error?: string; retryable?: boolean }> {
     const url = `${process.env.ONEINCH_API}/${chainId}/swap`;
     const params: {
       fromTokenAddress: string;
@@ -129,27 +129,37 @@ export class DexRouter {
       `Sending these parameters to 1inch: ${JSON.stringify(params)}`
     );
 
-    const response = await axios.get(url, {
-      params,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
-      },
-    });
+    try {
+      const response = await axios.get(url, {
+        params,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
+        },
+      });
 
-    if (
-      !response.data.tx ||
-      !response.data.tx.to ||
-      !response.data.tx.data
-    ) {
-      logger.error('No valid transaction received from 1inch');
+      if (
+        !response.data.tx ||
+        !response.data.tx.to ||
+        !response.data.tx.data
+      ) {
+        logger.error('No valid transaction received from 1inch');
+        return {
+          success: false,
+          error: 'No valid transaction received from 1inch',
+        };
+      }
+
+      return { success: true, data: response.data.tx };
+    } catch (error: Error | any) {
+      const errorMsg = error.response?.data?.description || error.message;
+      const status = error.response?.status;
       return {
         success: false,
-        error: 'No valid transaction received from 1inch',
+        error: errorMsg,
+        retryable: status === 429 || status === undefined || status >= 500,
       };
     }
-
-    return { success: true, data: response.data.tx };
   }
 
   private async swapWithOneInch(
@@ -206,6 +216,12 @@ export class DexRouter {
           fromAddress
         );
         if (!swapDataResult.success) {
+          if (swapDataResult.retryable && attempt < retries) {
+            const waitTime = delayMs * Math.pow(2, attempt - 1);
+            logger.warn(`Attempt (${attempt}/${retries}) after ${waitTime}ms`);
+            await new Promise((resolve) => setTimeout(resolve, waitTime));
+            continue;
+          }
           return { success: false, error: swapDataResult.error };
         }
         const txFrom1inch = swapDataResult.data!;

@@ -452,6 +452,94 @@ describe('Run Loop Discovery Integration', () => {
     expect(firstCallParams.rpcCache.gasPrice.toString()).to.equal('789');
   });
 
+  it('continues manual take targets when discovery rpc cache creation fails', async () => {
+    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
+      .resolves();
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '2',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '2',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+    const loggerErrorStub = sinon.stub(logger, 'error');
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Take Pool',
+          address: '0x1111111111111111111111111111111111111111',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
+        },
+      ],
+      autoDiscover: {
+        enabled: true,
+        take: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      ajna: {
+        fungiblePoolFactory: {
+          getPoolByAddress: sinon.stub().resolves({
+            name: 'Discovered Pool',
+            poolAddress: '0x4444444444444444444444444444444444444444',
+            quoteAddress: '0x5555555555555555555555555555555555555555',
+            collateralAddress: '0x6666666666666666666666666666666666666666',
+          }),
+        },
+      } as any,
+      config,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().rejects(new Error('read rpc unavailable')),
+        },
+      } as any,
+      poolMap: new Map([
+        [
+          config.pools[0].address,
+          {
+            name: 'Manual Take Pool',
+            poolAddress: config.pools[0].address,
+          } as any,
+        ],
+      ]),
+      discoverySnapshotState: {},
+    }).runTakeCycle();
+
+    expect(handleTakesStub.calledOnce).to.be.true;
+    expect(handleDiscoveredTakeTargetStub.called).to.be.false;
+    expect(
+      loggerErrorStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes(
+            'Failed to handle take for pool: Discovered Pool.'
+          )
+        )
+    ).to.equal(true);
+  });
+
   it('refreshes the shared discovery snapshot from the settlement cadence when take discovery is disabled', async () => {
     const handleDiscoveredSettlementTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
@@ -618,6 +706,103 @@ describe('Run Loop Discovery Integration', () => {
       handleDiscoveredSettlementTargetStub.secondCall.args[0].rpcCache!;
     expect(firstRpcCache.gasPrice!.toString()).to.equal('456');
     expect(secondRpcCache.gasPrice!.toString()).to.equal('456');
+  });
+
+  it('continues manual settlement targets when discovery rpc cache creation fails', async () => {
+    const handleSettlementsStub = sinon
+      .stub(settlementModule, 'handleSettlements')
+      .resolves();
+    const handleDiscoveredSettlementTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
+      .resolves();
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '0',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+    const loggerErrorStub = sinon.stub(logger, 'error');
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Settlement Pool',
+          address: '0x2222222222222222222222222222222222222222',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+          },
+        },
+      ],
+      autoDiscover: {
+        enabled: true,
+        take: false,
+        settlement: true,
+      },
+      discoveredDefaults: {
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: true,
+        },
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      ajna: {
+        fungiblePoolFactory: {
+          getPoolByAddress: sinon.stub().resolves({
+            name: 'Discovered Settlement Pool',
+            poolAddress: '0x4444444444444444444444444444444444444444',
+            quoteAddress: '0x5555555555555555555555555555555555555555',
+            collateralAddress: '0x6666666666666666666666666666666666666666',
+          }),
+        },
+      } as any,
+      config,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().rejects(new Error('read rpc unavailable')),
+        },
+        getAddress: sinon
+          .stub()
+          .resolves('0x7777777777777777777777777777777777777777'),
+      } as any,
+      poolMap: new Map([
+        [
+          config.pools[0].address,
+          {
+            name: 'Manual Settlement Pool',
+            poolAddress: config.pools[0].address,
+          } as any,
+        ],
+      ]),
+      discoverySnapshotState: {},
+    }).runSettlementCycle();
+
+    expect(handleSettlementsStub.calledOnce).to.be.true;
+    expect(handleDiscoveredSettlementTargetStub.called).to.be.false;
+    expect(
+      loggerErrorStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes(
+            'Failed to handle settlements for pool: Discovered Settlement Pool'
+          )
+        )
+    ).to.equal(true);
   });
 
   it('logs a take cycle summary with target counts and snapshot status', async () => {

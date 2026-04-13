@@ -14,6 +14,7 @@ import { NonceConsumedTransactionError, NonceTracker } from '../nonce';
 const DEFAULT_RELAY_SEND_METHOD = 'eth_sendPrivateTransaction';
 const DEFAULT_RELAY_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET = 25;
+const DEFAULT_TAKE_RECEIPT_TIMEOUT_MS = 120_000;
 
 export interface TakeWriteSubmission {
   txHash: string;
@@ -30,6 +31,33 @@ export interface TakeWriteTransport {
 
 export interface TakeWriteTransportConfig {
   takeWriteTransport?: TakeWriteTransport;
+}
+
+async function waitForReceiptWithTimeout(params: {
+  txHash: string;
+  wait: () => Promise<providers.TransactionReceipt>;
+  timeoutMs: number;
+}): Promise<providers.TransactionReceipt> {
+  const { txHash, wait, timeoutMs } = params;
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      wait(),
+      new Promise<providers.TransactionReceipt>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(
+            new Error(
+              `Transaction confirmation timeout after ${timeoutMs}ms for ${txHash}`
+            )
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 export function resolveTakeWriteTransport(
@@ -77,7 +105,10 @@ export async function createTakeWriteTransport(params: {
       logger.info(
         `Configured take write transport mode=${TakeWriteTransportMode.PUBLIC_RPC}`
       );
-      return createPublicRpcTakeWriteTransport(params.signer);
+      return createPublicRpcTakeWriteTransport(
+        params.signer,
+        normalizedConfig.receiptTimeoutMs
+      );
 
     case TakeWriteTransportMode.PRIVATE_RPC:
       if (!normalizedConfig.rpcUrl) {
@@ -89,6 +120,7 @@ export async function createTakeWriteTransport(params: {
         signer: params.signer,
         rpcUrl: normalizedConfig.rpcUrl,
         expectedChainId: params.expectedChainId,
+        receiptTimeoutMs: normalizedConfig.receiptTimeoutMs,
       });
 
     case TakeWriteTransportMode.RELAY:
@@ -99,6 +131,7 @@ export async function createTakeWriteTransport(params: {
         signer: params.signer,
         relay: normalizedConfig.relay,
         expectedChainId: params.expectedChainId,
+        defaultReceiptTimeoutMs: normalizedConfig.receiptTimeoutMs,
       });
   }
 }
@@ -112,7 +145,8 @@ export async function submitTakeTransaction(
 }
 
 function createPublicRpcTakeWriteTransport(
-  signer: Signer
+  signer: Signer,
+  receiptTimeoutMs: number = DEFAULT_TAKE_RECEIPT_TIMEOUT_MS
 ): TakeWriteTransport {
   return {
     mode: TakeWriteTransportMode.PUBLIC_RPC,
@@ -123,7 +157,12 @@ function createPublicRpcTakeWriteTransport(
       const response = await signer.sendTransaction(txRequest);
       return {
         txHash: response.hash,
-        wait: async () => await response.wait(),
+        wait: async () =>
+          await waitForReceiptWithTimeout({
+            txHash: response.hash,
+            wait: () => response.wait(),
+            timeoutMs: receiptTimeoutMs,
+          }),
       };
     },
   };
@@ -133,6 +172,7 @@ async function createPrivateRpcTakeWriteTransport(params: {
   signer: Wallet;
   rpcUrl: string;
   expectedChainId: number;
+  receiptTimeoutMs?: number;
 }): Promise<TakeWriteTransport> {
   const provider = new JsonRpcProvider(params.rpcUrl);
   const network = await provider.getNetwork();
@@ -161,7 +201,13 @@ async function createPrivateRpcTakeWriteTransport(params: {
       const response = await writeSigner.sendTransaction(txRequest);
       return {
         txHash: response.hash,
-        wait: async () => await response.wait(),
+        wait: async () =>
+          await waitForReceiptWithTimeout({
+            txHash: response.hash,
+            wait: () => response.wait(),
+            timeoutMs:
+              params.receiptTimeoutMs ?? DEFAULT_TAKE_RECEIPT_TIMEOUT_MS,
+          }),
       };
     },
   };
@@ -171,6 +217,7 @@ async function createRelayTakeWriteTransport(params: {
   signer: Wallet;
   relay: TakeWriteRelayConfig;
   expectedChainId: number;
+  defaultReceiptTimeoutMs?: number;
 }): Promise<TakeWriteTransport> {
   const chainId = await params.signer.getChainId();
   if (chainId !== params.expectedChainId) {
@@ -252,6 +299,7 @@ async function createRelayTakeWriteTransport(params: {
               txHash,
               1,
               params.relay.receiptTimeoutMs ??
+                params.defaultReceiptTimeoutMs ??
                 DEFAULT_RELAY_RECEIPT_TIMEOUT_MS
             );
             if (!receipt) {

@@ -2,6 +2,7 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import * as graphqlRequest from 'graphql-request';
 import { clearEndpointHealthState } from '../endpoint-health';
+import { logger } from '../logging';
 import subgraph from '../subgraph';
 
 describe('Subgraph Discovery Pagination', () => {
@@ -96,5 +97,46 @@ describe('Subgraph Discovery Pagination', () => {
     expect(requestStub.secondCall.args[0] as any).to.include({
       url: 'http://fallback-subgraph',
     });
+  });
+
+  it('warns when chain-wide discovery hits the configured max page cap', async () => {
+    const requestStub = sinon.stub(graphqlRequest, 'request');
+    const loggerWarnStub = sinon.stub(logger, 'warn');
+    requestStub.onCall(0).resolves({
+      liquidationAuctions: Array.from({ length: 100 }, (_, index) => ({
+        borrower: `0xborrower-${index}`,
+        kickTime: '1',
+        debtRemaining: '1',
+        collateralRemaining: '1',
+        neutralPrice: '1',
+        debt: '1',
+        collateral: '1',
+        pool: { id: '0x1111111111111111111111111111111111111111' },
+      })),
+    });
+    requestStub.onCall(1).resolves({
+      liquidationAuctions: Array.from({ length: 100 }, (_, index) => ({
+        borrower: `0xborrower-second-${index}`,
+        kickTime: '1',
+        debtRemaining: '1',
+        collateralRemaining: '1',
+        neutralPrice: '1',
+        debt: '1',
+        collateral: '1',
+        pool: { id: '0x1111111111111111111111111111111111111111' },
+      })),
+    });
+
+    const result = await subgraph.getChainwideLiquidationAuctions(
+      'http://example-subgraph',
+      100,
+      2
+    );
+
+    expect(result.liquidationAuctions).to.have.length(200);
+    expect(loggerWarnStub.calledOnce).to.be.true;
+    expect(loggerWarnStub.firstCall.args[0]).to.include(
+      'reached maxPages=2 with pageSize=100'
+    );
   });
 });

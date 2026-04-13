@@ -78,6 +78,12 @@ interface DiscoveryCycleStats {
   targetFailures: number;
 }
 
+interface DiscoveryRpcCacheState {
+  initialized: boolean;
+  cache?: DiscoveryRpcCache;
+  error?: Error;
+}
+
 function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
@@ -179,11 +185,9 @@ async function resolveSettlementCycleTargets(
 }
 
 async function createTakeCycleRpcCache(
-  state: BoundDiscoveryRuntimeState,
-  targets: EffectiveTakeTarget[]
+  state: BoundDiscoveryRuntimeState
 ): Promise<DiscoveryRpcCache | undefined> {
-  return targets.some((target) => target.source === 'discovered') &&
-    state.signer.provider
+  return state.signer.provider
     ? {
         gasPrice: await state.readTransports.readRpc.getGasPrice(),
         factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
@@ -192,15 +196,73 @@ async function createTakeCycleRpcCache(
 }
 
 async function createSettlementCycleRpcCache(
-  state: BoundDiscoveryRuntimeState,
-  targets: EffectiveSettlementTarget[]
+  state: BoundDiscoveryRuntimeState
 ): Promise<DiscoveryRpcCache | undefined> {
-  return targets.some((target) => target.source === 'discovered') &&
-    state.signer.provider
+  return state.signer.provider
     ? {
         gasPrice: await state.readTransports.readRpc.getGasPrice(),
       }
     : undefined;
+}
+
+async function getTakeTargetRpcCache(params: {
+  state: BoundDiscoveryRuntimeState;
+  target: EffectiveTakeTarget;
+  cacheState: DiscoveryRpcCacheState;
+}): Promise<DiscoveryRpcCache | undefined> {
+  if (params.target.source === 'manual') {
+    return undefined;
+  }
+
+  if (!params.cacheState.initialized) {
+    params.cacheState.initialized = true;
+    try {
+      params.cacheState.cache = await createTakeCycleRpcCache(params.state);
+    } catch (error) {
+      params.cacheState.error =
+        error instanceof Error ? error : new Error(String(error));
+      logger.warn(
+        `Discovery take rpc cache unavailable for this cycle; discovered take targets will fail: ${params.cacheState.error.message}`
+      );
+    }
+  }
+
+  if (params.cacheState.error) {
+    throw params.cacheState.error;
+  }
+
+  return params.cacheState.cache;
+}
+
+async function getSettlementTargetRpcCache(params: {
+  state: BoundDiscoveryRuntimeState;
+  target: EffectiveSettlementTarget;
+  cacheState: DiscoveryRpcCacheState;
+}): Promise<DiscoveryRpcCache | undefined> {
+  if (params.target.source === 'manual') {
+    return undefined;
+  }
+
+  if (!params.cacheState.initialized) {
+    params.cacheState.initialized = true;
+    try {
+      params.cacheState.cache = await createSettlementCycleRpcCache(
+        params.state
+      );
+    } catch (error) {
+      params.cacheState.error =
+        error instanceof Error ? error : new Error(String(error));
+      logger.warn(
+        `Discovery settlement rpc cache unavailable for this cycle; discovered settlement targets will fail: ${params.cacheState.error.message}`
+      );
+    }
+  }
+
+  if (params.cacheState.error) {
+    throw params.cacheState.error;
+  }
+
+  return params.cacheState.cache;
 }
 
 async function resolveEffectiveTargetPool(
@@ -355,6 +417,9 @@ async function runTakeDiscoveryCycle(state: BoundDiscoveryRuntimeState): Promise
     targetSuccesses: 0,
     targetFailures: 0,
   };
+  const rpcCacheState: DiscoveryRpcCacheState = {
+    initialized: false,
+  };
 
   try {
     snapshotInfo = await getTakeCycleLiquidationAuctions(state);
@@ -364,8 +429,6 @@ async function runTakeDiscoveryCycle(state: BoundDiscoveryRuntimeState): Promise
       snapshotInfo.liquidationAuctions
     );
     Object.assign(stats, summarizeCycleTargets(targets));
-    phase = 'rpc-cache';
-    const rpcCache = await createTakeCycleRpcCache(state, targets);
     phase = 'dispatch';
 
     for (const target of targets) {
@@ -376,6 +439,11 @@ async function runTakeDiscoveryCycle(state: BoundDiscoveryRuntimeState): Promise
       }
 
       try {
+        const rpcCache = await getTakeTargetRpcCache({
+          state,
+          target,
+          cacheState: rpcCacheState,
+        });
         await executeEffectiveTakeTarget({
           state,
           pool,
@@ -425,6 +493,9 @@ async function runSettlementDiscoveryCycle(
     targetSuccesses: 0,
     targetFailures: 0,
   };
+  const rpcCacheState: DiscoveryRpcCacheState = {
+    initialized: false,
+  };
 
   try {
     snapshotInfo = await getSettlementCycleLiquidationAuctions(state);
@@ -434,8 +505,6 @@ async function runSettlementDiscoveryCycle(
       snapshotInfo.liquidationAuctions
     );
     Object.assign(stats, summarizeCycleTargets(targets));
-    phase = 'rpc-cache';
-    const rpcCache = await createSettlementCycleRpcCache(state, targets);
     phase = 'dispatch';
 
     for (const target of targets) {
@@ -446,6 +515,11 @@ async function runSettlementDiscoveryCycle(
       }
 
       try {
+        const rpcCache = await getSettlementTargetRpcCache({
+          state,
+          target,
+          cacheState: rpcCacheState,
+        });
         logger.debug(`Processing settlement check for pool: ${pool.name}`);
         await executeEffectiveSettlementTarget({
           state,

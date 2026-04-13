@@ -585,5 +585,50 @@ describe('DexRouter', () => {
 
       expect(result).to.deep.equal({ success: false, error: 'API error' });
     });
+
+    it('retries retryable 1inch swap-data failures before succeeding', async () => {
+      const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+      try {
+        sinon.stub(dexRouter as any, 'getQuoteFromOneInch').resolves({
+          success: true,
+          dstAmount: '900000000000000000',
+        });
+        const getSwapDataStub = sinon.stub(
+          dexRouter,
+          'getSwapDataFromOneInch'
+        );
+        getSwapDataStub
+          .onCall(0)
+          .resolves({ success: false, error: 'network error', retryable: true });
+        getSwapDataStub
+          .onCall(1)
+          .resolves({ success: false, error: 'network error', retryable: true });
+        getSwapDataStub.onCall(2).resolves({
+          success: true,
+          data: {
+            to: '0x1inchRouter',
+            data: '0xdata',
+            value: '0',
+            gas: '100000',
+          },
+        });
+
+        const resultPromise = dexRouter['swapWithOneInch'](
+          chainId,
+          BigNumber.from('100000000'),
+          tokenIn,
+          tokenOut,
+          slippage
+        );
+
+        await clock.runAllAsync();
+        const result = await resultPromise;
+
+        expect(result.success).to.be.true;
+        expect(getSwapDataStub.callCount).to.equal(3);
+      } finally {
+        clock.restore();
+      }
+    });
   });
 });

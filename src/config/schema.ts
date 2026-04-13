@@ -288,6 +288,7 @@ export interface TakeWriteConfig {
   mode: TakeWriteTransportMode;
   rpcUrl?: string;
   relay?: TakeWriteRelayConfig;
+  receiptTimeoutMs?: number;
 }
 
 export interface KeeperConfig {

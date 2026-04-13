@@ -322,6 +322,14 @@ async function getChainwideLiquidationAuctions(
       liquidationAuctions,
       pageResult.liquidationAuctions
     );
+    if (
+      page === maxPages - 1 &&
+      pageResult.liquidationAuctions.length === pageSize
+    ) {
+      logger.warn(
+        `Chain-wide liquidation discovery reached maxPages=${maxPages} with pageSize=${pageSize}; results may be truncated`
+      );
+    }
     if (pageResult.liquidationAuctions.length < pageSize) {
       break;
     }
