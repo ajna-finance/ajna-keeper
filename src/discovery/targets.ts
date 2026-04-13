@@ -160,6 +160,8 @@ interface DecimalValue {
   scale: number;
 }
 
+const ZERO_DECIMAL_VALUE: DecimalValue = { digits: '0', scale: 0 };
+
 function normalizeIntegerString(value: string): string {
   const normalized = value.replace(/^0+/, '');
   return normalized === '' ? '0' : normalized;
@@ -217,6 +219,10 @@ function compareDecimalValues(left: DecimalValue, right: DecimalValue): number {
   const leftScaled = `${left.digits}${'0'.repeat(targetScale - left.scale)}`;
   const rightScaled = `${right.digits}${'0'.repeat(targetScale - right.scale)}`;
   return compareIntegerStrings(leftScaled, rightScaled);
+}
+
+function isPositiveDecimalString(value: string | undefined): boolean {
+  return compareDecimalValues(parseDecimalValue(value), ZERO_DECIMAL_VALUE) > 0;
 }
 
 function multiplyIntegerStrings(left: string, right: string): string {
@@ -514,7 +520,7 @@ export async function buildDiscoveredTakeTargets(
   const takeCandidates = dedupeCandidates(
     liquidationAuctions
       .filter((candidate) => poolAllowed(config, candidate.pool.id))
-      .filter((candidate) => Number(candidate.collateralRemaining || '0') > 0)
+      .filter((candidate) => isPositiveDecimalString(candidate.collateralRemaining))
       .filter((candidate) => {
         const normalizedPool = normalizeAddress(candidate.pool.id);
         if (manualTakePools.has(normalizedPool)) {
@@ -606,7 +612,7 @@ export async function buildDiscoveredSettlementTargets(
   const settlementCandidates = dedupeCandidates(
     liquidationAuctions
       .filter((candidate) => poolAllowed(config, candidate.pool.id))
-      .filter((candidate) => Number(candidate.debtRemaining || '0') > 0)
+      .filter((candidate) => isPositiveDecimalString(candidate.debtRemaining))
       .filter((candidate) => {
         const normalizedPool = normalizeAddress(candidate.pool.id);
         if (manualSettlementPools.has(normalizedPool)) {

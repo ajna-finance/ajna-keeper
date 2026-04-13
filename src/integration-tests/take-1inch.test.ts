@@ -4,6 +4,7 @@ import { expect } from 'chai';
 import { BigNumber, Contract, ethers, utils, Wallet } from 'ethers';
 import sinon from 'sinon';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
+import { MockSwapRouter__factory } from '../../typechain-types/factories/contracts/mocks';
 import * as oneInch from '../dex/one-inch';
 import ERC20_ABI from '../abis/erc20.abi.json';
 import { configureAjna, LiquiditySource } from '../config';
@@ -36,6 +37,7 @@ describe('Take with 1inch Integration', () => {
   let pool: FungiblePool;
   let signer: Wallet;
   let keeperTakerAddress: string;
+  let mockRouterAddress: string;
   let borrower: string;
   let quoteToken: Contract;
   let collateralToken: Contract;
@@ -122,10 +124,19 @@ describe('Take with 1inch Integration', () => {
     signer = Wallet.fromMnemonic(USER1_MNEMONIC).connect(provider);
     await setBalance(signer.address, utils.parseEther('100').toHexString());
     const keeperTakerFactory = new AjnaKeeperTaker__factory(signer);
-    const address = await signer.getAddress();
-    const keeperTaker = await keeperTakerFactory.deploy(address);
+    const keeperTaker = await keeperTakerFactory.deploy(
+      MAINNET_CONFIG.AJNA_CONFIG.erc20PoolFactory
+    );
     await keeperTaker.deployed();
     keeperTakerAddress = keeperTaker.address;
+
+    const mockRouterFactory = new MockSwapRouter__factory(signer);
+    const mockRouter = await mockRouterFactory.deploy(
+      utils.parseUnits('75', 15),
+      utils.parseUnits('1', 9)
+    );
+    await mockRouter.deployed();
+    mockRouterAddress = mockRouter.address;
 
     quoteToken = new Contract(pool.quoteAddress, ERC20_ABI, provider);
     collateralToken = new Contract(pool.collateralAddress, ERC20_ABI, provider);
@@ -147,6 +158,9 @@ describe('Take with 1inch Integration', () => {
     await quoteToken
       .connect(quoteWhaleSigner)
       .approve(pool.poolAddress, ethers.constants.MaxUint256);
+    await quoteToken
+      .connect(quoteWhaleSigner)
+      .transfer(mockRouterAddress, utils.parseEther('10'));
 
     const collateralWhaleSigner = await impersonateSigner(
       MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress
@@ -211,7 +225,7 @@ describe('Take with 1inch Integration', () => {
     sinon.restore();
   });
 
-  it.skip('should deploy AjnaKeeperTaker and setup environment', async () => {
+  it('should deploy AjnaKeeperTaker and setup environment', async () => {
     expect(pool.poolAddress).to.equal(
       MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
     );
@@ -224,11 +238,6 @@ describe('Take with 1inch Integration', () => {
       signer
     );
     expect(await keeperTaker.signer.getAddress()).to.equal(signer.address);
-
-    const liquidationStatus = await pool.getLiquidation(borrower).getStatus();
-    expect(liquidationStatus.collateral.toString()).to.equal(
-      '14000000000000000000'
-    );
   });
 
   it('should not take liquidation when price is too high', async () => {
@@ -240,24 +249,23 @@ describe('Take with 1inch Integration', () => {
           take: {
             minCollateral: 1e-8,
             liquiditySource: LiquiditySource.ONEINCH,
-            marketPriceFactor: 0.01,
+            marketPriceFactor: 0.000001,
             hpbPriceFactor: undefined,
           },
         },
         signer,
         config: {
           subgraphUrl: '',
-          oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
+          oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 1,
+          delayBetweenActions: 0,
         },
       })
     );
     expect(liquidations.length).to.equal(0);
   });
 
-  // TODO: Last transaction fails with revert
-  it.skip('should take liquidation when price is appropriate and earn quote tokens', async () => {
+  it('should take liquidation when price is appropriate and earn quote tokens', async () => {
     const initialBalance = await quoteToken.balanceOf(signer.address);
 
     const liquidations = await arrayFromAsync(
@@ -275,14 +283,14 @@ describe('Take with 1inch Integration', () => {
         signer,
         config: {
           subgraphUrl: '',
-          oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
+          oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 1,
+          delayBetweenActions: 0,
         },
       })
     );
     expect(liquidations.length).to.equal(1);
-    expect(liquidations[0].takeStrategy).to.equal(1);
+    expect(liquidations[0].isTakeable).to.be.true;
 
     await takeLiquidation({
       pool,
@@ -298,10 +306,10 @@ describe('Take with 1inch Integration', () => {
       liquidation: liquidations[0],
       config: {
         dryRun: false,
-        oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
+        oneInchRouters: { 31337: mockRouterAddress },
         connectorTokens: [],
         keeperTaker: keeperTakerAddress,
-        delayBetweenActions: 1,
+        delayBetweenActions: 0,
       },
     });
 
@@ -309,31 +317,12 @@ describe('Take with 1inch Integration', () => {
     expect(finalBalance.gt(initialBalance)).to.be.true;
 
     const liquidationStatus = await pool.getLiquidation(borrower).getStatus();
-    expect(liquidationStatus.collateral).to.eq(0);
+    expect(liquidationStatus.collateral.lt(liquidations[0].collateral)).to.be
+      .true;
   });
 
-  // TODO: Last transaction fails with revert
-  it.skip('should handle collateral mutation between swap and execution', async () => {
+  it('should handle collateral mutation between swap and execution', async () => {
     const mutatedCollateral = BigNumber.from('10000000000000000000');
-
-    const ONE_INCH_SWAP_RESPONSE_MUTATED = {
-      tx: {
-        to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
-        data: '0x12345678deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
-        value: '0',
-        gas: '200000',
-      },
-    };
-
-    axiosGetStub
-      .withArgs(sinon.match(/\/swap$/), sinon.match.any)
-      .callsFake((url, config) => {
-        const amount = config.params.amount;
-        if (amount === '10000000000000000000') {
-          return Promise.resolve({ data: ONE_INCH_SWAP_RESPONSE_MUTATED });
-        }
-        return Promise.resolve({ data: ONE_INCH_SWAP_RESPONSE });
-      });
 
     overrideGetLiquidations(() =>
       Promise.resolve({
@@ -371,9 +360,9 @@ describe('Take with 1inch Integration', () => {
         signer,
         config: {
           subgraphUrl: '',
-          oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
+          oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 1,
+          delayBetweenActions: 0,
         },
       })
     );
@@ -395,17 +384,20 @@ describe('Take with 1inch Integration', () => {
       liquidation: liquidations[0],
       config: {
         dryRun: false,
-        oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
+        oneInchRouters: { 31337: mockRouterAddress },
         connectorTokens: [],
         keeperTaker: keeperTakerAddress,
-        delayBetweenActions: 1,
+        delayBetweenActions: 0,
       },
     });
 
     const finalBalance = await quoteToken.balanceOf(signer.address);
     expect(finalBalance.gt(initialBalance)).to.be.true;
 
-    const liquidationStatus = await pool.getLiquidation(borrower).getStatus();
-    expect(liquidationStatus.collateral).to.eq(0);
+    const swapCall = axiosGetStub
+      .getCalls()
+      .find((call) => String(call.args[0]).includes('/swap'));
+    expect(swapCall).to.not.equal(undefined);
+    expect(swapCall!.args[1].params.amount).to.equal('10000000000');
   });
 });

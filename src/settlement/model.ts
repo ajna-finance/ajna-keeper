@@ -27,11 +27,18 @@ export interface AuctionToSettle {
   collateralRemaining: import('ethers').BigNumber;
 }
 
+export interface SettlementNeedDetails {
+  debtRemaining: import('ethers').BigNumber;
+  collateralRemaining: import('ethers').BigNumber;
+  auctionPrice: import('ethers').BigNumber;
+  kickTime: number;
+}
+
 export interface SettlementNeedResult {
   needs: boolean;
   reason: string;
   retryable?: boolean;
-  details?: any;
+  details?: SettlementNeedDetails;
 }
 
 export interface SettlementIncentiveResult {
