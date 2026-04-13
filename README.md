@@ -456,7 +456,7 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 V1 can auto-discover `take` and `settlement` opportunities across a chain while keeping `kick` manual.
 
-- `autoDiscover` defines shared discovery controls like allow/deny lists, dry-run behavior, and hydration cooldowns.
+- `autoDiscover` defines shared discovery controls like allow/deny lists, dry-run behavior for pools not already listed in `pools[]`, and hydration cooldowns.
 - `autoDiscover.take` and `autoDiscover.settlement` carry independent per-action limits.
 - `discoveredDefaults` defines the default `take` and `settlement` behavior for discovered pools.
 - `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.

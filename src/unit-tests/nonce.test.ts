@@ -45,6 +45,27 @@ describe('NonceTracker', () => {
     expect(nonce).equals(12);
   });
 
+  it('ignores a hung auxiliary nonce reader after timeout', async function () {
+    this.timeout(10000);
+    const secondarySigner = {
+      getTransactionCount: sinon.stub().resolves(12),
+    } as unknown as Signer;
+    const hungSigner = {
+      getTransactionCount: sinon.stub().returns(new Promise(() => {})),
+    } as unknown as Signer;
+    sinon.stub(signer, 'getTransactionCount').resolves(10);
+    NonceTracker.setPendingNonceReaderTimeoutMsForTests(25);
+
+    NonceTracker.registerNonceReaders(await signer.getAddress(), [
+      signer,
+      secondarySigner,
+      hungSigner,
+    ]);
+
+    const nonce = await NonceTracker.getNonce(signer);
+    expect(nonce).equals(12);
+  });
+
   it('increments nonce every time it is called', async () => {
     sinon.stub(signer, 'getTransactionCount').resolves(10);
     await NonceTracker.getNonce(signer);

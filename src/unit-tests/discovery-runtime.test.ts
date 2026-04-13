@@ -1247,6 +1247,108 @@ describe('Run Loop Discovery Integration', () => {
     expect(discoveryStub.callCount).to.equal(2);
   });
 
+  it('retries discovered settlement refresh immediately after a transient discovery failure', async () => {
+    let nowMs = 0;
+    sinon.stub(Date, 'now').callsFake(() => nowMs);
+    const handleSettlementsStub = sinon
+      .stub(settlementModule, 'handleSettlements')
+      .resolves();
+    const handleDiscoveredSettlementTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
+      .resolves();
+    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions');
+    discoveryStub.onFirstCall().rejects(new Error('temporary discovery outage'));
+    discoveryStub.onSecondCall().resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '0',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Settlement Pool',
+          address: '0x2222222222222222222222222222222222222222',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+          },
+        },
+      ],
+      autoDiscover: {
+        enabled: true,
+        take: false,
+        settlement: true,
+      },
+      discoveredDefaults: {
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: true,
+        },
+      },
+    };
+
+    const discoveryRuntime = createTestDiscoveryRuntime({
+      ajna: {
+        fungiblePoolFactory: {
+          getPoolByAddress: sinon.stub().resolves({
+            name: 'Discovered Settlement Pool',
+            poolAddress: '0x4444444444444444444444444444444444444444',
+            quoteAddress: '0x5555555555555555555555555555555555555555',
+            collateralAddress: '0x6666666666666666666666666666666666666666',
+          }),
+        },
+      } as any,
+      config,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+        getAddress: sinon
+          .stub()
+          .resolves('0x7777777777777777777777777777777777777777'),
+      } as any,
+      poolMap: new Map([
+        [
+          config.pools[0].address,
+          {
+            name: 'Manual Settlement Pool',
+            poolAddress: config.pools[0].address,
+          } as any,
+        ],
+      ]),
+      discoverySnapshotState: {},
+    });
+
+    try {
+      await discoveryRuntime.runSettlementCycle();
+      expect.fail('Expected settlement discovery failure');
+    } catch (error) {
+      expect(String(error)).to.include('temporary discovery outage');
+    }
+
+    nowMs = 1_000;
+    await discoveryRuntime.runSettlementCycle();
+
+    expect(handleSettlementsStub.callCount).to.equal(1);
+    expect(handleDiscoveredSettlementTargetStub.callCount).to.equal(1);
+    expect(discoveryStub.callCount).to.equal(2);
+  });
+
   it('continues manual settlement targets when discovery rpc cache creation fails', async () => {
     const handleSettlementsStub = sinon
       .stub(settlementModule, 'handleSettlements')

@@ -192,6 +192,75 @@ describe('Discovery Target Resolution', () => {
     ).to.be.false;
   });
 
+  it('applies dryRunNewPools only to pools with no manual config entry', async () => {
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      dryRun: false,
+      autoDiscover: {
+        ...BASE_CONFIG.autoDiscover,
+        enabled: true,
+        dryRunNewPools: true,
+      },
+      pools: [
+        {
+          name: 'Kick Only Pool',
+          address: '0x2222222222222222222222222222222222222222',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          kick: {
+            minDebt: 1,
+            priceFactor: 0.9,
+          },
+        },
+      ],
+    };
+
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '3',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '3',
+          pool: { id: '0x2222222222222222222222222222222222222222' },
+        },
+        {
+          borrower: '0xBorrowerB',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '3',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '3',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+
+    const takeTargets = await buildDiscoveredTakeTargets(config);
+    const settlementTargets = await buildDiscoveredSettlementTargets(config);
+
+    const configuredTakeTarget = takeTargets.find(
+      (target) => target.poolAddress === '0x2222222222222222222222222222222222222222'
+    );
+    const newTakeTarget = takeTargets.find(
+      (target) => target.poolAddress === '0x4444444444444444444444444444444444444444'
+    );
+    const configuredSettlementTarget = settlementTargets.find(
+      (target) => target.poolAddress === '0x2222222222222222222222222222222222222222'
+    );
+    const newSettlementTarget = settlementTargets.find(
+      (target) => target.poolAddress === '0x4444444444444444444444444444444444444444'
+    );
+
+    expect(configuredTakeTarget?.dryRun).to.equal(false);
+    expect(newTakeTarget?.dryRun).to.equal(true);
+    expect(configuredSettlementTarget?.dryRun).to.equal(false);
+    expect(newSettlementTarget?.dryRun).to.equal(true);
+  });
+
   it('returns no discovered targets when the chain-wide query is empty', async () => {
     sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
       liquidationAuctions: [],

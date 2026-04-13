@@ -575,7 +575,7 @@ export async function buildDiscoveredTakeTargets(
       source: 'discovered',
       poolAddress,
       name: manualPool?.name ?? `discovered:${poolAddress}`,
-      dryRun: !!config.dryRun || !!autoDiscover.dryRunNewPools,
+      dryRun: !!config.dryRun || (!!autoDiscover.dryRunNewPools && !manualPool),
       take: takeConfig,
       candidates,
     };
@@ -664,7 +664,7 @@ export async function buildDiscoveredSettlementTargets(
       source: 'discovered',
       poolAddress,
       name: manualPool?.name ?? `discovered:${poolAddress}`,
-      dryRun: !!config.dryRun || !!autoDiscover.dryRunNewPools,
+      dryRun: !!config.dryRun || (!!autoDiscover.dryRunNewPools && !manualPool),
       settlement: settlementConfig,
       candidates,
     };

@@ -32,6 +32,21 @@ export interface NativeToQuoteConversion {
   amountOutQuoteRaw: BigNumber;
 }
 
+const WRAPPED_NATIVE_TOKEN_SYMBOLS = [
+  'weth',
+  'wavax',
+  'wftm',
+  'wmatic',
+  'wbnb',
+  'wxdai',
+  'wglmr',
+  'wmovr',
+  'wsei',
+  'wrose',
+  'wnear',
+  'wone',
+];
+
 export function createDiscoveryTransportsForConfig(
   config: DiscoveryExecutionConfig,
   signer: Signer
@@ -68,21 +83,42 @@ function getTokenAddressCaseInsensitive(
   return undefined;
 }
 
+function resolveWrappedNativeTokenAddress(
+  addresses: { [tokenSymbol: string]: string } | undefined
+): string | undefined {
+  for (const symbol of WRAPPED_NATIVE_TOKEN_SYMBOLS) {
+    const address = getTokenAddressCaseInsensitive(addresses, symbol);
+    if (address) {
+      return address;
+    }
+  }
+  return undefined;
+}
+
 export function resolveWrappedNativeAddress(
   config: DiscoveryExecutionConfig,
   liquiditySource?: LiquiditySource
 ): string | undefined {
   if (liquiditySource === LiquiditySource.UNISWAPV3) {
-    return config.universalRouterOverrides?.wethAddress;
+    return (
+      config.universalRouterOverrides?.wethAddress ??
+      resolveWrappedNativeTokenAddress(config.tokenAddresses)
+    );
   }
   if (liquiditySource === LiquiditySource.SUSHISWAP) {
-    return config.sushiswapRouterOverrides?.wethAddress;
+    return (
+      config.sushiswapRouterOverrides?.wethAddress ??
+      resolveWrappedNativeTokenAddress(config.tokenAddresses)
+    );
   }
   if (liquiditySource === LiquiditySource.CURVE) {
-    return config.curveRouterOverrides?.wethAddress;
+    return (
+      config.curveRouterOverrides?.wethAddress ??
+      resolveWrappedNativeTokenAddress(config.tokenAddresses)
+    );
   }
   return (
-    getTokenAddressCaseInsensitive(config.tokenAddresses, 'weth') ??
+    resolveWrappedNativeTokenAddress(config.tokenAddresses) ??
     config.universalRouterOverrides?.wethAddress ??
     config.sushiswapRouterOverrides?.wethAddress ??
     config.curveRouterOverrides?.wethAddress

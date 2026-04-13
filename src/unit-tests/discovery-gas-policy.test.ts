@@ -70,4 +70,58 @@ describe('Discovery Gas Policy', () => {
     expect(oneInchQuoteStub.calledOnce).to.be.true;
     expect(rpcCache.gasQuoteConversions.size).to.equal(1);
   });
+
+  it('recognizes wrapped native aliases from tokenAddresses for quote-denominated gas conversion', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('1', 6).toString(),
+      });
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(43114),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        oneInchRouters: {
+          43114: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          wavax: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        gasQuoteConversions: new Map<string, BigNumber | null>(),
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(oneInchQuoteStub.firstCall.args[2]).to.equal(
+      '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7'
+    );
+  });
 });

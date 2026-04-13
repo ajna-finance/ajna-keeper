@@ -42,6 +42,9 @@ export class NonceTracker {
 
   // Universal RPC cache refresh delay - applies to all chains
   private static readonly RPC_CACHE_REFRESH_DELAY = 1000; // 1000ms for aggressive RPC caching
+  private static readonly DEFAULT_PENDING_NONCE_READER_TIMEOUT_MS = 2_000;
+  private static pendingNonceReaderTimeoutMs =
+    NonceTracker.DEFAULT_PENDING_NONCE_READER_TIMEOUT_MS;
 
   constructor() {
     if (!NonceTracker.instance) {
@@ -65,6 +68,8 @@ export class NonceTracker {
     tracker.nonces = new Map();
     tracker.queues = new Map();
     tracker.nonceReaders = new Map();
+    NonceTracker.pendingNonceReaderTimeoutMs =
+      NonceTracker.DEFAULT_PENDING_NONCE_READER_TIMEOUT_MS;
     logger.debug('Cleared all nonce tracking data');
   }
 
@@ -74,6 +79,11 @@ export class NonceTracker {
 
   static clearDurableNonceStateForTests() {
     clearDurableNonceStateForTests();
+  }
+
+  static setPendingNonceReaderTimeoutMsForTests(timeoutMs?: number) {
+    NonceTracker.pendingNonceReaderTimeoutMs =
+      timeoutMs ?? NonceTracker.DEFAULT_PENDING_NONCE_READER_TIMEOUT_MS;
   }
 
   static async markDurableNonceFloor(params: {
@@ -239,16 +249,7 @@ export class NonceTracker {
   private async getPendingNonce(signer: Signer, address: string): Promise<number> {
     const readers = this.nonceReaders.get(address) ?? [signer];
     const pendingNonces = await Promise.all(
-      readers.map(async (reader) => {
-        try {
-          return await reader.getTransactionCount('pending');
-        } catch (error) {
-          logger.warn(
-            `Failed to fetch pending nonce for ${address} from a registered nonce reader: ${error}`
-          );
-          return -1;
-        }
-      })
+      readers.map((reader) => this.getPendingNonceFromReader(reader, address))
     );
 
     const latestNonce = Math.max(...pendingNonces);
@@ -257,6 +258,36 @@ export class NonceTracker {
     }
 
     return await this.applyDurableNonceFloor(signer, address, latestNonce);
+  }
+
+  private async getPendingNonceFromReader(
+    reader: Signer,
+    address: string
+  ): Promise<number> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader.getTransactionCount('pending'),
+        new Promise<number>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(
+              new Error(
+                `Pending nonce lookup timed out after ${NonceTracker.pendingNonceReaderTimeoutMs}ms`
+              )
+            );
+          }, NonceTracker.pendingNonceReaderTimeoutMs);
+        }),
+      ]);
+    } catch (error) {
+      logger.warn(
+        `Failed to fetch pending nonce for ${address} from a registered nonce reader: ${error}`
+      );
+      return -1;
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
   }
 
   private async markDurableNonceFloor(params: {

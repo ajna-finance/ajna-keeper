@@ -8,7 +8,7 @@ import {
 
 const config: KeeperConfig = {
   // Keep the existing manual keeper behavior live.
-  // Newly discovered pools stay dry-run until autoDiscover.dryRunNewPools is removed.
+  // Newly discovered pools that are not already listed in pools[] stay dry-run until autoDiscover.dryRunNewPools is removed.
   dryRun: false,
   logLevel: 'info',
 

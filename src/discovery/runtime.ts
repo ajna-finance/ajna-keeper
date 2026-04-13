@@ -575,7 +575,6 @@ async function runSettlementDiscoveryCycle(
   try {
     const includeDiscoveredTargets = shouldRunDiscoveredSettlementCycle(state);
     if (includeDiscoveredTargets) {
-      state.lastDiscoveredSettlementCycleStartedAtMs = Date.now();
       snapshotInfo = await getSettlementCycleLiquidationAuctions(state);
     } else {
       snapshotInfo = {
@@ -595,6 +594,9 @@ async function runSettlementDiscoveryCycle(
         )
       : getManualSettlementTargets(state.config);
     Object.assign(stats, summarizeCycleTargets(targets));
+    if (includeDiscoveredTargets) {
+      state.lastDiscoveredSettlementCycleStartedAtMs = Date.now();
+    }
     phase = 'dispatch';
 
     for (const target of targets) {
