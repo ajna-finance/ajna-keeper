@@ -759,8 +759,8 @@ curveRouterOverrides: {
 ### Automatic Detection
 
 The keeper automatically detects your configuration:
-- **Single**: Uses existing 1inch integration (`src/take.ts`)
-- **Factory**: Uses multi-DEX system (`src/take-factory.ts`) 
+- **Single**: Uses existing 1inch integration (`src/take/index.ts`)
+- **Factory**: Uses multi-DEX system (`src/take/factory/index.ts`) 
 - **None**: ArbTake and settlement only
 
 No manual selection needed - the bot chooses based on your config.

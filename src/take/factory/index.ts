@@ -98,6 +98,7 @@ export async function handleFactoryTakes({
     },
     dryRun: resolvedConfig.dryRun ?? false,
     delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
+    takeWriteTransport,
     arbTakeActionLabel: 'Factory ArbTake',
     arbTakeLogPrefix: 'Factory: ',
     onFound: (decision) => {

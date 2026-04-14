@@ -4,6 +4,7 @@ import { logger } from '../logging';
 import { SubgraphReader } from '../read-transports';
 import { delay, weiToDecimaled } from '../utils';
 import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
+import { TakeWriteTransport } from './write-transport';
 import {
   ArbTakeEvaluation,
   ExternalTakeQuoteEvaluation,
@@ -98,6 +99,7 @@ interface ExecuteTakeDecisionParams<
   }) => void;
   arbTakeActionLabel?: string;
   arbTakeLogPrefix?: string;
+  takeWriteTransport?: TakeWriteTransport;
 }
 
 interface ProcessTakeCandidatesParams<
@@ -117,6 +119,7 @@ interface ProcessTakeCandidatesParams<
       | 'onExecuted'
       | 'arbTakeActionLabel'
       | 'arbTakeLogPrefix'
+      | 'takeWriteTransport'
     > {
   candidates: TakeBorrowerCandidate[];
   approveExternalTake?: EvaluateTakeDecisionParams<TPoolConfig>['approveExternalTake'];
@@ -329,6 +332,7 @@ export async function executeTakeDecision<
   onExecuted,
   arbTakeActionLabel,
   arbTakeLogPrefix,
+  takeWriteTransport,
 }: ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>): Promise<void> {
   let approvedTake = decision.approvedTake;
   let approvedArbTake = decision.approvedArbTake;
@@ -399,6 +403,7 @@ export async function executeTakeDecision<
       },
       config: {
         dryRun,
+        takeWriteTransport,
       },
       actionLabel: arbTakeActionLabel,
       logPrefix: arbTakeLogPrefix,
@@ -433,6 +438,7 @@ export async function processTakeCandidates<
   onFound,
   arbTakeActionLabel,
   arbTakeLogPrefix,
+  takeWriteTransport,
 }: ProcessTakeCandidatesParams<TPoolConfig, TExecutionConfig>): Promise<void> {
   for (const candidate of candidates) {
     const decision = await evaluateTakeDecision({
@@ -472,6 +478,7 @@ export async function processTakeCandidates<
       onExecuted,
       arbTakeActionLabel,
       arbTakeLogPrefix,
+      takeWriteTransport,
     });
   }
 }

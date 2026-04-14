@@ -15,7 +15,11 @@ import { DexRouter } from '../dex/router';
 import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
 import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provider';
 import { getDecimalsErc20 } from '../erc20';
-import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
+import {
+  DiscoveryExecutionConfig,
+  DiscoveryExecutionTransportConfig,
+  DiscoveryRpcCache,
+} from './types';
 
 export interface GasPolicyResult {
   approved: boolean;
@@ -83,7 +87,7 @@ function hasConfiguredLiquiditySource(
 }
 
 export function createDiscoveryTransportsForConfig(
-  config: DiscoveryExecutionConfig,
+  config: DiscoveryExecutionTransportConfig,
   signer: Signer
 ): DiscoveryReadTransports {
   return createDiscoveryReadTransports(

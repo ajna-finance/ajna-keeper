@@ -2,14 +2,16 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber } from 'ethers';
 import { clearSharedDiscoveryScans } from '../discovery/targets';
+import { clearSharedSettlementScannerCache } from '../settlement/scanner';
 import { createDiscoveryRuntime } from '../discovery/runtime';
 import { processKickCycle, runTakeLoopIteration } from '../run';
-import { KeeperConfig, PriceOriginSource } from '../config';
+import { KeeperConfig, PriceOriginSource, TakeWriteTransportMode } from '../config';
 import * as readRpc from '../read-rpc';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
 import * as kickModule from '../kick';
 import * as discoveryHandlers from '../discovery/handlers';
+import * as takeWriteTransportModule from '../take/write-transport';
 import subgraph from '../subgraph';
 import { logger } from '../logging';
 import { createSubgraphReader } from '../read-transports';
@@ -55,6 +57,7 @@ describe('Run Loop Discovery Integration', () => {
   afterEach(() => {
     sinon.restore();
     clearSharedDiscoveryScans();
+    clearSharedSettlementScannerCache();
   });
 
   it('keeps the manual-only take path unchanged when auto discovery is disabled', async () => {
@@ -128,6 +131,69 @@ describe('Run Loop Discovery Integration', () => {
       takeWriteTransport: takeWriteTransport as any,
     }).runTakeCycle();
 
+    expect(handleTakesStub.calledOnce).to.be.true;
+    expect(handleTakesStub.firstCall.args[0].takeWriteTransport).to.equal(
+      takeWriteTransport
+    );
+  });
+
+
+  it('retries take write transport initialization on later take cycles after a startup failure', async () => {
+    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
+    const takeWriteTransport = {
+      mode: 'private_rpc',
+      signer: {
+        getAddress: sinon
+          .stub()
+          .resolves('0x9999999999999999999999999999999999999999'),
+      },
+      submitTransaction: sinon.stub(),
+    };
+    const createTakeWriteTransportStub = sinon
+      .stub(takeWriteTransportModule, 'createTakeWriteTransport');
+    createTakeWriteTransportStub
+      .onFirstCall()
+      .rejects(new Error('transport unavailable'));
+    createTakeWriteTransportStub
+      .onSecondCall()
+      .resolves(takeWriteTransport as any);
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      takeWrite: {
+        mode: TakeWriteTransportMode.PRIVATE_RPC,
+        rpcUrl: 'http://127.0.0.1:1',
+      },
+      pools: [
+        {
+          name: 'Manual Take Pool',
+          address: '0x1111111111111111111111111111111111111111',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
+        },
+      ],
+    };
+    const pool = {
+      name: 'Manual Take Pool',
+      poolAddress: '0x1111111111111111111111111111111111111111',
+    };
+
+    const runtime = createTestDiscoveryRuntime({
+      config,
+      poolMap: new Map([[config.pools[0].address, pool as any]]),
+      signer: {
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      discoverySnapshotState: {},
+    });
+
+    await runtime.runTakeCycle();
+    await runtime.runTakeCycle();
+
+    expect(createTakeWriteTransportStub.calledTwice).to.be.true;
     expect(handleTakesStub.calledOnce).to.be.true;
     expect(handleTakesStub.firstCall.args[0].takeWriteTransport).to.equal(
       takeWriteTransport
@@ -1353,6 +1419,87 @@ describe('Run Loop Discovery Integration', () => {
     ).to.be.true;
   });
 
+
+  it('does not reuse an overly stale cached settlement snapshot after refresh failures', async () => {
+    let nowMs = 300_000;
+    sinon.stub(Date, 'now').callsFake(() => nowMs);
+    const handleSettlementsStub = sinon
+      .stub(settlementModule, 'handleSettlements')
+      .resolves();
+    const handleDiscoveredSettlementTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
+      .resolves();
+    const loggerWarnStub = sinon.stub(logger, 'warn');
+    sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .rejects(new Error('subgraph unavailable'));
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Settlement Pool',
+          address: '0x2222222222222222222222222222222222222222',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+          },
+        },
+      ],
+      autoDiscover: {
+        enabled: true,
+        take: false,
+        settlement: true,
+      },
+      discoveredDefaults: {
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: true,
+        },
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      config,
+      poolMap: new Map([
+        [
+          config.pools[0].address,
+          {
+            name: 'Manual Settlement Pool',
+            poolAddress: config.pools[0].address,
+          } as any,
+        ],
+      ]),
+      discoverySnapshotState: {
+        fetchedAt: 0,
+        latestLiquidationAuctions: [
+          {
+            borrower: '0xBorrowerA',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '0',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '0',
+            pool: { id: '0x4444444444444444444444444444444444444444' },
+          },
+        ],
+      },
+    }).runSettlementCycle();
+
+    expect(handleSettlementsStub.calledOnce).to.be.true;
+    expect(handleDiscoveredSettlementTargetStub.called).to.be.false;
+    expect(
+      loggerWarnStub.calledWithMatch(
+        sinon.match('Cached settlement discovery snapshot is too stale')
+      )
+    ).to.be.true;
+  });
+
   it('continues manual settlement targets when discovery rpc cache creation fails', async () => {
     const handleSettlementsStub = sinon
       .stub(settlementModule, 'handleSettlements')
@@ -1541,6 +1688,76 @@ describe('Run Loop Discovery Integration', () => {
     expect(
       loggerWarnStub.calledWithMatch(
         sinon.match('Failed to refresh take discovery snapshot')
+      )
+    ).to.be.true;
+  });
+
+
+  it('does not reuse an overly stale cached take snapshot after refresh failures', async () => {
+    let nowMs = 300_000;
+    sinon.stub(Date, 'now').callsFake(() => nowMs);
+    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
+      .resolves();
+    const loggerWarnStub = sinon.stub(logger, 'warn');
+    sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .rejects(new Error('subgraph unavailable'));
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Take Pool',
+          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
+        },
+      ],
+      autoDiscover: {
+        enabled: true,
+        take: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      config,
+      poolMap: new Map([[config.pools[0].address, {
+        name: 'Manual Take Pool',
+        poolAddress: config.pools[0].address,
+      } as any]]),
+      discoverySnapshotState: {
+        fetchedAt: 0,
+        latestLiquidationAuctions: [
+          {
+            borrower: '0xBorrowerA',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '2',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '2',
+            pool: { id: '0x4444444444444444444444444444444444444444' },
+          },
+        ],
+      },
+    }).runTakeCycle();
+
+    expect(handleTakesStub.calledOnce).to.be.true;
+    expect(handleDiscoveredTakeTargetStub.called).to.be.false;
+    expect(
+      loggerWarnStub.calledWithMatch(
+        sinon.match('Cached take discovery snapshot is too stale')
       )
     ).to.be.true;
   });

@@ -5,9 +5,27 @@ import { AuctionToSettle, SettlementReadConfig } from './model';
 import { SettlementActionConfig } from './types';
 import { needsSettlement } from './checks';
 
+interface SettlementScannerCacheEntry {
+  lastSubgraphQuery: number;
+  cachedAuctions: AuctionToSettle[];
+}
+
+const sharedSettlementScannerCache = new Map<string, SettlementScannerCacheEntry>();
+const SHARED_SETTLEMENT_SCANNER_CACHE_RETENTION_MS = 900000;
+
+export function clearSharedSettlementScannerCache(): void {
+  sharedSettlementScannerCache.clear();
+}
+
+function pruneSharedSettlementScannerCache(now: number): void {
+  sharedSettlementScannerCache.forEach((entry, cacheKey) => {
+    if (now - entry.lastSubgraphQuery > SHARED_SETTLEMENT_SCANNER_CACHE_RETENTION_MS) {
+      sharedSettlementScannerCache.delete(cacheKey);
+    }
+  });
+}
+
 export class SettlementScanner {
-  private lastSubgraphQuery = 0;
-  private cachedAuctions: AuctionToSettle[] = [];
   private readonly QUERY_CACHE_DURATION = 300000;
 
   constructor(
@@ -17,14 +35,32 @@ export class SettlementScanner {
     private config: SettlementReadConfig
   ) {}
 
+  private getCacheEntry(minAge: number): SettlementScannerCacheEntry {
+    pruneSharedSettlementScannerCache(Date.now());
+    const maxBucketDepth = this.poolConfig.settlement.maxBucketDepth ?? 50;
+    const cacheKey = `${this.config.subgraph.cacheKey}:${this.pool.poolAddress.toLowerCase()}:${minAge}:${maxBucketDepth}`;
+    const existing = sharedSettlementScannerCache.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+
+    const created: SettlementScannerCacheEntry = {
+      lastSubgraphQuery: 0,
+      cachedAuctions: [],
+    };
+    sharedSettlementScannerCache.set(cacheKey, created);
+    return created;
+  }
+
   async findSettleableAuctions(): Promise<AuctionToSettle[]> {
     const now = Date.now();
     const minAge = this.poolConfig.settlement.minAuctionAge || 3600;
-    const cacheAge = now - this.lastSubgraphQuery;
+    const cacheEntry = this.getCacheEntry(minAge);
+    const cacheAge = now - cacheEntry.lastSubgraphQuery;
     const shouldUseCache =
       cacheAge < this.QUERY_CACHE_DURATION &&
       cacheAge < minAge * 1000 &&
-      this.cachedAuctions.length === 0;
+      cacheEntry.cachedAuctions.length === 0;
 
     if (shouldUseCache) {
       logger.debug(
@@ -32,7 +68,7 @@ export class SettlementScanner {
           cacheAge / 1000
         )}s old)`
       );
-      return this.cachedAuctions;
+      return cacheEntry.cachedAuctions;
     }
 
     logger.debug(
@@ -47,6 +83,7 @@ export class SettlementScanner {
       );
       const actuallySettleable: AuctionToSettle[] = [];
       let hadRetryableCheckFailures = false;
+      let sawTooYoungAuction = false;
 
       for (const auction of result.liquidationAuctions) {
         const borrower = auction.borrower;
@@ -54,6 +91,7 @@ export class SettlementScanner {
         const ageSeconds = (now - kickTime) / 1000;
 
         if (ageSeconds < minAge) {
+          sawTooYoungAuction = true;
           logger.debug(
             `Auction ${borrower.slice(0, 8)} too young (${Math.round(
               ageSeconds
@@ -87,16 +125,23 @@ export class SettlementScanner {
           logger.debug(
             `Auction ${borrower.slice(0, 8)} DOES need settlement: ${settlementCheck.reason}`
           );
-          actuallySettleable.push({
-            borrower: auction.borrower,
-            kickTime,
-            debtRemaining: ethers.utils.parseEther(
-              auction.debtRemaining || '0'
-            ),
-            collateralRemaining: ethers.utils.parseEther(
-              auction.collateralRemaining || '0'
-            ),
-          });
+          try {
+            actuallySettleable.push({
+              borrower: auction.borrower,
+              kickTime,
+              debtRemaining: ethers.utils.parseEther(
+                auction.debtRemaining || '0'
+              ),
+              collateralRemaining: ethers.utils.parseEther(
+                auction.collateralRemaining || '0'
+              ),
+            });
+          } catch (error) {
+            logger.warn(
+              `Skipping settlement candidate ${borrower.slice(0, 8)} in ${this.pool.name}: malformed numeric fields`,
+              error
+            );
+          }
         } else {
           logger.debug(
             `Auction ${borrower.slice(0, 8)} does NOT need settlement: ${settlementCheck.reason}`
@@ -115,8 +160,14 @@ export class SettlementScanner {
       }
 
       if (!hadRetryableCheckFailures) {
-        this.lastSubgraphQuery = now;
-        this.cachedAuctions = actuallySettleable;
+        const canCacheEmptyResult =
+          actuallySettleable.length > 0 ||
+          (!sawTooYoungAuction && result.liquidationAuctions.length === 0);
+
+        if (canCacheEmptyResult) {
+          cacheEntry.lastSubgraphQuery = now;
+          cacheEntry.cachedAuctions = actuallySettleable;
+        }
       }
       return actuallySettleable;
     } catch (error) {

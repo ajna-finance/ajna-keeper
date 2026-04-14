@@ -5,6 +5,7 @@ import { logger } from '../logging';
 import { SubgraphReader } from '../read-transports';
 import { ArbTakeEvaluation, TakeActionConfig } from './types';
 import { liquidationArbTake } from '../transactions';
+import { TakeWriteTransport } from './write-transport';
 import { decimaledToWei, weiToDecimaled } from '../utils';
 
 interface ArbTakeExecutionParams {
@@ -16,6 +17,7 @@ interface ArbTakeExecutionParams {
   };
   config: {
     dryRun?: boolean;
+    takeWriteTransport?: TakeWriteTransport;
   };
   actionLabel?: string;
   logPrefix?: string;
@@ -111,7 +113,12 @@ export async function arbTakeLiquidation({
       `${logPrefix}Sending ArbTake Tx - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, hpbIndex: ${hpbIndex}`
     );
     const liquidationSdk = pool.getLiquidation(borrower);
-    await liquidationArbTake(liquidationSdk, signer, hpbIndex);
+    await liquidationArbTake(
+      liquidationSdk,
+      signer,
+      hpbIndex,
+      config.takeWriteTransport
+    );
     logger.info(
       `${actionLabel} successful - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
     );

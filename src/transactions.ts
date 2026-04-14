@@ -8,6 +8,7 @@ import {
 import { BigNumber, ethers } from 'ethers';
 import { MAX_FENWICK_INDEX, MAX_UINT_256 } from './constants';
 import { NonceTracker } from './nonce';
+import { submitTakeTransaction, TakeWriteTransport } from './take/write-transport';
 import { Bucket } from '@ajna-finance/sdk/dist/classes/Bucket';
 import {
   removeCollateral,
@@ -18,6 +19,7 @@ import { settle } from '@ajna-finance/sdk/dist/contracts/pool';
 import { getAllowanceOfErc20, getDecimalsErc20, convertWadToTokenDecimals } from './erc20';
 import { weiToDecimaled } from './utils';
 import { logger } from './logging';
+import { estimateGasWithBuffer } from './utils';
 
 const quoteScaleCache = new Map<string, BigNumber>();
 
@@ -141,10 +143,30 @@ export async function poolKick(
 export async function liquidationArbTake(
   liquidation: Liquidation,
   signer: Signer,
-  bucketIndex: number
+  bucketIndex: number,
+  takeWriteTransport?: TakeWriteTransport
 ) {
+  const queueSigner = takeWriteTransport?.signer ?? signer;
   const contractPoolWithSigner = liquidation.poolContract.connect(signer);
-  await NonceTracker.queueTransaction(signer, async (nonce) => {
+  await NonceTracker.queueTransaction(queueSigner, async (nonce) => {
+    if (takeWriteTransport) {
+      const txArgs = [liquidation.borrowerAddress, false, bucketIndex] as const;
+      const fallbackGasLimit = BigNumber.from(800_000);
+      const gasLimit = await estimateGasWithBuffer(
+        () => contractPoolWithSigner.estimateGas.bucketTake(...txArgs),
+        fallbackGasLimit,
+        `ArbTake ${liquidation.borrowerAddress.slice(0, 8)}`
+      );
+      const txRequest =
+        await contractPoolWithSigner.populateTransaction.bucketTake(...txArgs, {
+          gasLimit,
+          nonce: nonce.toString(),
+        });
+      const receipt = await submitTakeTransaction(takeWriteTransport, txRequest);
+      logger.info(`Arb take on borrower ${liquidation.borrowerAddress.slice(0, 8)} at bucket ${bucketIndex} | tx: ${receipt.transactionHash}`);
+      return receipt;
+    }
+
     const tx = await bucketTake(
       contractPoolWithSigner,
       liquidation.borrowerAddress,

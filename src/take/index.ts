@@ -211,6 +211,7 @@ export async function handleLegacyOrArbTakes({
     },
     dryRun: resolvedConfig.dryRun ?? false,
     delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
+    takeWriteTransport,
     onFound: (decision) => {
       logger.info(
         `Found liquidation to ${formatTakeStrategyLog(
@@ -285,7 +286,8 @@ export function createOneInchTakeAdapter(
 interface GetLiquidationsToTakeParams
   extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
   config: SubgraphConfigInput<
-    Pick<KeeperConfig, 'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'>
+    Pick<KeeperConfig, 'oneInchRouters' | 'connectorTokens'> &
+      Partial<Pick<KeeperConfig, 'delayBetweenActions'>>
   >;
 }
 
@@ -294,7 +296,7 @@ export async function getOneInchTakeQuoteEvaluation(
   price: number,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
-  config: Pick<KeeperConfig, 'delayBetweenActions'>,
+  config: Partial<Pick<KeeperConfig, 'delayBetweenActions'>>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
   connectorTokens: string[] | undefined
@@ -332,7 +334,7 @@ export async function getOneInchTakeQuoteEvaluation(
     }
 
     // Pause between getting a quote for each liquidation to avoid 1inch rate limit
-    await delay(config.delayBetweenActions);
+    await delay(config.delayBetweenActions ?? 0);
 
     const dexRouter = new DexRouter(signer, {
       oneInchRouters: oneInchRouters ?? {},
@@ -415,7 +417,7 @@ async function checkIfTakeable(
   price: number,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
-  config: Pick<KeeperConfig, 'delayBetweenActions'>,
+  config: Partial<Pick<KeeperConfig, 'delayBetweenActions'>>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
   connectorTokens: string[] | undefined

@@ -10,6 +10,7 @@ import {
 } from './gas-policy';
 import {
   DiscoveryExecutionConfig,
+  DiscoveryExecutionTransportConfig,
   DiscoveryRpcCache,
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
@@ -28,22 +29,45 @@ interface DiscoveredSettlementTargetStats {
   executionAttempted: boolean;
 }
 
-export interface HandleDiscoveredSettlementTargetParams {
+interface HandleDiscoveredSettlementTargetParamsBase {
   pool: FungiblePool;
   signer: Signer;
   target: ResolvedSettlementTarget;
-  config: DiscoveryExecutionConfig;
-  transports?: DiscoveryReadTransports;
   rpcCache?: DiscoveryRpcCache;
 }
 
+export type HandleDiscoveredSettlementTargetParams =
+  | (HandleDiscoveredSettlementTargetParamsBase & {
+      config: DiscoveryExecutionTransportConfig;
+      transports?: DiscoveryReadTransports;
+    })
+  | (HandleDiscoveredSettlementTargetParamsBase & {
+      config: DiscoveryExecutionConfig;
+      transports: DiscoveryReadTransports;
+    });
+
+function hasDiscoveryTransportConfig(
+  config: DiscoveryExecutionConfig | DiscoveryExecutionTransportConfig
+): config is DiscoveryExecutionTransportConfig {
+  return (
+    'ethRpcUrl' in config &&
+    typeof config.ethRpcUrl === 'string' &&
+    'subgraphUrl' in config &&
+    typeof config.subgraphUrl === 'string'
+  );
+}
+
 function hydrateSettlementAuction(
-  candidate: ResolvedSettlementTarget['candidates'][number]
+  candidate: ResolvedSettlementTarget['candidates'][number],
+  onchainKickTimeSeconds?: number
 ): AuctionToSettle | undefined {
   try {
     return {
       borrower: candidate.borrower,
-      kickTime: candidate.kickTime,
+      kickTime:
+        onchainKickTimeSeconds !== undefined
+          ? onchainKickTimeSeconds * 1000
+          : candidate.kickTime,
       debtRemaining: ethers.utils.parseEther(candidate.debtRemaining || '0'),
       collateralRemaining: ethers.utils.parseEther(
         candidate.collateralRemaining || '0'
@@ -71,9 +95,15 @@ function logDiscoveredSettlementTargetSummary(params: {
 export async function handleDiscoveredSettlementTarget(
   params: HandleDiscoveredSettlementTargetParams
 ): Promise<void> {
-  const transports =
-    params.transports ??
-    createDiscoveryTransportsForConfig(params.config, params.signer);
+  const transports = params.transports
+    ? params.transports
+    : hasDiscoveryTransportConfig(params.config)
+      ? createDiscoveryTransportsForConfig(params.config, params.signer)
+      : (() => {
+          throw new Error(
+            'Discovered settlement target requires transports when config omits read transport settings'
+          );
+        })();
   const stats: DiscoveredSettlementTargetStats = {
     candidateCount: params.target.candidates.length,
     needsSettlementSkips: 0,
@@ -166,7 +196,10 @@ export async function handleDiscoveredSettlementTarget(
         }
       }
 
-      const hydratedAuction = hydrateSettlementAuction(candidate);
+      const hydratedAuction = hydrateSettlementAuction(
+        candidate,
+        needsSettlement.details?.kickTime
+      );
       if (!hydratedAuction) {
         stats.invalidCandidateSkips += 1;
         continue;

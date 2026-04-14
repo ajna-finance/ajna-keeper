@@ -1,4 +1,5 @@
 import { AjnaSDK, FungiblePool, Signer } from '@ajna-finance/sdk';
+import { Wallet } from 'ethers';
 import {
   buildDiscoveredSettlementTargets,
   buildDiscoveredTakeTargets,
@@ -31,7 +32,11 @@ import { handleSettlements } from '../settlement';
 import { ChainwideLiquidationAuction } from '../subgraph';
 import { createFactoryQuoteProviderRuntimeCache } from '../take/factory';
 import { handleTakes } from '../take';
-import { TakeWriteTransport } from '../take/write-transport';
+import {
+  createTakeWriteTransport,
+  resolveTakeWriteConfig,
+  TakeWriteTransport,
+} from '../take/write-transport';
 import { delay } from '../utils';
 
 export interface DiscoverySnapshotState {
@@ -142,6 +147,66 @@ function getSnapshotAgeMs(
     : undefined;
 }
 
+function getMaxDiscoverySnapshotFallbackAgeMs(config: KeeperConfig): number {
+  return Math.max(config.delayBetweenRuns * 5, 120) * 1000;
+}
+
+function getCachedDiscoverySnapshotForFallback(
+  state: BoundDiscoveryRuntimeState,
+  cycleType: 'take' | 'settlement'
+): ChainwideLiquidationAuction[] | undefined {
+  const cachedAuctions = state.discoverySnapshotState?.latestLiquidationAuctions;
+  if (!cachedAuctions) {
+    return undefined;
+  }
+
+  const snapshotAgeMs = getSnapshotAgeMs(state.discoverySnapshotState);
+  if (
+    snapshotAgeMs === undefined ||
+    snapshotAgeMs <= getMaxDiscoverySnapshotFallbackAgeMs(state.config)
+  ) {
+    return cachedAuctions;
+  }
+
+  logger.warn(
+    `Cached ${cycleType} discovery snapshot is too stale (${Math.round(
+      snapshotAgeMs / 1000
+    )}s old); continuing with manual targets only`
+  );
+  return undefined;
+}
+
+function requiresDedicatedTakeWriteTransport(config: KeeperConfig): boolean {
+  return !config.dryRun && resolveTakeWriteConfig(config) !== undefined;
+}
+
+async function ensureTakeWriteTransport(
+  state: BoundDiscoveryRuntimeState
+): Promise<boolean> {
+  if (!requiresDedicatedTakeWriteTransport(state.config)) {
+    return true;
+  }
+
+  if (state.takeWriteTransport) {
+    return true;
+  }
+
+  try {
+    state.takeWriteTransport = await createTakeWriteTransport({
+      signer: state.signer as Wallet,
+      config: state.config,
+      expectedChainId: await state.signer.getChainId(),
+    });
+    return true;
+  } catch (error) {
+    logger.error(
+      'Failed to initialize take write transport for this take cycle; skipping take execution until the next retry.',
+      error
+    );
+    return false;
+  }
+}
+
 async function getTakeCycleLiquidationAuctions(
   state: BoundDiscoveryRuntimeState
 ): Promise<DiscoveryCycleSnapshotInfo> {
@@ -153,8 +218,10 @@ async function getTakeCycleLiquidationAuctions(
       liquidationAuctions = await refreshDiscoverySnapshot(state);
       snapshotRefreshed = true;
     } catch (error) {
-      const cachedAuctions =
-        state.discoverySnapshotState?.latestLiquidationAuctions;
+      const cachedAuctions = getCachedDiscoverySnapshotForFallback(
+        state,
+        'take'
+      );
       logger.warn(
         `Failed to refresh take discovery snapshot; continuing with ${cachedAuctions ? 'cached discovery data' : 'manual targets only'}`,
         error
@@ -187,8 +254,10 @@ async function getSettlementCycleLiquidationAuctions(
       refreshedLiquidationAuctions = await refreshDiscoverySnapshot(state);
       snapshotRefreshed = true;
     } catch (error) {
-      const cachedAuctions =
-        state.discoverySnapshotState?.latestLiquidationAuctions;
+      const cachedAuctions = getCachedDiscoverySnapshotForFallback(
+        state,
+        'settlement'
+      );
       logger.warn(
         `Failed to refresh settlement discovery snapshot; continuing with ${cachedAuctions ? 'cached discovery data' : 'manual targets only'}`,
         error
@@ -540,6 +609,21 @@ async function runTakeDiscoveryCycle(state: BoundDiscoveryRuntimeState): Promise
   };
 
   try {
+    phase = 'transport';
+    if (!(await ensureTakeWriteTransport(state))) {
+      logDiscoveryCycleSummary({
+        cycleType: 'take',
+        stats,
+        durationMs: Date.now() - startedAt,
+        snapshotInfo: {
+          snapshotRefreshed: false,
+          snapshotAgeMs: getSnapshotAgeMs(state.discoverySnapshotState),
+        },
+      });
+      return;
+    }
+
+    phase = 'snapshot';
     snapshotInfo = await getTakeCycleLiquidationAuctions(state);
     phase = 'targets';
     const targets = await resolveTakeCycleTargets(

@@ -1,6 +1,7 @@
 import { BigNumber } from 'ethers';
 import { KeeperConfig } from '../config';
 import { FactoryQuoteProviderRuntimeCache } from '../take/factory';
+import { DiscoveryReadTransportConfig } from '../read-transports';
 
 export type DiscoveryExecutionConfig = Pick<
   KeeperConfig,
@@ -18,6 +19,9 @@ export type DiscoveryExecutionConfig = Pick<
   | 'tokenAddresses'
   | 'universalRouterOverrides'
 >;
+
+export type DiscoveryExecutionTransportConfig = DiscoveryExecutionConfig &
+  DiscoveryReadTransportConfig;
 
 export interface DiscoveryRpcCache {
   chainId?: number;

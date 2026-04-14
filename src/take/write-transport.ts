@@ -15,7 +15,7 @@ const DEFAULT_RELAY_SEND_METHOD = 'eth_sendPrivateTransaction';
 const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_RELAY_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET = 25;
-const DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_BLOCK_OFFSET = 25;
+const DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_TTL_MS = 15 * 60_000;
 const DEFAULT_TAKE_RECEIPT_TIMEOUT_MS = 120_000;
 
 export interface TakeWriteSubmission {
@@ -156,23 +156,13 @@ function resolveExplicitNonce(
   return ethers.BigNumber.from(txLike.nonce).toNumber();
 }
 
-async function getAcceptedSubmissionExpiryBlock(params: {
-  provider?: providers.Provider | null;
-  blockOffset: number;
-}): Promise<number | undefined> {
-  if (!params.provider) {
-    return undefined;
-  }
-
-  try {
-    const currentBlock = await params.provider.getBlockNumber();
-    return currentBlock + params.blockOffset;
-  } catch (error) {
-    logger.warn(
-      `Failed to determine expiry block for accepted take submission: ${error}`
-    );
-    return undefined;
-  }
+function getAcceptedSubmissionNonceFloorExpiryMs(
+  receiptTimeoutMs: number = DEFAULT_TAKE_RECEIPT_TIMEOUT_MS
+): number {
+  return Date.now() + Math.max(
+    receiptTimeoutMs,
+    DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_TTL_MS
+  );
 }
 
 function createPublicRpcTakeWriteTransport(
@@ -261,11 +251,9 @@ async function createPrivateRpcTakeWriteTransport(params: {
                   signer: params.signer,
                   nonce: acceptedNonce,
                   txHash: response.hash,
-                  expiresAtBlock: await getAcceptedSubmissionExpiryBlock({
-                    provider: params.signer.provider,
-                    blockOffset:
-                      DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_BLOCK_OFFSET,
-                  }),
+                  expiresAtMs: getAcceptedSubmissionNonceFloorExpiryMs(
+                    params.receiptTimeoutMs
+                  ),
                 });
               } catch (durableNonceError) {
                 throw new NonceConsumedTransactionError(
@@ -334,13 +322,25 @@ async function createRelayTakeWriteTransport(params: {
       }
 
       const nonce = ethers.BigNumber.from(populatedTx.nonce).toNumber();
-      const currentBlock = await params.signer.provider!.getBlockNumber();
       const relayMethod =
         params.relay.sendMethod ?? DEFAULT_RELAY_SEND_METHOD;
-      const maxBlockNumberOffset =
-        params.relay.maxBlockNumberOffset ??
-        DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET;
-      const expiresAtBlock = currentBlock + maxBlockNumberOffset;
+      const relaySupportsBlockExpiry =
+        relayMethodSupportsBlockExpiry(relayMethod);
+      if (!relaySupportsBlockExpiry && params.relay.maxBlockNumberOffset !== undefined) {
+        logger.warn(
+          `Relay sendMethod=${relayMethod} does not support maxBlockNumberOffset; applying only a local durable nonce expiry`
+        );
+      }
+      const expiresAtBlock = relaySupportsBlockExpiry
+        ? (await params.signer.provider!.getBlockNumber()) +
+          (params.relay.maxBlockNumberOffset ??
+            DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET)
+        : undefined;
+      const expiresAtMs = relaySupportsBlockExpiry
+        ? undefined
+        : getAcceptedSubmissionNonceFloorExpiryMs(
+            params.relay.receiptTimeoutMs ?? params.defaultReceiptTimeoutMs
+          );
 
       const rawTx = await params.signer.signTransaction(populatedTx);
       const localTxHash = ethers.utils.keccak256(rawTx);
@@ -349,15 +349,58 @@ async function createRelayTakeWriteTransport(params: {
         rawTx,
         expiresAtBlock
       );
-      const response = await axios.post(params.relay.url, relayRequestBody, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(params.relay.headers ?? {}),
-        },
-        timeout:
-          params.relay.requestTimeoutMs ?? DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
-      });
-      const txHash = extractRelayTxHash(response.data, localTxHash);
+      let txHash: string;
+      try {
+        const response = await axios.post(params.relay.url, relayRequestBody, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...(params.relay.headers ?? {}),
+          },
+          timeout:
+            params.relay.requestTimeoutMs ?? DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
+        });
+        try {
+          txHash = extractRelayTxHash(response.data, localTxHash);
+        } catch (error) {
+          if (relayResponseMayHideAcceptedTransaction(response.data)) {
+            await throwRelayNonceConsumedError({
+              signer: params.signer,
+              nonce,
+              txHash: localTxHash,
+              expiresAtBlock,
+              expiresAtMs,
+              relayUrl: params.relay.url,
+              message: `Relay submission for ${localTxHash} may have been accepted but the response body did not contain a usable transaction hash`,
+              cause: error,
+            });
+          }
+          throw error;
+        }
+      } catch (error) {
+        const responseTxHash = tryExtractRelayTxHashFromErrorResponse(
+          error,
+          localTxHash
+        );
+        if (
+          responseTxHash ||
+          relayErrorResponseMayHideAcceptedTransaction(error) ||
+          isAmbiguousRelaySubmissionFailure(error)
+        ) {
+          await throwRelayNonceConsumedError({
+            signer: params.signer,
+            nonce,
+            txHash: responseTxHash ?? localTxHash,
+            expiresAtBlock,
+            expiresAtMs,
+            relayUrl: params.relay.url,
+            message: responseTxHash
+              ? `Relay accepted transaction ${responseTxHash} but the submission response was surfaced as an error`
+              : `Relay submission for ${localTxHash} may have been accepted before the HTTP response was lost`,
+            cause: error,
+          });
+        }
+        throw error;
+      }
 
       try {
         await NonceTracker.markDurableNonceFloor({
@@ -365,6 +408,7 @@ async function createRelayTakeWriteTransport(params: {
           nonce,
           txHash,
           expiresAtBlock,
+          expiresAtMs,
           relayUrl: params.relay.url,
         });
       } catch (error) {
@@ -378,7 +422,7 @@ async function createRelayTakeWriteTransport(params: {
       }
 
       logger.info(
-        `Accepted relay take submission via ${relayMethod} | tx: ${txHash}${expiresAtBlock !== undefined ? ` expiresAfterBlock=${expiresAtBlock}` : ''}`
+        `Accepted relay take submission via ${relayMethod} | tx: ${txHash}${expiresAtBlock !== undefined ? ` expiresAfterBlock=${expiresAtBlock}` : ''}${expiresAtMs !== undefined ? ` localExpiryAtMs=${expiresAtMs}` : ''}`
       );
 
       return {
@@ -449,6 +493,127 @@ function buildRelayRequestBody(
   };
 }
 
+async function throwRelayNonceConsumedError(params: {
+  signer: Wallet;
+  nonce: number;
+  txHash: string;
+  expiresAtBlock?: number;
+  expiresAtMs?: number;
+  relayUrl: string;
+  message: string;
+  cause: unknown;
+}): Promise<never> {
+  let durableFloorPersistenceError: unknown;
+  try {
+    await NonceTracker.markDurableNonceFloor({
+      signer: params.signer,
+      nonce: params.nonce,
+      txHash: params.txHash,
+      expiresAtBlock: params.expiresAtBlock,
+      expiresAtMs: params.expiresAtMs,
+      relayUrl: params.relayUrl,
+    });
+  } catch (error) {
+    durableFloorPersistenceError = error;
+  }
+
+  throw new NonceConsumedTransactionError(
+    durableFloorPersistenceError
+      ? `${params.message}; durable nonce floor persistence also failed`
+      : params.message,
+    {
+      txHash: params.txHash,
+      cause: durableFloorPersistenceError
+        ? {
+            relaySubmissionError: params.cause,
+            durableNonceFloorPersistenceError: durableFloorPersistenceError,
+          }
+        : params.cause,
+    }
+  );
+}
+
+function isAmbiguousRelaySubmissionFailure(error: unknown): boolean {
+  if (axios.isAxiosError(error) && error.response?.data !== undefined) {
+    return false;
+  }
+
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+  if (
+    code === 'ECONNABORTED' ||
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ERR_NETWORK' ||
+    code === 'EPIPE'
+  ) {
+    return true;
+  }
+
+  const message =
+    error instanceof Error
+      ? error.message.toLowerCase()
+      : String(error).toLowerCase();
+  return (
+    message.includes('timeout') ||
+    message.includes('timed out') ||
+    message.includes('econnreset') ||
+    message.includes('socket hang up') ||
+    message.includes('network error') ||
+    message.includes('connection reset')
+  );
+}
+
+function tryExtractRelayTxHashFromErrorResponse(
+  error: unknown,
+  fallbackTxHash: string
+): string | undefined {
+  if (!axios.isAxiosError(error) || error.response?.data === undefined) {
+    return undefined;
+  }
+
+  try {
+    return extractRelayTxHash(error.response.data, fallbackTxHash);
+  } catch {
+    return undefined;
+  }
+}
+
+function relayErrorResponseMayHideAcceptedTransaction(error: unknown): boolean {
+  if (!axios.isAxiosError(error) || error.response?.data === undefined) {
+    return false;
+  }
+
+  return relayResponseMayHideAcceptedTransaction(error.response.data);
+}
+
+function relayResponseMayHideAcceptedTransaction(responseData: unknown): boolean {
+  return hasRelayResultPayload(responseData) && !hasExplicitRelayError(responseData);
+}
+
+function relayMethodSupportsBlockExpiry(method: string): boolean {
+  return method === DEFAULT_RELAY_SEND_METHOD;
+}
+
+function hasRelayResultPayload(responseData: unknown): boolean {
+  return (
+    !!responseData &&
+    typeof responseData === 'object' &&
+    'result' in responseData
+  );
+}
+
+function hasExplicitRelayError(responseData: unknown): boolean {
+  return (
+    !!responseData &&
+    typeof responseData === 'object' &&
+    'error' in responseData &&
+    (responseData as { error?: unknown }).error !== undefined
+  );
+}
+
 function isValidRelayTxHash(value: string): boolean {
   return /^0x[a-fA-F0-9]{64}$/.test(value);
 }
@@ -471,12 +636,7 @@ function normalizeValidatedRelayTxHash(
 }
 
 function extractRelayTxHash(responseData: unknown, fallbackTxHash: string): string {
-  if (
-    responseData &&
-    typeof responseData === 'object' &&
-    'error' in responseData &&
-    (responseData as { error?: unknown }).error !== undefined
-  ) {
+  if (hasExplicitRelayError(responseData)) {
     throw new Error(
       `Relay submission failed: ${JSON.stringify(
         (responseData as { error: unknown }).error

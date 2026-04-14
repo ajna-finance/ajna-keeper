@@ -4,6 +4,8 @@ import { ethers } from 'ethers';
 import * as erc20 from '../erc20';
 import { LiquiditySource } from '../config';
 import { arbTakeLiquidation, checkIfArbTakeable } from '../take/arb';
+import { processTakeCandidates } from '../take/engine';
+import { createNoExternalTakeAdapter } from '../take';
 import * as transactions from '../transactions';
 
 describe('shared arbTake helpers', () => {
@@ -86,7 +88,10 @@ describe('shared arbTake helpers', () => {
       pool: pool as any,
       signer: {} as any,
       liquidation,
-      config: { dryRun: false },
+      config: {
+        dryRun: false,
+        takeWriteTransport: { submitTransaction: sinon.stub(), signer: {} } as any,
+      },
       actionLabel: 'Factory ArbTake',
       logPrefix: 'Factory: ',
     });
@@ -99,12 +104,71 @@ describe('shared arbTake helpers', () => {
       liquidationSdk,
       {},
       77,
+      undefined,
     ]);
-    expect(liquidationArbTakeStub.secondCall.args).to.deep.equal([
-      liquidationSdk,
-      {},
-      77,
-    ]);
+    const forwardedTransport = liquidationArbTakeStub.secondCall.args[3];
+    expect(liquidationArbTakeStub.secondCall.args[0]).to.equal(liquidationSdk);
+    expect(liquidationArbTakeStub.secondCall.args[1]).to.deep.equal({});
+    expect(liquidationArbTakeStub.secondCall.args[2]).to.equal(77);
+    expect(forwardedTransport).to.not.equal(undefined);
+    expect((forwardedTransport as any).signer).to.deep.equal({});
+    expect(typeof (forwardedTransport as any).submitTransaction).to.equal(
+      'function'
+    );
+  });
+
+  it('forwards takeWriteTransport through processTakeCandidates into arbTake execution', async () => {
+    const takeWriteTransport = {
+      mode: 'private_rpc',
+      signer: { getAddress: sinon.stub().resolves('0xwriter') },
+      submitTransaction: sinon.stub(),
+    };
+    const arbTakeLiquidationStub = sinon
+      .stub(require('../take/arb'), 'arbTakeLiquidation')
+      .resolves(true);
+    sinon.stub(require('../take/arb'), 'checkIfArbTakeable').resolves({
+      isArbTakeable: true,
+      hpbIndex: 77,
+      maxArbTakePrice: 2,
+    });
+
+    const pool = {
+      name: 'Execution Pool',
+      poolAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('1'),
+        }),
+      }),
+      getPrices: sinon.stub().resolves({
+        hpb: ethers.utils.parseEther('1'),
+      }),
+    };
+
+    await processTakeCandidates({
+      pool: pool as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Execution Pool',
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: [{ borrower: '0xBorrower' }],
+      subgraph: {} as any,
+      externalTakeAdapter: createNoExternalTakeAdapter() as any,
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      takeWriteTransport: takeWriteTransport as any,
+    });
+
+    expect(arbTakeLiquidationStub.calledOnce).to.equal(true);
+    expect(arbTakeLiquidationStub.firstCall.args[0].config.takeWriteTransport).to.equal(
+      takeWriteTransport
+    );
   });
 
   it('returns false when arb take execution fails', async () => {

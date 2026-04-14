@@ -122,7 +122,7 @@ describe('take write transport', () => {
     expect(transport.signer).to.not.equal(signer);
   });
 
-  it('persists an expiring durable nonce floor for private rpc receipt wait failures', async () => {
+  it('persists a long-lived time-based durable nonce floor for private rpc receipt wait failures', async () => {
     const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     try {
       const writeSigner = {
@@ -141,11 +141,7 @@ describe('take write transport', () => {
         getTransactionCount: sinon.stub().resolves(7),
         connect: sinon.stub().returns(writeSigner),
         provider: {
-          getBlockNumber: sinon
-            .stub()
-            .onFirstCall().resolves(100)
-            .onSecondCall().resolves(110)
-            .onThirdCall().resolves(130),
+          getBlockNumber: sinon.stub().resolves(100),
         },
       } as any;
       sinon
@@ -186,6 +182,8 @@ describe('take write transport', () => {
       NonceTracker.clearNonces();
       const nonceBeforeExpiry = await NonceTracker.getNonce(signer);
       expect(nonceBeforeExpiry).to.equal(8);
+
+      await clock.tickAsync(15 * 60_000 + 1);
 
       NonceTracker.clearNonces();
       const nonceAfterExpiry = await NonceTracker.getNonce(signer);
@@ -272,63 +270,81 @@ describe('take write transport', () => {
     expect(nextNonce).to.equal(8);
   });
 
-  it('applies a local durable nonce expiry for custom relay methods', async () => {
-    const signer = {
-      getAddress: sinon
-        .stub()
-        .resolves('0x00000000000000000000000000000000000000aa'),
-      getChainId: sinon.stub().resolves(1),
-      getTransactionCount: sinon.stub().resolves(7),
-      populateTransaction: sinon.stub().callsFake(async (tx) => ({
-        ...tx,
-        chainId: 1,
-        nonce: tx.nonce ?? 7,
-        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
-        maxFeePerGas: BigNumber.from(1),
-        maxPriorityFeePerGas: BigNumber.from(1),
-      })),
-      signTransaction: sinon.stub().resolves('0x1234'),
-      provider: {
-        getBlockNumber: sinon.stub().onFirstCall().resolves(100).onSecondCall().resolves(130),
-        waitForTransaction: sinon.stub().resolves({
-          transactionHash:
-            '0x3333333333333333333333333333333333333333333333333333333333333333',
-        }),
-      },
-    } as any;
-    const localTxHash = ethers.utils.keccak256('0x1234');
-    sinon.stub(axios, 'post').resolves({
-      data: {
-        result: localTxHash,
-      },
-    } as any);
-
-    const transport = await createTakeWriteTransport({
-      signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-            sendMethod: 'eth_sendRawTransactionConditional',
-          },
+  it('applies only a local durable nonce expiry for custom relay methods', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+    try {
+      const getBlockNumberStub = sinon.stub().resolves(100);
+      const signer = {
+        getAddress: sinon
+          .stub()
+          .resolves('0x00000000000000000000000000000000000000aa'),
+        getChainId: sinon.stub().resolves(1),
+        getTransactionCount: sinon.stub().resolves(7),
+        populateTransaction: sinon.stub().callsFake(async (tx) => ({
+          ...tx,
+          chainId: 1,
+          nonce: tx.nonce ?? 7,
+          gasLimit: tx.gasLimit ?? BigNumber.from(21000),
+          maxFeePerGas: BigNumber.from(1),
+          maxPriorityFeePerGas: BigNumber.from(1),
+        })),
+        signTransaction: sinon.stub().resolves('0x1234'),
+        provider: {
+          getBlockNumber: getBlockNumberStub,
+          waitForTransaction: sinon.stub().resolves({
+            transactionHash:
+              '0x3333333333333333333333333333333333333333333333333333333333333333',
+          }),
         },
-      } as any,
-      expectedChainId: 1,
-    });
+      } as any;
+      const localTxHash = ethers.utils.keccak256('0x1234');
+      sinon.stub(axios, 'post').resolves({
+        data: {
+          result: localTxHash,
+        },
+      } as any);
 
-    await transport.submitTransaction({
-      to: '0x00000000000000000000000000000000000000bb',
-      data: '0xdeadbeef',
-      nonce: 7,
-    });
+      const transport = await createTakeWriteTransport({
+        signer,
+        config: {
+          takeWrite: {
+            mode: TakeWriteTransportMode.RELAY,
+            relay: {
+              url: 'https://relay.example',
+              sendMethod: 'eth_sendRawTransactionConditional',
+              maxBlockNumberOffset: 25,
+              receiptTimeoutMs: 25,
+            },
+          },
+        } as any,
+        expectedChainId: 1,
+      });
 
-    NonceTracker.clearNonces();
-    const nextNonce = await NonceTracker.getNonce(signer);
-    expect(nextNonce).to.equal(7);
+      await transport.submitTransaction({
+        to: '0x00000000000000000000000000000000000000bb',
+        data: '0xdeadbeef',
+        nonce: 7,
+      });
+
+      const axiosPostStub = axios.post as sinon.SinonStub;
+      expect(axiosPostStub.firstCall.args[1].params).to.deep.equal(['0x1234']);
+      expect(getBlockNumberStub.called).to.equal(false);
+
+      NonceTracker.clearNonces();
+      const nonceBeforeExpiry = await NonceTracker.getNonce(signer);
+      expect(nonceBeforeExpiry).to.equal(8);
+
+      await clock.tickAsync(15 * 60_000 + 1);
+
+      NonceTracker.clearNonces();
+      const nonceAfterExpiry = await NonceTracker.getNonce(signer);
+      expect(nonceAfterExpiry).to.equal(7);
+    } finally {
+      clock.restore();
+    }
   });
 
-  it('rejects a relay response with an invalid tx hash before advancing durable nonce state', async () => {
+  it('preserves the consumed nonce when a relay response body lacks a usable tx hash', async () => {
     const signer = {
       getAddress: sinon
         .stub()
@@ -374,16 +390,77 @@ describe('take write transport', () => {
         data: '0xdeadbeef',
         nonce: 7,
       });
-      expect.fail('Expected invalid relay hash to throw');
+      expect.fail('Expected unusable relay response to throw');
     } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
       expect((error as Error).message).to.include(
-        'Relay submission returned invalid tx hash'
+        'may have been accepted but the response body did not contain a usable transaction hash'
       );
     }
 
     NonceTracker.clearNonces();
     const nextNonce = await NonceTracker.getNonce(signer);
-    expect(nextNonce).to.equal(7);
+    expect(nextNonce).to.equal(8);
+  });
+
+  it('preserves the consumed nonce when a relay returns a different valid tx hash', async () => {
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(1),
+      getTransactionCount: sinon.stub().resolves(7),
+      populateTransaction: sinon.stub().callsFake(async (tx) => ({
+        ...tx,
+        chainId: 1,
+        nonce: tx.nonce ?? 7,
+        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
+        maxFeePerGas: BigNumber.from(1),
+        maxPriorityFeePerGas: BigNumber.from(1),
+      })),
+      signTransaction: sinon.stub().resolves('0x1234'),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(100),
+        waitForTransaction: sinon.stub(),
+      },
+    } as any;
+    sinon.stub(axios, 'post').resolves({
+      data: {
+        result:
+          '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      },
+    } as any);
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: {
+        takeWrite: {
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+          },
+        },
+      } as any,
+      expectedChainId: 1,
+    });
+
+    try {
+      await transport.submitTransaction({
+        to: '0x00000000000000000000000000000000000000bb',
+        data: '0xdeadbeef',
+        nonce: 7,
+      });
+      expect.fail('Expected mismatched relay hash to throw');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
+      expect((error as Error).message).to.include(
+        'may have been accepted but the response body did not contain a usable transaction hash'
+      );
+    }
+
+    NonceTracker.clearNonces();
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(8);
   });
 
   it('rejects relay submissions without an explicit nonce', async () => {
@@ -486,6 +563,133 @@ describe('take write transport', () => {
       );
     }
 
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(8);
+  });
+
+
+  it('does not preserve the nonce for ordinary relay HTTP error bodies without a result payload', async () => {
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(1),
+      getTransactionCount: sinon.stub().resolves(7),
+      populateTransaction: sinon.stub().callsFake(async (tx) => ({
+        ...tx,
+        chainId: 1,
+        nonce: tx.nonce ?? 7,
+        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
+        maxFeePerGas: BigNumber.from(1),
+        maxPriorityFeePerGas: BigNumber.from(1),
+      })),
+      signTransaction: sinon.stub().resolves('0x1234'),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(100),
+        waitForTransaction: sinon.stub(),
+      },
+    } as any;
+    sinon.stub(axios, 'post').rejects(
+      Object.assign(new Error('bad gateway'), {
+        isAxiosError: true,
+        response: {
+          status: 502,
+          data: {
+            message: 'upstream failed',
+          },
+        },
+      })
+    );
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: {
+        takeWrite: {
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+          },
+        },
+      } as any,
+      expectedChainId: 1,
+    });
+
+    try {
+      await NonceTracker.queueTransaction(signer, async (nonce) => {
+        return await submitTakeTransaction(transport, {
+          to: '0x00000000000000000000000000000000000000bb',
+          data: '0xdeadbeef',
+          nonce,
+        });
+      });
+      expect.fail('Expected relay HTTP error to bubble without consuming the nonce');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(false);
+      expect((error as Error).message).to.equal('bad gateway');
+    }
+
+    NonceTracker.clearNonces();
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(7);
+  });
+
+  it('preserves the consumed nonce when a relay response times out after possible acceptance', async () => {
+    const localTxHash = ethers.utils.keccak256('0x1234');
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(1),
+      getTransactionCount: sinon.stub().resolves(7),
+      populateTransaction: sinon.stub().callsFake(async (tx) => ({
+        ...tx,
+        chainId: 1,
+        nonce: tx.nonce ?? 7,
+        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
+        maxFeePerGas: BigNumber.from(1),
+        maxPriorityFeePerGas: BigNumber.from(1),
+      })),
+      signTransaction: sinon.stub().resolves('0x1234'),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(100),
+        waitForTransaction: sinon.stub(),
+      },
+    } as any;
+    sinon.stub(axios, 'post').rejects(
+      Object.assign(new Error('timeout of 15000ms exceeded'), {
+        isAxiosError: true,
+        code: 'ECONNABORTED',
+      })
+    );
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: {
+        takeWrite: {
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+          },
+        },
+      } as any,
+      expectedChainId: 1,
+    });
+
+    try {
+      await NonceTracker.queueTransaction(signer, async (nonce) => {
+        return await submitTakeTransaction(transport, {
+          to: '0x00000000000000000000000000000000000000bb',
+          data: '0xdeadbeef',
+          nonce,
+        });
+      });
+      expect.fail('Expected relay timeout to preserve the nonce');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
+      expect((error as Error).message).to.include(localTxHash);
+    }
+
+    NonceTracker.clearNonces();
     const nextNonce = await NonceTracker.getNonce(signer);
     expect(nextNonce).to.equal(8);
   });

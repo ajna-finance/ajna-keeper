@@ -5,6 +5,7 @@ import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../
 import { KeeperConfig, PoolConfig } from '../config';
 import subgraph from '../subgraph';
 import * as transactions from '../transactions';
+import { clearSharedSettlementScannerCache } from '../settlement/scanner';
 
 /**
  * Tests the settlement functionality for the Ajna keeper bot, including:
@@ -108,6 +109,7 @@ describe('Settlement Module Tests', () => {
   afterEach(() => {
     // Clean up all stubs after each test
     sinon.restore();
+    clearSharedSettlementScannerCache();
   });
 
   describe('SettlementHandler.needsSettlement()', () => {
@@ -637,6 +639,135 @@ describe('Settlement Module Tests', () => {
       expect(firstResult).to.be.empty;
       expect(secondResult).to.be.empty;
       expect(getUnsettledAuctionsStub.calledOnce).to.be.true;
+    });
+
+
+    it('reuses empty settlement scans across handler instances within the cache window', async () => {
+      getUnsettledAuctionsStub.resolves({
+        liquidationAuctions: [],
+      });
+
+      const firstHandler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+      const secondHandler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      const firstResult = await firstHandler.findSettleableAuctions();
+      const secondResult = await secondHandler.findSettleableAuctions();
+
+      expect(firstResult).to.be.empty;
+      expect(secondResult).to.be.empty;
+      expect(getUnsettledAuctionsStub.calledOnce).to.be.true;
+    });
+
+    it('does not cache empty settlement scans when returned auctions are only too young', async () => {
+      const currentTimeSeconds = Math.floor(Date.now() / 1000);
+
+      getUnsettledAuctionsStub.resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerYoung',
+            kickTime: currentTimeSeconds.toString(),
+            debtRemaining: '2.0',
+            collateralRemaining: '0.0',
+            neutralPrice: '0.05',
+            debt: '2.0',
+            collateral: '0.0',
+          },
+        ],
+      });
+
+      const firstHandler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+      const secondHandler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      const firstResult = await firstHandler.findSettleableAuctions();
+      const secondResult = await secondHandler.findSettleableAuctions();
+
+      expect(firstResult).to.be.empty;
+      expect(secondResult).to.be.empty;
+      expect(getUnsettledAuctionsStub.calledTwice).to.be.true;
+    });
+
+    it('skips malformed numeric fields without aborting the whole settlement scan', async () => {
+      const oldKickTime = Math.floor(Date.now() / 1000) - 7200;
+
+      getUnsettledAuctionsStub.resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerBad',
+            kickTime: oldKickTime.toString(),
+            debtRemaining: 'not-a-number',
+            collateralRemaining: '0.0',
+            neutralPrice: '0.05',
+            debt: '2.0',
+            collateral: '0.0',
+          },
+          {
+            borrower: '0xBorrowerGood',
+            kickTime: oldKickTime.toString(),
+            debtRemaining: '2.0',
+            collateralRemaining: '0.0',
+            neutralPrice: '0.05',
+            debt: '2.0',
+            collateral: '0.0',
+          },
+        ],
+      });
+
+      mockPool.contract.auctionInfo.withArgs('0xBorrowerBad').resolves({
+        kickTime_: BigNumber.from(oldKickTime),
+        debtToCollateral_: BigNumber.from('2000000000000000000'),
+      });
+      mockPool.contract.auctionInfo.withArgs('0xBorrowerGood').resolves({
+        kickTime_: BigNumber.from(oldKickTime),
+        debtToCollateral_: BigNumber.from('2000000000000000000'),
+      });
+
+      mockPool.getLiquidation.withArgs('0xBorrowerBad').returns({
+        getStatus: async () => ({
+          collateral: BigNumber.from(0),
+          price: BigNumber.from('1000000000000'),
+        }),
+      });
+      mockPool.getLiquidation.withArgs('0xBorrowerGood').returns({
+        getStatus: async () => ({
+          collateral: BigNumber.from(0),
+          price: BigNumber.from('1000000000000'),
+        }),
+      });
+
+      mockPool.contract.callStatic.settle.withArgs('0xBorrowerBad', 50).resolves();
+      mockPool.contract.callStatic.settle.withArgs('0xBorrowerGood', 50).resolves();
+
+      const handler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      const result = await handler.findSettleableAuctions();
+
+      expect(result).to.have.length(1);
+      expect(result[0].borrower).to.equal('0xBorrowerGood');
     });
 
     it('does not cache empty settlement results caused by retryable on-chain check failures', async () => {

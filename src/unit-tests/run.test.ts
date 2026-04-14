@@ -65,7 +65,7 @@ describe('run startup gating', () => {
     ).to.equal(true);
   });
 
-  it('disables the take loop when take write transport initialization fails', async () => {
+  it('keeps the take loop enabled when take write transport initialization fails', async () => {
     const createTakeWriteTransportStub = sinon
       .stub(takeWriteTransportModule, 'createTakeWriteTransport')
       .rejects(new Error('transport unavailable'));
@@ -94,7 +94,44 @@ describe('run startup gating', () => {
     });
 
     expect(createTakeWriteTransportStub.calledOnce).to.equal(true);
-    expect(result.takeLoopEnabled).to.equal(false);
+    expect(result.takeLoopEnabled).to.equal(true);
     expect(result.takeWriteTransport).to.equal(undefined);
+  });
+
+  it('fails fast when take write configuration is invalid', async () => {
+    const createTakeWriteTransportStub = sinon.stub(
+      takeWriteTransportModule,
+      'createTakeWriteTransport'
+    );
+
+    try {
+      await initializeTakeLoop({
+        config: {
+          ...BASE_CONFIG,
+          takeWrite: {
+            mode: TakeWriteTransportMode.RELAY,
+            relay: {} as any,
+          },
+          pools: [
+            {
+              name: 'Manual Take Pool',
+              address: '0x1111111111111111111111111111111111111111',
+              price: { source: PriceOriginSource.FIXED, value: 1 },
+              take: {
+                minCollateral: 0.1,
+                hpbPriceFactor: 0.98,
+              },
+            },
+          ],
+        },
+        signer: {} as any,
+        chainId: 1,
+      });
+      expect.fail('Expected invalid take write config to throw');
+    } catch (error) {
+      expect((error as Error).message).to.include('relay.url');
+    }
+
+    expect(createTakeWriteTransportStub.called).to.equal(false);
   });
 });

@@ -13,6 +13,22 @@ import * as erc20 from '../erc20';
 import { DexRouter } from '../dex/router';
 import { logger } from '../logging';
 
+function createDiscoveryTransports(gasPrice: BigNumber = BigNumber.from(1)) {
+  return {
+    subgraph: {
+      cacheKey: 'test-subgraph',
+      getLoans: sinon.stub().rejects(new Error('unused')),
+      getLiquidations: sinon.stub().rejects(new Error('unused')),
+      getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
+      getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
+      getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
+    },
+    readRpc: {
+      getGasPrice: sinon.stub().resolves(gasPrice),
+    },
+  };
+}
+
 describe('Discovery Handlers', () => {
   afterEach(() => {
     sinon.restore();
@@ -91,6 +107,7 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(),
     });
 
     expect(takeLiquidationStub.called).to.be.false;
@@ -234,6 +251,9 @@ describe('Discovery Handlers', () => {
           price: ethers.utils.parseEther('1'),
         }),
       }),
+      getPrices: sinon.stub().resolves({
+        hpb: ethers.utils.parseEther('1'),
+      }),
     };
 
     await handleDiscoveredTakeTarget({
@@ -297,6 +317,100 @@ describe('Discovery Handlers', () => {
     expect(
       takeLiquidationStub.firstCall.args[0].config.takeWriteTransport
     ).to.equal(takeWriteTransport);
+  });
+
+  it('passes the take write transport into discovered arbTake execution', async () => {
+    const takeWriteTransport = {
+      mode: 'private_rpc',
+      signer: {
+        getAddress: sinon
+          .stub()
+          .resolves('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+      },
+      submitTransaction: sinon.stub(),
+    };
+    const arbTakeLiquidationStub = sinon
+      .stub(arbModule, 'arbTakeLiquidation')
+      .resolves(true);
+    sinon.stub(arbModule, 'checkIfArbTakeable').resolves({
+      isArbTakeable: true,
+      hpbIndex: 7,
+      maxArbTakePrice: 2,
+    } as any);
+
+    const pool = {
+      name: 'Discovered Pool',
+      poolAddress: '0x1111111111111111111111111111111111111111',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('1'),
+        }),
+      }),
+      getPrices: sinon.stub().resolves({
+        hpb: ethers.utils.parseEther('1'),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        getChainId: sinon.stub().resolves(1),
+        provider: {},
+      } as any,
+      takeWriteTransport: takeWriteTransport as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerA',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: true,
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: {
+        subgraph: {
+          cacheKey: 'test-subgraph',
+          getLoans: sinon.stub().rejects(new Error('unused')),
+          getLiquidations: sinon.stub().rejects(new Error('unused')),
+          getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
+          getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
+          getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
+        },
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+      },
+    });
+
+    expect(arbTakeLiquidationStub.calledOnce).to.be.true;
+    expect(arbTakeLiquidationStub.firstCall.args[0].config.takeWriteTransport).to.equal(
+      takeWriteTransport
+    );
   });
 
   it('rejects a discovered settlement target before onchain settlement reads when gas policy fails', async () => {
@@ -445,9 +559,87 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(),
     });
 
     expect(handleCandidateAuctionsStub.called).to.be.false;
+  });
+
+
+  it('uses the onchain kickTime when hydrating prevalidated discovered settlements', async () => {
+    const handleCandidateAuctionsStub = sinon
+      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .resolves();
+    sinon
+      .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
+      .resolves({
+        needs: true,
+        reason: 'Bad debt detected',
+        details: {
+          debtRemaining: BigNumber.from(1),
+          collateralRemaining: BigNumber.from(0),
+          auctionPrice: BigNumber.from(1),
+          kickTime: 1,
+        },
+      });
+
+    const pool = {
+      name: 'Settlement Pool',
+      poolAddress: '0x4444444444444444444444444444444444444444',
+      quoteAddress: '0x5555555555555555555555555555555555555555',
+      contract: {
+        kickerInfo: sinon.stub().resolves({ claimable_: BigNumber.from(0) }),
+      },
+    };
+
+    await handleDiscoveredSettlementTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: false,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerKickTime',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '0',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '0',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          settlement: true,
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(),
+    });
+
+    expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
+    expect(handleCandidateAuctionsStub.firstCall.args[0][0].kickTime).to.equal(
+      1000
+    );
   });
 
   it('does not require take profit-floor gas quoting for discovered settlement candidates', async () => {
@@ -511,6 +703,7 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(),
     });
 
     expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
@@ -578,6 +771,7 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(ethers.utils.parseUnits('1', 'gwei')),
     });
 
     expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
@@ -659,6 +853,7 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(ethers.utils.parseUnits('1', 'gwei')),
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
@@ -736,6 +931,7 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(BigNumber.from(0)),
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
@@ -815,6 +1011,7 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(),
     });
 
     const summaryLog = loggerInfoStub
@@ -900,6 +1097,7 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(),
     });
 
     expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
@@ -972,6 +1170,7 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
+      transports: createDiscoveryTransports(),
     });
 
     const summaryLog = loggerInfoStub

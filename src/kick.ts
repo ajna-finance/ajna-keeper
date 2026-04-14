@@ -28,9 +28,9 @@ type KickConfigBase = Pick<
   | 'dryRun'
   | 'delayBetweenActions'
   | 'coinGeckoApiKey'
-  | 'ethRpcUrl'
   | 'tokenAddresses'
->;
+> &
+  Partial<Pick<KeeperConfig, 'ethRpcUrl'>>;
 
 type KickConfig = WithSubgraph<KickConfigBase>;
 type KickConfigInput = SubgraphConfigInput<KickConfigBase>;
@@ -75,7 +75,8 @@ interface LoanToKick {
 interface GetLoansToKickParams
   extends Pick<HandleKickParams, 'pool' | 'poolConfig' | 'chainId'> {
   config: SubgraphConfigInput<
-    Pick<KeeperConfig, 'coinGeckoApiKey' | 'ethRpcUrl' | 'tokenAddresses'>
+    Pick<KeeperConfig, 'coinGeckoApiKey' | 'tokenAddresses'> &
+      Partial<Pick<KeeperConfig, 'ethRpcUrl'>>
   >;
 }
 

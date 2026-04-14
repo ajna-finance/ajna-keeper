@@ -76,9 +76,9 @@ export async function initializeTakeLoop(params: {
   }
 
   validateTakeSettingsForChain(params.config, params.chainId);
+  validateTakeWriteConfig(params.config);
 
   try {
-    validateTakeWriteConfig(params.config);
     return {
       takeLoopEnabled: true,
       takeWriteTransport: await createTakeWriteTransport({
@@ -89,11 +89,11 @@ export async function initializeTakeLoop(params: {
     };
   } catch (error) {
     logger.error(
-      'Failed to initialize take write transport; disabling the take loop while other keeper loops continue.',
+      'Failed to initialize take write transport during startup; the take loop remains enabled and will retry transport initialization in-cycle.',
       error
     );
     return {
-      takeLoopEnabled: false,
+      takeLoopEnabled: true,
     };
   }
 }

@@ -10,6 +10,7 @@ export interface DurableNonceFloorEntry {
   txHash?: string;
   submittedAtMs: number;
   expiresAtBlock?: number;
+  expiresAtMs?: number;
   relayUrl?: string;
 }
 

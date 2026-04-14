@@ -11,6 +11,7 @@ import {
 } from './gas-policy';
 import {
   DiscoveryExecutionConfig,
+  DiscoveryExecutionTransportConfig,
   DiscoveryRpcCache,
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
@@ -74,14 +75,33 @@ interface DiscoveredTakeTargetStats {
   executedArbTakes: number;
 }
 
-export interface HandleDiscoveredTakeTargetParams {
+interface HandleDiscoveredTakeTargetParamsBase {
   pool: FungiblePool;
   signer: Signer;
   takeWriteTransport?: TakeWriteTransport;
   target: ResolvedTakeTarget;
-  config: DiscoveryExecutionConfig;
-  transports?: DiscoveryReadTransports;
   rpcCache?: DiscoveryRpcCache;
+}
+
+export type HandleDiscoveredTakeTargetParams =
+  | (HandleDiscoveredTakeTargetParamsBase & {
+      config: DiscoveryExecutionTransportConfig;
+      transports?: DiscoveryReadTransports;
+    })
+  | (HandleDiscoveredTakeTargetParamsBase & {
+      config: DiscoveryExecutionConfig;
+      transports: DiscoveryReadTransports;
+    });
+
+function hasDiscoveryTransportConfig(
+  config: DiscoveryExecutionConfig | DiscoveryExecutionTransportConfig
+): config is DiscoveryExecutionTransportConfig {
+  return (
+    'ethRpcUrl' in config &&
+    typeof config.ethRpcUrl === 'string' &&
+    'subgraphUrl' in config &&
+    typeof config.subgraphUrl === 'string'
+  );
 }
 
 function logDiscoveredTakeTargetSummary(params: {
@@ -97,9 +117,15 @@ function logDiscoveredTakeTargetSummary(params: {
 export async function handleDiscoveredTakeTarget(
   params: HandleDiscoveredTakeTargetParams
 ): Promise<void> {
-  const transports =
-    params.transports ??
-    createDiscoveryTransportsForConfig(params.config, params.signer);
+  const transports = params.transports
+    ? params.transports
+    : hasDiscoveryTransportConfig(params.config)
+      ? createDiscoveryTransportsForConfig(params.config, params.signer)
+      : (() => {
+          throw new Error(
+            'Discovered take target requires transports when config omits read transport settings'
+          );
+        })();
   const stats: DiscoveredTakeTargetStats = {
     candidateCount: params.target.candidates.length,
     approvedTakeDecisions: 0,
@@ -237,6 +263,7 @@ export async function handleDiscoveredTakeTarget(
       externalExecutionConfig: externalExecutionConfig as any,
       dryRun: params.target.dryRun,
       delayBetweenActions: params.config.delayBetweenActions,
+      takeWriteTransport: params.takeWriteTransport,
       revalidateBeforeExecution: true,
       approveExternalTake: async ({
         price,

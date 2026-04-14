@@ -91,6 +91,7 @@ export class NonceTracker {
     nonce: number;
     txHash?: string;
     expiresAtBlock?: number;
+    expiresAtMs?: number;
     relayUrl?: string;
   }) {
     const tracker = new NonceTracker();
@@ -295,6 +296,7 @@ export class NonceTracker {
     nonce: number;
     txHash?: string;
     expiresAtBlock?: number;
+    expiresAtMs?: number;
     relayUrl?: string;
   }): Promise<void> {
     const address = await params.signer.getAddress();
@@ -306,6 +308,7 @@ export class NonceTracker {
       txHash: params.txHash,
       submittedAtMs: Date.now(),
       expiresAtBlock: params.expiresAtBlock,
+      expiresAtMs: params.expiresAtMs,
       relayUrl: params.relayUrl,
     });
 
@@ -335,6 +338,19 @@ export class NonceTracker {
       if (cleared) {
         logger.info(
           `Cleared durable nonce floor for ${address} on chain ${chainId} after provider caught up to pending nonce ${observedPendingNonce}`
+        );
+      }
+      return observedPendingNonce;
+    }
+
+    if (
+      durableFloor.expiresAtMs !== undefined &&
+      Date.now() >= durableFloor.expiresAtMs
+    ) {
+      const cleared = await clearDurableNonceFloor(chainId, address);
+      if (cleared) {
+        logger.warn(
+          `Cleared expired durable nonce floor for ${address} on chain ${chainId} after local expiry ${durableFloor.expiresAtMs}`
         );
       }
       return observedPendingNonce;
