@@ -44,11 +44,15 @@ function hasConfiguredWrappedNativeAddress(config: KeeperConfig): boolean {
 
 function hasConfiguredGasQuoteLiquiditySource(
   config: KeeperConfig,
-  liquiditySource: LiquiditySource
+  liquiditySource: LiquiditySource,
+  chainId?: number
 ): boolean {
   switch (liquiditySource) {
     case LiquiditySource.ONEINCH:
-      return hasNonEmptyObject(config.oneInchRouters);
+      return !!(
+        hasNonEmptyObject(config.oneInchRouters) &&
+        (chainId === undefined || config.oneInchRouters?.[chainId])
+      );
     case LiquiditySource.UNISWAPV3:
       return !!(
         config.universalRouterOverrides?.universalRouterAddress &&
@@ -72,13 +76,15 @@ function hasConfiguredGasQuoteLiquiditySource(
 }
 
 function resolveConfiguredGasQuoteLiquiditySource(
-  config: KeeperConfig
+  config: KeeperConfig,
+  chainId?: number
 ): LiquiditySource | undefined {
   const preferredSource = config.discoveredDefaults?.take?.liquiditySource;
-  if (preferredSource !== undefined) {
-    return hasConfiguredGasQuoteLiquiditySource(config, preferredSource)
-      ? preferredSource
-      : undefined;
+  if (
+    preferredSource !== undefined &&
+    hasConfiguredGasQuoteLiquiditySource(config, preferredSource, chainId)
+  ) {
+    return preferredSource;
   }
 
   for (const candidate of [
@@ -87,7 +93,7 @@ function resolveConfiguredGasQuoteLiquiditySource(
     LiquiditySource.SUSHISWAP,
     LiquiditySource.CURVE,
   ]) {
-    if (hasConfiguredGasQuoteLiquiditySource(config, candidate)) {
+    if (hasConfiguredGasQuoteLiquiditySource(config, candidate, chainId)) {
       return candidate;
     }
   }
@@ -97,9 +103,10 @@ function resolveConfiguredGasQuoteLiquiditySource(
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,
-  fieldName: string
+  fieldName: string,
+  chainId?: number
 ): void {
-  if (resolveConfiguredGasQuoteLiquiditySource(config) === undefined) {
+  if (resolveConfiguredGasQuoteLiquiditySource(config, chainId) === undefined) {
     throw new Error(
       `${fieldName} requires a configured native-to-quote liquidity source`
     );
@@ -342,7 +349,10 @@ export function validateSettlementSettings(config: SettlementConfig): void {
   }
 }
 
-export function validateAutoDiscoverConfig(config: KeeperConfig): void {
+export function validateAutoDiscoverConfig(
+  config: KeeperConfig,
+  chainId?: number
+): void {
   const autoDiscover = config.autoDiscover;
   if (!autoDiscover?.enabled) {
     return;
@@ -424,12 +434,13 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
       );
     }
 
-    validateTakeSettings(discoveredTake, config);
+    validateTakeSettings(discoveredTake, config, chainId);
 
     if (takePolicy.maxGasCostQuote !== undefined) {
       validateQuoteDenominatedGasPolicy(
         config,
-        'AutoDiscoverConfig.take: maxGasCostQuote'
+        'AutoDiscoverConfig.take: maxGasCostQuote',
+        chainId
       );
     }
 
@@ -444,7 +455,8 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
     if (takePolicy.minExpectedProfitQuote !== undefined) {
       validateQuoteDenominatedGasPolicy(
         config,
-        'AutoDiscoverConfig.take: minExpectedProfitQuote'
+        'AutoDiscoverConfig.take: minExpectedProfitQuote',
+        chainId
       );
     }
   }
@@ -485,7 +497,8 @@ export function validateAutoDiscoverConfig(config: KeeperConfig): void {
     if (settlementPolicy.maxGasCostQuote !== undefined) {
       validateQuoteDenominatedGasPolicy(
         config,
-        'AutoDiscoverConfig.settlement: maxGasCostQuote'
+        'AutoDiscoverConfig.settlement: maxGasCostQuote',
+        chainId
       );
     }
 

@@ -200,8 +200,9 @@ export async function executeUniswapV3FactoryTake({
   );
 
   if (!config.universalRouterOverrides) {
-    logger.error('Factory: universalRouterOverrides required for UniswapV3 takes');
-    return;
+    const message = 'Factory: universalRouterOverrides required for UniswapV3 takes';
+    logger.error(message);
+    throw new Error(message);
   }
 
   const minimalAmountOut = await computeFactoryAmountOutMinimum({
@@ -278,5 +279,6 @@ export async function executeUniswapV3FactoryTake({
       `Factory: Failed to Uniswap V3 Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
       error
     );
+    throw error;
   }
 }

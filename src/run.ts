@@ -67,7 +67,7 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   const chainId = network.chainId;
 
   configureAjna(config.ajna);
-  validateAutoDiscoverConfig(config);
+  validateAutoDiscoverConfig(config, chainId);
   const takeLoopEnabled = shouldRunTakeLoop(config);
   if (takeLoopEnabled) {
     validateTakeWriteConfig(config);

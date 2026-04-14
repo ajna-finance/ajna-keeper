@@ -693,6 +693,45 @@ describe('Settlement Module Tests', () => {
     });
   });
 
+  describe('SettlementHandler.handleCandidateAuctions()', () => {
+    it('skips redundant preflight checks for prevalidated discovered auctions', async () => {
+      const handler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+      const needsSettlementStub = sinon.stub(handler, 'needsSettlement').rejects(
+        new Error('should not recheck needsSettlement')
+      );
+      const incentiveStub = sinon.stub(handler, 'checkBotIncentive').rejects(
+        new Error('should not recheck incentives')
+      );
+      sinon.stub(handler, 'isAuctionOldEnough').returns(true);
+      const settleStub = sinon.stub(handler, 'settleAuctionCompletely').resolves({
+        success: true,
+        completed: true,
+        iterations: 1,
+      } as any);
+
+      await handler.handleCandidateAuctions(
+        [
+          {
+            borrower: '0xBorrower123',
+            kickTime: Date.now() - 7200 * 1000,
+            debtRemaining: BigNumber.from(1),
+            collateralRemaining: BigNumber.from(0),
+          },
+        ],
+        { prevalidated: true }
+      );
+
+      expect(needsSettlementStub.called).to.be.false;
+      expect(incentiveStub.called).to.be.false;
+      expect(settleStub.calledOnceWithExactly('0xBorrower123')).to.be.true;
+    });
+  });
+
   describe('SettlementHandler.settleAuctionCompletely()', () => {
     /**
      * Test settlement execution with multiple iterations

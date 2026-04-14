@@ -36,12 +36,12 @@ describe('Subgraph Discovery Pagination', () => {
     expect((requestStub.firstCall.args[0] as any).variables).to.deep.equal({
       poolId: '0x1111111111111111111111111111111111111111',
       first: 1000,
-      skip: 0,
+      afterBorrower: '',
     });
     expect((requestStub.secondCall.args[0] as any).variables).to.deep.equal({
       poolId: '0x1111111111111111111111111111111111111111',
       first: 1000,
-      skip: 1000,
+      afterBorrower: '0xborrower-999',
     });
   });
 

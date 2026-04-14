@@ -2,7 +2,6 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../../config';
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
-import { DexRouter } from '../../dex/router';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
@@ -154,6 +153,7 @@ export async function evaluateCurveFactoryQuote({
       quoteAmount,
       quoteAmountRaw,
       collateralAmount,
+      curvePool: quoteResult.selectedPool,
       reason: profitable ? undefined : 'quoted output below required Curve profitability floor',
     };
   } catch (error) {
@@ -190,74 +190,39 @@ export async function executeCurveFactoryTake({
   );
 
   if (!config.curveRouterOverrides) {
-    logger.error('Factory: curveRouterOverrides required for Curve takes');
-    return;
+    const message = 'Factory: curveRouterOverrides required for Curve takes';
+    logger.error(message);
+    throw new Error(message);
   }
 
   try {
-    const quoteProvider = new CurveQuoteProvider(signer, {
-      poolConfigs: config.curveRouterOverrides.poolConfigs! as any,
-      defaultSlippage: config.curveRouterOverrides.defaultSlippage || 1.0,
-      wethAddress: config.curveRouterOverrides.wethAddress!,
-    });
+    let selectedCurvePool = quoteEvaluation.curvePool;
 
-    await quoteProvider.initialize();
+    if (!selectedCurvePool) {
+      const quoteProvider = new CurveQuoteProvider(signer, {
+        poolConfigs: config.curveRouterOverrides.poolConfigs! as any,
+        defaultSlippage: config.curveRouterOverrides.defaultSlippage || 1.0,
+        wethAddress: config.curveRouterOverrides.wethAddress!,
+        tokenAddresses: config.tokenAddresses || {},
+      });
 
-    const poolExists = await quoteProvider.poolExists(
-      pool.collateralAddress,
-      pool.quoteAddress
-    );
-    if (!poolExists) {
-      logger.error(`Factory: No Curve pool found for ${pool.collateralAddress}/${pool.quoteAddress}`);
-      return;
-    }
-
-    const dexRouter = new DexRouter(signer, {
-      tokenAddresses: config.tokenAddresses || {},
-    });
-
-    const selectedPoolConfig = dexRouter.getCurvePoolForTokenPair(
-      pool.collateralAddress,
-      pool.quoteAddress,
-      config.curveRouterOverrides.poolConfigs!
-    );
-
-    if (!selectedPoolConfig) {
-      logger.error(
-        `Factory: Could not find working pool config for ${pool.collateralAddress}/${pool.quoteAddress}`
+      selectedCurvePool = await quoteProvider.resolvePoolSelection(
+        pool.collateralAddress,
+        pool.quoteAddress
       );
-      return;
     }
 
-    let tokenInIndex: number | undefined;
-    let tokenOutIndex: number | undefined;
-
-    const discoveryAbi = ['function coins(uint256 i) external view returns (address)'];
-    const poolContract = new ethers.Contract(selectedPoolConfig.address, discoveryAbi, signer);
-
-    for (let i = 0; i < 8; i++) {
-      try {
-        const tokenAddr = await poolContract.coins(i);
-        if (tokenAddr.toLowerCase() === pool.collateralAddress.toLowerCase()) {
-          tokenInIndex = i;
-        }
-        if (tokenAddr.toLowerCase() === pool.quoteAddress.toLowerCase()) {
-          tokenOutIndex = i;
-        }
-      } catch (error) {
-        break;
-      }
+    if (!selectedCurvePool) {
+      const message =
+        `Factory: Could not resolve a Curve pool selection for ${pool.collateralAddress}/${pool.quoteAddress}`;
+      logger.error(message);
+      throw new Error(message);
     }
 
-    if (tokenInIndex === undefined || tokenOutIndex === undefined) {
-      logger.error(
-        `Factory: Could not discover token indices for Curve pool ${selectedPoolConfig.address}`
-      );
-      return;
-    }
+    const resolvedCurvePool = selectedCurvePool;
 
     logger.debug(
-      `Factory: Found Curve pool tokens: ${pool.collateralAddress}@${tokenInIndex}, ${pool.quoteAddress}@${tokenOutIndex}`
+      `Factory: Found Curve pool tokens: ${pool.collateralAddress}@${resolvedCurvePool.tokenInIndex}, ${pool.quoteAddress}@${resolvedCurvePool.tokenOutIndex}`
     );
 
     const minimalAmountOut = await computeFactoryAmountOutMinimum({
@@ -272,21 +237,21 @@ export async function executeCurveFactoryTake({
 
     logger.debug(
       `Factory: Executing Curve take for pool ${pool.name}:\n` +
-        `  Pool Address: ${selectedPoolConfig.address}\n` +
-        `  Pool Type: ${selectedPoolConfig.poolType}\n` +
+        `  Pool Address: ${resolvedCurvePool.address}\n` +
+        `  Pool Type: ${resolvedCurvePool.poolType}\n` +
         `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
         `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
-        `  Token Indices: ${tokenInIndex} -> ${tokenOutIndex}\n` +
+        `  Token Indices: ${resolvedCurvePool.tokenInIndex} -> ${resolvedCurvePool.tokenOutIndex}\n` +
         `  Minimal Amount Out: ${minimalAmountOut.toString()} (quoted bound)`
     );
 
     const encodedSwapDetails = ethers.utils.defaultAbiCoder.encode(
       ['address', 'uint8', 'uint8', 'uint8', 'uint256', 'uint256'],
       [
-        selectedPoolConfig.address,
-        selectedPoolConfig.poolType === CurvePoolType.STABLE ? 0 : 1,
-        tokenInIndex,
-        tokenOutIndex,
+        resolvedCurvePool.address,
+        resolvedCurvePool.poolType === CurvePoolType.STABLE ? 0 : 1,
+        resolvedCurvePool.tokenInIndex,
+        resolvedCurvePool.tokenOutIndex,
         minimalAmountOut,
         deadline,
       ]
@@ -309,7 +274,7 @@ export async function executeCurveFactoryTake({
         liquidation.auctionPrice,
         liquidation.collateral,
         Number(poolConfig.take.liquiditySource),
-        selectedPoolConfig.address,
+        resolvedCurvePool.address,
         encodedSwapDetails,
       ] as const;
       const gasLimit = await estimateGasWithBuffer(
@@ -332,5 +297,6 @@ export async function executeCurveFactoryTake({
       `Factory: Failed to Curve Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
       error
     );
+    throw error;
   }
 }

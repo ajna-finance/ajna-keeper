@@ -197,8 +197,9 @@ export async function executeSushiSwapFactoryTake({
   );
 
   if (!config.sushiswapRouterOverrides) {
-    logger.error('Factory: sushiswapRouterOverrides required for SushiSwap takes');
-    return;
+    const message = 'Factory: sushiswapRouterOverrides required for SushiSwap takes';
+    logger.error(message);
+    throw new Error(message);
   }
 
   const minimalAmountOut = await computeFactoryAmountOutMinimum({
@@ -267,5 +268,6 @@ export async function executeSushiSwapFactoryTake({
       `Factory: Failed to SushiSwap Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
       error
     );
+    throw error;
   }
 }

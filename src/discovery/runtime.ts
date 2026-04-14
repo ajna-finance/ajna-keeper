@@ -249,6 +249,10 @@ async function createTakeCycleRpcCache(
   return state.signer.provider
     ? {
         ...createEmptyDiscoveryRpcCache(),
+        chainId:
+          typeof state.signer.getChainId === 'function'
+            ? await state.signer.getChainId()
+            : undefined,
         gasPrice: await state.readTransports.readRpc.getGasPrice(),
         gasPriceFetchedAt: Date.now(),
         factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
@@ -262,6 +266,10 @@ async function createSettlementCycleRpcCache(
   return state.signer.provider
     ? {
         ...createEmptyDiscoveryRpcCache(),
+        chainId:
+          typeof state.signer.getChainId === 'function'
+            ? await state.signer.getChainId()
+            : undefined,
         gasPrice: await state.readTransports.readRpc.getGasPrice(),
         gasPriceFetchedAt: Date.now(),
       }

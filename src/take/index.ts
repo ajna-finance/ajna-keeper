@@ -527,7 +527,7 @@ export async function takeLiquidation({
   signer,
   liquidation,
   config,
-}: TakeLiquidationParams) {
+}: TakeLiquidationParams): Promise<boolean> {
   const { borrower } = liquidation;
   const { dryRun } = config;
 
@@ -535,38 +535,52 @@ export async function takeLiquidation({
     logger.info(
       `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${poolConfig.take.liquiditySource}`
     );
-  } else {
-    if (poolConfig.take.liquiditySource === LiquiditySource.ONEINCH) {
-      const takeWriteTransport = resolveTakeWriteTransport(signer, config);
-      const keeperTaker = AjnaKeeperTaker__factory.connect(
-        config.keeperTaker!,
-        takeWriteTransport.signer
-      );
+    return true;
+  }
 
-      // pause between getting the 1inch quote and requesting the swap to avoid 1inch rate limit
-      await delay(config.delayBetweenActions);
-      const dexRouter = new DexRouter(signer, {
-        oneInchRouters: config.oneInchRouters ?? {},
-        connectorTokens: config.connectorTokens ?? [],
-      });
+  if (poolConfig.take.liquiditySource !== LiquiditySource.ONEINCH) {
+    logger.error(
+      `Valid liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
+    );
+    return false;
+  }
 
-      // Convert collateral from WAD to token decimals for 1inch API consistency
-      const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
-      const collateralInTokenDecimals = convertWadToTokenDecimals(liquidation.collateral, collateralDecimals);
+  try {
+    const takeWriteTransport = resolveTakeWriteTransport(signer, config);
+    const keeperTaker = AjnaKeeperTaker__factory.connect(
+      config.keeperTaker!,
+      takeWriteTransport.signer
+    );
 
-      const swapData = await dexRouter.getSwapDataFromOneInch(
-        await signer.getChainId(),
-        collateralInTokenDecimals,  //Use token decimals for 1inch API
-        pool.collateralAddress,
-        pool.quoteAddress,
-        1,
-        keeperTaker.address,
-        true
-      );
+    // pause between getting the 1inch quote and requesting the swap to avoid 1inch rate limit
+    await delay(config.delayBetweenActions);
+    const dexRouter = new DexRouter(signer, {
+      oneInchRouters: config.oneInchRouters ?? {},
+      connectorTokens: config.connectorTokens ?? [],
+    });
 
-      // Log transaction parameters for debugging
-      logger.debug(
-        `Preparing takeWithAtomicSwap transaction:\n` +
+    // Convert collateral from WAD to token decimals for 1inch API consistency
+    const collateralDecimals = await getDecimalsErc20(
+      signer,
+      pool.collateralAddress
+    );
+    const collateralInTokenDecimals = convertWadToTokenDecimals(
+      liquidation.collateral,
+      collateralDecimals
+    );
+
+    const swapData = await dexRouter.getSwapDataFromOneInch(
+      await signer.getChainId(),
+      collateralInTokenDecimals,
+      pool.collateralAddress,
+      pool.quoteAddress,
+      1,
+      keeperTaker.address,
+      true
+    );
+
+    logger.debug(
+      `Preparing takeWithAtomicSwap transaction:\n` +
         `  Pool: ${pool.poolAddress}\n` +
         `  Borrower: ${liquidation.borrower}\n` +
         `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
@@ -575,52 +589,47 @@ export async function takeLiquidation({
         `  Liquidity Source: ${poolConfig.take.liquiditySource}\n` +
         `  1inch Router: ${dexRouter.getRouter(await signer.getChainId())}\n` +
         `  Swap Data Length: ${swapData.data.length} chars`
-      );
+    );
 
-	      try {
-	        logger.debug(
-	          `Sending Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
-	        );
-	        await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {
-          const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
-          const txArgs = [
-            pool.poolAddress,
-            liquidation.borrower,
-            liquidation.auctionPrice,
-            liquidation.collateral,
-            Number(poolConfig.take.liquiditySource),
-            dexRouter.getRouter(await signer.getChainId())!,
-            convertSwapApiResponseToDetailsBytes(swapData.data),
-          ] as const;
-          const gasLimit = await estimateGasWithBuffer(
-            () => keeperTaker.estimateGas.takeWithAtomicSwap(...txArgs),
-            fallbackGasLimit,
-            `Take ${pool.name}/${borrower}`
-          );
-          const txRequest =
-            await keeperTaker.populateTransaction.takeWithAtomicSwap(...txArgs, {
-              gasLimit,
-              nonce: nonce.toString(),
-            });
-	          const receipt = await submitTakeTransaction(
-              takeWriteTransport,
-              txRequest
-            );
-	          logger.info(
-	            `Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
-          );
-          return receipt;
-        });
-      } catch (error) {
-        logger.error(
-          `Failed to Take. pool: ${pool.name}, borrower: ${borrower}`,
-          error
+    logger.debug(
+      `Sending Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
+    );
+    await NonceTracker.queueTransaction(
+      takeWriteTransport.signer,
+      async (nonce: number) => {
+        const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
+        const txArgs = [
+          pool.poolAddress,
+          liquidation.borrower,
+          liquidation.auctionPrice,
+          liquidation.collateral,
+          Number(poolConfig.take.liquiditySource),
+          dexRouter.getRouter(await signer.getChainId())!,
+          convertSwapApiResponseToDetailsBytes(swapData.data),
+        ] as const;
+        const gasLimit = await estimateGasWithBuffer(
+          () => keeperTaker.estimateGas.takeWithAtomicSwap(...txArgs),
+          fallbackGasLimit,
+          `Take ${pool.name}/${borrower}`
         );
+        const txRequest =
+          await keeperTaker.populateTransaction.takeWithAtomicSwap(...txArgs, {
+            gasLimit,
+            nonce: nonce.toString(),
+          });
+        const receipt = await submitTakeTransaction(takeWriteTransport, txRequest);
+        logger.info(
+          `Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
+        );
+        return receipt;
       }
-    } else {
-      logger.error(
-        `Valid liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
-      );
-    }
+    );
+    return true;
+  } catch (error) {
+    logger.error(
+      `Failed to Take. pool: ${pool.name}, borrower: ${borrower}`,
+      error
+    );
+    return false;
   }
 }

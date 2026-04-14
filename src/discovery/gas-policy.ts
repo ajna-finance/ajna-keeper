@@ -49,11 +49,16 @@ const WRAPPED_NATIVE_TOKEN_SYMBOLS = [
 
 function hasConfiguredLiquiditySource(
   config: DiscoveryExecutionConfig,
-  liquiditySource: LiquiditySource
+  liquiditySource: LiquiditySource,
+  chainId?: number
 ): boolean {
   switch (liquiditySource) {
     case LiquiditySource.ONEINCH:
-      return !!config.oneInchRouters && Object.keys(config.oneInchRouters).length > 0;
+      return !!(
+        config.oneInchRouters &&
+        Object.keys(config.oneInchRouters).length > 0 &&
+        (chainId === undefined || config.oneInchRouters?.[chainId])
+      );
     case LiquiditySource.UNISWAPV3:
       return !!(
         config.universalRouterOverrides?.universalRouterAddress &&
@@ -156,12 +161,13 @@ export function resolveWrappedNativeAddress(
 }
 
 function resolveGasQuoteSource(
-  config: DiscoveryExecutionConfig
+  config: DiscoveryExecutionConfig,
+  chainId?: number
 ): LiquiditySource | undefined {
   const preferredSource = config.discoveredDefaults?.take?.liquiditySource;
   if (
     preferredSource !== undefined &&
-    hasConfiguredLiquiditySource(config, preferredSource)
+    hasConfiguredLiquiditySource(config, preferredSource, chainId)
   ) {
     return preferredSource;
   }
@@ -172,7 +178,7 @@ function resolveGasQuoteSource(
     LiquiditySource.SUSHISWAP,
     LiquiditySource.CURVE,
   ]) {
-    if (hasConfiguredLiquiditySource(config, candidate)) {
+    if (hasConfiguredLiquiditySource(config, candidate, chainId)) {
       return candidate;
     }
   }
@@ -187,13 +193,14 @@ async function quoteTokensByLiquiditySource(params: {
   amountIn: BigNumber;
   tokenIn: string;
   tokenOut: string;
+  chainId?: number;
 }): Promise<BigNumber | undefined> {
   if (params.tokenIn.toLowerCase() === params.tokenOut.toLowerCase()) {
     return params.amountIn;
   }
 
   if (params.liquiditySource === LiquiditySource.ONEINCH) {
-    const chainId = await params.signer.getChainId();
+    const chainId = params.chainId ?? (await params.signer.getChainId());
     if (!params.config.oneInchRouters?.[chainId]) {
       return undefined;
     }
@@ -337,6 +344,7 @@ export async function evaluateGasPolicy(params: {
   gasPrice?: BigNumber;
   nativeToQuoteConversion?: NativeToQuoteConversion;
   rpcCache?: DiscoveryRpcCache;
+  chainId?: number;
 }): Promise<GasPolicyResult> {
   const provider = params.signer.provider;
   if (!provider) {
@@ -389,11 +397,24 @@ export async function evaluateGasPolicy(params: {
     };
   }
 
+  const chainId =
+    params.chainId ?? params.rpcCache?.chainId ?? (await params.signer.getChainId());
+  const resolvedGasQuoteSource = resolveGasQuoteSource(params.config, chainId);
+  const preferredLiquiditySource =
+    params.preferredLiquiditySource !== undefined &&
+    hasConfiguredLiquiditySource(
+      params.config,
+      params.preferredLiquiditySource,
+      chainId
+    )
+      ? params.preferredLiquiditySource
+      : resolvedGasQuoteSource;
+
   const wrappedNativeAddress =
     resolveWrappedNativeAddress(
       params.config,
-      params.preferredLiquiditySource
-    ) ?? resolveWrappedNativeAddress(params.config, resolveGasQuoteSource(params.config));
+      preferredLiquiditySource
+    ) ?? resolveWrappedNativeAddress(params.config, resolvedGasQuoteSource);
   if (!wrappedNativeAddress) {
     return {
       approved: false,
@@ -428,8 +449,7 @@ export async function evaluateGasPolicy(params: {
       ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals)
     );
   } else {
-    const liquiditySource =
-      params.preferredLiquiditySource ?? resolveGasQuoteSource(params.config);
+    const liquiditySource = preferredLiquiditySource;
     if (liquiditySource === undefined) {
       return {
         approved: false,
@@ -457,6 +477,7 @@ export async function evaluateGasPolicy(params: {
           amountIn: gasCostNativeRaw,
           tokenIn: wrappedNativeAddress,
           tokenOut: params.quoteTokenAddress,
+          chainId,
         })) ?? null;
       quoteCache?.set(cacheKey, quotedAmount);
     }

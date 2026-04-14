@@ -36,11 +36,19 @@ interface CurveQuoteConfig {
   tokenAddresses?: { [symbol: string]: string };
 }
 
+export interface CurvePoolSelection {
+  address: string;
+  poolType: CurvePoolType;
+  tokenInIndex: number;
+  tokenOutIndex: number;
+}
+
 interface QuoteResult {
   success: boolean;
   dstAmount?: BigNumber;
   error?: string;
   gasEstimate?: BigNumber;
+  selectedPool?: CurvePoolSelection;
 }
 
 /**
@@ -139,9 +147,10 @@ export class CurveQuoteProvider {
           logger.debug(`Found Curve pool for ${tokenASymbol}/${tokenBSymbol}: ${poolConfig.address} (${poolConfig.poolType})`);
           return poolConfig;
         }
-        
-        logger.debug(`No Curve pool configured for ${tokenASymbol}/${tokenBSymbol}`);
-        return undefined;
+
+        logger.debug(
+          `No Curve pool configured for ${tokenASymbol}/${tokenBSymbol} via symbol lookup, falling back to address matching`
+        );
       }
     }
 
@@ -209,6 +218,49 @@ export class CurveQuoteProvider {
     return undefined;
   }
 
+  private async resolvePoolSelectionFromConfig(
+    poolConfig: { address: string; poolType: CurvePoolType },
+    tokenIn: string,
+    tokenOut: string
+  ): Promise<CurvePoolSelection | undefined> {
+    const { tokenInIndex, tokenOutIndex } = await this.discoverTokenIndices(
+      poolConfig.address,
+      poolConfig.poolType,
+      tokenIn,
+      tokenOut
+    );
+
+    if (tokenInIndex === undefined || tokenOutIndex === undefined) {
+      return undefined;
+    }
+
+    return {
+      address: poolConfig.address,
+      poolType: poolConfig.poolType,
+      tokenInIndex,
+      tokenOutIndex,
+    };
+  }
+
+  async resolvePoolSelection(
+    tokenIn: string,
+    tokenOut: string
+  ): Promise<CurvePoolSelection | undefined> {
+    if (!this.isInitialized) {
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return undefined;
+      }
+    }
+
+    const poolConfig = await this.findPoolForTokenPair(tokenIn, tokenOut);
+    if (!poolConfig) {
+      return undefined;
+    }
+
+    return await this.resolvePoolSelectionFromConfig(poolConfig, tokenIn, tokenOut);
+  }
+
   /**
    * Check if pool exists and tokens are available
    */
@@ -217,33 +269,18 @@ export class CurveQuoteProvider {
     tokenB: string
   ): Promise<boolean> {
     try {
-      if (!this.isInitialized) {
-        await this.initialize();
-      }
+      const selectedPool = await this.resolvePoolSelection(tokenA, tokenB);
+      const exists = selectedPool !== undefined;
 
-      const poolConfig = await this.findPoolForTokenPair(tokenA, tokenB);
-      if (!poolConfig) {
-        return false;
-      }
-
-      // Verify tokens exist in pool by discovering indices
-      const { tokenInIndex, tokenOutIndex } = await this.discoverTokenIndices(
-        poolConfig.address,
-        poolConfig.poolType,
-        tokenA,
-        tokenB
-      );
-
-      const exists = tokenInIndex !== undefined && tokenOutIndex !== undefined;
-      
-      if (exists) {
-        logger.debug(`Curve pool tokens found: ${tokenA}@${tokenInIndex}, ${tokenB}@${tokenOutIndex}`);
+      if (selectedPool) {
+        logger.debug(
+          `Curve pool tokens found: ${tokenA}@${selectedPool.tokenInIndex}, ${tokenB}@${selectedPool.tokenOutIndex}`
+        );
       } else {
         logger.debug(`Curve pool tokens NOT found for ${tokenA}/${tokenB}`);
       }
-      
-      return exists;
 
+      return exists;
     } catch (error) {
       logger.debug(`Error checking Curve pool existence: ${error}`);
       return false;
@@ -305,29 +342,41 @@ export class CurveQuoteProvider {
         return { success: false, error: `No Curve pool configured for ${tokenIn}/${tokenOut}` };
       }
 
-      // Discover token indices
-      const { tokenInIndex, tokenOutIndex } = await this.discoverTokenIndices(
-        poolConfig.address,
-        poolConfig.poolType,
+      const selectedPool = await this.resolvePoolSelectionFromConfig(
+        poolConfig,
         tokenIn,
         tokenOut
       );
-
-      if (tokenInIndex === undefined || tokenOutIndex === undefined) {
+      if (!selectedPool) {
         return { success: false, error: `Tokens not found in Curve pool ${poolConfig.address}` };
       }
 
       // Get quote using pool-specific ABI (pattern from test scripts)
-      const poolAbi = poolConfig.poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-      const poolContract = new ethers.Contract(poolConfig.address, poolAbi, this.signer);
+      const poolAbi =
+        selectedPool.poolType === CurvePoolType.STABLE
+          ? STABLESWAP_ABI
+          : CRYPTOSWAP_ABI;
+      const poolContract = new ethers.Contract(
+        selectedPool.address,
+        poolAbi,
+        this.signer
+      );
 
       let amountOut: BigNumber;
-      if (poolConfig.poolType === CurvePoolType.STABLE) {
+      if (selectedPool.poolType === CurvePoolType.STABLE) {
         // StableSwap uses int128 indices
-        amountOut = await poolContract.get_dy(tokenInIndex, tokenOutIndex, amountIn);
+        amountOut = await poolContract.get_dy(
+          selectedPool.tokenInIndex,
+          selectedPool.tokenOutIndex,
+          amountIn
+        );
       } else {
         // CryptoSwap uses uint256 indices
-        amountOut = await poolContract.get_dy(tokenInIndex, tokenOutIndex, amountIn);
+        amountOut = await poolContract.get_dy(
+          selectedPool.tokenInIndex,
+          selectedPool.tokenOutIndex,
+          amountIn
+        );
       }
 
       if (amountOut.isZero()) {
@@ -343,6 +392,7 @@ export class CurveQuoteProvider {
       return {
         success: true,
         dstAmount: amountOut,
+        selectedPool,
         // Note: Curve pools don't provide gas estimates like Uniswap QuoterV2
       };
 

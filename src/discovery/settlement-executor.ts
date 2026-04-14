@@ -98,6 +98,10 @@ export async function handleDiscoveredSettlementTarget(
     params.rpcCache ??
     (params.signer.provider
       ? {
+          chainId:
+          typeof params.signer.getChainId === 'function'
+            ? await params.signer.getChainId()
+            : undefined,
           gasPrice: await transports.readRpc.getGasPrice(),
           gasPriceFetchedAt: Date.now(),
           gasQuoteConversions: new Map(),
@@ -109,6 +113,27 @@ export async function handleDiscoveredSettlementTarget(
   );
 
   try {
+    const gasPolicy = await evaluateGasPolicy({
+      signer: params.signer,
+      config: params.config,
+      transports,
+      policy: settlementPolicy,
+      gasLimit: SETTLEMENT_GAS_LIMIT,
+      quoteTokenAddress: params.pool.quoteAddress,
+      useProfitFloor: false,
+      gasPrice: rpcCache?.gasPrice,
+      chainId: rpcCache?.chainId,
+      rpcCache,
+    });
+    if (!gasPolicy.approved) {
+      stats.gasPolicyRejects = params.target.candidates.length;
+      logDiscoveryDecision(
+        params.config,
+        `Skipping discovered settlement target ${params.pool.poolAddress}: ${gasPolicy.reason}`
+      );
+      return;
+    }
+
     for (const candidate of params.target.candidates) {
       const needsSettlement = await handler.needsSettlement(candidate.borrower);
       if (!needsSettlement.needs) {
@@ -141,26 +166,6 @@ export async function handleDiscoveredSettlementTarget(
         }
       }
 
-      const gasPolicy = await evaluateGasPolicy({
-        signer: params.signer,
-        config: params.config,
-        transports,
-        policy: settlementPolicy,
-        gasLimit: SETTLEMENT_GAS_LIMIT,
-        quoteTokenAddress: params.pool.quoteAddress,
-        useProfitFloor: false,
-        gasPrice: rpcCache?.gasPrice,
-        rpcCache,
-      });
-      if (!gasPolicy.approved) {
-        stats.gasPolicyRejects += 1;
-        logDiscoveryDecision(
-          params.config,
-          `Skipping discovered settlement candidate ${params.pool.poolAddress}/${candidate.borrower}: ${gasPolicy.reason}`
-        );
-        continue;
-      }
-
       const hydratedAuction = hydrateSettlementAuction(candidate);
       if (!hydratedAuction) {
         stats.invalidCandidateSkips += 1;
@@ -176,7 +181,9 @@ export async function handleDiscoveredSettlementTarget(
     }
 
     stats.executionAttempted = true;
-    await handler.handleCandidateAuctions(approvedAuctions);
+    await handler.handleCandidateAuctions(approvedAuctions, {
+      prevalidated: true,
+    });
   } finally {
     logDiscoveredSettlementTargetSummary({
       pool: params.pool,

@@ -8,6 +8,9 @@ import { NonceTracker } from '../nonce';
 import { takeLiquidation } from '../take';
 import { DexRouter } from '../dex/router';
 import { executeUniswapV3FactoryTake } from '../take/factory/uniswap';
+import { executeCurveFactoryTake } from '../take/factory/curve';
+import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
+import { CurvePoolType } from '../config';
 import * as shared from '../take/factory/shared';
 import {
   AjnaKeeperTaker__factory,
@@ -111,6 +114,124 @@ describe('take write submission', () => {
     ).to.be.true;
     expect(queueTransactionStub.calledOnce).to.be.true;
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
+  });
+
+  it('uses the configured take write transport for Curve factory take submission without reselecting the pool', async () => {
+    const clock = sinon.useFakeTimers();
+    const readSigner = {};
+    const writeSigner = {
+      getAddress: sinon.stub().resolves('0x00000000000000000000000000000000000000ef'),
+      getTransactionCount: sinon.stub().resolves(0),
+      provider: {
+        getBlock: sinon.stub().resolves({ timestamp: 123 }),
+      },
+    };
+    const takeWriteTransport = {
+      mode: 'private_rpc',
+      signer: writeSigner,
+      submitTransaction: sinon.stub().resolves({
+        txHash: '0xcurvehash',
+        wait: sinon.stub().resolves({ transactionHash: '0xcurvehash' }),
+      }),
+    };
+    const estimateGasStub = sinon.stub().resolves(BigNumber.from(120_000));
+    const populateTransactionStub = sinon.stub().resolves({
+      to: '0x0000000000000000000000000000000000000013',
+      data: '0x9876',
+    });
+    const factory = {
+      estimateGas: {
+        takeWithAtomicSwap: estimateGasStub,
+      },
+      populateTransaction: {
+        takeWithAtomicSwap: populateTransactionStub,
+      },
+    };
+
+    sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns(factory as any);
+    sinon.stub(shared, 'computeFactoryAmountOutMinimum').resolves(BigNumber.from(10));
+    sinon.stub(shared, 'getSwapDeadline').callsFake(async (signer) => {
+      expect(signer).to.equal(writeSigner);
+      return 456;
+    });
+    const queueTransactionStub = sinon
+      .stub(NonceTracker, 'queueTransaction')
+      .callsFake(async (signer, txFunction) => {
+        expect(signer).to.equal(writeSigner);
+        return await txFunction(3);
+      });
+    const initializeStub = sinon.stub(CurveQuoteProvider.prototype, 'initialize');
+    const resolvePoolSelectionStub = sinon.stub(
+      CurveQuoteProvider.prototype,
+      'resolvePoolSelection'
+    );
+
+    const curveTakePromise = executeCurveFactoryTake({
+      pool: {
+        name: 'Factory Curve Pool',
+        poolAddress: '0x0000000000000000000000000000000000000011',
+        collateralAddress: '0x00000000000000000000000000000000000000c1',
+        quoteAddress: '0x00000000000000000000000000000000000000c2',
+      } as any,
+      poolConfig: {
+        name: 'Factory Curve Pool',
+        take: {
+          liquiditySource: LiquiditySource.CURVE,
+          marketPriceFactor: 0.95,
+        },
+      },
+      signer: readSigner as any,
+      liquidation: {
+        borrower: '0xBorrower',
+        hpbIndex: 0,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+        isTakeable: true,
+        isArbTakeable: false,
+      },
+      quoteEvaluation: {
+        isTakeable: true,
+        quoteAmountRaw: BigNumber.from(11),
+        curvePool: {
+          address: '0x00000000000000000000000000000000000000c3',
+          poolType: CurvePoolType.STABLE,
+          tokenInIndex: 1,
+          tokenOutIndex: 0,
+        },
+      },
+      config: {
+        keeperTakerFactory: '0x0000000000000000000000000000000000000013',
+        curveRouterOverrides: {
+          poolConfigs: {
+            'mismatched-key': {
+              address: '0x00000000000000000000000000000000000000ff',
+              poolType: CurvePoolType.CRYPTO,
+            },
+          },
+          wethAddress: '0x00000000000000000000000000000000000000aa',
+        },
+        tokenAddresses: {},
+        takeWriteTransport: takeWriteTransport as any,
+      },
+    });
+    await clock.tickAsync(2000);
+    await curveTakePromise;
+    clock.restore();
+
+    expect(initializeStub.called).to.be.false;
+    expect(resolvePoolSelectionStub.called).to.be.false;
+    expect(queueTransactionStub.calledOnce).to.be.true;
+    expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
+    const takeArgs = populateTransactionStub.firstCall.args;
+    expect(takeArgs[5].toLowerCase()).to.equal('0x00000000000000000000000000000000000000c3');
+    const decoded = ethers.utils.defaultAbiCoder.decode(
+      ['address', 'uint8', 'uint8', 'uint8', 'uint256', 'uint256'],
+      takeArgs[6]
+    );
+    expect(decoded[0].toLowerCase()).to.equal('0x00000000000000000000000000000000000000c3');
+    expect(decoded[1]).to.equal(0);
+    expect(decoded[2]).to.equal(1);
+    expect(decoded[3]).to.equal(0);
   });
 
   it('uses the configured take write transport for Uniswap factory take submission', async () => {

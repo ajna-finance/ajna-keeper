@@ -59,9 +59,12 @@ export class SettlementHandler {
     }
   }
 
-  async handleCandidateAuctions(auctions: AuctionToSettle[]): Promise<void> {
+  async handleCandidateAuctions(
+    auctions: AuctionToSettle[],
+    options?: { prevalidated?: boolean }
+  ): Promise<void> {
     for (const auction of auctions) {
-      await this.processAuction(auction);
+      await this.processAuction(auction, options);
       await delay(this.config.delayBetweenActions);
     }
   }
@@ -115,7 +118,10 @@ export class SettlementHandler {
     };
   }
 
-  private async processAuction(auction: AuctionToSettle): Promise<void> {
+  private async processAuction(
+    auction: AuctionToSettle,
+    options?: { prevalidated?: boolean }
+  ): Promise<void> {
     const { borrower } = auction;
     const settlementKey = `${this.pool.poolAddress}-${borrower}`;
 
@@ -140,33 +146,37 @@ export class SettlementHandler {
         return;
       }
 
-      const settlementCheck = await this.needsSettlement(borrower);
-      if (!settlementCheck.needs) {
-        if (settlementCheck.retryable) {
-          logger.warn(
-            `Retryable settlement check failure for ${borrower.slice(0, 8)} in ${this.pool.name}: ${settlementCheck.reason}`
-          );
-          return;
-        }
-        logger.debug(
-          `Settlement not needed for ${borrower.slice(0, 8)}: ${settlementCheck.reason}`
-        );
-        return;
-      }
-
-      if (this.poolConfig.settlement.checkBotIncentive) {
-        const incentiveCheck = await this.checkBotIncentive(borrower);
-        if (!incentiveCheck.hasIncentive) {
+      let settlementReason = 'prevalidated candidate';
+      if (!options?.prevalidated) {
+        const settlementCheck = await this.needsSettlement(borrower);
+        if (!settlementCheck.needs) {
+          if (settlementCheck.retryable) {
+            logger.warn(
+              `Retryable settlement check failure for ${borrower.slice(0, 8)} in ${this.pool.name}: ${settlementCheck.reason}`
+            );
+            return;
+          }
           logger.debug(
-            `No bot incentive for ${borrower.slice(0, 8)}: ${incentiveCheck.reason}`
+            `Settlement not needed for ${borrower.slice(0, 8)}: ${settlementCheck.reason}`
           );
           return;
         }
-        logger.debug(`Bot incentive confirmed: ${incentiveCheck.reason}`);
+        settlementReason = settlementCheck.reason;
+
+        if (this.poolConfig.settlement.checkBotIncentive) {
+          const incentiveCheck = await this.checkBotIncentive(borrower);
+          if (!incentiveCheck.hasIncentive) {
+            logger.debug(
+              `No bot incentive for ${borrower.slice(0, 8)}: ${incentiveCheck.reason}`
+            );
+            return;
+          }
+          logger.debug(`Bot incentive confirmed: ${incentiveCheck.reason}`);
+        }
       }
 
       logger.info(
-        `SETTLEMENT NEEDED for ${borrower.slice(0, 8)}: ${settlementCheck.reason}`
+        `SETTLEMENT NEEDED for ${borrower.slice(0, 8)}: ${settlementReason}`
       );
       const result = await this.settleAuctionCompletely(borrower);
 

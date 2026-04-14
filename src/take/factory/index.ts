@@ -309,6 +309,11 @@ async function checkCurveQuote(
   });
 }
 
+function failFactoryTakeExecution(message: string): false {
+  logger.error(message);
+  return false;
+}
+
 /**
  * Execute external take using factory pattern
  */
@@ -323,9 +328,11 @@ export async function takeLiquidationFactory({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: LiquidationToTake;
-  config: Pick<FactoryTakeParams['config'], 'dryRun' | 'keeperTakerFactory' | 'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses' > & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
-}) {
-  
+  config: Pick<
+    FactoryTakeParams['config'],
+    'dryRun' | 'keeperTakerFactory' | 'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses'
+  > & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
+}): Promise<boolean> {
   const { borrower } = liquidation;
   const { dryRun, keeperTakerFactory } = config;
 
@@ -333,12 +340,13 @@ export async function takeLiquidationFactory({
     logger.info(
       `DryRun - would Factory Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${poolConfig.take.liquiditySource}`
     );
-    return;
+    return true;
   }
 
   if (!keeperTakerFactory) {
-    logger.error('Factory: keeperTakerFactory address not configured');
-    return;
+    return failFactoryTakeExecution(
+      'Factory: keeperTakerFactory address not configured'
+    );
   }
 
   const externalTakeQuoteEvaluation =
@@ -353,48 +361,63 @@ export async function takeLiquidationFactory({
     ));
 
   if (!externalTakeQuoteEvaluation.isTakeable) {
-    logger.error(
+    return failFactoryTakeExecution(
       `Factory: Take quote no longer satisfies execution policy for ${pool.name}/${borrower}: ${externalTakeQuoteEvaluation.reason ?? 'not takeable'}`
     );
-    return;
   }
 
   if (!externalTakeQuoteEvaluation.quoteAmountRaw) {
-    logger.error(
+    return failFactoryTakeExecution(
       `Factory: Missing raw quote amount for ${pool.name}/${borrower}; refusing to send an unbounded swap`
     );
-    return;
   }
 
-  if (poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3) {
-    await takeWithUniswapV3Factory({
-      pool,
-      poolConfig,
-      signer,
-      liquidation,
-      quoteEvaluation: externalTakeQuoteEvaluation,
-      config,
-    });
-  } else if (poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP) {
-  await takeWithSushiSwapFactory({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation: externalTakeQuoteEvaluation,
-    config,
-  });
-  } else if (poolConfig.take.liquiditySource === LiquiditySource.CURVE) {
-  await takeWithCurveFactory({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation: externalTakeQuoteEvaluation,
-    config,
-  });
-  } else {
-    logger.error(`Factory: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`);
+  try {
+    if (poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3) {
+      await takeWithUniswapV3Factory({
+        pool,
+        poolConfig,
+        signer,
+        liquidation,
+        quoteEvaluation: externalTakeQuoteEvaluation,
+        config,
+      });
+      return true;
+    }
+
+    if (poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP) {
+      await takeWithSushiSwapFactory({
+        pool,
+        poolConfig,
+        signer,
+        liquidation,
+        quoteEvaluation: externalTakeQuoteEvaluation,
+        config,
+      });
+      return true;
+    }
+
+    if (poolConfig.take.liquiditySource === LiquiditySource.CURVE) {
+      await takeWithCurveFactory({
+        pool,
+        poolConfig,
+        signer,
+        liquidation,
+        quoteEvaluation: externalTakeQuoteEvaluation,
+        config,
+      });
+      return true;
+    }
+
+    return failFactoryTakeExecution(
+      `Factory: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`
+    );
+  } catch (error) {
+    logger.error(
+      `Factory take execution failed for ${pool.name}/${borrower}`,
+      error
+    );
+    return false;
   }
 }
 

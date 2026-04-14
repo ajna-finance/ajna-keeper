@@ -106,13 +106,15 @@ const GET_LOANS_PAGE_SIZE = 1000;
 const GET_LOANS_MAX_PAGES = 100;
 
 const getLoansQuery = gql`
-  query GetLoans($poolId: String!, $first: Int!, $skip: Int!) {
+  query GetLoans($poolId: String!, $first: Int!, $afterBorrower: String!) {
     loans(
       first: $first
-      skip: $skip
+      orderBy: borrower
+      orderDirection: asc
       where: {
         inLiquidation: false
         poolAddress: $poolId
+        borrower_gt: $afterBorrower
       }
     ) {
       borrower
@@ -128,18 +130,19 @@ async function getLoans(
 ) {
   const loans: GetLoanResponse['loans'] = [];
   const poolId = poolAddress.toLowerCase();
+  let afterBorrower = '';
 
   for (let page = 0; page < GET_LOANS_MAX_PAGES; page++) {
     const pageResult = await requestSubgraph<
       GetLoanResponse,
-      { poolId: string; first: number; skip: number }
+      { poolId: string; first: number; afterBorrower: string }
     >({
       subgraphUrl,
       document: getLoansQuery,
       variables: {
         poolId,
         first: GET_LOANS_PAGE_SIZE,
-        skip: page * GET_LOANS_PAGE_SIZE,
+        afterBorrower,
       },
       options,
     });
@@ -157,6 +160,8 @@ async function getLoans(
     if (pageResult.loans.length < GET_LOANS_PAGE_SIZE) {
       break;
     }
+
+    afterBorrower = pageResult.loans[pageResult.loans.length - 1].borrower.toLowerCase();
   }
 
   return { loans };

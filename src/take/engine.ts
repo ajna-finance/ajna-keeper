@@ -33,7 +33,7 @@ export interface ExternalTakeAdapter<
     poolConfig: TPoolConfig;
     liquidation: TakeLiquidationPlan;
     config: TExecutionConfig;
-  }) => Promise<void>;
+  }) => Promise<boolean | void>;
 }
 
 interface TakeApprovalResult {
@@ -362,7 +362,7 @@ export async function executeTakeDecision<
   }
 
   if (approvedTake && externalTakeAdapter.executeExternalTake) {
-    await externalTakeAdapter.executeExternalTake({
+    const externalTakeSucceeded = await externalTakeAdapter.executeExternalTake({
       pool,
       signer,
       poolConfig,
@@ -377,6 +377,11 @@ export async function executeTakeDecision<
       },
       config: externalExecutionConfig,
     });
+    if (externalTakeSucceeded === false) {
+      throw new Error(
+        `External take execution failed for ${pool.name}/${decision.borrower}`
+      );
+    }
     executedTake = true;
 
     if (approvedArbTake) {

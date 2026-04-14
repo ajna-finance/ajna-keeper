@@ -202,13 +202,24 @@ async function createPrivateRpcTakeWriteTransport(params: {
       const response = await writeSigner.sendTransaction(txRequest);
       return {
         txHash: response.hash,
-        wait: async () =>
-          await waitForReceiptWithTimeout({
-            txHash: response.hash,
-            wait: () => response.wait(),
-            timeoutMs:
-              params.receiptTimeoutMs ?? DEFAULT_TAKE_RECEIPT_TIMEOUT_MS,
-          }),
+        wait: async () => {
+          try {
+            return await waitForReceiptWithTimeout({
+              txHash: response.hash,
+              wait: () => response.wait(),
+              timeoutMs:
+                params.receiptTimeoutMs ?? DEFAULT_TAKE_RECEIPT_TIMEOUT_MS,
+            });
+          } catch (error) {
+            throw new NonceConsumedTransactionError(
+              `Private RPC submission ${response.hash} was accepted but receipt wait failed`,
+              {
+                txHash: response.hash,
+                cause: error,
+              }
+            );
+          }
+        },
       };
     },
   };
@@ -243,6 +254,10 @@ async function createRelayTakeWriteTransport(params: {
     submitTransaction: async (
       txRequest: providers.TransactionRequest
     ): Promise<TakeWriteSubmission> => {
+      if (txRequest.nonce === undefined) {
+        throw new Error('Relay take submission requires an explicit nonce');
+      }
+
       const populatedTx = await params.signer.populateTransaction({
         ...txRequest,
         chainId: params.expectedChainId,
@@ -357,6 +372,27 @@ function buildRelayRequestBody(
   };
 }
 
+function isValidRelayTxHash(value: string): boolean {
+  return /^0x[a-fA-F0-9]{64}$/.test(value);
+}
+
+function normalizeValidatedRelayTxHash(
+  txHash: string,
+  fallbackTxHash: string
+): string {
+  if (!isValidRelayTxHash(txHash)) {
+    throw new Error(`Relay submission returned invalid tx hash: ${txHash}`);
+  }
+
+  if (txHash.toLowerCase() !== fallbackTxHash.toLowerCase()) {
+    throw new Error(
+      `Relay submission returned mismatched tx hash ${txHash}; expected ${fallbackTxHash}`
+    );
+  }
+
+  return fallbackTxHash;
+}
+
 function extractRelayTxHash(responseData: unknown, fallbackTxHash: string): string {
   if (
     responseData &&
@@ -376,20 +412,20 @@ function extractRelayTxHash(responseData: unknown, fallbackTxHash: string): stri
       ? (responseData as { result?: unknown }).result
       : undefined;
 
-  if (typeof result === 'string' && result.startsWith('0x')) {
-    return result;
+  if (typeof result === 'string') {
+    return normalizeValidatedRelayTxHash(result, fallbackTxHash);
   }
 
   if (result && typeof result === 'object') {
     const txHash = (result as { txHash?: unknown; hash?: unknown }).txHash;
-    if (typeof txHash === 'string' && txHash.startsWith('0x')) {
-      return txHash;
+    if (typeof txHash === 'string') {
+      return normalizeValidatedRelayTxHash(txHash, fallbackTxHash);
     }
     const hash = (result as { txHash?: unknown; hash?: unknown }).hash;
-    if (typeof hash === 'string' && hash.startsWith('0x')) {
-      return hash;
+    if (typeof hash === 'string') {
+      return normalizeValidatedRelayTxHash(hash, fallbackTxHash);
     }
   }
 
-  return fallbackTxHash;
+  throw new Error('Relay submission did not return a valid tx hash');
 }

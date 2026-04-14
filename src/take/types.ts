@@ -1,5 +1,5 @@
 import { BigNumber } from 'ethers';
-import { TakeSettings } from '../config';
+import { CurvePoolType, TakeSettings } from '../config';
 
 export interface TakeActionConfig {
   name?: string;
@@ -19,6 +19,12 @@ export interface ExternalTakeQuoteEvaluation {
   quoteAmount?: number;
   quoteAmountRaw?: BigNumber;
   collateralAmount?: number;
+  curvePool?: {
+    address: string;
+    poolType: CurvePoolType;
+    tokenInIndex: number;
+    tokenOutIndex: number;
+  };
   reason?: string;
 }
 
