@@ -220,6 +220,34 @@ describe('NonceTracker', () => {
     expect(nextNonce).to.equal(11);
   });
 
+  it('reconciles a consumed nonce to the highest pending nonce across readers', async () => {
+    sinon.stub(signer, 'getTransactionCount').resolves(10);
+
+    await NonceTracker.getNonce(signer);
+
+    const secondarySigner = {
+      getTransactionCount: sinon.stub().resolves(14),
+    } as unknown as Signer;
+    NonceTracker.registerNonceReaders(await signer.getAddress(), [
+      signer,
+      secondarySigner,
+    ]);
+
+    try {
+      await NonceTracker.queueTransaction(signer, async () => {
+        throw new NonceConsumedTransactionError(
+          'accepted private submission timed out'
+        );
+      });
+      expect.fail('Should have thrown');
+    } catch (error) {
+      // expected
+    }
+
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(14);
+  });
+
   it('persists a durable relay nonce floor across tracker resets', async () => {
     sinon.stub(signer, 'getTransactionCount').resolves(10);
     sinon.stub(signer, 'getChainId').resolves(1);

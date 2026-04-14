@@ -72,7 +72,14 @@ export function resolveTakeWriteTransport(
 export function resolveTakeWriteConfig(
   config: Pick<KeeperConfig, 'takeWrite' | 'takeWriteRpcUrl'>
 ): TakeWriteConfig | undefined {
-  if (config.takeWrite && config.takeWriteRpcUrl) {
+  const hasTakeWriteRpcUrl =
+    Object.prototype.hasOwnProperty.call(config, 'takeWriteRpcUrl') &&
+    (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl !== undefined;
+  const shorthandRpcUrl = hasTakeWriteRpcUrl
+    ? (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl
+    : undefined;
+
+  if (config.takeWrite && hasTakeWriteRpcUrl) {
     throw new Error(
       'Configure only one of takeWrite or takeWriteRpcUrl, not both'
     );
@@ -82,10 +89,17 @@ export function resolveTakeWriteConfig(
     return config.takeWrite;
   }
 
-  if (config.takeWriteRpcUrl) {
+  if (hasTakeWriteRpcUrl) {
+    if (
+      typeof shorthandRpcUrl !== 'string' ||
+      shorthandRpcUrl.trim().length === 0
+    ) {
+      throw new Error('takeWriteRpcUrl cannot be blank');
+    }
+
     return {
       mode: TakeWriteTransportMode.PRIVATE_RPC,
-      rpcUrl: config.takeWriteRpcUrl,
+      rpcUrl: shorthandRpcUrl.trim(),
     };
   }
 

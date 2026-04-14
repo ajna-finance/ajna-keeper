@@ -175,9 +175,7 @@ export class NonceTracker {
       } catch (txError) {
         logger.error(`Transaction with nonce ${nonce} failed: ${txError}`);
         if (isNonceConsumedTransactionError(txError)) {
-          logger.warn(
-            `Preserving consumed nonce ${nonce} for ${address}${txError.txHash ? ` after accepted submission ${txError.txHash}` : ''}`
-          );
+          await this.reconcileConsumedNonce(signer, address, nonce, txError.txHash);
           throw txError;
         }
         await this.handleFailedNonce(signer, address, nonce);
@@ -230,6 +228,31 @@ export class NonceTracker {
       // A skipped nonce is recoverable (next cycle resyncs), but a reused
       // nonce after broadcast risks replacing a live transaction.
       logger.warn(`Failed to check pending nonce for ${address}, preserving incremented nonce: ${rpcError}`);
+    }
+  }
+
+
+  private async reconcileConsumedNonce(
+    signer: Signer,
+    address: string,
+    nonce: number,
+    txHash?: string
+  ) {
+    const preservedNextNonce = Math.max(this.nonces.get(address) ?? nonce + 1, nonce + 1);
+
+    try {
+      const pendingNonce = await this.getPendingNonce(signer, address);
+      const reconciledNonce = Math.max(preservedNextNonce, pendingNonce);
+      this.nonces.set(address, reconciledNonce);
+
+      logger.warn(
+        `Preserving consumed nonce ${nonce} for ${address}${txHash ? ` after accepted submission ${txHash}` : ''}; reconciled next nonce to ${reconciledNonce}`
+      );
+    } catch (rpcError) {
+      this.nonces.set(address, preservedNextNonce);
+      logger.warn(
+        `Failed to reconcile consumed nonce ${nonce} for ${address}${txHash ? ` after accepted submission ${txHash}` : ''}, preserving next nonce ${preservedNextNonce}: ${rpcError}`
+      );
     }
   }
 

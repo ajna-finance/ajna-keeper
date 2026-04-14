@@ -515,10 +515,26 @@ export function validateAutoDiscoverConfig(
 }
 
 export function validateTakeWriteConfig(config: KeeperConfig): void {
-  if (config.takeWrite && config.takeWriteRpcUrl) {
+  const hasTakeWriteRpcUrl =
+    Object.prototype.hasOwnProperty.call(config, 'takeWriteRpcUrl') &&
+    (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl !== undefined;
+  const shorthandRpcUrl = hasTakeWriteRpcUrl
+    ? (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl
+    : undefined;
+
+  if (config.takeWrite && hasTakeWriteRpcUrl) {
     throw new Error(
       'KeeperConfig: configure only one of takeWrite or takeWriteRpcUrl'
     );
+  }
+
+  if (hasTakeWriteRpcUrl) {
+    if (
+      typeof shorthandRpcUrl !== 'string' ||
+      shorthandRpcUrl.trim().length === 0
+    ) {
+      throw new Error('KeeperConfig: takeWriteRpcUrl cannot be blank');
+    }
   }
 
   if (!config.takeWrite) {

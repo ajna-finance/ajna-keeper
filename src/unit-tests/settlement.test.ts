@@ -555,6 +555,55 @@ describe('Settlement Module Tests', () => {
       expect(mockPool.contract.auctionInfo.called).to.be.false;
     });
 
+
+    it('falls back to the on-chain kickTime when subgraph kickTime is malformed', async () => {
+      const onchainKickTime = Math.floor(Date.now() / 1000) - 7200;
+
+      getUnsettledAuctionsStub.resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xFallbackBorrower',
+            kickTime: '',
+            debtRemaining: '2.0',
+            collateralRemaining: '0.0',
+            neutralPrice: '0.05',
+            debt: '2.0',
+            collateral: '0.0',
+          },
+        ],
+      });
+
+      mockPool.contract.auctionInfo.withArgs('0xFallbackBorrower').resolves({
+        kickTime_: BigNumber.from(onchainKickTime),
+        debtToCollateral_: BigNumber.from('2000000000000000000'),
+      });
+
+      mockPool.getLiquidation.withArgs('0xFallbackBorrower').returns({
+        getStatus: async () => ({
+          collateral: BigNumber.from(0),
+          price: BigNumber.from('1000000000000'),
+        }),
+      });
+
+      mockPool.contract.callStatic.settle
+        .withArgs('0xFallbackBorrower', 5)
+        .resolves();
+
+      const handler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      const result = await handler.findSettleableAuctions();
+
+      expect(result).to.have.length(1);
+      expect(result[0].borrower).to.equal('0xFallbackBorrower');
+      expect(result[0].kickTime).to.equal(onchainKickTime * 1000);
+      expect(mockPool.contract.auctionInfo.calledOnceWith('0xFallbackBorrower')).to.be.true;
+    });
+
     it('should handle subgraph network errors gracefully', async () => {
       // Setup: Mock subgraph to return network error
       getUnsettledAuctionsStub.rejects(new Error('ECONNRESET: Network error'));

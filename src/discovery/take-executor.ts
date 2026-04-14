@@ -68,6 +68,7 @@ interface DiscoveredTakeTargetStats {
   approvedArbTakeDecisions: number;
   evaluationSkips: number;
   revalidationSkips: number;
+  executionSkips: number;
   gasPolicyRejects: number;
   profitFloorRejects: number;
   arbProfitUnavailableRejects: number;
@@ -110,7 +111,7 @@ function logDiscoveredTakeTargetSummary(params: {
   stats: DiscoveredTakeTargetStats;
 }): void {
   logger.info(
-    `Discovered take target summary: pool=${params.pool.poolAddress} name="${params.target.name}" source=${params.target.take.liquiditySource ?? 'none'} dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} approvedTakeDecisions=${params.stats.approvedTakeDecisions} approvedArbTakeDecisions=${params.stats.approvedArbTakeDecisions} evaluationSkips=${params.stats.evaluationSkips} revalidationSkips=${params.stats.revalidationSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} profitFloorRejects=${params.stats.profitFloorRejects} arbProfitUnavailableRejects=${params.stats.arbProfitUnavailableRejects} executedExternalTakes=${params.stats.executedExternalTakes} executedArbTakes=${params.stats.executedArbTakes}`
+    `Discovered take target summary: pool=${params.pool.poolAddress} name="${params.target.name}" source=${params.target.take.liquiditySource ?? 'none'} dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} approvedTakeDecisions=${params.stats.approvedTakeDecisions} approvedArbTakeDecisions=${params.stats.approvedArbTakeDecisions} evaluationSkips=${params.stats.evaluationSkips} revalidationSkips=${params.stats.revalidationSkips} executionSkips=${params.stats.executionSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} profitFloorRejects=${params.stats.profitFloorRejects} arbProfitUnavailableRejects=${params.stats.arbProfitUnavailableRejects} executedExternalTakes=${params.stats.executedExternalTakes} executedArbTakes=${params.stats.executedArbTakes}`
   );
 }
 
@@ -132,6 +133,7 @@ export async function handleDiscoveredTakeTarget(
     approvedArbTakeDecisions: 0,
     evaluationSkips: 0,
     revalidationSkips: 0,
+    executionSkips: 0,
     gasPolicyRejects: 0,
     profitFloorRejects: 0,
     arbProfitUnavailableRejects: 0,
@@ -411,6 +413,8 @@ export async function handleDiscoveredTakeTarget(
       onSkip: ({ candidate, stage, reason }) => {
         if (stage === 'revalidation') {
           stats.revalidationSkips += 1;
+        } else if (stage === 'execution') {
+          stats.executionSkips += 1;
         } else {
           stats.evaluationSkips += 1;
         }

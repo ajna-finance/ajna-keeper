@@ -1025,6 +1025,99 @@ describe('Discovery Handlers', () => {
     expect(summaryLog).to.include('candidates=1');
     expect(summaryLog).to.include('approvedTakeDecisions=1');
     expect(summaryLog).to.include('revalidationSkips=1');
+    expect(summaryLog).to.include('executionSkips=0');
+    expect(summaryLog).to.include('executedExternalTakes=0');
+  });
+
+  it('logs execution-stage discovered take failures separately from evaluation skips', async () => {
+    sinon.stub(takeModule, 'takeLiquidation').rejects(new Error('execution boom'));
+    sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
+      isTakeable: true,
+      quoteAmount: 10,
+      collateralAmount: 1,
+      marketPrice: 10,
+      takeablePrice: 12,
+    });
+    const loggerInfoStub = sinon.stub(logger, 'info');
+
+    const getStatusStub = sinon.stub();
+    getStatusStub
+      .onCall(0)
+      .resolves({
+        collateral: ethers.utils.parseEther('1'),
+        price: ethers.utils.parseEther('1'),
+      })
+      .onCall(1)
+      .resolves({
+        collateral: ethers.utils.parseEther('1'),
+        price: ethers.utils.parseEther('1'),
+      });
+
+    const pool = {
+      name: 'Execution Failure Pool',
+      poolAddress: '0x3434343434343434343434343434343434343434',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+      },
+      getChainId: sinon.stub().resolves(1),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerExecution',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: true,
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(),
+    });
+
+    const summaryLog = loggerInfoStub
+      .getCalls()
+      .map((call) => call.args[0])
+      .find(
+        (message: any) =>
+          typeof message === 'string' &&
+          message.includes('Discovered take target summary:')
+      );
+    expect(summaryLog).to.be.a('string');
+    expect(summaryLog).to.include('evaluationSkips=0');
+    expect(summaryLog).to.include('revalidationSkips=0');
+    expect(summaryLog).to.include('executionSkips=1');
     expect(summaryLog).to.include('executedExternalTakes=0');
   });
 

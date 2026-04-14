@@ -44,6 +44,14 @@ describe('take write transport', () => {
     });
   });
 
+  it('rejects a blank legacy takeWriteRpcUrl shorthand', () => {
+    expect(() =>
+      resolveTakeWriteConfig({
+        takeWriteRpcUrl: '   ',
+      } as any)
+    ).to.throw('takeWriteRpcUrl cannot be blank');
+  });
+
   it('rejects unknown take write transport modes', async () => {
     const signer = Wallet.createRandom();
 
