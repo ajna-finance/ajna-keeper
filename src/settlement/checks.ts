@@ -66,6 +66,7 @@ export async function needsSettlement(params: {
   pool: FungiblePool;
   signer: Signer;
   borrower: string;
+  maxIterations?: number;
 }): Promise<SettlementNeedResult> {
   try {
     const auctionInfo = await params.pool.contract.auctionInfo(params.borrower);
@@ -107,7 +108,10 @@ export async function needsSettlement(params: {
     if (collateralAmount.eq(0) && debt.gt(0)) {
       try {
         const poolWithSigner = params.pool.contract.connect(params.signer);
-        await poolWithSigner.callStatic.settle(params.borrower, 10);
+        await poolWithSigner.callStatic.settle(
+          params.borrower,
+          params.maxIterations ?? 10
+        );
 
         return {
           needs: true,

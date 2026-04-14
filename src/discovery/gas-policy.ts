@@ -47,6 +47,36 @@ const WRAPPED_NATIVE_TOKEN_SYMBOLS = [
   'wone',
 ];
 
+function hasConfiguredLiquiditySource(
+  config: DiscoveryExecutionConfig,
+  liquiditySource: LiquiditySource
+): boolean {
+  switch (liquiditySource) {
+    case LiquiditySource.ONEINCH:
+      return !!config.oneInchRouters && Object.keys(config.oneInchRouters).length > 0;
+    case LiquiditySource.UNISWAPV3:
+      return !!(
+        config.universalRouterOverrides?.universalRouterAddress &&
+        config.universalRouterOverrides.poolFactoryAddress &&
+        config.universalRouterOverrides.wethAddress
+      );
+    case LiquiditySource.SUSHISWAP:
+      return !!(
+        config.sushiswapRouterOverrides?.swapRouterAddress &&
+        config.sushiswapRouterOverrides.factoryAddress &&
+        config.sushiswapRouterOverrides.wethAddress
+      );
+    case LiquiditySource.CURVE:
+      return !!(
+        config.curveRouterOverrides?.poolConfigs &&
+        Object.keys(config.curveRouterOverrides.poolConfigs).length > 0 &&
+        config.curveRouterOverrides.wethAddress
+      );
+    default:
+      return false;
+  }
+}
+
 export function createDiscoveryTransportsForConfig(
   config: DiscoveryExecutionConfig,
   signer: Signer
@@ -128,13 +158,26 @@ export function resolveWrappedNativeAddress(
 function resolveGasQuoteSource(
   config: DiscoveryExecutionConfig
 ): LiquiditySource | undefined {
-  return (
-    config.discoveredDefaults?.take?.liquiditySource ??
-    (config.oneInchRouters ? LiquiditySource.ONEINCH : undefined) ??
-    (config.universalRouterOverrides ? LiquiditySource.UNISWAPV3 : undefined) ??
-    (config.sushiswapRouterOverrides ? LiquiditySource.SUSHISWAP : undefined) ??
-    (config.curveRouterOverrides ? LiquiditySource.CURVE : undefined)
-  );
+  const preferredSource = config.discoveredDefaults?.take?.liquiditySource;
+  if (
+    preferredSource !== undefined &&
+    hasConfiguredLiquiditySource(config, preferredSource)
+  ) {
+    return preferredSource;
+  }
+
+  for (const candidate of [
+    LiquiditySource.ONEINCH,
+    LiquiditySource.UNISWAPV3,
+    LiquiditySource.SUSHISWAP,
+    LiquiditySource.CURVE,
+  ]) {
+    if (hasConfiguredLiquiditySource(config, candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
 }
 
 async function quoteTokensByLiquiditySource(params: {

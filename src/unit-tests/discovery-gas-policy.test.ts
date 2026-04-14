@@ -71,6 +71,49 @@ describe('Discovery Gas Policy', () => {
     expect(rpcCache.gasQuoteConversions.size).to.equal(1);
   });
 
+  it('falls back when oneInchRouters is present but empty', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        oneInchRouters: {},
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        gasQuoteConversions: new Map<string, BigNumber | null>(),
+      },
+    });
+
+    expect(result.approved).to.be.false;
+    expect(result.reason).to.equal(
+      'no liquidity source available for gas cost conversion'
+    );
+  });
+
   it('recognizes wrapped native aliases from tokenAddresses for quote-denominated gas conversion', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const oneInchQuoteStub = sinon

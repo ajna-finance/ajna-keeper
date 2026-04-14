@@ -201,6 +201,34 @@ describe('Settlement Module Tests', () => {
       expect(result.reason).to.include('collateral');
     });
 
+    it('uses the configured maxIterations for settlement feasibility checks', async () => {
+      mockPool.contract.auctionInfo.resolves({
+        kickTime_: BigNumber.from(Math.floor(Date.now() / 1000)),
+        debtToCollateral_: BigNumber.from('2000000000000000000'),
+      });
+
+      mockPool.getLiquidation.returns({
+        getStatus: async () => ({
+          collateral: BigNumber.from(0),
+          price: BigNumber.from('1000000000000'),
+        }),
+      });
+
+      mockPool.contract.callStatic.settle.resolves();
+
+      const handler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      await handler.needsSettlement('0xBorrower123');
+
+      expect(mockPool.contract.callStatic.settle.calledWith('0xBorrower123', 5)).to.be
+        .true;
+    });
+
     it('should return true for bad debt scenario (collateral=0, debt>0)', async () => {
       // Setup: Mock auction with bad debt (no collateral, has debt)
       mockPool.contract.auctionInfo.resolves({
@@ -447,8 +475,8 @@ describe('Settlement Module Tests', () => {
       });
 
       // Mock settlement feasibility checks
-      settleCallStub.withArgs('0xBorrower1', 10).rejects(new Error('Has collateral'));
-      settleCallStub.withArgs('0xBorrower2', 10).resolves(); // Should succeed
+      settleCallStub.withArgs('0xBorrower1', 5).rejects(new Error('Has collateral'));
+      settleCallStub.withArgs('0xBorrower2', 5).resolves(); // Should succeed
 
       // Apply mocks to pool
       mockPool.contract.auctionInfo = auctionInfoStub;
@@ -573,7 +601,7 @@ describe('Settlement Module Tests', () => {
       });
 
       mockPool.contract.callStatic.settle
-        .withArgs('0xBorrower2', 10)
+        .withArgs('0xBorrower2', 5)
         .resolves();
 
       const handler = new SettlementHandler(
@@ -961,7 +989,7 @@ describe('Settlement Module Tests', () => {
       });
 
       // Mock settlement feasibility and execution
-      mockPool.contract.callStatic.settle.withArgs('0xBorrower1', 10).resolves();
+      mockPool.contract.callStatic.settle.withArgs('0xBorrower1', 5).resolves();
       poolSettleStub.resolves();
 
       // Mock bonds to be unlocked after settlement
@@ -1090,7 +1118,7 @@ describe('Settlement Module Tests', () => {
           }),
         });
         
-        settleCallStub.withArgs(borrower, 10).resolves();
+        settleCallStub.withArgs(borrower, 5).resolves();
       });
 
       // Apply stubs to pool

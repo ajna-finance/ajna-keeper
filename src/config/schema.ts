@@ -279,6 +279,7 @@ export interface TakeWriteRelayConfig {
   sendMethod?: string;
   headers?: Record<string, string>;
   maxBlockNumberOffset?: number;
+  requestTimeoutMs?: number;
   receiptTimeoutMs?: number;
 }
 

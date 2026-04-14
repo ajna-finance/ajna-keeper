@@ -1247,7 +1247,7 @@ describe('Run Loop Discovery Integration', () => {
     expect(discoveryStub.callCount).to.equal(2);
   });
 
-  it('retries discovered settlement refresh immediately after a transient discovery failure', async () => {
+  it('continues manual settlement targets and retries discovery after a transient snapshot failure', async () => {
     let nowMs = 0;
     sinon.stub(Date, 'now').callsFake(() => nowMs);
     const handleSettlementsStub = sinon
@@ -1256,6 +1256,7 @@ describe('Run Loop Discovery Integration', () => {
     const handleDiscoveredSettlementTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
       .resolves();
+    const loggerWarnStub = sinon.stub(logger, 'warn');
     const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions');
     discoveryStub.onFirstCall().rejects(new Error('temporary discovery outage'));
     discoveryStub.onSecondCall().resolves({
@@ -1334,19 +1335,19 @@ describe('Run Loop Discovery Integration', () => {
       discoverySnapshotState: {},
     });
 
-    try {
-      await discoveryRuntime.runSettlementCycle();
-      expect.fail('Expected settlement discovery failure');
-    } catch (error) {
-      expect(String(error)).to.include('temporary discovery outage');
-    }
+    await discoveryRuntime.runSettlementCycle();
 
     nowMs = 1_000;
     await discoveryRuntime.runSettlementCycle();
 
-    expect(handleSettlementsStub.callCount).to.equal(1);
+    expect(handleSettlementsStub.callCount).to.equal(2);
     expect(handleDiscoveredSettlementTargetStub.callCount).to.equal(1);
     expect(discoveryStub.callCount).to.equal(2);
+    expect(
+      loggerWarnStub.calledWithMatch(
+        sinon.match('Failed to refresh settlement discovery snapshot')
+      )
+    ).to.be.true;
   });
 
   it('continues manual settlement targets when discovery rpc cache creation fails', async () => {
@@ -1492,11 +1493,59 @@ describe('Run Loop Discovery Integration', () => {
     expect(summaryLog).to.include('targetFailures=0');
   });
 
-  it('logs a take cycle failure summary when snapshot refresh fails', async () => {
-    const loggerErrorStub = sinon.stub(logger, 'error');
+  it('continues manual take targets when snapshot refresh fails', async () => {
+    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
+    const loggerWarnStub = sinon.stub(logger, 'warn');
     sinon
       .stub(subgraph, 'getChainwideLiquidationAuctions')
       .rejects(new Error('subgraph unavailable'));
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Take Pool',
+          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
+        },
+      ],
+      autoDiscover: {
+        enabled: true,
+        take: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      config,
+      poolMap: new Map([[config.pools[0].address, {
+        name: 'Manual Take Pool',
+        poolAddress: config.pools[0].address,
+      } as any]]),
+      discoverySnapshotState: {},
+    }).runTakeCycle();
+
+    expect(handleTakesStub.calledOnce).to.be.true;
+    expect(
+      loggerWarnStub.calledWithMatch(
+        sinon.match('Failed to refresh take discovery snapshot')
+      )
+    ).to.be.true;
+  });
+
+  it('does not treat snapshot refresh failures as take loop crashes', async () => {
+    sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .rejects(new Error('temporary discovery outage'));
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
@@ -1511,39 +1560,6 @@ describe('Run Loop Discovery Integration', () => {
         },
       },
     };
-
-    await expect(
-      createTestDiscoveryRuntime({
-        config,
-      }).runTakeCycle()
-    ).to.be.rejectedWith('subgraph unavailable');
-
-    const failureLog = loggerErrorStub
-      .getCalls()
-      .map((call) => call.args[0])
-      .find(
-        (message: any) =>
-          typeof message === 'string' &&
-          message.includes('Discovery take cycle failed:')
-      );
-    expect(failureLog).to.be.a('string');
-    expect(failureLog).to.include('phase=snapshot');
-    expect(failureLog).to.include('snapshotRefreshed=false');
-  });
-
-  it('recovers take loop iterations from pre-target discovery failures', async () => {
-    const discoveryError = new Error('temporary discovery outage');
-    sinon
-      .stub(subgraph, 'getChainwideLiquidationAuctions')
-      .rejects(discoveryError);
-
-    const config: KeeperConfig = {
-      ...BASE_CONFIG,
-      autoDiscover: {
-        enabled: true,
-        take: true,
-      },
-    };
     const result = await runTakeLoopIteration({
       config,
       signer: {} as any,
@@ -1555,8 +1571,8 @@ describe('Run Loop Discovery Integration', () => {
     });
 
     expect(result).to.deep.equal({
-      delaySeconds: 30,
-      recovered: true,
+      delaySeconds: 1,
+      recovered: false,
     });
   });
 });

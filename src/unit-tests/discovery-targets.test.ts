@@ -373,6 +373,99 @@ describe('Discovery Target Resolution', () => {
     expect(targets).to.have.length(2);
   });
 
+  it('preserves negative signs when ranking discovered take candidates', async () => {
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        ...BASE_CONFIG.autoDiscover!,
+        take: {
+          enabled: true,
+          takeQuoteBudgetPerRun: 1,
+          maxPoolsPerRun: 1,
+        },
+        settlement: false,
+      },
+    };
+
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerNegative',
+          kickTime: '1',
+          debtRemaining: '1',
+          collateralRemaining: '5',
+          neutralPrice: '-2',
+          debt: '1',
+          collateral: '5',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+        {
+          borrower: '0xBorrowerPositive',
+          kickTime: '2',
+          debtRemaining: '3',
+          collateralRemaining: '4',
+          neutralPrice: '1',
+          debt: '3',
+          collateral: '4',
+          pool: { id: '0x2222222222222222222222222222222222222222' },
+        },
+      ],
+    });
+
+    const targets = await buildDiscoveredTakeTargets(config);
+
+    expect(targets).to.have.length(1);
+    expect(targets[0].poolAddress).to.equal(
+      '0x2222222222222222222222222222222222222222'
+    );
+  });
+
+  it('treats zero kickTime as too new to bypass settlement age filtering', async () => {
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        ...BASE_CONFIG.autoDiscover!,
+        take: false,
+        settlement: {
+          enabled: true,
+          maxPoolsPerRun: 1,
+        },
+      },
+    };
+
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerZeroKick',
+          kickTime: '0',
+          debtRemaining: '10',
+          collateralRemaining: '0',
+          neutralPrice: '1',
+          debt: '10',
+          collateral: '0',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+        {
+          borrower: '0xBorrowerOldKick',
+          kickTime: '1',
+          debtRemaining: '10',
+          collateralRemaining: '0',
+          neutralPrice: '1',
+          debt: '10',
+          collateral: '0',
+          pool: { id: '0x2222222222222222222222222222222222222222' },
+        },
+      ],
+    });
+
+    const targets = await buildDiscoveredSettlementTargets(config);
+
+    expect(targets).to.have.length(1);
+    expect(targets[0].poolAddress).to.equal(
+      '0x2222222222222222222222222222222222222222'
+    );
+  });
+
   it('uses precise decimal ranking when enforcing discovered take quote budgets', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,

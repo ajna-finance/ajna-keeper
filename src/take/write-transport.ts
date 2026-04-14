@@ -12,6 +12,7 @@ import { JsonRpcProvider } from '../provider';
 import { NonceConsumedTransactionError, NonceTracker } from '../nonce';
 
 const DEFAULT_RELAY_SEND_METHOD = 'eth_sendPrivateTransaction';
+const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_RELAY_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET = 25;
 const DEFAULT_TAKE_RECEIPT_TIMEOUT_MS = 120_000;
@@ -272,9 +273,7 @@ async function createRelayTakeWriteTransport(params: {
           ...(params.relay.headers ?? {}),
         },
         timeout:
-          params.relay.receiptTimeoutMs ??
-          params.defaultReceiptTimeoutMs ??
-          DEFAULT_RELAY_RECEIPT_TIMEOUT_MS,
+          params.relay.requestTimeoutMs ?? DEFAULT_RELAY_REQUEST_TIMEOUT_MS,
       });
       const txHash = extractRelayTxHash(response.data, localTxHash);
 

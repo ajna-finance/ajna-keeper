@@ -226,8 +226,10 @@ function isPositiveDecimalString(value: string | undefined): boolean {
 }
 
 function multiplyIntegerStrings(left: string, right: string): string {
-  const leftUnsigned = normalizeIntegerString(left.startsWith('-') ? left.slice(1) : left);
-  const rightUnsigned = normalizeIntegerString(right.startsWith('-') ? right.slice(1) : right);
+  const leftNegative = left.startsWith('-');
+  const rightNegative = right.startsWith('-');
+  const leftUnsigned = normalizeIntegerString(leftNegative ? left.slice(1) : left);
+  const rightUnsigned = normalizeIntegerString(rightNegative ? right.slice(1) : right);
   if (leftUnsigned === '0' || rightUnsigned === '0') {
     return '0';
   }
@@ -252,7 +254,8 @@ function multiplyIntegerStrings(left: string, right: string): string {
     }
   }
 
-  return normalizeIntegerString(digits.join(''));
+  const product = normalizeIntegerString(digits.join(''));
+  return leftNegative !== rightNegative ? `-${product}` : product;
 }
 
 function multiplyDecimalValues(left: DecimalValue, right: DecimalValue): DecimalValue {
@@ -346,10 +349,14 @@ function compareSettlementCandidates(
 }
 
 function hydrateCandidate(candidate: ChainwideLiquidationAuction): DiscoveredAuctionCandidate {
+  const parsedKickTime = Number(candidate.kickTime || '0');
   return {
     poolAddress: candidate.pool.id,
     borrower: candidate.borrower,
-    kickTime: Number(candidate.kickTime || '0') * 1000,
+    kickTime:
+      Number.isFinite(parsedKickTime) && parsedKickTime > 0
+        ? parsedKickTime * 1000
+        : Date.now(),
     debtRemaining: candidate.debtRemaining,
     collateralRemaining: candidate.collateralRemaining,
     neutralPrice: candidate.neutralPrice,

@@ -67,6 +67,7 @@ type EffectiveTargetIdentity =
 interface DiscoveryCycleSnapshotInfo {
   liquidationAuctions?: ChainwideLiquidationAuction[];
   snapshotRefreshed: boolean;
+  snapshotRefreshFailed?: boolean;
   snapshotAgeMs?: number;
 }
 
@@ -132,46 +133,79 @@ async function refreshDiscoverySnapshot(
   return liquidationAuctions;
 }
 
+function getSnapshotAgeMs(
+  discoverySnapshotState?: DiscoverySnapshotState
+): number | undefined {
+  return discoverySnapshotState?.fetchedAt !== undefined
+    ? Math.max(0, Date.now() - discoverySnapshotState.fetchedAt)
+    : undefined;
+}
+
 async function getTakeCycleLiquidationAuctions(
   state: BoundDiscoveryRuntimeState
 ): Promise<DiscoveryCycleSnapshotInfo> {
-  const liquidationAuctions = shouldRefreshDiscoverySnapshotOnTakeCycle(state.config)
-    ? await refreshDiscoverySnapshot(state)
-    : undefined;
-  const snapshotAgeMs =
-    state.discoverySnapshotState?.fetchedAt !== undefined
-      ? Math.max(0, Date.now() - state.discoverySnapshotState.fetchedAt)
-      : undefined;
+  let liquidationAuctions: ChainwideLiquidationAuction[] | undefined;
+  let snapshotRefreshed = false;
+  let snapshotRefreshFailed = false;
+  if (shouldRefreshDiscoverySnapshotOnTakeCycle(state.config)) {
+    try {
+      liquidationAuctions = await refreshDiscoverySnapshot(state);
+      snapshotRefreshed = true;
+    } catch (error) {
+      const cachedAuctions =
+        state.discoverySnapshotState?.latestLiquidationAuctions;
+      logger.warn(
+        `Failed to refresh take discovery snapshot; continuing with ${cachedAuctions ? 'cached discovery data' : 'manual targets only'}`,
+        error
+      );
+      liquidationAuctions = cachedAuctions ?? [];
+      snapshotRefreshFailed = true;
+    }
+  }
   return {
     liquidationAuctions,
-    snapshotRefreshed: liquidationAuctions !== undefined,
-    snapshotAgeMs,
+    snapshotRefreshed,
+    snapshotRefreshFailed,
+    snapshotAgeMs: getSnapshotAgeMs(state.discoverySnapshotState),
   };
 }
 
 async function getSettlementCycleLiquidationAuctions(
   state: BoundDiscoveryRuntimeState
 ): Promise<DiscoveryCycleSnapshotInfo> {
-  const refreshedLiquidationAuctions =
+  let refreshedLiquidationAuctions: ChainwideLiquidationAuction[] | undefined;
+  let snapshotRefreshed = false;
+  let snapshotRefreshFailed = false;
+  if (
     shouldRefreshDiscoverySnapshotOnSettlementCycle(
       state.config,
       state.discoverySnapshotState
     )
-      ? await refreshDiscoverySnapshot(state)
-      : undefined;
+  ) {
+    try {
+      refreshedLiquidationAuctions = await refreshDiscoverySnapshot(state);
+      snapshotRefreshed = true;
+    } catch (error) {
+      const cachedAuctions =
+        state.discoverySnapshotState?.latestLiquidationAuctions;
+      logger.warn(
+        `Failed to refresh settlement discovery snapshot; continuing with ${cachedAuctions ? 'cached discovery data' : 'manual targets only'}`,
+        error
+      );
+      refreshedLiquidationAuctions = cachedAuctions ?? [];
+      snapshotRefreshFailed = true;
+    }
+  }
 
   const liquidationAuctions =
     refreshedLiquidationAuctions ??
     state.discoverySnapshotState?.latestLiquidationAuctions ??
     undefined;
-  const snapshotAgeMs =
-    state.discoverySnapshotState?.fetchedAt !== undefined
-      ? Math.max(0, Date.now() - state.discoverySnapshotState.fetchedAt)
-      : undefined;
   return {
     liquidationAuctions,
-    snapshotRefreshed: refreshedLiquidationAuctions !== undefined,
-    snapshotAgeMs,
+    snapshotRefreshed,
+    snapshotRefreshFailed,
+    snapshotAgeMs: getSnapshotAgeMs(state.discoverySnapshotState),
   };
 }
 
@@ -594,7 +628,7 @@ async function runSettlementDiscoveryCycle(
         )
       : getManualSettlementTargets(state.config);
     Object.assign(stats, summarizeCycleTargets(targets));
-    if (includeDiscoveredTargets) {
+    if (includeDiscoveredTargets && !snapshotInfo.snapshotRefreshFailed) {
       state.lastDiscoveredSettlementCycleStartedAtMs = Date.now();
     }
     phase = 'dispatch';

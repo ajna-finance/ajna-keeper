@@ -239,7 +239,7 @@ describe('take write transport', () => {
       },
     ]);
     expect(axiosPostStub.firstCall.args[2]).to.include({
-      timeout: 120000,
+      timeout: 15000,
     });
 
     NonceTracker.clearNonces();
@@ -337,6 +337,7 @@ describe('take write transport', () => {
           mode: TakeWriteTransportMode.RELAY,
           relay: {
             url: 'https://relay.example',
+            requestTimeoutMs: 750,
             receiptTimeoutMs: 1000,
           },
         },
@@ -352,7 +353,7 @@ describe('take write transport', () => {
 
     const axiosPostStub = axios.post as sinon.SinonStub;
     expect(axiosPostStub.firstCall.args[2]).to.include({
-      timeout: 1000,
+      timeout: 750,
     });
 
     try {

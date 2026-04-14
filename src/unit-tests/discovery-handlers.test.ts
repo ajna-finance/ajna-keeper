@@ -640,6 +640,83 @@ describe('Discovery Handlers', () => {
     expect(summaryLog).to.include('executedExternalTakes=0');
   });
 
+  it('skips malformed discovered settlement candidates without aborting the target', async () => {
+    const handleCandidateAuctionsStub = sinon
+      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .resolves();
+    sinon
+      .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
+      .resolves({ needs: true, reason: 'Bad debt detected' });
+
+    const pool = {
+      name: 'Settlement Pool',
+      poolAddress: '0x4545454545454545454545454545454545454545',
+      quoteAddress: '0x5555555555555555555555555555555555555555',
+      contract: {},
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+      },
+    };
+
+    await handleDiscoveredSettlementTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: false,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerBad',
+            kickTime: Date.now(),
+            debtRemaining: 'not-a-number',
+            collateralRemaining: '0',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '0',
+            heuristicScore: 1,
+          },
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerGood',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '0',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '0',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          settlement: true,
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+    });
+
+    expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
+    expect(handleCandidateAuctionsStub.firstCall.args[0]).to.have.length(1);
+    expect(handleCandidateAuctionsStub.firstCall.args[0][0].borrower).to.equal(
+      '0xBorrowerGood'
+    );
+  });
+
   it('logs a discovered settlement summary with skip counters', async () => {
     sinon
       .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')

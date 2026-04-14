@@ -60,13 +60,15 @@ async function ensureLoaded(): Promise<void> {
           normalized
         );
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
-      entries.clear();
-    } finally {
       loaded = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        entries.clear();
+        loaded = true;
+        return;
+      }
+      throw error;
+    } finally {
       loadPromise = undefined;
     }
   })();

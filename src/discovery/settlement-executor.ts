@@ -23,6 +23,7 @@ interface DiscoveredSettlementTargetStats {
   retryableNeedsSettlementFailures: number;
   incentiveSkips: number;
   gasPolicyRejects: number;
+  invalidCandidateSkips: number;
   approvedCandidates: number;
   executionAttempted: boolean;
 }
@@ -38,15 +39,23 @@ export interface HandleDiscoveredSettlementTargetParams {
 
 function hydrateSettlementAuction(
   candidate: ResolvedSettlementTarget['candidates'][number]
-): AuctionToSettle {
-  return {
-    borrower: candidate.borrower,
-    kickTime: candidate.kickTime,
-    debtRemaining: ethers.utils.parseEther(candidate.debtRemaining || '0'),
-    collateralRemaining: ethers.utils.parseEther(
-      candidate.collateralRemaining || '0'
-    ),
-  };
+): AuctionToSettle | undefined {
+  try {
+    return {
+      borrower: candidate.borrower,
+      kickTime: candidate.kickTime,
+      debtRemaining: ethers.utils.parseEther(candidate.debtRemaining || '0'),
+      collateralRemaining: ethers.utils.parseEther(
+        candidate.collateralRemaining || '0'
+      ),
+    };
+  } catch (error) {
+    logger.warn(
+      `Skipping discovered settlement candidate ${candidate.borrower} for ${candidate.poolAddress}: malformed numeric fields`,
+      error
+    );
+    return undefined;
+  }
 }
 
 function logDiscoveredSettlementTargetSummary(params: {
@@ -55,7 +64,7 @@ function logDiscoveredSettlementTargetSummary(params: {
   stats: DiscoveredSettlementTargetStats;
 }): void {
   logger.info(
-    `Discovered settlement target summary: pool=${params.pool.poolAddress} name="${params.target.name}" dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} needsSettlementSkips=${params.stats.needsSettlementSkips} retryableNeedsSettlementFailures=${params.stats.retryableNeedsSettlementFailures} incentiveSkips=${params.stats.incentiveSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} approvedCandidates=${params.stats.approvedCandidates} executionAttempted=${params.stats.executionAttempted}`
+    `Discovered settlement target summary: pool=${params.pool.poolAddress} name="${params.target.name}" dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} needsSettlementSkips=${params.stats.needsSettlementSkips} retryableNeedsSettlementFailures=${params.stats.retryableNeedsSettlementFailures} incentiveSkips=${params.stats.incentiveSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} invalidCandidateSkips=${params.stats.invalidCandidateSkips} approvedCandidates=${params.stats.approvedCandidates} executionAttempted=${params.stats.executionAttempted}`
   );
 }
 
@@ -71,6 +80,7 @@ export async function handleDiscoveredSettlementTarget(
     retryableNeedsSettlementFailures: 0,
     incentiveSkips: 0,
     gasPolicyRejects: 0,
+    invalidCandidateSkips: 0,
     approvedCandidates: 0,
     executionAttempted: false,
   };
@@ -151,7 +161,13 @@ export async function handleDiscoveredSettlementTarget(
         continue;
       }
 
-      approvedAuctions.push(hydrateSettlementAuction(candidate));
+      const hydratedAuction = hydrateSettlementAuction(candidate);
+      if (!hydratedAuction) {
+        stats.invalidCandidateSkips += 1;
+        continue;
+      }
+
+      approvedAuctions.push(hydratedAuction);
     }
 
     stats.approvedCandidates = approvedAuctions.length;

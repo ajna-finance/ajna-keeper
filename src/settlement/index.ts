@@ -75,6 +75,7 @@ export class SettlementHandler {
       pool: this.pool,
       signer: this.signer,
       borrower,
+      maxIterations: this.poolConfig.settlement.maxIterations,
     });
   }
 
