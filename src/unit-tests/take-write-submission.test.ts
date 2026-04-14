@@ -109,7 +109,7 @@ describe('take write submission', () => {
     expect(
       (AjnaKeeperTaker__factory.connect as sinon.SinonStub).calledOnceWithExactly(
         '0x00000000000000000000000000000000000000dd',
-        writeSigner
+        readSigner
       )
     ).to.be.true;
     expect(queueTransactionStub.calledOnce).to.be.true;
@@ -151,7 +151,7 @@ describe('take write submission', () => {
     sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns(factory as any);
     sinon.stub(shared, 'computeFactoryAmountOutMinimum').resolves(BigNumber.from(10));
     sinon.stub(shared, 'getSwapDeadline').callsFake(async (signer) => {
-      expect(signer).to.equal(writeSigner);
+      expect(signer).to.equal(readSigner);
       return 456;
     });
     const queueTransactionStub = sinon
@@ -272,7 +272,7 @@ describe('take write submission', () => {
       .stub(shared, 'computeFactoryAmountOutMinimum')
       .resolves(BigNumber.from(10));
     sinon.stub(shared, 'getSwapDeadline').callsFake(async (signer) => {
-      expect(signer).to.equal(writeSigner);
+      expect(signer).to.equal(readSigner);
       return 456;
     });
     const queueTransactionStub = sinon
@@ -322,7 +322,7 @@ describe('take write submission', () => {
     expect(
       (AjnaKeeperTakerFactory__factory.connect as sinon.SinonStub).calledOnceWithExactly(
         '0x0000000000000000000000000000000000000013',
-        writeSigner
+        readSigner
       )
     ).to.be.true;
     expect(queueTransactionStub.calledOnce).to.be.true;

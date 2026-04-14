@@ -1247,7 +1247,7 @@ describe('Run Loop Discovery Integration', () => {
     expect(discoveryStub.callCount).to.equal(2);
   });
 
-  it('continues manual settlement targets and retries discovery after a transient snapshot failure', async () => {
+  it('continues manual settlement targets and backs off discovery retries after a transient snapshot failure', async () => {
     let nowMs = 0;
     sinon.stub(Date, 'now').callsFake(() => nowMs);
     const handleSettlementsStub = sinon
@@ -1340,7 +1340,10 @@ describe('Run Loop Discovery Integration', () => {
     nowMs = 1_000;
     await discoveryRuntime.runSettlementCycle();
 
-    expect(handleSettlementsStub.callCount).to.equal(2);
+    nowMs = 31_000;
+    await discoveryRuntime.runSettlementCycle();
+
+    expect(handleSettlementsStub.callCount).to.equal(3);
     expect(handleDiscoveredSettlementTargetStub.callCount).to.equal(1);
     expect(discoveryStub.callCount).to.equal(2);
     expect(

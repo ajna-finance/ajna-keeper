@@ -10,6 +10,7 @@ import {
 import {
   createTakeWriteTransport,
   resolveTakeWriteConfig,
+  submitTakeTransaction,
 } from '../take/write-transport';
 import { NonceTracker, isNonceConsumedTransactionError } from '../nonce';
 
@@ -21,12 +22,14 @@ describe('take write transport', () => {
       '/tmp',
       `ajna-keeper-take-write-${Date.now()}-${Math.random()}.json`
     );
+    NonceTracker.clearNonces();
     NonceTracker.setDurableNonceStateFilePathForTests(durableStatePath);
     NonceTracker.clearDurableNonceStateForTests();
   });
 
   afterEach(() => {
     sinon.restore();
+    NonceTracker.clearNonces();
     NonceTracker.clearDurableNonceStateForTests();
   });
 
@@ -54,7 +57,7 @@ describe('take write transport', () => {
     expect(transport.signer).to.equal(signer);
   });
 
-  it('times out public rpc receipt waits using the configured timeout', async () => {
+  it('wraps public rpc receipt wait failures as nonce-consumed errors', async () => {
     const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     try {
       const signer = {
@@ -77,14 +80,16 @@ describe('take write transport', () => {
 
       const submission = await transport.submitTransaction({
         to: '0x00000000000000000000000000000000000000bb',
+        nonce: 7,
       });
       const waitPromise = submission.wait().then(
         () => {
           expect.fail('Expected public rpc wait to time out');
         },
         (error) => {
+          expect(isNonceConsumedTransactionError(error)).to.equal(true);
           expect((error as Error).message).to.include(
-            'Transaction confirmation timeout after 25ms'
+            'Public RPC submission 0xpublic was accepted but receipt wait failed'
           );
         }
       );
@@ -117,18 +122,31 @@ describe('take write transport', () => {
     expect(transport.signer).to.not.equal(signer);
   });
 
-  it('wraps private rpc receipt wait failures as nonce-consumed errors', async () => {
+  it('persists an expiring durable nonce floor for private rpc receipt wait failures', async () => {
     const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     try {
       const writeSigner = {
         address: '0x00000000000000000000000000000000000000aa',
         sendTransaction: sinon.stub().resolves({
           hash: '0xprivate',
+          nonce: 7,
           wait: sinon.stub().returns(new Promise(() => {})),
         }),
       };
       const signer = {
+        getAddress: sinon
+          .stub()
+          .resolves('0x00000000000000000000000000000000000000aa'),
+        getChainId: sinon.stub().resolves(1),
+        getTransactionCount: sinon.stub().resolves(7),
         connect: sinon.stub().returns(writeSigner),
+        provider: {
+          getBlockNumber: sinon
+            .stub()
+            .onFirstCall().resolves(100)
+            .onSecondCall().resolves(110)
+            .onThirdCall().resolves(130),
+        },
       } as any;
       sinon
         .stub(JsonRpcProvider.prototype, 'getNetwork')
@@ -148,6 +166,7 @@ describe('take write transport', () => {
 
       const submission = await transport.submitTransaction({
         to: '0x00000000000000000000000000000000000000bb',
+        nonce: 7,
       });
       const waitPromise = submission.wait().then(
         () => {
@@ -163,6 +182,14 @@ describe('take write transport', () => {
 
       await clock.tickAsync(26);
       await waitPromise;
+
+      NonceTracker.clearNonces();
+      const nonceBeforeExpiry = await NonceTracker.getNonce(signer);
+      expect(nonceBeforeExpiry).to.equal(8);
+
+      NonceTracker.clearNonces();
+      const nonceAfterExpiry = await NonceTracker.getNonce(signer);
+      expect(nonceAfterExpiry).to.equal(7);
     } finally {
       clock.restore();
     }
@@ -397,6 +424,70 @@ describe('take write transport', () => {
         'Relay take submission requires an explicit nonce'
       );
     }
+  });
+
+  it('preserves the consumed nonce when relay acceptance is followed by durable floor persistence failure', async () => {
+    const localTxHash = ethers.utils.keccak256('0x1234');
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(1),
+      getTransactionCount: sinon.stub().resolves(7),
+      populateTransaction: sinon.stub().callsFake(async (tx) => ({
+        ...tx,
+        chainId: 1,
+        nonce: tx.nonce ?? 7,
+        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
+        maxFeePerGas: BigNumber.from(1),
+        maxPriorityFeePerGas: BigNumber.from(1),
+      })),
+      signTransaction: sinon.stub().resolves('0x1234'),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(100),
+        waitForTransaction: sinon.stub(),
+      },
+    } as any;
+    sinon.stub(axios, 'post').resolves({
+      data: {
+        result: localTxHash,
+      },
+    } as any);
+    sinon
+      .stub(NonceTracker, 'markDurableNonceFloor')
+      .rejects(new Error('disk full'));
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: {
+        takeWrite: {
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+          },
+        },
+      } as any,
+      expectedChainId: 1,
+    });
+
+    try {
+      await NonceTracker.queueTransaction(signer, async (nonce) => {
+        return await submitTakeTransaction(transport, {
+          to: '0x00000000000000000000000000000000000000bb',
+          data: '0xdeadbeef',
+          nonce,
+        });
+      });
+      expect.fail('Expected relay durable nonce persistence failure');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
+      expect((error as Error).message).to.include(
+        'Relay accepted transaction'
+      );
+    }
+
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(8);
   });
 
   it('wraps relay receipt wait failures as nonce-consumed errors', async () => {

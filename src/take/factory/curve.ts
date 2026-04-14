@@ -186,7 +186,7 @@ export async function executeCurveFactoryTake({
   const takeWriteTransport = resolveTakeWriteTransport(signer, config);
   const factory = AjnaKeeperTakerFactory__factory.connect(
     config.keeperTakerFactory!,
-    takeWriteTransport.signer
+    signer
   );
 
   if (!config.curveRouterOverrides) {
@@ -233,7 +233,7 @@ export async function executeCurveFactoryTake({
       config,
       marketPriceFactor: poolConfig.take.marketPriceFactor!,
     });
-    const deadline = await getSwapDeadline(takeWriteTransport.signer);
+    const deadline = await getSwapDeadline(signer);
 
     logger.debug(
       `Factory: Executing Curve take for pool ${pool.name}:\n` +

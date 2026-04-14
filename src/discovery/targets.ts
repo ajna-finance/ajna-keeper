@@ -718,6 +718,22 @@ export function validateResolvedSettlementTarget(
   validateSettlementSettings(target.settlement);
 }
 
+function pruneExpiredHydrationCooldowns(
+  hydrationCooldowns: PoolHydrationCooldowns,
+  nowMs: number
+): void {
+  const expiredPools: string[] = [];
+  hydrationCooldowns.forEach((cooldownUntil, poolAddress) => {
+    if (cooldownUntil <= nowMs) {
+      expiredPools.push(poolAddress);
+    }
+  });
+
+  for (const poolAddress of expiredPools) {
+    hydrationCooldowns.delete(poolAddress);
+  }
+}
+
 export async function ensurePoolLoaded(params: {
   ajna: AjnaSDK;
   poolMap: PoolMap;
@@ -726,13 +742,16 @@ export async function ensurePoolLoaded(params: {
   hydrationCooldowns: PoolHydrationCooldowns;
 }): Promise<FungiblePool | undefined> {
   const normalizedPool = normalizeAddress(params.poolAddress);
+  const nowMs = Date.now();
+  pruneExpiredHydrationCooldowns(params.hydrationCooldowns, nowMs);
   const cachedPool = getCachedPool(params.poolMap, params.poolAddress);
   if (cachedPool) {
+    params.hydrationCooldowns.delete(normalizedPool);
     return cachedPool;
   }
 
   const cooldownUntil = params.hydrationCooldowns.get(normalizedPool);
-  if (cooldownUntil !== undefined && cooldownUntil > Date.now()) {
+  if (cooldownUntil !== undefined && cooldownUntil > nowMs) {
     logger.debug(
       `Skipping hydration for ${normalizedPool} until ${new Date(
         cooldownUntil
@@ -747,6 +766,7 @@ export async function ensurePoolLoaded(params: {
     );
     overrideMulticall(pool, params.config);
     cachePool(params.poolMap, params.poolAddress, pool);
+    params.hydrationCooldowns.delete(normalizedPool);
     return pool;
   } catch (error) {
     const cooldownSeconds =

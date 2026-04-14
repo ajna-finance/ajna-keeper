@@ -549,7 +549,7 @@ export async function takeLiquidation({
     const takeWriteTransport = resolveTakeWriteTransport(signer, config);
     const keeperTaker = AjnaKeeperTaker__factory.connect(
       config.keeperTaker!,
-      takeWriteTransport.signer
+      signer
     );
 
     // pause between getting the 1inch quote and requesting the swap to avoid 1inch rate limit

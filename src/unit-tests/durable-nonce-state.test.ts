@@ -112,6 +112,24 @@ describe('durable nonce state', () => {
     });
   });
 
+  it('clears a stale lock file before persisting durable nonce floors', async () => {
+    const lockPath = `${durableStatePath}.lock`;
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, 'stale lock', 'utf8');
+    fs.utimesSync(lockPath, new Date(Date.now() - 20_000), new Date(Date.now() - 20_000));
+
+    await upsertDurableNonceFloor({
+      chainId: 1,
+      address: '0x00000000000000000000000000000000000000aa',
+      nextNonce: 7,
+      submittedAtMs: 123,
+    });
+
+    const entry = await getDurableNonceFloor(1, '0x00000000000000000000000000000000000000aa');
+    expect(entry?.nextNonce).to.equal(7);
+    expect(fs.existsSync(lockPath)).to.equal(false);
+  });
+
   it('retries loading after a corrupted state file is corrected', async () => {
     const address = '0x00000000000000000000000000000000000000aa';
     fs.writeFileSync(durableStatePath, '{invalid json', 'utf8');

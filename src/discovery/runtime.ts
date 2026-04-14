@@ -59,6 +59,7 @@ type DiscoveryRuntimeState = CreateDiscoveryRuntimeParams;
 type BoundDiscoveryRuntimeState = DiscoveryRuntimeState & {
   readTransports: DiscoveryReadTransports;
   lastDiscoveredSettlementCycleStartedAtMs?: number;
+  lastDiscoveredSettlementFailureAtMs?: number;
 };
 type EffectiveTargetIdentity =
   | Pick<EffectiveTakeTarget, 'source' | 'poolAddress' | 'name'>
@@ -598,6 +599,7 @@ async function runSettlementDiscoveryCycle(
   state: BoundDiscoveryRuntimeState
 ): Promise<void> {
   const startedAt = Date.now();
+  let includeDiscoveredTargets = false;
   let phase = 'snapshot';
   let snapshotInfo: DiscoveryCycleSnapshotInfo = {
     snapshotRefreshed: false,
@@ -615,7 +617,7 @@ async function runSettlementDiscoveryCycle(
   };
 
   try {
-    const includeDiscoveredTargets = shouldRunDiscoveredSettlementCycle(state);
+    includeDiscoveredTargets = shouldRunDiscoveredSettlementCycle(state);
     if (includeDiscoveredTargets) {
       snapshotInfo = await getSettlementCycleLiquidationAuctions(state);
     } else {
@@ -638,6 +640,9 @@ async function runSettlementDiscoveryCycle(
     Object.assign(stats, summarizeCycleTargets(targets));
     if (includeDiscoveredTargets && !snapshotInfo.snapshotRefreshFailed) {
       state.lastDiscoveredSettlementCycleStartedAtMs = Date.now();
+      state.lastDiscoveredSettlementFailureAtMs = undefined;
+    } else if (includeDiscoveredTargets && snapshotInfo.snapshotRefreshFailed) {
+      state.lastDiscoveredSettlementFailureAtMs = Date.now();
     }
     phase = 'dispatch';
 
@@ -677,6 +682,9 @@ async function runSettlementDiscoveryCycle(
       snapshotInfo,
     });
   } catch (error) {
+    if (includeDiscoveredTargets) {
+      state.lastDiscoveredSettlementFailureAtMs = Date.now();
+    }
     logDiscoveryCycleFailure({
       cycleType: 'settlement',
       phase,
@@ -699,12 +707,32 @@ function computeDiscoveredSettlementCheckIntervalSeconds(
   return Math.max(config.delayBetweenRuns * 5, 120);
 }
 
+function computeDiscoveredSettlementFailureRetrySeconds(
+  config: KeeperConfig
+): number {
+  return Math.min(
+    computeDiscoveredSettlementCheckIntervalSeconds(config),
+    Math.max(config.delayBetweenRuns, 30)
+  );
+}
+
 function shouldRunDiscoveredSettlementCycle(
   state: BoundDiscoveryRuntimeState
 ): boolean {
   if (
     !state.config.autoDiscover?.enabled ||
     !getAutoDiscoverSettlementPolicy(state.config.autoDiscover)
+  ) {
+    return false;
+  }
+
+  const lastFailureAtMs = state.lastDiscoveredSettlementFailureAtMs;
+  const lastSuccessAtMs = state.lastDiscoveredSettlementCycleStartedAtMs;
+  if (
+    lastFailureAtMs !== undefined &&
+    (lastSuccessAtMs === undefined || lastFailureAtMs > lastSuccessAtMs) &&
+    Date.now() - lastFailureAtMs <
+      computeDiscoveredSettlementFailureRetrySeconds(state.config) * 1000
   ) {
     return false;
   }

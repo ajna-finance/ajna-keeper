@@ -196,7 +196,7 @@ export async function executeUniswapV3FactoryTake({
   const takeWriteTransport = resolveTakeWriteTransport(signer, config);
   const factory = AjnaKeeperTakerFactory__factory.connect(
     config.keeperTakerFactory!,
-    takeWriteTransport.signer
+    signer
   );
 
   if (!config.universalRouterOverrides) {
@@ -213,7 +213,7 @@ export async function executeUniswapV3FactoryTake({
     config,
     marketPriceFactor: poolConfig.take.marketPriceFactor!,
   });
-  const deadline = await getSwapDeadline(takeWriteTransport.signer);
+  const deadline = await getSwapDeadline(signer);
 
   logger.debug(
     `Factory: Executing Uniswap V3 take for pool ${pool.name}:\n` +

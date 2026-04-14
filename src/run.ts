@@ -1,4 +1,5 @@
 import { AjnaSDK, Signer } from '@ajna-finance/sdk';
+import { Wallet } from 'ethers';
 import {
   configureAjna,
   getAutoDiscoverTakePolicy,
@@ -26,7 +27,10 @@ import {
 } from './discovery/targets';
 import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery/runtime';
 import { createSubgraphReader, SubgraphReader } from './read-transports';
-import { createTakeWriteTransport } from './take/write-transport';
+import {
+  createTakeWriteTransport,
+  TakeWriteTransport,
+} from './take/write-transport';
 
 interface KeepPoolParams {
   poolMap: PoolMap;
@@ -58,6 +62,42 @@ export function shouldRunTakeLoop(config: KeeperConfig): boolean {
   return hasManualTakeTargets || hasDiscoveredTakeTargets;
 }
 
+export async function initializeTakeLoop(params: {
+  config: KeeperConfig;
+  signer: Wallet;
+  chainId: number;
+}): Promise<{
+  takeLoopEnabled: boolean;
+  takeWriteTransport?: TakeWriteTransport;
+}> {
+  const takeLoopConfigured = shouldRunTakeLoop(params.config);
+  if (!takeLoopConfigured) {
+    return { takeLoopEnabled: false };
+  }
+
+  validateTakeSettingsForChain(params.config, params.chainId);
+
+  try {
+    validateTakeWriteConfig(params.config);
+    return {
+      takeLoopEnabled: true,
+      takeWriteTransport: await createTakeWriteTransport({
+        signer: params.signer,
+        config: params.config,
+        expectedChainId: params.chainId,
+      }),
+    };
+  } catch (error) {
+    logger.error(
+      'Failed to initialize take write transport; disabling the take loop while other keeper loops continue.',
+      error
+    );
+    return {
+      takeLoopEnabled: false,
+    };
+  }
+}
+
 export async function startKeeperFromConfig(config: KeeperConfig) {
   const { provider, signer } = await getProviderAndSigner(
     config.keeperKeystore,
@@ -68,11 +108,11 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
 
   configureAjna(config.ajna);
   validateAutoDiscoverConfig(config, chainId);
-  const takeLoopEnabled = shouldRunTakeLoop(config);
-  if (takeLoopEnabled) {
-    validateTakeWriteConfig(config);
-    validateTakeSettingsForChain(config, chainId);
-  }
+  const { takeLoopEnabled, takeWriteTransport } = await initializeTakeLoop({
+    config,
+    signer,
+    chainId,
+  });
 
   const ajna = new AjnaSDK(provider);
   logger.info('...and pools:');
@@ -80,13 +120,6 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   const hydrationCooldowns: PoolHydrationCooldowns = new Map();
   const discoverySnapshotState = {};
   const subgraph = createSubgraphReader(config);
-  const takeWriteTransport = takeLoopEnabled
-    ? await createTakeWriteTransport({
-        signer,
-        config,
-        expectedChainId: chainId,
-      })
-    : undefined;
   const discoveryRuntime = createDiscoveryRuntime({
     ajna,
     poolMap,

@@ -390,7 +390,7 @@ export async function executeTakeDecision<
   }
 
   if (approvedArbTake) {
-    await arbTakeLiquidation({
+    executedArbTake = await arbTakeLiquidation({
       pool,
       signer,
       liquidation: {
@@ -403,7 +403,6 @@ export async function executeTakeDecision<
       actionLabel: arbTakeActionLabel,
       logPrefix: arbTakeLogPrefix,
     });
-    executedArbTake = true;
   }
 
   onExecuted?.({

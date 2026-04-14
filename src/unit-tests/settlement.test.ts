@@ -201,7 +201,7 @@ describe('Settlement Module Tests', () => {
       expect(result.reason).to.include('collateral');
     });
 
-    it('uses the configured maxIterations for settlement feasibility checks', async () => {
+    it('uses the configured maxBucketDepth for settlement feasibility checks', async () => {
       mockPool.contract.auctionInfo.resolves({
         kickTime_: BigNumber.from(Math.floor(Date.now() / 1000)),
         debtToCollateral_: BigNumber.from('2000000000000000000'),
@@ -225,7 +225,7 @@ describe('Settlement Module Tests', () => {
 
       await handler.needsSettlement('0xBorrower123');
 
-      expect(mockPool.contract.callStatic.settle.calledWith('0xBorrower123', 5)).to.be
+      expect(mockPool.contract.callStatic.settle.calledWith('0xBorrower123', 50)).to.be
         .true;
     });
 
@@ -1028,7 +1028,7 @@ describe('Settlement Module Tests', () => {
       });
 
       // Mock settlement feasibility and execution
-      mockPool.contract.callStatic.settle.withArgs('0xBorrower1', 5).resolves();
+      mockPool.contract.callStatic.settle.withArgs('0xBorrower1', 50).resolves();
       poolSettleStub.resolves();
 
       // Mock bonds to be unlocked after settlement

@@ -75,14 +75,14 @@ describe('shared arbTake helpers', () => {
       isArbTakeable: true,
     };
 
-    await arbTakeLiquidation({
+    const firstResult = await arbTakeLiquidation({
       pool: pool as any,
       signer: {} as any,
       liquidation,
       config: { dryRun: false },
     });
 
-    await arbTakeLiquidation({
+    const secondResult = await arbTakeLiquidation({
       pool: pool as any,
       signer: {} as any,
       liquidation,
@@ -90,6 +90,9 @@ describe('shared arbTake helpers', () => {
       actionLabel: 'Factory ArbTake',
       logPrefix: 'Factory: ',
     });
+
+    expect(firstResult).to.equal(true);
+    expect(secondResult).to.equal(true);
 
     expect(liquidationArbTakeStub.callCount).to.equal(2);
     expect(liquidationArbTakeStub.firstCall.args).to.deep.equal([
@@ -102,5 +105,25 @@ describe('shared arbTake helpers', () => {
       {},
       77,
     ]);
+  });
+
+  it('returns false when arb take execution fails', async () => {
+    sinon.stub(transactions, 'liquidationArbTake').rejects(new Error('boom'));
+
+    const result = await arbTakeLiquidation({
+      pool: {
+        name: 'Execution Pool',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+        getLiquidation: sinon.stub().returns({}),
+      } as any,
+      signer: {} as any,
+      liquidation: {
+        borrower: '0xBorrower',
+        hpbIndex: 77,
+      },
+      config: { dryRun: false },
+    });
+
+    expect(result).to.equal(false);
   });
 });

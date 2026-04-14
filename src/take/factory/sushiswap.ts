@@ -193,7 +193,7 @@ export async function executeSushiSwapFactoryTake({
   const takeWriteTransport = resolveTakeWriteTransport(signer, config);
   const factory = AjnaKeeperTakerFactory__factory.connect(
     config.keeperTakerFactory!,
-    takeWriteTransport.signer
+    signer
   );
 
   if (!config.sushiswapRouterOverrides) {
@@ -210,7 +210,7 @@ export async function executeSushiSwapFactoryTake({
     config,
     marketPriceFactor: poolConfig.take.marketPriceFactor!,
   });
-  const deadline = await getSwapDeadline(takeWriteTransport.signer);
+  const deadline = await getSwapDeadline(signer);
 
   logger.debug(
     `Factory: Using WAD amounts for SushiSwap pool ${pool.name}:\n` +

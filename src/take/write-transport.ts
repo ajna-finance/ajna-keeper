@@ -15,6 +15,7 @@ const DEFAULT_RELAY_SEND_METHOD = 'eth_sendPrivateTransaction';
 const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_RELAY_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET = 25;
+const DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_BLOCK_OFFSET = 25;
 const DEFAULT_TAKE_RECEIPT_TIMEOUT_MS = 120_000;
 
 export interface TakeWriteSubmission {
@@ -145,6 +146,35 @@ export async function submitTakeTransaction(
   return await submission.wait();
 }
 
+function resolveExplicitNonce(
+  txLike: Pick<providers.TransactionRequest, 'nonce'>
+): number | undefined {
+  if (txLike.nonce === undefined) {
+    return undefined;
+  }
+
+  return ethers.BigNumber.from(txLike.nonce).toNumber();
+}
+
+async function getAcceptedSubmissionExpiryBlock(params: {
+  provider?: providers.Provider | null;
+  blockOffset: number;
+}): Promise<number | undefined> {
+  if (!params.provider) {
+    return undefined;
+  }
+
+  try {
+    const currentBlock = await params.provider.getBlockNumber();
+    return currentBlock + params.blockOffset;
+  } catch (error) {
+    logger.warn(
+      `Failed to determine expiry block for accepted take submission: ${error}`
+    );
+    return undefined;
+  }
+}
+
 function createPublicRpcTakeWriteTransport(
   signer: Signer,
   receiptTimeoutMs: number = DEFAULT_TAKE_RECEIPT_TIMEOUT_MS
@@ -158,12 +188,23 @@ function createPublicRpcTakeWriteTransport(
       const response = await signer.sendTransaction(txRequest);
       return {
         txHash: response.hash,
-        wait: async () =>
-          await waitForReceiptWithTimeout({
-            txHash: response.hash,
-            wait: () => response.wait(),
-            timeoutMs: receiptTimeoutMs,
-          }),
+        wait: async () => {
+          try {
+            return await waitForReceiptWithTimeout({
+              txHash: response.hash,
+              wait: () => response.wait(),
+              timeoutMs: receiptTimeoutMs,
+            });
+          } catch (error) {
+            throw new NonceConsumedTransactionError(
+              `Public RPC submission ${response.hash} was accepted but receipt wait failed`,
+              {
+                txHash: response.hash,
+                cause: error,
+              }
+            );
+          }
+        },
       };
     },
   };
@@ -211,6 +252,32 @@ async function createPrivateRpcTakeWriteTransport(params: {
                 params.receiptTimeoutMs ?? DEFAULT_TAKE_RECEIPT_TIMEOUT_MS,
             });
           } catch (error) {
+            const acceptedNonce = resolveExplicitNonce({
+              nonce: response.nonce ?? txRequest.nonce,
+            });
+            if (acceptedNonce !== undefined) {
+              try {
+                await NonceTracker.markDurableNonceFloor({
+                  signer: params.signer,
+                  nonce: acceptedNonce,
+                  txHash: response.hash,
+                  expiresAtBlock: await getAcceptedSubmissionExpiryBlock({
+                    provider: params.signer.provider,
+                    blockOffset:
+                      DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_BLOCK_OFFSET,
+                  }),
+                });
+              } catch (durableNonceError) {
+                throw new NonceConsumedTransactionError(
+                  `Private RPC submission ${response.hash} was accepted but durable nonce floor persistence failed`,
+                  {
+                    txHash: response.hash,
+                    cause: durableNonceError,
+                  }
+                );
+              }
+            }
+
             throw new NonceConsumedTransactionError(
               `Private RPC submission ${response.hash} was accepted but receipt wait failed`,
               {
@@ -292,13 +359,23 @@ async function createRelayTakeWriteTransport(params: {
       });
       const txHash = extractRelayTxHash(response.data, localTxHash);
 
-      await NonceTracker.markDurableNonceFloor({
-        signer: params.signer,
-        nonce,
-        txHash,
-        expiresAtBlock,
-        relayUrl: params.relay.url,
-      });
+      try {
+        await NonceTracker.markDurableNonceFloor({
+          signer: params.signer,
+          nonce,
+          txHash,
+          expiresAtBlock,
+          relayUrl: params.relay.url,
+        });
+      } catch (error) {
+        throw new NonceConsumedTransactionError(
+          `Relay accepted transaction ${txHash} but durable nonce floor persistence failed`,
+          {
+            txHash,
+            cause: error,
+          }
+        );
+      }
 
       logger.info(
         `Accepted relay take submission via ${relayMethod} | tx: ${txHash}${expiresAtBlock !== undefined ? ` expiresAfterBlock=${expiresAtBlock}` : ''}`

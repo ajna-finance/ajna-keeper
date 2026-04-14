@@ -1,6 +1,7 @@
 import fs from 'fs';
 import { promises as fsPromises } from 'fs';
 import path from 'path';
+import { logger } from './logging';
 
 export interface DurableNonceFloorEntry {
   chainId: number;
@@ -23,11 +24,18 @@ const DEFAULT_STATE_FILE = path.resolve(
 );
 const STATE_LOCK_RETRY_MS = 25;
 const STATE_LOCK_TIMEOUT_MS = 2_000;
+const STATE_LOCK_STALE_MS = 10_000;
 
 let stateFilePath = DEFAULT_STATE_FILE;
 let loaded = false;
 let loadPromise: Promise<void> | undefined;
-let lastLoadedMtimeMs: number | undefined;
+interface StateFileSignature {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
+}
+
+let lastLoadedSignature: StateFileSignature | undefined;
 const entries = new Map<string, DurableNonceFloorEntry>();
 
 function keyFor(chainId: number, address: string): string {
@@ -45,10 +53,14 @@ function getStateLockPath(): string {
   return `${stateFilePath}.lock`;
 }
 
-async function getStateFileMtimeMs(): Promise<number | undefined> {
+async function getStateFileSignature(): Promise<StateFileSignature | undefined> {
   try {
     const stat = await fsPromises.stat(stateFilePath);
-    return stat.mtimeMs;
+    return {
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      size: stat.size,
+    };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined;
@@ -70,19 +82,30 @@ async function reloadFromDisk(): Promise<void> {
   const parsed = JSON.parse(raw) as DurableNonceFloorStateFile;
   loadEntriesFromStateFile(parsed);
   loaded = true;
-  lastLoadedMtimeMs = await getStateFileMtimeMs();
+  lastLoadedSignature = await getStateFileSignature();
 }
 
 function resetLoadedState(): void {
   entries.clear();
   loaded = true;
-  lastLoadedMtimeMs = undefined;
+  lastLoadedSignature = undefined;
 }
 
 async function ensureLoaded(): Promise<void> {
   if (loadPromise) {
     await loadPromise;
     return;
+  }
+
+  if (loaded) {
+    const currentSignature = await getStateFileSignature();
+    if (
+      currentSignature?.mtimeMs === lastLoadedSignature?.mtimeMs &&
+      currentSignature?.ctimeMs === lastLoadedSignature?.ctimeMs &&
+      currentSignature?.size === lastLoadedSignature?.size
+    ) {
+      return;
+    }
   }
 
   loadPromise = (async () => {
@@ -102,6 +125,27 @@ async function ensureLoaded(): Promise<void> {
   await loadPromise;
 }
 
+async function clearStaleStateLockIfNeeded(): Promise<boolean> {
+  try {
+    const stat = await fsPromises.stat(getStateLockPath());
+    const lockAgeMs = Date.now() - stat.mtimeMs;
+    if (lockAgeMs < STATE_LOCK_STALE_MS) {
+      return false;
+    }
+
+    await fsPromises.rm(getStateLockPath(), { force: true });
+    logger.warn(
+      `Cleared stale durable nonce state lock ${getStateLockPath()} after ${lockAgeMs}ms`
+    );
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function acquireStateLock() {
   await fsPromises.mkdir(path.dirname(stateFilePath), { recursive: true });
   const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
@@ -112,6 +156,9 @@ async function acquireStateLock() {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
         throw error;
+      }
+      if (await clearStaleStateLockIfNeeded()) {
+        continue;
       }
       if (Date.now() >= deadline) {
         throw new Error(
@@ -143,7 +190,7 @@ async function persistLoadedEntries(): Promise<void> {
   await fsPromises.writeFile(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
   await fsPromises.rename(tmpPath, stateFilePath);
   loaded = true;
-  lastLoadedMtimeMs = await getStateFileMtimeMs();
+  lastLoadedSignature = await getStateFileSignature();
 }
 
 async function withStateLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -217,7 +264,7 @@ export function setDurableNonceStateFilePathForTests(
   stateFilePath = path.resolve(filePath ?? DEFAULT_STATE_FILE);
   loaded = false;
   loadPromise = undefined;
-  lastLoadedMtimeMs = undefined;
+  lastLoadedSignature = undefined;
   entries.clear();
 }
 
@@ -225,7 +272,7 @@ export function clearDurableNonceStateForTests(): void {
   entries.clear();
   loaded = false;
   loadPromise = undefined;
-  lastLoadedMtimeMs = undefined;
+  lastLoadedSignature = undefined;
   try {
     fs.rmSync(stateFilePath, { force: true });
     fs.rmSync(getStateLockPath(), { force: true });

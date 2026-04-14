@@ -310,7 +310,7 @@ export class NonceTracker {
     });
 
     logger.warn(
-      `Persisted durable relay nonce floor ${params.nonce + 1} for ${address} on chain ${chainId}${params.txHash ? ` after accepted submission ${params.txHash}` : ''}`
+      `Persisted durable nonce floor ${params.nonce + 1} for ${address} on chain ${chainId}${params.txHash ? ` after accepted submission ${params.txHash}` : ''}`
     );
   }
 
@@ -334,7 +334,7 @@ export class NonceTracker {
       const cleared = await clearDurableNonceFloor(chainId, address);
       if (cleared) {
         logger.info(
-          `Cleared durable relay nonce floor for ${address} on chain ${chainId} after provider caught up to pending nonce ${observedPendingNonce}`
+          `Cleared durable nonce floor for ${address} on chain ${chainId} after provider caught up to pending nonce ${observedPendingNonce}`
         );
       }
       return observedPendingNonce;
@@ -350,20 +350,20 @@ export class NonceTracker {
           const cleared = await clearDurableNonceFloor(chainId, address);
           if (cleared) {
             logger.warn(
-              `Cleared expired durable relay nonce floor for ${address} on chain ${chainId} after block ${currentBlock} exceeded expiry ${durableFloor.expiresAtBlock}`
+              `Cleared expired durable nonce floor for ${address} on chain ${chainId} after block ${currentBlock} exceeded expiry ${durableFloor.expiresAtBlock}`
             );
           }
           return observedPendingNonce;
         }
       } catch (error) {
         logger.warn(
-          `Failed to check block height for durable relay nonce floor on ${address}: ${error}`
+          `Failed to check block height for durable nonce floor on ${address}: ${error}`
         );
       }
     }
 
     logger.warn(
-      `Using durable relay nonce floor ${durableFloor.nextNonce} for ${address} on chain ${chainId} while provider pending nonce remains ${observedPendingNonce}`
+      `Using durable nonce floor ${durableFloor.nextNonce} for ${address} on chain ${chainId} while provider pending nonce remains ${observedPendingNonce}`
     );
     return durableFloor.nextNonce;
   }

@@ -56,6 +56,27 @@ describe('Read RPC Failover', () => {
     expect(gasPrice.toString()).to.equal('88');
   });
 
+  it('clears timeout timers after successful gas price reads', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+    try {
+      const primaryProvider = {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(42)),
+      };
+
+      const gasPrice = await getResilientReadGasPrice({
+        config: {
+          ethRpcUrl: 'http://write-rpc',
+        } as any,
+        primaryProvider: primaryProvider as any,
+      });
+
+      expect(gasPrice.toString()).to.equal('42');
+      expect(clock.countTimers()).to.equal(0);
+    } finally {
+      clock.restore();
+    }
+  });
+
   it('fails over across configured readRpcUrls when the primary read endpoint fails', async () => {
     sinon
       .stub(JsonRpcProvider.prototype, 'getGasPrice')

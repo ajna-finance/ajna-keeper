@@ -96,14 +96,14 @@ export async function arbTakeLiquidation({
   config,
   actionLabel = 'ArbTake',
   logPrefix = '',
-}: ArbTakeExecutionParams): Promise<void> {
+}: ArbTakeExecutionParams): Promise<boolean> {
   const { borrower, hpbIndex } = liquidation;
 
   if (config.dryRun) {
     logger.info(
       `DryRun - would ${actionLabel} - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
     );
-    return;
+    return true;
   }
 
   try {
@@ -115,10 +115,12 @@ export async function arbTakeLiquidation({
     logger.info(
       `${actionLabel} successful - poolAddress: ${pool.poolAddress}, borrower: ${borrower}`
     );
+    return true;
   } catch (error) {
     logger.error(
       `${logPrefix}Failed to ArbTake. pool: ${pool.name}, borrower: ${borrower}`,
       error
     );
+    return false;
   }
 }
