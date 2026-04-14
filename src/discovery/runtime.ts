@@ -74,6 +74,7 @@ interface DiscoveryCycleSnapshotInfo {
   liquidationAuctions?: ChainwideLiquidationAuction[];
   snapshotRefreshed: boolean;
   snapshotRefreshFailed?: boolean;
+  snapshotFallbackUsed?: boolean;
   snapshotAgeMs?: number;
 }
 
@@ -180,6 +181,15 @@ function requiresDedicatedTakeWriteTransport(config: KeeperConfig): boolean {
   return !config.dryRun && resolveTakeWriteConfig(config) !== undefined;
 }
 
+function isTakeWriteWalletSigner(signer: Signer): signer is Wallet {
+  const candidate = signer as Partial<Wallet>;
+  return (
+    typeof candidate.connect === 'function' &&
+    typeof candidate.populateTransaction === 'function' &&
+    typeof candidate.signTransaction === 'function'
+  );
+}
+
 async function ensureTakeWriteTransport(
   state: BoundDiscoveryRuntimeState
 ): Promise<boolean> {
@@ -191,9 +201,16 @@ async function ensureTakeWriteTransport(
     return true;
   }
 
+  if (!isTakeWriteWalletSigner(state.signer)) {
+    logger.error(
+      'Configured take write transport requires a wallet-capable signer; skipping take execution for this cycle.'
+    );
+    return false;
+  }
+
   try {
     state.takeWriteTransport = await createTakeWriteTransport({
-      signer: state.signer as Wallet,
+      signer: state.signer,
       config: state.config,
       expectedChainId: await state.signer.getChainId(),
     });
@@ -213,6 +230,7 @@ async function getTakeCycleLiquidationAuctions(
   let liquidationAuctions: ChainwideLiquidationAuction[] | undefined;
   let snapshotRefreshed = false;
   let snapshotRefreshFailed = false;
+  let snapshotFallbackUsed = false;
   if (shouldRefreshDiscoverySnapshotOnTakeCycle(state.config)) {
     try {
       liquidationAuctions = await refreshDiscoverySnapshot(state);
@@ -228,12 +246,14 @@ async function getTakeCycleLiquidationAuctions(
       );
       liquidationAuctions = cachedAuctions ?? [];
       snapshotRefreshFailed = true;
+      snapshotFallbackUsed = cachedAuctions !== undefined;
     }
   }
   return {
     liquidationAuctions,
     snapshotRefreshed,
     snapshotRefreshFailed,
+    snapshotFallbackUsed,
     snapshotAgeMs: getSnapshotAgeMs(state.discoverySnapshotState),
   };
 }
@@ -244,6 +264,7 @@ async function getSettlementCycleLiquidationAuctions(
   let refreshedLiquidationAuctions: ChainwideLiquidationAuction[] | undefined;
   let snapshotRefreshed = false;
   let snapshotRefreshFailed = false;
+  let snapshotFallbackUsed = false;
   if (
     shouldRefreshDiscoverySnapshotOnSettlementCycle(
       state.config,
@@ -264,6 +285,7 @@ async function getSettlementCycleLiquidationAuctions(
       );
       refreshedLiquidationAuctions = cachedAuctions ?? [];
       snapshotRefreshFailed = true;
+      snapshotFallbackUsed = cachedAuctions !== undefined;
     }
   }
 
@@ -275,6 +297,7 @@ async function getSettlementCycleLiquidationAuctions(
     liquidationAuctions,
     snapshotRefreshed,
     snapshotRefreshFailed,
+    snapshotFallbackUsed,
     snapshotAgeMs: getSnapshotAgeMs(state.discoverySnapshotState),
   };
 }
@@ -699,6 +722,7 @@ async function runSettlementDiscoveryCycle(
   const rpcCacheState: DiscoveryRpcCacheState = {
     initialized: false,
   };
+  let discoveredTargetSuccesses = 0;
 
   try {
     includeDiscoveredTargets = shouldRunDiscoveredSettlementCycle(state);
@@ -722,12 +746,6 @@ async function runSettlementDiscoveryCycle(
         )
       : getManualSettlementTargets(state.config);
     Object.assign(stats, summarizeCycleTargets(targets));
-    if (includeDiscoveredTargets && !snapshotInfo.snapshotRefreshFailed) {
-      state.lastDiscoveredSettlementCycleStartedAtMs = Date.now();
-      state.lastDiscoveredSettlementFailureAtMs = undefined;
-    } else if (includeDiscoveredTargets && snapshotInfo.snapshotRefreshFailed) {
-      state.lastDiscoveredSettlementFailureAtMs = Date.now();
-    }
     phase = 'dispatch';
 
     for (const target of targets) {
@@ -751,11 +769,27 @@ async function runSettlementDiscoveryCycle(
           rpcCache,
         });
         stats.targetSuccesses += 1;
+        if (target.source === 'discovered') {
+          discoveredTargetSuccesses += 1;
+        }
         logger.debug(`Settlement check completed for pool: ${pool.name}`);
         await delay(state.config.delayBetweenActions);
       } catch (error) {
         stats.targetFailures += 1;
         logger.error(`Failed to handle settlements for pool: ${pool.name}`, error);
+      }
+    }
+
+    if (includeDiscoveredTargets) {
+      const completedWithUsableDiscoveryData =
+        !snapshotInfo.snapshotRefreshFailed || snapshotInfo.snapshotFallbackUsed;
+      if (!completedWithUsableDiscoveryData && snapshotInfo.snapshotRefreshFailed) {
+        state.lastDiscoveredSettlementFailureAtMs = Date.now();
+      } else if (stats.discoveredTargets === 0 || discoveredTargetSuccesses > 0) {
+        state.lastDiscoveredSettlementCycleStartedAtMs = Date.now();
+        state.lastDiscoveredSettlementFailureAtMs = undefined;
+      } else {
+        state.lastDiscoveredSettlementFailureAtMs = Date.now();
       }
     }
 
@@ -838,7 +872,8 @@ export function createDiscoveryRuntime(
     ...params,
     readTransports: createDiscoveryReadTransports(
       params.config,
-      params.signer.provider
+      params.signer.provider,
+      async () => await params.signer.getChainId()
     ),
   };
 

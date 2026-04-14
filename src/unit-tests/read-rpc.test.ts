@@ -77,6 +77,43 @@ describe('Read RPC Failover', () => {
     }
   });
 
+  it('skips fallback read-rpc endpoints on the wrong chain when an expected chainId is provided', async () => {
+    sinon
+      .stub(JsonRpcProvider.prototype, 'getNetwork')
+      .callsFake(function (this: JsonRpcProvider) {
+        const endpoint = (this as any).connection?.url;
+        if (endpoint === 'http://read-rpc-a') {
+          return Promise.resolve({ chainId: 1 } as any);
+        }
+        if (endpoint === 'http://read-rpc-b') {
+          return Promise.resolve({ chainId: 8453 } as any);
+        }
+        return Promise.reject(new Error(`unexpected endpoint ${endpoint}`));
+      });
+    sinon
+      .stub(JsonRpcProvider.prototype, 'getGasPrice')
+      .callsFake(function (this: JsonRpcProvider) {
+        const endpoint = (this as any).connection?.url;
+        if (endpoint === 'http://read-rpc-a') {
+          return Promise.resolve(BigNumber.from(999));
+        }
+        if (endpoint === 'http://read-rpc-b') {
+          return Promise.resolve(BigNumber.from(77));
+        }
+        return Promise.reject(new Error(`unexpected endpoint ${endpoint}`));
+      });
+
+    const gasPrice = await getResilientReadGasPrice({
+      config: {
+        ethRpcUrl: 'http://write-rpc',
+        readRpcUrls: ['http://read-rpc-a', 'http://read-rpc-b'],
+      } as any,
+      expectedChainId: 8453,
+    });
+
+    expect(gasPrice.toString()).to.equal('77');
+  });
+
   it('fails over across configured readRpcUrls when the primary read endpoint fails', async () => {
     sinon
       .stub(JsonRpcProvider.prototype, 'getGasPrice')

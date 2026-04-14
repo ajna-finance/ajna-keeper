@@ -2,6 +2,7 @@ import { AjnaSDK, Signer } from '@ajna-finance/sdk';
 import { Wallet } from 'ethers';
 import {
   configureAjna,
+  getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   KeeperConfig,
   PoolConfig,
@@ -54,12 +55,31 @@ interface LoopIterationResult {
 
 const LOOP_CRASH_RECOVERY_DELAY_SECONDS = 30;
 
+function isPermanentTakeWriteTransportInitializationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('does not match keeper chainId') ||
+    message.includes('requires the keeper signer to be connected to a provider') ||
+    message.includes('Unsupported take write transport mode')
+  );
+}
+
 export function shouldRunTakeLoop(config: KeeperConfig): boolean {
   const hasManualTakeTargets = config.pools.some(({ take }) => !!take);
   const hasDiscoveredTakeTargets =
     !!config.autoDiscover?.enabled &&
     !!getAutoDiscoverTakePolicy(config.autoDiscover);
   return hasManualTakeTargets || hasDiscoveredTakeTargets;
+}
+
+export function shouldRunSettlementLoop(config: KeeperConfig): boolean {
+  const hasManualSettlementTargets = config.pools.some(
+    ({ settlement }) => !!settlement
+  );
+  const hasDiscoveredSettlementTargets =
+    !!config.autoDiscover?.enabled &&
+    !!getAutoDiscoverSettlementPolicy(config.autoDiscover);
+  return hasManualSettlementTargets || hasDiscoveredSettlementTargets;
 }
 
 export async function initializeTakeLoop(params: {
@@ -76,6 +96,10 @@ export async function initializeTakeLoop(params: {
   }
 
   validateTakeSettingsForChain(params.config, params.chainId);
+  if (params.config.dryRun) {
+    return { takeLoopEnabled: true };
+  }
+
   validateTakeWriteConfig(params.config);
 
   try {
@@ -88,6 +112,10 @@ export async function initializeTakeLoop(params: {
       }),
     };
   } catch (error) {
+    if (isPermanentTakeWriteTransportInitializationError(error)) {
+      throw error;
+    }
+
     logger.error(
       'Failed to initialize take write transport during startup; the take loop remains enabled and will retry transport initialization in-cycle.',
       error
@@ -134,7 +162,9 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   if (takeLoopEnabled) {
     takePoolsLoop({ config, signer, poolMap, discoveryRuntime });
   }
-  settlementLoop({ config, signer, poolMap, discoveryRuntime });
+  if (shouldRunSettlementLoop(config)) {
+    settlementLoop({ config, signer, poolMap, discoveryRuntime });
+  }
   collectBondLoop({ poolMap, config, signer, subgraph });
   collectLpRewardsLoop({ poolMap, config, signer, subgraph });
 }

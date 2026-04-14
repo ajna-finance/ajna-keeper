@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { BigNumber } from 'ethers';
+import { BigNumber, ethers } from 'ethers';
 import { clearSharedDiscoveryScans } from '../discovery/targets';
 import { clearSharedSettlementScannerCache } from '../settlement/scanner';
 import { createDiscoveryRuntime } from '../discovery/runtime';
@@ -42,11 +42,40 @@ function createTestDiscoveryRuntime(params: {
   hydrationCooldowns?: any;
   discoverySnapshotState?: any;
 }) {
+  const ajna = { ...(params.ajna ?? {}) } as any;
+  const factory = ajna.fungiblePoolFactory;
+  if (factory?.getPoolByAddress && !factory.getPoolAddress) {
+    const hydratedPoolAddresses = new Map<string, string>();
+    const originalGetPoolByAddress = factory.getPoolByAddress.bind(factory);
+    factory.getPoolByAddress = sinon.stub().callsFake(async (poolAddress: string) => {
+      const pool = await originalGetPoolByAddress(poolAddress);
+      if (pool?.collateralAddress && pool?.quoteAddress && pool?.poolAddress) {
+        hydratedPoolAddresses.set(
+          `${String(pool.collateralAddress).toLowerCase()}:${String(pool.quoteAddress).toLowerCase()}`,
+          String(pool.poolAddress)
+        );
+      }
+      return pool;
+    });
+    factory.getPoolAddress = sinon.stub().callsFake(async (collateralAddress: string, quoteAddress: string) => {
+      return (
+        hydratedPoolAddresses.get(
+          `${String(collateralAddress).toLowerCase()}:${String(quoteAddress).toLowerCase()}`
+        ) ?? ethers.constants.AddressZero
+      );
+    });
+  }
+
+  const signer = {
+    getChainId: sinon.stub().resolves(1),
+    ...(params.signer ?? {}),
+  } as any;
+
   return createDiscoveryRuntime({
-    ajna: (params.ajna ?? {}) as any,
+    ajna: ajna as any,
     poolMap: (params.poolMap ?? new Map()) as any,
     config: params.config,
-    signer: (params.signer ?? {}) as any,
+    signer,
     takeWriteTransport: params.takeWriteTransport as any,
     hydrationCooldowns: params.hydrationCooldowns ?? new Map(),
     discoverySnapshotState: params.discoverySnapshotState,
@@ -186,6 +215,9 @@ describe('Run Loop Discovery Integration', () => {
       poolMap: new Map([[config.pools[0].address, pool as any]]),
       signer: {
         getChainId: sinon.stub().resolves(1),
+        connect: sinon.stub(),
+        populateTransaction: sinon.stub(),
+        signTransaction: sinon.stub(),
       } as any,
       discoverySnapshotState: {},
     });
@@ -447,7 +479,7 @@ describe('Run Loop Discovery Integration', () => {
   });
 
   it('refreshes the discovered take gas price when the per-cycle cache becomes stale', async () => {
-    let nowMs = 0;
+    let nowMs = 1_000;
     sinon.stub(Date, 'now').callsFake(() => nowMs);
     const observedGasPrices: string[] = [];
     const handleDiscoveredTakeTargetStub = sinon
@@ -1306,6 +1338,109 @@ describe('Run Loop Discovery Integration', () => {
     nowMs = 1_000;
     await discoveryRuntime.runSettlementCycle();
     nowMs = 121_000;
+    await discoveryRuntime.runSettlementCycle();
+
+    expect(handleSettlementsStub.callCount).to.equal(3);
+    expect(handleDiscoveredSettlementTargetStub.callCount).to.equal(2);
+    expect(discoveryStub.callCount).to.equal(2);
+  });
+
+  it('retries discovered settlement after a fully failed discovered dispatch on the failure cadence', async () => {
+    let nowMs = 0;
+    sinon.stub(Date, 'now').callsFake(() => nowMs);
+    const handleSettlementsStub = sinon
+      .stub(settlementModule, 'handleSettlements')
+      .resolves();
+    const handleDiscoveredSettlementTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget');
+    handleDiscoveredSettlementTargetStub
+      .onFirstCall()
+      .rejects(new Error('temporary discovered settlement failure'));
+    handleDiscoveredSettlementTargetStub
+      .onSecondCall()
+      .resolves();
+    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '0',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      pools: [
+        {
+          name: 'Manual Settlement Pool',
+          address: '0x2222222222222222222222222222222222222222',
+          price: { source: PriceOriginSource.FIXED, value: 1 },
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+          },
+        },
+      ],
+      autoDiscover: {
+        enabled: true,
+        take: false,
+        settlement: true,
+      },
+      discoveredDefaults: {
+        settlement: {
+          enabled: true,
+          minAuctionAge: 60,
+          maxBucketDepth: 50,
+          maxIterations: 5,
+          checkBotIncentive: true,
+        },
+      },
+    };
+
+    const discoveryRuntime = createTestDiscoveryRuntime({
+      ajna: {
+        fungiblePoolFactory: {
+          getPoolByAddress: sinon.stub().resolves({
+            name: 'Discovered Settlement Pool',
+            poolAddress: '0x4444444444444444444444444444444444444444',
+            quoteAddress: '0x5555555555555555555555555555555555555555',
+            collateralAddress: '0x6666666666666666666666666666666666666666',
+          }),
+        },
+      } as any,
+      config,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+        getAddress: sinon
+          .stub()
+          .resolves('0x7777777777777777777777777777777777777777'),
+      } as any,
+      poolMap: new Map([
+        [
+          config.pools[0].address,
+          {
+            name: 'Manual Settlement Pool',
+            poolAddress: config.pools[0].address,
+          } as any,
+        ],
+      ]),
+      discoverySnapshotState: {},
+    });
+
+    await discoveryRuntime.runSettlementCycle();
+
+    nowMs = 1_000;
+    await discoveryRuntime.runSettlementCycle();
+
+    nowMs = 31_000;
     await discoveryRuntime.runSettlementCycle();
 
     expect(handleSettlementsStub.callCount).to.equal(3);

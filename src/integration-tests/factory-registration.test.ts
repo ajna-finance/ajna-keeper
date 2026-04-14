@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import { Wallet, constants, providers, utils } from 'ethers';
 import { network } from 'hardhat';
+import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
 import { SushiSwapKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
 import { LiquiditySource } from '../config';
@@ -17,6 +18,33 @@ async function fundSigner(address: string) {
 }
 
 describe('Factory taker registration', () => {
+  it('rejects the legacy direct 1inch taker with a clear incompatibility error', async () => {
+    const owner = Wallet.createRandom().connect(getProvider());
+    await fundSigner(owner.address);
+
+    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+      constants.AddressZero
+    );
+    await factory.deployed();
+
+    const legacyTaker = await new AjnaKeeperTaker__factory(owner).deploy(
+      constants.AddressZero
+    );
+    await legacyTaker.deployed();
+
+    let error: unknown;
+    try {
+      await factory.setTaker(LiquiditySource.ONEINCH, legacyTaker.address);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).to.be.instanceOf(Error);
+    expect((error as Error).message).to.contain(
+      'LegacyDirectOneInchTakerUnsupported'
+    );
+  });
+
   it('rejects takers authorized for a different factory', async () => {
     const owner = Wallet.createRandom().connect(getProvider());
     const otherAccount = Wallet.createRandom();

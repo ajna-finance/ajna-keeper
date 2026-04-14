@@ -22,6 +22,8 @@ export type ReadRpcTransportConfig = Pick<
 export type DiscoveryReadTransportConfig = SubgraphTransportConfig &
   ReadRpcTransportConfig;
 
+type ExpectedChainIdResolver = () => Promise<number | undefined>;
+
 export interface SubgraphReader {
   readonly cacheKey: string;
   getLoans(poolAddress: string): Promise<GetLoanResponse>;
@@ -124,13 +126,17 @@ export function resolveSubgraphConfig<T extends object>(
 
 export function createReadRpcTransport(
   config: ReadRpcTransportConfig,
-  primaryProvider?: providers.Provider
+  primaryProvider?: providers.Provider,
+  expectedChainIdResolver?: ExpectedChainIdResolver
 ): ReadRpc {
   return {
     async getGasPrice() {
       return getResilientReadGasPrice({
         config,
         primaryProvider,
+        expectedChainId: expectedChainIdResolver
+          ? await expectedChainIdResolver()
+          : undefined,
       });
     },
   };
@@ -138,10 +144,15 @@ export function createReadRpcTransport(
 
 export function createDiscoveryReadTransports(
   config: DiscoveryReadTransportConfig,
-  primaryProvider?: providers.Provider
+  primaryProvider?: providers.Provider,
+  expectedChainIdResolver?: ExpectedChainIdResolver
 ): DiscoveryReadTransports {
   return {
     subgraph: createSubgraphReader(config),
-    readRpc: createReadRpcTransport(config, primaryProvider),
+    readRpc: createReadRpcTransport(
+      config,
+      primaryProvider,
+      expectedChainIdResolver
+    ),
   };
 }

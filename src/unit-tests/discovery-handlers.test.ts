@@ -211,9 +211,8 @@ describe('Discovery Handlers', () => {
           },
         },
       });
-      expect.fail('Expected discovered take execution to fail');
     } catch (error) {
-      expect((error as Error).message).to.equal('external take failed');
+      expect.fail(`Did not expect discovered take handler to throw: ${String(error)}`);
     }
 
     expect(takeLiquidationStub.calledOnce).to.be.true;

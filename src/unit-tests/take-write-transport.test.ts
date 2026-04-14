@@ -44,6 +44,28 @@ describe('take write transport', () => {
     });
   });
 
+  it('rejects unknown take write transport modes', async () => {
+    const signer = Wallet.createRandom();
+
+    try {
+      await createTakeWriteTransport({
+        signer,
+        config: {
+          takeWrite: {
+            mode: 'private-rpc',
+            rpcUrl: 'http://private-rpc',
+          },
+        } as any,
+        expectedChainId: 1,
+      });
+      expect.fail('Expected unknown take write mode to throw');
+    } catch (error) {
+      expect((error as Error).message).to.include(
+        'Unsupported take write transport mode: private-rpc'
+      );
+    }
+  });
+
   it('creates a public transport when no dedicated take write config is present', async () => {
     const signer = Wallet.createRandom();
 
@@ -342,6 +364,65 @@ describe('take write transport', () => {
     } finally {
       clock.restore();
     }
+  });
+
+  it('does not preserve a nonce when a relay explicitly returns a null result', async () => {
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(1),
+      getTransactionCount: sinon.stub().resolves(7),
+      populateTransaction: sinon.stub().callsFake(async (tx) => ({
+        ...tx,
+        chainId: 1,
+        nonce: tx.nonce ?? 7,
+        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
+        maxFeePerGas: BigNumber.from(1),
+        maxPriorityFeePerGas: BigNumber.from(1),
+      })),
+      signTransaction: sinon.stub().resolves('0x1234'),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(100),
+        waitForTransaction: sinon.stub(),
+      },
+    } as any;
+    sinon.stub(axios, 'post').resolves({
+      data: {
+        result: null,
+      },
+    } as any);
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: {
+        takeWrite: {
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+          },
+        },
+      } as any,
+      expectedChainId: 1,
+    });
+
+    try {
+      await transport.submitTransaction({
+        to: '0x00000000000000000000000000000000000000bb',
+        data: '0xdeadbeef',
+        nonce: 7,
+      });
+      expect.fail('Expected null relay result to throw');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(false);
+      expect((error as Error).message).to.include(
+        'Relay submission did not return a valid tx hash'
+      );
+    }
+
+    NonceTracker.clearNonces();
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(7);
   });
 
   it('preserves the consumed nonce when a relay response body lacks a usable tx hash', async () => {

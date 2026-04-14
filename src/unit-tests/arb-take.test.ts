@@ -171,6 +171,70 @@ describe('shared arbTake helpers', () => {
     );
   });
 
+  it('continues processing later candidates when an earlier candidate throws', async () => {
+    const executeExternalTakeStub = sinon.stub().callsFake(async ({ liquidation }: any) => {
+      if (liquidation.borrower === '0xBorrowerA') {
+        throw new Error('quote provider failed');
+      }
+      return true;
+    });
+    const onSkip = sinon.stub();
+    const onFound = sinon.stub();
+    const onExecuted = sinon.stub();
+
+    const pool = {
+      name: 'Execution Pool',
+      poolAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().callsFake((borrower: string) => ({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: borrower === '0xBorrowerA'
+            ? ethers.utils.parseEther('1')
+            : ethers.utils.parseEther('0.5'),
+        }),
+      })),
+    };
+
+    await processTakeCandidates({
+      pool: pool as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Execution Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: [
+        { borrower: '0xBorrowerA' },
+        { borrower: '0xBorrowerB' },
+      ],
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'legacy',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          takeablePrice: 1,
+        }),
+        executeExternalTake: executeExternalTakeStub,
+      } as any,
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      onSkip,
+      onFound,
+      onExecuted,
+    });
+
+    expect(onSkip.calledOnce).to.equal(true);
+    expect(onSkip.firstCall.args[0].candidate.borrower).to.equal('0xBorrowerA');
+    expect(onSkip.firstCall.args[0].stage).to.equal('execution');
+    expect(onSkip.firstCall.args[0].reason).to.include('quote provider failed');
+    expect(onFound.callCount).to.equal(2);
+    expect(onExecuted.calledOnce).to.equal(true);
+    expect(onExecuted.firstCall.args[0].decision.borrower).to.equal('0xBorrowerB');
+  });
+
   it('returns false when arb take execution fails', async () => {
     sinon.stub(transactions, 'liquidationArbTake').rejects(new Error('boom'));
 

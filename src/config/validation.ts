@@ -151,6 +151,8 @@ export function validatePostAuctionDex(
         );
       }
       return;
+    default:
+      throw new Error(`Unsupported PostAuctionDex: ${String(dexProvider)}`);
   }
 }
 
@@ -588,6 +590,10 @@ export function validateTakeWriteConfig(config: KeeperConfig): void {
         );
       }
       return;
+    default:
+      throw new Error(
+        `KeeperConfig.takeWrite: unsupported mode ${String(config.takeWrite.mode)}`
+      );
   }
 }
 

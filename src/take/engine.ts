@@ -88,7 +88,7 @@ interface ExecuteTakeDecisionParams<
   revalidateBeforeExecution?: boolean;
   onSkip?: (params: {
     candidate: TakeBorrowerCandidate;
-    stage: 'evaluation' | 'revalidation';
+    stage: 'evaluation' | 'revalidation' | 'execution';
     reason: string;
     decision?: TakeDecision;
   }) => void;
@@ -441,45 +441,58 @@ export async function processTakeCandidates<
   takeWriteTransport,
 }: ProcessTakeCandidatesParams<TPoolConfig, TExecutionConfig>): Promise<void> {
   for (const candidate of candidates) {
-    const decision = await evaluateTakeDecision({
-      pool,
-      signer,
-      poolConfig,
-      candidate,
-      subgraph,
-      externalTakeAdapter,
-      approveExternalTake,
-      approveArbTake,
-    });
+    let decision: TakeDecision | undefined;
+    let stage: 'evaluation' | 'execution' = 'evaluation';
 
-    if (!decision.approvedTake && !decision.approvedArbTake) {
+    try {
+      decision = await evaluateTakeDecision({
+        pool,
+        signer,
+        poolConfig,
+        candidate,
+        subgraph,
+        externalTakeAdapter,
+        approveExternalTake,
+        approveArbTake,
+      });
+
+      if (!decision.approvedTake && !decision.approvedArbTake) {
+        onSkip?.({
+          candidate,
+          stage: 'evaluation',
+          reason: decision.reason ?? 'policy rejected candidate',
+          decision,
+        });
+        continue;
+      }
+
+      onFound?.(decision);
+      stage = 'execution';
+
+      await executeTakeDecision({
+        pool,
+        signer,
+        poolConfig,
+        decision,
+        externalTakeAdapter,
+        externalExecutionConfig,
+        dryRun,
+        delayBetweenActions,
+        revalidateBeforeExecution,
+        onSkip,
+        onExecuted,
+        arbTakeActionLabel,
+        arbTakeLogPrefix,
+        takeWriteTransport,
+      });
+    } catch (error) {
       onSkip?.({
         candidate,
-        stage: 'evaluation',
-        reason: decision.reason ?? 'policy rejected candidate',
+        stage,
+        reason: error instanceof Error ? error.message : String(error),
         decision,
       });
-      continue;
     }
-
-    onFound?.(decision);
-
-    await executeTakeDecision({
-      pool,
-      signer,
-      poolConfig,
-      decision,
-      externalTakeAdapter,
-      externalExecutionConfig,
-      dryRun,
-      delayBetweenActions,
-      revalidateBeforeExecution,
-      onSkip,
-      onExecuted,
-      arbTakeActionLabel,
-      arbTakeLogPrefix,
-      takeWriteTransport,
-    });
   }
 }
 

@@ -23,6 +23,7 @@ import { overrideMulticall, RequireFields } from '../utils';
 const DISCOVERY_PAGE_SIZE = 100;
 const DISCOVERY_MAX_PAGES = 100;
 const DISCOVERY_SCAN_CACHE_WINDOW_MS = 1000;
+const INVALID_KICK_TIME_MS = Number.MAX_SAFE_INTEGER;
 
 export type PoolMap = Map<string, FungiblePool>;
 export type PoolHydrationCooldowns = Map<string, number>;
@@ -161,6 +162,7 @@ interface DecimalValue {
 }
 
 const ZERO_DECIMAL_VALUE: DecimalValue = { digits: '0', scale: 0 };
+const DECIMAL_VALUE_PATTERN = /^-?(?:\d+(?:\.\d*)?|\.\d+)$/;
 
 function normalizeIntegerString(value: string): string {
   const normalized = value.replace(/^0+/, '');
@@ -171,6 +173,10 @@ function parseDecimalValue(value: string | undefined): DecimalValue {
   const trimmed = (value ?? '0').trim();
   if (trimmed === '') {
     return { digits: '0', scale: 0 };
+  }
+
+  if (!DECIMAL_VALUE_PATTERN.test(trimmed)) {
+    throw new Error(`invalid decimal value: ${trimmed}`);
   }
 
   const negative = trimmed.startsWith('-');
@@ -348,6 +354,33 @@ function compareSettlementCandidates(
   return compareCandidateIdentity(left, right);
 }
 
+function hasValidCandidateNumericFields(
+  config: KeeperConfig,
+  candidate: ChainwideLiquidationAuction
+): boolean {
+  const numericFields: Array<[string, string | undefined]> = [
+    ['debtRemaining', candidate.debtRemaining],
+    ['collateralRemaining', candidate.collateralRemaining],
+    ['neutralPrice', candidate.neutralPrice],
+    ['debt', candidate.debt],
+    ['collateral', candidate.collateral],
+  ];
+
+  for (const [fieldName, fieldValue] of numericFields) {
+    try {
+      parseDecimalValue(fieldValue);
+    } catch (error) {
+      logDiscoverySkip(
+        config,
+        `discovery ignored ${normalizeAddress(candidate.pool.id)}/${candidate.borrower} because ${fieldName} was malformed: ${(error as Error).message}`
+      );
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function hydrateCandidate(candidate: ChainwideLiquidationAuction): DiscoveredAuctionCandidate {
   const parsedKickTime = Number(candidate.kickTime || '0');
   return {
@@ -356,7 +389,7 @@ function hydrateCandidate(candidate: ChainwideLiquidationAuction): DiscoveredAuc
     kickTime:
       Number.isFinite(parsedKickTime) && parsedKickTime > 0
         ? parsedKickTime * 1000
-        : Date.now(),
+        : INVALID_KICK_TIME_MS,
     debtRemaining: candidate.debtRemaining,
     collateralRemaining: candidate.collateralRemaining,
     neutralPrice: candidate.neutralPrice,
@@ -527,6 +560,7 @@ export async function buildDiscoveredTakeTargets(
   const takeCandidates = dedupeCandidates(
     liquidationAuctions
       .filter((candidate) => poolAllowed(config, candidate.pool.id))
+      .filter((candidate) => hasValidCandidateNumericFields(config, candidate))
       .filter((candidate) => isPositiveDecimalString(candidate.collateralRemaining))
       .filter((candidate) => {
         const normalizedPool = normalizeAddress(candidate.pool.id);
@@ -625,6 +659,7 @@ export async function buildDiscoveredSettlementTargets(
   const settlementCandidates = dedupeCandidates(
     liquidationAuctions
       .filter((candidate) => poolAllowed(config, candidate.pool.id))
+      .filter((candidate) => hasValidCandidateNumericFields(config, candidate))
       .filter((candidate) => isPositiveDecimalString(candidate.debtRemaining))
       .filter((candidate) => {
         const normalizedPool = normalizeAddress(candidate.pool.id);
@@ -718,6 +753,25 @@ export function validateResolvedSettlementTarget(
   validateSettlementSettings(target.settlement);
 }
 
+async function assertDiscoveredPoolMatchesAjnaDeployment(params: {
+  ajna: AjnaSDK;
+  pool: FungiblePool;
+  expectedPoolAddress: Address;
+}): Promise<void> {
+  const deployedPoolAddress = await params.ajna.fungiblePoolFactory.getPoolAddress(
+    params.pool.collateralAddress,
+    params.pool.quoteAddress
+  );
+  const normalizedExpected = normalizeAddress(params.expectedPoolAddress);
+  const normalizedDeployed = normalizeAddress(deployedPoolAddress);
+
+  if (normalizedDeployed !== normalizedExpected) {
+    throw new Error(
+      `Discovered pool ${normalizedExpected} is not part of the configured Ajna deployment (factory resolved ${normalizedDeployed} for ${params.pool.collateralAddress}/${params.pool.quoteAddress})`
+    );
+  }
+}
+
 function pruneExpiredHydrationCooldowns(
   hydrationCooldowns: PoolHydrationCooldowns,
   nowMs: number
@@ -764,6 +818,11 @@ export async function ensurePoolLoaded(params: {
     const pool = await params.ajna.fungiblePoolFactory.getPoolByAddress(
       params.poolAddress
     );
+    await assertDiscoveredPoolMatchesAjnaDeployment({
+      ajna: params.ajna,
+      pool,
+      expectedPoolAddress: params.poolAddress,
+    });
     overrideMulticall(pool, params.config);
     cachePool(params.poolMap, params.poolAddress, pool);
     params.hydrationCooldowns.delete(normalizedPool);

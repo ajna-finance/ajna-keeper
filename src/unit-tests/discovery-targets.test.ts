@@ -4,6 +4,7 @@ import {
   buildDiscoveredSettlementTargets,
   buildDiscoveredTakeTargets,
   clearSharedDiscoveryScans,
+  ensurePoolLoaded,
   validateResolvedSettlementTarget,
   validateResolvedTakeTarget,
 } from '../discovery/targets';
@@ -261,6 +262,41 @@ describe('Discovery Target Resolution', () => {
     expect(newSettlementTarget?.dryRun).to.equal(true);
   });
 
+  it('refuses to cache a discovered pool that is not deployed by the configured Ajna factory', async () => {
+    const hydrationCooldowns = new Map<string, number>();
+    const poolMap = new Map();
+    const loggerErrorStub = sinon.stub(logger, 'error');
+
+    const pool = await ensurePoolLoaded({
+      ajna: {
+        fungiblePoolFactory: {
+          getPoolByAddress: sinon.stub().resolves({
+            name: 'Compromised Pool',
+            poolAddress: '0x1111111111111111111111111111111111111111',
+            collateralAddress: '0x2222222222222222222222222222222222222222',
+            quoteAddress: '0x3333333333333333333333333333333333333333',
+          }),
+          getPoolAddress: sinon
+            .stub()
+            .resolves('0x9999999999999999999999999999999999999999'),
+        },
+      } as any,
+      poolMap: poolMap as any,
+      poolAddress: '0x1111111111111111111111111111111111111111',
+      config: BASE_CONFIG,
+      hydrationCooldowns,
+    });
+
+    expect(pool).to.equal(undefined);
+    expect(poolMap.size).to.equal(0);
+    expect(
+      hydrationCooldowns.has('0x1111111111111111111111111111111111111111')
+    ).to.equal(true);
+    expect(
+      loggerErrorStub.firstCall.args[0]
+    ).to.include('Failed to hydrate discovered pool 0x1111111111111111111111111111111111111111');
+  });
+
   it('returns no discovered targets when the chain-wide query is empty', async () => {
     sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
       liquidationAuctions: [],
@@ -373,6 +409,43 @@ describe('Discovery Target Resolution', () => {
     expect(targets).to.have.length(2);
   });
 
+  it('skips discovered candidates with malformed numeric fields without aborting the take build', async () => {
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerInvalid',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '3',
+          neutralPrice: '1e18',
+          debt: '2',
+          collateral: '3',
+          pool: { id: '0x2222222222222222222222222222222222222222' },
+        },
+        {
+          borrower: '0xBorrowerValid',
+          kickTime: '2',
+          debtRemaining: '5',
+          collateralRemaining: '6',
+          neutralPrice: '7',
+          debt: '5',
+          collateral: '6',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+      ],
+    });
+
+    const targets = await buildDiscoveredTakeTargets(BASE_CONFIG);
+
+    expect(targets).to.have.length(1);
+    expect(targets[0].poolAddress).to.equal(
+      '0x1111111111111111111111111111111111111111'
+    );
+    expect(targets[0].candidates.map((candidate) => candidate.borrower)).to.deep.equal([
+      '0xBorrowerValid',
+    ]);
+  });
+
   it('preserves negative signs when ranking discovered take candidates', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
@@ -464,6 +537,58 @@ describe('Discovery Target Resolution', () => {
     expect(targets[0].poolAddress).to.equal(
       '0x2222222222222222222222222222222222222222'
     );
+  });
+
+  it('uses a deterministic fallback ordering for invalid discovered kickTime values', async () => {
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        ...BASE_CONFIG.autoDiscover!,
+        take: false,
+        settlement: {
+          enabled: true,
+          maxPoolsPerRun: 1,
+        },
+      },
+    };
+
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerB',
+          kickTime: 'not-a-number',
+          debtRemaining: '10',
+          collateralRemaining: '0',
+          neutralPrice: '1',
+          debt: '10',
+          collateral: '0',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '',
+          debtRemaining: '10',
+          collateralRemaining: '0',
+          neutralPrice: '1',
+          debt: '10',
+          collateral: '0',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+      ],
+    });
+
+    const firstTargets = await buildDiscoveredSettlementTargets(config);
+    clearSharedDiscoveryScans();
+    const secondTargets = await buildDiscoveredSettlementTargets(config);
+
+    expect(firstTargets).to.have.length(1);
+    expect(secondTargets).to.have.length(1);
+    expect(
+      firstTargets[0].candidates.map((candidate) => candidate.borrower)
+    ).to.deep.equal(['0xBorrowerA', '0xBorrowerB']);
+    expect(
+      secondTargets[0].candidates.map((candidate) => candidate.borrower)
+    ).to.deep.equal(['0xBorrowerA', '0xBorrowerB']);
   });
 
   it('uses precise decimal ranking when enforcing discovered take quote budgets', async () => {

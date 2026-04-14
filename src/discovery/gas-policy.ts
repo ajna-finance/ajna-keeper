@@ -92,7 +92,8 @@ export function createDiscoveryTransportsForConfig(
 ): DiscoveryReadTransports {
   return createDiscoveryReadTransports(
     config as unknown as DiscoveryReadTransportConfig,
-    signer.provider
+    signer.provider,
+    async () => await signer.getChainId()
   );
 }
 

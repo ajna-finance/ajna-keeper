@@ -17,6 +17,7 @@ const READ_RPC_COOLDOWN_MS = 30_000;
 const READ_RPC_TIMEOUT_MS = 5_000;
 
 const readProviders = new Map<string, providers.JsonRpcProvider>();
+const readProviderChainIds = new Map<string, number>();
 
 function uniqueEndpoints(endpoints: string[]): string[] {
   const seen = new Set<string>();
@@ -54,6 +55,25 @@ function getReadProvider(url: string): providers.JsonRpcProvider {
   return provider;
 }
 
+async function getReadProviderChainId(
+  endpoint: string,
+  provider: providers.Provider
+): Promise<number> {
+  const cached = readProviderChainIds.get(endpoint);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const network = await withTimeout(
+    provider.getNetwork(),
+    READ_RPC_TIMEOUT_MS,
+    `read-rpc getNetwork for ${formatEndpointForLogs(endpoint)}`
+  );
+  const chainId = Number(network.chainId);
+  readProviderChainIds.set(endpoint, chainId);
+  return chainId;
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -79,6 +99,7 @@ async function withTimeout<T>(
 export async function getResilientReadGasPrice(params: {
   config: Pick<KeeperConfig, 'ethRpcUrl' | 'readRpcUrls'>;
   primaryProvider?: providers.Provider;
+  expectedChainId?: number;
 }): Promise<BigNumber> {
   const endpointKind: EndpointKind = 'read-rpc';
   const configuredEndpoints = getReadRpcEndpoints(params.config);
@@ -108,6 +129,18 @@ export async function getResilientReadGasPrice(params: {
         : getReadProvider(endpoint);
 
     try {
+      if (
+        params.expectedChainId !== undefined &&
+        provider !== params.primaryProvider
+      ) {
+        const providerChainId = await getReadProviderChainId(endpoint, provider);
+        if (providerChainId !== params.expectedChainId) {
+          throw new Error(
+            `read-rpc endpoint ${formatEndpointForLogs(endpoint)} is on chainId ${providerChainId}, expected ${params.expectedChainId}`
+          );
+        }
+      }
+
       const gasPrice = await withTimeout(
         provider.getGasPrice(),
         READ_RPC_TIMEOUT_MS,
@@ -143,6 +176,7 @@ export async function getResilientReadGasPrice(params: {
 
 export function clearReadProviderCache(): void {
   readProviders.clear();
+  readProviderChainIds.clear();
 }
 
 export function resetReadRpcHealthForTests(): void {

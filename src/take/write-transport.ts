@@ -135,6 +135,10 @@ export async function createTakeWriteTransport(params: {
         expectedChainId: params.expectedChainId,
         defaultReceiptTimeoutMs: normalizedConfig.receiptTimeoutMs,
       });
+    default:
+      throw new Error(
+        `Unsupported take write transport mode: ${String(normalizedConfig.mode)}`
+      );
   }
 }
 
@@ -590,7 +594,26 @@ function relayErrorResponseMayHideAcceptedTransaction(error: unknown): boolean {
 }
 
 function relayResponseMayHideAcceptedTransaction(responseData: unknown): boolean {
-  return hasRelayResultPayload(responseData) && !hasExplicitRelayError(responseData);
+  if (!hasRelayResultPayload(responseData) || hasExplicitRelayError(responseData)) {
+    return false;
+  }
+
+  const result =
+    responseData && typeof responseData === 'object'
+      ? (responseData as { result?: unknown }).result
+      : undefined;
+
+  if (typeof result === 'string') {
+    return result.trim() !== '';
+  }
+
+  if (result && typeof result === 'object') {
+    const txHash = (result as { txHash?: unknown; hash?: unknown }).txHash;
+    const hash = (result as { txHash?: unknown; hash?: unknown }).hash;
+    return typeof txHash === 'string' || typeof hash === 'string';
+  }
+
+  return false;
 }
 
 function relayMethodSupportsBlockExpiry(method: string): boolean {
