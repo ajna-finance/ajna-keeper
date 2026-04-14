@@ -49,6 +49,7 @@ describe('Subgraph Discovery Pagination', () => {
     const requestStub = sinon.stub(graphqlRequest, 'request');
     requestStub.onCall(0).resolves({
       liquidationAuctions: Array.from({ length: 100 }, (_, index) => ({
+        id: `auction-${index}`,
         borrower: `0xborrower-${index}`,
         kickTime: '1',
         debtRemaining: '1',
@@ -61,6 +62,7 @@ describe('Subgraph Discovery Pagination', () => {
     });
     requestStub.onCall(1).resolves({
       liquidationAuctions: Array.from({ length: 100 }, (_, index) => ({
+        id: `auction-second-${index}`,
         borrower: `0xborrower-second-${index}`,
         kickTime: '1',
         debtRemaining: '1',
@@ -73,6 +75,7 @@ describe('Subgraph Discovery Pagination', () => {
     });
     requestStub.onCall(2).resolves({
       liquidationAuctions: Array.from({ length: 20 }, (_, index) => ({
+        id: `auction-third-${index}`,
         borrower: `0xborrower-third-${index}`,
         kickTime: '1',
         debtRemaining: '1',
@@ -98,14 +101,14 @@ describe('Subgraph Discovery Pagination', () => {
     expect(firstRequest).to.include({
       url: 'http://example-subgraph',
     });
-    expect(firstRequest.variables).to.deep.equal({ first: 100, skip: 0 });
+    expect(firstRequest.variables).to.deep.equal({ first: 100, afterId: '' });
     expect(secondRequest.variables).to.deep.equal({
       first: 100,
-      skip: 100,
+      afterId: 'auction-99',
     });
     expect(thirdRequest.variables).to.deep.equal({
       first: 100,
-      skip: 200,
+      afterId: 'auction-second-99',
     });
   });
 
@@ -138,6 +141,7 @@ describe('Subgraph Discovery Pagination', () => {
     const loggerWarnStub = sinon.stub(logger, 'warn');
     requestStub.onCall(0).resolves({
       liquidationAuctions: Array.from({ length: 100 }, (_, index) => ({
+        id: `cap-auction-${index}`,
         borrower: `0xborrower-${index}`,
         kickTime: '1',
         debtRemaining: '1',
@@ -150,6 +154,7 @@ describe('Subgraph Discovery Pagination', () => {
     });
     requestStub.onCall(1).resolves({
       liquidationAuctions: Array.from({ length: 100 }, (_, index) => ({
+        id: `cap-auction-second-${index}`,
         borrower: `0xborrower-second-${index}`,
         kickTime: '1',
         debtRemaining: '1',

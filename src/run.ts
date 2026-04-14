@@ -1,6 +1,7 @@
 import { AjnaSDK, Signer } from '@ajna-finance/sdk';
 import {
   configureAjna,
+  getAutoDiscoverTakePolicy,
   KeeperConfig,
   PoolConfig,
   validateAutoDiscoverConfig,
@@ -49,6 +50,14 @@ interface LoopIterationResult {
 
 const LOOP_CRASH_RECOVERY_DELAY_SECONDS = 30;
 
+export function shouldRunTakeLoop(config: KeeperConfig): boolean {
+  const hasManualTakeTargets = config.pools.some(({ take }) => !!take);
+  const hasDiscoveredTakeTargets =
+    !!config.autoDiscover?.enabled &&
+    !!getAutoDiscoverTakePolicy(config.autoDiscover);
+  return hasManualTakeTargets || hasDiscoveredTakeTargets;
+}
+
 export async function startKeeperFromConfig(config: KeeperConfig) {
   const { provider, signer } = await getProviderAndSigner(
     config.keeperKeystore,
@@ -59,8 +68,11 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
 
   configureAjna(config.ajna);
   validateAutoDiscoverConfig(config);
-  validateTakeWriteConfig(config);
-  validateTakeSettingsForChain(config, chainId);
+  const takeLoopEnabled = shouldRunTakeLoop(config);
+  if (takeLoopEnabled) {
+    validateTakeWriteConfig(config);
+    validateTakeSettingsForChain(config, chainId);
+  }
 
   const ajna = new AjnaSDK(provider);
   logger.info('...and pools:');
@@ -68,11 +80,13 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   const hydrationCooldowns: PoolHydrationCooldowns = new Map();
   const discoverySnapshotState = {};
   const subgraph = createSubgraphReader(config);
-  const takeWriteTransport = await createTakeWriteTransport({
-    signer,
-    config,
-    expectedChainId: chainId,
-  });
+  const takeWriteTransport = takeLoopEnabled
+    ? await createTakeWriteTransport({
+        signer,
+        config,
+        expectedChainId: chainId,
+      })
+    : undefined;
   const discoveryRuntime = createDiscoveryRuntime({
     ajna,
     poolMap,
@@ -84,7 +98,9 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   });
 
   kickPoolsLoop({ poolMap, config, signer, chainId, subgraph });
-  takePoolsLoop({ config, signer, poolMap, discoveryRuntime });
+  if (takeLoopEnabled) {
+    takePoolsLoop({ config, signer, poolMap, discoveryRuntime });
+  }
   settlementLoop({ config, signer, poolMap, discoveryRuntime });
   collectBondLoop({ poolMap, config, signer, subgraph });
   collectLpRewardsLoop({ poolMap, config, signer, subgraph });

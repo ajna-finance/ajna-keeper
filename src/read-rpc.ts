@@ -82,8 +82,7 @@ export async function getResilientReadGasPrice(params: {
   const orderedEndpoints = orderEndpointsByHealth(
     endpointKind,
     uniqueEndpoints(
-      (usePrimaryProviderFirst ||
-        (primaryProviderUrl && configuredEndpoints[0] !== primaryProviderUrl))
+      usePrimaryProviderFirst
         ? [primaryEndpoint, ...configuredEndpoints]
         : configuredEndpoints
     )

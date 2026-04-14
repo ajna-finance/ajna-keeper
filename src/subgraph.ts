@@ -248,6 +248,7 @@ export interface GetUnsettledAuctionsResponse {
 }
 
 export interface ChainwideLiquidationAuction {
+  id?: string;
   borrower: string;
   kickTime: string;
   debtRemaining: string;
@@ -300,16 +301,17 @@ async function getUnsettledAuctions(
 }
 
 const getChainwideLiquidationAuctionsQuery = gql`
-  query GetChainwideLiquidationAuctions($first: Int!, $skip: Int!) {
+  query GetChainwideLiquidationAuctions($first: Int!, $afterId: String!) {
     liquidationAuctions(
       first: $first
-      skip: $skip
-      orderBy: kickTime
-      orderDirection: desc
+      orderBy: id
+      orderDirection: asc
       where: {
         settled: false
+        id_gt: $afterId
       }
     ) {
+      id
       borrower
       kickTime
       debtRemaining
@@ -327,16 +329,16 @@ const getChainwideLiquidationAuctionsQuery = gql`
 async function getChainwideLiquidationAuctionsPage(
   subgraphUrl: string,
   first: number = 100,
-  skip: number = 0,
+  afterId: string = '',
   options?: SubgraphRequestOptions
 ) {
   const result = await requestSubgraph<
     GetChainwideLiquidationAuctionsResponse,
-    { first: number; skip: number }
+    { first: number; afterId: string }
   >({
     subgraphUrl,
     document: getChainwideLiquidationAuctionsQuery,
-    variables: { first, skip },
+    variables: { first, afterId },
     options,
   });
   return result;
@@ -349,17 +351,28 @@ async function getChainwideLiquidationAuctions(
   options?: SubgraphRequestOptions
 ) {
   const liquidationAuctions: ChainwideLiquidationAuction[] = [];
+  let afterId = '';
   for (let page = 0; page < maxPages; page++) {
     const pageResult = await getChainwideLiquidationAuctionsPage(
       subgraphUrl,
       pageSize,
-      page * pageSize,
+      afterId,
       options
     );
     liquidationAuctions.push.apply(
       liquidationAuctions,
       pageResult.liquidationAuctions
     );
+    const lastAuction =
+      pageResult.liquidationAuctions[pageResult.liquidationAuctions.length - 1];
+    if (lastAuction?.id) {
+      afterId = lastAuction.id;
+    } else if (lastAuction) {
+      logger.warn(
+        'Chain-wide liquidation discovery response omitted auction id; stopping pagination early to avoid unstable cursors'
+      );
+      break;
+    }
     if (
       page === maxPages - 1 &&
       pageResult.liquidationAuctions.length === pageSize

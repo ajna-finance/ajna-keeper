@@ -543,7 +543,7 @@ describe('Settlement Module Tests', () => {
       expect(result).to.be.empty;
     });
 
-    it('reuses non-empty cached auctions within the cache window', async () => {
+    it('rechecks non-empty settlement scans instead of reusing cached settleable auctions', async () => {
       const oldKickTime = Math.floor(Date.now() / 1000) - 7200;
 
       getUnsettledAuctionsStub.resolves({
@@ -588,6 +588,26 @@ describe('Settlement Module Tests', () => {
 
       expect(firstResult).to.have.length(1);
       expect(secondResult).to.deep.equal(firstResult);
+      expect(getUnsettledAuctionsStub.calledTwice).to.be.true;
+    });
+
+    it('reuses empty settlement scans within the cache window', async () => {
+      getUnsettledAuctionsStub.resolves({
+        liquidationAuctions: [],
+      });
+
+      const handler = new SettlementHandler(
+        mockPool as any,
+        mockSigner as any,
+        poolConfig as any,
+        config
+      );
+
+      const firstResult = await handler.findSettleableAuctions();
+      const secondResult = await handler.findSettleableAuctions();
+
+      expect(firstResult).to.be.empty;
+      expect(secondResult).to.be.empty;
       expect(getUnsettledAuctionsStub.calledOnce).to.be.true;
     });
 

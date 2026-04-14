@@ -247,6 +247,62 @@ describe('take write transport', () => {
     expect(nextNonce).to.equal(8);
   });
 
+  it('applies a local durable nonce expiry for custom relay methods', async () => {
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(1),
+      getTransactionCount: sinon.stub().resolves(7),
+      populateTransaction: sinon.stub().callsFake(async (tx) => ({
+        ...tx,
+        chainId: 1,
+        nonce: tx.nonce ?? 7,
+        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
+        maxFeePerGas: BigNumber.from(1),
+        maxPriorityFeePerGas: BigNumber.from(1),
+      })),
+      signTransaction: sinon.stub().resolves('0x1234'),
+      provider: {
+        getBlockNumber: sinon.stub().onFirstCall().resolves(100).onSecondCall().resolves(130),
+        waitForTransaction: sinon.stub().resolves({
+          transactionHash:
+            '0x3333333333333333333333333333333333333333333333333333333333333333',
+        }),
+      },
+    } as any;
+    sinon.stub(axios, 'post').resolves({
+      data: {
+        result:
+          '0x3333333333333333333333333333333333333333333333333333333333333333',
+      },
+    } as any);
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: {
+        takeWrite: {
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+            sendMethod: 'eth_sendRawTransactionConditional',
+          },
+        },
+      } as any,
+      expectedChainId: 1,
+    });
+
+    await transport.submitTransaction({
+      to: '0x00000000000000000000000000000000000000bb',
+      data: '0xdeadbeef',
+      nonce: 7,
+    });
+
+    NonceTracker.clearNonces();
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(7);
+  });
+
   it('wraps relay receipt wait failures as nonce-consumed errors', async () => {
     const signer = {
       getAddress: sinon

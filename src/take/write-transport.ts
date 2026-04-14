@@ -255,14 +255,9 @@ async function createRelayTakeWriteTransport(params: {
       const relayMethod =
         params.relay.sendMethod ?? DEFAULT_RELAY_SEND_METHOD;
       const maxBlockNumberOffset =
-        relayMethod === DEFAULT_RELAY_SEND_METHOD
-          ? params.relay.maxBlockNumberOffset ??
-            DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET
-          : undefined;
-      const expiresAtBlock =
-        maxBlockNumberOffset !== undefined
-          ? currentBlock + maxBlockNumberOffset
-          : undefined;
+        params.relay.maxBlockNumberOffset ??
+        DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET;
+      const expiresAtBlock = currentBlock + maxBlockNumberOffset;
 
       const rawTx = await params.signer.signTransaction(populatedTx);
       const localTxHash = ethers.utils.keccak256(rawTx);

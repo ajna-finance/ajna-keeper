@@ -259,11 +259,9 @@ export interface SushiswapRouterOverrides {
 
 export interface CurveRouterOverrides {
   poolConfigs?: {
-    [poolAddress: string]: {
-      tokens: string[];
-      indices: { [tokenAddress: string]: number };
+    [tokenPair: string]: {
+      address: string;
       poolType: CurvePoolType;
-      enabled?: boolean;
     };
   };
   wethAddress?: string;
