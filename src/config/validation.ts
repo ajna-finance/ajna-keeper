@@ -10,96 +10,10 @@ import {
   hasExternalTakeSettings,
   hasNonEmptyObject,
 } from './schema';
-
-const WRAPPED_NATIVE_TOKEN_SYMBOLS = [
-  'weth',
-  'wavax',
-  'wftm',
-  'wmatic',
-  'wbnb',
-  'wxdai',
-  'wglmr',
-  'wmovr',
-  'wsei',
-  'wrose',
-  'wnear',
-  'wone',
-];
-
-function hasConfiguredWrappedNativeAddress(config: KeeperConfig): boolean {
-  if (
-    config.universalRouterOverrides?.wethAddress ||
-    config.sushiswapRouterOverrides?.wethAddress ||
-    config.curveRouterOverrides?.wethAddress
-  ) {
-    return true;
-  }
-
-  return WRAPPED_NATIVE_TOKEN_SYMBOLS.some((symbol) =>
-    Object.keys(config.tokenAddresses ?? {}).some(
-      (configuredSymbol) => configuredSymbol.toLowerCase() === symbol
-    )
-  );
-}
-
-function hasConfiguredGasQuoteLiquiditySource(
-  config: KeeperConfig,
-  liquiditySource: LiquiditySource,
-  chainId?: number
-): boolean {
-  switch (liquiditySource) {
-    case LiquiditySource.ONEINCH:
-      return !!(
-        hasNonEmptyObject(config.oneInchRouters) &&
-        (chainId === undefined || config.oneInchRouters?.[chainId])
-      );
-    case LiquiditySource.UNISWAPV3:
-      return !!(
-        config.universalRouterOverrides?.universalRouterAddress &&
-        config.universalRouterOverrides.poolFactoryAddress &&
-        config.universalRouterOverrides.wethAddress
-      );
-    case LiquiditySource.SUSHISWAP:
-      return !!(
-        config.sushiswapRouterOverrides?.swapRouterAddress &&
-        config.sushiswapRouterOverrides.factoryAddress &&
-        config.sushiswapRouterOverrides.wethAddress
-      );
-    case LiquiditySource.CURVE:
-      return !!(
-        hasNonEmptyObject(config.curveRouterOverrides?.poolConfigs) &&
-        config.curveRouterOverrides?.wethAddress
-      );
-    default:
-      return false;
-  }
-}
-
-function resolveConfiguredGasQuoteLiquiditySource(
-  config: KeeperConfig,
-  chainId?: number
-): LiquiditySource | undefined {
-  const preferredSource = config.discoveredDefaults?.take?.liquiditySource;
-  if (
-    preferredSource !== undefined &&
-    hasConfiguredGasQuoteLiquiditySource(config, preferredSource, chainId)
-  ) {
-    return preferredSource;
-  }
-
-  for (const candidate of [
-    LiquiditySource.ONEINCH,
-    LiquiditySource.UNISWAPV3,
-    LiquiditySource.SUSHISWAP,
-    LiquiditySource.CURVE,
-  ]) {
-    if (hasConfiguredGasQuoteLiquiditySource(config, candidate, chainId)) {
-      return candidate;
-    }
-  }
-
-  return undefined;
-}
+import {
+  hasConfiguredWrappedNativeAddress,
+  resolveConfiguredGasQuoteLiquiditySource,
+} from './liquidity-source';
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,

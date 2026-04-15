@@ -11,6 +11,7 @@ import {
 } from './endpoint-health';
 import { logger } from './logging';
 import { JsonRpcProvider } from './provider';
+import { withTimeout } from './utils';
 
 const READ_RPC_FAILURE_THRESHOLD = 3;
 const READ_RPC_COOLDOWN_MS = 30_000;
@@ -72,28 +73,6 @@ async function getReadProviderChainId(
   const chainId = Number(network.chainId);
   readProviderChainIds.set(endpoint, chainId);
   return chainId;
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string
-): Promise<T> {
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
 }
 
 export async function getResilientReadGasPrice(params: {

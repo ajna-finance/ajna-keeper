@@ -105,6 +105,46 @@ export interface GetLoanResponse {
 const GET_LOANS_PAGE_SIZE = 1000;
 const GET_LOANS_MAX_PAGES = 100;
 
+async function paginateSubgraphCursor<TItem>(params: {
+  pageSize: number;
+  maxPages: number;
+  truncationWarning: string;
+  fetchPage: (cursor: string) => Promise<TItem[]>;
+  getCursor: (item: TItem) => string | undefined;
+  missingCursorWarning?: string;
+}): Promise<TItem[]> {
+  const items: TItem[] = [];
+  let cursor = '';
+
+  for (let page = 0; page < params.maxPages; page++) {
+    const pageItems = await params.fetchPage(cursor);
+    items.push(...pageItems);
+
+    if (
+      page === params.maxPages - 1 &&
+      pageItems.length === params.pageSize
+    ) {
+      logger.warn(params.truncationWarning);
+    }
+
+    if (pageItems.length < params.pageSize) {
+      break;
+    }
+
+    const nextCursor = params.getCursor(pageItems[pageItems.length - 1]);
+    if (!nextCursor) {
+      if (params.missingCursorWarning) {
+        logger.warn(params.missingCursorWarning);
+      }
+      break;
+    }
+
+    cursor = nextCursor;
+  }
+
+  return items;
+}
+
 const getLoansQuery = gql`
   query GetLoans($poolId: String!, $first: Int!, $afterBorrower: String!) {
     loans(
@@ -128,41 +168,29 @@ async function getLoans(
   poolAddress: string,
   options?: SubgraphRequestOptions
 ) {
-  const loans: GetLoanResponse['loans'] = [];
   const poolId = poolAddress.toLowerCase();
-  let afterBorrower = '';
-
-  for (let page = 0; page < GET_LOANS_MAX_PAGES; page++) {
-    const pageResult = await requestSubgraph<
-      GetLoanResponse,
-      { poolId: string; first: number; afterBorrower: string }
-    >({
-      subgraphUrl,
-      document: getLoansQuery,
-      variables: {
-        poolId,
-        first: GET_LOANS_PAGE_SIZE,
-        afterBorrower,
-      },
-      options,
-    });
-    loans.push(...pageResult.loans);
-
-    if (
-      page === GET_LOANS_MAX_PAGES - 1 &&
-      pageResult.loans.length === GET_LOANS_PAGE_SIZE
-    ) {
-      logger.warn(
-        `Loan discovery reached maxPages=${GET_LOANS_MAX_PAGES} with pageSize=${GET_LOANS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
-      );
-    }
-
-    if (pageResult.loans.length < GET_LOANS_PAGE_SIZE) {
-      break;
-    }
-
-    afterBorrower = pageResult.loans[pageResult.loans.length - 1].borrower.toLowerCase();
-  }
+  const loans = await paginateSubgraphCursor({
+    pageSize: GET_LOANS_PAGE_SIZE,
+    maxPages: GET_LOANS_MAX_PAGES,
+    truncationWarning: `Loan discovery reached maxPages=${GET_LOANS_MAX_PAGES} with pageSize=${GET_LOANS_PAGE_SIZE} for pool=${poolId}; results may be truncated`,
+    fetchPage: async (afterBorrower) => {
+      const pageResult = await requestSubgraph<
+        GetLoanResponse,
+        { poolId: string; first: number; afterBorrower: string }
+      >({
+        subgraphUrl,
+        document: getLoansQuery,
+        variables: {
+          poolId,
+          first: GET_LOANS_PAGE_SIZE,
+          afterBorrower,
+        },
+        options,
+      });
+      return pageResult.loans;
+    },
+    getCursor: (loan) => loan.borrower.toLowerCase(),
+  });
 
   return { loans };
 }
@@ -212,55 +240,42 @@ async function getLiquidations(
   options?: SubgraphRequestOptions
 ) {
   const poolId = poolAddress.toLowerCase();
-  const liquidationAuctions: GetLiquidationResponse['pool']['liquidationAuctions'] = [];
-  let afterBorrower = '';
   let hpb = 0;
   let hpbIndex = 0;
+  const liquidationAuctions = await paginateSubgraphCursor({
+    pageSize: GET_LIQUIDATIONS_PAGE_SIZE,
+    maxPages: GET_LIQUIDATIONS_MAX_PAGES,
+    truncationWarning: `Pool liquidation discovery reached maxPages=${GET_LIQUIDATIONS_MAX_PAGES} with pageSize=${GET_LIQUIDATIONS_PAGE_SIZE} for pool=${poolId}; results may be truncated`,
+    fetchPage: async (afterBorrower) => {
+      const pageResult = await requestSubgraph<
+        GetLiquidationResponse,
+        {
+          poolId: string;
+          minCollateral: string;
+          first: number;
+          afterBorrower: string;
+        }
+      >({
+        subgraphUrl,
+        document: getLiquidationsQuery,
+        variables: {
+          poolId,
+          minCollateral: minCollateral.toString(),
+          first: GET_LIQUIDATIONS_PAGE_SIZE,
+          afterBorrower,
+        },
+        options,
+      });
 
-  for (let page = 0; page < GET_LIQUIDATIONS_MAX_PAGES; page++) {
-    const pageResult = await requestSubgraph<
-      GetLiquidationResponse,
-      {
-        poolId: string;
-        minCollateral: string;
-        first: number;
-        afterBorrower: string;
+      if (pageResult.pool) {
+        hpb = pageResult.pool.hpb;
+        hpbIndex = pageResult.pool.hpbIndex;
       }
-    >({
-      subgraphUrl,
-      document: getLiquidationsQuery,
-      variables: {
-        poolId,
-        minCollateral: minCollateral.toString(),
-        first: GET_LIQUIDATIONS_PAGE_SIZE,
-        afterBorrower,
-      },
-      options,
-    });
 
-    if (pageResult.pool) {
-      hpb = pageResult.pool.hpb;
-      hpbIndex = pageResult.pool.hpbIndex;
-      liquidationAuctions.push(...pageResult.pool.liquidationAuctions);
-    }
-
-    const pageAuctions = pageResult.pool?.liquidationAuctions ?? [];
-
-    if (
-      page === GET_LIQUIDATIONS_MAX_PAGES - 1 &&
-      pageAuctions.length === GET_LIQUIDATIONS_PAGE_SIZE
-    ) {
-      logger.warn(
-        `Pool liquidation discovery reached maxPages=${GET_LIQUIDATIONS_MAX_PAGES} with pageSize=${GET_LIQUIDATIONS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
-      );
-    }
-
-    if (pageAuctions.length < GET_LIQUIDATIONS_PAGE_SIZE) {
-      break;
-    }
-
-    afterBorrower = pageAuctions[pageAuctions.length - 1].borrower.toLowerCase();
-  }
+      return pageResult.pool?.liquidationAuctions ?? [];
+    },
+    getCursor: (auction) => auction.borrower.toLowerCase(),
+  });
 
   return {
     pool: {
@@ -373,42 +388,28 @@ async function getUnsettledAuctions(
   options?: SubgraphRequestOptions
 ) {
   const poolId = poolAddress.toLowerCase();
-  const liquidationAuctions: GetUnsettledAuctionsResponse['liquidationAuctions'] = [];
-  let afterBorrower = '';
-
-  for (let page = 0; page < GET_UNSETTLED_AUCTIONS_MAX_PAGES; page++) {
-    const pageResult = await requestSubgraph<
-      GetUnsettledAuctionsResponse,
-      { poolId: string; first: number; afterBorrower: string }
-    >({
-      subgraphUrl,
-      document: getUnsettledAuctionsQuery,
-      variables: {
-        poolId,
-        first: GET_UNSETTLED_AUCTIONS_PAGE_SIZE,
-        afterBorrower,
-      },
-      options,
-    });
-    liquidationAuctions.push(...pageResult.liquidationAuctions);
-
-    if (
-      page === GET_UNSETTLED_AUCTIONS_MAX_PAGES - 1 &&
-      pageResult.liquidationAuctions.length === GET_UNSETTLED_AUCTIONS_PAGE_SIZE
-    ) {
-      logger.warn(
-        `Unsettled auction discovery reached maxPages=${GET_UNSETTLED_AUCTIONS_MAX_PAGES} with pageSize=${GET_UNSETTLED_AUCTIONS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
-      );
-    }
-
-    if (pageResult.liquidationAuctions.length < GET_UNSETTLED_AUCTIONS_PAGE_SIZE) {
-      break;
-    }
-
-    afterBorrower = pageResult.liquidationAuctions[
-      pageResult.liquidationAuctions.length - 1
-    ].borrower.toLowerCase();
-  }
+  const liquidationAuctions = await paginateSubgraphCursor({
+    pageSize: GET_UNSETTLED_AUCTIONS_PAGE_SIZE,
+    maxPages: GET_UNSETTLED_AUCTIONS_MAX_PAGES,
+    truncationWarning: `Unsettled auction discovery reached maxPages=${GET_UNSETTLED_AUCTIONS_MAX_PAGES} with pageSize=${GET_UNSETTLED_AUCTIONS_PAGE_SIZE} for pool=${poolId}; results may be truncated`,
+    fetchPage: async (afterBorrower) => {
+      const pageResult = await requestSubgraph<
+        GetUnsettledAuctionsResponse,
+        { poolId: string; first: number; afterBorrower: string }
+      >({
+        subgraphUrl,
+        document: getUnsettledAuctionsQuery,
+        variables: {
+          poolId,
+          first: GET_UNSETTLED_AUCTIONS_PAGE_SIZE,
+          afterBorrower,
+        },
+        options,
+      });
+      return pageResult.liquidationAuctions;
+    },
+    getCursor: (auction) => auction.borrower.toLowerCase(),
+  });
 
   return { liquidationAuctions };
 }
@@ -463,41 +464,23 @@ async function getChainwideLiquidationAuctions(
   maxPages: number = 100,
   options?: SubgraphRequestOptions
 ) {
-  const liquidationAuctions: ChainwideLiquidationAuction[] = [];
-  let afterId = '';
-  for (let page = 0; page < maxPages; page++) {
-    const pageResult = await getChainwideLiquidationAuctionsPage(
-      subgraphUrl,
-      pageSize,
-      afterId,
-      options
-    );
-    liquidationAuctions.push.apply(
-      liquidationAuctions,
-      pageResult.liquidationAuctions
-    );
-    const lastAuction =
-      pageResult.liquidationAuctions[pageResult.liquidationAuctions.length - 1];
-    if (lastAuction?.id) {
-      afterId = lastAuction.id;
-    } else if (lastAuction) {
-      logger.warn(
-        'Chain-wide liquidation discovery response omitted auction id; stopping pagination early to avoid unstable cursors'
+  const liquidationAuctions = await paginateSubgraphCursor({
+    pageSize,
+    maxPages,
+    truncationWarning: `Chain-wide liquidation discovery reached maxPages=${maxPages} with pageSize=${pageSize}; results may be truncated`,
+    fetchPage: async (afterId) => {
+      const pageResult = await getChainwideLiquidationAuctionsPage(
+        subgraphUrl,
+        pageSize,
+        afterId,
+        options
       );
-      break;
-    }
-    if (
-      page === maxPages - 1 &&
-      pageResult.liquidationAuctions.length === pageSize
-    ) {
-      logger.warn(
-        `Chain-wide liquidation discovery reached maxPages=${maxPages} with pageSize=${pageSize}; results may be truncated`
-      );
-    }
-    if (pageResult.liquidationAuctions.length < pageSize) {
-      break;
-    }
-  }
+      return pageResult.liquidationAuctions;
+    },
+    getCursor: (auction) => auction.id,
+    missingCursorWarning:
+      'Chain-wide liquidation discovery response omitted auction id; stopping pagination early to avoid unstable cursors',
+  });
 
   return { liquidationAuctions };
 }

@@ -10,6 +10,7 @@ import {
 import { logger } from '../logging';
 import { JsonRpcProvider } from '../provider';
 import { NonceConsumedTransactionError, NonceTracker } from '../nonce';
+import { withTimeout } from '../utils';
 
 const DEFAULT_RELAY_SEND_METHOD = 'eth_sendPrivateTransaction';
 const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 15_000;
@@ -34,28 +35,6 @@ export interface TakeWriteTransport {
 
 export interface TakeWriteTransportConfig {
   takeWriteTransport?: TakeWriteTransport;
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string
-): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
 }
 
 async function waitForReceiptWithTimeout(params: {

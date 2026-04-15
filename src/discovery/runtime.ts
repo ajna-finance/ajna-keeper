@@ -336,37 +336,28 @@ async function resolveSettlementCycleTargets(
   ];
 }
 
-async function createTakeCycleRpcCache(
-  state: BoundDiscoveryRuntimeState
-): Promise<DiscoveryRpcCache | undefined> {
-  return state.signer.provider
-    ? {
-        ...createEmptyDiscoveryRpcCache(),
-        chainId:
-          typeof state.signer.getChainId === 'function'
-            ? await state.signer.getChainId()
-            : undefined,
-        gasPrice: await state.readTransports.readRpc.getGasPrice(),
-        gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
-      }
-    : undefined;
-}
+async function createDiscoveryCycleRpcCache(params: {
+  state: BoundDiscoveryRuntimeState;
+  includeFactoryQuoteProviders?: boolean;
+}): Promise<DiscoveryRpcCache | undefined> {
+  if (!params.state.signer.provider) {
+    return undefined;
+  }
 
-async function createSettlementCycleRpcCache(
-  state: BoundDiscoveryRuntimeState
-): Promise<DiscoveryRpcCache | undefined> {
-  return state.signer.provider
-    ? {
-        ...createEmptyDiscoveryRpcCache(),
-        chainId:
-          typeof state.signer.getChainId === 'function'
-            ? await state.signer.getChainId()
-            : undefined,
-        gasPrice: await state.readTransports.readRpc.getGasPrice(),
-        gasPriceFetchedAt: Date.now(),
-      }
-    : undefined;
+  return {
+    ...createEmptyDiscoveryRpcCache(),
+    chainId:
+      typeof params.state.signer.getChainId === 'function'
+        ? await params.state.signer.getChainId()
+        : undefined,
+    gasPrice: await params.state.readTransports.readRpc.getGasPrice(),
+    gasPriceFetchedAt: Date.now(),
+    ...(params.includeFactoryQuoteProviders
+      ? {
+          factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
+        }
+      : {}),
+  };
 }
 
 async function ensureFreshDiscoveryGasPrice(params: {
@@ -393,10 +384,14 @@ async function ensureFreshDiscoveryGasPrice(params: {
   params.cache.gasPriceFetchedAt = Date.now();
 }
 
-async function getTakeTargetRpcCache(params: {
+async function getDiscoveryTargetRpcCache<
+  TTarget extends { source: 'manual' | 'discovered' },
+>(params: {
   state: BoundDiscoveryRuntimeState;
-  target: EffectiveTakeTarget;
+  target: TTarget;
   cacheState: DiscoveryRpcCacheState;
+  targetLabel: 'take' | 'settlement';
+  createCache: () => Promise<DiscoveryRpcCache | undefined>;
 }): Promise<DiscoveryRpcCache | undefined> {
   if (params.target.source === 'manual') {
     return undefined;
@@ -404,13 +399,13 @@ async function getTakeTargetRpcCache(params: {
 
   if (!params.cacheState.initialized) {
     try {
-      params.cacheState.cache = await createTakeCycleRpcCache(params.state);
+      params.cacheState.cache = await params.createCache();
       params.cacheState.initialized = true;
     } catch (error) {
       const discoveryError =
         error instanceof Error ? error : new Error(String(error));
       logger.warn(
-        `Discovery take rpc cache unavailable for this target; discovered take target will fail: ${discoveryError.message}`
+        `Discovery ${params.targetLabel} rpc cache unavailable for this target; discovered ${params.targetLabel} target will fail: ${discoveryError.message}`
       );
       throw discoveryError;
     }
@@ -425,7 +420,7 @@ async function getTakeTargetRpcCache(params: {
     const discoveryError =
       error instanceof Error ? error : new Error(String(error));
     logger.warn(
-      `Discovery take gas price refresh unavailable for this target; discovered take target will fail: ${discoveryError.message}`
+      `Discovery ${params.targetLabel} gas price refresh unavailable for this target; discovered ${params.targetLabel} target will fail: ${discoveryError.message}`
     );
     throw discoveryError;
   }
@@ -433,46 +428,39 @@ async function getTakeTargetRpcCache(params: {
   return params.cacheState.cache;
 }
 
+async function getTakeTargetRpcCache(params: {
+  state: BoundDiscoveryRuntimeState;
+  target: EffectiveTakeTarget;
+  cacheState: DiscoveryRpcCacheState;
+}): Promise<DiscoveryRpcCache | undefined> {
+  return await getDiscoveryTargetRpcCache({
+    state: params.state,
+    target: params.target,
+    cacheState: params.cacheState,
+    targetLabel: 'take',
+    createCache: async () =>
+      await createDiscoveryCycleRpcCache({
+        state: params.state,
+        includeFactoryQuoteProviders: true,
+      }),
+  });
+}
+
 async function getSettlementTargetRpcCache(params: {
   state: BoundDiscoveryRuntimeState;
   target: EffectiveSettlementTarget;
   cacheState: DiscoveryRpcCacheState;
 }): Promise<DiscoveryRpcCache | undefined> {
-  if (params.target.source === 'manual') {
-    return undefined;
-  }
-
-  if (!params.cacheState.initialized) {
-    try {
-      params.cacheState.cache = await createSettlementCycleRpcCache(
-        params.state
-      );
-      params.cacheState.initialized = true;
-    } catch (error) {
-      const discoveryError =
-        error instanceof Error ? error : new Error(String(error));
-      logger.warn(
-        `Discovery settlement rpc cache unavailable for this target; discovered settlement target will fail: ${discoveryError.message}`
-      );
-      throw discoveryError;
-    }
-  }
-
-  try {
-    await ensureFreshDiscoveryGasPrice({
-      state: params.state,
-      cache: params.cacheState.cache,
-    });
-  } catch (error) {
-    const discoveryError =
-      error instanceof Error ? error : new Error(String(error));
-    logger.warn(
-      `Discovery settlement gas price refresh unavailable for this target; discovered settlement target will fail: ${discoveryError.message}`
-    );
-    throw discoveryError;
-  }
-
-  return params.cacheState.cache;
+  return await getDiscoveryTargetRpcCache({
+    state: params.state,
+    target: params.target,
+    cacheState: params.cacheState,
+    targetLabel: 'settlement',
+    createCache: async () =>
+      await createDiscoveryCycleRpcCache({
+        state: params.state,
+      }),
+  });
 }
 
 async function resolveEffectiveTargetPool(
