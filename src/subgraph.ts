@@ -177,31 +177,98 @@ export interface GetLiquidationResponse {
   };
 }
 
+const GET_LIQUIDATIONS_PAGE_SIZE = 1000;
+const GET_LIQUIDATIONS_MAX_PAGES = 100;
+
+const getLiquidationsQuery = gql`
+  query GetLiquidations(
+    $poolId: String!
+    $minCollateral: String!
+    $first: Int!
+    $afterBorrower: String!
+  ) {
+    pool(id: $poolId) {
+      hpb
+      hpbIndex
+      liquidationAuctions(
+        first: $first
+        orderBy: borrower
+        orderDirection: asc
+        where: {
+          collateralRemaining_gt: $minCollateral
+          borrower_gt: $afterBorrower
+        }
+      ) {
+        borrower
+      }
+    }
+  }
+`;
+
 async function getLiquidations(
   subgraphUrl: string,
   poolAddress: string,
   minCollateral: number,
   options?: SubgraphRequestOptions
 ) {
-  // TODO: Should probably sort auctions by kickTime so that we kick the most profitable auctions first.
-  const query = gql`
-    query {
-      pool (id: "${poolAddress.toLowerCase()}") {
-        hpb
-        hpbIndex
-        liquidationAuctions (where: {collateralRemaining_gt: "${minCollateral}"}) {
-          borrower
-        }
-      }
-    }
-  `;
+  const poolId = poolAddress.toLowerCase();
+  const liquidationAuctions: GetLiquidationResponse['pool']['liquidationAuctions'] = [];
+  let afterBorrower = '';
+  let hpb = 0;
+  let hpbIndex = 0;
 
-  const result = await requestSubgraph<GetLiquidationResponse>({
-    subgraphUrl,
-    document: query,
-    options,
-  });
-  return result;
+  for (let page = 0; page < GET_LIQUIDATIONS_MAX_PAGES; page++) {
+    const pageResult = await requestSubgraph<
+      GetLiquidationResponse,
+      {
+        poolId: string;
+        minCollateral: string;
+        first: number;
+        afterBorrower: string;
+      }
+    >({
+      subgraphUrl,
+      document: getLiquidationsQuery,
+      variables: {
+        poolId,
+        minCollateral: minCollateral.toString(),
+        first: GET_LIQUIDATIONS_PAGE_SIZE,
+        afterBorrower,
+      },
+      options,
+    });
+
+    if (pageResult.pool) {
+      hpb = pageResult.pool.hpb;
+      hpbIndex = pageResult.pool.hpbIndex;
+      liquidationAuctions.push(...pageResult.pool.liquidationAuctions);
+    }
+
+    const pageAuctions = pageResult.pool?.liquidationAuctions ?? [];
+
+    if (
+      page === GET_LIQUIDATIONS_MAX_PAGES - 1 &&
+      pageAuctions.length === GET_LIQUIDATIONS_PAGE_SIZE
+    ) {
+      logger.warn(
+        `Pool liquidation discovery reached maxPages=${GET_LIQUIDATIONS_MAX_PAGES} with pageSize=${GET_LIQUIDATIONS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
+      );
+    }
+
+    if (pageAuctions.length < GET_LIQUIDATIONS_PAGE_SIZE) {
+      break;
+    }
+
+    afterBorrower = pageAuctions[pageAuctions.length - 1].borrower.toLowerCase();
+  }
+
+  return {
+    pool: {
+      hpb,
+      hpbIndex,
+      liquidationAuctions,
+    },
+  };
 }
 
 export interface GetMeaningfulBucketResponse {
@@ -270,39 +337,80 @@ export interface GetChainwideLiquidationAuctionsResponse {
   liquidationAuctions: ChainwideLiquidationAuction[];
 }
 
+const GET_UNSETTLED_AUCTIONS_PAGE_SIZE = 1000;
+const GET_UNSETTLED_AUCTIONS_MAX_PAGES = 100;
+
+const getUnsettledAuctionsQuery = gql`
+  query GetUnsettledAuctions(
+    $poolId: String!
+    $first: Int!
+    $afterBorrower: String!
+  ) {
+    liquidationAuctions(
+      first: $first
+      orderBy: borrower
+      orderDirection: asc
+      where: {
+        pool: $poolId
+        settled: false
+        borrower_gt: $afterBorrower
+      }
+    ) {
+      borrower
+      kickTime
+      debtRemaining
+      collateralRemaining
+      neutralPrice
+      debt
+      collateral
+    }
+  }
+`;
+
 async function getUnsettledAuctions(
   subgraphUrl: string,
   poolAddress: string,
   options?: SubgraphRequestOptions
 ) {
-  const query = gql`
-    query GetUnsettledAuctions($poolId: String!) {
-      liquidationAuctions(
-        where: {
-          pool: $poolId,
-          settled: false
-        }
-      ) {
-        borrower
-        kickTime
-        debtRemaining
-        collateralRemaining
-        neutralPrice
-        debt
-        collateral
-      }
-    }
-  `;
+  const poolId = poolAddress.toLowerCase();
+  const liquidationAuctions: GetUnsettledAuctionsResponse['liquidationAuctions'] = [];
+  let afterBorrower = '';
 
-  const result = await requestSubgraph<GetUnsettledAuctionsResponse, { poolId: string }>({
-    subgraphUrl,
-    document: query,
-    variables: {
-      poolId: poolAddress.toLowerCase(),
-    },
-    options,
-  });
-  return result;
+  for (let page = 0; page < GET_UNSETTLED_AUCTIONS_MAX_PAGES; page++) {
+    const pageResult = await requestSubgraph<
+      GetUnsettledAuctionsResponse,
+      { poolId: string; first: number; afterBorrower: string }
+    >({
+      subgraphUrl,
+      document: getUnsettledAuctionsQuery,
+      variables: {
+        poolId,
+        first: GET_UNSETTLED_AUCTIONS_PAGE_SIZE,
+        afterBorrower,
+      },
+      options,
+    });
+    liquidationAuctions.push(...pageResult.liquidationAuctions);
+
+    if (
+      page === GET_UNSETTLED_AUCTIONS_MAX_PAGES - 1 &&
+      pageResult.liquidationAuctions.length === GET_UNSETTLED_AUCTIONS_PAGE_SIZE
+    ) {
+      logger.warn(
+        `Unsettled auction discovery reached maxPages=${GET_UNSETTLED_AUCTIONS_MAX_PAGES} with pageSize=${GET_UNSETTLED_AUCTIONS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
+      );
+    }
+
+    if (pageResult.liquidationAuctions.length < GET_UNSETTLED_AUCTIONS_PAGE_SIZE) {
+      break;
+    }
+
+    afterBorrower = pageResult.liquidationAuctions[
+      pageResult.liquidationAuctions.length - 1
+    ].borrower.toLowerCase();
+  }
+
+  return { liquidationAuctions };
 }
 
 const getChainwideLiquidationAuctionsQuery = gql`

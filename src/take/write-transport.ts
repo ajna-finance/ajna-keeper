@@ -17,6 +17,7 @@ const DEFAULT_RELAY_RECEIPT_TIMEOUT_MS = 120_000;
 const DEFAULT_RELAY_MAX_BLOCK_NUMBER_OFFSET = 25;
 const DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_TTL_MS = 15 * 60_000;
 const DEFAULT_TAKE_RECEIPT_TIMEOUT_MS = 120_000;
+const DEFAULT_TAKE_WRITE_NETWORK_TIMEOUT_MS = 5_000;
 
 export interface TakeWriteSubmission {
   txHash: string;
@@ -35,23 +36,18 @@ export interface TakeWriteTransportConfig {
   takeWriteTransport?: TakeWriteTransport;
 }
 
-async function waitForReceiptWithTimeout(params: {
-  txHash: string;
-  wait: () => Promise<providers.TransactionReceipt>;
-  timeoutMs: number;
-}): Promise<providers.TransactionReceipt> {
-  const { txHash, wait, timeoutMs } = params;
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<T> {
   let timeoutHandle: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      wait(),
-      new Promise<providers.TransactionReceipt>((_, reject) => {
+      promise,
+      new Promise<T>((_, reject) => {
         timeoutHandle = setTimeout(() => {
-          reject(
-            new Error(
-              `Transaction confirmation timeout after ${timeoutMs}ms for ${txHash}`
-            )
-          );
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);
@@ -60,6 +56,24 @@ async function waitForReceiptWithTimeout(params: {
       clearTimeout(timeoutHandle);
     }
   }
+}
+
+async function waitForReceiptWithTimeout(params: {
+  txHash: string;
+  wait: () => Promise<providers.TransactionReceipt>;
+  timeoutMs: number;
+}): Promise<providers.TransactionReceipt> {
+  const { txHash, wait, timeoutMs } = params;
+  return await withTimeout(
+    wait(),
+    timeoutMs,
+    `Transaction confirmation timeout for ${txHash}`
+  ).catch((error) => {
+    if (error instanceof Error && error.message.startsWith('Transaction confirmation timeout for')) {
+      throw new Error(`Transaction confirmation timeout after ${timeoutMs}ms for ${txHash}`);
+    }
+    throw error;
+  });
 }
 
 export function resolveTakeWriteTransport(
@@ -225,7 +239,11 @@ async function createPrivateRpcTakeWriteTransport(params: {
   receiptTimeoutMs?: number;
 }): Promise<TakeWriteTransport> {
   const provider = new JsonRpcProvider(params.rpcUrl);
-  const network = await provider.getNetwork();
+  const network = await withTimeout(
+    provider.getNetwork(),
+    DEFAULT_TAKE_WRITE_NETWORK_TIMEOUT_MS,
+    `takeWrite private_rpc getNetwork for ${params.rpcUrl}`
+  );
   if (network.chainId !== params.expectedChainId) {
     throw new Error(
       `Configured take write rpc chainId ${network.chainId} does not match keeper chainId ${params.expectedChainId}`

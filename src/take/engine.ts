@@ -390,6 +390,31 @@ export async function executeTakeDecision<
 
     if (approvedArbTake) {
       await delay(delayBetweenActions);
+
+      try {
+        const postTakeRevalidated = await revalidateTakeDecision({
+          pool,
+          borrower: decision.borrower,
+          maxArbTakePrice: decision.maxArbTakePrice,
+        });
+        const arbActionLabel = arbTakeActionLabel ?? 'ArbTake';
+        approvedArbTake = postTakeRevalidated.approvedArbTake;
+        collateral = postTakeRevalidated.collateral;
+        auctionPrice = postTakeRevalidated.auctionPrice;
+
+        if (!approvedArbTake) {
+          logger.debug(
+            `Skipping ${arbActionLabel} after external take for ${pool.name}/${decision.borrower}: onchain revalidation changed the auction state`
+          );
+        }
+      } catch (error) {
+        const arbActionLabel = arbTakeActionLabel ?? 'ArbTake';
+        approvedArbTake = false;
+        logger.warn(
+          `Skipping ${arbActionLabel} after external take for ${pool.name}/${decision.borrower}: failed to revalidate auction state`,
+          error
+        );
+      }
     }
   }
 

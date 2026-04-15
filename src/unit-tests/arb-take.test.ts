@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { ethers } from 'ethers';
+import { BigNumber, ethers } from 'ethers';
 import * as erc20 from '../erc20';
 import { LiquiditySource } from '../config';
 import { arbTakeLiquidation, checkIfArbTakeable } from '../take/arb';
@@ -169,6 +169,79 @@ describe('shared arbTake helpers', () => {
     expect(arbTakeLiquidationStub.firstCall.args[0].config.takeWriteTransport).to.equal(
       takeWriteTransport
     );
+  });
+
+
+  it('skips arb take after a successful external take changes the auction state', async () => {
+    const executeExternalTakeStub = sinon.stub().resolves(true);
+    const arbTakeLiquidationStub = sinon
+      .stub(require('../take/arb'), 'arbTakeLiquidation')
+      .resolves(true);
+    sinon.stub(require('../take/arb'), 'checkIfArbTakeable').resolves({
+      isArbTakeable: true,
+      hpbIndex: 77,
+      maxArbTakePrice: 2,
+    });
+    const onExecuted = sinon.stub();
+
+    const getStatusStub = sinon.stub();
+    getStatusStub
+      .onCall(0)
+      .resolves({
+        collateral: ethers.utils.parseEther('1'),
+        price: ethers.utils.parseEther('1'),
+      })
+      .onCall(1)
+      .resolves({
+        collateral: BigNumber.from(0),
+        price: ethers.utils.parseEther('1'),
+      });
+
+    const pool = {
+      name: 'Execution Pool',
+      poolAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+      getPrices: sinon.stub().resolves({
+        hpb: ethers.utils.parseEther('1'),
+      }),
+    };
+
+    await processTakeCandidates({
+      pool: pool as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Execution Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: [{ borrower: '0xBorrower' }],
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'legacy',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          takeablePrice: 1,
+        }),
+        executeExternalTake: executeExternalTakeStub,
+      } as any,
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      approveArbTake: sinon.stub().resolves({ approved: true }),
+      onExecuted,
+    });
+
+    expect(executeExternalTakeStub.calledOnce).to.equal(true);
+    expect(arbTakeLiquidationStub.called).to.equal(false);
+    expect(onExecuted.calledOnce).to.equal(true);
+    expect(onExecuted.firstCall.args[0].executedTake).to.equal(true);
+    expect(onExecuted.firstCall.args[0].executedArbTake).to.equal(false);
   });
 
   it('continues processing later candidates when an earlier candidate throws', async () => {

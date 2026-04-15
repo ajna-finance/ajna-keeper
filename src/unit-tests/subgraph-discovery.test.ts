@@ -45,6 +45,96 @@ describe('Subgraph Discovery Pagination', () => {
     });
   });
 
+
+  it('paginates pool liquidation discovery until the final short page', async () => {
+    const requestStub = sinon.stub(graphqlRequest, 'request');
+    requestStub.onCall(0).resolves({
+      pool: {
+        hpb: 1,
+        hpbIndex: 123,
+        liquidationAuctions: Array.from({ length: 1000 }, (_, index) => ({
+          borrower: `0xliquidation-${index}`,
+        })),
+      },
+    });
+    requestStub.onCall(1).resolves({
+      pool: {
+        hpb: 1,
+        hpbIndex: 123,
+        liquidationAuctions: Array.from({ length: 250 }, (_, index) => ({
+          borrower: `0xliquidation-next-${index}`,
+        })),
+      },
+    });
+
+    const result = await subgraph.getLiquidations(
+      'http://example-subgraph',
+      '0x1111111111111111111111111111111111111111',
+      0.5
+    );
+
+    expect(result.pool.hpb).to.equal(1);
+    expect(result.pool.hpbIndex).to.equal(123);
+    expect(result.pool.liquidationAuctions).to.have.length(1250);
+    expect(requestStub.callCount).to.equal(2);
+    expect((requestStub.firstCall.args[0] as any).variables).to.deep.equal({
+      poolId: '0x1111111111111111111111111111111111111111',
+      minCollateral: '0.5',
+      first: 1000,
+      afterBorrower: '',
+    });
+    expect((requestStub.secondCall.args[0] as any).variables).to.deep.equal({
+      poolId: '0x1111111111111111111111111111111111111111',
+      minCollateral: '0.5',
+      first: 1000,
+      afterBorrower: '0xliquidation-999',
+    });
+  });
+
+  it('paginates unsettled auctions until the final short page', async () => {
+    const requestStub = sinon.stub(graphqlRequest, 'request');
+    requestStub.onCall(0).resolves({
+      liquidationAuctions: Array.from({ length: 1000 }, (_, index) => ({
+        borrower: `0xauction-${index}`,
+        kickTime: '1',
+        debtRemaining: '1',
+        collateralRemaining: '1',
+        neutralPrice: '1',
+        debt: '1',
+        collateral: '1',
+      })),
+    });
+    requestStub.onCall(1).resolves({
+      liquidationAuctions: Array.from({ length: 20 }, (_, index) => ({
+        borrower: `0xauction-next-${index}`,
+        kickTime: '1',
+        debtRemaining: '1',
+        collateralRemaining: '1',
+        neutralPrice: '1',
+        debt: '1',
+        collateral: '1',
+      })),
+    });
+
+    const result = await subgraph.getUnsettledAuctions(
+      'http://example-subgraph',
+      '0x1111111111111111111111111111111111111111'
+    );
+
+    expect(result.liquidationAuctions).to.have.length(1020);
+    expect(requestStub.callCount).to.equal(2);
+    expect((requestStub.firstCall.args[0] as any).variables).to.deep.equal({
+      poolId: '0x1111111111111111111111111111111111111111',
+      first: 1000,
+      afterBorrower: '',
+    });
+    expect((requestStub.secondCall.args[0] as any).variables).to.deep.equal({
+      poolId: '0x1111111111111111111111111111111111111111',
+      first: 1000,
+      afterBorrower: '0xauction-999',
+    });
+  });
+
   it('paginates chain-wide liquidation auctions until the final short page', async () => {
     const requestStub = sinon.stub(graphqlRequest, 'request');
     requestStub.onCall(0).resolves({

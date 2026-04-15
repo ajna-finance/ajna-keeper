@@ -131,6 +131,42 @@ describe('take write transport', () => {
     }
   });
 
+
+  it('times out a hung private_rpc network probe', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+    try {
+      const signer = Wallet.createRandom();
+      sinon
+        .stub(JsonRpcProvider.prototype, 'getNetwork')
+        .returns(new Promise(() => {}));
+
+      const createPromise = createTakeWriteTransport({
+        signer,
+        config: {
+          takeWrite: {
+            mode: TakeWriteTransportMode.PRIVATE_RPC,
+            rpcUrl: 'http://private-rpc',
+          },
+        } as any,
+        expectedChainId: 1,
+      }).then(
+        () => {
+          expect.fail('Expected private_rpc network probe to time out');
+        },
+        (error) => {
+          expect((error as Error).message).to.include(
+            'takeWrite private_rpc getNetwork for http://private-rpc timed out after 5000ms'
+          );
+        }
+      );
+
+      await clock.tickAsync(5001);
+      await createPromise;
+    } finally {
+      clock.restore();
+    }
+  });
+
   it('creates a private transport from explicit private_rpc config', async () => {
     const signer = Wallet.createRandom();
     sinon

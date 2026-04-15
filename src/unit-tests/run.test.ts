@@ -87,6 +87,21 @@ describe('run startup gating', () => {
     expect(
       shouldRunSettlementLoop({
         ...BASE_CONFIG,
+        pools: [
+          {
+            name: 'Disabled Settlement Pool',
+            address: '0x3333333333333333333333333333333333333333',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            settlement: {
+              enabled: false,
+            },
+          },
+        ],
+      })
+    ).to.equal(false);
+    expect(
+      shouldRunSettlementLoop({
+        ...BASE_CONFIG,
         autoDiscover: {
           enabled: true,
           settlement: true,

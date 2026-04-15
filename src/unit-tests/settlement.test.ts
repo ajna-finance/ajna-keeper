@@ -145,15 +145,16 @@ describe('Settlement Module Tests', () => {
     });
 
     it('should return false when debt is zero', async () => {
-      // Setup: Mock auction with no debt remaining
+      // Setup: Auction info still has kick-time debt-to-collateral, but the live debt is zero.
       mockPool.contract.auctionInfo.resolves({
         kickTime_: BigNumber.from(Math.floor(Date.now() / 1000)),
-        debtToCollateral_: BigNumber.from(0), // No debt
+        debtToCollateral_: BigNumber.from('9000000000000000000'),
       });
 
       mockPool.getLiquidation.returns({
         getStatus: async () => ({
           collateral: BigNumber.from(0),
+          debtToCover: BigNumber.from(0),
           price: BigNumber.from('1000000000000'),
         }),
       });
@@ -168,9 +169,10 @@ describe('Settlement Module Tests', () => {
       // Execute: Check settlement need
       const result = await handler.needsSettlement('0xBorrower123');
       
-      // Verify: Should not need settlement when debt is zero
+      // Verify: Should not need settlement when live debt is zero
       expect(result.needs).to.be.false;
       expect(result.reason).to.include('No debt remaining');
+      expect(result.details?.debtRemaining.toString()).to.equal('0');
     });
 
     it('should return false when collateral still exists for auction', async () => {
@@ -235,12 +237,13 @@ describe('Settlement Module Tests', () => {
       // Setup: Mock auction with bad debt (no collateral, has debt)
       mockPool.contract.auctionInfo.resolves({
         kickTime_: BigNumber.from(Math.floor(Date.now() / 1000)),
-        debtToCollateral_: BigNumber.from('2000000000000000000'), // 2.0 debt
+        debtToCollateral_: BigNumber.from('9000000000000000000'),
       });
 
       mockPool.getLiquidation.returns({
         getStatus: async () => ({
           collateral: BigNumber.from(0), // No collateral left
+          debtToCover: BigNumber.from('2000000000000000000'),
           price: BigNumber.from('1000000000000'),
         }),
       });
@@ -258,10 +261,12 @@ describe('Settlement Module Tests', () => {
       // Execute: Check settlement need
       const result = await handler.needsSettlement('0xBorrower123');
       
-      // Verify: Should need settlement for bad debt
+      // Verify: Should need settlement for bad debt using the live debt amount
       expect(result.needs).to.be.true;
       expect(result.reason).to.include('Bad debt detected');
-      expect(result.reason).to.include('2'); // weiToDecimaled converts 2000000000000000000 to '2'
+      expect(result.reason).to.include('2');
+      expect(result.reason).to.not.include('9');
+      expect(result.details?.debtRemaining.toString()).to.equal('2000000000000000000');
     });
 
     it('should return false when settlement call would fail', async () => {

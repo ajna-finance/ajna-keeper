@@ -74,7 +74,7 @@ export function shouldRunTakeLoop(config: KeeperConfig): boolean {
 
 export function shouldRunSettlementLoop(config: KeeperConfig): boolean {
   const hasManualSettlementTargets = config.pools.some(
-    ({ settlement }) => !!settlement
+    ({ settlement }) => settlement?.enabled === true
   );
   const hasDiscoveredSettlementTargets =
     !!config.autoDiscover?.enabled &&

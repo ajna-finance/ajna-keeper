@@ -80,7 +80,7 @@ export async function needsSettlement(params: {
       .getLiquidation(params.borrower)
       .getStatus();
     const collateralAmount = liquidationStatus.collateral;
-    const debt = auctionInfo.debtToCollateral_;
+    const debt = liquidationStatus.debtToCover ?? auctionInfo.debtToCollateral_;
 
     const details = {
       debtRemaining: debt,
