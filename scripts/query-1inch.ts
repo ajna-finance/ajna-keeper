@@ -166,4 +166,9 @@ async function main() {
   }
 }
 
-main();
+main().catch((error) => {
+  const errorMessage =
+    error instanceof Error ? error.message : String(error);
+  console.error(errorMessage);
+  exit(1);
+});

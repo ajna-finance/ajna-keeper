@@ -7,18 +7,42 @@ import {
 } from './src/config';
 
 const config: KeeperConfig = {
-  // Start in dry-run mode for testing
+  // Start in dry-run mode for testing.
+  // Note: dryRun skips takeWrite transport validation and initialization.
+  // Do one non-dry-run startup check before assuming private/relay take submission is wired correctly.
   dryRun: true,
   logLevel: 'debug',
 
   // Base Chain RPC - Uses Alchemy API key from .env file
   ethRpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+  // Optional dedicated read failover endpoints. If you configure readRpcUrls,
+  // include the primary endpoint here yourself; ethRpcUrl is not implicitly prepended.
+  // readRpcUrls: [
+  //   `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+  //   process.env.BASE_READ_RPC_FALLBACK_URL!,
+  // ],
 
   // Subgraph URL - The Graph gateway (requires API key from https://thegraph.com/studio/)
   subgraphUrl: `https://gateway.thegraph.com/api/${process.env.GRAPH_API_KEY}/subgraphs/id/9npza28cZyi8R94SJjm9Y3fuWeBZZK4CHr2r8NCvsr98`,
 
   // Keystore path - update to your keystore location
   keeperKeystore: '/path/to/your/keystore.json',
+  // Optional shorthand for private_rpc mode:
+  // takeWriteRpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
+  // Optional explicit take-only write transport:
+  // takeWrite: {
+  //   mode: 'private_rpc',
+  //   rpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
+  // },
+  // Or route takes through a private relay:
+  // takeWrite: {
+  //   mode: 'relay',
+  //   relay: {
+  //     url: process.env.BASE_PRIVATE_RELAY_URL!,
+  //     sendMethod: 'eth_sendPrivateTransaction',
+  //     maxBlockNumberOffset: 25,
+  //   },
+  // },
 
   // Base Chain Multicall
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',

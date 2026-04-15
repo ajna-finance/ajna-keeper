@@ -37,10 +37,7 @@ export async function addAccountFromKeystore(
   // read the keystore file, confirming it exists
   const jsonKeystore = (await fs.readFile(keystorePath)).toString();
 
-  const pswd = await password({
-    message: 'Please enter your keystore password',
-    mask: '*',
-  });
+  const pswd = await Utils.askPassword();
 
   try {
     let wallet = Wallet.fromEncryptedJsonSync(jsonKeystore, pswd);
@@ -48,9 +45,9 @@ export async function addAccountFromKeystore(
     return wallet.connect(provider);
   } catch (error) {
     logger.error('Error decrypting keystore:', error);
-    logger.error('This keeper will not create transactions');
-    let wallet = Wallet.createRandom();
-    return wallet.connect(provider);
+    throw new Error(
+      `Failed to decrypt keystore at ${keystorePath}. Check your keystore password and try again.`
+    );
   }
 }
 

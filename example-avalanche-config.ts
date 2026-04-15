@@ -12,8 +12,23 @@ import { FeeAmount } from '@uniswap/v3-sdk';
 const config: KeeperConfig = {
   dryRun: false,
   ethRpcUrl: `https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+  // Optional dedicated read failover endpoints. If you configure readRpcUrls,
+  // include the primary endpoint here yourself; ethRpcUrl is not implicitly prepended.
+  // readRpcUrls: [
+  //   `https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+  //   process.env.AVALANCHE_READ_RPC_FALLBACK_URL!,
+  // ],
   subgraphUrl: `https://gateway.thegraph.com/api/${process.env.GRAPH_API_KEY}/subgraphs/id/YOUR_AVALANCHE_SUBGRAPH_ID`,
+  // Optional subgraph fallbacks used only when the primary subgraph is unavailable.
+  // subgraphFallbackUrls: [process.env.AVALANCHE_SUBGRAPH_FALLBACK_URL!],
   keeperKeystore: '/path/to/your/keystore.json',
+  // Optional shorthand for private_rpc mode:
+  // takeWriteRpcUrl: `https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
+  // Optional explicit take-only write transport:
+  // takeWrite: {
+  //   mode: 'private_rpc',
+  //   rpcUrl: `https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
+  // },
   
   // 1inch Single Contract Setup for External Takes (deploy with scripts/query-1inch.ts --action deploy)
   keeperTaker: '0x[DEPLOY_WITH_query-1inch.ts]',  // Deploy smart contract using: yarn compile && scripts/query-1inch.ts --config [config] --action deploy

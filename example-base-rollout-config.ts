@@ -13,6 +13,16 @@ const config: KeeperConfig = {
   logLevel: 'info',
 
   ethRpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+  // Optional dedicated read failover endpoints. If you configure readRpcUrls,
+  // include the primary endpoint here yourself; ethRpcUrl is not implicitly prepended.
+  // readRpcUrls: [
+  //   `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+  //   process.env.BASE_READ_RPC_FALLBACK_URL!,
+  // ],
+  // Optional subgraph fallbacks used only when the primary subgraph is unavailable.
+  // subgraphFallbackUrls: [process.env.BASE_SUBGRAPH_FALLBACK_URL!],
+  // Optional shorthand for private_rpc mode:
+  // takeWriteRpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
   // Optional: route take tx submission through a dedicated private/write RPC.
   // Kick, settlement, LP, and bond flows continue using ethRpcUrl until write transport
   // hardening is expanded beyond take.

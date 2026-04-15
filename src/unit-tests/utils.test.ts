@@ -7,6 +7,7 @@ import { BigNumber, providers, Wallet } from 'ethers';
 chai.use(chaiAsPromised);
 import { KeeperConfig } from '../config';
 import {
+  addAccountFromKeystore,
   overrideMulticall,
   decimaledToWei,
   weiToDecimaled,
@@ -150,6 +151,36 @@ describe('getProviderAndSigner', function () {
     expect(result).to.have.property('signer');
     expect(addAccountStub.calledOnceWith(fakeKeystorePath)).to.be.true;
     expect(result.signer).to.have.property('address', fakeWallet.address);
+  });
+});
+
+describe('addAccountFromKeystore', function () {
+  const fakeRpcUrl = 'http://localhost:8545';
+  const tempKeystorePath = '/tmp/ajna-keeper-invalid-keystore.json';
+
+  afterEach(async () => {
+    sinon.restore();
+    await fs.rm(tempKeystorePath, { force: true });
+  });
+
+  it('throws when keystore decryption fails instead of returning a random wallet', async function () {
+    await fs.writeFile(tempKeystorePath, '{"address":"0x0"}');
+
+    sinon.stub(Utils, 'askPassword').resolves('wrong-password');
+    sinon
+      .stub(Wallet, 'fromEncryptedJsonSync')
+      .throws(new Error('invalid password'));
+    const createRandomStub = sinon.stub(Wallet, 'createRandom');
+
+    await expect(
+      addAccountFromKeystore(
+        tempKeystorePath,
+        new providers.JsonRpcProvider(fakeRpcUrl)
+      )
+    ).to.be.rejectedWith(
+      `Failed to decrypt keystore at ${tempKeystorePath}. Check your keystore password and try again.`
+    );
+    expect(createRandomStub.called).to.equal(false);
   });
 });
 

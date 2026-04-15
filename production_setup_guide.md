@@ -27,6 +27,29 @@ While the main README covers the basic setup process, production deployments ben
 
 **Why hosted RPC?** Running a local node requires significant infrastructure, storage, and maintenance. Hosted providers offer better uptime and are more cost-effective for most use cases.
 
+### Optional Read Failover Endpoints
+
+For production discovery and gas-policy checks, you can configure dedicated read failover RPCs and subgraph fallbacks:
+
+```typescript
+{
+  ethRpcUrl: 'https://primary-write-and-default-read-rpc',
+  readRpcUrls: [
+    'https://primary-read-rpc',
+    'https://secondary-read-rpc',
+  ],
+  subgraphUrl: 'https://primary-subgraph',
+  subgraphFallbackUrls: [
+    'https://secondary-subgraph',
+  ],
+}
+```
+
+Important operational details:
+- `readRpcUrls` is a dedicated read path. If you configure it, the keeper does not implicitly prepend `ethRpcUrl`; include your primary RPC in `readRpcUrls` yourself if you want it in the read failover set.
+- All `readRpcUrls` must point to the same chain as the keeper signer. Wrong-chain read fallbacks are rejected.
+- `subgraphFallbackUrls` are only used when the primary subgraph is unavailable or unhealthy.
+
 ## Step 1.5: Critical Fee Tier Selection (Before Contract Deployment)
 
 ### Understanding Smart Contract Fee Tier Constraints
@@ -624,6 +647,8 @@ const config: KeeperConfig = {
   keeperKeystore: 'PUT_YOUR_FULL_PATH_HERE/keystore.json',
   logLevel: 'debug',
   ethRpcUrl: 'https://avax-mainnet.g.alchemy.com/v2/YOUR_API_KEY',
+  // Optional shorthand for private_rpc mode:
+  // takeWriteRpcUrl: 'https://avax-mainnet.g.alchemy.com/v2/YOUR_PRIVATE_TX_API_KEY',
   // Optional: private/write RPC used only for take submissions
   // takeWrite: {
   //   mode: 'private_rpc',
@@ -721,6 +746,8 @@ yarn ts-node scripts/query-1inch.ts --config avalanche-config.ts --action deploy
 yarn start --config avalanche-config.ts
 ```
 
+`dryRun` is useful for validating keeper logic and config shape, but it skips `takeWrite` transport validation and initialization entirely. Use a non-dry-run startup check before assuming a private RPC or relay endpoint is wired correctly.
+
 ### Hemi Production Config Snippet
 
 ```typescript
@@ -729,6 +756,8 @@ const config: KeeperConfig = {
   keeperKeystore: 'PUT_YOUR_FULL_PATH_HERE/keystore.json',
   logLevel: 'debug',
   ethRpcUrl: 'https://rpc.hemi.network/rpc',  //you can put in your own Quicknode RPC here
+  // Optional shorthand for private_rpc mode:
+  // takeWriteRpcUrl: 'https://YOUR_PRIVATE_RPC_HERE',
   // Optional: private/write RPC used only for take submissions
   // takeWrite: {
   //   mode: 'private_rpc',
@@ -842,6 +871,12 @@ yarn ts-node scripts/deploy-factory-system.ts hemi-config.ts
 # 3. Test with dry run first  
 yarn start --config hemi-config.ts
 ```
+
+The same `dryRun` caveat applies here: private/relay take-write endpoints are not validated in dry-run mode.
+
+For live startup behavior:
+- permanent `takeWrite` config mistakes fail fast at startup, including wrong-chain dedicated RPCs, blank `takeWriteRpcUrl`, unsupported `takeWrite.mode`, and invalid relay requirements
+- transient dedicated endpoint outages do not disable the take loop permanently; the keeper retries take-write transport initialization in-cycle
 
 ### Base Curve Production Config Snippet
 

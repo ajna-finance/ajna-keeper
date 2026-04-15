@@ -12,8 +12,23 @@ import { FeeAmount } from '@uniswap/v3-sdk';
 const config: KeeperConfig = {
   dryRun: false,
   ethRpcUrl: 'https://rpc.hemi.network/rpc', // Hemi public RPC (may be rate limited in the future)
+  // Optional dedicated read failover endpoints. If you configure readRpcUrls,
+  // include the primary endpoint here yourself; ethRpcUrl is not implicitly prepended.
+  // readRpcUrls: [
+  //   'https://rpc.hemi.network/rpc',
+  //   process.env.HEMI_READ_RPC_FALLBACK_URL!,
+  // ],
   subgraphUrl: `https://gateway.thegraph.com/api/${process.env.GRAPH_API_KEY}/subgraphs/id/YOUR_HEMI_SUBGRAPH_ID`,
+  // Optional subgraph fallbacks used only when the primary subgraph is unavailable.
+  // subgraphFallbackUrls: [process.env.HEMI_SUBGRAPH_FALLBACK_URL!],
   keeperKeystore: '/path/to/your/keystore.json',
+  // Optional shorthand for private_rpc mode:
+  // takeWriteRpcUrl: 'https://YOUR_PRIVATE_RPC_HERE',
+  // Optional explicit take-only write transport:
+  // takeWrite: {
+  //   mode: 'private_rpc',
+  //   rpcUrl: 'https://YOUR_PRIVATE_RPC_HERE',
+  // },
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',
   multicallBlock: 484490,
   delayBetweenRuns: 2,  // IN SECONDS
