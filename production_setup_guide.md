@@ -155,7 +155,7 @@ This makes fee tier selection a **strategic runtime configuration decision**. It
 
 **Best for:** Established chains with 1inch aggregator support
 
-**IMPORTANT:** 1inch contract deployment is now **required even for LP reward swaps**.
+**IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
 
 **Prerequisites:**
 ```bash
@@ -177,13 +177,13 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 # Expected output:
 # ✅ 1inch keeper taker deployed to: 0x[deployed-address]
 # ✅ Contract verification successful
-# ✅ Ready for external takes and LP reward swaps
+# ✅ Ready for 1inch external takes and optional 1inch LP reward swaps
 ```
 
 **Configuration Updates:**
 ```typescript
 const config: KeeperConfig = {
-  // ADD: Deployed contract address (REQUIRED for both external takes AND LP rewards)
+  // ADD: Deployed contract address (REQUIRED for 1inch external takes; also needed if LP rewards use PostAuctionDex.ONEINCH)
   keeperTaker: '0x[deployed-contract-address]',
   
   // ADD: 1inch router addresses per chain

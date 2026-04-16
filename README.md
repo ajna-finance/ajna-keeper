@@ -558,7 +558,7 @@ External takes require contract deployment and specific configuration:
 
 #### 1inch Integration (Single Contract)
 
-**IMPORTANT:** 1inch contract deployment is now **required even for LP reward swaps**.
+**IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
 
 **Contract Deployment:**
 ```bash
@@ -568,7 +568,7 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 **Config.ts Setup:**
 ```typescript
 const config: KeeperConfig = {
-  // Required for 1inch external takes AND LP rewards
+  // Required for 1inch external takes; only needed for LP rewards when they also use PostAuctionDex.ONEINCH
   keeperTaker: '0x[deployed-address]',
   oneInchRouters: {
     1: '0x1111111254EEB25477B68fb85Ed929f73A960582',    // Ethereum
@@ -832,7 +832,7 @@ The following sections provide comprehensive examples for configuring LP reward 
 
 ##### 1inch LP Reward Configuration
 
-**IMPORTANT:** 1inch LP reward swaps now require smart contract deployment.
+**IMPORTANT:** 1inch LP reward swaps require smart contract deployment, but LP rewards can also use Uniswap V3, SushiSwap, or Curve without the 1inch contract.
 
 ```bash
 # Deploy 1inch contract first (REQUIRED)
@@ -963,7 +963,7 @@ pools: [
 
 ##### Notes
 
-- **Contract deployment is required** for 1inch LP reward swaps
+- **Contract deployment is only required** for LP reward swaps that use `PostAuctionDex.ONEINCH`
 - If `dexProvider: PostAuctionDex.ONEINCH` but `keeperTaker` is missing, the script will fail.
 - Ensure the `.env` file is loaded (via `dotenv/config`) in your project.
 
