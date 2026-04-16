@@ -212,6 +212,7 @@ npm run create-liquidatable-uniswap-fixture
   - adds full-range liquidity
   - deploys a keeper-owned `AjnaKeeperTakerFactory` and `UniswapV3KeeperTaker`
   - writes a ready-to-paste keeper config snippet path into the summary
+  - tops up lender, borrower, and optional keeper native gas by default so non-deployer actors can execute prepared actions on a fresh fork
 
 In Uniswap external-take mode, `AJNA_AGENT_KEEPER_KEY` is required because the deployed factory and taker must be owned by the signer that will execute the keeper take path.
 
@@ -628,7 +629,7 @@ Use this if you want fast local validation without building a full subgraph pipe
 The repo now includes a direct harness entry point at [run-fixture-keeper-harness.ts](/home/mike/Projects-2026/ajna-keeper/scripts/run-fixture-keeper-harness.ts):
 
 ```bash
-AJNA_AGENT_KEEPER_KEY=0x... npm run run-fixture-keeper-harness -- --summary /tmp/ajna-fixture-summary.json
+AJNA_AGENT_KEEPER_KEY=0x... npm run run-fixture-keeper-harness -- --summary /tmp/ajna-fixture-summary.json --auto-warp-to-take --take-warp-seconds 86400 --max-take-warps 3
 ```
 
 This harness:
@@ -636,19 +637,18 @@ This harness:
 1. connects to the fresh pool through the Ajna SDK
 2. overrides `getLoans` and `getLiquidations` from onchain state for the single borrower fixture
 3. calls the real keeper `handleKicks(...)` and `handleTakes(...)` paths
-4. emits a machine-readable report of kick/take results
+4. can optionally auto-warp the fork between take attempts until the auction becomes profitable
+5. emits a machine-readable report of kick/take results
 
 This is the most practical route for testing new `kick`, `take`, or factory-based Uniswap V3 external-take behavior against a brand-new local pool.
 
 The current working sequence on the local Base fork is:
 
-1. run `npm run create-liquidatable-uniswap-fixture` with `AJNA_AGENT_BUCKET_INDEX=4600`
+1. run `AJNA_AGENT_TARGET_KICK_DELAY_DAYS=3 npm run create-liquidatable-uniswap-fixture`
 2. let the wrapper remove quote up to the `LUPBelowHTP()` boundary and time-warp the fork until `thresholdPrice >= lup`
-3. run `AJNA_AGENT_KEEPER_KEY=0x... npm run run-fixture-keeper-harness -- --summary /tmp/ajna-fixture-summary.json` to kick the borrower
-4. advance the fork again so the auction price decays enough for the external take to become profitable
-5. rerun the same harness command to exercise the Uniswap V3 external take path
+3. run `AJNA_AGENT_KEEPER_KEY=0x... npm run run-fixture-keeper-harness -- --summary /tmp/ajna-fixture-summary.json --auto-warp-to-take --take-warp-seconds 86400 --max-take-warps 3`
 
-On the passing local fork run, the auction needed roughly one additional day of decay between kick and take.
+On the verified local fork run, the borrower kicked immediately from the 3-day fixture, then the harness needed one additional 86400-second warp and a second take attempt before the Uniswap V3 external take executed successfully.
 
 ### Important limitation
 

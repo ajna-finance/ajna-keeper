@@ -68,6 +68,9 @@ type HarnessReport = {
     price: string;
   } | null;
   collateralReducedByTake: boolean;
+  takeWarpCount: number;
+  takeWarpSecondsPerStep: number;
+  takeAttempts: number;
 };
 
 const BASE_AJNA_CONFIG = {
@@ -155,12 +158,15 @@ function makeGetLiquidationsFromFixture(
 }
 
 function usage() {
-  return `Usage: ts-node scripts/run-fixture-keeper-harness.ts --summary /path/to/fixture-summary.json [--dry-run]\n\nRequired env:\n- AJNA_AGENT_KEEPER_KEY\n\nOptional env:\n- AJNA_AGENT_HARNESS_OUTPUT_PATH\n`;
+  return `Usage: ts-node scripts/run-fixture-keeper-harness.ts --summary /path/to/fixture-summary.json [--dry-run] [--auto-warp-to-take] [--take-warp-seconds N] [--max-take-warps N]\n\nRequired env:\n- AJNA_AGENT_KEEPER_KEY\n\nOptional env:\n- AJNA_AGENT_HARNESS_OUTPUT_PATH\n`;
 }
 
 function parseArgs(argv: string[]) {
   let summaryPath: string | undefined;
   let dryRun = false;
+  let autoWarpToTake = false;
+  let takeWarpSeconds = 86400;
+  let maxTakeWarps = 3;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -173,6 +179,20 @@ function parseArgs(argv: string[]) {
       dryRun = true;
       continue;
     }
+    if (arg === '--auto-warp-to-take') {
+      autoWarpToTake = true;
+      continue;
+    }
+    if (arg === '--take-warp-seconds') {
+      takeWarpSeconds = Number(argv[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg === '--max-take-warps') {
+      maxTakeWarps = Number(argv[i + 1]);
+      i += 1;
+      continue;
+    }
     if (arg === '--help') {
       process.stdout.write(usage());
       process.exit(0);
@@ -182,10 +202,19 @@ function parseArgs(argv: string[]) {
   if (!summaryPath) {
     throw new Error('Missing --summary /path/to/fixture-summary.json');
   }
+  if (!Number.isFinite(takeWarpSeconds) || takeWarpSeconds < 0) {
+    throw new Error('--take-warp-seconds must be a non-negative number');
+  }
+  if (!Number.isFinite(maxTakeWarps) || maxTakeWarps < 0) {
+    throw new Error('--max-take-warps must be a non-negative number');
+  }
 
   return {
     summaryPath: path.resolve(summaryPath),
     dryRun,
+    autoWarpToTake,
+    takeWarpSeconds,
+    maxTakeWarps,
   };
 }
 
@@ -202,7 +231,7 @@ async function getLiquidationStatus(pool: FungiblePool, borrower: string) {
 }
 
 async function main() {
-  const { summaryPath, dryRun } = parseArgs(process.argv.slice(2));
+  const { summaryPath, dryRun, autoWarpToTake, takeWarpSeconds, maxTakeWarps } = parseArgs(process.argv.slice(2));
   const keeperKey = process.env.AJNA_AGENT_KEEPER_KEY;
   if (!keeperKey) {
     throw new Error('Missing AJNA_AGENT_KEEPER_KEY');
@@ -300,42 +329,59 @@ async function main() {
 
     const collateralBeforeTake = liquidationStatusAfterKick?.collateral;
 
-    await handleTakes({
-      signer: keeper,
-      pool,
-      poolConfig,
-      config: {
-        dryRun,
-        delayBetweenActions: 0,
-        subgraphUrl: 'http://fixture-subgraph.override.invalid',
-        keeperTakerFactory:
-          summary.uniswapV3ExternalTake.deployment.keeperTakerFactory,
-        takerContracts: {
-          UniswapV3: summary.uniswapV3ExternalTake.deployment.uniswapV3Taker,
-        },
-        universalRouterOverrides:
-          summary.uniswapV3ExternalTake.routerConfig,
-      },
-    });
+    let takeWarpCount = 0;
+    let takeAttempts = 0;
+    let liquidationStatusAfterTake: HarnessReport['liquidationStatusAfterTake'] = liquidationStatusAfterKick ?? null;
+    let collateralReducedByTake = false;
 
-    let liquidationStatusAfterTake: HarnessReport['liquidationStatusAfterTake'];
-    try {
-      liquidationStatusAfterTake = await getLiquidationStatus(
+    while (true) {
+      takeAttempts += 1;
+      await handleTakes({
+        signer: keeper,
         pool,
-        summary.borrower.owner
-      );
-    } catch {
-      liquidationStatusAfterTake = null;
+        poolConfig,
+        config: {
+          dryRun,
+          delayBetweenActions: 0,
+          subgraphUrl: 'http://fixture-subgraph.override.invalid',
+          keeperTakerFactory:
+            summary.uniswapV3ExternalTake.deployment.keeperTakerFactory,
+          takerContracts: {
+            UniswapV3: summary.uniswapV3ExternalTake.deployment.uniswapV3Taker,
+          },
+          universalRouterOverrides:
+            summary.uniswapV3ExternalTake.routerConfig,
+        },
+      });
+
+      try {
+        liquidationStatusAfterTake = await getLiquidationStatus(
+          pool,
+          summary.borrower.owner
+        );
+      } catch {
+        liquidationStatusAfterTake = null;
+      }
+
+      collateralReducedByTake =
+        collateralBeforeTake !== undefined && liquidationStatusAfterTake !== null
+          ? ethers.BigNumber.from(liquidationStatusAfterTake.collateral).lt(
+              ethers.BigNumber.from(collateralBeforeTake)
+            )
+          : collateralBeforeTake !== undefined && liquidationStatusAfterTake === null;
+
+      if (collateralReducedByTake || !autoWarpToTake || takeWarpCount >= maxTakeWarps) {
+        break;
+      }
+      if (liquidationStatusAfterTake === null) {
+        break;
+      }
+      await provider.send('evm_increaseTime', [takeWarpSeconds]);
+      await provider.send('evm_mine', []);
+      takeWarpCount += 1;
     }
 
     const keeperQuoteBalanceAfter = await getBalanceOfErc20(keeper, pool.quoteAddress);
-
-    const collateralReducedByTake =
-      collateralBeforeTake !== undefined && liquidationStatusAfterTake !== null
-        ? ethers.BigNumber.from(liquidationStatusAfterTake.collateral).lt(
-            ethers.BigNumber.from(collateralBeforeTake)
-          )
-        : collateralBeforeTake !== undefined && liquidationStatusAfterTake === null;
 
     const report: HarnessReport = {
       summaryPath,
@@ -356,6 +402,9 @@ async function main() {
       takeExecuted: collateralReducedByTake,
       liquidationStatusAfterTake,
       collateralReducedByTake,
+      takeWarpCount,
+      takeWarpSecondsPerStep: takeWarpSeconds,
+      takeAttempts,
     };
 
     const outputPath = process.env.AJNA_AGENT_HARNESS_OUTPUT_PATH;
