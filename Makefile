@@ -139,6 +139,6 @@ setup:
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1. Edit .env and add your API keys"
-	@echo "  2. Create a config file: cp example-base-config.ts config.ts"
+	@echo "  2. Create a config file: cp examples/example-base-config.ts config.ts"
 	@echo "  3. Create a keystore: make keystore"
 	@echo "  4. Run in dry-run mode: make start config.ts"

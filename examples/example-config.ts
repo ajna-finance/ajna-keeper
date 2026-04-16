@@ -8,7 +8,7 @@ import {
   TokenToCollect,
   LiquiditySource,  // Import for external takes
   PostAuctionDex,   // Import for LP reward swaps
-} from './src/config';
+} from '../src/config';
 
 const config: KeeperConfig = {
   // dryRun skips takeWrite transport validation and initialization.

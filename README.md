@@ -6,10 +6,11 @@ A bot to automate liquidations on the Ajna platform.
 
 ## Design
 
-- Each instance of the keeper connects to exactly one chain using a single RPC endpoint. The same keeper instance may interact with multiple pools on that chain.
-- Pool addresses must be explicitly configured.
+- Each instance of the keeper targets exactly one chain. The same keeper instance may interact with multiple pools on that chain.
+- Reads use a primary RPC plus optional read-RPC and subgraph failover endpoints. Take submission can optionally use a dedicated take-write transport.
+- Pools may be configured manually, and V1 autodiscovery can also discover chain-wide `take` and `settlement` targets. `kick` remains manual.
 - Each instance of the keeper may unlock only a single wallet using a JSON keystore file. As such, if running multiple keepers on the same chain, different accounts should be used for each keeper to avoid nonce conflicts.
-- Kick, ArbTake, Bond Collection, Reward LP Collection, Settlement, Take (connect outside liquidity to Ajna Liquidations) - can all be enabled/disabled per pool through the provided config.
+- Kick, ArbTake, Take, Bond Collection, Reward LP Collection, and Settlement can all be enabled or disabled through the provided config. Manual per-pool config still overrides discovery defaults for the same action.
 
 ## Quick Setup
 
@@ -70,7 +71,7 @@ The production guide covers the recommended approach using hosted services:
 - API rate limits and service tier recommendations
 - Real-world configuration examples
 - Production monitoring and troubleshooting
-- See `example-avalanche-config.ts` and `example-hemi-config.ts` for chain-specific examples.
+- See `examples/example-avalanche-config.ts` and `examples/example-hemi-config.ts` for chain-specific examples.
 
 *The production approach is more reliable and easier to maintain than running everything locally.*
 
@@ -121,7 +122,7 @@ ONEINCH_API_KEY="????????????????????????????????????"
 
 ### Create a new config file
 
-Create a new `config.ts` file in the `ajna-keeper/` folder and copy the contents from `example-config.ts` or `example-base-config.ts`.
+Create a new `config.ts` file in the `ajna-keeper/` folder and copy the contents from `examples/example-config.ts` or `examples/example-base-config.ts`.
 
 All example configs are now set up to automatically use environment variables from `.env`, so you don't need to manually replace API keys in your config file.
 
@@ -175,7 +176,7 @@ Ensure that the generated wallet is saved in the directory specified by the `kee
 make start config.ts
 
 # Or use a specific config
-make start base-config.ts
+make start examples/example-base-config.ts
 
 # Dry-run mode (no transactions)
 make start-dry config.ts
@@ -206,8 +207,8 @@ make format         # Format code
 
 For each desired chain:
 
-- A JSON-RPC endpoint is needed to query pool data and submit transactions.
-- A subgraph connection is needed to iterate through buckets/borrowers/liquidations within a configured pool.
+- A JSON-RPC endpoint is needed to query pool data and submit transactions. Optional read fallbacks and a dedicated take-write transport can be added on top.
+- A subgraph connection is needed for liquidation discovery, bucket/liquidation reads, and chain-wide autodiscovery.
 - Funds used to pay gas on that chain.
 - Funds (quote token) to post liquidation bonds in each pool configured to kick.
 
@@ -219,14 +220,15 @@ Starts a liquidation when a loan's threshold price exceeds the lowest utilized p
 
 ### Take
 
-When auction price drops a configurable percentage below a DEX price, swaps collateral for quote token using a DEX or DEX aggregator, repaying debt and earning profit for the taker.
-This usually requires contract deployment for either 1inch or individual DEX's like Uniswap V3 or SushiSwap. Please see contract deployment section below.
+When auction price drops below a configured external-price threshold, the keeper can execute an external take by swapping collateral for quote token and repaying debt. Current external take paths support the legacy 1inch flow plus factory-based Uniswap V3, SushiSwap, and Curve integrations.
 
-### Arbtake
+External takes usually require contract deployment. Take submission can also be routed through an optional dedicated private/write transport. See the contract deployment section below.
+
+### ArbTake
 
 When auction price drops a configurable percentage below the highest price bucket, exchanges quote token in that bucket for collateral, earning a share of that bucket.
 
-Note if keeper is configured to both `take` and `arbTake`, and prices are appropriate for both, the keeper will attempt to execute both strategies.  Whichever transaction is included in a block first will "win", with the other strategy potentially reverting onchain.  To conserve gas when using both, ensure one is configured at a more aggressive price than the other.
+Note if keeper is configured to both `take` and `arbTake`, and prices are appropriate for both, the keeper will attempt to execute both strategies. Whichever transaction is included in a block first will "win", with the other strategy potentially reverting onchain. To conserve gas when using both, ensure one is configured at a more aggressive price than the other.
 
 ### Collect Liquidation Bond
 
@@ -261,12 +263,25 @@ Settlement processes auctions in multiple iterations if needed, settling debt ag
 
 Settlement integrates seamlessly with other keeper operations - when bond collection or LP reward collection fails due to locked bonds, the keeper automatically attempts settlement before retrying the operation.
 
+### Chain-Wide Auto-Discovery
+
+V1 autodiscovery can discover chain-wide `take` and `settlement` opportunities without listing every pool in `pools[]`.
+
+- `take` and `settlement` have independent discovery policies and per-run limits.
+- Manual per-pool `take` and `settlement` config still wins over discovery defaults for the same pool.
+- `dryRunNewPools` keeps newly discovered pools in dry-run until you explicitly trust them.
+- `kick` autodiscovery is intentionally not part of V1.
+
+
+
+
+
 ## Configuration
 
 ### Configuration file
 
 While `*.json` config files are supported, it is recommended to use `*.ts` config files so that you get the benefits of type checking.
-See `example-config.ts` for reference.
+See `examples/example-config.ts` for reference.
 
 ### Price sources
 
@@ -463,7 +478,7 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
 
-For a conservative first live rollout on Base, start from [`example-base-rollout-config.ts`](./example-base-rollout-config.ts).
+For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).
 
 ```typescript
 const config: KeeperConfig = {
@@ -769,7 +784,7 @@ No manual selection needed - the bot chooses based on your config.
 
 **Major Chain Example (1inch):**
 ```typescript
-// example-avalanche-config.ts shows 1inch external takes
+// examples/example-avalanche-config.ts shows 1inch external takes
 const config: KeeperConfig = {
   keeperTaker: '0x[deployed-1inch-contract]',
   oneInchRouters: { 43114: '0x111111125421ca6dc452d289314280a0f8842a65' },
@@ -785,7 +800,7 @@ const config: KeeperConfig = {
 
 **Multi-DEX Chain Example (Factory):**  
 ```typescript
-// hemi-config.ts shows factory external takes
+// examples/example-hemi-config.ts shows factory external takes
 const config: KeeperConfig = {
   keeperTakerFactory: '0x[factory-address]',
   takerContracts: { 
@@ -810,7 +825,7 @@ const config: KeeperConfig = {
 }
 ```
 
-**See `example-avalanche-config.ts`, `example-hemi-config.ts`, for complete examples.**
+**See `examples/example-avalanche-config.ts`, `examples/example-hemi-config.ts`, for complete examples.**
 
 ### Detailed LP Reward Configuration
 
@@ -1156,7 +1171,10 @@ make test-prices
 
 User assumes all risk of data presented and transactions placed by this keeper; see license for more details.
 
-## Deepwiki (You can ask an AI about this Github repo, indexed weekly)
+## DeepWiki
+
+You can ask an AI about this GitHub repo on DeepWiki. It is indexed weekly, so it may lag the current branch.
+
 [https://deepwiki.com/mitakash/ajna-keeper](https://deepwiki.com/mitakash/ajna-keeper)
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mitakash/ajna-keeper)

@@ -7,7 +7,7 @@ import {
   LiquiditySource,
   PostAuctionDex,
   CurvePoolType
-} from './src/config';
+} from '../src/config';
 
 const config: KeeperConfig = {
   dryRun: false,

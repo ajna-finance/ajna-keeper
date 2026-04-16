@@ -4,14 +4,16 @@ import {
   PriceOriginPoolReference,
   PriceOriginSource,
   TokenToCollect,
-} from './src/config';
+} from '../src/config';
 
 const config: KeeperConfig = {
-  // Keep the existing manual keeper behavior live.
-  // Newly discovered pools that are not already listed in pools[] stay dry-run until autoDiscover.dryRunNewPools is removed.
-  dryRun: false,
-  logLevel: 'info',
+  // Start in dry-run mode for testing.
+  // Note: dryRun skips takeWrite transport validation and initialization.
+  // Do one non-dry-run startup check before assuming private/relay take submission is wired correctly.
+  dryRun: true,
+  logLevel: 'debug',
 
+  // Base Chain RPC - Uses Alchemy API key from .env file
   ethRpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
   // Optional dedicated read failover endpoints. If you configure readRpcUrls,
   // include the primary endpoint here yourself; ethRpcUrl is not implicitly prepended.
@@ -19,18 +21,20 @@ const config: KeeperConfig = {
   //   `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
   //   process.env.BASE_READ_RPC_FALLBACK_URL!,
   // ],
-  // Optional subgraph fallbacks used only when the primary subgraph is unavailable.
-  // subgraphFallbackUrls: [process.env.BASE_SUBGRAPH_FALLBACK_URL!],
+
+  // Subgraph URL - The Graph gateway (requires API key from https://thegraph.com/studio/)
+  subgraphUrl: `https://gateway.thegraph.com/api/${process.env.GRAPH_API_KEY}/subgraphs/id/9npza28cZyi8R94SJjm9Y3fuWeBZZK4CHr2r8NCvsr98`,
+
+  // Keystore path - update to your keystore location
+  keeperKeystore: '/path/to/your/keystore.json',
   // Optional shorthand for private_rpc mode:
   // takeWriteRpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
-  // Optional: route take tx submission through a dedicated private/write RPC.
-  // Kick, settlement, LP, and bond flows continue using ethRpcUrl until write transport
-  // hardening is expanded beyond take.
+  // Optional explicit take-only write transport:
   // takeWrite: {
   //   mode: 'private_rpc',
   //   rpcUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
   // },
-  // Or route take submission through a JSON-RPC private relay.
+  // Or route takes through a private relay:
   // takeWrite: {
   //   mode: 'relay',
   //   relay: {
@@ -39,21 +43,38 @@ const config: KeeperConfig = {
   //     maxBlockNumberOffset: 25,
   //   },
   // },
-  subgraphUrl: `https://gateway.thegraph.com/api/${process.env.GRAPH_API_KEY}/subgraphs/id/9npza28cZyi8R94SJjm9Y3fuWeBZZK4CHr2r8NCvsr98`,
-  keeperKeystore: '/path/to/your/keystore.json',
 
+  // Base Chain Multicall
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',
   multicallBlock: 5022,
 
-  // Conservative cadence for a first rollout.
-  delayBetweenRuns: 45,
-  delayBetweenActions: 3,
+  // Timing configuration (conservative for testing)
+  delayBetweenRuns: 30,      // 30 seconds between cycles
+  delayBetweenActions: 2,     // 2 seconds between actions
 
+  // 1inch Router Configuration (optional for now)
+  oneInchRouters: {
+    8453: '0x1111111254EEB25477B68fb85Ed929f73A960582',  // Base
+  },
+
+  // Token addresses on Base
   tokenAddresses: {
     weth: '0x4200000000000000000000000000000000000006',
     usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
   },
 
+  // Universal Router configuration for Uniswap V3 on Base
+  universalRouterOverrides: {
+    universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+    wethAddress: '0x4200000000000000000000000000000000000006',
+    permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+    poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
+    quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
+    defaultFeeTier: 3000,      // 0.3% fee tier
+    defaultSlippage: 0.5,      // 0.5% slippage
+  },
+
+  // Ajna contract addresses on Base
   ajna: {
     erc20PoolFactory: '0x214f62B5836D83f3D6c4f71F174209097B1A779C',
     erc721PoolFactory: '0xeefEC5d1Cc4bde97279d01D88eFf9e0fEe981769',
@@ -65,56 +86,55 @@ const config: KeeperConfig = {
     lenderHelper: '',
   },
 
+  // CoinGecko API Key - Optional, will fallback to Alchemy Prices API if not provided
+  // Get a free key from https://www.coingecko.com/en/developers/dashboard
   coinGeckoApiKey: process.env.COINGECKO_API_KEY,
 
+  // Optional chain-wide discovery for take and settlement.
+  // Kick remains manual in V1.
   autoDiscover: {
     enabled: true,
     take: {
       enabled: true,
-      maxPoolsPerRun: 3,
-      takeQuoteBudgetPerRun: 3,
-      maxGasPriceGwei: 2,
-      maxGasCostNative: 0.00005,
-      // These are quote-token denominated. Leave them unset unless you explicitly
-      // want native->quote conversion during policy checks.
-      // maxGasCostQuote: 1,
-      // minExpectedProfitQuote: 1,
+      maxPoolsPerRun: 10,
+      takeQuoteBudgetPerRun: 5,
+      maxGasPriceGwei: 5,
+      maxGasCostNative: 0.0001,
+      // Quote-denominated gas caps require native->quote conversion.
+      // Leave them unset unless you explicitly want quote-token thresholds.
+      // maxGasCostQuote: 0.01,
+      // Set minExpectedProfitQuote only after discovered external takes are enabled.
+      // minExpectedProfitQuote: 0.005,
     },
     settlement: {
       enabled: true,
-      maxPoolsPerRun: 3,
-      maxGasPriceGwei: 2,
-      maxGasCostNative: 0.00005,
-      // This is quote-token denominated. Leave it unset unless you explicitly want
-      // native->quote conversion across mixed quote assets.
-      // maxGasCostQuote: 1,
+      maxPoolsPerRun: 10,
+      maxGasPriceGwei: 5,
+      maxGasCostNative: 0.0001,
+      // maxGasCostQuote: 0.01,
     },
     dryRunNewPools: true,
     logSkips: true,
-    hydrateCooldownSec: 900,
-    // If you want an even smaller first blast radius, uncomment allowPools
-    // and start with one or two known pools.
-    // allowPools: [
-    //   '0x63a366fc5976ff72999c89f69366f388b7d233e8',
-    // ],
   },
 
+  // Defaults applied to discovered pools that do not already define the action in pools[].
   discoveredDefaults: {
     take: {
-      // First rollout: arb-take only for discovered pools.
-      // Add liquiditySource + marketPriceFactor later if you want discovered external takes.
+      // Start discovered pools on arb-take only.
+      // Add liquiditySource + marketPriceFactor after external take contracts are deployed.
       minCollateral: 0.01,
       hpbPriceFactor: 0.9,
     },
     settlement: {
       enabled: true,
-      minAuctionAge: 21600,
-      maxBucketDepth: 25,
-      maxIterations: 5,
+      minAuctionAge: 18000,
+      maxBucketDepth: 50,
+      maxIterations: 10,
       checkBotIncentive: true,
     },
   },
 
+  // Pool configurations - Example pools on Base
   pools: [
     {
       name: 'wstETH / WETH',
@@ -130,6 +150,9 @@ const config: KeeperConfig = {
       take: {
         minCollateral: 0.01,
         hpbPriceFactor: 0.9,
+        // External takes disabled for now - enable after contract deployment
+        // liquiditySource: LiquiditySource.UNISWAPV3,
+        // marketPriceFactor: 0.98,
       },
       collectBond: true,
       collectLpReward: {
@@ -139,7 +162,7 @@ const config: KeeperConfig = {
       },
       settlement: {
         enabled: true,
-        minAuctionAge: 18000,
+        minAuctionAge: 18000,     // 5 hours
         maxBucketDepth: 50,
         maxIterations: 10,
         checkBotIncentive: true,

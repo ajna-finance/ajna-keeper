@@ -532,7 +532,7 @@ Operationally, discovered `take` refreshes one shared in-memory chain-wide aucti
 
 Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh, so crossing 100 active auctions does not require any operator action.
 
-Use [`example-base-rollout-config.ts`](./example-base-rollout-config.ts) as the conservative starting point for the first live rollout.
+Use [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts) as the conservative starting point for the first live rollout.
 
 Recommended rollout order:
 1. Keep `dryRunNewPools: true` and inspect discovered skip/action logs first.
