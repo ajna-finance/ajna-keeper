@@ -36,13 +36,31 @@ export function convertSwapApiResponseToDetails(
   };
 }
 
+export function encodeOneInchSwapDetailsBytes(
+  details: AjnaKeeperTaker.OneInchSwapDetailsStruct
+): string {
+  return ethers.utils.defaultAbiCoder.encode(
+    ['(address,(address,address,address,address,uint256,uint256,uint256),bytes)'],
+    [[
+      details.aggregationExecutor,
+      [
+        details.swapDescription.srcToken,
+        details.swapDescription.dstToken,
+        details.swapDescription.srcReceiver,
+        details.swapDescription.dstReceiver,
+        details.swapDescription.amount,
+        details.swapDescription.minReturnAmount,
+        details.swapDescription.flags,
+      ],
+      details.opaqueData,
+    ]]
+  );
+}
+
 export function convertSwapApiResponseToDetailsBytes(
   apiResponse: any,
 ): string {
   const details = convertSwapApiResponseToDetails(apiResponse);
   logger.debug('1inch swap details encoded');
-  return ethers.utils.defaultAbiCoder.encode(
-    ['(address,(address,address,address,address,uint256,uint256,uint256),bytes)'],
-    [Object.values(details)],
-  );
+  return encodeOneInchSwapDetailsBytes(details);
 }

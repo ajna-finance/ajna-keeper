@@ -1174,6 +1174,42 @@ describe('Settlement Module Tests', () => {
       expect(result).to.be.false;
     });
 
+    it('reuses the discovered auctions during reactive settlement instead of rescanning', async () => {
+      const auctions = [
+        {
+          borrower: '0xBorrower1',
+          kickTime: Date.now() - 7_200_000,
+          debtRemaining: BigNumber.from(1),
+          collateralRemaining: BigNumber.from(0),
+        },
+      ];
+      const findStub = sinon
+        .stub(SettlementHandler.prototype, 'findSettleableAuctions')
+        .resolves(auctions as any);
+      const handleCandidateStub = sinon
+        .stub(SettlementHandler.prototype, 'handleCandidateAuctions')
+        .resolves();
+      const handleSettlementsStub = sinon
+        .stub(SettlementHandler.prototype, 'handleSettlements')
+        .resolves();
+      mockPool.kickerInfo.resolves({
+        locked: BigNumber.from(0),
+        claimable: BigNumber.from(1),
+      });
+
+      const result = await tryReactiveSettlement({
+        pool: mockPool as any,
+        poolConfig,
+        signer: mockSigner as any,
+        config,
+      });
+
+      expect(result).to.be.true;
+      expect(findStub.calledOnce).to.equal(true);
+      expect(handleCandidateStub.calledOnceWithExactly(auctions)).to.equal(true);
+      expect(handleSettlementsStub.called).to.equal(false);
+    });
+
     it('should return true when bonds are unlocked after successful settlement', async () => {
       // Setup: Mock settleable auction and successful settlement
       const oldKickTime = Math.floor(Date.now() / 1000) - 7200; // 2 hours ago

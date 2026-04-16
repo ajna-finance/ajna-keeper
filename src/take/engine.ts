@@ -83,6 +83,7 @@ interface ExecuteTakeDecisionParams<
   decision: TakeDecision;
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
   externalExecutionConfig: TExecutionConfig;
+  subgraph: SubgraphReader;
   dryRun: boolean;
   delayBetweenActions: number;
   revalidateBeforeExecution?: boolean;
@@ -144,14 +145,20 @@ export async function getTakeBorrowerCandidates(params: {
 
 export async function revalidateTakeDecision(params: {
   pool: FungiblePool;
+  signer: Signer;
   borrower: string;
+  subgraph: SubgraphReader;
+  poolConfig: TakeActionConfig;
   takeablePrice?: number;
+  hpbIndex?: number;
   maxArbTakePrice?: number;
 }): Promise<{
   approvedTake: boolean;
   approvedArbTake: boolean;
   collateral: BigNumber;
   auctionPrice: BigNumber;
+  hpbIndex: number;
+  maxArbTakePrice?: number;
 }> {
   const liquidationStatus = await params.pool
     .getLiquidation(params.borrower)
@@ -164,16 +171,43 @@ export async function revalidateTakeDecision(params: {
       approvedArbTake: false,
       collateral,
       auctionPrice: liquidationStatus.price,
+      hpbIndex: 0,
     };
+  }
+
+  let approvedArbTake = false;
+  let hpbIndex = params.hpbIndex ?? 0;
+  let maxArbTakePrice = params.maxArbTakePrice;
+
+  if (params.maxArbTakePrice !== undefined) {
+    const prices = await params.pool.getPrices();
+    const hpb = Number(weiToDecimaled(prices.hpb));
+    const minDeposit = params.poolConfig.take.minCollateral
+      ? params.poolConfig.take.minCollateral / hpb
+      : 0;
+    const arbEvaluation = await checkIfArbTakeable(
+      params.pool,
+      currentPrice,
+      collateral,
+      params.poolConfig,
+      params.subgraph,
+      minDeposit.toString(),
+      params.signer
+    );
+
+    approvedArbTake = arbEvaluation.isArbTakeable;
+    hpbIndex = arbEvaluation.hpbIndex;
+    maxArbTakePrice = arbEvaluation.maxArbTakePrice;
   }
 
   return {
     approvedTake:
       params.takeablePrice !== undefined && currentPrice <= params.takeablePrice,
-    approvedArbTake:
-      params.maxArbTakePrice !== undefined && currentPrice < params.maxArbTakePrice,
+    approvedArbTake,
     collateral,
     auctionPrice: liquidationStatus.price,
+    hpbIndex,
+    maxArbTakePrice,
   };
 }
 
@@ -325,6 +359,7 @@ export async function executeTakeDecision<
   decision,
   externalTakeAdapter,
   externalExecutionConfig,
+  subgraph,
   dryRun,
   delayBetweenActions,
   revalidateBeforeExecution,
@@ -338,21 +373,29 @@ export async function executeTakeDecision<
   let approvedArbTake = decision.approvedArbTake;
   let collateral = decision.collateral;
   let auctionPrice = decision.auctionPrice;
+  let hpbIndex = decision.hpbIndex;
+  let maxArbTakePrice = decision.maxArbTakePrice;
   let executedTake = false;
   let executedArbTake = false;
 
   if (revalidateBeforeExecution) {
     const revalidated = await revalidateTakeDecision({
       pool,
+      signer,
       borrower: decision.borrower,
+      subgraph,
+      poolConfig,
       takeablePrice: decision.takeablePrice,
-      maxArbTakePrice: decision.maxArbTakePrice,
+      hpbIndex,
+      maxArbTakePrice,
     });
 
     approvedTake = approvedTake && revalidated.approvedTake;
     approvedArbTake = approvedArbTake && revalidated.approvedArbTake;
     collateral = revalidated.collateral;
     auctionPrice = revalidated.auctionPrice;
+    hpbIndex = revalidated.hpbIndex;
+    maxArbTakePrice = revalidated.maxArbTakePrice;
 
     if (!approvedTake && !approvedArbTake) {
       onSkip?.({
@@ -372,7 +415,7 @@ export async function executeTakeDecision<
       poolConfig,
       liquidation: {
         borrower: decision.borrower,
-        hpbIndex: decision.hpbIndex,
+        hpbIndex,
         collateral,
         auctionPrice,
         isTakeable: true,
@@ -394,13 +437,19 @@ export async function executeTakeDecision<
       try {
         const postTakeRevalidated = await revalidateTakeDecision({
           pool,
+          signer,
           borrower: decision.borrower,
-          maxArbTakePrice: decision.maxArbTakePrice,
+          subgraph,
+          poolConfig,
+          hpbIndex,
+          maxArbTakePrice,
         });
         const arbActionLabel = arbTakeActionLabel ?? 'ArbTake';
         approvedArbTake = postTakeRevalidated.approvedArbTake;
         collateral = postTakeRevalidated.collateral;
         auctionPrice = postTakeRevalidated.auctionPrice;
+        hpbIndex = postTakeRevalidated.hpbIndex;
+        maxArbTakePrice = postTakeRevalidated.maxArbTakePrice;
 
         if (!approvedArbTake) {
           logger.debug(
@@ -424,7 +473,7 @@ export async function executeTakeDecision<
       signer,
       liquidation: {
         borrower: decision.borrower,
-        hpbIndex: decision.hpbIndex,
+        hpbIndex,
       },
       config: {
         dryRun,
@@ -501,6 +550,7 @@ export async function processTakeCandidates<
         decision,
         externalTakeAdapter,
         externalExecutionConfig,
+        subgraph,
         dryRun,
         delayBetweenActions,
         revalidateBeforeExecution,

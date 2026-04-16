@@ -11,6 +11,7 @@ import {
   MockAtomicSwapPool__factory,
   MockCurveSwapPool__factory,
   MockERC20__factory,
+  MockOneInchUnderdeliveryRouter__factory,
   MockPermit2__factory,
   MockPoolDeployer__factory,
   MockSushiSwapRouter__factory,
@@ -155,6 +156,53 @@ describe('Taker quote balance guards', () => {
           taker.address,
           COLLATERAL_AMOUNT,
           0,
+          0,
+        ],
+        '0x',
+      ]]
+    );
+    const callbackData = utils.defaultAbiCoder.encode(
+      [ONE_INCH_CALLBACK_DATA_TYPE],
+      [[1, router.address, oneInchDetails]]
+    );
+
+    await expectCustomError(
+      pool.callAtomicSwapCallback(
+        taker.address,
+        COLLATERAL_AMOUNT,
+        QUOTE_AMOUNT_DUE,
+        callbackData
+      ),
+      'InsufficientQuoteReceived'
+    );
+  });
+
+  it('rejects legacy 1inch swaps that underdeliver versus the scaled minReturnAmount', async () => {
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
+    const taker = await new AjnaKeeperTaker__factory(owner).deploy(poolDeployer.address);
+    await taker.deployed();
+
+    await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
+
+    const router = await new MockOneInchUnderdeliveryRouter__factory(owner).deploy(
+      QUOTE_AMOUNT_DUE
+    );
+    await router.deployed();
+    await quoteToken.mint(router.address, QUOTE_AMOUNT_DUE);
+
+    const quotedCollateralAmount = COLLATERAL_AMOUNT.mul(2);
+    const quotedMinReturnAmount = utils.parseEther('12');
+    const oneInchDetails = utils.defaultAbiCoder.encode(
+      [ONE_INCH_DETAILS_TYPE],
+      [[
+        router.address,
+        [
+          collateralToken.address,
+          quoteToken.address,
+          router.address,
+          taker.address,
+          quotedCollateralAmount,
+          quotedMinReturnAmount,
           0,
         ],
         '0x',

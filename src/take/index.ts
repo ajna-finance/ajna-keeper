@@ -9,7 +9,10 @@ import { KeeperConfig, LiquiditySource, PoolConfig } from '../config';
 import { logger } from '../logging';
 import { DexRouter } from '../dex/router';
 import { BigNumber, ethers } from 'ethers';
-import { convertSwapApiResponseToDetailsBytes } from '../dex/one-inch';
+import {
+  convertSwapApiResponseToDetails,
+  encodeOneInchSwapDetailsBytes,
+} from '../dex/one-inch';
 import { AjnaKeeperTaker__factory } from '../../typechain-types';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
 import { NonceTracker } from '../nonce';
@@ -20,6 +23,7 @@ import {
   WithSubgraph,
 } from '../read-transports';
 import { handleFactoryTakes } from './factory';
+import * as factoryShared from './factory/shared';
 import {
   arbTakeLiquidation,
   checkIfArbTakeable,
@@ -435,6 +439,46 @@ async function checkIfTakeable(
   return { isTakeable: evaluation.isTakeable };
 }
 
+async function computeLegacyOneInchMinReturnAmount(params: {
+  pool: FungiblePool;
+  poolConfig: TakeActionConfig;
+  liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+}): Promise<BigNumber> {
+  if (!params.poolConfig.take.marketPriceFactor) {
+    throw new Error('Legacy 1inch execution requires marketPriceFactor');
+  }
+  if (!params.quoteEvaluation.quoteAmountRaw) {
+    throw new Error('Legacy 1inch execution requires quoteAmountRaw');
+  }
+
+  const quoteAmountDueRaw = await factoryShared.getQuoteAmountDueRaw(
+    params.pool,
+    params.liquidation.auctionPrice,
+    params.liquidation.collateral
+  );
+  const profitabilityFloor = factoryShared.ceilDiv(
+    quoteAmountDueRaw.mul(factoryShared.MARKET_FACTOR_SCALE),
+    BigNumber.from(
+      factoryShared.getMarketPriceFactorUnits(
+        params.poolConfig.take.marketPriceFactor
+      )
+    )
+  );
+  const slippageFloor = params.quoteEvaluation.quoteAmountRaw
+    .mul(
+      factoryShared.BASIS_POINTS_DENOMINATOR -
+        factoryShared.getSlippageBasisPoints(1)
+    )
+    .div(factoryShared.BASIS_POINTS_DENOMINATOR);
+
+  return factoryShared.maxBigNumber(
+    quoteAmountDueRaw,
+    profitabilityFloor,
+    slippageFloor
+  );
+}
+
 export async function* getLiquidationsToTake({
   pool,
   poolConfig,
@@ -548,6 +592,33 @@ export async function takeLiquidation({
   }
 
   try {
+    const approvedQuoteEvaluation =
+      liquidation.externalTakeQuoteEvaluation ??
+      (await getOneInchTakeQuoteEvaluation(
+        pool,
+        Number(weiToDecimaled(liquidation.auctionPrice)),
+        liquidation.collateral,
+        poolConfig,
+        { delayBetweenActions: config.delayBetweenActions },
+        signer,
+        config.oneInchRouters,
+        config.connectorTokens
+      ));
+
+    if (!approvedQuoteEvaluation.isTakeable) {
+      logger.error(
+        `Legacy 1inch take quote no longer satisfies execution policy for ${pool.name}/${borrower}: ${approvedQuoteEvaluation.reason ?? 'not takeable'}`
+      );
+      return false;
+    }
+
+    if (!approvedQuoteEvaluation.quoteAmountRaw) {
+      logger.error(
+        `Legacy 1inch take is missing raw quote amount for ${pool.name}/${borrower}; refusing to send an unbounded swap`
+      );
+      return false;
+    }
+
     const takeWriteTransport = resolveTakeWriteTransport(signer, config);
     const keeperTaker = AjnaKeeperTaker__factory.connect(
       config.keeperTaker!,
@@ -570,9 +641,10 @@ export async function takeLiquidation({
       liquidation.collateral,
       collateralDecimals
     );
+    const chainId = await signer.getChainId();
 
     const swapData = await dexRouter.getSwapDataFromOneInch(
-      await signer.getChainId(),
+      chainId,
       collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
@@ -580,6 +652,24 @@ export async function takeLiquidation({
       keeperTaker.address,
       true
     );
+    const swapDetails = convertSwapApiResponseToDetails(swapData.data);
+    const requiredMinReturnAmount = await computeLegacyOneInchMinReturnAmount({
+      pool,
+      poolConfig,
+      liquidation,
+      quoteEvaluation: approvedQuoteEvaluation,
+    });
+
+    const routeMinReturnAmount = BigNumber.from(
+      swapDetails.swapDescription.minReturnAmount
+    );
+    if (routeMinReturnAmount.lt(requiredMinReturnAmount)) {
+      swapDetails.swapDescription = {
+        ...swapDetails.swapDescription,
+        minReturnAmount: requiredMinReturnAmount,
+      };
+    }
+    const swapDetailsBytes = encodeOneInchSwapDetailsBytes(swapDetails);
 
     logger.debug(
       `Preparing takeWithAtomicSwap transaction:\n` +
@@ -589,7 +679,8 @@ export async function takeLiquidation({
         `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
         `  Collateral (Token Decimals): ${collateralInTokenDecimals.toString()}\n` +
         `  Liquidity Source: ${poolConfig.take.liquiditySource}\n` +
-        `  1inch Router: ${dexRouter.getRouter(await signer.getChainId())}\n` +
+        `  1inch Router: ${dexRouter.getRouter(chainId)}\n` +
+        `  Required Min Return: ${requiredMinReturnAmount.toString()}\n` +
         `  Swap Data Length: ${swapData.data.length} chars`
     );
 
@@ -606,8 +697,8 @@ export async function takeLiquidation({
           liquidation.auctionPrice,
           liquidation.collateral,
           Number(poolConfig.take.liquiditySource),
-          dexRouter.getRouter(await signer.getChainId())!,
-          convertSwapApiResponseToDetailsBytes(swapData.data),
+          dexRouter.getRouter(chainId)!,
+          swapDetailsBytes,
         ] as const;
         const gasLimit = await estimateGasWithBuffer(
           () => keeperTaker.estimateGas.takeWithAtomicSwap(...txArgs),

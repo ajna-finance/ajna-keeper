@@ -241,7 +241,7 @@ export async function tryReactiveSettlement({
   }
 
   logger.info(`Bonds locked in ${pool.name}, attempting reactive settlement...`);
-  await handler.handleSettlements();
+  await handler.handleCandidateAuctions(auctions);
 
   const signerAddress = await signer.getAddress();
   const { locked } = await pool.kickerInfo(signerAddress);

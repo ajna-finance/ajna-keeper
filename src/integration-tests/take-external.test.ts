@@ -74,7 +74,7 @@ describe('External Take with MockSwapRouter', function () {
           data: {
             tx: {
               to: mockRouterAddress,
-              data: '0x00', // not used — we override convertSwapApiResponseToDetailsBytes
+              data: '0x00', // not used — we override convertSwapApiResponseToDetails
               value: '0',
               gas: '200000',
             },
@@ -133,10 +133,10 @@ describe('External Take with MockSwapRouter', function () {
       .connect(quoteWhaleSigner)
       .transfer(mockRouterAddress, utils.parseEther('10'));
 
-    // Stub convertSwapApiResponseToDetailsBytes to produce valid ABI data
+    // Stub convertSwapApiResponseToDetails to produce valid ABI data
     // pointing at the MockSwapRouter
     sinon
-      .stub(oneInch, 'convertSwapApiResponseToDetailsBytes')
+      .stub(oneInch, 'convertSwapApiResponseToDetails')
       .callsFake(() => {
         const details = {
           aggregationExecutor: mockRouterAddress, // not used by mock but must be valid address
@@ -151,26 +151,7 @@ describe('External Take with MockSwapRouter', function () {
           },
           opaqueData: '0x', // empty — mock doesn't use it
         };
-        return utils.defaultAbiCoder.encode(
-          [
-            '(address,(address,address,address,address,uint256,uint256,uint256),bytes)',
-          ],
-          [
-            [
-              details.aggregationExecutor,
-              [
-                details.swapDescription.srcToken,
-                details.swapDescription.dstToken,
-                details.swapDescription.srcReceiver,
-                details.swapDescription.dstReceiver,
-                details.swapDescription.amount,
-                details.swapDescription.minReturnAmount,
-                details.swapDescription.flags,
-              ],
-              details.opaqueData,
-            ],
-          ]
-        );
+        return details as any;
       });
 
     // Set up the loan and kick it
@@ -462,24 +443,21 @@ describe('Real Uniswap V3 External Take', function () {
 
     // Override the swap encoding to produce valid data for the adapter
     sinon
-      .stub(oneInch, 'convertSwapApiResponseToDetailsBytes')
+      .stub(oneInch, 'convertSwapApiResponseToDetails')
       .callsFake(() => {
-        return utils.defaultAbiCoder.encode(
-          ['(address,(address,address,address,address,uint256,uint256,uint256),bytes)'],
-          [[
-            adapterAddress, // aggregationExecutor (not used by adapter)
-            [
-              pool.collateralAddress,   // srcToken: SOL
-              pool.quoteAddress,        // dstToken: WETH
-              adapterAddress,           // srcReceiver
-              keeperTakerAddress,       // dstReceiver: keeper gets WETH
-              BigNumber.from('14000000000'), // amount in SOL decimals (14 SOL * 1e9)
-              BigNumber.from('1'),      // minReturnAmount: 1 wei (let Uniswap determine actual output)
-              BigNumber.from('0'),      // flags
-            ],
-            '0x', // opaqueData
-          ]]
-        );
+        return {
+          aggregationExecutor: adapterAddress,
+          swapDescription: {
+            srcToken: pool.collateralAddress,
+            dstToken: pool.quoteAddress,
+            srcReceiver: adapterAddress,
+            dstReceiver: keeperTakerAddress,
+            amount: BigNumber.from('14000000000'),
+            minReturnAmount: BigNumber.from('1'),
+            flags: BigNumber.from('0'),
+          },
+          opaqueData: '0x',
+        } as any;
       });
 
     // Set up loan, kick

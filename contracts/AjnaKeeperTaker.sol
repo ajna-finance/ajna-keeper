@@ -167,6 +167,14 @@ contract AjnaKeeperTaker is IERC20Taker {
 
         IERC20 quoteToken = IERC20(pool.quoteTokenAddress());
         uint256 quoteBalanceBefore = quoteToken.balanceOf(address(this));
+        (, uint256 normalizedMinReturnAmount) = _normalizeOneInchSwapAmounts(
+            swapDescription,
+            actualCollateralAmount
+        );
+        uint256 requiredQuoteReceived =
+            normalizedMinReturnAmount > quoteAmountDue
+                ? normalizedMinReturnAmount
+                : quoteAmountDue;
 
         _executeOneInchSwap(
             swapRouter,
@@ -177,7 +185,7 @@ contract AjnaKeeperTaker is IERC20Taker {
         );
 
         uint256 quoteReceived = quoteToken.balanceOf(address(this)) - quoteBalanceBefore;
-        if (quoteReceived < quoteAmountDue) revert InsufficientQuoteReceived();
+        if (quoteReceived < requiredQuoteReceived) revert InsufficientQuoteReceived();
     }
 
     function _executeOneInchSwap(
@@ -191,9 +199,13 @@ contract AjnaKeeperTaker is IERC20Taker {
         _safeApproveWithReset(swapDescription.srcToken, address(swapRouter), actualCollateralAmount);
 
         // scale the return amount to the actual amount
-        if (swapDescription.amount != actualCollateralAmount) {
-            swapDescription.minReturnAmount = actualCollateralAmount * swapDescription.minReturnAmount / swapDescription.amount;
-            swapDescription.amount = actualCollateralAmount;
+        (uint256 normalizedAmount, uint256 normalizedMinReturnAmount) = _normalizeOneInchSwapAmounts(
+            swapDescription,
+            actualCollateralAmount
+        );
+        if (normalizedAmount != swapDescription.amount) {
+            swapDescription.amount = normalizedAmount;
+            swapDescription.minReturnAmount = normalizedMinReturnAmount;
         }
 
         // execute the swap
@@ -204,6 +216,20 @@ contract AjnaKeeperTaker is IERC20Taker {
         );
 
         _safeApproveWithReset(swapDescription.srcToken, address(swapRouter), 0);
+    }
+
+    function _normalizeOneInchSwapAmounts(
+        SwapDescription memory swapDescription,
+        uint256 actualCollateralAmount
+    ) private pure returns (uint256 normalizedAmount, uint256 normalizedMinReturnAmount) {
+        normalizedAmount = swapDescription.amount;
+        normalizedMinReturnAmount = swapDescription.minReturnAmount;
+
+        if (normalizedAmount != actualCollateralAmount) {
+            normalizedMinReturnAmount =
+                actualCollateralAmount * normalizedMinReturnAmount / normalizedAmount;
+            normalizedAmount = actualCollateralAmount;
+        }
     }
 
 

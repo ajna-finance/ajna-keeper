@@ -73,7 +73,7 @@ describe('Take with 1inch Integration', () => {
       .callsFake(() => Promise.resolve({ data: ONE_INCH_SWAP_RESPONSE }));
 
     sinon
-      .stub(oneInch, 'convertSwapApiResponseToDetailsBytes')
+      .stub(oneInch, 'convertSwapApiResponseToDetails')
       .callsFake(() => {
         const details = {
           aggregationExecutor: '0x6956C0a5DFE1Ea7Bf71422EaCb6e9D85F7607176',
@@ -89,26 +89,7 @@ describe('Take with 1inch Integration', () => {
           opaqueData:
             '0xa9059cbb000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000de0b6b3a7640000',
         };
-        return utils.defaultAbiCoder.encode(
-          [
-            '(address,(address,address,address,address,uint256,uint256,uint256),bytes)',
-          ],
-          [
-            [
-              details.aggregationExecutor,
-              [
-                details.swapDescription.srcToken,
-                details.swapDescription.dstToken,
-                details.swapDescription.srcReceiver,
-                details.swapDescription.dstReceiver,
-                details.swapDescription.amount,
-                details.swapDescription.minReturnAmount,
-                details.swapDescription.flags,
-              ],
-              details.opaqueData,
-            ],
-          ]
-        );
+        return details as any;
       });
 
     configureAjna(MAINNET_CONFIG.AJNA_CONFIG);

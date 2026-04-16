@@ -171,6 +171,67 @@ describe('shared arbTake helpers', () => {
     );
   });
 
+  it('recomputes arb take eligibility during revalidation before execution', async () => {
+    const arbTakeLiquidationStub = sinon
+      .stub(require('../take/arb'), 'arbTakeLiquidation')
+      .resolves(true);
+    sinon
+      .stub(require('../take/arb'), 'checkIfArbTakeable')
+      .onFirstCall()
+      .resolves({
+        isArbTakeable: true,
+        hpbIndex: 77,
+        maxArbTakePrice: 2,
+      })
+      .onSecondCall()
+      .resolves({
+        isArbTakeable: false,
+        hpbIndex: 88,
+        maxArbTakePrice: 0.9,
+        reason: 'auction price above arbTake threshold',
+      });
+    const onSkip = sinon.stub();
+
+    const getStatusStub = sinon.stub().resolves({
+      collateral: ethers.utils.parseEther('1'),
+      price: ethers.utils.parseEther('1'),
+    });
+
+    const pool = {
+      name: 'Execution Pool',
+      poolAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+      getPrices: sinon.stub().resolves({
+        hpb: ethers.utils.parseEther('1'),
+      }),
+    };
+
+    await processTakeCandidates({
+      pool: pool as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Execution Pool',
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: [{ borrower: '0xBorrower' }],
+      subgraph: { cacheKey: 'test-subgraph' } as any,
+      externalTakeAdapter: createNoExternalTakeAdapter() as any,
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      revalidateBeforeExecution: true,
+      onSkip,
+    });
+
+    expect(arbTakeLiquidationStub.called).to.equal(false);
+    expect(onSkip.calledOnce).to.equal(true);
+    expect(onSkip.firstCall.args[0].stage).to.equal('revalidation');
+  });
 
   it('skips arb take after a successful external take changes the auction state', async () => {
     const executeExternalTakeStub = sinon.stub().resolves(true);
