@@ -55,6 +55,12 @@ contract AjnaKeeperTaker is IERC20Taker {
     /// @notice Emitted when the requested liquidity source is not available on this deployment of the contract.
     error UnsupportedLiquiditySource();
 
+    /// @notice The provided swap details are inconsistent with the Ajna pool assets or receiver.
+    error InvalidSwapDetails();
+
+    /// @notice External swap did not deliver enough quote token to satisfy Ajna's callback requirement.
+    error InsufficientQuoteReceived();
+
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment of Ajna the keeper is interacting with.
     constructor(PoolDeployer ajnaErc20PoolFactory) {
@@ -114,7 +120,7 @@ contract AjnaKeeperTaker is IERC20Taker {
 
     /// @dev Called by `Pool` to allow a taker to externally swap collateral for quote token.
     /// @param data Determines where external liquidity should be sourced to swap collateral for quote token.
-    function atomicSwapCallback(uint256 collateral, uint256, bytes calldata data) external override {
+    function atomicSwapCallback(uint256 collateral, uint256 quoteAmountDue, bytes calldata data) external override {
         SwapData memory swapData = abi.decode(data, (SwapData));
 
         // Ensure msg.sender is a valid Ajna pool and matches the pool in the data
@@ -125,11 +131,13 @@ contract AjnaKeeperTaker is IERC20Taker {
         {
             OneInchSwapDetails memory details = abi.decode(swapData.details, (OneInchSwapDetails));
             _swapWithOneInch(
+                pool,
                 IGenericRouter(swapData.router),
                 details.aggregationExecutor,
                 details.swapDescription,
                 details.opaqueData,
-                collateral //Already in token precision from Ajna
+                collateral, // Already in token precision from Ajna
+                quoteAmountDue
             );
         } else {
             revert UnsupportedLiquiditySource();
@@ -143,6 +151,36 @@ contract AjnaKeeperTaker is IERC20Taker {
     /// @param swapData opaque calldata from 1inch API
     /// @param actualCollateralAmount collateral received from take, in token precision
     function _swapWithOneInch(
+        IERC20Pool pool,
+        IGenericRouter swapRouter,
+        address aggregationExecutor,
+        SwapDescription memory swapDescription,
+        bytes memory swapData,
+        uint256 actualCollateralAmount,
+        uint256 quoteAmountDue
+    ) private {
+        if (
+            address(swapDescription.srcToken) != pool.collateralAddress() ||
+            address(swapDescription.dstToken) != pool.quoteTokenAddress() ||
+            swapDescription.dstReceiver != address(this)
+        ) revert InvalidSwapDetails();
+
+        IERC20 quoteToken = IERC20(pool.quoteTokenAddress());
+        uint256 quoteBalanceBefore = quoteToken.balanceOf(address(this));
+
+        _executeOneInchSwap(
+            swapRouter,
+            aggregationExecutor,
+            swapDescription,
+            swapData,
+            actualCollateralAmount
+        );
+
+        uint256 quoteReceived = quoteToken.balanceOf(address(this)) - quoteBalanceBefore;
+        if (quoteReceived < quoteAmountDue) revert InsufficientQuoteReceived();
+    }
+
+    function _executeOneInchSwap(
         IGenericRouter swapRouter,
         address aggregationExecutor,
         SwapDescription memory swapDescription,
@@ -164,6 +202,8 @@ contract AjnaKeeperTaker is IERC20Taker {
             swapDescription,
             swapData
         );
+
+        _safeApproveWithReset(swapDescription.srcToken, address(swapRouter), 0);
     }
 
 
@@ -183,7 +223,7 @@ contract AjnaKeeperTaker is IERC20Taker {
         OneInchSwapDetails memory swapDetails,
         uint256 actualCollateralAmount
     ) public onlyOwner {
-        _swapWithOneInch(
+        _executeOneInchSwap(
             swapRouter,
             swapDetails.aggregationExecutor,
             swapDetails.swapDescription,

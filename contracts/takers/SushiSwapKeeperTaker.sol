@@ -53,6 +53,7 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     error UnsupportedSource();      // sig: 0xf54a7ed9
     error SwapFailed();             // sig: 0xf2fde38b
     error InvalidSwapDetails();     // sig: 0x13d0c2b4
+    error InsufficientQuoteReceived();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment
     /// @param _authorizedFactory Factory contract address that can also call functions
@@ -111,7 +112,7 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
 
     /// @notice Called by Pool to swap collateral for quote tokens during liquidation
     // AUDIT FIX: Add nonReentrant modifier for security
-    function atomicSwapCallback(uint256 collateral, uint256, bytes calldata data) external override nonReentrant {
+    function atomicSwapCallback(uint256 collateral, uint256 quoteAmountDue, bytes calldata data) external override nonReentrant {
         // Ensure msg.sender is a valid Ajna pool
         IERC20Pool pool = IERC20Pool(msg.sender);
         if (!_validatePool(pool)) revert InvalidPool();
@@ -124,6 +125,7 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
             pool.collateralAddress(),
             details.targetToken,
             collateral, //this is already in native token amount that Ajna Core Knows
+            quoteAmountDue,
             details
         );
     }
@@ -149,13 +151,15 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         address tokenIn,
         address tokenOut,
         uint256 amountIn,
+        uint256 quoteAmountDue,
         SushiSwapDetails memory details
     ) private {
         if (amountIn == 0) revert SwapFailed();
         if (block.timestamp > details.deadline) revert SwapFailed();
 
         IERC20 tokenInContract = IERC20(tokenIn);
-        
+        uint256 quoteBalanceBefore = IERC20(tokenOut).balanceOf(address(this));
+
         // FIXED: Safe approval for SushiSwap router (same as 1inch pattern)
         _safeApproveWithReset(tokenInContract, details.swapRouter, amountIn);
 
@@ -187,7 +191,11 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         // Decode and validate output amount
         uint256 amountOut = abi.decode(result, (uint256));
         require(amountOut >= amountOutMin, "Insufficient output amount");
-        
+
+        _safeApproveWithReset(tokenInContract, details.swapRouter, 0);
+
+        uint256 quoteReceived = IERC20(tokenOut).balanceOf(address(this)) - quoteBalanceBefore;
+        if (quoteReceived < quoteAmountDue) revert InsufficientQuoteReceived();
     }
 
     /// @dev Recovers token balance to owner
