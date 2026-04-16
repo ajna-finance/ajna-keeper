@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, constants } from 'ethers';
-import { KeeperConfig, PoolConfig } from './config-types';
+import { KeeperConfig, PoolConfig, PriceOriginSource } from './config';
 import {
   getAllowanceOfErc20,
   getBalanceOfErc20,
@@ -8,8 +8,7 @@ import {
   convertWadToTokenDecimals,
 } from './erc20';
 import { logger } from './logging';
-import { getPrice } from './price';
-import subgraph from './subgraph';
+import { getPrice } from './pricing';
 import {
   decimaledToWei,
   delay,
@@ -18,15 +17,29 @@ import {
   weiToDecimaled,
 } from './utils';
 import { poolKick, poolQuoteApprove } from './transactions';
+import {
+  resolveSubgraphConfig,
+  SubgraphConfigInput,
+  WithSubgraph,
+} from './read-transports';
+
+type KickConfigBase = Pick<
+  KeeperConfig,
+  | 'dryRun'
+  | 'delayBetweenActions'
+  | 'coinGeckoApiKey'
+  | 'tokenAddresses'
+> &
+  Partial<Pick<KeeperConfig, 'ethRpcUrl'>>;
+
+type KickConfig = WithSubgraph<KickConfigBase>;
+type KickConfigInput = SubgraphConfigInput<KickConfigBase>;
 
 interface HandleKickParams {
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'kick'>;
   signer: Signer;
-  config: Pick<
-    KeeperConfig,
-    'dryRun' | 'subgraphUrl' | 'delayBetweenActions' | 'coinGeckoApiKey' | 'ethRpcUrl' | 'tokenAddresses'
-  >;
+  config: KickConfigInput;
   chainId?: number;
 }
 
@@ -39,14 +52,15 @@ export async function handleKicks({
   config,
   chainId,
 }: HandleKickParams) {
+  const resolvedConfig = resolveSubgraphConfig(config);
   for await (const loanToKick of getLoansToKick({
     pool,
     poolConfig,
-    config,
+    config: resolvedConfig,
     chainId,
   })) {
-    await kick({ signer, pool, loanToKick, config });
-    await delay(config.delayBetweenActions);
+    await kick({ signer, pool, loanToKick, config: resolvedConfig });
+    await delay(resolvedConfig.delayBetweenActions);
   }
   await clearAllowances({ pool, signer });
 }
@@ -60,7 +74,10 @@ interface LoanToKick {
 
 interface GetLoansToKickParams
   extends Pick<HandleKickParams, 'pool' | 'poolConfig' | 'chainId'> {
-  config: Pick<KeeperConfig, 'subgraphUrl' | 'coinGeckoApiKey' | 'ethRpcUrl' | 'tokenAddresses'>;
+  config: SubgraphConfigInput<
+    Pick<KeeperConfig, 'coinGeckoApiKey' | 'tokenAddresses'> &
+      Partial<Pick<KeeperConfig, 'ethRpcUrl'>>
+  >;
 }
 
 export async function* getLoansToKick({
@@ -69,8 +86,8 @@ export async function* getLoansToKick({
   poolConfig,
   chainId,
 }: GetLoansToKickParams): AsyncGenerator<LoanToKick> {
-  const { subgraphUrl } = config;
-  const { loans } = await subgraph.getLoans(subgraphUrl, pool.poolAddress);
+  const resolvedConfig = resolveSubgraphConfig(config);
+  const { loans } = await resolvedConfig.subgraph.getLoans(pool.poolAddress);
   const loanMap = await pool.getLoans(loans.map(({ borrower }) => borrower));
   const borrowersSortedByBond = Array.from(loanMap.keys()).sort(
     (borrowerA, borrowerB) => {
@@ -84,6 +101,20 @@ export async function* getLoansToKick({
       (sum, borrower) => sum.add(loanMap.get(borrower)!.liquidationBond),
       constants.Zero
     );
+  // Fixed and CoinGecko kick references are pool-wide for the duration of a kick pass.
+  // Pool-derived references must stay per-iteration because a prior kick can change pool
+  // prices before this async generator resumes on the next borrower.
+  const staticLimitPrice =
+    poolConfig.price.source === PriceOriginSource.POOL
+      ? undefined
+      : await getPrice(
+          poolConfig.price,
+          resolvedConfig.coinGeckoApiKey,
+          undefined,
+          chainId,
+          resolvedConfig.ethRpcUrl,
+          resolvedConfig.tokenAddresses
+        );
 
   for (let i = 0; i < borrowersSortedByBond.length; i++) {
     const borrower = borrowersSortedByBond[i];
@@ -124,14 +155,16 @@ export async function* getLoansToKick({
     */
 
     // Only kick loans with a neutralPrice above price (with some margin) to ensure they are profitable.
-    const limitPrice = await getPrice(
-      poolConfig.price,
-      config.coinGeckoApiKey,
-      poolPrices,
-      chainId,
-      config.ethRpcUrl,
-      config.tokenAddresses
-    );
+    const limitPrice =
+      staticLimitPrice ??
+      (await getPrice(
+        poolConfig.price,
+        resolvedConfig.coinGeckoApiKey,
+        poolPrices,
+        chainId,
+        resolvedConfig.ethRpcUrl,
+        resolvedConfig.tokenAddresses
+      ));
     if (
       weiToDecimaled(neutralPrice) * poolConfig.kick.priceFactor <
       limitPrice

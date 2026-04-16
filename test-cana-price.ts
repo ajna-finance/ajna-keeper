@@ -1,6 +1,6 @@
 import 'dotenv/config';
-import { getPriceCoinGecko } from './src/coingecko';
-import { PriceOriginSource } from './src/config-types';
+import { getPriceCoinGecko } from './src/pricing/coingecko';
+import { PriceOriginSource } from './src/config';
 
 async function testCanaPrice() {
   const chainId = 8453; // Base

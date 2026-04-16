@@ -1,9 +1,9 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import * as curveRouterModule from '../curve-router-module';
+import * as curveRouterModule from '../dex/curve-router';
 import { NonceTracker } from '../nonce';
-import { CurvePoolType } from '../config-types';
+import { CurvePoolType } from '../config';
 
 describe('Curve Router Module', () => {
   let swapStub: sinon.SinonStub;
@@ -14,7 +14,7 @@ describe('Curve Router Module', () => {
     // Reset sinon after each test
     sinon.restore();
     
-    // Create basic mocks - same pattern as sushiswap-router-module.test.ts
+    // Create basic mocks - same pattern as sushiswap-router.test.ts
     mockSigner = {
       getAddress: sinon.stub().resolves('0xTestAddress'),
       getChainId: sinon.stub().resolves(8453), // Base chain ID
@@ -30,7 +30,7 @@ describe('Curve Router Module', () => {
       }),
     };
     
-    // Mock NonceTracker - same pattern as sushiswap-router-module.test.ts
+    // Mock NonceTracker - same pattern as sushiswap-router.test.ts
     queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (signer, txFunc) => {
       return await txFunc(10);
     });
@@ -167,7 +167,7 @@ describe('Curve Router Module', () => {
     });
   });
 
-  // Test NonceTracker integration - same pattern as sushiswap-router-module.test.ts
+  // Test NonceTracker integration - same pattern as sushiswap-router.test.ts
   describe('Integration with NonceTracker', () => {
     it('should use NonceTracker.queueTransaction for transactions', async () => {
       // Restore the original method before this test

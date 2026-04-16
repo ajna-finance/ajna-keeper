@@ -6,10 +6,11 @@ A bot to automate liquidations on the Ajna platform.
 
 ## Design
 
-- Each instance of the keeper connects to exactly one chain using a single RPC endpoint. The same keeper instance may interact with multiple pools on that chain.
-- Pool addresses must be explicitly configured.
+- Each instance of the keeper targets exactly one chain. The same keeper instance may interact with multiple pools on that chain.
+- Reads use a primary RPC plus optional read-RPC and subgraph failover endpoints. Take submission can optionally use a dedicated take-write transport.
+- Pools may be configured manually, and V1 autodiscovery can also discover chain-wide `take` and `settlement` targets. `kick` remains manual.
 - Each instance of the keeper may unlock only a single wallet using a JSON keystore file. As such, if running multiple keepers on the same chain, different accounts should be used for each keeper to avoid nonce conflicts.
-- Kick, ArbTake, Bond Collection, Reward LP Collection, Settlement, Take (connect outside liquidity to Ajna Liquidations) - can all be enabled/disabled per pool through the provided config.
+- Kick, ArbTake, Take, Bond Collection, Reward LP Collection, and Settlement can all be enabled or disabled through the provided config. Manual per-pool config still overrides discovery defaults for the same action.
 
 ## Quick Setup
 
@@ -70,7 +71,7 @@ The production guide covers the recommended approach using hosted services:
 - API rate limits and service tier recommendations
 - Real-world configuration examples
 - Production monitoring and troubleshooting
-- See `example-avalanche-config.ts` and `example-hemi-config.ts` for chain-specific examples.
+- See `examples/example-avalanche-config.ts` and `examples/example-hemi-config.ts` for chain-specific examples.
 
 *The production approach is more reliable and easier to maintain than running everything locally.*
 
@@ -121,7 +122,7 @@ ONEINCH_API_KEY="????????????????????????????????????"
 
 ### Create a new config file
 
-Create a new `config.ts` file in the `ajna-keeper/` folder and copy the contents from `example-config.ts` or `example-base-config.ts`.
+Create a new `config.ts` file in the `ajna-keeper/` folder and copy the contents from `examples/example-config.ts` or `examples/example-base-config.ts`.
 
 All example configs are now set up to automatically use environment variables from `.env`, so you don't need to manually replace API keys in your config file.
 
@@ -175,7 +176,7 @@ Ensure that the generated wallet is saved in the directory specified by the `kee
 make start config.ts
 
 # Or use a specific config
-make start base-config.ts
+make start examples/example-base-config.ts
 
 # Dry-run mode (no transactions)
 make start-dry config.ts
@@ -206,8 +207,8 @@ make format         # Format code
 
 For each desired chain:
 
-- A JSON-RPC endpoint is needed to query pool data and submit transactions.
-- A subgraph connection is needed to iterate through buckets/borrowers/liquidations within a configured pool.
+- A JSON-RPC endpoint is needed to query pool data and submit transactions. Optional read fallbacks and a dedicated take-write transport can be added on top.
+- A subgraph connection is needed for liquidation discovery, bucket/liquidation reads, and chain-wide autodiscovery.
 - Funds used to pay gas on that chain.
 - Funds (quote token) to post liquidation bonds in each pool configured to kick.
 
@@ -219,14 +220,15 @@ Starts a liquidation when a loan's threshold price exceeds the lowest utilized p
 
 ### Take
 
-When auction price drops a configurable percentage below a DEX price, swaps collateral for quote token using a DEX or DEX aggregator, repaying debt and earning profit for the taker.
-This usually requires contract deployment for either 1inch or individual DEX's like Uniswap V3 or SushiSwap. Please see contract deployment section below.
+When auction price drops below a configured external-price threshold, the keeper can execute an external take by swapping collateral for quote token and repaying debt. Current external take paths support the legacy 1inch flow plus factory-based Uniswap V3, SushiSwap, and Curve integrations.
 
-### Arbtake
+External takes usually require contract deployment. Take submission can also be routed through an optional dedicated private/write transport. See the contract deployment section below.
+
+### ArbTake
 
 When auction price drops a configurable percentage below the highest price bucket, exchanges quote token in that bucket for collateral, earning a share of that bucket.
 
-Note if keeper is configured to both `take` and `arbTake`, and prices are appropriate for both, the keeper will attempt to execute both strategies.  Whichever transaction is included in a block first will "win", with the other strategy potentially reverting onchain.  To conserve gas when using both, ensure one is configured at a more aggressive price than the other.
+Note if keeper is configured to both `take` and `arbTake`, and prices are appropriate for both, the keeper will attempt to execute both strategies. Whichever transaction is included in a block first will "win", with the other strategy potentially reverting onchain. To conserve gas when using both, ensure one is configured at a more aggressive price than the other.
 
 ### Collect Liquidation Bond
 
@@ -261,12 +263,25 @@ Settlement processes auctions in multiple iterations if needed, settling debt ag
 
 Settlement integrates seamlessly with other keeper operations - when bond collection or LP reward collection fails due to locked bonds, the keeper automatically attempts settlement before retrying the operation.
 
+### Chain-Wide Auto-Discovery
+
+V1 autodiscovery can discover chain-wide `take` and `settlement` opportunities without listing every pool in `pools[]`.
+
+- `take` and `settlement` have independent discovery policies and per-run limits.
+- Manual per-pool `take` and `settlement` config still wins over discovery defaults for the same pool.
+- `dryRunNewPools` keeps newly discovered pools in dry-run until you explicitly trust them.
+- `kick` autodiscovery is intentionally not part of V1.
+
+
+
+
+
 ## Configuration
 
 ### Configuration file
 
 While `*.json` config files are supported, it is recommended to use `*.ts` config files so that you get the benefits of type checking.
-See `example-config.ts` for reference.
+See `examples/example-config.ts` for reference.
 
 ### Price sources
 
@@ -314,6 +329,37 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 To enable 1inch swaps, you need to set up environment variables and add specific fields to config.ts. Also be sure to set `delayBetweenActions` to 1 second or greater to avoid 1inch API rate limiting.
 
+If you want take transactions to go through a dedicated private/write path, set
+`takeWrite` in your keeper config:
+
+```ts
+takeWrite: {
+  mode: 'private_rpc',
+  rpcUrl: 'https://your-private-rpc',
+}
+```
+
+Or for JSON-RPC relay/private orderflow endpoints:
+
+```ts
+takeWrite: {
+  mode: 'relay',
+  relay: {
+    url: 'https://your-relay-endpoint',
+    sendMethod: 'eth_sendPrivateTransaction',
+    maxBlockNumberOffset: 25,
+    receiptTimeoutMs: 120000,
+  },
+}
+```
+
+`takeWriteRpcUrl` remains supported as a shorthand for the same `private_rpc`
+mode. This write path is currently scoped to `take` only; the rest of the
+keeper still uses `ethRpcUrl` for transaction submission. Relay mode persists
+accepted take nonces under `local/take-write-relay-state.json` so a process
+restart does not accidentally reuse a private nonce before the public provider
+can observe it.
+
 ##### Environment Variables
 
 Create a .env file in your project root with:
@@ -331,50 +377,49 @@ A 1inch API key may be obtained from their [developer portal](https://portal.1in
 
 ### Critical Fee Tier Configuration for External Takes
 
-**⚠️ CRITICAL: Smart Contract Fee Tier Configuration**
-
-The `defaultFeeTier` values in your router overrides get **compiled into deployed smart contracts** and cannot be changed without redeploying. This directly impacts external take profitability.
+For Uniswap V3 and SushiSwap external takes, the keeper currently chooses one runtime `defaultFeeTier` per DEX per keeper instance. That value is passed into quote evaluation and execution for each external take. It is not baked into deployed bytecode, so changing it is a config-and-restart decision, not a redeploy.
 
 **Fee Tier Value → Percentage → Common Use:**
 - `500` = 0.05% = 5 basis points (stablecoins)
-- `3000` = 0.3% = 30 basis points (most common)  
+- `3000` = 0.3% = 30 basis points (most common)
 - `10000` = 1.0% = 100 basis points (exotic pairs)
 
 **External Takes vs Post-Auction Swaps:**
 
 **For External Takes (Time-Sensitive):**
-- Fee tier is **permanently set** at contract deployment time
 - Uses `universalRouterOverrides.defaultFeeTier` or `sushiswapRouterOverrides.defaultFeeTier`
-- Changing requires full contract redeployment  
-- Choose carefully based on your most valuable/frequent liquidation pairs
+- One global default per DEX per keeper instance
+- Applies to both quote evaluation and execution
+- No per-pool external-take fee override today
+- Change requires updating config and restarting the keeper
 
 **For Post-Auction LP Rewards (Flexible):**
 - Can override per pool using `fee: FeeAmount.MEDIUM` in `rewardAction`
-- Falls back to contract's default if no override specified
-- Flexible and changeable without redeployment
+- Falls back to the same global default if no override is specified
+- Flexible and changeable without redeploying contracts
 
 ### Pre-Deployment Fee Tier Research (REQUIRED)
 
-Before running deployment scripts, research liquidity for ALL your configured pools:
+Before enabling Uniswap V3 or SushiSwap external takes:
 
-**Step 1: List all token pairs from your pools**  
-**Step 2: Check Uniswap Info or SushiSwap Analytics for EACH pair's fee tier liquidity**  
-**Step 3: Choose the fee tier that optimizes for your highest-value pairs**  
-**Step 4: Set defaultFeeTier in config**  
-**Step 5: Deploy contracts (fee tier is now permanent)**
+**Step 1: List all token pairs from your pools**
+**Step 2: Check Uniswap Info or SushiSwap Analytics for each pair's fee-tier liquidity**
+**Step 3: Weight by expected liquidation value and frequency, not just TVL**
+**Step 4: Set `defaultFeeTier` in config**
+**Step 5: Revisit periodically as liquidity shifts**
 
 Example research process:
 ```
 Pools: USDC/WETH (high value), DAI/USDC (medium), RARE/WETH (low)
 
 Research Results:
-- USDC/WETH: 500 tier has $50M TVL, 3000 tier has $200M TVL  
+- USDC/WETH: 500 tier has $50M TVL, 3000 tier has $200M TVL
 - DAI/USDC: 500 tier has $100M TVL, 3000 tier has $30M TVL
 - RARE/WETH: Only exists in 10000 tier
 
-Decision: Use defaultFeeTier: 3000 
+Decision: Use defaultFeeTier: 3000
 Rationale: Optimizes highest-value pair (USDC/WETH)
-Plan: Override DAI/USDC in LP rewards, RARE/WETH gets suboptimal external takes
+Plan: LP rewards can override per pool, while uncommon pairs may be better handled with 1inch, arbTake, or a separate keeper config
 ```
 
 ### Choose Your Deployment Approach
@@ -421,6 +466,90 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 ---
 
+## Chain-Wide Auto-Discovery (V1)
+
+V1 can auto-discover `take` and `settlement` opportunities across a chain while keeping `kick` manual.
+
+- `autoDiscover` defines shared discovery controls like allow/deny lists, dry-run behavior for pools not already listed in `pools[]`, and hydration cooldowns.
+- `autoDiscover.take` and `autoDiscover.settlement` carry independent per-action limits.
+- `discoveredDefaults` defines the default `take` and `settlement` behavior for discovered pools.
+- `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
+- If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
+- If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
+
+For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).
+
+```typescript
+const config: KeeperConfig = {
+  dryRun: true,
+  autoDiscover: {
+    enabled: true,
+    take: {
+      enabled: true,
+      maxPoolsPerRun: 10,
+      takeQuoteBudgetPerRun: 5,
+      maxGasPriceGwei: 5,
+      maxGasCostNative: 0.0001,
+    },
+    settlement: {
+      enabled: true,
+      maxPoolsPerRun: 10,
+      maxGasPriceGwei: 5,
+      maxGasCostNative: 0.0001,
+    },
+    dryRunNewPools: true,
+    logSkips: true,
+    denyPools: [
+      '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+    ],
+  },
+  discoveredDefaults: {
+    take: {
+      minCollateral: 0.01,
+      hpbPriceFactor: 0.9,
+    },
+    settlement: {
+      enabled: true,
+      minAuctionAge: 18000,
+      maxBucketDepth: 50,
+      maxIterations: 10,
+      checkBotIncentive: true,
+    },
+  },
+  pools: [
+    {
+      name: 'wstETH / WETH',
+      address: '0x...',
+      price: { source: PriceOriginSource.FIXED, value: 1.15 },
+      kick: {
+        minDebt: 0.07,
+        priceFactor: 0.9,
+      },
+      // Manual take override for this pool only. If omitted,
+      // discoveredDefaults.take will be used when the pool is discovered.
+      take: {
+        minCollateral: 0.02,
+        hpbPriceFactor: 0.97,
+      },
+    },
+  ],
+};
+```
+
+Discovery is auction-first, not pool-enumeration-first. The keeper queries chain-wide liquidation activity from the subgraph, groups live work by pool, hydrates only the pools that matter, and then runs the existing `take` and `settlement` execution paths behind the new policy checks.
+
+At runtime, discovered `take` refreshes the shared chain-wide auction snapshot when `autoDiscover.take` is enabled. Discovered `settlement` reuses that in-memory snapshot instead of issuing its own chain-wide fetch, so settlement no longer doubles discovery traffic in the common case. If you run settlement-only discovery, the settlement loop refreshes the snapshot on its own slower cadence. The snapshot is not persisted across restarts; after process restart, discovered settlement resumes after the next discovery refresh for the actions you enabled.
+
+Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh. No extra operator action is needed to discover 101 active auctions.
+
+`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. `maxGasCostNative`, `maxGasCostQuote`, and `maxGasPriceGwei` are action-specific under `autoDiscover.take` and `autoDiscover.settlement`.
+
+Prefer `maxGasCostNative` on L2s and mixed-quote deployments. It uses the RPC gas price directly and does not require an extra native-to-quote conversion fetch. `maxGasCostQuote` remains available as an explicit quote-denominated mode; when it is enabled the keeper may need to convert native gas cost into the pool quote token. If the pool collateral is already wrapped native, the keeper reuses the existing take quote instead of fetching a second conversion quote. All quote-denominated thresholds are per-pool quote token amounts.
+
+`kick` auto-discovery is intentionally not part of V1.
+
+---
+
 ## DEX Router Configuration:
 
 ### Configuring for External Takes
@@ -429,7 +558,7 @@ External takes require contract deployment and specific configuration:
 
 #### 1inch Integration (Single Contract)
 
-**IMPORTANT:** 1inch contract deployment is now **required even for LP reward swaps**.
+**IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
 
 **Contract Deployment:**
 ```bash
@@ -439,7 +568,7 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 **Config.ts Setup:**
 ```typescript
 const config: KeeperConfig = {
-  // Required for 1inch external takes AND LP rewards
+  // Required for 1inch external takes; only needed for LP rewards when they also use PostAuctionDex.ONEINCH
   keeperTaker: '0x[deployed-address]',
   oneInchRouters: {
     1: '0x1111111254EEB25477B68fb85Ed929f73A960582',    // Ethereum
@@ -480,7 +609,7 @@ const config: KeeperConfig = {
     permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-    defaultFeeTier: 3000, // ← COMPILED INTO CONTRACT: All external takes use 0.3%
+    defaultFeeTier: 3000, // Global default for Uniswap external takes
     defaultSlippage: 0.5,
   },
   
@@ -495,13 +624,13 @@ const config: KeeperConfig = {
 
 **⚠️ Important: Uniswap V3 Pool Selection and Fee Tier Configuration**
 
-Before running in production, manually verify which fee tier has the highest liquidity for your token pairs. The Universal Router will ONLY use the specific fee tier you configure (500 = 0.05%, 3000 = 0.3%, 10000 = 1%) - it does not automatically select the optimal route. 
+Uniswap external takes currently quote and execute against the configured `defaultFeeTier` only (`500` = 0.05%, `3000` = 0.3%, `10000` = 1%). The keeper does not dynamically probe alternative fee tiers per take, so choose the default that best matches your highest-value pairs.
 
 To check liquidity:
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) for your network
-2. Search for your token pair (e.g., USDC/WETH)  
+2. Search for your token pair (e.g., USDC/WETH)
 3. Compare TVL across different fee tiers
-4. Set `defaultFeeTier` to the most liquid option
+4. Set `defaultFeeTier` to the most liquid option for your most important pairs
 5. Monitor and update as liquidity shifts over time
 
 Low-liquidity pools can cause swap failures or poor pricing that impacts liquidation profitability.
@@ -526,7 +655,7 @@ const config: KeeperConfig = {
     quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
-    defaultFeeTier: 500, // ← COMPILED INTO CONTRACT: All external takes use 0.05%
+    defaultFeeTier: 500, // Global default for SushiSwap external takes
     defaultSlippage: 10.0,
   },
   
@@ -541,14 +670,14 @@ const config: KeeperConfig = {
 
 **⚠️ Important: SushiSwap Pool Selection and Fee Tier Configuration**
 
-SushiSwap routing requires manual fee tier selection. The router will only use the `defaultFeeTier` you specify (typically 500 = 0.05%, 3000 = 0.3%) - it does not find alternative routes automatically.
+SushiSwap external takes currently quote and execute against the configured `defaultFeeTier` only (typically `500` = 0.05% or `3000` = 0.3%). The keeper does not dynamically probe alternative fee tiers per take, so choose the default that best matches your highest-value pairs.
 
 To verify optimal pools:
 1. Check [SushiSwap Analytics](https://sushi.com/pool) for your network
 2. Compare liquidity across fee tiers for your token pairs
-3. Set `defaultFeeTier` to the highest liquidity option
+3. Set `defaultFeeTier` to the highest-liquidity option for your most important pairs
 4. Test with small amounts before production deployment
-5. Adjust configuration as market conditions change
+5. Revisit the setting as market conditions change
 
 Using low-liquidity pools may result in failed swaps or unfavorable pricing.
 
@@ -644,8 +773,8 @@ curveRouterOverrides: {
 ### Automatic Detection
 
 The keeper automatically detects your configuration:
-- **Single**: Uses existing 1inch integration (`src/take.ts`)
-- **Factory**: Uses multi-DEX system (`src/take-factory.ts`) 
+- **Single**: Uses existing 1inch integration (`src/take/index.ts`)
+- **Factory**: Uses multi-DEX system (`src/take/factory/index.ts`) 
 - **None**: ArbTake and settlement only
 
 No manual selection needed - the bot chooses based on your config.
@@ -654,7 +783,7 @@ No manual selection needed - the bot chooses based on your config.
 
 **Major Chain Example (1inch):**
 ```typescript
-// example-avalanche-config.ts shows 1inch external takes
+// examples/example-avalanche-config.ts shows 1inch external takes
 const config: KeeperConfig = {
   keeperTaker: '0x[deployed-1inch-contract]',
   oneInchRouters: { 43114: '0x111111125421ca6dc452d289314280a0f8842a65' },
@@ -670,7 +799,7 @@ const config: KeeperConfig = {
 
 **Multi-DEX Chain Example (Factory):**  
 ```typescript
-// hemi-config.ts shows factory external takes
+// examples/example-hemi-config.ts shows factory external takes
 const config: KeeperConfig = {
   keeperTakerFactory: '0x[factory-address]',
   takerContracts: { 
@@ -678,11 +807,11 @@ const config: KeeperConfig = {
     'SushiSwap': '0x[taker-address]'
   },
   universalRouterOverrides: { 
-    defaultFeeTier: 3000, // 0.3% compiled into Uniswap contract
+    defaultFeeTier: 3000, // Global default for Uniswap external takes
     /* other addresses */ 
   },
   sushiswapRouterOverrides: { 
-    defaultFeeTier: 3000, // 0.3% compiled into SushiSwap contract  
+    defaultFeeTier: 3000, // Global default for SushiSwap external takes  
     /* other addresses */ 
   },
   
@@ -695,7 +824,7 @@ const config: KeeperConfig = {
 }
 ```
 
-**See `example-avalanche-config.ts`, `example-hemi-config.ts`, for complete examples.**
+**See `examples/example-avalanche-config.ts`, `examples/example-hemi-config.ts`, for complete examples.**
 
 ### Detailed LP Reward Configuration
 
@@ -703,7 +832,7 @@ The following sections provide comprehensive examples for configuring LP reward 
 
 ##### 1inch LP Reward Configuration
 
-**IMPORTANT:** 1inch LP reward swaps now require smart contract deployment.
+**IMPORTANT:** 1inch LP reward swaps require smart contract deployment, but LP rewards can also use Uniswap V3, SushiSwap, or Curve without the 1inch contract.
 
 ```bash
 # Deploy 1inch contract first (REQUIRED)
@@ -834,7 +963,7 @@ pools: [
 
 ##### Notes
 
-- **Contract deployment is required** for 1inch LP reward swaps
+- **Contract deployment is only required** for LP reward swaps that use `PostAuctionDex.ONEINCH`
 - If `dexProvider: PostAuctionDex.ONEINCH` but `keeperTaker` is missing, the script will fail.
 - Ensure the `.env` file is loaded (via `dotenv/config`) in your project.
 
@@ -1041,7 +1170,10 @@ make test-prices
 
 User assumes all risk of data presented and transactions placed by this keeper; see license for more details.
 
-## Deepwiki (You can ask an AI about this Github repo, indexed weekly)
+## DeepWiki
+
+You can ask an AI about this GitHub repo on DeepWiki. It is indexed weekly, so it may lag the current branch.
+
 [https://deepwiki.com/mitakash/ajna-keeper](https://deepwiki.com/mitakash/ajna-keeper)
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mitakash/ajna-keeper)

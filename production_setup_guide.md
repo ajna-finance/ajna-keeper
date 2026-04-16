@@ -27,22 +27,52 @@ While the main README covers the basic setup process, production deployments ben
 
 **Why hosted RPC?** Running a local node requires significant infrastructure, storage, and maintenance. Hosted providers offer better uptime and are more cost-effective for most use cases.
 
-## Step 1.5: Critical Fee Tier Selection (Before Contract Deployment)
+### Optional Read Failover Endpoints
 
-### Understanding Smart Contract Fee Tier Constraints
+For production discovery and gas-policy checks, you can configure dedicated read failover RPCs and subgraph fallbacks:
 
-**IMPORTANT:** The fee tier you specify in router overrides gets compiled into the deployed smart contract. This creates a permanent constraint for external takes that cannot be changed without full redeployment.
+```typescript
+{
+  ethRpcUrl: 'https://primary-write-and-default-read-rpc',
+  readRpcUrls: [
+    'https://primary-read-rpc',
+    'https://secondary-read-rpc',
+  ],
+  subgraphUrl: 'https://primary-subgraph',
+  subgraphFallbackUrls: [
+    'https://secondary-subgraph',
+  ],
+}
+```
+
+Important operational details:
+- `readRpcUrls` is a dedicated read path. If you configure it, the keeper does not implicitly prepend `ethRpcUrl`; include your primary RPC in `readRpcUrls` yourself if you want it in the read failover set.
+- All `readRpcUrls` must point to the same chain as the keeper signer. Wrong-chain read fallbacks are rejected.
+- `subgraphFallbackUrls` are only used when the primary subgraph is unavailable or unhealthy.
+
+## Step 1.5: Critical Fee Tier Selection (Before Enabling External Takes)
+
+### What the Current Keeper Actually Does
+
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data, but the keeper currently chooses that fee tier from one runtime `defaultFeeTier` per DEX per keeper instance.
 
 ```typescript
 universalRouterOverrides: {
-  defaultFeeTier: 3000, // ← THIS GETS COMPILED INTO SMART CONTRACT
+  defaultFeeTier: 3000, // Global runtime default for Uniswap external takes
   // ... other settings
 },
 sushiswapRouterOverrides: {
-  defaultFeeTier: 500,  // ← THIS GETS COMPILED INTO SMART CONTRACT  
+  defaultFeeTier: 500,  // Global runtime default for SushiSwap external takes
   // ... other settings
 }
 ```
+
+Implications:
+- External takes use the configured default for both quoting and execution
+- Changing the default is a config-and-restart change, not a contract redeploy
+- There is no per-pool external-take fee override in the current config schema
+- LP reward swaps remain more flexible because `rewardAction.fee` can override per pool
+- 1inch does not use this model because the API routes dynamically
 
 ### Pre-Deployment Research Workflow
 
@@ -56,90 +86,56 @@ sushiswapRouterOverrides: {
 
 **Fee Tier Mapping (Critical Reference):**
 - `500` = 0.05% = 5 basis points (typically stablecoins)
-- `3000` = 0.3% = 30 basis points (most common major pairs)  
+- `3000` = 0.3% = 30 basis points (most common major pairs)
 - `10000` = 1.0% = 100 basis points (exotic pairs, higher volatility)
 
 For Uniswap V3:
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) → your network
-2. For each token pair, compare TVL across fee tiers:
-   - 500 (0.05%): Usually stablecoins, lower volatility
-   - 3000 (0.3%): Most common major pairs  
-   - 10000 (1%): Exotic pairs, higher volatility
-3. **Weight by expected liquidation volume/value**
+2. For each token pair, compare TVL across fee tiers
+3. Weight the result by expected liquidation volume and value
 
 For SushiSwap:
 1. Check [SushiSwap Analytics](https://www.sushi.com/base/pool) → your network
-2. Most pools use 500 (0.05%) or 3000 (0.3%)
-3. Verify pools exist for your pairs before deployment
+2. Verify pools exist for your pairs before enabling external takes
+3. Weight the result by expected liquidation volume and value
 
-**Step 3: Make Strategic Fee Tier Decision**
-```
-Priority Matrix:
-High-value pools + High-frequency pairs = Highest weight in decision
-Medium-value pools = Medium weight  
-Low-value/rare pairs = Optimize via LP reward overrides later
-```
+**Step 3: Make a Strategic Default Selection**
+- Optimize for the weighted majority of your expected liquidation flow, not for every pair equally
+- If a few important pairs want a different tier, decide whether they should use 1inch, arbTake, or a separate keeper config
+- Revisit the default periodically as liquidity migrates
 
 **Real-World Example Decision Process (Based on Production Configs):**
 ```
 Hemi Network Pools Analysis:
 - vcred/usdc_e (medium value): Most liquidity in 500 tier (0.05%)
-- vusd/usdc_e (medium value): Most liquidity in 500 tier (0.05%)  
+- vusd/usdc_e (medium value): Most liquidity in 500 tier (0.05%)
 - usd_t1/usdc_t (high frequency): Most liquidity in 3000 tier (0.3%)
 
 Production Decision: Use defaultFeeTier: 3000
-Rationale: 
-- Optimize for highest frequency pair (usd_t1/usdc_t) 
-- External takes get optimal routing for most common liquidations
-- Use fee: FeeAmount.LOW overrides in LP rewards for vcred/vusd pairs
+Rationale:
+- Optimize for highest-frequency pair (usd_t1/usdc_t)
+- External takes get the best route for the majority of expected flow
+- Use `fee: FeeAmount.LOW` overrides in LP rewards for vcred/vusd pairs
+- Consider a separate keeper config if the 500-tier cluster becomes strategically important
 
 Result in Production Config:
 universalRouterOverrides: {
-  defaultFeeTier: 3000, // All external takes use 0.3%
+  defaultFeeTier: 3000, // Uniswap external takes default to 0.3% in this keeper instance
 },
 sushiswapRouterOverrides: {
-  defaultFeeTier: 3000, // All external takes use 0.3%  
+  defaultFeeTier: 3000, // SushiSwap external takes default to 0.3% in this keeper instance
 }
 ```
 
-### Post-Deployment Flexibility
+### Operational Guidance
 
-After contract deployment, you retain flexibility only for LP reward swaps:
-
-```typescript
-pools: [
-  {
-    name: "vcred/usdc_e",
-    take: {
-      // External takes: LOCKED to contract's defaultFeeTier (3000 = 0.3%)
-      liquiditySource: LiquiditySource.SUSHISWAP,
-    },
-    collectLpReward: {
-      rewardActionCollateral: {
-        fee: FeeAmount.LOW, // FLEXIBLE: Can use optimal 0.05% for this pair
-        dexProvider: PostAuctionDex.SUSHISWAP
-      }
-    }
-  }
-]
-```
-
-### When to Redeploy Contracts
-
-Consider redeployment if:
-- Market liquidity shifts significantly (quarterly review)
-- You add pools with very different optimal fee tiers
-- External take profitability drops due to poor routing
-- Major liquidity migrations between fee tiers
-
-**Redeployment Process:**
-1. Research current market conditions
+When liquidity shifts materially:
+1. Re-check the relevant pairs on the DEX analytics page
 2. Update `defaultFeeTier` in config
-3. Redeploy: `yarn ts-node scripts/deploy-factory-system.ts config.ts`  
-4. Update config with new contract addresses
-5. Test thoroughly before production
+3. Restart the keeper
+4. Re-test with small amounts before relying on the new route selection
 
-This makes fee tier selection a **strategic infrastructure decision**, not just a configuration parameter.
+This makes fee tier selection a **strategic runtime configuration decision**. It is still important, but it is no longer a contract-redeploy decision in the current keeper.
 
 ## Step 2: Contract Deployment for External Takes
 
@@ -159,7 +155,7 @@ This makes fee tier selection a **strategic infrastructure decision**, not just 
 
 **Best for:** Established chains with 1inch aggregator support
 
-**IMPORTANT:** 1inch contract deployment is now **required even for LP reward swaps**.
+**IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
 
 **Prerequisites:**
 ```bash
@@ -181,13 +177,13 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 # Expected output:
 # ✅ 1inch keeper taker deployed to: 0x[deployed-address]
 # ✅ Contract verification successful
-# ✅ Ready for external takes and LP reward swaps
+# ✅ Ready for 1inch external takes and optional 1inch LP reward swaps
 ```
 
 **Configuration Updates:**
 ```typescript
 const config: KeeperConfig = {
-  // ADD: Deployed contract address (REQUIRED for both external takes AND LP rewards)
+  // ADD: Deployed contract address (REQUIRED for 1inch external takes; also needed if LP rewards use PostAuctionDex.ONEINCH)
   keeperTaker: '0x[deployed-contract-address]',
   
   // ADD: 1inch router addresses per chain
@@ -268,7 +264,7 @@ const config: KeeperConfig = {
     permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-    defaultFeeTier: 3000,    // ← COMPILED INTO CONTRACT: 0.3% fee tier
+    defaultFeeTier: 3000,    // Global runtime default for Uniswap external takes
     defaultSlippage: 0.5,    // 0.5% slippage tolerance
   },
   
@@ -278,7 +274,7 @@ const config: KeeperConfig = {
     quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
-    defaultFeeTier: 3000,    // ← COMPILED INTO CONTRACT: 0.3% fee tier
+    defaultFeeTier: 3000,    // Global runtime default for SushiSwap external takes
     defaultSlippage: 1.0,    // 1% slippage tolerance
   },
   
@@ -472,7 +468,7 @@ The recommended approach uses the [BuiltByMom/Ajna-subgraph](https://github.com/
 **Curve:**
 - No API rate limits (direct pool contract interaction)
 - May have RPC rate limits depending on provider
-- Pool discovery requires manual configuration
+- V1 auto-discovery can find live `take` and `settlement` work chain-wide, but Curve routing still needs explicit `curveRouterOverrides.poolConfigs` and `tokenAddresses`
 
 **Goldsky:**
 - 50 requests/second (generous for subgraph queries)
@@ -495,28 +491,51 @@ The keeper is configured with conservative timing to respect rate limits:
 
 **For faster operation:** Upgrade to paid API tiers. The bot timing can be reduced with higher-tier service plans.
 
+### Auto-Discovery Rollout (V1)
+
+V1 auto-discovery is auction-first: the keeper scans chain-wide liquidation activity, hydrates only pools with live work, and then feeds discovered targets into the existing `take` and `settlement` execution paths. `kick` remains manual in V1.
+
+- `autoDiscover` holds shared discovery controls such as allow/deny lists, `dryRunNewPools`, and hydration cooldowns.
+- `autoDiscover.take` and `autoDiscover.settlement` carry separate per-action limits.
+- `discoveredDefaults.take` defines how newly discovered pools should run `take`.
+- `discoveredDefaults.settlement` defines how newly discovered pools should run `settlement`.
+- Manual `pools[]` entries still control `kick`, LP reward collection, bond collection, and per-action overrides.
+
+Operationally, discovered `take` refreshes one shared in-memory chain-wide auction snapshot when `autoDiscover.take` is enabled. Discovered `settlement` reuses that snapshot instead of issuing its own chain-wide discovery scan, which keeps background subgraph traffic tied to the `take` cadence in the common case. If you run settlement-only discovery, the settlement loop refreshes the snapshot on its own slower cadence. The snapshot is not persisted across restarts; discovered settlement resumes after the next discovery refresh for the actions you enabled.
+
+Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh, so crossing 100 active auctions does not require any operator action.
+
+Use [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts) as the conservative starting point for the first live rollout.
+
+Recommended rollout order:
+1. Keep `dryRunNewPools: true` and inspect discovered skip/action logs first.
+2. Enable discovered `settlement` before discovered external `take` if you want the lower-risk path first.
+3. Prefer `autoDiscover.take.maxGasCostNative` and `autoDiscover.settlement.maxGasCostNative` before quote-denominated gas caps. Native gas caps use the RPC gas price directly and avoid extra native-to-quote conversion fetches.
+4. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
+5. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
+
 ## Step 6: DEX Configuration Best Practices
 
 ### Pool Liquidity Verification
 
-**Critical for Production Success:** DEX integrations require manual pool/fee tier selection. The bot will only use exactly what you configure - it cannot automatically find better routes.
+**Critical for Production Success:** For Uniswap V3 and SushiSwap external takes, the current keeper uses the configured `defaultFeeTier` at runtime. It does not automatically probe better tiers per take, so your default needs to reflect the pairs you care about most.
 
 **For Uniswap V3:**
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) → your network
 2. Search each token pair in your pools (e.g., "USDC WETH")
 3. Compare Total Value Locked (TVL) across fee tiers:
    - 500 (0.05%) - typically stablecoin pairs
-   - 3000 (0.3%) - most common for major pairs  
+   - 3000 (0.3%) - most common for major pairs
    - 10000 (1%) - exotic or volatile pairs
-4. Set `defaultFeeTier` to the highest TVL option
-5. For LP rewards, set `fee: FeeAmount.MEDIUM` (or appropriate tier)
+4. Set `defaultFeeTier` to the highest-liquidity option for your most important pairs
+5. For LP rewards, set `fee: FeeAmount.MEDIUM` (or the appropriate tier)
 
 **For SushiSwap:**
 1. Check [SushiSwap Analytics](https://www.sushi.com/pool) → your network
 2. Verify pool existence and liquidity for your pairs
 3. Most SushiSwap pools use 500 (0.05%) or 3000 (0.3%) tiers
-4. Set `defaultFeeTier` conservatively (typically 500)
-5. Use higher `defaultSlippage` (5-10%) due to potentially lower liquidity
+4. Set `defaultFeeTier` to the best-supported option for your most important pairs
+5. Use higher `defaultSlippage` (5-10%) when liquidity is thinner
 
 **For Curve:**
 1. Visit [Curve.fi](https://curve.finance) → your network
@@ -529,15 +548,16 @@ The keeper is configured with conservative timing to respect rate limits:
 
 **External Takes (Time-Sensitive):**
 - Execute during active auctions when timing is critical
-- Use global DEX settings: `defaultFeeTier` from router overrides
-- Cannot be customized per pool due to speed requirements
-- Choose `defaultFeeTier` based on your most common/valuable token pairs
+- Use the runtime `defaultFeeTier` from router overrides
+- Apply that same tier to quote evaluation and execution
+- Cannot be customized per pool in the current config schema
+- Can be changed by updating config and restarting the keeper
 
-**Post-Auction Swaps (Flexible):**  
+**Post-Auction Swaps (Flexible):**
 - Execute after auctions complete when timing is less critical
 - Can override fee tiers per pool using the `fee` parameter in `rewardAction`
 - Allow optimization for each specific token pair
-- If no `fee` specified, falls back to global `defaultFeeTier`
+- If no `fee` specified, falls back to the same global default
 
 ### Configuration Strategy
 
@@ -601,6 +621,22 @@ const config: KeeperConfig = {
   keeperKeystore: 'PUT_YOUR_FULL_PATH_HERE/keystore.json',
   logLevel: 'debug',
   ethRpcUrl: 'https://avax-mainnet.g.alchemy.com/v2/YOUR_API_KEY',
+  // Optional shorthand for private_rpc mode:
+  // takeWriteRpcUrl: 'https://avax-mainnet.g.alchemy.com/v2/YOUR_PRIVATE_TX_API_KEY',
+  // Optional: private/write RPC used only for take submissions
+  // takeWrite: {
+  //   mode: 'private_rpc',
+  //   rpcUrl: 'https://avax-mainnet.g.alchemy.com/v2/YOUR_PRIVATE_TX_API_KEY',
+  // },
+  // Optional: relay/private-orderflow submission for take only
+  // takeWrite: {
+  //   mode: 'relay',
+  //   relay: {
+  //     url: 'https://YOUR_PRIVATE_RELAY_ENDPOINT',
+  //     sendMethod: 'eth_sendPrivateTransaction',
+  //     maxBlockNumberOffset: 25,
+  //   },
+  // },
   subgraphUrl: 'https://api.goldsky.com/api/public/project_[id]/subgraphs/ajna-avalanche/1.0.0/gn',
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',
   multicallBlock: 11907934,
@@ -684,6 +720,8 @@ yarn ts-node scripts/query-1inch.ts --config avalanche-config.ts --action deploy
 yarn start --config avalanche-config.ts
 ```
 
+`dryRun` is useful for validating keeper logic and config shape, but it skips `takeWrite` transport validation and initialization entirely. Use a non-dry-run startup check before assuming a private RPC or relay endpoint is wired correctly.
+
 ### Hemi Production Config Snippet
 
 ```typescript
@@ -692,6 +730,22 @@ const config: KeeperConfig = {
   keeperKeystore: 'PUT_YOUR_FULL_PATH_HERE/keystore.json',
   logLevel: 'debug',
   ethRpcUrl: 'https://rpc.hemi.network/rpc',  //you can put in your own Quicknode RPC here
+  // Optional shorthand for private_rpc mode:
+  // takeWriteRpcUrl: 'https://YOUR_PRIVATE_RPC_HERE',
+  // Optional: private/write RPC used only for take submissions
+  // takeWrite: {
+  //   mode: 'private_rpc',
+  //   rpcUrl: 'https://YOUR_PRIVATE_RPC_HERE',
+  // },
+  // Optional: relay/private-orderflow submission for take only
+  // takeWrite: {
+  //   mode: 'relay',
+  //   relay: {
+  //     url: 'https://YOUR_PRIVATE_RELAY_ENDPOINT',
+  //     sendMethod: 'eth_sendPrivateTransaction',
+  //     maxBlockNumberOffset: 25,
+  //   },
+  // },
   subgraphUrl: 'https://api.goldsky.com/api/public/project_[id]/subgraphs/ajna-hemi/1.0.0/gn',
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',
   multicallBlock: 484490,
@@ -710,7 +764,7 @@ const config: KeeperConfig = {
     universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
     wethAddress: '0x4200000000000000000000000000000000000006',
     permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
-    defaultFeeTier: 3000, // ← COMPILED INTO CONTRACT: All Uniswap external takes use 0.3%
+    defaultFeeTier: 3000, // Global default for Uniswap external takes
     defaultSlippage: 0.5,
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
@@ -722,7 +776,7 @@ const config: KeeperConfig = {
     quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
-    defaultFeeTier: 3000, // ← COMPILED INTO CONTRACT: All SushiSwap external takes use 0.3%
+    defaultFeeTier: 3000, // Global default for SushiSwap external takes
     defaultSlippage: 1.0,
   },
   
@@ -759,7 +813,7 @@ const config: KeeperConfig = {
       checkBotIncentive: false,
     },
     take: {
-      // External take via SushiSwap (uses contract's 0.3% tier)
+      // External take via SushiSwap (uses this keeper's configured 0.3% default)
       liquiditySource: LiquiditySource.SUSHISWAP,
       marketPriceFactor: 0.99,
       minCollateral: 0.01,
@@ -791,6 +845,12 @@ yarn ts-node scripts/deploy-factory-system.ts hemi-config.ts
 # 3. Test with dry run first  
 yarn start --config hemi-config.ts
 ```
+
+The same `dryRun` caveat applies here: private/relay take-write endpoints are not validated in dry-run mode.
+
+For live startup behavior:
+- permanent `takeWrite` config mistakes fail fast at startup, including wrong-chain dedicated RPCs, blank `takeWriteRpcUrl`, unsupported `takeWrite.mode`, and invalid relay requirements
+- transient dedicated endpoint outages do not disable the take loop permanently; the keeper retries take-write transport initialization in-cycle
 
 ### Base Curve Production Config Snippet
 
@@ -1018,11 +1078,8 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 # LP reward swaps
 "Successfully swapped 1.5 of 0x123... to usdc_t via sushiswap"
 
-# Fee tier usage in external takes
-"Using compiled fee tier 3000 (0.3%) for external take"
-
-# Fee tier override in LP rewards  
-"LP reward swap: Using fee override 500 (0.05%) instead of default 3000"
+# Fee-tier defaults are configuration-driven
+# Review `defaultFeeTier` in config when troubleshooting routing quality
 ```
 
 **Key Logs to Monitor for Curve:**
@@ -1048,8 +1105,8 @@ yarn ts-node scripts/query-1inch.ts --config config.ts --action quote --poolName
 # Verify factory deployment
 grep "Type: factory, Valid: true" logs/keeper.log
 
-# Check fee tier compilation
-grep "compiled fee tier" logs/keeper.log
+# Check configured fee tiers
+rg "defaultFeeTier|fee:" config.ts
 ```
 
 ## Troubleshooting Production Issues
@@ -1119,19 +1176,19 @@ This indicates the auction needs more settlement iterations or has complex debt 
 
 ### DEX-Specific Issues
 
-**Smart Contract Fee Tier Issues:**
+**External-Take Fee Tier Issues:**
 ```bash
-# Log: "External takes consistently unprofitable"
-# Cause: Contract deployed with suboptimal fee tier
-# Solution: Research current liquidity, consider redeploying with better tier
+# Symptom: "External takes consistently unprofitable"
+# Cause: Keeper defaultFeeTier points at a weaker liquidity tier for the pairs you care about
+# Solution: Re-check liquidity, update defaultFeeTier, and restart the keeper
 
-# Log: "High price impact on external takes"  
-# Cause: Contract locked to low-liquidity fee tier
-# Solution: Either redeploy or rely more on arbTake strategy
+# Symptom: "High price impact on external takes"
+# Cause: External-take default is set to a low-liquidity tier for that pair
+# Solution: Change the default, route those pools through 1inch, or split those pools into a separate keeper config
 
-# Log: "LP rewards more profitable than external takes"
-# Cause: LP rewards using optimal per-pool overrides, external takes using suboptimal contract tier
-# Solution: Normal - this is expected with strategic fee tier choices
+# Symptom: "LP rewards more profitable than external takes"
+# Cause: LP rewards can use per-pool fee overrides while external takes share one DEX default
+# Solution: Normal in mixed-pair deployments; consider separate keeper configs if the gap matters operationally
 ```
 
 **SushiSwap Quote Provider Issues:**

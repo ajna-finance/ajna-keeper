@@ -3,8 +3,8 @@ import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import { BigNumber, Contract, ethers, providers, Signer } from 'ethers';
 import sinon from 'sinon';
-import { DexRouter } from '../dex-router';
-import { PostAuctionDex } from '../config-types';
+import { DexRouter } from '../dex/router';
+import { PostAuctionDex } from '../config';
 import * as erc20 from '../erc20';
 import { MAINNET_CONFIG } from '../integration-tests/test-config';
 import { logger } from '../logging';
@@ -584,6 +584,51 @@ describe('DexRouter', () => {
       );
 
       expect(result).to.deep.equal({ success: false, error: 'API error' });
+    });
+
+    it('retries retryable 1inch swap-data failures before succeeding', async () => {
+      const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+      try {
+        sinon.stub(dexRouter as any, 'getQuoteFromOneInch').resolves({
+          success: true,
+          dstAmount: '900000000000000000',
+        });
+        const getSwapDataStub = sinon.stub(
+          dexRouter,
+          'getSwapDataFromOneInch'
+        );
+        getSwapDataStub
+          .onCall(0)
+          .resolves({ success: false, error: 'network error', retryable: true });
+        getSwapDataStub
+          .onCall(1)
+          .resolves({ success: false, error: 'network error', retryable: true });
+        getSwapDataStub.onCall(2).resolves({
+          success: true,
+          data: {
+            to: '0x1inchRouter',
+            data: '0xdata',
+            value: '0',
+            gas: '100000',
+          },
+        });
+
+        const resultPromise = dexRouter['swapWithOneInch'](
+          chainId,
+          BigNumber.from('100000000'),
+          tokenIn,
+          tokenOut,
+          slippage
+        );
+
+        await clock.runAllAsync();
+        const result = await resultPromise;
+
+        expect(result.success).to.be.true;
+        expect(getSwapDataStub.callCount).to.equal(3);
+      } finally {
+        clock.restore();
+      }
     });
   });
 });

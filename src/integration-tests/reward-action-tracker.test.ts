@@ -1,17 +1,17 @@
-import { RewardActionLabel } from '../config-types';
+import { RewardActionLabel } from '../config';
 import {
   getProvider,
   impersonateSigner,
   resetHardhat,
   setBalance,
 } from './test-utils';
-import { MAINNET_CONFIG, USER1_MNEMONIC } from './test-config';
-import { RewardActionTracker } from '../reward-action-tracker';
+import { MAINNET_CONFIG } from './test-config';
+import { RewardActionTracker } from '../rewards';
 import { decimaledToWei } from '../utils';
 import { Wallet } from 'ethers';
-import { getBalanceOfErc20 } from '../erc20';
+import { getBalanceOfErc20, transferErc20 } from '../erc20';
 import { expect } from 'chai';
-import { DexRouter } from '../dex-router';
+import { DexRouter } from '../dex/router';
 
 describe('RewardActionTracker', () => {
   beforeEach(async () => {
@@ -19,17 +19,25 @@ describe('RewardActionTracker', () => {
   });
 
   it('Transfers to wallet', async () => {
-    const signer = await impersonateSigner(
+    const tokenWhaleSigner = await impersonateSigner(
       MAINNET_CONFIG.WBTC_USDC_POOL.collateralWhaleAddress
     );
+    const signer = Wallet.createRandom().connect(getProvider());
+    const tokenToSwap = MAINNET_CONFIG.WBTC_USDC_POOL.collateralAddress;
+    await setBalance(signer.address, decimaledToWei(1000).toHexString());
     await setBalance(
-      await signer.getAddress(),
+      await tokenWhaleSigner.getAddress(),
       decimaledToWei(1000).toHexString()
     );
-    const receiver = Wallet.fromMnemonic(USER1_MNEMONIC).connect(getProvider());
+    await transferErc20(
+      tokenWhaleSigner,
+      tokenToSwap,
+      signer.address,
+      decimaledToWei(1, 8)
+    );
+    const receiver = Wallet.createRandom().connect(getProvider());
     const wethAddress = MAINNET_CONFIG.WETH_ADDRESS;
     const uniswapV3Router = MAINNET_CONFIG.UNISWAP_V3_ROUTER;
-    const tokenToSwap = MAINNET_CONFIG.WBTC_USDC_POOL.collateralAddress;
     const dexRouter = new DexRouter(signer);
     const et = new RewardActionTracker(
       signer,

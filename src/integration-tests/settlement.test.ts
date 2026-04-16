@@ -2,17 +2,22 @@ import './subgraph-mock';
 import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
 import { expect } from 'chai';
 import { BigNumber, constants } from 'ethers';
-import { BigNumber, constants } from 'ethers';
-import { configureAjna, KeeperConfig, PoolConfig } from '../config-types';
+import { configureAjna, KeeperConfig, PoolConfig } from '../config';
 import { NonceTracker } from '../nonce';
 import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../settlement';
-import { LpCollector } from '../collect-lp';
-import { collectBondFromPool } from '../collect-bond';
-import { RewardActionTracker } from '../reward-action-tracker';
-import { DexRouter } from '../dex-router';
+import { LpCollector, collectBondFromPool, RewardActionTracker } from '../rewards';
+import { DexRouter } from '../dex/router';
 import { decimaledToWei, weiToDecimaled, delay } from '../utils';
 import { logger } from '../logging';
 import { MAINNET_CONFIG } from './test-config';
+import {
+  makeGetHighestMeaningfulBucket,
+  makeGetLiquidationsFromSdk,
+  makeGetLoansFromSdk,
+  overrideGetHighestMeaningfulBucket,
+  overrideGetLiquidations,
+  overrideGetLoans,
+} from './subgraph-mock';
 import {
   getProvider,
   impersonateSigner,
@@ -55,6 +60,9 @@ describe('Settlement Integration Tests', () => {
     pool = await ajna.fungiblePoolFactory.getPoolByAddress(
       MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
     );
+    overrideGetLoans(makeGetLoansFromSdk(pool));
+    overrideGetLiquidations(makeGetLiquidationsFromSdk(pool));
+    overrideGetHighestMeaningfulBucket(makeGetHighestMeaningfulBucket(pool));
 
     // Standard settlement configuration for testing
     poolConfig = {

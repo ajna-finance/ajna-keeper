@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { IERC20Pool, IERC20Taker } from "../AjnaInterfaces.sol";
+import { IERC20Pool, IERC20Taker, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 
 /// @notice Common interface for all Ajna keeper taker implementations
@@ -41,6 +41,14 @@ interface IAjnaKeeperTaker is IERC20Taker {
     /// @notice Returns the owner of this contract.
     /// @return The address of the contract owner.
     function owner() external view returns (address);
+
+    /// @notice Returns the factory contract authorized to invoke this taker.
+    /// @return The authorized factory address.
+    function authorizedFactory() external view returns (address);
+
+    /// @notice Returns the Ajna pool factory this taker validates pools against.
+    /// @return The Ajna pool factory address.
+    function poolFactory() external view returns (PoolDeployer);
 
     /// @notice Returns the supported liquidity sources for this taker.
     /// @return sources Array of supported LiquiditySource values.

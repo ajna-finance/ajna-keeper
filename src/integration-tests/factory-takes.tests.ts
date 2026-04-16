@@ -4,9 +4,9 @@ import { AjnaSDK, FungiblePool, Signer } from '@ajna-finance/sdk';
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
 import sinon from 'sinon';
-import { configureAjna, LiquiditySource, KeeperConfig, PoolConfig } from '../config-types';
-import { handleFactoryTakes } from '../take-factory';
-import { UniswapV3QuoteProvider } from '../dex-providers/uniswap-quote-provider';
+import { configureAjna, LiquiditySource, KeeperConfig, PoolConfig } from '../config';
+import { handleFactoryTakes } from '../take/factory';
+import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
 import { handleKicks } from '../kick';
 import { arrayFromAsync, decimaledToWei } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
@@ -32,7 +32,7 @@ import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 /**
  * Integration tests for factory take implementation and quote provider.
  * 
- * Purpose: Ensure take-factory.ts and UniswapV3QuoteProvider work together correctly.
+ * Purpose: Ensure take/factory and UniswapV3QuoteProvider work together correctly.
  * Critical for: Future developers modifying factory take logic or quote providers.
  * 
  * Focus Areas:
@@ -41,7 +41,10 @@ import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
  * 3. Uniswap V3 configuration handling
  * 4. Error handling and edge cases
  */
-describe('Factory Takes Integration Tests', () => {
+const FORK_INTEGRATION_TIMEOUT_MS = 120_000;
+
+describe('Factory Takes Integration Tests', function () {
+  this.timeout(FORK_INTEGRATION_TIMEOUT_MS);
   let ajna: AjnaSDK;
   let pool: FungiblePool;
   let signer: Signer;
@@ -84,7 +87,7 @@ describe('Factory Takes Integration Tests', () => {
     await increaseTime(SECONDS_PER_DAY * 1);
   };
 
-  beforeEach(async () => {
+  const setupForkContext = async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
     
@@ -108,13 +111,21 @@ describe('Factory Takes Integration Tests', () => {
       await signer.getAddress(),
       decimaledToWei(100).toHexString()
     );
-  });
+  };
+
+  const setupQuoteProviderSigner = async () => {
+    signer = ethers.Wallet.createRandom().connect(
+      getProvider()
+    ) as unknown as Signer;
+  };
 
   afterEach(() => {
     sinon.restore();
   });
 
   describe('Factory Take Workflow', () => {
+    beforeEach(setupForkContext);
+
     /**
      * Critical: Tests that factory take workflow executes correctly.
      * If someone modifies handleFactoryTakes(), these tests catch breaking changes.
@@ -248,6 +259,8 @@ describe('Factory Takes Integration Tests', () => {
   });
 
   describe('Quote Provider Integration', () => {
+    beforeEach(setupQuoteProviderSigner);
+
     /**
      * Tests that UniswapV3QuoteProvider integrates correctly with factory takes.
      * Critical for accurate pricing decisions in take logic.
@@ -369,6 +382,8 @@ describe('Factory Takes Integration Tests', () => {
   });
 
   describe('Uniswap V3 Configuration Handling', () => {
+    beforeEach(setupForkContext);
+
     /**
      * Tests various Uniswap V3 configuration scenarios.
      * Ensures factory takes work with different chain configurations.
@@ -512,6 +527,8 @@ describe('Factory Takes Integration Tests', () => {
   });
 
   describe('Error Handling and Edge Cases', () => {
+    beforeEach(setupForkContext);
+
     /**
      * Tests factory take error handling for various edge cases.
      * Ensures robust operation when configurations are incomplete or invalid.
@@ -702,6 +719,8 @@ describe('Factory Takes Integration Tests', () => {
   });
 
   describe('Integration with Existing Components', () => {
+    beforeEach(setupForkContext);
+
     /**
      * Tests that factory takes integrate properly with existing keeper components.
      * Ensures factory system doesn't break other keeper functionality.

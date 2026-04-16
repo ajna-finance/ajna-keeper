@@ -2,7 +2,7 @@ import { BigNumber, providers, Wallet } from 'ethers';
 import { promises as fs } from 'fs';
 import { password } from '@inquirer/prompts';
 import { FungiblePool } from '@ajna-finance/sdk';
-import { KeeperConfig } from './config-types';
+import { KeeperConfig } from './config';
 import { logger } from './logging';
 import { JsonRpcProvider } from './provider';
 
@@ -37,10 +37,7 @@ export async function addAccountFromKeystore(
   // read the keystore file, confirming it exists
   const jsonKeystore = (await fs.readFile(keystorePath)).toString();
 
-  const pswd = await password({
-    message: 'Please enter your keystore password',
-    mask: '*',
-  });
+  const pswd = await Utils.askPassword();
 
   try {
     let wallet = Wallet.fromEncryptedJsonSync(jsonKeystore, pswd);
@@ -48,9 +45,9 @@ export async function addAccountFromKeystore(
     return wallet.connect(provider);
   } catch (error) {
     logger.error('Error decrypting keystore:', error);
-    logger.error('This keeper will not create transactions');
-    let wallet = Wallet.createRandom();
-    return wallet.connect(provider);
+    throw new Error(
+      `Failed to decrypt keystore at ${keystorePath}. Check your keystore password and try again.`
+    );
   }
 }
 
@@ -71,6 +68,56 @@ export function overrideMulticall(
 
 export async function delay(seconds: number) {
   return new Promise((res) => setTimeout(res, seconds * 1000));
+}
+
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+export function withGasLimitBuffer(
+  estimatedGas: BigNumber,
+  basisPoints: number = 13000
+): BigNumber {
+  return estimatedGas.mul(basisPoints).add(9999).div(10000);
+}
+
+export async function estimateGasWithBuffer(
+  estimateFn: () => Promise<BigNumber>,
+  fallbackGasLimit: BigNumber,
+  label: string,
+  basisPoints: number = 13000
+): Promise<BigNumber> {
+  try {
+    const estimatedGas = await estimateFn();
+    const gasLimit = withGasLimitBuffer(estimatedGas, basisPoints);
+    logger.debug(
+      `${label} gas estimate: ${estimatedGas.toString()} -> buffered ${gasLimit.toString()}`
+    );
+    return gasLimit;
+  } catch (error) {
+    logger.warn(
+      `${label} gas estimation failed, using fallback ${fallbackGasLimit.toString()}: ${error}`
+    );
+    return fallbackGasLimit;
+  }
 }
 
 function bigToScientific(bn: BigNumber): {

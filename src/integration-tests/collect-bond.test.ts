@@ -6,7 +6,7 @@ import {
   Signer,
 } from '@ajna-finance/sdk';
 import { MAINNET_CONFIG } from './test-config';
-import { configureAjna } from '../config-types';
+import { configureAjna } from '../config';
 import {
   getProvider,
   resetHardhat,
@@ -24,9 +24,9 @@ import {
 import { expect } from 'chai';
 import { weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
-import { collectBondFromPool } from '../collect-bond';
+import { collectBondFromPool } from '../rewards';
 import { handleKicks } from '../kick';
-import { handleTakes, handleTakesWith1inch } from '../take';
+import { handleLegacyOrArbTakes, handleTakes } from '../take';
 import { NonceTracker } from '../nonce';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 
@@ -161,7 +161,7 @@ describe('collectBondFromPool', () => {
       },
     });
     await increaseTime(SECONDS_PER_DAY * 2);
-    await handleTakesWith1inch ({
+    await handleLegacyOrArbTakes ({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,

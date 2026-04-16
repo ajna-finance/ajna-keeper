@@ -1,0 +1,140 @@
+import { expect } from 'chai';
+import sinon from 'sinon';
+import { BigNumber } from 'ethers';
+import { JsonRpcProvider } from '../provider';
+import {
+  getResilientReadGasPrice,
+  resetReadRpcHealthForTests,
+} from '../read-rpc';
+
+describe('Read RPC Failover', () => {
+  afterEach(() => {
+    sinon.restore();
+    resetReadRpcHealthForTests();
+  });
+
+  it('uses the primary provider when no dedicated readRpcUrls are configured', async () => {
+    const primaryProvider = {
+      getGasPrice: sinon.stub().resolves(BigNumber.from(42)),
+    };
+
+    const gasPrice = await getResilientReadGasPrice({
+      config: {
+        ethRpcUrl: 'http://write-rpc',
+      } as any,
+      primaryProvider: primaryProvider as any,
+    });
+
+    expect(primaryProvider.getGasPrice.calledOnce).to.be.true;
+    expect(gasPrice.toString()).to.equal('42');
+  });
+
+  it('does not prepend the primary provider when dedicated readRpcUrls are configured', async () => {
+    const primaryProvider = {
+      getGasPrice: sinon.stub().rejects(new Error('write rpc should not be used')),
+    };
+
+    sinon
+      .stub(JsonRpcProvider.prototype, 'getGasPrice')
+      .callsFake(function (this: JsonRpcProvider) {
+        const endpoint = (this as any).connection?.url;
+        if (endpoint === 'http://read-rpc-a') {
+          return Promise.resolve(BigNumber.from(88));
+        }
+        return Promise.reject(new Error('unexpected endpoint ' + endpoint));
+      });
+
+    const gasPrice = await getResilientReadGasPrice({
+      config: {
+        ethRpcUrl: 'http://write-rpc',
+        readRpcUrls: ['http://read-rpc-a'],
+      } as any,
+      primaryProvider: primaryProvider as any,
+    });
+
+    expect(primaryProvider.getGasPrice.called).to.be.false;
+    expect(gasPrice.toString()).to.equal('88');
+  });
+
+  it('clears timeout timers after successful gas price reads', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+    try {
+      const primaryProvider = {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(42)),
+      };
+
+      const gasPrice = await getResilientReadGasPrice({
+        config: {
+          ethRpcUrl: 'http://write-rpc',
+        } as any,
+        primaryProvider: primaryProvider as any,
+      });
+
+      expect(gasPrice.toString()).to.equal('42');
+      expect(clock.countTimers()).to.equal(0);
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it('skips fallback read-rpc endpoints on the wrong chain when an expected chainId is provided', async () => {
+    sinon
+      .stub(JsonRpcProvider.prototype, 'getNetwork')
+      .callsFake(function (this: JsonRpcProvider) {
+        const endpoint = (this as any).connection?.url;
+        if (endpoint === 'http://read-rpc-a') {
+          return Promise.resolve({ chainId: 1 } as any);
+        }
+        if (endpoint === 'http://read-rpc-b') {
+          return Promise.resolve({ chainId: 8453 } as any);
+        }
+        return Promise.reject(new Error(`unexpected endpoint ${endpoint}`));
+      });
+    sinon
+      .stub(JsonRpcProvider.prototype, 'getGasPrice')
+      .callsFake(function (this: JsonRpcProvider) {
+        const endpoint = (this as any).connection?.url;
+        if (endpoint === 'http://read-rpc-a') {
+          return Promise.resolve(BigNumber.from(999));
+        }
+        if (endpoint === 'http://read-rpc-b') {
+          return Promise.resolve(BigNumber.from(77));
+        }
+        return Promise.reject(new Error(`unexpected endpoint ${endpoint}`));
+      });
+
+    const gasPrice = await getResilientReadGasPrice({
+      config: {
+        ethRpcUrl: 'http://write-rpc',
+        readRpcUrls: ['http://read-rpc-a', 'http://read-rpc-b'],
+      } as any,
+      expectedChainId: 8453,
+    });
+
+    expect(gasPrice.toString()).to.equal('77');
+  });
+
+  it('fails over across configured readRpcUrls when the primary read endpoint fails', async () => {
+    sinon
+      .stub(JsonRpcProvider.prototype, 'getGasPrice')
+      .callsFake(function (this: JsonRpcProvider) {
+        const endpoint = (this as any).connection?.url;
+        if (endpoint === 'http://read-rpc-a') {
+          return Promise.reject(new Error('read-rpc-a unavailable'));
+        }
+        if (endpoint === 'http://read-rpc-b') {
+          return Promise.resolve(BigNumber.from(77));
+        }
+        return Promise.reject(new Error(`unexpected endpoint ${endpoint}`));
+      });
+
+    const gasPrice = await getResilientReadGasPrice({
+      config: {
+        ethRpcUrl: 'http://write-rpc',
+        readRpcUrls: ['http://read-rpc-a', 'http://read-rpc-b'],
+      } as any,
+    });
+
+    expect(gasPrice.toString()).to.equal('77');
+  });
+});

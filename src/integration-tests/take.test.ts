@@ -2,7 +2,7 @@ import './subgraph-mock';
 import { getLoansToKick, handleKicks, kick } from '../kick';
 import { AjnaSDK, ERC20Pool__factory, FungiblePool } from '@ajna-finance/sdk';
 import { MAINNET_CONFIG, USER1_MNEMONIC } from './test-config';
-import { configureAjna, LiquiditySource, TokenToCollect } from '../config-types';
+import { configureAjna, LiquiditySource, TokenToCollect } from '../config';
 import {
   getProvider,
   resetHardhat,
@@ -20,19 +20,17 @@ import {
 } from './subgraph-mock';
 import { expect } from 'chai';
 import {
-  arbTakeLiquidation,
   getLiquidationsToTake,
-  handleTakesWith1inch,
+  handleLegacyOrArbTakes,
 } from '../take';
+import { arbTakeLiquidation } from '../take/arb';
 import { BigNumber, constants, Wallet } from 'ethers';
 import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 import { NonceTracker } from '../nonce';
-import { LpCollector } from '../collect-lp';
-import { DexRouter } from '../dex-router';
-import { RewardActionTracker } from '../reward-action-tracker';
-import { collectBondFromPool } from '../collect-bond';
+import { LpCollector, RewardActionTracker, collectBondFromPool } from '../rewards';
+import { DexRouter } from '../dex/router';
 
 const setup = async () => {
   configureAjna(MAINNET_CONFIG.AJNA_CONFIG);
@@ -251,7 +249,6 @@ describe('arbTakeLiquidation', () => {
 
     await arbTakeLiquidation({
       pool,
-      poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
       config: {
         dryRun: false,
@@ -295,7 +292,6 @@ describe('arbTakeLiquidation', () => {
 
     await arbTakeLiquidation({
       pool,
-      poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
       config: {
         dryRun: true, // DRY RUN
@@ -316,7 +312,7 @@ describe('arbTakeLiquidation', () => {
   });
 });
 
-describe('handleTakesWith1inch', () => {
+describe('handleLegacyOrArbTakes', () => {
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
@@ -375,7 +371,7 @@ describe('handleTakesWith1inch', () => {
     // Record initial deposits for comparison
     const bucket2DepositBefore = weiToDecimaled((await bucket2.getStatus()).deposit);
 
-    await handleTakesWith1inch({
+    await handleLegacyOrArbTakes({
       signer,
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -391,7 +387,7 @@ describe('handleTakesWith1inch', () => {
       'Bucket 1 should only have dust remaining'
     );
 
-    await handleTakesWith1inch({
+    await handleLegacyOrArbTakes({
       signer,
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -416,7 +412,7 @@ describe('ArbTake → LP Collection chain', () => {
     NonceTracker.clearNonces();
   });
 
-  it('collects LP rewards after successful arb take', async () => {
+  it('tracks LP rewards after successful arb take when direct redemption is blocked', async () => {
     const { pool } = await setup();
     await increaseTime(SECONDS_PER_DAY * 1);
 
@@ -458,7 +454,7 @@ describe('ArbTake → LP Collection chain', () => {
     await lpCollector.startSubscription();
 
     // Execute arb take
-    await handleTakesWith1inch({
+    await handleLegacyOrArbTakes({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
@@ -488,19 +484,22 @@ describe('ArbTake → LP Collection chain', () => {
     const lpBalance = await bucket.lpBalance(signerAddress);
     expect(weiToDecimaled(lpBalance)).to.be.greaterThan(0);
 
-    // Attempt to redeem LP rewards. When the arb take consumed the entire
-    // bucket deposit, the redemption will fail on-chain (nothing to withdraw).
-    // This is expected Ajna behavior — the LP represents a claim on an empty bucket.
-    // The collectLpRewards() call handles this gracefully (logs error, continues).
-    await lpCollector.collectLpRewards();
+    let collectionError: unknown;
+    try {
+      await lpCollector.collectLpRewards();
+    } catch (error) {
+      collectionError = error;
+    } finally {
+      await lpCollector.stopSubscription();
+    }
 
-    // The LP reward should still be tracked (redemption from empty bucket
-    // returns 0 tokens, so the reward isn't subtracted)
+    expect(String(collectionError)).to.include('AuctionNotCleared');
+
+    // The LP reward should still be tracked because redemption was blocked
+    // by the active auction and the collector re-throws for reactive settlement.
     const remainingReward = lpCollector.lpMap.get(bucketIndex);
     expect(remainingReward).to.not.be.undefined;
     expect(remainingReward!.gt(constants.Zero)).to.be.true;
-
-    await lpCollector.stopSubscription();
   });
 });
 
@@ -515,7 +514,7 @@ describe('ArbTake → Settlement → Bond Collection chain', () => {
     await increaseTime(SECONDS_PER_DAY * 2);
 
     // Execute arb take — consumes all collateral
-    await handleTakesWith1inch({
+    await handleLegacyOrArbTakes({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,

@@ -2,8 +2,8 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers, Wallet } from 'ethers';
-import { CurveQuoteProvider } from '../dex-providers/curve-quote-provider';
-import { CurvePoolType } from '../config-types';
+import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
+import { CurvePoolType } from '../config';
 import { USER1_MNEMONIC } from './test-config';
 import { getProvider } from './test-utils';
 

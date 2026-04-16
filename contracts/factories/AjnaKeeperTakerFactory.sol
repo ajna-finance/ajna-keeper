@@ -33,6 +33,7 @@ contract AjnaKeeperTakerFactory {
     error UnsupportedSource();     // sig: 0xf54a7ed9
     error TakerNotSet();           // sig: 0x1f2a2005
     error InvalidTaker();          // sig: 0x8baa579f
+    error LegacyDirectOneInchTakerUnsupported();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for this deployment
     constructor(PoolDeployer ajnaErc20PoolFactory) {
@@ -54,11 +55,26 @@ contract AjnaKeeperTakerFactory {
             try IAjnaKeeperTaker(takerAddress).isSourceSupported(source) returns (bool supported) {
                 require(supported, "Source not supported");
             } catch {
+                if (_isLegacyDirectOneInchTaker(source, takerAddress)) {
+                    revert LegacyDirectOneInchTakerUnsupported();
+                }
                 revert InvalidTaker();
             }
 
             try IAjnaKeeperTaker(takerAddress).owner() returns (address takerOwner) {
                 require(takerOwner == owner, "Owner mismatch");
+            } catch {
+                revert InvalidTaker();
+            }
+
+            try IAjnaKeeperTaker(takerAddress).authorizedFactory() returns (address factoryAddress) {
+                require(factoryAddress == address(this), "Factory mismatch");
+            } catch {
+                revert InvalidTaker();
+            }
+
+            try IAjnaKeeperTaker(takerAddress).poolFactory() returns (PoolDeployer takerPoolFactory) {
+                require(address(takerPoolFactory) == address(poolFactory), "Pool factory mismatch");
             } catch {
                 revert InvalidTaker();
             }
@@ -167,6 +183,21 @@ contract AjnaKeeperTakerFactory {
         if (balance > 0) {
             token.safeTransfer(owner, balance);
          }   
+    }
+
+    function _isLegacyDirectOneInchTaker(
+        IAjnaKeeperTaker.LiquiditySource source,
+        address takerAddress
+    ) private view returns (bool) {
+        if (source != IAjnaKeeperTaker.LiquiditySource.OneInch) {
+            return false;
+        }
+
+        (bool hasOwner, ) = takerAddress.staticcall(abi.encodeWithSignature("owner()"));
+        (bool hasPoolFactory, ) = takerAddress.staticcall(abi.encodeWithSignature("poolFactory()"));
+        (bool hasAuthorizedFactory, ) = takerAddress.staticcall(abi.encodeWithSignature("authorizedFactory()"));
+
+        return hasOwner && hasPoolFactory && !hasAuthorizedFactory;
     }
 
     /// @dev Validates that the pool is from our Ajna deployment

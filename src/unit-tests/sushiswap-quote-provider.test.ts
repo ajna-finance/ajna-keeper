@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { SushiSwapQuoteProvider } from '../dex-providers/sushiswap-quote-provider';
+import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provider';
 
 describe('SushiSwap Quote Provider', () => {
   let mockSigner: any;

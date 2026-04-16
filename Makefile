@@ -1,4 +1,4 @@
-.PHONY: help install compile build test test-unit test-integration test-prices clean format start start-dry keystore fork-base
+.PHONY: help install compile build test test-unit test-integration test-prices clean clean-test format start start-dry keystore fork-base env-check setup
 
 # Default target
 .DEFAULT_GOAL := help
@@ -15,7 +15,7 @@ help:
 ## install: Install dependencies
 install:
 	@echo "Installing dependencies..."
-	@yarn install --frozen-lockfile || (rm -f yarn.lock && yarn install)
+	@yarn install --frozen-lockfile
 
 ## compile: Compile contracts and generate types
 compile:
@@ -35,10 +35,9 @@ test-unit:
 	@echo "Running unit tests..."
 	@yarn unit-tests
 
-## test-integration: Run integration tests (requires hardhat node)
+## test-integration: Run integration tests
 test-integration:
 	@echo "Running integration tests..."
-	@echo "Note: Run 'make fork-base' in another terminal first"
 	@yarn integration-tests
 
 ## test-prices: Test price APIs (Alchemy and CoinGecko)
@@ -52,25 +51,25 @@ test-prices:
 	@echo "Testing CANA price..."
 	@npx ts-node test-cana-price.ts
 
-## start: Start keeper with specified config (e.g., make start base-config.ts)
+## start: Start keeper with specified config (e.g., make start examples/example-base-config.ts)
 start:
 	@config="$(CONFIG)$(filter-out $@,$(MAKECMDGOALS))"; \
 	if [ -z "$$config" ]; then \
 		echo "Usage: make start <config-file>"; \
-		echo "Example: make start base-config.ts"; \
-		echo "     or: make start CONFIG=base-config.ts"; \
+		echo "Example: make start examples/example-base-config.ts"; \
+		echo "     or: make start CONFIG=examples/example-base-config.ts"; \
 		exit 1; \
 	fi; \
 	echo "Starting keeper with $$config..."; \
 	yarn start --config $$config
 
-## start-dry: Start keeper in dry-run mode (e.g., make start-dry base-config.ts)
+## start-dry: Start keeper in dry-run mode (e.g., make start-dry examples/example-base-config.ts)
 start-dry:
 	@config="$(CONFIG)$(filter-out $@,$(MAKECMDGOALS))"; \
 	if [ -z "$$config" ]; then \
 		echo "Usage: make start-dry <config-file>"; \
-		echo "Example: make start-dry base-config.ts"; \
-		echo "     or: make start-dry CONFIG=base-config.ts"; \
+		echo "Example: make start-dry examples/example-base-config.ts"; \
+		echo "     or: make start-dry CONFIG=examples/example-base-config.ts"; \
 		exit 1; \
 	fi; \
 	echo "Starting keeper in DRY-RUN mode with $$config..."; \
@@ -96,14 +95,13 @@ format:
 	@echo "Formatting code..."
 	@yarn format
 
-## clean: Remove build artifacts and dependencies
+## clean: Remove build artifacts and dependencies (keeps committed lockfile)
 clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf node_modules
 	@rm -rf artifacts
 	@rm -rf cache
 	@rm -rf typechain-types
-	@rm -f yarn.lock
 	@echo "Clean complete!"
 
 ## clean-test: Remove test artifacts only
@@ -139,6 +137,6 @@ setup:
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1. Edit .env and add your API keys"
-	@echo "  2. Create a config file: cp example-base-config.ts config.ts"
+	@echo "  2. Create a config file: cp examples/example-base-config.ts config.ts"
 	@echo "  3. Create a keystore: make keystore"
-	@echo "  4. Run in dry-run mode: make start config.ts"
+	@echo "  4. Run in dry-run mode: make start-dry config.ts"

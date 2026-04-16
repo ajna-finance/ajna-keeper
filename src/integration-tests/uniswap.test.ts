@@ -13,7 +13,7 @@ import {
 } from './test-utils';
 import { addLiquidity } from './uniswap-helpers';
 import { expect } from 'chai';
-import { getPoolInfo, swapToWeth } from '../uniswap';
+import { getPoolInfo, swapToWeth } from '../dex/uniswap';
 import { getBalanceOfErc20 } from '../erc20';
 
 const UNISWAP_V3_ROUTER = '0xE592427A0AEce92De3Edee1F18E0157C05861564';

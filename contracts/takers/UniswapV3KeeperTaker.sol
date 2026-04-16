@@ -46,6 +46,7 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     error InvalidPool();
     error UnsupportedSource();
     error SwapFailed();
+    error InsufficientQuoteReceived();
 
     constructor(PoolDeployer ajnaErc20PoolFactory, address _authorizedFactory) {
         owner = msg.sender;
@@ -94,7 +95,7 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     }
 
     /// @notice Called by Pool to swap collateral for quote tokens
-    function atomicSwapCallback(uint256 collateral, uint256, bytes calldata data) external override nonReentrant {
+    function atomicSwapCallback(uint256 collateral, uint256 quoteAmountDue, bytes calldata data) external override nonReentrant {
         IERC20Pool pool = IERC20Pool(msg.sender);
         if (!_validatePool(pool)) revert InvalidPool();
 
@@ -104,7 +105,7 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         
         
         // Execute swap, the collateral amount is already in native tokens from Ajna Core contract
-        _swapWithUniswapV3(pool.collateralAddress(), details.targetToken, collateral, details);
+        _swapWithUniswapV3(pool.collateralAddress(), details.targetToken, collateral, quoteAmountDue, details);
     }
 
     /// @inheritdoc IAjnaKeeperTaker
@@ -124,14 +125,23 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     }
 
     /// @dev SIMPLIFIED: Essential debugging without stack depth issues
-    function _swapWithUniswapV3(address tokenIn, address tokenOut, uint256 amountIn, UniswapV3SwapDetails memory details) private {
+    function _swapWithUniswapV3(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 quoteAmountDue,
+        UniswapV3SwapDetails memory details
+    ) private {
         
         if (amountIn == 0) {
             revert SwapFailed();
         }
 
+        IERC20 tokenInContract = IERC20(tokenIn);
+        uint256 quoteBalanceBefore = IERC20(tokenOut).balanceOf(address(this));
+
         // Step 1: Approve Permit2
-        _safeApproveWithReset(IERC20(tokenIn), details.permit2, amountIn);
+        _safeApproveWithReset(tokenInContract, details.permit2, amountIn);
         
         // Step 2: Permit2 -> Universal Router approval
         bytes memory permit2Data = abi.encodeWithSignature(
@@ -163,7 +173,11 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         if (!swapSuccess) {
             revert SwapFailed();
         }
-        
+
+        _safeApproveWithReset(tokenInContract, details.permit2, 0);
+
+        uint256 quoteReceived = IERC20(tokenOut).balanceOf(address(this)) - quoteBalanceBefore;
+        if (quoteReceived < quoteAmountDue) revert InsufficientQuoteReceived();
     }
 
     function _recoverToken(IERC20 token) private {

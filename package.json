@@ -18,11 +18,12 @@
     "@ajna-finance/sdk": "^0.4.7",
     "@ethersproject/abstract-provider": "^5.7.0",
     "@inquirer/prompts": "^7.2.3",
-    "@openzeppelin/contracts": "4.8.0",
+    "@openzeppelin/contracts": "4.9.6",
     "@uniswap/sdk-core": "^7.5.0",
     "@uniswap/v3-core": "^1.0.1",
     "@uniswap/v3-sdk": "^3.24.0",
-    "axios": "^1.8.1",
+    "axios": "^1.15.0",
+    "ethcall": "^6.0.6",
     "ethers": "^5.7.2",
     "graphql": "^16.10.0",
     "graphql-request": "6.1",
@@ -49,5 +50,21 @@
     "prettier": "^3.4.2",
     "sinon": "^19.0.2",
     "typechain": "^8.1.0"
+  },
+  "resolutions": {
+    "elliptic": "^6.6.1",
+    "ws": "^7.5.10",
+    "@ajna-finance/sdk/**/picomatch": "^2.3.2",
+    "chokidar/anymatch/picomatch": "^2.3.2",
+    "chokidar/readdirp/picomatch": "^2.3.2",
+    "**/typedoc/minimatch": "^9.0.7",
+    "@babel/runtime": "^7.26.10",
+    "elliptic/bn.js": "^4.12.3",
+    "@ethersproject/bignumber/bn.js": "^5.2.3",
+    "@ethersproject/signing-key/bn.js": "^5.2.3",
+    "ethers/@ethersproject/bignumber/bn.js": "^5.2.3",
+    "ethers/@ethersproject/signing-key/bn.js": "^5.2.3",
+    "@ajna-finance/sdk/ethers/@ethersproject/bignumber/bn.js": "^5.2.3",
+    "@ajna-finance/sdk/ethers/@ethersproject/signing-key/bn.js": "^5.2.3"
   }
 }

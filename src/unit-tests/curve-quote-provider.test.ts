@@ -1,8 +1,8 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { CurveQuoteProvider } from '../dex-providers/curve-quote-provider';
-import { CurvePoolType } from '../config-types';
+import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
+import { CurvePoolType } from '../config';
 
 describe('Curve Quote Provider', () => {
   let mockSigner: any;
@@ -191,6 +191,35 @@ describe('Curve Quote Provider', () => {
       expect(normalizeAddress(ethAddress, wethAddress)).to.equal(wethAddress);
       expect(normalizeAddress(wethAddress, wethAddress)).to.equal(wethAddress);
       expect(normalizeAddress('0x53Be558aF29cC65126ED0E585119FAC748FeB01B', wethAddress)).to.equal('0x53Be558aF29cC65126ED0E585119FAC748FeB01B');
+    });
+
+    it('falls back to address-based matching when token symbol casing differs from pool config keys', async () => {
+      const provider: any = new CurveQuoteProvider(mockSigner, {
+        poolConfigs: {
+          'weth-usdc': {
+            address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
+            poolType: CurvePoolType.CRYPTO
+          }
+        },
+        defaultSlippage: 1.0,
+        wethAddress: '0x4200000000000000000000000000000000000006',
+        tokenAddresses: {
+          WETH: '0x4200000000000000000000000000000000000006',
+          USDC: '0x53Be558aF29cC65126ED0E585119FAC748FeB01B'
+        }
+      });
+      const checkTokensStub = sinon.stub(provider, 'checkTokensInPool').resolves(true);
+
+      const poolConfig = await provider.findPoolForTokenPair(
+        '0x4200000000000000000000000000000000000006',
+        '0x53Be558aF29cC65126ED0E585119FAC748FeB01B'
+      );
+
+      expect(poolConfig).to.deep.equal({
+        address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
+        poolType: CurvePoolType.CRYPTO
+      });
+      expect(checkTokensStub.calledOnce).to.be.true;
     });
   });
 

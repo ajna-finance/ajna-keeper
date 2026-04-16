@@ -21,3 +21,7 @@ yarn-debug.log*
 yarn-error.log*
 _archivepackage-lock.json
 /local
+.codex
+.context/
+*.dot
+.vscode/

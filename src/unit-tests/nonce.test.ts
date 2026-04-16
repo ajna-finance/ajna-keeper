@@ -1,24 +1,69 @@
 import sinon from 'sinon';
-import { NonceTracker } from '../nonce';
+import { NonceConsumedTransactionError, NonceTracker } from '../nonce';
 import { Wallet } from 'ethers';
 import { Signer } from '@ajna-finance/sdk';
 import { expect } from 'chai';
+import path from 'path';
 
 describe('NonceTracker', () => {
   let signer: Signer = Wallet.createRandom();
+  let durableStatePath: string;
 
   beforeEach(() => {
+    durableStatePath = path.join(
+      '/tmp',
+      `ajna-keeper-durable-nonce-${Date.now()}-${Math.random()}.json`
+    );
+    NonceTracker.setDurableNonceStateFilePathForTests(durableStatePath);
+    NonceTracker.clearDurableNonceStateForTests();
     NonceTracker.clearNonces();
   });
 
   afterEach(() => {
     sinon.restore();
+    NonceTracker.clearDurableNonceStateForTests();
   });
 
   it('gets initial nonce', async () => {
     sinon.stub(signer, 'getTransactionCount').resolves(10);
     const nonce = await NonceTracker.getNonce(signer);
     expect(nonce).equals(10);
+  });
+
+  it('uses the highest pending nonce across registered readers for the same address', async () => {
+    const secondarySigner = {
+      getTransactionCount: sinon.stub().resolves(12),
+    } as unknown as Signer;
+    sinon.stub(signer, 'getTransactionCount').resolves(10);
+
+    NonceTracker.registerNonceReaders(await signer.getAddress(), [
+      signer,
+      secondarySigner,
+    ]);
+
+    const nonce = await NonceTracker.getNonce(signer);
+    expect(nonce).equals(12);
+  });
+
+  it('ignores a hung auxiliary nonce reader after timeout', async function () {
+    this.timeout(10000);
+    const secondarySigner = {
+      getTransactionCount: sinon.stub().resolves(12),
+    } as unknown as Signer;
+    const hungSigner = {
+      getTransactionCount: sinon.stub().returns(new Promise(() => {})),
+    } as unknown as Signer;
+    sinon.stub(signer, 'getTransactionCount').resolves(10);
+    NonceTracker.setPendingNonceReaderTimeoutMsForTests(25);
+
+    NonceTracker.registerNonceReaders(await signer.getAddress(), [
+      signer,
+      secondarySigner,
+      hungSigner,
+    ]);
+
+    const nonce = await NonceTracker.getNonce(signer);
+    expect(nonce).equals(12);
   });
 
   it('increments nonce every time it is called', async () => {
@@ -32,7 +77,7 @@ describe('NonceTracker', () => {
     sinon.stub(signer, 'getTransactionCount').resolves(10);
     await NonceTracker.getNonce(signer);
     await NonceTracker.getNonce(signer);
-    NonceTracker.resetNonce(signer, await signer.getAddress());
+    await NonceTracker.resetNonce(signer, await signer.getAddress());
     const nonceAfterReset = await NonceTracker.getNonce(signer);
     expect(nonceAfterReset).equals(10);
   });
@@ -154,6 +199,97 @@ describe('NonceTracker', () => {
     // rather than risk reusing nonce 10 which might be in the mempool
     const nextNonce = await NonceTracker.getNonce(signer);
     expect(nextNonce).to.equal(11);
+  });
+
+  it('preserves incremented nonce when a submission explicitly marks the nonce as consumed', async () => {
+    sinon.stub(signer, 'getTransactionCount').resolves(10);
+
+    try {
+      await NonceTracker.queueTransaction(signer, async () => {
+        throw new NonceConsumedTransactionError(
+          'relay accepted tx before wait failure',
+          { txHash: '0xabc' }
+        );
+      });
+      expect.fail('Should have thrown');
+    } catch (error) {
+      // expected
+    }
+
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(11);
+  });
+
+  it('reconciles a consumed nonce to the highest pending nonce across readers', async () => {
+    sinon.stub(signer, 'getTransactionCount').resolves(10);
+
+    await NonceTracker.getNonce(signer);
+
+    const secondarySigner = {
+      getTransactionCount: sinon.stub().resolves(14),
+    } as unknown as Signer;
+    NonceTracker.registerNonceReaders(await signer.getAddress(), [
+      signer,
+      secondarySigner,
+    ]);
+
+    try {
+      await NonceTracker.queueTransaction(signer, async () => {
+        throw new NonceConsumedTransactionError(
+          'accepted private submission timed out'
+        );
+      });
+      expect.fail('Should have thrown');
+    } catch (error) {
+      // expected
+    }
+
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(14);
+  });
+
+  it('persists a durable relay nonce floor across tracker resets', async () => {
+    sinon.stub(signer, 'getTransactionCount').resolves(10);
+    sinon.stub(signer, 'getChainId').resolves(1);
+
+    await NonceTracker.markDurableNonceFloor({
+      signer,
+      nonce: 10,
+      txHash:
+        '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      expiresAtBlock: 200,
+    });
+
+    NonceTracker.clearNonces();
+
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(11);
+  });
+
+  it('clears an expired durable relay nonce floor once its block window passes', async () => {
+    const relaySigner = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getTransactionCount: sinon.stub().resolves(10),
+      getChainId: sinon.stub().resolves(1),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(205),
+      },
+    } as unknown as Signer;
+
+    await NonceTracker.markDurableNonceFloor({
+      signer: relaySigner,
+      nonce: 10,
+      txHash:
+        '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      expiresAtBlock: 200,
+    });
+
+    NonceTracker.clearNonces();
+
+    const nextNonce = await NonceTracker.getNonce(relaySigner);
+    expect(nextNonce).to.equal(10);
   });
 
   it('recovers correctly through success-failure-success sequence', async function () {

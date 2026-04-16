@@ -6,9 +6,9 @@ import sinon from 'sinon';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
 import { MockSwapRouter__factory } from '../../typechain-types/factories/contracts/mocks';
 import { UniswapV3SwapAdapter__factory } from '../../typechain-types/factories/contracts/mocks/UniswapV3SwapAdapter.sol';
-import * as oneInch from '../1inch';
+import * as oneInch from '../dex/one-inch';
 import ERC20_ABI from '../abis/erc20.abi.json';
-import { configureAjna, LiquiditySource } from '../config-types';
+import { configureAjna, LiquiditySource } from '../config';
 import { SECONDS_PER_DAY } from '../constants';
 import { getLoansToKick, kick } from '../kick';
 import { getLiquidationsToTake, takeLiquidation } from '../take';
@@ -34,7 +34,10 @@ import {
 import { NonceTracker } from '../nonce';
 import { getBalanceOfErc20 } from '../erc20';
 
-describe('External Take with MockSwapRouter', () => {
+const FORK_INTEGRATION_TIMEOUT_MS = 120_000;
+
+describe('External Take with MockSwapRouter', function () {
+  this.timeout(FORK_INTEGRATION_TIMEOUT_MS);
   let provider: Provider;
   let pool: FungiblePool;
   let signer: Wallet;
@@ -48,12 +51,12 @@ describe('External Take with MockSwapRouter', () => {
   before(async () => {
     process.env.ONEINCH_API = 'https://api.1inch.io/v6.0';
     process.env.ONEINCH_API_KEY = 'mock_api_key';
-    provider = getProvider();
   });
 
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
+    provider = getProvider();
 
     // Stub axios to return mock 1inch API responses
     axiosGetStub = sinon.stub(axios, 'get');
@@ -71,7 +74,7 @@ describe('External Take with MockSwapRouter', () => {
           data: {
             tx: {
               to: mockRouterAddress,
-              data: '0x00', // not used — we override convertSwapApiResponseToDetailsBytes
+              data: '0x00', // not used — we override convertSwapApiResponseToDetails
               value: '0',
               gas: '200000',
             },
@@ -130,10 +133,10 @@ describe('External Take with MockSwapRouter', () => {
       .connect(quoteWhaleSigner)
       .transfer(mockRouterAddress, utils.parseEther('10'));
 
-    // Stub convertSwapApiResponseToDetailsBytes to produce valid ABI data
+    // Stub convertSwapApiResponseToDetails to produce valid ABI data
     // pointing at the MockSwapRouter
     sinon
-      .stub(oneInch, 'convertSwapApiResponseToDetailsBytes')
+      .stub(oneInch, 'convertSwapApiResponseToDetails')
       .callsFake(() => {
         const details = {
           aggregationExecutor: mockRouterAddress, // not used by mock but must be valid address
@@ -148,26 +151,7 @@ describe('External Take with MockSwapRouter', () => {
           },
           opaqueData: '0x', // empty — mock doesn't use it
         };
-        return utils.defaultAbiCoder.encode(
-          [
-            '(address,(address,address,address,address,uint256,uint256,uint256),bytes)',
-          ],
-          [
-            [
-              details.aggregationExecutor,
-              [
-                details.swapDescription.srcToken,
-                details.swapDescription.dstToken,
-                details.swapDescription.srcReceiver,
-                details.swapDescription.dstReceiver,
-                details.swapDescription.amount,
-                details.swapDescription.minReturnAmount,
-                details.swapDescription.flags,
-              ],
-              details.opaqueData,
-            ],
-          ]
-        );
+        return details as any;
       });
 
     // Set up the loan and kick it
@@ -349,7 +333,8 @@ describe('External Take with MockSwapRouter', () => {
   });
 });
 
-describe('Real Uniswap V3 External Take', () => {
+describe('Real Uniswap V3 External Take', function () {
+  this.timeout(FORK_INTEGRATION_TIMEOUT_MS);
   // This test uses NO mocks for the swap — real Uniswap V3 liquidity on the fork.
   // The UniswapV3SwapAdapter wraps the real Uniswap V3 SwapRouter behind
   // the 1inch IGenericRouter interface so the AjnaKeeperTaker can use it.
@@ -375,14 +360,14 @@ describe('Real Uniswap V3 External Take', () => {
   before(async () => {
     process.env.ONEINCH_API = 'https://api.1inch.io/v6.0';
     process.env.ONEINCH_API_KEY = 'mock_api_key';
-    provider = getProvider();
+    const forkProvider = getProvider();
 
     // Verify the fork has Uniswap V3 liquidity for SOL/WETH before running tests.
     // This prevents cryptic reverts if the fork block is updated.
     const uniV3Quoter = new Contract(
       '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6', // Uniswap V3 Quoter V1
       ['function quoteExactInputSingle(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn, uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)'],
-      provider
+      forkProvider
     );
     try {
       const quote = await uniV3Quoter.callStatic.quoteExactInputSingle(
@@ -406,6 +391,7 @@ describe('Real Uniswap V3 External Take', () => {
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
+    provider = getProvider();
 
     configureAjna(MAINNET_CONFIG.AJNA_CONFIG);
     const ajna = new AjnaSDK(provider);
@@ -457,24 +443,21 @@ describe('Real Uniswap V3 External Take', () => {
 
     // Override the swap encoding to produce valid data for the adapter
     sinon
-      .stub(oneInch, 'convertSwapApiResponseToDetailsBytes')
+      .stub(oneInch, 'convertSwapApiResponseToDetails')
       .callsFake(() => {
-        return utils.defaultAbiCoder.encode(
-          ['(address,(address,address,address,address,uint256,uint256,uint256),bytes)'],
-          [[
-            adapterAddress, // aggregationExecutor (not used by adapter)
-            [
-              pool.collateralAddress,   // srcToken: SOL
-              pool.quoteAddress,        // dstToken: WETH
-              adapterAddress,           // srcReceiver
-              keeperTakerAddress,       // dstReceiver: keeper gets WETH
-              BigNumber.from('14000000000'), // amount in SOL decimals (14 SOL * 1e9)
-              BigNumber.from('1'),      // minReturnAmount: 1 wei (let Uniswap determine actual output)
-              BigNumber.from('0'),      // flags
-            ],
-            '0x', // opaqueData
-          ]]
-        );
+        return {
+          aggregationExecutor: adapterAddress,
+          swapDescription: {
+            srcToken: pool.collateralAddress,
+            dstToken: pool.quoteAddress,
+            srcReceiver: adapterAddress,
+            dstReceiver: keeperTakerAddress,
+            amount: BigNumber.from('14000000000'),
+            minReturnAmount: BigNumber.from('1'),
+            flags: BigNumber.from('0'),
+          },
+          opaqueData: '0x',
+        } as any;
       });
 
     // Set up loan, kick
