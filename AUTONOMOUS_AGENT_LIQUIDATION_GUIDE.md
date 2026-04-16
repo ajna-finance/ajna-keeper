@@ -12,8 +12,9 @@ The goal is to make the flow deterministic:
 2. create a new Ajna ERC20 pool
 3. seed quote liquidity
 4. create a borrower position
-5. remove enough quote liquidity to make the borrower liquidatable
-6. verify the keeper functionality you care about against that state
+5. remove enough quote liquidity to push the loan to the `LUPBelowHTP()` boundary
+6. on a local fork, fast-forward time until interest accrual makes the borrower liquidatable
+7. verify the keeper functionality you care about against that state
 
 ## What This Guide Does and Does Not Assume
 
@@ -55,16 +56,16 @@ Keep both as 18-decimal, mintable test tokens unless you specifically need quote
 Use `ajna-skills` to:
 
 - create the ERC20 pool
-- lend quote into one dominant bucket
-- borrow a small amount against oversized collateral
+- approve quote and lend into one dominant bucket
+- approve collateral and borrow a small amount against oversized collateral
 
 ### Phase 3: Liquidation shaping
 
-Use `ajna-skills inspect-*` plus the gated `prepare-unsupported-ajna-action` escape hatch to remove quote from the lender bucket until:
+Use `ajna-skills inspect-*` plus the gated `prepare-unsupported-ajna-action` escape hatch to remove quote from the lender bucket until the pool reaches the `LUPBelowHTP()` boundary. On a local fork, then advance time so interest accrual raises `thresholdPrice` the rest of the way to:
 
 - borrower `thresholdPrice >= pool.prices.lup`
 
-That is the keeper-relevant keeper kick condition in the current code. For deterministic shaping, aim for `thresholdPrice > pool.prices.lup` so you are not relying on exact equality.
+That is the keeper-relevant kick condition in the current code. In practice the wrapper now does both steps: adaptive quote removal first, then `evm_increaseTime` / `evm_mine` if needed.
 
 ### Phase 4: Keeper validation
 
@@ -85,12 +86,14 @@ Use it for:
 - deterministic Foundry-based deploy/mint flow
 - manifest-based minting after deployment
 
-Canonical commands from that repo:
+Canonical working pattern from that repo:
 
 ```bash
 ./bin/token-deployer deploy request.json --broadcast --rpc-url "$RPC_URL" --private-key "$PRIVATE_KEY"
-./bin/token-deployer mint deployments/base/acme-token.json --to 0x... --amount 1000 --broadcast --rpc-url "$RPC_URL" --private-key "$OWNER_PRIVATE_KEY"
+cast send 0x<TOKEN_ADDRESS> 'transfer(address,uint256)' 0x<RECIPIENT> 1000000000000000000 --rpc-url "$RPC_URL" --private-key "$OWNER_PRIVATE_KEY"
 ```
+
+The verified fixture wrapper in this repo does not rely on `token-deployer mint`. It deploys with large initial supply to the deployer and then uses plain ERC20 `transfer(...)` calls to fund the lender, borrower, keeper, and optional Uniswap LP inventory.
 
 ### `ajna-skills`
 
@@ -229,7 +232,7 @@ Create two requests. Keep them simple and mintable.
   "chainName": "base",
   "owner": "${DEPLOYER_ADDRESS}",
   "initialRecipient": "${DEPLOYER_ADDRESS}",
-  "initialSupply": "0",
+  "initialSupply": "200000000000000000000000",
   "decimals": 18,
   "mintable": true
 }
@@ -246,7 +249,7 @@ Create two requests. Keep them simple and mintable.
   "chainName": "base",
   "owner": "${DEPLOYER_ADDRESS}",
   "initialRecipient": "${DEPLOYER_ADDRESS}",
-  "initialSupply": "0",
+  "initialSupply": "200000000000000000000000",
   "decimals": 18,
   "mintable": true
 }
@@ -260,23 +263,21 @@ cd /home/mike/Projects-2026/token-deployer
 ./bin/token-deployer deploy collateral-request.json --broadcast --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
 ```
 
-Capture the manifest paths and deployed token addresses from the deploy output. The agent should preserve them because `mint` uses the manifest as the source of truth.
+Capture the manifest paths and deployed token addresses from the deploy output.
 
-Mint quote to the lender and collateral to the borrower:
+For the verified local-fixture path, fund actors with standard ERC20 transfers from the deployer:
 
 ```bash
-./bin/token-deployer mint deployments/base/quote-test-token.json \
-  --to "$LENDER_ADDRESS" \
-  --amount 100000000000000000000000 \
-  --broadcast --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
+cast send 0x<QTEST_ADDRESS> \
+  'transfer(address,uint256)' "$LENDER_ADDRESS" 100000000000000000000000 \
+  --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
 
-./bin/token-deployer mint deployments/base/collateral-test-token.json \
-  --to "$BORROWER_ADDRESS" \
-  --amount 100000000000000000000000 \
-  --broadcast --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
+cast send 0x<CTEST_ADDRESS> \
+  'transfer(address,uint256)' "$BORROWER_ADDRESS" 100000000000000000000000 \
+  --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
 ```
 
-Adjust mint amounts as needed, but keep them large enough that the agent never confuses protocol constraints with lack of balance.
+If you are also bootstrapping the Uniswap V3 external-take path, fund the keeper and the future LP inventory from the deployer in the same way. The wrapper script does this automatically.
 
 ## Phase 2: Create the Ajna Pool
 
@@ -323,13 +324,20 @@ node dist/cli.js inspect-pool '{"network":"base","poolAddress":"0x<POOL_ADDRESS>
 
 Use one dominant quote bucket so the later liquidity removal predictably moves `lup`.
 
-Recommended starting bucket index:
+Recommended starting bucket index for the default wrapper numbers (`borrow=10`, `collateral=100`):
 
-- `3232`
+- `4600`
 
-That index is already used throughout `ajna-skills` fork tests and is a reasonable default for deterministic local workflows.
+That bucket price is close to the borrower threshold produced by the default borrow plan, which is what makes the later quote-removal + time-warp path converge. `3232` is far too high-priced for this specific local-fixture workflow.
 
-Prepare a lend from `LENDER_ADDRESS`:
+First approve the quote token explicitly. This is the working path the wrapper uses today:
+
+```bash
+node dist/cli.js prepare-approve-erc20 '{"network":"base","actorAddress":"'"$LENDER_ADDRESS"'","tokenAddress":"0x<QTEST_ADDRESS>","poolAddress":"0x<POOL_ADDRESS>","amount":"1000000000000000000000","approvalMode":"exact","maxAgeSeconds":600}'
+node dist/cli.js execute-prepared '{"preparedAction":{...}}'
+```
+
+Then prepare the lend from `LENDER_ADDRESS`:
 
 ```json
 {
@@ -337,7 +345,7 @@ Prepare a lend from `LENDER_ADDRESS`:
   "poolAddress": "0x<POOL_ADDRESS>",
   "actorAddress": "${LENDER_ADDRESS}",
   "amount": "1000000000000000000000",
-  "bucketIndex": 3232,
+  "bucketIndex": 4600,
   "ttlSeconds": 600,
   "approvalMode": "exact"
 }
@@ -348,7 +356,7 @@ Execute it with `AJNA_SIGNER_PRIVATE_KEY="$LENDER_KEY"`.
 Then inspect the lender bucket position:
 
 ```bash
-node dist/cli.js inspect-position '{"network":"base","poolAddress":"0x<POOL_ADDRESS>","owner":"'"$LENDER_ADDRESS"'","positionType":"lender","bucketIndex":3232}'
+node dist/cli.js inspect-position '{"network":"base","poolAddress":"0x<POOL_ADDRESS>","owner":"'"$LENDER_ADDRESS"'","positionType":"lender","bucketIndex":4600}'
 ```
 
 The agent should persist:
@@ -367,7 +375,14 @@ The exact economic numbers are less important than the structure:
 - comparatively small borrow amount
 - oversized collateral
 
-Example starting payload:
+First approve the collateral token explicitly:
+
+```bash
+node dist/cli.js prepare-approve-erc20 '{"network":"base","actorAddress":"'"$BORROWER_ADDRESS"'","tokenAddress":"0x<CTEST_ADDRESS>","poolAddress":"0x<POOL_ADDRESS>","amount":"100000000000000000000","approvalMode":"exact","maxAgeSeconds":600}'
+node dist/cli.js execute-prepared '{"preparedAction":{...}}'
+```
+
+Then prepare the borrow payload:
 
 ```json
 {
@@ -410,12 +425,13 @@ This is the deterministic part.
 The easiest way to make the borrower liquidatable without changing external prices is:
 
 1. keep almost all quote liquidity in one lender bucket
-2. remove most or all of that bucket's quote liquidity
-3. re-inspect until `thresholdPrice >= lup` and preferably `thresholdPrice > lup`
+2. remove as much of that bucket's quote liquidity as Ajna allows without tripping `LUPBelowHTP()`
+3. re-inspect until you are sitting on the boundary
+4. on a local fork, advance time and mine blocks until `thresholdPrice >= lup` and preferably `thresholdPrice > lup`
 
 ### Why this works
 
-`ajna-keeper` treats a borrower as kickable once borrower `thresholdPrice` is no lower than pool `lup`. Concentrated quote liquidity makes `lup` sensitive to that bucket. Pulling quote from the dominant bucket is the cleanest way to move `lup` down in a self-contained local test.
+`ajna-keeper` treats a borrower as kickable once borrower `thresholdPrice` is no lower than pool `lup`. Concentrated quote liquidity makes `lup` sensitive to that bucket. Pulling quote from the dominant bucket is still the cleanest way to move `lup` down in a self-contained local test, but Ajna itself will stop you at `LUPBelowHTP()`. That means quote removal alone usually gets you to the boundary, not through it. The final step on a local fork is time-forward interest accrual.
 
 ### Unsupported action payload
 
@@ -435,7 +451,7 @@ Example payload:
   "contractKind": "erc20-pool",
   "contractAddress": "0x<POOL_ADDRESS>",
   "methodName": "removeQuoteToken",
-  "args": ["1000000000000000000000", "3232"],
+  "args": ["1000000000000000000000", "4600"],
   "acknowledgeRisk": "I understand this bypasses the stable skill surface",
   "notes": "Remove quote from dominant bucket to drop LUP below borrower threshold price"
 }
@@ -471,6 +487,12 @@ The safer shaping target is:
 ```text
 borrower.thresholdPrice > pool.prices.lup
 ```
+
+In practice, expect this sequence on the local fork:
+
+1. quote removal drives the pool to the `LUPBelowHTP()` boundary
+2. `lup` stops moving because further `removeQuoteToken` calls revert
+3. time-forward interest accrual raises `thresholdPrice` until the borrower becomes kickable
 
 Once the first condition is true, the borrower is kickable under the current keeper code. If the second condition is also true, the fixture has some margin against equality edge cases.
 
@@ -518,9 +540,9 @@ Minimum handoff shape. The wrapper script emits a superset of this, including re
   "pool": {
     "address": "0x...",
     "interestRate": "50000000000000000",
-    "dominantBucketIndex": 3232,
+    "dominantBucketIndex": 4600,
     "lup": "...",
-    "lupIndex": 3232
+    "lupIndex": 7388
   },
   "actors": {
     "deployer": "0x...",
@@ -583,14 +605,14 @@ Use this if you are willing to stand up a local indexer or otherwise surface the
 
 This is required for:
 
-- manual `kick` runs against the fresh pool
-- manual `take` runs against the fresh pool
+- manual `kick` runs against the fresh pool without local overrides
+- manual `take` runs against the fresh pool without local overrides
 - autodiscovery against the fresh pool
 - settlement discovery against the fresh pool
 
 A minimal keeper config can be based on [example-base-config.ts](/home/mike/Projects-2026/ajna-keeper/examples/example-base-config.ts), but you must replace at least:
 
-- `ethRpcUrl` with `http://127.0.0.1:9545`
+- `ethRpcUrl` with your local fork RPC, for example `http://127.0.0.1:9551`
 - `subgraphUrl` with your local or test indexer URL
 - `keeperKeystore` with a keystore built from `KEEPER_KEY`
 - `pools[0].address` with the new pool address
@@ -599,33 +621,38 @@ If you used `npm run create-liquidatable-uniswap-fixture`, also merge the emitte
 
 For fresh local-pool tests, prefer a single manual `pools[]` entry instead of autodiscovery first. Once the manual flow is stable, add autodiscovery only if your subgraph indexing path is also stable.
 
-## Path B: Keeper-side harness with overridden subgraph reads
+## Path B: Direct keeper harness with overridden subgraph reads
 
 Use this if you want fast local validation without building a full subgraph pipeline.
 
-The current repo already has the useful building blocks in [subgraph-mock.ts](/home/mike/Projects-2026/ajna-keeper/src/integration-tests/subgraph-mock.ts):
+The repo now includes a direct harness entry point at [run-fixture-keeper-harness.ts](/home/mike/Projects-2026/ajna-keeper/scripts/run-fixture-keeper-harness.ts):
 
-- `overrideGetLoans`
-- `makeGetLoansFromSdk`
-- `overrideGetLiquidations`
-- `makeGetLiquidationsFromSdk`
-- `overrideGetHighestMeaningfulBucket`
-- `makeGetHighestMeaningfulBucket`
+```bash
+AJNA_AGENT_KEEPER_KEY=0x... npm run run-fixture-keeper-harness -- --summary /tmp/ajna-fixture-summary.json
+```
 
-That means a keeper-side test script can:
+This harness:
 
-1. connect to the fresh pool through the Ajna SDK
-2. override the keeper's subgraph module with SDK/onchain-backed data
-3. call the same `kick` / `take` logic you want to validate
+1. connects to the fresh pool through the Ajna SDK
+2. overrides `getLoans` and `getLiquidations` from onchain state for the single borrower fixture
+3. calls the real keeper `handleKicks(...)` and `handleTakes(...)` paths
+4. emits a machine-readable report of kick/take results
 
-This is the most practical route for testing new `kick` / `take` / `arbTake` behavior against a brand-new local pool. If the behavior under test is the Uniswap V3 external-take path, reuse the generated `keeperConfigSnippet` from the Uniswap-enabled wrapper and combine it with the subgraph override harness.
+This is the most practical route for testing new `kick`, `take`, or factory-based Uniswap V3 external-take behavior against a brand-new local pool.
+
+The current working sequence on the local Base fork is:
+
+1. run `npm run create-liquidatable-uniswap-fixture` with `AJNA_AGENT_BUCKET_INDEX=4600`
+2. let the wrapper remove quote up to the `LUPBelowHTP()` boundary and time-warp the fork until `thresholdPrice >= lup`
+3. run `AJNA_AGENT_KEEPER_KEY=0x... npm run run-fixture-keeper-harness -- --summary /tmp/ajna-fixture-summary.json` to kick the borrower
+4. advance the fork again so the auction price decays enough for the external take to become profitable
+5. rerun the same harness command to exercise the Uniswap V3 external take path
+
+On the passing local fork run, the auction needed roughly one additional day of decay between kick and take.
 
 ### Important limitation
 
-The existing mock helper does not currently provide `getUnsettledAuctions` for settlement scanning. If the new functionality you want to test is settlement discovery or settlement autodiscovery, you should either:
-
-- extend the mock helper with a `getUnsettledAuctions` override, or
-- use a real indexed subgraph
+The harness is intentionally narrow. It overrides loan and liquidation reads for a single borrower fixture, but it does not cover settlement scanning or chainwide autodiscovery. If the new functionality you want to test is settlement discovery, settlement execution, or autodiscovery, use Path A or extend the harness first.
 
 ## How to Choose the Keeper Test Mode
 

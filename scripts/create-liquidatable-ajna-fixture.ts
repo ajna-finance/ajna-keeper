@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { abi as NonfungiblePositionManagerABI } from '@uniswap/v3-periphery/artifacts/contracts/NonfungiblePositionManager.sol/NonfungiblePositionManager.json';
+import { ERC20Pool__factory, PoolInfoUtils__factory } from '@ajna-finance/sdk';
 import { BigNumber, Contract, ContractFactory, Wallet, ethers } from 'ethers';
 import { encodeSqrtRatioX96 } from '@uniswap/v3-sdk';
 import ERC20_ABI from '../src/abis/erc20.abi.json';
@@ -113,6 +114,15 @@ type ExternalTakeSnippetSummary = {
   content: string;
 };
 
+type AutoTuneSummary = {
+  targetKickDelayDays: number;
+  targetKickDelaySeconds: number;
+  selectedBorrowAmountWad: string;
+  lowerProbeBorrowAmountWad: string;
+  upperProbeBorrowAmountWad: string;
+  searchIterations: number;
+};
+
 type FixtureSummary = {
   network: 'base';
   rpcUrl: string;
@@ -153,10 +163,17 @@ type FixtureSummary = {
     borrowAmountWad: string;
     collateralAmountWad: string;
     limitIndex: number;
+    requestedBorrowAmountWad?: string;
+    targetKickDelayDays?: number;
   };
+  autoTune?: AutoTuneSummary;
   removal: {
     attempts: number;
     removedAmountsWad: string[];
+  };
+  timeWarp: {
+    count: number;
+    secondsPerWarp: number;
   };
   uniswapV3ExternalTake?: {
     routerConfig: UniswapV3RouterConfig;
@@ -170,6 +187,7 @@ type FixtureSummary = {
 const BASE_CHAIN_ID = 8453;
 const BASE_CHAIN_NAME = 'base';
 const BASE_AJNA_ERC20_POOL_FACTORY = '0x214f62B5836D83f3D6c4f71F174209097B1A779C';
+const BASE_POOL_INFO_UTILS = '0x97fa9b0909C238D170C1ab3B5c728A3a45BBEcBa';
 const BASE_UNISWAP_DEFAULTS: UniswapV3RouterConfig = {
   universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
   permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
@@ -197,7 +215,7 @@ function parseOptions(argv: string[]): CliOptions {
 }
 
 function usage() {
-  return `Usage: ts-node scripts/create-liquidatable-ajna-fixture.ts [--with-uniswap-v3-external-take]\n\nRequired env:\n- AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE\n- AJNA_AGENT_DEPLOYER_KEY\n- AJNA_AGENT_LENDER_KEY\n- AJNA_AGENT_BORROWER_KEY\n\nOptional env:\n- AJNA_AGENT_KEEPER_KEY\n- AJNA_AGENT_TOKEN_DEPLOYER_REPO (default: ../token-deployer)\n- AJNA_AGENT_AJNA_SKILLS_REPO (default: ../ajna-skills)\n- AJNA_AGENT_OUTPUT_PATH (default: temp summary path)\n- AJNA_AGENT_BUCKET_INDEX (default: 3232)\n- AJNA_AGENT_LIMIT_INDEX (default: 5000)\n- AJNA_AGENT_INTEREST_RATE (default: 50000000000000000)\n- AJNA_AGENT_LEND_AMOUNT_WAD (default: 1000000000000000000000)\n- AJNA_AGENT_BORROW_AMOUNT_WAD (default: 10000000000000000000)\n- AJNA_AGENT_COLLATERAL_AMOUNT_WAD (default: 100000000000000000000)\n- AJNA_AGENT_QUOTE_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_COLLATERAL_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_MAX_REMOVE_ATTEMPTS (default: 4)\n\nOptional Uniswap V3 external-take setup (requires --with-uniswap-v3-external-take or AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE=1):\n- AJNA_AGENT_KEEPER_KEY (required in external-take mode; the deployed factory/taker owner)\n- AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_FEE_TIER (default: 3000)\n- AJNA_AGENT_UNISWAP_UNIVERSAL_ROUTER_ADDRESS\n- AJNA_AGENT_UNISWAP_PERMIT2_ADDRESS\n- AJNA_AGENT_UNISWAP_POOL_FACTORY_ADDRESS\n- AJNA_AGENT_UNISWAP_QUOTER_V2_ADDRESS\n- AJNA_AGENT_UNISWAP_WETH_ADDRESS\n- AJNA_AGENT_UNISWAP_POSITION_MANAGER_ADDRESS\n- AJNA_AGENT_AJNA_ERC20_POOL_FACTORY (default: Base mainnet ERC20 pool factory)\n`;
+  return `Usage: ts-node scripts/create-liquidatable-ajna-fixture.ts [--with-uniswap-v3-external-take]\n\nRequired env:\n- AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE\n- AJNA_AGENT_DEPLOYER_KEY\n- AJNA_AGENT_LENDER_KEY\n- AJNA_AGENT_BORROWER_KEY\n\nOptional env:\n- AJNA_AGENT_KEEPER_KEY\n- AJNA_AGENT_TOKEN_DEPLOYER_REPO (default: ../token-deployer)\n- AJNA_AGENT_AJNA_SKILLS_REPO (default: ../ajna-skills)\n- AJNA_AGENT_OUTPUT_PATH (default: temp summary path)\n- AJNA_AGENT_BUCKET_INDEX (default: 4600)\n- AJNA_AGENT_LIMIT_INDEX (default: 5000)\n- AJNA_AGENT_INTEREST_RATE (default: 50000000000000000)\n- AJNA_AGENT_LEND_AMOUNT_WAD (default: 1000000000000000000000)\n- AJNA_AGENT_BORROW_AMOUNT_WAD (default: 10000000000000000000)\n- AJNA_AGENT_COLLATERAL_AMOUNT_WAD (default: 100000000000000000000)\n- AJNA_AGENT_TARGET_KICK_DELAY_DAYS (optional; auto-tunes borrow amount to reach kickability within this many fork days)\n- AJNA_AGENT_QUOTE_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_COLLATERAL_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_MAX_REMOVE_ATTEMPTS (default: 16)\n- AJNA_AGENT_TIME_WARP_SECONDS (default: 31536000)\n- AJNA_AGENT_MAX_TIME_WARPS (default: 5)\n\nOptional Uniswap V3 external-take setup (requires --with-uniswap-v3-external-take or AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE=1):\n- AJNA_AGENT_KEEPER_KEY (required in external-take mode; the deployed factory/taker owner)\n- AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_FEE_TIER (default: 3000)\n- AJNA_AGENT_UNISWAP_UNIVERSAL_ROUTER_ADDRESS\n- AJNA_AGENT_UNISWAP_PERMIT2_ADDRESS\n- AJNA_AGENT_UNISWAP_POOL_FACTORY_ADDRESS\n- AJNA_AGENT_UNISWAP_QUOTER_V2_ADDRESS\n- AJNA_AGENT_UNISWAP_WETH_ADDRESS\n- AJNA_AGENT_UNISWAP_POSITION_MANAGER_ADDRESS\n- AJNA_AGENT_AJNA_ERC20_POOL_FACTORY (default: Base mainnet ERC20 pool factory)\n`;
 }
 
 function requiredEnv(name: string): string {
@@ -332,6 +350,7 @@ function deployMintableErc20(params: {
   name: string;
   symbol: string;
   owner: string;
+  initialSupply: string;
   rpcUrl: string;
   privateKey: string;
   targetDir: string;
@@ -345,7 +364,7 @@ function deployMintableErc20(params: {
     chainName: BASE_CHAIN_NAME,
     owner: params.owner,
     initialRecipient: params.owner,
-    initialSupply: '0',
+    initialSupply: params.initialSupply,
     decimals: 18,
     mintable: true,
   };
@@ -364,27 +383,17 @@ function deployMintableErc20(params: {
   ]) as TokenDeployerManifest;
 }
 
-function mintFromManifest(params: {
-  tokenDeployerRepo: string;
-  manifestPath: string;
+async function transferErc20(params: {
+  signer: Wallet;
+  tokenAddress: string;
   to: string;
   amount: string;
-  rpcUrl: string;
-  privateKey: string;
 }) {
-  return runTokenDeployer(params.tokenDeployerRepo, [
-    'mint',
-    params.manifestPath,
-    '--to',
-    params.to,
-    '--amount',
-    params.amount,
-    '--broadcast',
-    '--rpc-url',
-    params.rpcUrl,
-    '--private-key',
-    params.privateKey,
-  ]);
+  const token = new Contract(params.tokenAddress, ERC20_ABI, params.signer);
+  const tx = await token.transfer(params.to, params.amount, {
+    gasLimit: 500_000,
+  });
+  await tx.wait();
 }
 
 function prepareAndExecute(
@@ -451,6 +460,71 @@ function inspectLender(
   );
 }
 
+async function inspectPoolDirect(
+  provider: ethers.providers.JsonRpcProvider,
+  poolAddress: string
+): Promise<PoolInspectionResult> {
+  const poolInfoUtils = PoolInfoUtils__factory.connect(BASE_POOL_INFO_UTILS, provider);
+  const prices = await poolInfoUtils.poolPricesInfo(poolAddress);
+  return {
+    poolAddress,
+    prices: {
+      lup: prices.lup_.toString(),
+      lupIndex: prices.lupIndex_.toNumber(),
+      hpb: prices.hpb_.toString(),
+      hpbIndex: prices.hpbIndex_.toNumber(),
+      htp: prices.htp_.toString(),
+      htpIndex: prices.htpIndex_.toNumber(),
+    },
+  };
+}
+
+async function inspectBorrowerDirect(
+  provider: ethers.providers.JsonRpcProvider,
+  poolAddress: string,
+  owner: string
+): Promise<BorrowerInspectionResult> {
+  const poolInfoUtils = PoolInfoUtils__factory.connect(BASE_POOL_INFO_UTILS, provider);
+  const pool = ERC20Pool__factory.connect(poolAddress, provider);
+  const [borrowerInfo, debtInfo] = await Promise.all([
+    poolInfoUtils.borrowerInfo(poolAddress, owner),
+    pool.debtInfo(),
+  ]);
+  return {
+    owner,
+    debt: borrowerInfo.debt_.toString(),
+    collateral: borrowerInfo.collateral_.toString(),
+    thresholdPrice: borrowerInfo.thresholdPrice_.toString(),
+    neutralPrice: borrowerInfo.t0Np_.toString(),
+    poolDebtInAuction: debtInfo[2].toString(),
+  };
+}
+
+async function inspectLenderDirect(
+  provider: ethers.providers.JsonRpcProvider,
+  poolAddress: string,
+  owner: string,
+  bucketIndex: number
+): Promise<LenderInspectionResult> {
+  const poolInfoUtils = PoolInfoUtils__factory.connect(BASE_POOL_INFO_UTILS, provider);
+  const pool = ERC20Pool__factory.connect(poolAddress, provider);
+  const lenderInfo = await pool.lenderInfo(bucketIndex, owner);
+  const lpBalance = lenderInfo[0];
+  const depositTime = lenderInfo[1];
+  const [quoteRedeemable, collateralRedeemable] = await Promise.all([
+    poolInfoUtils.lpToQuoteTokens(poolAddress, lpBalance, bucketIndex),
+    poolInfoUtils.lpToCollateral(poolAddress, lpBalance, bucketIndex),
+  ]);
+  return {
+    owner,
+    bucketIndex,
+    lpBalance: lpBalance.toString(),
+    depositTime: depositTime.toString(),
+    quoteRedeemable: quoteRedeemable.toString(),
+    collateralRedeemable: collateralRedeemable.toString(),
+  };
+}
+
 function readArtifact(relativePath: string): { abi: any; bytecode: string } {
   const artifactPath = path.join(process.cwd(), relativePath);
   ensureFileExists(artifactPath, `artifact ${relativePath}`);
@@ -474,6 +548,263 @@ async function approveErc20Exact(
   }
   const approveTx = await token.approve(spender, amount);
   await approveTx.wait();
+}
+
+async function resolveSafeQuoteRemovalAmount(params: {
+  lenderSigner: Wallet;
+  poolAddress: string;
+  bucketIndex: number;
+  maxAmount: BigNumber;
+}): Promise<BigNumber> {
+  const pool = ERC20Pool__factory.connect(params.poolAddress, params.lenderSigner);
+  let candidate = params.maxAmount;
+
+  while (candidate.gt(0)) {
+    try {
+      await pool.estimateGas.removeQuoteToken(candidate, params.bucketIndex);
+      return candidate;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('LUPBelowHTP()') && !message.includes('0x444507e1')) {
+        throw error;
+      }
+      candidate = candidate.div(2);
+    }
+  }
+
+  throw new Error('Unable to find a removable quote amount that preserves LUP >= HTP');
+}
+
+async function createSnapshot(provider: ethers.providers.JsonRpcProvider): Promise<string> {
+  return String(await provider.send('evm_snapshot', []));
+}
+
+async function revertSnapshot(
+  provider: ethers.providers.JsonRpcProvider,
+  snapshotId: string
+) {
+  const reverted = await provider.send('evm_revert', [snapshotId]);
+  if (!reverted) {
+    throw new Error(`Failed to revert snapshot ${snapshotId}`);
+  }
+}
+
+type BorrowKickSimulationResult = {
+  keeperKickEligibleAfterDelay: boolean;
+  borrowerPosition: BorrowerInspectionResult;
+  poolInspection: PoolInspectionResult;
+  attempts: number;
+  removedAmountsWad: string[];
+};
+
+async function simulateBorrowToKickability(params: {
+  provider: ethers.providers.JsonRpcProvider;
+  poolAddress: string;
+  borrowerAddress: string;
+  borrowerSigner: Wallet;
+  lenderAddress: string;
+  lenderSigner: Wallet;
+  bucketIndex: number;
+  limitIndex: number;
+  collateralAmountWad: string;
+  borrowAmountWad: string;
+  maxRemoveAttempts: number;
+  targetKickDelaySeconds: number;
+}): Promise<BorrowKickSimulationResult> {
+  const snapshotId = await createSnapshot(params.provider);
+
+  try {
+    const borrowerPool = ERC20Pool__factory.connect(
+      params.poolAddress,
+      params.borrowerSigner
+    );
+    const borrowTx = await borrowerPool.drawDebt(
+      params.borrowerAddress,
+      params.borrowAmountWad,
+      params.limitIndex,
+      params.collateralAmountWad,
+      { gasLimit: 2_000_000 }
+    );
+    await borrowTx.wait();
+
+    let borrowerPosition = await inspectBorrowerDirect(
+      params.provider,
+      params.poolAddress,
+      params.borrowerAddress
+    );
+    let poolInspection = await inspectPoolDirect(params.provider, params.poolAddress);
+    let lenderPosition = await inspectLenderDirect(
+      params.provider,
+      params.poolAddress,
+      params.lenderAddress,
+      params.bucketIndex
+    );
+    const removedAmountsWad: string[] = [];
+    let attempts = 0;
+    const lenderPool = ERC20Pool__factory.connect(params.poolAddress, params.lenderSigner);
+
+    while (
+      big(borrowerPosition.thresholdPrice).lt(big(poolInspection.prices.lup)) &&
+      attempts < params.maxRemoveAttempts
+    ) {
+      const redeemable = big(lenderPosition.quoteRedeemable);
+      if (redeemable.isZero()) {
+        break;
+      }
+
+      const removeAmount = await resolveSafeQuoteRemovalAmount({
+        lenderSigner: params.lenderSigner,
+        poolAddress: params.poolAddress,
+        bucketIndex: params.bucketIndex,
+        maxAmount: redeemable,
+      });
+
+      const removeTx = await lenderPool.removeQuoteToken(removeAmount, params.bucketIndex, {
+        gasLimit: 2_000_000,
+      });
+      await removeTx.wait();
+
+      removedAmountsWad.push(removeAmount.toString());
+      attempts += 1;
+      lenderPosition = await inspectLenderDirect(
+        params.provider,
+        params.poolAddress,
+        params.lenderAddress,
+        params.bucketIndex
+      );
+      borrowerPosition = await inspectBorrowerDirect(
+        params.provider,
+        params.poolAddress,
+        params.borrowerAddress
+      );
+      poolInspection = await inspectPoolDirect(params.provider, params.poolAddress);
+    }
+
+    let keeperKickEligibleAfterDelay = big(borrowerPosition.thresholdPrice).gte(
+      big(poolInspection.prices.lup)
+    );
+
+    if (!keeperKickEligibleAfterDelay && params.targetKickDelaySeconds > 0) {
+      await params.provider.send('evm_increaseTime', [params.targetKickDelaySeconds]);
+      await params.provider.send('evm_mine', []);
+      borrowerPosition = await inspectBorrowerDirect(
+        params.provider,
+        params.poolAddress,
+        params.borrowerAddress
+      );
+      poolInspection = await inspectPoolDirect(params.provider, params.poolAddress);
+      keeperKickEligibleAfterDelay = big(borrowerPosition.thresholdPrice).gte(
+        big(poolInspection.prices.lup)
+      );
+    }
+
+    return {
+      keeperKickEligibleAfterDelay,
+      borrowerPosition,
+      poolInspection,
+      attempts,
+      removedAmountsWad,
+    };
+  } finally {
+    await revertSnapshot(params.provider, snapshotId);
+  }
+}
+
+async function autoTuneBorrowAmountWad(params: {
+  provider: ethers.providers.JsonRpcProvider;
+  poolAddress: string;
+  borrowerAddress: string;
+  borrowerSigner: Wallet;
+  lenderAddress: string;
+  lenderSigner: Wallet;
+  bucketIndex: number;
+  limitIndex: number;
+  lendAmountWad: string;
+  collateralAmountWad: string;
+  borrowAmountWad: string;
+  maxRemoveAttempts: number;
+  targetKickDelayDays: number;
+}): Promise<AutoTuneSummary> {
+  const targetKickDelaySeconds = Math.max(
+    1,
+    Math.round(params.targetKickDelayDays * 24 * 60 * 60)
+  );
+  const maxBorrowAmount = big(params.lendAmountWad).sub(1);
+  let lower = big(params.borrowAmountWad);
+  let upper = lower;
+  let searchIterations = 0;
+
+  const evaluate = async (candidate: BigNumber) => {
+    searchIterations += 1;
+    return simulateBorrowToKickability({
+      provider: params.provider,
+      poolAddress: params.poolAddress,
+      borrowerAddress: params.borrowerAddress,
+      borrowerSigner: params.borrowerSigner,
+      lenderAddress: params.lenderAddress,
+      lenderSigner: params.lenderSigner,
+      bucketIndex: params.bucketIndex,
+      limitIndex: params.limitIndex,
+      collateralAmountWad: params.collateralAmountWad,
+      borrowAmountWad: candidate.toString(),
+      maxRemoveAttempts: params.maxRemoveAttempts,
+      targetKickDelaySeconds,
+    });
+  };
+
+  let lowerResult = await evaluate(lower);
+  if (lowerResult.keeperKickEligibleAfterDelay) {
+    return {
+      targetKickDelayDays: params.targetKickDelayDays,
+      targetKickDelaySeconds,
+      selectedBorrowAmountWad: lower.toString(),
+      lowerProbeBorrowAmountWad: lower.toString(),
+      upperProbeBorrowAmountWad: lower.toString(),
+      searchIterations,
+    };
+  }
+
+  while (upper.lt(maxBorrowAmount)) {
+    const nextUpper = upper.mul(105).div(100);
+    upper = nextUpper.gt(upper) ? nextUpper : upper.add(1);
+    if (upper.gt(maxBorrowAmount)) {
+      upper = maxBorrowAmount;
+    }
+    const upperResult = await evaluate(upper);
+    if (upperResult.keeperKickEligibleAfterDelay) {
+      break;
+    }
+    lower = upper;
+    lowerResult = upperResult;
+    if (upper.eq(maxBorrowAmount)) {
+      throw new Error(
+        `Auto-tune could not find a borrow amount that becomes kickable within ${params.targetKickDelayDays} days before hitting the lend amount cap`
+      );
+    }
+  }
+
+  for (let i = 0; i < 18; i += 1) {
+    const mid = lower.add(upper).div(2);
+    if (mid.lte(lower) || mid.gte(upper)) {
+      break;
+    }
+    const midResult = await evaluate(mid);
+    if (midResult.keeperKickEligibleAfterDelay) {
+      upper = mid;
+    } else {
+      lower = mid;
+      lowerResult = midResult;
+    }
+  }
+
+  return {
+    targetKickDelayDays: params.targetKickDelayDays,
+    targetKickDelaySeconds,
+    selectedBorrowAmountWad: upper.toString(),
+    lowerProbeBorrowAmountWad: lower.toString(),
+    upperProbeBorrowAmountWad: upper.toString(),
+    searchIterations,
+  };
 }
 
 function resolveUniswapV3RouterConfig(): UniswapV3RouterConfig {
@@ -703,14 +1034,56 @@ async function main() {
   );
 
   const interestRate = optionalEnv('AJNA_AGENT_INTEREST_RATE', '50000000000000000');
-  const bucketIndex = Number(optionalEnv('AJNA_AGENT_BUCKET_INDEX', '3232'));
+  const bucketIndex = Number(optionalEnv('AJNA_AGENT_BUCKET_INDEX', '4600'));
   const limitIndex = Number(optionalEnv('AJNA_AGENT_LIMIT_INDEX', '5000'));
   const lendAmountWad = optionalEnv('AJNA_AGENT_LEND_AMOUNT_WAD', '1000000000000000000000');
   const borrowAmountWad = optionalEnv('AJNA_AGENT_BORROW_AMOUNT_WAD', '10000000000000000000');
   const collateralAmountWad = optionalEnv('AJNA_AGENT_COLLATERAL_AMOUNT_WAD', '100000000000000000000');
+  const targetKickDelayDays = process.env.AJNA_AGENT_TARGET_KICK_DELAY_DAYS
+    ? Number(process.env.AJNA_AGENT_TARGET_KICK_DELAY_DAYS)
+    : undefined;
+  if (
+    process.env.AJNA_AGENT_TARGET_KICK_DELAY_DAYS !== undefined &&
+    (!Number.isFinite(targetKickDelayDays) || (targetKickDelayDays ?? 0) <= 0)
+  ) {
+    throw new Error('AJNA_AGENT_TARGET_KICK_DELAY_DAYS must be a positive number');
+  }
   const quoteMintRaw = optionalEnv('AJNA_AGENT_QUOTE_MINT_RAW', '100000000000000000000000');
   const collateralMintRaw = optionalEnv('AJNA_AGENT_COLLATERAL_MINT_RAW', '100000000000000000000000');
-  const maxRemoveAttempts = Number(optionalEnv('AJNA_AGENT_MAX_REMOVE_ATTEMPTS', '4'));
+  const quoteKeeperBufferRaw = optionalEnv(
+    'AJNA_AGENT_KEEPER_QUOTE_BUFFER_RAW',
+    '1000000000000000000000'
+  );
+  const defaultTimeWarpSeconds =
+    targetKickDelayDays !== undefined
+      ? String(Math.max(1, Math.round(targetKickDelayDays * 24 * 60 * 60)))
+      : '31536000';
+  const timeWarpSeconds = Number(
+    optionalEnv('AJNA_AGENT_TIME_WARP_SECONDS', defaultTimeWarpSeconds)
+  );
+  const maxTimeWarps = Number(
+    optionalEnv('AJNA_AGENT_MAX_TIME_WARPS', targetKickDelayDays !== undefined ? '1' : '5')
+  );
+  const quoteLiquidityRaw = options.withUniswapV3ExternalTake
+    ? optionalEnv(
+        'AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW',
+        '10000000000000000000000'
+      )
+    : '0';
+  const collateralLiquidityRaw = options.withUniswapV3ExternalTake
+    ? optionalEnv(
+        'AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW',
+        '10000000000000000000000'
+      )
+    : '0';
+  const quoteInitialSupplyRaw = big(quoteMintRaw)
+    .add(big(quoteLiquidityRaw))
+    .add(keeperKey ? big(quoteKeeperBufferRaw) : BigNumber.from(0))
+    .toString();
+  const collateralInitialSupplyRaw = big(collateralMintRaw)
+    .add(big(collateralLiquidityRaw))
+    .toString();
+  const maxRemoveAttempts = Number(optionalEnv('AJNA_AGENT_MAX_REMOVE_ATTEMPTS', '16'));
 
   const deployerAddress = actorAddress(deployerKey);
   const lenderAddress = actorAddress(lenderKey);
@@ -725,7 +1098,7 @@ async function main() {
     chainName: BASE_CHAIN_NAME,
     owner: deployerAddress,
     initialRecipient: deployerAddress,
-    initialSupply: '0',
+    initialSupply: quoteInitialSupplyRaw,
     decimals: 18,
     mintable: true,
   };
@@ -737,7 +1110,7 @@ async function main() {
     chainName: BASE_CHAIN_NAME,
     owner: deployerAddress,
     initialRecipient: deployerAddress,
-    initialSupply: '0',
+    initialSupply: collateralInitialSupplyRaw,
     decimals: 18,
     mintable: true,
   };
@@ -748,6 +1121,7 @@ async function main() {
     name: quoteRequest.name,
     symbol: quoteRequest.symbol,
     owner: deployerAddress,
+    initialSupply: quoteRequest.initialSupply,
     rpcUrl,
     privateKey: deployerKey,
     targetDir: path.join(tempDir, 'quote-token-workspace'),
@@ -758,27 +1132,37 @@ async function main() {
     name: collateralRequest.name,
     symbol: collateralRequest.symbol,
     owner: deployerAddress,
+    initialSupply: collateralRequest.initialSupply,
     rpcUrl,
     privateKey: deployerKey,
     targetDir: path.join(tempDir, 'collateral-token-workspace'),
   });
 
-  mintFromManifest({
-    tokenDeployerRepo,
-    manifestPath: quoteManifest.manifestPath,
+  const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+  const deployerSigner = new Wallet(deployerKey, provider);
+  const lenderSigner = new Wallet(lenderKey, provider);
+  const borrowerSigner = new Wallet(borrowerKey, provider);
+
+  await transferErc20({
+    signer: deployerSigner,
+    tokenAddress: quoteManifest.deployedAddress,
     to: lenderAddress,
     amount: quoteMintRaw,
-    rpcUrl,
-    privateKey: deployerKey,
   });
-  mintFromManifest({
-    tokenDeployerRepo,
-    manifestPath: collateralManifest.manifestPath,
+  await transferErc20({
+    signer: deployerSigner,
+    tokenAddress: collateralManifest.deployedAddress,
     to: borrowerAddress,
     amount: collateralMintRaw,
-    rpcUrl,
-    privateKey: deployerKey,
   });
+  if (keeperAddress && keeperAddress.toLowerCase() !== deployerAddress.toLowerCase()) {
+    await transferErc20({
+      signer: deployerSigner,
+      tokenAddress: quoteManifest.deployedAddress,
+      to: keeperAddress,
+      amount: quoteKeeperBufferRaw,
+    });
+  }
 
   let uniswapSummary: FixtureSummary['uniswapV3ExternalTake'];
   let uniswapBootstrap:
@@ -789,33 +1173,6 @@ async function main() {
       }
     | undefined;
   if (options.withUniswapV3ExternalTake) {
-    const quoteLiquidityRaw = optionalEnv(
-      'AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW',
-      '10000000000000000000000'
-    );
-    const collateralLiquidityRaw = optionalEnv(
-      'AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW',
-      '10000000000000000000000'
-    );
-    mintFromManifest({
-      tokenDeployerRepo,
-      manifestPath: quoteManifest.manifestPath,
-      to: deployerAddress,
-      amount: quoteLiquidityRaw,
-      rpcUrl,
-      privateKey: deployerKey,
-    });
-    mintFromManifest({
-      tokenDeployerRepo,
-      manifestPath: collateralManifest.manifestPath,
-      to: deployerAddress,
-      amount: collateralLiquidityRaw,
-      rpcUrl,
-      privateKey: deployerKey,
-    });
-
-    const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-    const deployerSigner = new Wallet(deployerKey, provider);
     const keeperSigner = new Wallet(keeperKey!, provider);
     const routerConfig = resolveUniswapV3RouterConfig();
     const liquidity = await createAndSeedUniswapV3Pool({
@@ -886,6 +1243,22 @@ async function main() {
 
   prepareAndExecute(
     ajnaSkillsRepo,
+    'prepare-approve-erc20',
+    {
+      network: 'base',
+      actorAddress: lenderAddress,
+      tokenAddress: quoteManifest.deployedAddress,
+      poolAddress,
+      amount: lendAmountWad,
+      approvalMode: 'exact',
+      maxAgeSeconds: 600,
+    },
+    lenderKey,
+    rpcUrl
+  );
+
+  prepareAndExecute(
+    ajnaSkillsRepo,
     'prepare-lend',
     {
       network: 'base',
@@ -904,12 +1277,50 @@ async function main() {
 
   prepareAndExecute(
     ajnaSkillsRepo,
+    'prepare-approve-erc20',
+    {
+      network: 'base',
+      actorAddress: borrowerAddress,
+      tokenAddress: collateralManifest.deployedAddress,
+      poolAddress,
+      amount: collateralAmountWad,
+      approvalMode: 'exact',
+      maxAgeSeconds: 600,
+    },
+    borrowerKey,
+    rpcUrl
+  );
+
+  let selectedBorrowAmountWad = borrowAmountWad;
+  let autoTuneSummary: AutoTuneSummary | undefined;
+
+  if (targetKickDelayDays !== undefined) {
+    autoTuneSummary = await autoTuneBorrowAmountWad({
+      provider,
+      poolAddress,
+      borrowerAddress,
+      borrowerSigner,
+      lenderAddress,
+      lenderSigner,
+      bucketIndex,
+      limitIndex,
+      lendAmountWad,
+      collateralAmountWad,
+      borrowAmountWad,
+      maxRemoveAttempts,
+      targetKickDelayDays,
+    });
+    selectedBorrowAmountWad = autoTuneSummary.selectedBorrowAmountWad;
+  }
+
+  prepareAndExecute(
+    ajnaSkillsRepo,
     'prepare-borrow',
     {
       network: 'base',
       poolAddress,
       actorAddress: borrowerAddress,
-      amount: borrowAmountWad,
+      amount: selectedBorrowAmountWad,
       collateralAmount: collateralAmountWad,
       limitIndex,
       approvalMode: 'exact',
@@ -930,7 +1341,14 @@ async function main() {
       throw new Error('Lender quoteRedeemable is zero before borrower became kickable');
     }
 
-    const removeAmount = redeemable.toString();
+    const removeAmount = (
+      await resolveSafeQuoteRemovalAmount({
+        lenderSigner,
+        poolAddress,
+        bucketIndex,
+        maxAmount: redeemable,
+      })
+    ).toString();
     prepareAndExecute(
       ajnaSkillsRepo,
       'prepare-unsupported-ajna-action',
@@ -956,12 +1374,31 @@ async function main() {
     poolInspection = inspectPool(ajnaSkillsRepo, rpcUrl, poolAddress);
   }
 
-  const keeperKickEligibleByCurrentCode = big(borrowerPosition.thresholdPrice).gte(big(poolInspection.prices.lup));
-  const strictlyAboveLup = big(borrowerPosition.thresholdPrice).gt(big(poolInspection.prices.lup));
+  let keeperKickEligibleByCurrentCode = big(borrowerPosition.thresholdPrice).gte(
+    big(poolInspection.prices.lup)
+  );
+  let strictlyAboveLup = big(borrowerPosition.thresholdPrice).gt(
+    big(poolInspection.prices.lup)
+  );
+  let timeWarpCount = 0;
+
+  while (!keeperKickEligibleByCurrentCode && timeWarpCount < maxTimeWarps) {
+    await provider.send('evm_increaseTime', [timeWarpSeconds]);
+    await provider.send('evm_mine', []);
+    timeWarpCount += 1;
+    borrowerPosition = inspectBorrower(ajnaSkillsRepo, rpcUrl, poolAddress, borrowerAddress);
+    poolInspection = inspectPool(ajnaSkillsRepo, rpcUrl, poolAddress);
+    keeperKickEligibleByCurrentCode = big(borrowerPosition.thresholdPrice).gte(
+      big(poolInspection.prices.lup)
+    );
+    strictlyAboveLup = big(borrowerPosition.thresholdPrice).gt(
+      big(poolInspection.prices.lup)
+    );
+  }
 
   if (!keeperKickEligibleByCurrentCode) {
     throw new Error(
-      `Fixture did not reach keeper kick condition after ${attempts} removal attempts: thresholdPrice=${borrowerPosition.thresholdPrice}, lup=${poolInspection.prices.lup}`
+      `Fixture did not reach keeper kick condition after ${attempts} removal attempts and ${timeWarpCount} time warps: thresholdPrice=${borrowerPosition.thresholdPrice}, lup=${poolInspection.prices.lup}`
     );
   }
 
@@ -1002,13 +1439,21 @@ async function main() {
     },
     borrowPlan: {
       lendAmountWad,
-      borrowAmountWad,
+      borrowAmountWad: selectedBorrowAmountWad,
       collateralAmountWad,
       limitIndex,
+      requestedBorrowAmountWad:
+        autoTuneSummary !== undefined ? borrowAmountWad : undefined,
+      targetKickDelayDays,
     },
+    autoTune: autoTuneSummary,
     removal: {
       attempts,
       removedAmountsWad,
+    },
+    timeWarp: {
+      count: timeWarpCount,
+      secondsPerWarp: timeWarpSeconds,
     },
     uniswapV3ExternalTake: uniswapSummary,
   };
