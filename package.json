@@ -10,7 +10,9 @@
     "unit-tests": "npx mocha --require ts-node/register 'src/unit-tests/**/*.test.ts'",
     "integration-tests": "npx hardhat test",
     "create-keystore": "./node_modules/ts-node/dist/bin.js scripts/create-keystore.ts",
-    "fork-base": "FORK_NETWORK=base hardhat node"
+    "fork-base": "FORK_NETWORK=base hardhat node",
+    "create-liquidatable-fixture": "./node_modules/ts-node/dist/bin.js scripts/create-liquidatable-ajna-fixture.ts",
+    "create-liquidatable-uniswap-fixture": "./node_modules/ts-node/dist/bin.js scripts/create-liquidatable-ajna-fixture.ts --with-uniswap-v3-external-take"
   },
   "author": "",
   "license": "MIT",
