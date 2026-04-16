@@ -126,6 +126,7 @@ type AutoTuneSummary = {
 type FixtureSummary = {
   network: 'base';
   rpcUrl: string;
+  profile?: 'realistic-1d';
   repos: {
     tokenDeployerRepo: string;
     ajnaSkillsRepo: string;
@@ -215,7 +216,7 @@ function parseOptions(argv: string[]): CliOptions {
 }
 
 function usage() {
-  return `Usage: ts-node scripts/create-liquidatable-ajna-fixture.ts [--with-uniswap-v3-external-take]\n\nRequired env:\n- AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE\n- AJNA_AGENT_DEPLOYER_KEY\n- AJNA_AGENT_LENDER_KEY\n- AJNA_AGENT_BORROWER_KEY\n\nOptional env:\n- AJNA_AGENT_KEEPER_KEY\n- AJNA_AGENT_TOKEN_DEPLOYER_REPO (default: ../token-deployer)\n- AJNA_AGENT_AJNA_SKILLS_REPO (default: ../ajna-skills)\n- AJNA_AGENT_OUTPUT_PATH (default: temp summary path)\n- AJNA_AGENT_BUCKET_INDEX (default: 4600)\n- AJNA_AGENT_LIMIT_INDEX (default: 5000)\n- AJNA_AGENT_INTEREST_RATE (default: 50000000000000000)\n- AJNA_AGENT_LEND_AMOUNT_WAD (default: 1000000000000000000000)\n- AJNA_AGENT_BORROW_AMOUNT_WAD (default: 10000000000000000000)\n- AJNA_AGENT_COLLATERAL_AMOUNT_WAD (default: 100000000000000000000)\n- AJNA_AGENT_TARGET_KICK_DELAY_DAYS (optional; auto-tunes borrow amount to reach kickability within this many fork days)\n- AJNA_AGENT_QUOTE_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_COLLATERAL_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_MAX_REMOVE_ATTEMPTS (default: 16)\n- AJNA_AGENT_NATIVE_GAS_FUND_WEI (default: 1000000000000000000)\n- AJNA_AGENT_TIME_WARP_SECONDS (default: 31536000)\n- AJNA_AGENT_MAX_TIME_WARPS (default: 5)\n\nOptional Uniswap V3 external-take setup (requires --with-uniswap-v3-external-take or AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE=1):\n- AJNA_AGENT_KEEPER_KEY (required in external-take mode; the deployed factory/taker owner)\n- AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_FEE_TIER (default: 3000)\n- AJNA_AGENT_UNISWAP_UNIVERSAL_ROUTER_ADDRESS\n- AJNA_AGENT_UNISWAP_PERMIT2_ADDRESS\n- AJNA_AGENT_UNISWAP_POOL_FACTORY_ADDRESS\n- AJNA_AGENT_UNISWAP_QUOTER_V2_ADDRESS\n- AJNA_AGENT_UNISWAP_WETH_ADDRESS\n- AJNA_AGENT_UNISWAP_POSITION_MANAGER_ADDRESS\n- AJNA_AGENT_AJNA_ERC20_POOL_FACTORY (default: Base mainnet ERC20 pool factory)\n`;
+  return `Usage: ts-node scripts/create-liquidatable-ajna-fixture.ts [--with-uniswap-v3-external-take]\n\nRequired env:\n- AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE\n- AJNA_AGENT_DEPLOYER_KEY\n- AJNA_AGENT_LENDER_KEY\n- AJNA_AGENT_BORROWER_KEY\n\nOptional env:\n- AJNA_AGENT_KEEPER_KEY\n- AJNA_AGENT_TOKEN_DEPLOYER_REPO (default: ../token-deployer)\n- AJNA_AGENT_AJNA_SKILLS_REPO (default: ../ajna-skills)\n- AJNA_AGENT_OUTPUT_PATH (default: temp summary path)\n- AJNA_AGENT_PROFILE (supported: realistic-1d; implies 10% APR and 1-day kick target unless overridden)\n- AJNA_AGENT_BUCKET_INDEX (default: 4600)\n- AJNA_AGENT_LIMIT_INDEX (default: 5000)\n- AJNA_AGENT_INTEREST_RATE (default: 50000000000000000)\n- AJNA_AGENT_LEND_AMOUNT_WAD (default: 1000000000000000000000)\n- AJNA_AGENT_BORROW_AMOUNT_WAD (default: 10000000000000000000)\n- AJNA_AGENT_COLLATERAL_AMOUNT_WAD (default: 100000000000000000000)\n- AJNA_AGENT_TARGET_KICK_DELAY_DAYS (optional; auto-tunes borrow amount to reach kickability within this many fork days)\n- AJNA_AGENT_QUOTE_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_COLLATERAL_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_MAX_REMOVE_ATTEMPTS (default: 16)\n- AJNA_AGENT_NATIVE_GAS_FUND_WEI (default: 1000000000000000000)\n- AJNA_AGENT_TIME_WARP_SECONDS (default: 31536000)\n- AJNA_AGENT_MAX_TIME_WARPS (default: 5)\n\nOptional Uniswap V3 external-take setup (requires --with-uniswap-v3-external-take or AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE=1):\n- AJNA_AGENT_KEEPER_KEY (required in external-take mode; the deployed factory/taker owner)\n- AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_FEE_TIER (default: 3000)\n- AJNA_AGENT_UNISWAP_UNIVERSAL_ROUTER_ADDRESS\n- AJNA_AGENT_UNISWAP_PERMIT2_ADDRESS\n- AJNA_AGENT_UNISWAP_POOL_FACTORY_ADDRESS\n- AJNA_AGENT_UNISWAP_QUOTER_V2_ADDRESS\n- AJNA_AGENT_UNISWAP_WETH_ADDRESS\n- AJNA_AGENT_UNISWAP_POSITION_MANAGER_ADDRESS\n- AJNA_AGENT_AJNA_ERC20_POOL_FACTORY (default: Base mainnet ERC20 pool factory)\n`;
 }
 
 function requiredEnv(name: string): string {
@@ -1047,23 +1048,31 @@ async function main() {
 
   const tokenDeployerRepo = resolveRepoPath('AJNA_AGENT_TOKEN_DEPLOYER_REPO', '../token-deployer');
   const ajnaSkillsRepo = resolveRepoPath('AJNA_AGENT_AJNA_SKILLS_REPO', '../ajna-skills');
+  const fixtureProfile = process.env.AJNA_AGENT_PROFILE;
+  if (fixtureProfile !== undefined && fixtureProfile !== 'realistic-1d') {
+    throw new Error(`Unsupported AJNA_AGENT_PROFILE: ${fixtureProfile}`);
+  }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ajna-liquidation-fixture-'));
   const outputPath = path.resolve(
     process.env.AJNA_AGENT_OUTPUT_PATH ?? path.join(tempDir, 'fixture-summary.json')
   );
 
-  const interestRate = optionalEnv('AJNA_AGENT_INTEREST_RATE', '50000000000000000');
+  const defaultInterestRate = fixtureProfile === 'realistic-1d' ? '100000000000000000' : '50000000000000000';
+  const interestRate = optionalEnv('AJNA_AGENT_INTEREST_RATE', defaultInterestRate);
   const bucketIndex = Number(optionalEnv('AJNA_AGENT_BUCKET_INDEX', '4600'));
   const limitIndex = Number(optionalEnv('AJNA_AGENT_LIMIT_INDEX', '5000'));
   const lendAmountWad = optionalEnv('AJNA_AGENT_LEND_AMOUNT_WAD', '1000000000000000000000');
   const borrowAmountWad = optionalEnv('AJNA_AGENT_BORROW_AMOUNT_WAD', '10000000000000000000');
   const collateralAmountWad = optionalEnv('AJNA_AGENT_COLLATERAL_AMOUNT_WAD', '100000000000000000000');
-  const targetKickDelayDays = process.env.AJNA_AGENT_TARGET_KICK_DELAY_DAYS
-    ? Number(process.env.AJNA_AGENT_TARGET_KICK_DELAY_DAYS)
+  const targetKickDelayDaysRaw =
+    process.env.AJNA_AGENT_TARGET_KICK_DELAY_DAYS ??
+    (fixtureProfile === 'realistic-1d' ? '1' : undefined);
+  const targetKickDelayDays = targetKickDelayDaysRaw
+    ? Number(targetKickDelayDaysRaw)
     : undefined;
   if (
-    process.env.AJNA_AGENT_TARGET_KICK_DELAY_DAYS !== undefined &&
+    targetKickDelayDaysRaw !== undefined &&
     (!Number.isFinite(targetKickDelayDays) || (targetKickDelayDays ?? 0) <= 0)
   ) {
     throw new Error('AJNA_AGENT_TARGET_KICK_DELAY_DAYS must be a positive number');
@@ -1447,6 +1456,7 @@ async function main() {
   const summary: FixtureSummary = {
     network: 'base',
     rpcUrl,
+    profile: fixtureProfile === 'realistic-1d' ? 'realistic-1d' : undefined,
     repos: {
       tokenDeployerRepo,
       ajnaSkillsRepo,

@@ -218,6 +218,12 @@ In Uniswap external-take mode, `AJNA_AGENT_KEEPER_KEY` is required because the d
 
 Use the plain wrapper when you only need a liquidatable Ajna fixture. Use the Uniswap wrapper when you want the DEX and keeper-contract side of a manual external-take test bootstrapped too.
 
+For a faster but still plausible synthetic profile, set `AJNA_AGENT_PROFILE=realistic-1d`. That profile currently means:
+
+- Ajna pool creation at the factory-maximum `10%` APR
+- a `1`-day liquidation shaping target
+- the same adaptive borrow-tuning logic if tighter shaping becomes necessary later
+
 ## Phase 1: Deploy Two Test ERC20s
 
 Create two requests. Keep them simple and mintable.
@@ -642,13 +648,20 @@ This harness:
 
 This is the most practical route for testing new `kick`, `take`, or factory-based Uniswap V3 external-take behavior against a brand-new local pool.
 
-The current working sequence on the local Base fork is:
+The current working sequences on the local Base fork are:
 
-1. run `AJNA_AGENT_TARGET_KICK_DELAY_DAYS=3 npm run create-liquidatable-uniswap-fixture`
-2. let the wrapper remove quote up to the `LUPBelowHTP()` boundary and time-warp the fork until `thresholdPrice >= lup`
-3. run `AJNA_AGENT_KEEPER_KEY=0x... npm run run-fixture-keeper-harness -- --summary /tmp/ajna-fixture-summary.json --auto-warp-to-take --take-warp-seconds 86400 --max-take-warps 3`
+1. baseline profile
+   `AJNA_AGENT_TARGET_KICK_DELAY_DAYS=3 npm run create-liquidatable-uniswap-fixture`
+2. faster realistic profile
+   `AJNA_AGENT_PROFILE=realistic-1d npm run create-liquidatable-uniswap-fixture`
+3. let the wrapper remove quote up to the `LUPBelowHTP()` boundary and time-warp the fork until `thresholdPrice >= lup`
+4. run `AJNA_AGENT_KEEPER_KEY=0x... npm run run-fixture-keeper-harness -- --summary /tmp/ajna-fixture-summary.json --auto-warp-to-take --take-warp-seconds 86400 --max-take-warps 3`
 
-On the verified local fork run, the borrower kicked immediately from the 3-day fixture, then the harness needed one additional 86400-second warp and a second take attempt before the Uniswap V3 external take executed successfully.
+Verified results:
+
+- the baseline profile reaches keeper kickability after `3` days
+- the `realistic-1d` profile reaches keeper kickability after `1` day
+- both verified profiles still needed one additional `86400`-second warp and a second take attempt before the Uniswap V3 external take became profitable and executed successfully
 
 ### Important limitation
 
