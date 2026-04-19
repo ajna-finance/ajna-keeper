@@ -18,6 +18,7 @@ type TokenDeployerManifest = {
   chainId: number;
   chainName: string;
   status: string;
+  source?: 'deployed' | 'reused';
 };
 
 type SuccessEnvelope<T> = {
@@ -102,7 +103,36 @@ type UniswapV3LiquiditySummary = {
   positionManagerAddress: string;
 };
 
+type FixtureStageSummary = {
+  nativeGasFunding: {
+    enabled: boolean;
+    status: 'funded' | 'skipped';
+  };
+  createPool: {
+    enabled: boolean;
+    status: 'created' | 'reused';
+  };
+  deployTokens: {
+    enabled: boolean;
+    quoteTokenSource: 'deployed' | 'reused';
+    collateralTokenSource: 'deployed' | 'reused';
+  };
+  transferTokens: {
+    enabled: boolean;
+    status: 'transferred' | 'skipped';
+  };
+  seedUniswap?: {
+    enabled: boolean;
+    status: 'seeded' | 'skipped';
+  };
+  deployExternalTake?: {
+    enabled: boolean;
+    mode: 'deployed' | 'reused' | 'skipped';
+  };
+};
+
 type ExternalTakeDeploymentSummary = {
+  mode: 'deployed' | 'reused';
   owner: string;
   ajnaPoolFactory: string;
   keeperTakerFactory: string;
@@ -127,6 +157,7 @@ type FixtureSummary = {
   network: 'base';
   rpcUrl: string;
   profile?: 'realistic-1d';
+  stages: FixtureStageSummary;
   repos: {
     tokenDeployerRepo: string;
     ajnaSkillsRepo: string;
@@ -178,9 +209,9 @@ type FixtureSummary = {
   };
   uniswapV3ExternalTake?: {
     routerConfig: UniswapV3RouterConfig;
-    liquidity: UniswapV3LiquiditySummary;
-    deployment: ExternalTakeDeploymentSummary;
-    keeperConfigSnippet: ExternalTakeSnippetSummary;
+    liquidity?: UniswapV3LiquiditySummary;
+    deployment?: ExternalTakeDeploymentSummary;
+    keeperConfigSnippet?: ExternalTakeSnippetSummary;
     note: 'Manual keeper take tests still need either a real subgraph/indexer or a repo-local subgraph override harness.';
   };
 };
@@ -199,24 +230,177 @@ const BASE_UNISWAP_DEFAULTS: UniswapV3RouterConfig = {
   defaultFeeTier: 3000,
   defaultSlippage: 0.5,
 };
+const ERC20_METADATA_ABI = [
+  'function name() view returns (string)',
+  'function symbol() view returns (string)'
+];
 const FACTORY_ABI = [
   'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)'
 ];
+const AJNA_KEEPER_TAKER_FACTORY_ABI = [
+  'function owner() view returns (address)',
+  'function poolFactory() view returns (address)',
+  'function takerContracts(uint8 source) view returns (address)'
+];
+const UNISWAP_V3_KEEPER_TAKER_ABI = [
+  'function owner() view returns (address)',
+  'function poolFactory() view returns (address)',
+  'function authorizedFactory() view returns (address)'
+];
+const AJNA_POOL_TOKEN_ABI = [
+  'function collateralAddress() view returns (address)',
+  'function quoteTokenAddress() view returns (address)'
+];
+const UNISWAP_V3_LIQUIDITY_SOURCE = 2;
 
 type CliOptions = {
   withUniswapV3ExternalTake: boolean;
+  fundNativeGas: boolean;
+  createPool: boolean;
+  deployTokens: boolean;
+  transferTokens: boolean;
+  seedUniswap: boolean;
+  deployExternalTake: boolean;
 };
 
+function parseBooleanValue(name: string, rawValue: string): boolean {
+  const normalized = rawValue.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) {
+    return false;
+  }
+  throw new Error(
+    `${name} must be one of: 1, 0, true, false, yes, no, on, off (received ${rawValue})`
+  );
+}
+
+function resolveToggle(params: {
+  argv: string[];
+  enableFlag: string;
+  disableFlag: string;
+  envName: string;
+  defaultValue: boolean;
+}): boolean {
+  if (params.argv.includes(params.enableFlag)) {
+    return true;
+  }
+  if (params.argv.includes(params.disableFlag)) {
+    return false;
+  }
+  const envValue = process.env[params.envName];
+  if (envValue === undefined) {
+    return params.defaultValue;
+  }
+  return parseBooleanValue(params.envName, envValue);
+}
+
 function parseOptions(argv: string[]): CliOptions {
+  const withUniswapV3ExternalTake =
+    argv.includes('--with-uniswap-v3-external-take') ||
+    process.env.AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE === '1';
+
   return {
-    withUniswapV3ExternalTake:
-      argv.includes('--with-uniswap-v3-external-take') ||
-      process.env.AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE === '1',
+    withUniswapV3ExternalTake,
+    fundNativeGas: resolveToggle({
+      argv,
+      enableFlag: '--fund-native-gas',
+      disableFlag: '--no-fund-native-gas',
+      envName: 'AJNA_AGENT_FUND_NATIVE_GAS',
+      defaultValue: true,
+    }),
+    createPool: resolveToggle({
+      argv,
+      enableFlag: '--create-pool',
+      disableFlag: '--no-create-pool',
+      envName: 'AJNA_AGENT_CREATE_POOL',
+      defaultValue: true,
+    }),
+    deployTokens: resolveToggle({
+      argv,
+      enableFlag: '--deploy-tokens',
+      disableFlag: '--no-deploy-tokens',
+      envName: 'AJNA_AGENT_DEPLOY_TOKENS',
+      defaultValue: true,
+    }),
+    transferTokens: resolveToggle({
+      argv,
+      enableFlag: '--transfer-tokens',
+      disableFlag: '--no-transfer-tokens',
+      envName: 'AJNA_AGENT_TRANSFER_TOKENS',
+      defaultValue: true,
+    }),
+    seedUniswap: resolveToggle({
+      argv,
+      enableFlag: '--seed-uniswap',
+      disableFlag: '--no-seed-uniswap',
+      envName: 'AJNA_AGENT_SEED_UNISWAP',
+      defaultValue: withUniswapV3ExternalTake,
+    }),
+    deployExternalTake: resolveToggle({
+      argv,
+      enableFlag: '--deploy-external-take',
+      disableFlag: '--no-deploy-external-take',
+      envName: 'AJNA_AGENT_DEPLOY_EXTERNAL_TAKE',
+      defaultValue: withUniswapV3ExternalTake,
+    }),
   };
 }
 
 function usage() {
-  return `Usage: ts-node scripts/create-liquidatable-ajna-fixture.ts [--with-uniswap-v3-external-take]\n\nRequired env:\n- AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE\n- AJNA_AGENT_DEPLOYER_KEY\n- AJNA_AGENT_LENDER_KEY\n- AJNA_AGENT_BORROWER_KEY\n\nOptional env:\n- AJNA_AGENT_KEEPER_KEY\n- AJNA_AGENT_TOKEN_DEPLOYER_REPO (default: ../token-deployer)\n- AJNA_AGENT_AJNA_SKILLS_REPO (default: ../ajna-skills)\n- AJNA_AGENT_OUTPUT_PATH (default: temp summary path)\n- AJNA_AGENT_PROFILE (supported: realistic-1d; implies 10% APR and 1-day kick target unless overridden)\n- AJNA_AGENT_BUCKET_INDEX (default: 4600)\n- AJNA_AGENT_LIMIT_INDEX (default: 5000)\n- AJNA_AGENT_INTEREST_RATE (default: 50000000000000000)\n- AJNA_AGENT_LEND_AMOUNT_WAD (default: 1000000000000000000000)\n- AJNA_AGENT_BORROW_AMOUNT_WAD (default: 10000000000000000000)\n- AJNA_AGENT_COLLATERAL_AMOUNT_WAD (default: 100000000000000000000)\n- AJNA_AGENT_TARGET_KICK_DELAY_DAYS (optional; auto-tunes borrow amount to reach kickability within this many fork days)\n- AJNA_AGENT_QUOTE_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_COLLATERAL_MINT_RAW (default: 100000000000000000000000)\n- AJNA_AGENT_MAX_REMOVE_ATTEMPTS (default: 16)\n- AJNA_AGENT_NATIVE_GAS_FUND_WEI (default: 1000000000000000000)\n- AJNA_AGENT_TIME_WARP_SECONDS (default: 31536000)\n- AJNA_AGENT_MAX_TIME_WARPS (default: 5)\n\nOptional Uniswap V3 external-take setup (requires --with-uniswap-v3-external-take or AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE=1):\n- AJNA_AGENT_KEEPER_KEY (required in external-take mode; the deployed factory/taker owner)\n- AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW (default: 10000000000000000000000)\n- AJNA_AGENT_UNISWAP_FEE_TIER (default: 3000)\n- AJNA_AGENT_UNISWAP_UNIVERSAL_ROUTER_ADDRESS\n- AJNA_AGENT_UNISWAP_PERMIT2_ADDRESS\n- AJNA_AGENT_UNISWAP_POOL_FACTORY_ADDRESS\n- AJNA_AGENT_UNISWAP_QUOTER_V2_ADDRESS\n- AJNA_AGENT_UNISWAP_WETH_ADDRESS\n- AJNA_AGENT_UNISWAP_POSITION_MANAGER_ADDRESS\n- AJNA_AGENT_AJNA_ERC20_POOL_FACTORY (default: Base mainnet ERC20 pool factory)\n`;
+  return `Usage: ts-node scripts/create-liquidatable-ajna-fixture.ts [--with-uniswap-v3-external-take] [--fund-native-gas|--no-fund-native-gas] [--create-pool|--no-create-pool] [--deploy-tokens|--no-deploy-tokens] [--transfer-tokens|--no-transfer-tokens] [--seed-uniswap|--no-seed-uniswap] [--deploy-external-take|--no-deploy-external-take]
+
+Required env:
+- AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE
+- AJNA_AGENT_DEPLOYER_KEY
+- AJNA_AGENT_LENDER_KEY
+- AJNA_AGENT_BORROWER_KEY
+
+Optional env:
+- AJNA_AGENT_KEEPER_KEY
+- AJNA_AGENT_TOKEN_DEPLOYER_REPO
+- AJNA_AGENT_AJNA_SKILLS_REPO
+- AJNA_AGENT_OUTPUT_PATH
+- AJNA_AGENT_FUND_NATIVE_GAS=yes|no (default: yes)
+- AJNA_AGENT_CREATE_POOL=yes|no (default: yes)
+- AJNA_AGENT_POOL_ADDRESS (required when pool creation is disabled)
+- AJNA_AGENT_DEPLOY_TOKENS=yes|no (default: yes)
+- AJNA_AGENT_TRANSFER_TOKENS=yes|no (default: yes)
+- AJNA_AGENT_QUOTE_TOKEN_ADDRESS (reuse existing quote token)
+- AJNA_AGENT_COLLATERAL_TOKEN_ADDRESS (reuse existing collateral token)
+- AJNA_AGENT_PROFILE
+- AJNA_AGENT_BUCKET_INDEX
+- AJNA_AGENT_LIMIT_INDEX
+- AJNA_AGENT_INTEREST_RATE
+- AJNA_AGENT_LEND_AMOUNT_WAD
+- AJNA_AGENT_BORROW_AMOUNT_WAD
+- AJNA_AGENT_COLLATERAL_AMOUNT_WAD
+- AJNA_AGENT_TARGET_KICK_DELAY_DAYS
+- AJNA_AGENT_QUOTE_MINT_RAW
+- AJNA_AGENT_COLLATERAL_MINT_RAW
+- AJNA_AGENT_MAX_REMOVE_ATTEMPTS
+- AJNA_AGENT_NATIVE_GAS_FUND_WEI
+- AJNA_AGENT_TIME_WARP_SECONDS
+- AJNA_AGENT_MAX_TIME_WARPS
+
+Optional Uniswap V3 external-take setup:
+- AJNA_AGENT_SEED_UNISWAP=yes|no (default: yes when external take is enabled)
+- AJNA_AGENT_DEPLOY_EXTERNAL_TAKE=yes|no (default: yes when external take is enabled)
+- AJNA_AGENT_KEEPER_KEY (required only when deploying a fresh factory/taker pair)
+- AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS (reuse existing factory)
+- AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS (reuse existing UniswapV3 taker)
+- AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW
+- AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW
+- AJNA_AGENT_UNISWAP_FEE_TIER
+- AJNA_AGENT_UNISWAP_UNIVERSAL_ROUTER_ADDRESS
+- AJNA_AGENT_UNISWAP_PERMIT2_ADDRESS
+- AJNA_AGENT_UNISWAP_POOL_FACTORY_ADDRESS
+- AJNA_AGENT_UNISWAP_QUOTER_V2_ADDRESS
+- AJNA_AGENT_UNISWAP_WETH_ADDRESS
+- AJNA_AGENT_UNISWAP_POSITION_MANAGER_ADDRESS
+- AJNA_AGENT_AJNA_ERC20_POOL_FACTORY
+`;
 }
 
 function requiredEnv(name: string): string {
@@ -322,6 +506,12 @@ function actorAddress(privateKey: string): string {
   return new Wallet(privateKey).address;
 }
 
+function withGasBuffer(gasEstimate: BigNumber, minGas: number, multiplierBps = 12000): BigNumber {
+  const buffered = gasEstimate.mul(multiplierBps).add(9999).div(10000);
+  const floor = BigNumber.from(minGas);
+  return buffered.gt(floor) ? buffered : floor;
+}
+
 function normalizeAddress(address: string): string {
   return ethers.utils.getAddress(address);
 }
@@ -371,18 +561,176 @@ function deployMintableErc20(params: {
   };
   writeJson(requestPath, request);
 
-  return runTokenDeployer(params.tokenDeployerRepo, [
-    'deploy',
-    requestPath,
-    '--target-dir',
-    params.targetDir,
-    '--force',
-    '--broadcast',
-    '--rpc-url',
-    params.rpcUrl,
-    '--private-key',
-    params.privateKey,
-  ]) as TokenDeployerManifest;
+  return {
+    ...(runTokenDeployer(params.tokenDeployerRepo, [
+      'deploy',
+      requestPath,
+      '--target-dir',
+      params.targetDir,
+      '--force',
+      '--broadcast',
+      '--rpc-url',
+      params.rpcUrl,
+      '--private-key',
+      params.privateKey,
+    ]) as TokenDeployerManifest),
+    source: 'deployed',
+  };
+}
+
+async function describeExistingErc20(params: {
+  provider: ethers.providers.Provider;
+  tokenAddress: string;
+  fallbackName: string;
+  fallbackSymbol: string;
+}): Promise<TokenDeployerManifest> {
+  const tokenAddress = normalizeAddress(params.tokenAddress);
+  const token = new Contract(tokenAddress, ERC20_METADATA_ABI, params.provider);
+
+  let name = params.fallbackName;
+  let symbol = params.fallbackSymbol;
+
+  try {
+    name = await token.name();
+  } catch {
+    // Keep fallback metadata when the token contract omits ERC20 metadata.
+  }
+
+  try {
+    symbol = await token.symbol();
+  } catch {
+    // Keep fallback metadata when the token contract omits ERC20 metadata.
+  }
+
+  return {
+    manifestPath: '',
+    deployedAddress: tokenAddress,
+    name,
+    symbol,
+    chainId: BASE_CHAIN_ID,
+    chainName: BASE_CHAIN_NAME,
+    status: 'reused',
+    source: 'reused',
+  };
+}
+
+async function resolveFixtureToken(params: {
+  existingAddress?: string;
+  provider: ethers.providers.Provider;
+  tokenDeployerRepo: string;
+  tempDir: string;
+  name: string;
+  symbol: string;
+  owner: string;
+  initialSupply: string;
+  rpcUrl: string;
+  privateKey: string;
+  targetDir: string;
+}): Promise<TokenDeployerManifest> {
+  if (params.existingAddress) {
+    return describeExistingErc20({
+      provider: params.provider,
+      tokenAddress: params.existingAddress,
+      fallbackName: params.name,
+      fallbackSymbol: params.symbol,
+    });
+  }
+
+  return deployMintableErc20({
+    tokenDeployerRepo: params.tokenDeployerRepo,
+    tempDir: params.tempDir,
+    name: params.name,
+    symbol: params.symbol,
+    owner: params.owner,
+    initialSupply: params.initialSupply,
+    rpcUrl: params.rpcUrl,
+    privateKey: params.privateKey,
+    targetDir: params.targetDir,
+  });
+}
+
+function optionalAddressEnv(name: string): string | undefined {
+  const value = process.env[name];
+  if (!value) {
+    return undefined;
+  }
+  return normalizeAddress(value);
+}
+
+async function resolveExistingUniswapV3ExternalTakeDeployment(params: {
+  provider: ethers.providers.Provider;
+  ajnaPoolFactoryAddress: string;
+  keeperTakerFactoryAddress: string;
+  uniswapV3TakerAddress: string;
+}): Promise<ExternalTakeDeploymentSummary> {
+  const ajnaPoolFactoryAddress = normalizeAddress(params.ajnaPoolFactoryAddress);
+  const keeperTakerFactoryAddress = normalizeAddress(params.keeperTakerFactoryAddress);
+  const uniswapV3TakerAddress = normalizeAddress(params.uniswapV3TakerAddress);
+
+  const keeperTakerFactory = new Contract(
+    keeperTakerFactoryAddress,
+    AJNA_KEEPER_TAKER_FACTORY_ABI,
+    params.provider
+  );
+  const uniswapV3Taker = new Contract(
+    uniswapV3TakerAddress,
+    UNISWAP_V3_KEEPER_TAKER_ABI,
+    params.provider
+  );
+
+  const [
+    owner,
+    configuredPoolFactory,
+    configuredUniswapV3Taker,
+    takerOwner,
+    takerPoolFactory,
+    authorizedFactory,
+  ] = await Promise.all([
+    keeperTakerFactory.owner(),
+    keeperTakerFactory.poolFactory(),
+    keeperTakerFactory.takerContracts(UNISWAP_V3_LIQUIDITY_SOURCE),
+    uniswapV3Taker.owner(),
+    uniswapV3Taker.poolFactory(),
+    uniswapV3Taker.authorizedFactory(),
+  ]);
+
+  if (normalizeAddress(configuredPoolFactory) !== ajnaPoolFactoryAddress) {
+    throw new Error(
+      `Existing keeper taker factory ${keeperTakerFactoryAddress} targets Ajna pool factory ${configuredPoolFactory}, expected ${ajnaPoolFactoryAddress}`
+    );
+  }
+
+  if (normalizeAddress(configuredUniswapV3Taker) !== uniswapV3TakerAddress) {
+    throw new Error(
+      `Existing keeper taker factory ${keeperTakerFactoryAddress} has UniswapV3 taker ${configuredUniswapV3Taker}, expected ${uniswapV3TakerAddress}`
+    );
+  }
+
+  if (normalizeAddress(takerOwner) !== normalizeAddress(owner)) {
+    throw new Error(
+      `Existing UniswapV3 taker ${uniswapV3TakerAddress} owner ${takerOwner} does not match factory owner ${owner}`
+    );
+  }
+
+  if (normalizeAddress(takerPoolFactory) !== ajnaPoolFactoryAddress) {
+    throw new Error(
+      `Existing UniswapV3 taker ${uniswapV3TakerAddress} targets Ajna pool factory ${takerPoolFactory}, expected ${ajnaPoolFactoryAddress}`
+    );
+  }
+
+  if (normalizeAddress(authorizedFactory) !== keeperTakerFactoryAddress) {
+    throw new Error(
+      `Existing UniswapV3 taker ${uniswapV3TakerAddress} authorizes factory ${authorizedFactory}, expected ${keeperTakerFactoryAddress}`
+    );
+  }
+
+  return {
+    mode: 'reused',
+    owner: normalizeAddress(owner),
+    ajnaPoolFactory: ajnaPoolFactoryAddress,
+    keeperTakerFactory: keeperTakerFactoryAddress,
+    uniswapV3Taker: uniswapV3TakerAddress,
+  };
 }
 
 async function transferErc20(params: {
@@ -900,12 +1248,18 @@ async function createAndSeedUniswapV3Pool(params: {
     ordered.value0.toString()
   ).toString();
 
+  const createGasEstimate = await positionManager.estimateGas.createAndInitializePoolIfNecessary(
+    ordered.token0,
+    ordered.token1,
+    routerConfig.defaultFeeTier,
+    sqrtPriceX96
+  );
   const createTx = await positionManager.createAndInitializePoolIfNecessary(
     ordered.token0,
     ordered.token1,
     routerConfig.defaultFeeTier,
     sqrtPriceX96,
-    { gasLimit: 5_000_000 }
+    { gasLimit: withGasBuffer(createGasEstimate, 400_000) }
   );
   await createTx.wait();
 
@@ -915,22 +1269,23 @@ async function createAndSeedUniswapV3Pool(params: {
   }
   const latestBlock = await provider.getBlock('latest');
   const recipient = await signer.getAddress();
-  const mintTx = await positionManager.mint(
-    {
-      token0: ordered.token0,
-      token1: ordered.token1,
-      fee: routerConfig.defaultFeeTier,
-      tickLower: -887220,
-      tickUpper: 887220,
-      amount0Desired: ordered.value0,
-      amount1Desired: ordered.value1,
-      amount0Min: 0,
-      amount1Min: 0,
-      recipient,
-      deadline: latestBlock.timestamp + 3600,
-    },
-    { gasLimit: 10_000_000 }
-  );
+  const mintParams = {
+    token0: ordered.token0,
+    token1: ordered.token1,
+    fee: routerConfig.defaultFeeTier,
+    tickLower: -887220,
+    tickUpper: 887220,
+    amount0Desired: ordered.value0,
+    amount1Desired: ordered.value1,
+    amount0Min: 0,
+    amount1Min: 0,
+    recipient,
+    deadline: latestBlock.timestamp + 3600,
+  };
+  const mintGasEstimate = await positionManager.estimateGas.mint(mintParams);
+  const mintTx = await positionManager.mint(mintParams, {
+    gasLimit: withGasBuffer(mintGasEstimate, 700_000),
+  });
   await mintTx.wait();
 
   const factory = new Contract(routerConfig.poolFactoryAddress, FACTORY_ABI, signer);
@@ -983,8 +1338,10 @@ async function deployUniswapV3ExternalTakeContracts(params: {
     factoryArtifact.bytecode,
     params.ownerSigner
   );
+  const factoryDeployTx = factoryFactory.getDeployTransaction(params.ajnaPoolFactoryAddress);
+  const keeperFactoryDeployGasEstimate = await params.ownerSigner.estimateGas(factoryDeployTx);
   const keeperTakerFactory = await factoryFactory.deploy(params.ajnaPoolFactoryAddress, {
-    gasLimit: 6_000_000,
+    gasLimit: withGasBuffer(keeperFactoryDeployGasEstimate, 1_500_000),
   });
   await keeperTakerFactory.deployed();
 
@@ -993,19 +1350,26 @@ async function deployUniswapV3ExternalTakeContracts(params: {
     takerArtifact.bytecode,
     params.ownerSigner
   );
+  const takerDeployTx = uniswapTakerFactory.getDeployTransaction(
+    params.ajnaPoolFactoryAddress,
+    keeperTakerFactory.address
+  );
+  const uniswapTakerDeployGasEstimate = await params.ownerSigner.estimateGas(takerDeployTx);
   const uniswapV3Taker = await uniswapTakerFactory.deploy(
     params.ajnaPoolFactoryAddress,
     keeperTakerFactory.address,
-    { gasLimit: 6_000_000 }
+    { gasLimit: withGasBuffer(uniswapTakerDeployGasEstimate, 1_500_000) }
   );
   await uniswapV3Taker.deployed();
 
+  const setTakerGasEstimate = await keeperTakerFactory.estimateGas.setTaker(2, uniswapV3Taker.address);
   const setTakerTx = await keeperTakerFactory.setTaker(2, uniswapV3Taker.address, {
-    gasLimit: 500_000,
+    gasLimit: withGasBuffer(setTakerGasEstimate, 250_000),
   });
   await setTakerTx.wait();
 
   return {
+    mode: 'deployed',
     owner: await params.ownerSigner.getAddress(),
     ajnaPoolFactory: params.ajnaPoolFactoryAddress,
     keeperTakerFactory: keeperTakerFactory.address,
@@ -1039,10 +1403,62 @@ async function main() {
   const lenderKey = requiredEnv('AJNA_AGENT_LENDER_KEY');
   const borrowerKey = requiredEnv('AJNA_AGENT_BORROWER_KEY');
   const keeperKey = process.env.AJNA_AGENT_KEEPER_KEY;
+  const existingQuoteTokenAddress = optionalAddressEnv('AJNA_AGENT_QUOTE_TOKEN_ADDRESS');
+  const existingCollateralTokenAddress = optionalAddressEnv('AJNA_AGENT_COLLATERAL_TOKEN_ADDRESS');
+  const existingPoolAddress = optionalAddressEnv('AJNA_AGENT_POOL_ADDRESS');
+  const existingKeeperTakerFactoryAddress = optionalAddressEnv(
+    'AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS'
+  );
+  const existingUniswapV3TakerAddress = optionalAddressEnv('AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS');
+  const shouldFundNativeGas = options.fundNativeGas;
+  const shouldCreatePool = options.createPool;
+  const shouldDeployTokens = options.deployTokens;
+  const shouldTransferTokens = options.transferTokens;
+  const shouldSeedUniswap = options.withUniswapV3ExternalTake && options.seedUniswap;
+  const shouldDeployExternalTake = options.withUniswapV3ExternalTake && options.deployExternalTake;
 
-  if (options.withUniswapV3ExternalTake && !keeperKey) {
+  if (!shouldCreatePool && !existingPoolAddress) {
+    throw new Error('AJNA_AGENT_POOL_ADDRESS is required when pool creation is disabled');
+  }
+
+  if (!shouldDeployTokens && !existingQuoteTokenAddress) {
     throw new Error(
-      'AJNA_AGENT_KEEPER_KEY is required when --with-uniswap-v3-external-take is enabled because the keeper must own the deployed factory/taker contracts'
+      'AJNA_AGENT_QUOTE_TOKEN_ADDRESS is required when token deployment is disabled'
+    );
+  }
+  if (!shouldDeployTokens && !existingCollateralTokenAddress) {
+    throw new Error(
+      'AJNA_AGENT_COLLATERAL_TOKEN_ADDRESS is required when token deployment is disabled'
+    );
+  }
+
+  if (Boolean(existingKeeperTakerFactoryAddress) !== Boolean(existingUniswapV3TakerAddress)) {
+    throw new Error(
+      'AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS and AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS must be provided together when reusing external-take contracts'
+    );
+  }
+
+  if (!shouldDeployExternalTake && options.withUniswapV3ExternalTake) {
+    if (!(existingKeeperTakerFactoryAddress && existingUniswapV3TakerAddress)) {
+      throw new Error(
+        'AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS and AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS are required when external-take deployment is disabled'
+      );
+    }
+  }
+
+  if (options.withUniswapV3ExternalTake && !shouldSeedUniswap && shouldDeployExternalTake) {
+    throw new Error(
+      'Cannot deploy external-take contracts while Uniswap seeding is disabled; disable both or enable seeding'
+    );
+  }
+
+  if (
+    shouldDeployExternalTake &&
+    !keeperKey &&
+    !(existingKeeperTakerFactoryAddress && existingUniswapV3TakerAddress)
+  ) {
+    throw new Error(
+      'AJNA_AGENT_KEEPER_KEY is required when deploying fresh external-take contracts unless existing factory and taker addresses are both provided'
     );
   }
 
@@ -1145,7 +1561,17 @@ async function main() {
     mintable: true,
   };
 
-  const quoteManifest = deployMintableErc20({
+  const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+  const deployerSigner = new Wallet(deployerKey, provider);
+  const lenderSigner = new Wallet(lenderKey, provider);
+  const borrowerSigner = new Wallet(borrowerKey, provider);
+  // If an existing token address is provided via env var, always reuse it regardless of the
+  // deploy flag. The flag acts as a strictness guard: when disabled, the validation above
+  // requires the env var to be set. This keeps re-runs idempotent against state from earlier
+  // deployments.
+  const quoteManifest = await resolveFixtureToken({
+    existingAddress: existingQuoteTokenAddress,
+    provider,
     tokenDeployerRepo,
     tempDir,
     name: quoteRequest.name,
@@ -1156,7 +1582,9 @@ async function main() {
     privateKey: deployerKey,
     targetDir: path.join(tempDir, 'quote-token-workspace'),
   });
-  const collateralManifest = deployMintableErc20({
+  const collateralManifest = await resolveFixtureToken({
+    existingAddress: existingCollateralTokenAddress,
+    provider,
     tokenDeployerRepo,
     tempDir,
     name: collateralRequest.name,
@@ -1167,80 +1595,137 @@ async function main() {
     privateKey: deployerKey,
     targetDir: path.join(tempDir, 'collateral-token-workspace'),
   });
+  const stages: FixtureStageSummary = {
+    nativeGasFunding: {
+      enabled: shouldFundNativeGas,
+      status: shouldFundNativeGas ? 'funded' : 'skipped',
+    },
+    createPool: {
+      enabled: shouldCreatePool,
+      status: shouldCreatePool ? 'created' : 'reused',
+    },
+    deployTokens: {
+      enabled: shouldDeployTokens,
+      quoteTokenSource: quoteManifest.source ?? (existingQuoteTokenAddress ? 'reused' : 'deployed'),
+      collateralTokenSource:
+        collateralManifest.source ?? (existingCollateralTokenAddress ? 'reused' : 'deployed'),
+    },
+    transferTokens: {
+      enabled: shouldTransferTokens,
+      status: shouldTransferTokens ? 'transferred' : 'skipped',
+    },
+    ...(options.withUniswapV3ExternalTake
+      ? {
+          seedUniswap: {
+            enabled: shouldSeedUniswap,
+            status: shouldSeedUniswap ? 'seeded' : 'skipped',
+          },
+          deployExternalTake: {
+            enabled: shouldDeployExternalTake,
+            mode: shouldDeployExternalTake
+              ? 'deployed'
+              : existingKeeperTakerFactoryAddress && existingUniswapV3TakerAddress
+                ? 'reused'
+                : 'skipped',
+          },
+        }
+      : {}),
+  };
 
-  const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-  const deployerSigner = new Wallet(deployerKey, provider);
-  const lenderSigner = new Wallet(lenderKey, provider);
-  const borrowerSigner = new Wallet(borrowerKey, provider);
-
-  await ensureNativeBalance({
-    signer: deployerSigner,
-    provider,
-    to: lenderAddress,
-    minimumWei: nativeGasFundWei,
-  });
-  await ensureNativeBalance({
-    signer: deployerSigner,
-    provider,
-    to: borrowerAddress,
-    minimumWei: nativeGasFundWei,
-  });
-  if (keeperAddress && keeperAddress.toLowerCase() !== deployerAddress.toLowerCase()) {
+  if (shouldFundNativeGas) {
     await ensureNativeBalance({
       signer: deployerSigner,
       provider,
-      to: keeperAddress,
+      to: lenderAddress,
       minimumWei: nativeGasFundWei,
     });
+    await ensureNativeBalance({
+      signer: deployerSigner,
+      provider,
+      to: borrowerAddress,
+      minimumWei: nativeGasFundWei,
+    });
+    if (keeperAddress && keeperAddress.toLowerCase() !== deployerAddress.toLowerCase()) {
+      await ensureNativeBalance({
+        signer: deployerSigner,
+        provider,
+        to: keeperAddress,
+        minimumWei: nativeGasFundWei,
+      });
+    }
   }
 
-  await transferErc20({
-    signer: deployerSigner,
-    tokenAddress: quoteManifest.deployedAddress,
-    to: lenderAddress,
-    amount: quoteMintRaw,
-  });
-  await transferErc20({
-    signer: deployerSigner,
-    tokenAddress: collateralManifest.deployedAddress,
-    to: borrowerAddress,
-    amount: collateralMintRaw,
-  });
-  if (keeperAddress && keeperAddress.toLowerCase() !== deployerAddress.toLowerCase()) {
+  if (shouldTransferTokens) {
     await transferErc20({
       signer: deployerSigner,
       tokenAddress: quoteManifest.deployedAddress,
-      to: keeperAddress,
-      amount: quoteKeeperBufferRaw,
+      to: lenderAddress,
+      amount: quoteMintRaw,
     });
+    await transferErc20({
+      signer: deployerSigner,
+      tokenAddress: collateralManifest.deployedAddress,
+      to: borrowerAddress,
+      amount: collateralMintRaw,
+    });
+    if (keeperAddress && keeperAddress.toLowerCase() !== deployerAddress.toLowerCase()) {
+      await transferErc20({
+        signer: deployerSigner,
+        tokenAddress: quoteManifest.deployedAddress,
+        to: keeperAddress,
+        amount: quoteKeeperBufferRaw,
+      });
+    }
   }
 
   let uniswapSummary: FixtureSummary['uniswapV3ExternalTake'];
   let uniswapBootstrap:
     | {
         routerConfig: UniswapV3RouterConfig;
-        liquidity: UniswapV3LiquiditySummary;
-        deployment: ExternalTakeDeploymentSummary;
+        liquidity?: UniswapV3LiquiditySummary;
+        deployment?: ExternalTakeDeploymentSummary;
       }
     | undefined;
   if (options.withUniswapV3ExternalTake) {
-    const keeperSigner = new Wallet(keeperKey!, provider);
     const routerConfig = resolveUniswapV3RouterConfig();
-    const liquidity = await createAndSeedUniswapV3Pool({
-      signer: deployerSigner,
-      quoteTokenAddress: quoteManifest.deployedAddress,
-      collateralTokenAddress: collateralManifest.deployedAddress,
-      quoteLiquidityRaw,
-      collateralLiquidityRaw,
-      routerConfig,
-    });
-    const deployment = await deployUniswapV3ExternalTakeContracts({
-      ownerSigner: keeperSigner,
-      ajnaPoolFactoryAddress: optionalEnv(
-        'AJNA_AGENT_AJNA_ERC20_POOL_FACTORY',
-        BASE_AJNA_ERC20_POOL_FACTORY
-      ),
-    });
+    const ajnaPoolFactoryAddress = optionalEnv(
+      'AJNA_AGENT_AJNA_ERC20_POOL_FACTORY',
+      BASE_AJNA_ERC20_POOL_FACTORY
+    );
+    const liquidity = shouldSeedUniswap
+      ? await createAndSeedUniswapV3Pool({
+          signer: deployerSigner,
+          quoteTokenAddress: quoteManifest.deployedAddress,
+          collateralTokenAddress: collateralManifest.deployedAddress,
+          quoteLiquidityRaw,
+          collateralLiquidityRaw,
+          routerConfig,
+        })
+      : undefined;
+    const deployment = shouldDeployExternalTake
+      ? existingKeeperTakerFactoryAddress && existingUniswapV3TakerAddress
+        ? await resolveExistingUniswapV3ExternalTakeDeployment({
+            provider,
+            ajnaPoolFactoryAddress,
+            keeperTakerFactoryAddress: existingKeeperTakerFactoryAddress,
+            uniswapV3TakerAddress: existingUniswapV3TakerAddress,
+          })
+        : await deployUniswapV3ExternalTakeContracts({
+            ownerSigner: new Wallet(keeperKey!, provider),
+            ajnaPoolFactoryAddress,
+          })
+      : existingKeeperTakerFactoryAddress && existingUniswapV3TakerAddress
+        ? await resolveExistingUniswapV3ExternalTakeDeployment({
+            provider,
+            ajnaPoolFactoryAddress,
+            keeperTakerFactoryAddress: existingKeeperTakerFactoryAddress,
+            uniswapV3TakerAddress: existingUniswapV3TakerAddress,
+          })
+        : undefined;
+
+    if (stages.deployExternalTake && deployment) {
+      stages.deployExternalTake.mode = deployment.mode;
+    }
 
     uniswapBootstrap = {
       routerConfig,
@@ -1249,45 +1734,77 @@ async function main() {
     };
   }
 
-  const createPoolResult = prepareAndExecute(
-    ajnaSkillsRepo,
-    'prepare-create-erc20-pool',
-    {
-      network: 'base',
-      actorAddress: deployerAddress,
-      collateralAddress: collateralManifest.deployedAddress,
-      quoteAddress: quoteManifest.deployedAddress,
-      interestRate,
-      maxAgeSeconds: 600,
-    },
-    deployerKey,
-    rpcUrl
-  );
+  const poolAddress = shouldCreatePool
+    ? (() => {
+        const createPoolResult = prepareAndExecute(
+          ajnaSkillsRepo,
+          'prepare-create-erc20-pool',
+          {
+            network: 'base',
+            actorAddress: deployerAddress,
+            collateralAddress: collateralManifest.deployedAddress,
+            quoteAddress: quoteManifest.deployedAddress,
+            interestRate,
+            maxAgeSeconds: 600,
+          },
+          deployerKey,
+          rpcUrl
+        );
 
-  const poolAddress = createPoolResult.resolvedPoolAddress;
-  if (!poolAddress) {
-    throw new Error('Pool creation did not return resolvedPoolAddress');
+        const resolvedPoolAddress = createPoolResult.resolvedPoolAddress;
+        if (!resolvedPoolAddress) {
+          throw new Error('Pool creation did not return resolvedPoolAddress');
+        }
+        return resolvedPoolAddress;
+      })()
+    : existingPoolAddress!;
+
+  // Confirm the resolved pool's token pair matches the resolved manifests. Catches env-var
+  // typos pointing at a pool for a different token pair before we waste RPC on doomed
+  // lend/borrow/kick calls.
+  {
+    const poolContract = new Contract(poolAddress, AJNA_POOL_TOKEN_ABI, provider);
+    const [poolCollateral, poolQuote] = await Promise.all([
+      poolContract.collateralAddress(),
+      poolContract.quoteTokenAddress(),
+    ]);
+    const expectedCollateral = normalizeAddress(collateralManifest.deployedAddress);
+    const expectedQuote = normalizeAddress(quoteManifest.deployedAddress);
+    if (normalizeAddress(poolCollateral) !== expectedCollateral) {
+      throw new Error(
+        `Pool ${poolAddress} collateral ${poolCollateral} does not match expected ${expectedCollateral}`
+      );
+    }
+    if (normalizeAddress(poolQuote) !== expectedQuote) {
+      throw new Error(
+        `Pool ${poolAddress} quote token ${poolQuote} does not match expected ${expectedQuote}`
+      );
+    }
   }
 
   if (uniswapBootstrap) {
-    const snippetContent = buildKeeperExternalTakeSnippet({
-      poolAddress,
-      quoteToken: quoteManifest,
-      collateralToken: collateralManifest,
-      routerConfig: uniswapBootstrap.routerConfig,
-      deployment: uniswapBootstrap.deployment,
-    });
-    const snippetPath = path.join(tempDir, 'keeper-uniswap-v3-config-snippet.ts');
-    fs.writeFileSync(snippetPath, `${snippetContent}\n`);
+    let keeperConfigSnippet: ExternalTakeSnippetSummary | undefined;
+    if (uniswapBootstrap.deployment) {
+      const snippetContent = buildKeeperExternalTakeSnippet({
+        poolAddress,
+        quoteToken: quoteManifest,
+        collateralToken: collateralManifest,
+        routerConfig: uniswapBootstrap.routerConfig,
+        deployment: uniswapBootstrap.deployment,
+      });
+      const snippetPath = path.join(tempDir, 'keeper-uniswap-v3-config-snippet.ts');
+      fs.writeFileSync(snippetPath, `${snippetContent}\n`);
+      keeperConfigSnippet = {
+        path: snippetPath,
+        content: snippetContent,
+      };
+    }
 
     uniswapSummary = {
       routerConfig: uniswapBootstrap.routerConfig,
       liquidity: uniswapBootstrap.liquidity,
       deployment: uniswapBootstrap.deployment,
-      keeperConfigSnippet: {
-        path: snippetPath,
-        content: snippetContent,
-      },
+      keeperConfigSnippet,
       note: 'Manual keeper take tests still need either a real subgraph/indexer or a repo-local subgraph override harness.',
     };
   }
@@ -1457,6 +1974,7 @@ async function main() {
     network: 'base',
     rpcUrl,
     profile: fixtureProfile === 'realistic-1d' ? 'realistic-1d' : undefined,
+    stages,
     repos: {
       tokenDeployerRepo,
       ajnaSkillsRepo,
