@@ -1,5 +1,8 @@
 import { ERC20Pool__factory, FungiblePool, Loan } from '@ajna-finance/sdk';
+import { BigNumber, utils } from 'ethers';
 import subgraphModule, {
+  BucketTakeLPAwardItem,
+  GetBucketTakeLPAwardsResponse,
   GetLiquidationResponse,
   GetLoanResponse,
   GetMeaningfulBucketResponse,
@@ -121,6 +124,78 @@ export function overrideGetHighestMeaningfulBucket(
   };
   subgraphModule.getHighestMeaningfulBucket = fn;
   return undoFn;
+}
+
+export function overrideGetBucketTakeLPAwards(
+  fn: typeof subgraphModule.getBucketTakeLPAwards
+): () => void {
+  const original = subgraphModule.getBucketTakeLPAwards;
+  const undoFn = () => {
+    subgraphModule.getBucketTakeLPAwards = original;
+  };
+  subgraphModule.getBucketTakeLPAwards = fn;
+  return undoFn;
+}
+
+export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
+  return async (
+    _subgraphUrl: string,
+    _poolAddress: string,
+    signerAddress: string,
+    sinceBlockTimestamp: string
+  ): Promise<GetBucketTakeLPAwardsResponse> => {
+    const provider = getProvider();
+    const poolContract = ERC20Pool__factory.connect(pool.poolAddress, provider);
+    const lpAwardedFilter = poolContract.filters.BucketTakeLPAwarded();
+    const events = await poolContract.queryFilter(
+      lpAwardedFilter,
+      MAINNET_CONFIG.BLOCK_NUMBER
+    );
+    const cursor = BigNumber.from(sinceBlockTimestamp || '0');
+    const signerLower = signerAddress.toLowerCase();
+
+    const bucketTakes: BucketTakeLPAwardItem[] = [];
+    for (const evt of events) {
+      const { taker, kicker, lpAwardedTaker, lpAwardedKicker } = evt.args;
+      const takerMatches = taker.toLowerCase() === signerLower;
+      const kickerMatches = kicker.toLowerCase() === signerLower;
+      if (!takerMatches && !kickerMatches) {
+        continue;
+      }
+
+      const block = await evt.getBlock();
+      const blockTimestamp = BigNumber.from(block.timestamp);
+      if (blockTimestamp.lte(cursor)) {
+        continue;
+      }
+
+      // Parse the originating bucketTake(borrower, depositTake, index) call to
+      // recover the bucket index the same way production used to — this is
+      // only used in tests against hardhat forks where the subgraph can't see
+      // the local chain state.
+      const tx = await evt.getTransaction();
+      const parsed = poolContract.interface.parseTransaction(tx);
+      if (parsed.functionFragment.name !== 'bucketTake') {
+        continue;
+      }
+      const [, , indexBn] = parsed.args as [string, boolean, BigNumber];
+
+      bucketTakes.push({
+        id: `${evt.transactionHash}-${evt.logIndex.toString(16).padStart(6, '0')}`,
+        index: indexBn.toNumber(),
+        taker: taker.toLowerCase(),
+        lpAwarded: {
+          lpAwardedTaker: utils.formatUnits(lpAwardedTaker, 18),
+          lpAwardedKicker: utils.formatUnits(lpAwardedKicker, 18),
+          kicker: kicker.toLowerCase(),
+        },
+        blockTimestamp: blockTimestamp.toString(),
+      });
+    }
+
+    bucketTakes.sort((a, b) => a.id.localeCompare(b.id));
+    return { bucketTakes };
+  };
 }
 
 export function makeGetHighestMeaningfulBucket(pool: FungiblePool) {

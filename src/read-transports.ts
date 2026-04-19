@@ -2,6 +2,7 @@ import { BigNumber, providers } from 'ethers';
 import { KeeperConfig } from './config';
 import { getResilientReadGasPrice } from './read-rpc';
 import subgraph, {
+  GetBucketTakeLPAwardsResponse,
   GetChainwideLiquidationAuctionsResponse,
   GetLiquidationResponse,
   GetLoanResponse,
@@ -40,6 +41,11 @@ export interface SubgraphReader {
     pageSize?: number,
     maxPages?: number
   ): Promise<GetChainwideLiquidationAuctionsResponse>;
+  getBucketTakeLPAwards(
+    poolAddress: string,
+    signerAddress: string,
+    sinceBlockTimestamp: string
+  ): Promise<GetBucketTakeLPAwardsResponse>;
 }
 
 export interface ReadRpc {
@@ -103,6 +109,17 @@ export function createSubgraphReader(
         config.subgraphUrl,
         pageSize,
         maxPages,
+        {
+          fallbackUrls: config.subgraphFallbackUrls,
+        }
+      );
+    },
+    getBucketTakeLPAwards(poolAddress, signerAddress, sinceBlockTimestamp) {
+      return subgraph.getBucketTakeLPAwards(
+        config.subgraphUrl,
+        poolAddress,
+        signerAddress,
+        sinceBlockTimestamp,
         {
           fallbackUrls: config.subgraphFallbackUrls,
         }

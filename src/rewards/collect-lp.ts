@@ -1,18 +1,5 @@
-import {
-  ERC20Pool__factory,
-  FungiblePool,
-  indexToPrice,
-  min,
-  Signer,
-  wdiv,
-} from '@ajna-finance/sdk';
-import { TypedListener } from '@ajna-finance/sdk/dist/types/contracts/common';
-import {
-  BucketTakeLPAwardedEvent,
-  BucketTakeLPAwardedEventFilter,
-  ERC20Pool,
-} from '@ajna-finance/sdk/dist/types/contracts/ERC20Pool';
-import { BigNumber, constants } from 'ethers';
+import { FungiblePool, min, Signer } from '@ajna-finance/sdk';
+import { BigNumber, constants, utils } from 'ethers';
 import {
   KeeperConfig,
   PoolConfig,
@@ -27,57 +14,38 @@ import {
 } from '../transactions';
 import { decimaledToWei, weiToDecimaled } from '../utils';
 import { FungibleBucket } from '@ajna-finance/sdk/dist/classes/FungibleBucket';
+import { SubgraphReader } from '../read-transports';
 
 /**
  * Collects lp rewarded from BucketTakes without collecting the user's deposits or loans.
+ *
+ * Uses subgraph-based polling instead of on-chain event listeners. Each
+ * `collectLpRewards()` call fetches new `BucketTake` entities (filtered by this
+ * signer as taker or kicker) since the last observed block timestamp, hydrates
+ * the in-memory `lpMap`, then sweeps the map to redeem LP. Matches the prior
+ * event-listener semantics (starts with an empty map on process startup; does
+ * not replay history) while eliminating ethers v5 event-listener polling.
  */
 export class LpCollector {
-  public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndexString, rewardLp>
-  public poolContract: ERC20Pool;
-  public kickerAwardEvt: Promise<BucketTakeLPAwardedEventFilter>;
-  public takerAwardEvt: Promise<BucketTakeLPAwardedEventFilter>;
+  public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndex, rewardLp>
 
-  private started: boolean = false;
+  private signerAddressPromise: Promise<string>;
+  private cursorBlockTimestamp: string = '0';
 
   constructor(
     private pool: FungiblePool,
     private signer: Signer,
     private poolConfig: Required<Pick<PoolConfig, 'collectLpReward'>>,
     private config: Pick<KeeperConfig, 'dryRun'>,
-    private exchangeTracker: RewardActionTracker
+    private exchangeTracker: RewardActionTracker,
+    private subgraph: SubgraphReader
   ) {
-    const poolContract = ERC20Pool__factory.connect(
-      this.pool.poolAddress,
-      this.signer
-    );
-    this.poolContract = poolContract;
-    this.takerAwardEvt = (async () => {
-      const signerAddress = await this.signer.getAddress();
-      return poolContract.filters.BucketTakeLPAwarded(signerAddress);
-    })();
-    this.kickerAwardEvt = (async () => {
-      const signerAddress = await this.signer.getAddress();
-      return poolContract.filters.BucketTakeLPAwarded(undefined, signerAddress);
-    })();
-  }
-
-  public async startSubscription() {
-    if (!this.started) {
-      await this.subscribeToLpRewards();
-      this.started = true;
-    }
-  }
-
-  public async stopSubscription() {
-    if (this.started) {
-      this.stopSubscriptionToLpRewards();
-      this.started = false;
-    }
+    this.signerAddressPromise = this.signer.getAddress();
   }
 
   public async collectLpRewards() {
-    if (!this.started)
-      throw new Error('Must start subscriptions before collecting rewards');
+    await this.ingestNewAwardsFromSubgraph();
+
     const lpMapEntries = Array.from(this.lpMap.entries()).filter(
       ([bucketIndex, rewardLp]) => rewardLp.gt(constants.Zero)
     );
@@ -90,11 +58,45 @@ export class LpCollector {
     }
   }
 
+  // Exposed for tests that want to verify reward tracking independently of
+  // the redemption flow. Production callers should use `collectLpRewards`.
+  public async ingestNewAwardsFromSubgraph(): Promise<void> {
+    const signerAddress = (await this.signerAddressPromise).toLowerCase();
+
+    // Cursor starts at 0 and advances with each cycle. The first cycle may
+    // pull a one-time history of BucketTakes for this signer in this pool
+    // (subgraph is designed for this; pagination caps at 100 pages × 1000
+    // rows). `collectLpRewardFromBucket` caps withdrawals at the signer's
+    // current on-chain `lpBalance`, so replaying already-redeemed rewards is
+    // safely a no-op. Replaying also usefully surfaces unredeemed pre-startup
+    // rewards that the prior event-listener design silently dropped.
+    const { bucketTakes } = await this.subgraph.getBucketTakeLPAwards(
+      this.pool.poolAddress,
+      signerAddress,
+      this.cursorBlockTimestamp
+    );
+
+    let maxTimestamp = this.cursorBlockTimestamp;
+    for (const take of bucketTakes) {
+      const takerMatches = take.taker.toLowerCase() === signerAddress;
+      const kickerMatches = take.lpAwarded.kicker.toLowerCase() === signerAddress;
+
+      if (takerMatches) {
+        this.addReward(take.index, take.lpAwarded.lpAwardedTaker, 'taker');
+      }
+      if (kickerMatches) {
+        this.addReward(take.index, take.lpAwarded.lpAwardedKicker, 'kicker');
+      }
+
+      if (bigIntStringGreater(take.blockTimestamp, maxTimestamp)) {
+        maxTimestamp = take.blockTimestamp;
+      }
+    }
+    this.cursorBlockTimestamp = maxTimestamp;
+  }
+
   /**
    * Collects the lpReward from bucket. Returns amount of lp used.
-   * @param bucketIndex
-   * @param rewardLp
-   * @resolves the amount of lp used while redeeming rewards.
    */
   private async collectLpRewardFromBucket(
     bucketIndex: number,
@@ -107,16 +109,14 @@ export class LpCollector {
       rewardActionQuote,
       rewardActionCollateral,
     } = this.poolConfig.collectLpReward;
-    const signerAddress = await this.signer.getAddress();
+    const signerAddress = await this.signerAddressPromise;
     const bucket = this.pool.getBucketByIndex(bucketIndex);
-    // retrieve exchange rate and total amount of deposit and collateral in bucket
     let { exchangeRate, deposit, collateral } = await bucket.getStatus();
     const { lpBalance, depositRedeemable, collateralRedeemable } =
       await bucket.getPosition(signerAddress);
     if (lpBalance.lt(rewardLp)) rewardLp = lpBalance;
     let reedemed = constants.Zero;
 
-    // If config explicitly wants collateral first, do so and then redeem leftover quote token
     if (redeemFirst === TokenToCollect.COLLATERAL) {
       const collateralToWithdraw = min(collateralRedeemable, collateral);
       if (collateralToWithdraw.gt(decimaledToWei(minAmountCollateral))) {
@@ -131,13 +131,11 @@ export class LpCollector {
         );
         ({ exchangeRate, deposit, collateral } = await bucket.getStatus());
       }
-      //the following is to prevent race conditions
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
-        return reedemed; // All LP already redeemed
+        return reedemed;
       }
       const remainingQuote = await bucket.lpToQuoteTokens(remainingLp);
-      // still need to check this in case minAmountCollateral prevented withdrawal of collateral
       const quoteToWithdraw = min(remainingQuote, deposit);
       if (quoteToWithdraw.gt(decimaledToWei(minAmountQuote))) {
         reedemed = reedemed.add(
@@ -149,8 +147,6 @@ export class LpCollector {
           )
         );
       }
-
-      // Otherwise, default to redeeming quote token first
     } else {
       const quoteToWithdraw = min(depositRedeemable, deposit);
       if (quoteToWithdraw.gt(decimaledToWei(minAmountQuote))) {
@@ -164,13 +160,11 @@ export class LpCollector {
         );
         ({ exchangeRate, deposit, collateral } = await bucket.getStatus());
       }
-      //The following is to prevent race conditions
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
-        return reedemed; // All LP already redeemed
+        return reedemed;
       }
       const remainingCollateral = await bucket.lpToCollateral(remainingLp);
-      // still need to check this in case minAmountQuote prevented withdrawal of quote token
       const collateralToWithdraw = min(remainingCollateral, collateral);
       if (collateralToWithdraw.gt(decimaledToWei(minAmountCollateral))) {
         reedemed = reedemed.add(
@@ -201,16 +195,14 @@ export class LpCollector {
     } else {
       try {
         logger.debug(`Collecting LP reward as quote. pool: ${this.pool.name}`);
-        
-        // Get LP balance before the transaction
-        const signerAddress = await this.signer.getAddress();
+
+        const signerAddress = await this.signerAddressPromise;
         const { lpBalance: lpBalanceBefore } = await bucket.getPosition(signerAddress);
-        
+
         await bucketRemoveQuoteToken(bucket, this.signer, quoteToWithdraw);
-        
-        // Get LP balance after the transaction
+
         const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
-        
+
         logger.info(
           `Collected LP reward as quote. pool: ${this.pool.name}, amount: ${weiToDecimaled(quoteToWithdraw)}`
         );
@@ -222,23 +214,19 @@ export class LpCollector {
             quoteToWithdraw
           );
         }
-        
-        // Validate LP difference to prevent negative values
+
         const lpUsed = lpBalanceBefore.sub(lpBalanceAfter);
         if (lpUsed.lt(0)) {
           logger.warn(`Negative LP calculation detected in redeemQuote, using zero instead. Pool: ${this.pool.name}, lpBefore: ${lpBalanceBefore.toString()}, lpAfter: ${lpBalanceAfter.toString()}`);
           return constants.Zero;
         }
-        
-        // Return the actual LP used
-        return lpUsed;
 
+        return lpUsed;
       } catch (error) {
-        // Re-throw AuctionNotCleared errors to trigger reactive settlement
         const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes("AuctionNotCleared")) {
+        if (errorMessage.includes('AuctionNotCleared')) {
           logger.debug(`Re-throwing AuctionNotCleared error from ${this.pool.name} to trigger reactive settlement`);
-          throw error; // Re-throw to outer catch block
+          throw error;
         }
 
         logger.error(
@@ -266,20 +254,18 @@ export class LpCollector {
         logger.debug(
           `Collecting LP reward as collateral. pool ${this.pool.name}`
         );
-        
-        // Get LP balance before the transaction
-        const signerAddress = await this.signer.getAddress();
+
+        const signerAddress = await this.signerAddressPromise;
         const { lpBalance: lpBalanceBefore } = await bucket.getPosition(signerAddress);
-        
+
         await bucketRemoveCollateralToken(
           bucket,
           this.signer,
           collateralToWithdraw
         );
-        
-        // Get LP balance after the transaction
+
         const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
-        
+
         logger.info(
           `Collected LP reward as collateral. pool: ${this.pool.name}, token: ${this.pool.collateralSymbol}, amount: ${weiToDecimaled(collateralToWithdraw)}`
         );
@@ -291,71 +277,38 @@ export class LpCollector {
             collateralToWithdraw
           );
         }
-        
-        // Validate LP difference to prevent negative values  
+
         const lpUsed = lpBalanceBefore.sub(lpBalanceAfter);
         if (lpUsed.lt(0)) {
           logger.warn(`Negative LP calculation detected in redeemCollateral, using zero instead. Pool: ${this.pool.name}, lpBefore: ${lpBalanceBefore.toString()}, lpAfter: ${lpBalanceAfter.toString()}`);
           return constants.Zero;
         }
-        
-        // Return the actual LP used 
+
         return lpUsed;
-
       } catch (error) {
-
-        // NEW: Re-throw AuctionNotCleared errors to trigger reactive settlement
         const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes("AuctionNotCleared")) {
+        if (errorMessage.includes('AuctionNotCleared')) {
           logger.debug(`Re-throwing AuctionNotCleared error from ${this.pool.name} to trigger reactive settlement`);
-          throw error; // Re-throw to outer catch block
+          throw error;
         }
-	      
-	logger.error(`Failed to collect LP reward as collateral. pool: ${this.pool.name}`, error);
+
+        logger.error(`Failed to collect LP reward as collateral. pool: ${this.pool.name}`, error);
       }
     }
     return constants.Zero;
   }
 
-  private async subscribeToLpRewards() {
-    this.poolContract.on(await this.takerAwardEvt, this.onTakerAwardEvent);
-    this.poolContract.on(await this.kickerAwardEvt, this.onKickerAwardEvent);
-  }
-
-  private async stopSubscriptionToLpRewards() {
-    this.poolContract.off(await this.takerAwardEvt, this.onTakerAwardEvent);
-    this.poolContract.off(await this.kickerAwardEvt, this.onKickerAwardEvent);
-  }
-
-  private onTakerAwardEvent: TypedListener<BucketTakeLPAwardedEvent> = async (
-    taker,
-    kicker,
-    lpAwardedTaker,
-    lpAwardedKicker,
-    evt
-  ) => {
-    const bucketIndex = await this.getBucketTakeBucketIndex(evt);
-    this.addReward(bucketIndex, lpAwardedTaker);
-  };
-
-  private onKickerAwardEvent: TypedListener<BucketTakeLPAwardedEvent> = async (
-    taker,
-    kicker,
-    lpAwardedTaker,
-    lpAwardedKicker,
-    evt
-  ) => {
-    const bucketIndex = await this.getBucketTakeBucketIndex(evt);
-    this.addReward(bucketIndex, lpAwardedKicker);
-  };
-
-  private addReward(index: BigNumber, rewardLp: BigNumber) {
+  private addReward(
+    bucketIndex: number,
+    rewardLpDecimal: string,
+    role: 'taker' | 'kicker'
+  ) {
+    const rewardLp = parseBigDecimalToWad(rewardLpDecimal);
     if (rewardLp.eq(constants.Zero)) return;
-    const bucketIndex = parseInt(index.toString());
     const prevReward = this.lpMap.get(bucketIndex) ?? constants.Zero;
     const sumReward = prevReward.add(rewardLp);
     logger.info(
-      `Received LP Rewards in pool: ${this.pool.name}, bucketIndex: ${index}, rewardLp: ${rewardLp}`
+      `Received LP Rewards in pool: ${this.pool.name}, bucketIndex: ${bucketIndex}, role: ${role}, rewardLp: ${rewardLp}`
     );
     this.lpMap.set(bucketIndex, sumReward);
   }
@@ -369,24 +322,29 @@ export class LpCollector {
       this.lpMap.set(bucketIndex, newReward);
     }
   }
+}
 
-  private getBucketTakeBucketIndex = async (evt: BucketTakeLPAwardedEvent) => {
-    const poolContract = ERC20Pool__factory.connect(
-      this.pool.poolAddress,
-      this.signer
+// Subgraph serializes BigDecimal reward amounts (18-decimal fixed) as strings
+// like "123.456000000000000000". Convert to a WAD-scaled BigNumber.
+function parseBigDecimalToWad(value: string): BigNumber {
+  if (!value || value === '0' || value === '0.0') {
+    return constants.Zero;
+  }
+  try {
+    return utils.parseUnits(value, 18);
+  } catch (error) {
+    logger.warn(
+      `Failed to parse LP reward amount "${value}" as BigDecimal; treating as zero`,
+      error
     );
-    const tx = await evt.getTransaction();
-    const parsedTransaction = poolContract.interface.parseTransaction(tx);
-    if (parsedTransaction.functionFragment.name !== 'bucketTake') {
-      throw new Error(
-        `Cannot get bucket index from transaction: ${parsedTransaction.functionFragment.name}`
-      );
-    }
-    const [borrower, depositTake, index] = parsedTransaction.args as [
-      string,
-      boolean,
-      BigNumber,
-    ];
-    return index;
-  };
+    return constants.Zero;
+  }
+}
+
+function bigIntStringGreater(a: string, b: string): boolean {
+  try {
+    return BigNumber.from(a).gt(BigNumber.from(b));
+  } catch {
+    return false;
+  }
 }

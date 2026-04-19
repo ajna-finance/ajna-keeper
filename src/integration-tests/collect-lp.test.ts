@@ -10,17 +10,20 @@ import { getBalanceOfErc20 } from '../erc20';
 import { handleKicks } from '../kick';
 import { NonceTracker } from '../nonce';
 import { handleLegacyOrArbTakes, handleTakes } from '../take';
-import { delay, waitForConditionToBeTrue } from '../utils';
+import { delay } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import './subgraph-mock';
 import {
+  makeGetBucketTakeLPAwardsFromSdk,
   makeGetHighestMeaningfulBucket,
   makeGetLiquidationsFromSdk,
   makeGetLoansFromSdk,
+  overrideGetBucketTakeLPAwards,
   overrideGetHighestMeaningfulBucket,
   overrideGetLiquidations,
   overrideGetLoans,
 } from './subgraph-mock';
+import { createSubgraphReader } from '../read-transports';
 import { MAINNET_CONFIG, USER1_MNEMONIC } from './test-config';
 import {
   getProvider,
@@ -39,6 +42,7 @@ const setup = async () => {
   overrideGetLoans(makeGetLoansFromSdk(pool));
   overrideGetLiquidations(makeGetLiquidationsFromSdk(pool));
   overrideGetHighestMeaningfulBucket(makeGetHighestMeaningfulBucket(pool));
+  overrideGetBucketTakeLPAwards(makeGetBucketTakeLPAwardsFromSdk(pool));
   await depositQuoteToken({
     pool,
     owner: MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress,
@@ -101,11 +105,11 @@ describe('LpCollector subscription', () => {
           },
           delayBetweenActions: 0,
           pools: [],
-        },
+        } as any,
         dexRouter
-      )
+      ),
+      createSubgraphReader({ subgraphUrl: 'mock://' })
     );
-    await lpCollector.startSubscription();
     await handleLegacyOrArbTakes({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -116,12 +120,10 @@ describe('LpCollector subscription', () => {
         delayBetweenActions: 0,
       },
     });
-    await waitForConditionToBeTrue(async () => {
-      const entries = Array.from(lpCollector.lpMap.entries());
-      const rewardLp: BigNumber | undefined = entries?.[0]?.[1];
-      return !!rewardLp && rewardLp.gt(constants.Zero);
-    });
-    await lpCollector.stopSubscription();
+    await lpCollector.ingestNewAwardsFromSubgraph();
+    const entries = Array.from(lpCollector.lpMap.entries());
+    const rewardLp: BigNumber | undefined = entries?.[0]?.[1];
+    expect(!!rewardLp && rewardLp.gt(constants.Zero)).to.be.true;
   });
 
   it('Does not track bucket takes of other users', async () => {
@@ -149,11 +151,11 @@ describe('LpCollector subscription', () => {
           },
           delayBetweenActions: 0,
           pools: [],
-        },
+        } as any,
         dexRouter
-      )
+      ),
+      createSubgraphReader({ subgraphUrl: 'mock://' })
     );
-    await lpCollector.startSubscription();
     const takerSigner = await impersonateSigner(
       MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
     );
@@ -167,10 +169,9 @@ describe('LpCollector subscription', () => {
         delayBetweenActions: 0,
       },
     });
-    await delay(5);
+    await lpCollector.ingestNewAwardsFromSubgraph();
     const entries = Array.from(lpCollector.lpMap.entries());
     expect(entries.length).equals(0);
-    await lpCollector.stopSubscription();
   });
 
   it('Tracks rewards for kicker', async () => {
@@ -199,12 +200,11 @@ describe('LpCollector subscription', () => {
           },
           delayBetweenActions: 0,
           pools: [],
-        },
+        } as any,
         dexRouter
-      )
+      ),
+      createSubgraphReader({ subgraphUrl: 'mock://' })
     );
-    await lpCollector.startSubscription();
-    await delay(5);
     const takerSigner = await impersonateSigner(
       MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress2
     );
@@ -218,12 +218,10 @@ describe('LpCollector subscription', () => {
         delayBetweenActions: 0,
       },
     });
-    await waitForConditionToBeTrue(async () => {
-      const entries = Array.from(lpCollector.lpMap.entries());
-      const rewardLp: BigNumber | undefined = entries?.[0]?.[1];
-      return !!rewardLp && rewardLp.gt(constants.Zero);
-    });
-    await lpCollector.stopSubscription();
+    await lpCollector.ingestNewAwardsFromSubgraph();
+    const entries = Array.from(lpCollector.lpMap.entries());
+    const rewardLp: BigNumber | undefined = entries?.[0]?.[1];
+    expect(!!rewardLp && rewardLp.gt(constants.Zero)).to.be.true;
   });
 });
 
@@ -260,11 +258,11 @@ describe('LpCollector collections', () => {
           },
           delayBetweenActions: 0,
           pools: [],
-        },
+        } as any,
         dexRouter
-      )
+      ),
+      createSubgraphReader({ subgraphUrl: 'mock://' })
     );
-    await lpCollector.startSubscription();
     await handleLegacyOrArbTakes({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -274,11 +272,6 @@ describe('LpCollector collections', () => {
         subgraphUrl: '',
         delayBetweenActions: 0,
       },
-    });
-    await waitForConditionToBeTrue(async () => {
-      const entries = Array.from(lpCollector.lpMap.entries());
-      const rewardLp: BigNumber | undefined = entries?.[0]?.[1];
-      return !!rewardLp && rewardLp.gt(constants.Zero);
     });
     const liquidation = pool.getLiquidation(
       MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress
@@ -297,6 +290,5 @@ describe('LpCollector collections', () => {
       pool.quoteAddress
     );
     expect(balanceAfterCollection.gt(balanceBeforeCollection)).to.be.true;
-    await lpCollector.stopSubscription();
   });
 });

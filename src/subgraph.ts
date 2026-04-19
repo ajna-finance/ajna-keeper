@@ -486,12 +486,120 @@ async function getChainwideLiquidationAuctions(
 }
 
 
+export interface BucketTakeLPAwardItem {
+  id: string;
+  index: number;
+  taker: string;
+  lpAwarded: {
+    lpAwardedTaker: string;
+    lpAwardedKicker: string;
+    kicker: string;
+  };
+  blockTimestamp: string;
+}
+
+export interface GetBucketTakeLPAwardsResponse {
+  bucketTakes: BucketTakeLPAwardItem[];
+}
+
+const GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE = 1000;
+const GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES = 100;
+
+const getBucketTakeLPAwardsQuery = gql`
+  query GetBucketTakeLPAwards(
+    $poolId: String!
+    $signerId: Bytes!
+    $sinceTimestamp: BigInt!
+    $first: Int!
+    $afterId: String!
+  ) {
+    bucketTakes(
+      first: $first
+      orderBy: id
+      orderDirection: asc
+      where: {
+        or: [
+          {
+            pool: $poolId
+            taker: $signerId
+            blockTimestamp_gt: $sinceTimestamp
+            id_gt: $afterId
+          }
+          {
+            pool: $poolId
+            liquidationAuction_: { kicker: $signerId }
+            blockTimestamp_gt: $sinceTimestamp
+            id_gt: $afterId
+          }
+        ]
+      }
+    ) {
+      id
+      index
+      taker
+      lpAwarded {
+        lpAwardedTaker
+        lpAwardedKicker
+        kicker
+      }
+      blockTimestamp
+    }
+  }
+`;
+
+async function getBucketTakeLPAwards(
+  subgraphUrl: string,
+  poolAddress: string,
+  signerAddress: string,
+  sinceBlockTimestamp: string,
+  options?: SubgraphRequestOptions
+) {
+  const poolId = poolAddress.toLowerCase();
+  const signerId = signerAddress.toLowerCase();
+
+  const bucketTakes = await paginateSubgraphCursor<BucketTakeLPAwardItem>({
+    pageSize: GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
+    maxPages: GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES,
+    truncationWarning: `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for pool=${poolId}; results may be truncated`,
+    fetchPage: async (afterId) => {
+      const pageResult = await requestSubgraph<
+        GetBucketTakeLPAwardsResponse,
+        {
+          poolId: string;
+          signerId: string;
+          sinceTimestamp: string;
+          first: number;
+          afterId: string;
+        }
+      >({
+        subgraphUrl,
+        document: getBucketTakeLPAwardsQuery,
+        variables: {
+          poolId,
+          signerId,
+          sinceTimestamp: sinceBlockTimestamp,
+          first: GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
+          afterId,
+        },
+        options,
+      });
+      return pageResult.bucketTakes;
+    },
+    getCursor: (item) => item.id.toLowerCase(),
+    missingCursorWarning:
+      'LP reward discovery response omitted bucketTake id; stopping pagination early to avoid unstable cursors',
+  });
+
+  return { bucketTakes };
+}
+
 // Exported as default module to enable mocking in tests.
-export default { 
-  getLoans, 
-  getLiquidations, 
-  getHighestMeaningfulBucket, 
+export default {
+  getLoans,
+  getLiquidations,
+  getHighestMeaningfulBucket,
   getUnsettledAuctions,
   getChainwideLiquidationAuctionsPage,
   getChainwideLiquidationAuctions,
+  getBucketTakeLPAwards,
 };
