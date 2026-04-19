@@ -131,6 +131,13 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     config.keeperKeystore,
     config.ethRpcUrl
   );
+  // LP-reward collection attaches event listeners (collect-lp.ts), which makes
+  // ethers v5 background-poll getBlockNumber at pollingInterval. Default is 4s;
+  // raise to 30s when LP rewards are enabled so idle keepers make ~2 calls/min
+  // instead of ~15. Has no effect when no listeners are attached.
+  if (config.pools.some((pool) => !!pool.collectLpReward)) {
+    provider.pollingInterval = 30_000;
+  }
   const network = await provider.getNetwork();
   const chainId = network.chainId;
 

@@ -9,8 +9,9 @@ export interface FeeData {
   gasPrice: null | BigNumber;
 }
 
-/** An extension of ethers@v5 JsonRpcProvider which takes advantage of the fee structure from EIP-1559. */
-export class JsonRpcProvider extends providers.JsonRpcProvider {
+/** An extension of ethers@v5 StaticJsonRpcProvider which takes advantage of the fee structure from EIP-1559.
+ *  Static variant avoids re-querying chainId via getNetwork() on every call. */
+export class JsonRpcProvider extends providers.StaticJsonRpcProvider {
   // This uses the logic of ethers@v6: getFeeData and makes it compatible with ethers@v5: getFeeData.
   // V6: https://github.com/ethers-io/ethers.js/blob/v6.13.5/src.ts/providers/abstract-provider.ts
   // V5: https://github.com/ethers-io/ethers.js/blob/v5.7.2/packages/abstract-provider/src.ts/index.ts#L235

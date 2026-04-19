@@ -24,8 +24,8 @@ import {
 import { expect } from 'chai';
 import { weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
-import { collectBondFromPool } from '../rewards';
-import { handleKicks } from '../kick';
+import { clearIdleBondCache, collectBondFromPool } from '../rewards';
+import { clearZeroAllowanceCache, handleKicks } from '../kick';
 import { handleLegacyOrArbTakes, handleTakes } from '../take';
 import { NonceTracker } from '../nonce';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
@@ -73,6 +73,8 @@ const setup = async () => {
 describe('collectBondFromPool', () => {
   beforeEach(async () => {
     await resetHardhat();
+    clearIdleBondCache();
+    clearZeroAllowanceCache();
   });
 
   it('Does nothing when there is no bond', async () => {

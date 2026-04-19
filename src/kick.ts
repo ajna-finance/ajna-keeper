@@ -22,6 +22,7 @@ import {
   SubgraphConfigInput,
   WithSubgraph,
 } from './read-transports';
+import { invalidateIdleBondCache } from './rewards/collect-bond';
 
 type KickConfigBase = Pick<
   KeeperConfig,
@@ -44,6 +45,39 @@ interface HandleKickParams {
 }
 
 const LIQUIDATION_BOND_MARGIN: number = 0.01; // How much extra margin to allow for liquidationBond. Expressed as a ratio (0 - 1).
+
+const ZERO_ALLOWANCE_CACHE_CYCLES = 10;
+const zeroAllowanceCache = new Map<string, number>();
+
+function allowanceCacheKey(poolAddress: string, signerAddress: string): string {
+  return `${poolAddress.toLowerCase()}:${signerAddress.toLowerCase()}`;
+}
+
+function consumeZeroAllowanceCache(key: string): boolean {
+  const remaining = zeroAllowanceCache.get(key);
+  if (remaining === undefined || remaining <= 0) {
+    zeroAllowanceCache.delete(key);
+    return false;
+  }
+  const next = remaining - 1;
+  if (next <= 0) {
+    zeroAllowanceCache.delete(key);
+  } else {
+    zeroAllowanceCache.set(key, next);
+  }
+  return true;
+}
+
+function invalidateZeroAllowanceCache(
+  poolAddress: string,
+  signerAddress: string
+): void {
+  zeroAllowanceCache.delete(allowanceCacheKey(poolAddress, signerAddress));
+}
+
+export function clearZeroAllowanceCache(): void {
+  zeroAllowanceCache.clear();
+}
 
 export async function handleKicks({
   pool,
@@ -233,6 +267,8 @@ export async function approveBalanceForLoanToKick({
         `Approving quote. pool: ${pool.name}, amount: ${amountWithMargin} WAD (${readableAmount} quote tokens)`
       );
       await poolQuoteApprove(pool, signer, amountWithMargin);
+      const signerAddress = await signer.getAddress();
+      invalidateZeroAllowanceCache(pool.poolAddress, signerAddress);
       logger.debug(
         `Approved quote. pool: ${pool.name}, amount: ${amountWithMargin} WAD (${readableAmount} quote tokens)`
       );
@@ -286,6 +322,8 @@ export async function kick({ pool, signer, config, loanToKick }: KickParams) {
     logger.info(
       `Kick transaction confirmed. pool: ${pool.name}, borrower: ${borrower}`
     );
+    const signerAddress = await signer.getAddress();
+    invalidateIdleBondCache(pool.poolAddress, signerAddress);
   } catch (error) {
     logger.error(
       `Failed to kick loan. pool: ${pool.name}, borrower: ${borrower}.`,
@@ -301,6 +339,14 @@ async function clearAllowances({
   pool,
   signer,
 }: Pick<HandleKickParams, 'pool' | 'signer'>) {
+  const signerAddress = await signer.getAddress();
+  const cacheKey = allowanceCacheKey(pool.poolAddress, signerAddress);
+  if (consumeZeroAllowanceCache(cacheKey)) {
+    logger.debug(
+      `Skipping allowance check (cached zero) for pool ${pool.name}`
+    );
+    return;
+  }
   const allowance = await getAllowanceOfErc20(
     signer,
     pool.quoteAddress,
@@ -310,9 +356,12 @@ async function clearAllowances({
     try {
       logger.debug(`Clearing allowance. pool: ${pool.name}`);
       await poolQuoteApprove(pool, signer, constants.Zero);
+      zeroAllowanceCache.set(cacheKey, ZERO_ALLOWANCE_CACHE_CYCLES);
       logger.debug(`Cleared allowance. pool: ${pool.name}`);
     } catch (error) {
       logger.error(`Failed to clear allowance. pool: ${pool.name}`, error);
     }
+    return;
   }
+  zeroAllowanceCache.set(cacheKey, ZERO_ALLOWANCE_CACHE_CYCLES);
 }
