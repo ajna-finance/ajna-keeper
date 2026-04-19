@@ -13,6 +13,39 @@ interface CollectBondParams {
   config: SettlementConfigInput;
 }
 
+const IDLE_BOND_CACHE_CYCLES = 10;
+const idleBondStateCache = new Map<string, number>();
+
+function bondCacheKey(poolAddress: string, signerAddress: string): string {
+  return `${poolAddress.toLowerCase()}:${signerAddress.toLowerCase()}`;
+}
+
+function consumeIdleBondCache(key: string): boolean {
+  const remaining = idleBondStateCache.get(key);
+  if (remaining === undefined || remaining <= 0) {
+    idleBondStateCache.delete(key);
+    return false;
+  }
+  const next = remaining - 1;
+  if (next <= 0) {
+    idleBondStateCache.delete(key);
+  } else {
+    idleBondStateCache.set(key, next);
+  }
+  return true;
+}
+
+export function invalidateIdleBondCache(
+  poolAddress: string,
+  signerAddress: string
+): void {
+  idleBondStateCache.delete(bondCacheKey(poolAddress, signerAddress));
+}
+
+export function clearIdleBondCache(): void {
+  idleBondStateCache.clear();
+}
+
 export async function collectBondFromPool({
   pool,
   signer,
@@ -21,6 +54,13 @@ export async function collectBondFromPool({
 }: CollectBondParams) {
   // Note: this may now trigger settlement if bonds are locked
   const signerAddress = await signer.getAddress();
+  const cacheKey = bondCacheKey(pool.poolAddress, signerAddress);
+  if (consumeIdleBondCache(cacheKey)) {
+    logger.debug(
+      `Skipping kickerInfo read (cached idle state) for pool ${pool.name}`
+    );
+    return;
+  }
   const { claimable, locked } = await pool.kickerInfo(signerAddress);
 
     // Case 1: Bonds ready to withdraw (optimal case)
@@ -44,7 +84,7 @@ export async function collectBondFromPool({
     }
     return;
   }
-  
+
   // Case 2: Bonds are locked - try reactive settlement if enabled
   if (locked.gt(constants.Zero)) {
     logger.debug(
@@ -92,6 +132,8 @@ export async function collectBondFromPool({
     return;
   }
   
-  // Case 3: No bonds to withdraw
+  // Case 3: No bonds to withdraw — cache idle state to skip kickerInfo for the next cycles.
+  // Invalidated externally when this keeper kicks a loan (which locks a bond).
+  idleBondStateCache.set(cacheKey, IDLE_BOND_CACHE_CYCLES);
   logger.debug(`No bonds to withdraw in pool ${pool.name}: locked=${weiToDecimaled(locked)}, claimable=${weiToDecimaled(claimable)}`);
 }

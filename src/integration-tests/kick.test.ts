@@ -1,5 +1,11 @@
 import './subgraph-mock';
-import { approveBalanceForLoanToKick, getLoansToKick, kick, handleKicks } from '../kick';
+import {
+  approveBalanceForLoanToKick,
+  clearZeroAllowanceCache,
+  getLoansToKick,
+  handleKicks,
+  kick,
+} from '../kick';
 import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
 import { MAINNET_CONFIG } from './test-config';
 import { configureAjna } from '../config';
@@ -18,6 +24,7 @@ import { constants, Contract, Wallet } from 'ethers';
 import { getAllowanceOfErc20, getBalanceOfErc20 } from '../erc20';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 import { NonceTracker } from '../nonce';
+import { clearIdleBondCache } from '../rewards';
 
 const WETH_ABI = ['function deposit() payable'];
 
@@ -35,6 +42,8 @@ describe('getLoansToKick', function () {
 
   beforeEach(async () => {
     await resetHardhat();
+    clearZeroAllowanceCache();
+    clearIdleBondCache();
   });
 
   it('Returns empty when loan is healthy (TP < LUP)', async () => {
@@ -222,6 +231,8 @@ describe('kick', function () {
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
+    clearZeroAllowanceCache();
+    clearIdleBondCache();
   });
 
   it('Kicks loan and creates auction with locked bond', async () => {
@@ -346,6 +357,8 @@ describe('approveBalanceForLoanToKick', () => {
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
+    clearZeroAllowanceCache();
+    clearIdleBondCache();
   });
 
   it('Fails when there is insufficient balance', async () => {
@@ -443,6 +456,8 @@ describe('handleKicks (end-to-end)', function () {
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
+    clearZeroAllowanceCache();
+    clearIdleBondCache();
   });
 
   it('Clears allowance after kicking', async () => {
