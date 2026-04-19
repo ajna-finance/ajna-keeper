@@ -63,13 +63,13 @@ export class LpCollector {
   public async ingestNewAwardsFromSubgraph(): Promise<void> {
     const signerAddress = (await this.signerAddressPromise).toLowerCase();
 
-    // Cursor starts at 0 and advances with each cycle. The first cycle may
-    // pull a one-time history of BucketTakes for this signer in this pool
-    // (subgraph is designed for this; pagination caps at 100 pages × 1000
-    // rows). `collectLpRewardFromBucket` caps withdrawals at the signer's
-    // current on-chain `lpBalance`, so replaying already-redeemed rewards is
-    // safely a no-op. Replaying also usefully surfaces unredeemed pre-startup
-    // rewards that the prior event-listener design silently dropped.
+    // Cursor starts at '0' so the first cycle replays all historical
+    // BucketTakes for this (pool, signer) from the subgraph. This reclaims
+    // unredeemed LP rewards that accrued before a restart. Correctness is
+    // bounded by `collectLpRewardFromBucket`'s on-chain `lpBalance` cap, and
+    // the zero-balance prune in the same method drops entries whose rewards
+    // were already redeemed (lpBalance=0), so the replay is self-cleaning
+    // after at most one cycle.
     const { bucketTakes } = await this.subgraph.getBucketTakeLPAwards(
       this.pool.poolAddress,
       signerAddress,
@@ -79,7 +79,8 @@ export class LpCollector {
     let maxTimestamp = this.cursorBlockTimestamp;
     for (const take of bucketTakes) {
       const takerMatches = take.taker.toLowerCase() === signerAddress;
-      const kickerMatches = take.lpAwarded.kicker.toLowerCase() === signerAddress;
+      const kickerMatches =
+        take.lpAwarded.kicker.toLowerCase() === signerAddress;
 
       if (takerMatches) {
         this.addReward(take.index, take.lpAwarded.lpAwardedTaker, 'taker');
@@ -115,6 +116,12 @@ export class LpCollector {
     const { lpBalance, depositRedeemable, collateralRedeemable } =
       await bucket.getPosition(signerAddress);
     if (lpBalance.lt(rewardLp)) rewardLp = lpBalance;
+    // Tracked reward must be stale (already redeemed or never minted) — drop
+    // the entry so subsequent cycles don't re-query this bucket.
+    if (rewardLp.eq(constants.Zero)) {
+      this.lpMap.delete(bucketIndex);
+      return constants.Zero;
+    }
     let reedemed = constants.Zero;
 
     if (redeemFirst === TokenToCollect.COLLATERAL) {

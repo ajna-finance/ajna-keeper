@@ -10,7 +10,6 @@ import { getBalanceOfErc20 } from '../erc20';
 import { handleKicks } from '../kick';
 import { NonceTracker } from '../nonce';
 import { handleLegacyOrArbTakes, handleTakes } from '../take';
-import { delay } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import './subgraph-mock';
 import {
