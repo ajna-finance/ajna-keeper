@@ -194,7 +194,7 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
     }
 
     bucketTakes.sort((a, b) => a.id.localeCompare(b.id));
-    return { bucketTakes };
+    return { bucketTakes, truncated: false };
   };
 }
 

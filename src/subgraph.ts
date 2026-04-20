@@ -112,6 +112,7 @@ async function paginateSubgraphCursor<TItem>(params: {
   fetchPage: (cursor: string) => Promise<TItem[]>;
   getCursor: (item: TItem) => string | undefined;
   missingCursorWarning?: string;
+  onTruncated?: () => void;
 }): Promise<TItem[]> {
   const items: TItem[] = [];
   let cursor = '';
@@ -125,6 +126,7 @@ async function paginateSubgraphCursor<TItem>(params: {
       pageItems.length === params.pageSize
     ) {
       logger.warn(params.truncationWarning);
+      if (params.onTruncated) params.onTruncated();
     }
 
     if (pageItems.length < params.pageSize) {
@@ -500,6 +502,7 @@ export interface BucketTakeLPAwardItem {
 
 export interface GetBucketTakeLPAwardsResponse {
   bucketTakes: BucketTakeLPAwardItem[];
+  truncated: boolean;
 }
 
 const GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE = 1000;
@@ -522,13 +525,13 @@ const getBucketTakeLPAwardsQuery = gql`
           {
             pool: $poolId
             taker: $signerId
-            blockTimestamp_gt: $sinceTimestamp
+            blockTimestamp_gte: $sinceTimestamp
             id_gt: $afterId
           }
           {
             pool: $poolId
             liquidationAuction_: { kicker: $signerId }
-            blockTimestamp_gt: $sinceTimestamp
+            blockTimestamp_gte: $sinceTimestamp
             id_gt: $afterId
           }
         ]
@@ -553,17 +556,21 @@ async function getBucketTakeLPAwards(
   signerAddress: string,
   sinceBlockTimestamp: string,
   options?: SubgraphRequestOptions
-) {
+): Promise<GetBucketTakeLPAwardsResponse> {
   const poolId = poolAddress.toLowerCase();
   const signerId = signerAddress.toLowerCase();
+  let truncated = false;
 
   const bucketTakes = await paginateSubgraphCursor<BucketTakeLPAwardItem>({
     pageSize: GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
     maxPages: GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES,
     truncationWarning: `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for pool=${poolId}; results may be truncated`,
+    onTruncated: () => {
+      truncated = true;
+    },
     fetchPage: async (afterId) => {
       const pageResult = await requestSubgraph<
-        GetBucketTakeLPAwardsResponse,
+        { bucketTakes: BucketTakeLPAwardItem[] },
         {
           poolId: string;
           signerId: string;
@@ -590,7 +597,7 @@ async function getBucketTakeLPAwards(
       'LP reward discovery response omitted bucketTake id; stopping pagination early to avoid unstable cursors',
   });
 
-  return { bucketTakes };
+  return { bucketTakes, truncated };
 }
 
 // Exported as default module to enable mocking in tests.

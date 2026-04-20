@@ -17,20 +17,41 @@ import { FungibleBucket } from '@ajna-finance/sdk/dist/classes/FungibleBucket';
 import { SubgraphReader } from '../read-transports';
 
 /**
- * Collects lp rewarded from BucketTakes without collecting the user's deposits or loans.
+ * Collects LP rewarded from BucketTakes without collecting the user's deposits
+ * or loans.
  *
  * Uses subgraph-based polling instead of on-chain event listeners. Each
- * `collectLpRewards()` call fetches new `BucketTake` entities (filtered by this
- * signer as taker or kicker) since the last observed block timestamp, hydrates
- * the in-memory `lpMap`, then sweeps the map to redeem LP. Matches the prior
- * event-listener semantics (starts with an empty map on process startup; does
- * not replay history) while eliminating ethers v5 event-listener polling.
+ * `collectLpRewards()` call fetches new `BucketTake` entities (filtered by
+ * this signer as taker or kicker) since the last observed `blockTimestamp`,
+ * hydrates the in-memory `lpMap`, then sweeps the map to redeem LP.
+ *
+ * On process start the cursor is `'0'`, so the first ingest replays all
+ * historical BucketTake rewards for this (pool, signer). This reclaims
+ * unredeemed LP that accrued before a restart. Correctness is bounded by the
+ * on-chain `lpBalance` cap in `collectLpRewardFromBucket`, and the
+ * zero-balance prune there drops entries whose rewards were already redeemed
+ * so the replay is self-cleaning after at most one cycle.
+ *
+ * Assumes the signer is a dedicated keeper key whose `lpBalance` in each
+ * bucket is entirely reward-derived. If the same signer also deposits into
+ * these pools, history replay after a restart can redeem principal to
+ * satisfy stale reward entries — use a distinct keeper key to avoid this.
  */
+// Overlap window subtracted from the cursor before each subgraph query, so
+// late-indexed events that land just under the previous cursor boundary are
+// still re-seen. Any event already processed is filtered out by the seen-id
+// set. Keeps us tolerant of typical Goldsky indexing lag (~5–30s in practice).
+export const LP_REWARD_LOOKBACK_SECONDS = 60;
+
 export class LpCollector {
   public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndex, rewardLp>
 
   private signerAddressPromise: Promise<string>;
   private cursorBlockTimestamp: string = '0';
+  // Dedupe set for events already processed. Bounded in practice — we only
+  // care about events within LP_REWARD_LOOKBACK_SECONDS of the cursor, so we
+  // prune entries older than (cursor - lookback).
+  private seenEventIds: Map<string, string> = new Map(); // id → blockTimestamp
 
   constructor(
     private pool: FungiblePool,
@@ -63,21 +84,26 @@ export class LpCollector {
   public async ingestNewAwardsFromSubgraph(): Promise<void> {
     const signerAddress = (await this.signerAddressPromise).toLowerCase();
 
-    // Cursor starts at '0' so the first cycle replays all historical
-    // BucketTakes for this (pool, signer) from the subgraph. This reclaims
-    // unredeemed LP rewards that accrued before a restart. Correctness is
-    // bounded by `collectLpRewardFromBucket`'s on-chain `lpBalance` cap, and
-    // the zero-balance prune in the same method drops entries whose rewards
-    // were already redeemed (lpBalance=0), so the replay is self-cleaning
-    // after at most one cycle.
-    const { bucketTakes } = await this.subgraph.getBucketTakeLPAwards(
-      this.pool.poolAddress,
-      signerAddress,
-      this.cursorBlockTimestamp
+    // Query with a small overlap window (`cursor - LP_REWARD_LOOKBACK_SECONDS`)
+    // and switch to `_gte` in the GraphQL query so late-indexed events at the
+    // prior-cursor boundary are still returned. The seen-id set prevents
+    // double-processing events we already ingested.
+    const queryCursor = subtractSecondsClamped(
+      this.cursorBlockTimestamp,
+      LP_REWARD_LOOKBACK_SECONDS
     );
+
+    const { bucketTakes, truncated } =
+      await this.subgraph.getBucketTakeLPAwards(
+        this.pool.poolAddress,
+        signerAddress,
+        queryCursor
+      );
 
     let maxTimestamp = this.cursorBlockTimestamp;
     for (const take of bucketTakes) {
+      if (this.seenEventIds.has(take.id)) continue;
+
       const takerMatches = take.taker.toLowerCase() === signerAddress;
       const kickerMatches =
         take.lpAwarded.kicker.toLowerCase() === signerAddress;
@@ -89,11 +115,36 @@ export class LpCollector {
         this.addReward(take.index, take.lpAwarded.lpAwardedKicker, 'kicker');
       }
 
+      this.seenEventIds.set(take.id, take.blockTimestamp);
+
       if (bigIntStringGreater(take.blockTimestamp, maxTimestamp)) {
         maxTimestamp = take.blockTimestamp;
       }
     }
-    this.cursorBlockTimestamp = maxTimestamp;
+
+    // Only advance the cursor when we fetched a complete result set. On
+    // truncation, leave the cursor where it was so the next cycle re-fetches
+    // from the same point. Seen-id dedupe prevents reprocessing anything we
+    // already handled in this truncated batch.
+    if (!truncated) {
+      this.cursorBlockTimestamp = maxTimestamp;
+      this.pruneSeenEventIds();
+    }
+  }
+
+  private pruneSeenEventIds(): void {
+    // Drop ids whose blockTimestamp is older than (cursor - lookback). Any
+    // future query only covers events >= that cutoff, so older ids can't be
+    // returned again.
+    const cutoff = subtractSecondsClamped(
+      this.cursorBlockTimestamp,
+      LP_REWARD_LOOKBACK_SECONDS
+    );
+    this.seenEventIds.forEach((ts, id) => {
+      if (!bigIntStringGreater(ts, cutoff)) {
+        this.seenEventIds.delete(id);
+      }
+    });
   }
 
   /**
@@ -112,7 +163,7 @@ export class LpCollector {
     } = this.poolConfig.collectLpReward;
     const signerAddress = await this.signerAddressPromise;
     const bucket = this.pool.getBucketByIndex(bucketIndex);
-    let { exchangeRate, deposit, collateral } = await bucket.getStatus();
+    let { deposit, collateral } = await bucket.getStatus();
     const { lpBalance, depositRedeemable, collateralRedeemable } =
       await bucket.getPosition(signerAddress);
     if (lpBalance.lt(rewardLp)) rewardLp = lpBalance;
@@ -132,11 +183,10 @@ export class LpCollector {
             bucket,
             bucketIndex,
             collateralToWithdraw,
-            exchangeRate,
             rewardActionCollateral
           )
         );
-        ({ exchangeRate, deposit, collateral } = await bucket.getStatus());
+        ({ deposit, collateral } = await bucket.getStatus());
       }
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
@@ -146,26 +196,16 @@ export class LpCollector {
       const quoteToWithdraw = min(remainingQuote, deposit);
       if (quoteToWithdraw.gt(decimaledToWei(minAmountQuote))) {
         reedemed = reedemed.add(
-          await this.redeemQuote(
-            bucket,
-            quoteToWithdraw,
-            exchangeRate,
-            rewardActionQuote
-          )
+          await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)
         );
       }
     } else {
       const quoteToWithdraw = min(depositRedeemable, deposit);
       if (quoteToWithdraw.gt(decimaledToWei(minAmountQuote))) {
         reedemed = reedemed.add(
-          await this.redeemQuote(
-            bucket,
-            quoteToWithdraw,
-            exchangeRate,
-            rewardActionQuote
-          )
+          await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)
         );
-        ({ exchangeRate, deposit, collateral } = await bucket.getStatus());
+        ({ deposit, collateral } = await bucket.getStatus());
       }
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
@@ -179,7 +219,6 @@ export class LpCollector {
             bucket,
             bucketIndex,
             collateralToWithdraw,
-            exchangeRate,
             rewardActionCollateral
           )
         );
@@ -192,7 +231,6 @@ export class LpCollector {
   private async redeemQuote(
     bucket: FungibleBucket,
     quoteToWithdraw: BigNumber,
-    exchangeRate: BigNumber,
     rewardActionQuote?: RewardAction
   ): Promise<BigNumber> {
     if (this.config.dryRun) {
@@ -249,7 +287,6 @@ export class LpCollector {
     bucket: FungibleBucket,
     bucketIndex: number,
     collateralToWithdraw: BigNumber,
-    exchangeRate: BigNumber,
     rewardActionCollateral?: RewardAction
   ): Promise<BigNumber> {
     if (this.config.dryRun) {
@@ -332,26 +369,41 @@ export class LpCollector {
 }
 
 // Subgraph serializes BigDecimal reward amounts (18-decimal fixed) as strings
-// like "123.456000000000000000". Convert to a WAD-scaled BigNumber.
-function parseBigDecimalToWad(value: string): BigNumber {
-  if (!value || value === '0' || value === '0.0') {
+// like "123.456000000000000000". Convert to a WAD-scaled BigNumber. Throws on
+// malformed input so the outer ingest loop halts WITHOUT advancing the cursor
+// — the reward will be re-fetched on the next cycle rather than silently lost.
+export function parseBigDecimalToWad(value: string): BigNumber {
+  if (!value || /^-?0(\.0+)?$/.test(value)) {
     return constants.Zero;
   }
+  return utils.parseUnits(value, 18);
+}
+
+export function bigIntStringGreater(a: string, b: string): boolean {
   try {
-    return utils.parseUnits(value, 18);
+    return BigNumber.from(a).gt(BigNumber.from(b));
   } catch (error) {
     logger.warn(
-      `Failed to parse LP reward amount "${value}" as BigDecimal; treating as zero`,
+      `Failed to compare blockTimestamps "${a}" vs "${b}" as BigInt; cursor will not advance this iteration`,
       error
     );
-    return constants.Zero;
+    return false;
   }
 }
 
-function bigIntStringGreater(a: string, b: string): boolean {
+// Returns max(0, cursor - seconds) as a decimal string, matching the BigInt
+// timestamp format the subgraph expects. Clamps at zero so a fresh collector
+// with cursor='0' still produces a valid BigInt query variable.
+export function subtractSecondsClamped(
+  cursor: string,
+  seconds: number
+): string {
   try {
-    return BigNumber.from(a).gt(BigNumber.from(b));
+    const cursorBn = BigNumber.from(cursor);
+    const shift = BigNumber.from(seconds);
+    if (cursorBn.lte(shift)) return '0';
+    return cursorBn.sub(shift).toString();
   } catch {
-    return false;
+    return '0';
   }
 }
