@@ -220,12 +220,14 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
     }
 
     // Matches production orderBy: blockTimestamp asc, with id as tie-breaker.
+    // Use byte-order string compare (not `localeCompare`, which applies ICU
+    // collation and is locale-dependent) to match Graph Node's id ASC.
     candidates.sort((a, b) => {
       const tsCmp = BigNumber.from(a.blockTimestamp).sub(
         BigNumber.from(b.blockTimestamp)
       );
       if (!tsCmp.isZero()) return tsCmp.lt(0) ? -1 : 1;
-      return a.id.localeCompare(b.id);
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
 
     // Matches production: clamp at pageSize * maxPages.

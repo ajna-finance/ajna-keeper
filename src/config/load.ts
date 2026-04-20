@@ -34,6 +34,18 @@ export function assertIsValidConfig(
   expectProperty(config, 'delayBetweenActions');
   expectProperty(config, 'delayBetweenRuns');
   expectProperty(config, 'pools');
+
+  // Optional field; only validate if the operator set it. Values flow into
+  // BigNumber arithmetic for the subgraph cursor — negative, fractional, or
+  // non-finite inputs silently corrupt the cursor or disable dedupe.
+  if (config.lpRewardLookbackSeconds !== undefined) {
+    const v = config.lpRewardLookbackSeconds;
+    if (!Number.isFinite(v) || !Number.isInteger(v) || v < 0) {
+      throw new Error(
+        `lpRewardLookbackSeconds must be a non-negative integer, got: ${v}`
+      );
+    }
+  }
 }
 
 function expectProperty<T, K extends keyof T>(config: T, key: K): void {

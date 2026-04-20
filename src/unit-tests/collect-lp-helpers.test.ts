@@ -40,6 +40,13 @@ describe('parseBigDecimalToWad', () => {
     );
   });
 
+  it('throws on negative values so quarantine catches schema drift', () => {
+    expect(() => parseBigDecimalToWad('-1.5')).to.throw(/negative/);
+    expect(() => parseBigDecimalToWad('-0.000000000000000001')).to.throw(
+      /negative/
+    );
+  });
+
   it('throws on malformed input', () => {
     expect(() => parseBigDecimalToWad('abc')).to.throw();
     expect(() => parseBigDecimalToWad('1.2.3')).to.throw();

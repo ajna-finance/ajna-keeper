@@ -3,6 +3,63 @@ import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { readConfigFile } from '../config';
+import { assertIsValidConfig } from '../config/load';
+
+const BASE_CONFIG = {
+  ethRpcUrl: 'https://example-rpc.invalid',
+  logLevel: 'info',
+  subgraphUrl: 'https://example-subgraph.invalid',
+  keeperKeystore: '/tmp/keeper.json',
+  ajna: {
+    erc20PoolFactory: '0x1111111111111111111111111111111111111111',
+    erc721PoolFactory: '0x2222222222222222222222222222222222222222',
+    poolUtils: '0x3333333333333333333333333333333333333333',
+    positionManager: '0x4444444444444444444444444444444444444444',
+    ajnaToken: '0x5555555555555555555555555555555555555555',
+  },
+  delayBetweenActions: 1,
+  delayBetweenRuns: 10,
+  pools: [],
+};
+
+describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
+  it('accepts omission (defaults applied downstream)', () => {
+    expect(() => assertIsValidConfig({ ...BASE_CONFIG })).to.not.throw();
+  });
+
+  it('accepts non-negative integers', () => {
+    expect(() =>
+      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: 0 })
+    ).to.not.throw();
+    expect(() =>
+      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: 300 })
+    ).to.not.throw();
+  });
+
+  it('rejects negative values (would invert cursor math)', () => {
+    expect(() =>
+      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: -30 })
+    ).to.throw(/non-negative integer/);
+  });
+
+  it('rejects fractional values', () => {
+    expect(() =>
+      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: 0.5 })
+    ).to.throw(/non-negative integer/);
+  });
+
+  it('rejects NaN and Infinity', () => {
+    expect(() =>
+      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: Number.NaN })
+    ).to.throw(/non-negative integer/);
+    expect(() =>
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        lpRewardLookbackSeconds: Number.POSITIVE_INFINITY,
+      })
+    ).to.throw(/non-negative integer/);
+  });
+});
 
 describe('config-load', () => {
   it('loads a ts config file from a cwd-relative path', async () => {

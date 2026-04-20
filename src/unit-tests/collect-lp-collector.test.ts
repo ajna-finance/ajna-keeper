@@ -125,7 +125,7 @@ describe('LpCollector cursor advancement', () => {
     );
   });
 
-  it('advances cursor on truncation so the next cycle makes forward progress', async () => {
+  it('advances cursor to the max observed timestamp across cycles', async () => {
     const signer = '0xabc0000000000000000000000000000000000000';
     const getAwards = sinon.stub();
     getAwards.onCall(0).resolves({
@@ -149,9 +149,9 @@ describe('LpCollector cursor advancement', () => {
     await collector.ingestNewAwardsFromSubgraph();
     await collector.ingestNewAwardsFromSubgraph();
 
-    // Query receives `queryTs = cursorTs - lookback`. On truncation, the
-    // cursor still advances so the next cycle shifts forward by
-    // `(5000 seen - 60 lookback) = 4940`.
+    // Cycle 1 queries from '0' and observes an event at ts=5000.
+    // Cycle 2 queries from `(cursorTs - lookback) = 5000 - 60 = 4940`,
+    // confirming the cursor advanced to the max observed ts.
     expect(getAwards.firstCall.args[2]).to.equal('0');
     expect(getAwards.secondCall.args[2]).to.equal(String(5000 - 60));
   });
@@ -354,6 +354,43 @@ describe('LpCollector null-field defense', () => {
 
     expect(collector.lpMap.has(7000)).to.be.false;
     expect(collector.lpMap.get(7001)!.toString()).to.equal(
+      utils.parseUnits('2.0', 18).toString()
+    );
+  });
+
+  it('skips events with unparseable blockTimestamp without pinning the seen set', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const getAwards = sinon.stub().resolves({
+      bucketTakes: [
+        {
+          id: 'take-bad-ts',
+          index: 8000,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: 'not-a-number',
+        },
+        {
+          id: 'take-ok',
+          index: 8001,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: '800',
+        },
+      ],
+    });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+
+    await collector.ingestNewAwardsFromSubgraph();
+
+    // The malformed-ts event is skipped entirely (not seen, not credited).
+    // Without this guard the entry would land in `seenEventIds` with a junk
+    // ts that neither prune nor cap can evict.
+    expect(collector.lpMap.has(8000)).to.be.false;
+    expect(collector.lpMap.get(8001)!.toString()).to.equal(
       utils.parseUnits('2.0', 18).toString()
     );
   });

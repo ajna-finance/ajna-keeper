@@ -77,9 +77,29 @@ export class LpCollector {
     private exchangeTracker: RewardActionTracker,
     private subgraph: SubgraphReader
   ) {
+    // Attach a catch so a failed address resolution doesn't become an
+    // unhandled rejection at process start (Node ≥15 is strict by default).
+    // The same rejection will still surface on every `await` of this promise.
     this.signerAddressPromise = this.signer.getAddress();
+    this.signerAddressPromise.catch((err) => {
+      logger.error(
+        `Failed to resolve signer address for pool ${this.pool.name}`,
+        err
+      );
+    });
+
+    // Defense-in-depth beyond `load.ts` validation: if `lpRewardLookbackSeconds`
+    // somehow arrives non-finite (e.g. a caller that bypassed the schema
+    // validator), fall back to the default rather than letting NaN/Infinity
+    // propagate into BigNumber arithmetic and silently break cursor math.
+    const configured = this.config.lpRewardLookbackSeconds;
     this.lookbackSeconds =
-      this.config.lpRewardLookbackSeconds ?? LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
+      typeof configured === 'number' &&
+      Number.isFinite(configured) &&
+      Number.isInteger(configured) &&
+      configured >= 0
+        ? configured
+        : LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
   }
 
   public async collectLpRewards() {
@@ -137,6 +157,21 @@ export class LpCollector {
 
     for (const take of bucketTakes) {
       if (this.seenEventIds.has(take.id)) continue;
+
+      // Reject unparseable blockTimestamp up-front — if we record an entry in
+      // `seenEventIds` with a junk ts, neither prune nor cap can evict it
+      // (both go through `bigIntStringGreater`, which returns false on parse
+      // error), and the entry pins the dedupe map permanently. A schema drift
+      // or GraphQL-library glitch that produces a non-numeric ts is exactly
+      // the case where halting ingest here protects memory bounds.
+      try {
+        BigNumber.from(take.blockTimestamp);
+      } catch {
+        logger.warn(
+          `BucketTake event has unparseable blockTimestamp; skipping. pool: ${this.pool.name}, id: ${take.id}, ts: ${take.blockTimestamp}`
+        );
+        continue;
+      }
 
       // Record the event in the seen set BEFORE any early-return so a
       // persistently malformed record does not get re-parsed on every cycle
@@ -212,48 +247,30 @@ export class LpCollector {
 
   private capSeenEventIds(): void {
     if (this.seenEventIds.size <= MAX_SEEN_EVENT_IDS) return;
-    // Partition seen ids into those still within the active lookback window
-    // (MUST be retained — next cycle's query will re-return them and we need
-    // dedupe to fire) and those already past the window (safe to evict).
+    // `pruneSeenEventIds` runs immediately before this, so anything strictly
+    // outside the lookback window has already been dropped. If we're still
+    // over the cap, the in-window set alone exceeds the cap — refuse to
+    // evict from it (doing so would cause re-fetched events to double-count)
+    // and just log a warning for the operator. No point preserving an
+    // out-of-window tail: the next query's timestamp floor would filter
+    // it anyway.
     const cutoff = subtractSecondsClamped(
       this.cursorBlockTimestamp,
       this.lookbackSeconds
     );
     const inWindow: Array<[string, string]> = [];
-    const outOfWindow: Array<[string, string]> = [];
     this.seenEventIds.forEach((ts, id) => {
-      if (bigIntStringGreater(cutoff, ts)) {
-        outOfWindow.push([id, ts]);
-      } else {
+      if (!bigIntStringGreater(cutoff, ts)) {
         inWindow.push([id, ts]);
       }
     });
 
     if (inWindow.length >= MAX_SEEN_EVENT_IDS) {
-      // Window itself exceeds the cap. Refuse to evict from the window —
-      // doing so would cause re-fetched events to double-count. Drop the
-      // out-of-window tail entirely and log a warning for the operator.
       logger.warn(
         `seenEventIds lookback window (${inWindow.length}) exceeds cap (${MAX_SEEN_EVENT_IDS}); dropping out-of-window entries only. pool: ${this.pool.name}`
       );
-      this.seenEventIds = new Map(inWindow);
-      return;
     }
-
-    // Sort out-of-window entries newest-first and keep as many as fit under
-    // the cap. A stable tie-breaker on id avoids arbitrary eviction at
-    // boundary timestamps.
-    outOfWindow.sort((a, b) => {
-      try {
-        const cmp = BigNumber.from(b[1]).sub(BigNumber.from(a[1]));
-        if (!cmp.isZero()) return cmp.lt(0) ? -1 : 1;
-      } catch {
-        /* fall through to id tie-breaker */
-      }
-      return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
-    });
-    const remaining = MAX_SEEN_EVENT_IDS - inWindow.length;
-    this.seenEventIds = new Map([...inWindow, ...outOfWindow.slice(0, remaining)]);
+    this.seenEventIds = new Map(inWindow);
   }
 
   private pruneSeenEventIds(): void {
@@ -514,9 +531,19 @@ export class LpCollector {
 // throw and quarantines the record (the seen-id + timestamp are recorded
 // BEFORE parse, so cursor advance and dedupe both still apply — the bad
 // event is dropped forever for this window and NOT retried every cycle).
+//
+// Rejects negatives explicitly. `utils.parseUnits('-1.5', 18)` returns a
+// negative BigNumber, which would otherwise flow into `addRewardParsed`
+// (which only short-circuits on `eq(Zero)`) and corrupt `lpMap` via
+// subtraction. The Ajna subgraph schema types these as non-negative
+// BigDecimal, so a negative string only reaches us on schema drift or a
+// subgraph bug — exactly the case this quarantine layer exists to catch.
 export function parseBigDecimalToWad(value: string): BigNumber {
   if (!value || /^-?0(\.0+)?$/.test(value)) {
     return constants.Zero;
+  }
+  if (value.startsWith('-')) {
+    throw new Error(`parseBigDecimalToWad rejecting negative value: ${value}`);
   }
   return utils.parseUnits(value, 18);
 }
