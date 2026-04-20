@@ -32,7 +32,7 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       poolId: '0xpool1111111111111111111111111111111111aa',
       signerId: '0xsigner2222222222222222222222222222222222',
       cursorTs: '500',
-      cursorId: '',
+      cursorId: '0x',
       first: 1000,
     });
   });
@@ -127,9 +127,10 @@ describe('Subgraph getBucketTakeLPAwards', () => {
 
     const variables = (requestStub.firstCall.args[0] as any).variables;
     expect(variables.cursorTs).to.equal('500');
-    // Within-call pagination always starts with an empty id cursor; it
-    // advances to the last page item's id between pages.
-    expect(variables.cursorId).to.equal('');
+    // Within-call pagination starts with `'0x'` (empty-bytes sentinel, which
+    // lexicographically precedes every real Bytes id); subsequent pages
+    // advance this cursor to the last page item's id.
+    expect(variables.cursorId).to.equal('0x');
   });
 
   it('warns when pagination hits the max-pages cap', async () => {

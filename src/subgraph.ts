@@ -523,7 +523,7 @@ const getBucketTakeLPAwardsQuery = gql`
     $poolId: String!
     $signerId: Bytes!
     $cursorTs: BigInt!
-    $cursorId: String!
+    $cursorId: Bytes!
     $first: Int!
   ) {
     bucketTakes(
@@ -585,8 +585,15 @@ async function getBucketTakeLPAwards(
   // pages so same-timestamp events are split deterministically by id. The
   // caller's `cursorBlockTimestamp` anchors the first page; subsequent pages
   // advance both fields from each page's last item.
+  //
+  // `pageId` uses `'0x'` (canonical empty-bytes hex) as the "before all ids"
+  // sentinel. BucketTake.id is a `Bytes!` in the Ajna subgraph schema; the
+  // query parameter is typed `Bytes!` to match, and an empty-bytes value
+  // lexicographically precedes every real id (which are `txHash-logIndex`
+  // hex-encoded and therefore always non-empty). Passing `''` here would
+  // rely on Graph Node's silent String→Bytes coercion and is not portable.
   let pageTs = cursorBlockTimestamp;
-  let pageId = '';
+  let pageId = '0x';
 
   for (let page = 0; page < GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES; page++) {
     const pageResult = await requestSubgraph<

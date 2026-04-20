@@ -191,10 +191,19 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       const block = await evt.getBlock();
       const blockTimestamp = BigNumber.from(block.timestamp);
 
-      // Parse the originating bucketTake(borrower, depositTake, index) call to
-      // recover the bucket index the same way production used to — this is
-      // only used in tests against hardhat forks where the subgraph can't see
-      // the local chain state.
+      // Parse the originating bucketTake(borrower, depositTake, index) call
+      // to recover the bucket index the same way production used to — this
+      // path only runs in tests against hardhat forks where the subgraph
+      // can't see the local chain state.
+      //
+      // Known divergence from production: events emitted inside a Multicall3
+      // wrapper (or any other aggregator) are SKIPPED here because
+      // `parseTransaction` sees the wrapper's top-level function, not the
+      // inner bucketTake. Production reads `BucketTake.index` directly from
+      // the indexed entity and has no such restriction. Tests that wrap
+      // bucketTake in multicall will silently lose coverage against the
+      // mock. None of the current fixtures use that pattern; revisit if
+      // that changes.
       const tx = await evt.getTransaction();
       const parsed = poolContract.interface.parseTransaction(tx);
       if (parsed.functionFragment.name !== 'bucketTake') {

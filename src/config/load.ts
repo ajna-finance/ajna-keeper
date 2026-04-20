@@ -45,6 +45,21 @@ export function assertIsValidConfig(
         `lpRewardLookbackSeconds must be a non-negative integer, got: ${v}`
       );
     }
+    // Warn (don't reject) at unusual bounds so an obvious misconfiguration
+    // surfaces in the log without blocking rare-but-legitimate choices.
+    if (v === 0) {
+      logger.warn(
+        'lpRewardLookbackSeconds=0 disables the indexing-lag overlap; ' +
+          'any late-indexed event will be permanently missed.'
+      );
+    } else if (v > 3600) {
+      logger.warn(
+        `lpRewardLookbackSeconds=${v} is unusually large (>1h). Each query ` +
+          'shifts the cursor back by this amount; on a pool with steady ' +
+          'BucketTake flow, this produces a near-full historical replay ' +
+          'every cycle. Verify your subgraph really lags this much.'
+      );
+    }
   }
 }
 

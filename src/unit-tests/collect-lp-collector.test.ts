@@ -158,9 +158,12 @@ describe('LpCollector cursor advancement', () => {
 
   it('does not double-count events at exactly the lookback cutoff boundary', async () => {
     // Regression test: an event whose blockTimestamp lands exactly on
-    // (cursor - lookback) must be retained in seenEventIds across prune so
-    // that the next query (using blockTimestamp_gte: cutoff) does not
-    // re-ingest it as new.
+    // (cursor - lookback) must be retained in seenEventIds across prune.
+    // The production query uses `blockTimestamp_gt: cursorTs - lookback`,
+    // which RE-INCLUDES any event strictly greater than the cutoff — i.e.
+    // the event at the boundary itself is still returned by the next
+    // query, so dedupe (not query-side filtering) is what prevents the
+    // double count.
     const signer = '0xabc0000000000000000000000000000000000000';
     const LOOKBACK = LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
     const boundaryEvent = {

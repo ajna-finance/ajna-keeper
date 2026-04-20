@@ -44,11 +44,11 @@ import { SubgraphReader } from '../read-transports';
 // chains can raise via `KeeperConfig.lpRewardLookbackSeconds`.
 export const LP_REWARD_LOOKBACK_SECONDS_DEFAULT = 60;
 
-// Hard cap on the dedupe map so sustained truncation or a pathological
-// backlog can't grow memory unboundedly. Oldest (by blockTimestamp) entries
-// are evicted first; anything evicted would either be filtered by the
-// composite cursor on the next cycle (if it's chronologically behind) or
-// caught by the lookback window + cap rarely needs to evict in steady state.
+// Advisory threshold for the dedupe set. Memory is hard-bounded by
+// `lookbackSeconds × event rate` (entries outside the window are pruned
+// each cycle); this threshold is a warning trigger for operators, not an
+// enforced cap. Evicting in-window entries would cause re-fetched events
+// to double-count, so we never do it.
 const MAX_SEEN_EVENT_IDS = 100_000;
 
 export class LpCollector {
@@ -238,39 +238,25 @@ export class LpCollector {
     // picks up where this one left off, just later in wall-clock time.
     this.cursorBlockTimestamp = maxTimestamp;
 
-    // Prune and cap seenEventIds. Prune drops entries below the lookback
-    // window (safe to forget). Cap evicts older entries if we're still over
-    // the memory cap — but never entries inside the active window.
+    // Prune the dedupe set: drops entries below the lookback window (safe to
+    // forget — the next query's timestamp floor would filter them anyway).
+    // Then check that memory stays bounded.
     this.pruneSeenEventIds();
-    this.capSeenEventIds();
+    this.warnIfSeenEventIdsOverThreshold();
   }
 
-  private capSeenEventIds(): void {
-    if (this.seenEventIds.size <= MAX_SEEN_EVENT_IDS) return;
-    // `pruneSeenEventIds` runs immediately before this, so anything strictly
-    // outside the lookback window has already been dropped. If we're still
-    // over the cap, the in-window set alone exceeds the cap — refuse to
-    // evict from it (doing so would cause re-fetched events to double-count)
-    // and just log a warning for the operator. No point preserving an
-    // out-of-window tail: the next query's timestamp floor would filter
-    // it anyway.
-    const cutoff = subtractSecondsClamped(
-      this.cursorBlockTimestamp,
-      this.lookbackSeconds
-    );
-    const inWindow: Array<[string, string]> = [];
-    this.seenEventIds.forEach((ts, id) => {
-      if (!bigIntStringGreater(cutoff, ts)) {
-        inWindow.push([id, ts]);
-      }
-    });
-
-    if (inWindow.length >= MAX_SEEN_EVENT_IDS) {
+  private warnIfSeenEventIdsOverThreshold(): void {
+    // After `pruneSeenEventIds`, the remaining entries are all within the
+    // active lookback window and MUST be retained (evicting them would cause
+    // re-fetched events to double-count). `MAX_SEEN_EVENT_IDS` is therefore
+    // advisory: memory is hard-bounded by `lookbackSeconds × event rate`,
+    // and this log lets operators notice pathological pools or oversized
+    // lookback windows before they become a problem.
+    if (this.seenEventIds.size >= MAX_SEEN_EVENT_IDS) {
       logger.warn(
-        `seenEventIds lookback window (${inWindow.length}) exceeds cap (${MAX_SEEN_EVENT_IDS}); dropping out-of-window entries only. pool: ${this.pool.name}`
+        `seenEventIds lookback window (${this.seenEventIds.size}) meets or exceeds advisory threshold (${MAX_SEEN_EVENT_IDS}); verify pool event rate vs. lpRewardLookbackSeconds. pool: ${this.pool.name}`
       );
     }
-    this.seenEventIds = new Map(inWindow);
   }
 
   private pruneSeenEventIds(): void {
