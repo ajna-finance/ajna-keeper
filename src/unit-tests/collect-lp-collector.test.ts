@@ -156,6 +156,61 @@ describe('LpCollector cursor advancement', () => {
     expect(getAwards.secondCall.args[2]).to.equal('0');
   });
 
+  it('does not double-count events at exactly the lookback cutoff boundary', async () => {
+    // Regression test: an event whose blockTimestamp lands exactly on
+    // (cursor - lookback) must be retained in seenEventIds across prune so
+    // that the next query (using blockTimestamp_gte: cutoff) does not
+    // re-ingest it as new.
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const LOOKBACK = LP_REWARD_LOOKBACK_SECONDS;
+    const boundaryEvent = {
+      id: 't-boundary',
+      index: 7000,
+      taker: signer,
+      lpAwarded: {
+        lpAwardedTaker: '1.0',
+        lpAwardedKicker: '0',
+        kicker: '0xdef',
+      },
+      blockTimestamp: String(LOOKBACK), // cursor after = LOOKBACK, cutoff = 0
+    };
+    const anchorEvent = {
+      id: 't-anchor',
+      index: 8000,
+      taker: signer,
+      lpAwarded: {
+        lpAwardedTaker: '2.0',
+        lpAwardedKicker: '0',
+        kicker: '0xdef',
+      },
+      blockTimestamp: String(LOOKBACK * 2), // cursor advances here; cutoff = LOOKBACK
+    };
+    const getAwards = sinon.stub();
+    getAwards.onCall(0).resolves({
+      bucketTakes: [boundaryEvent, anchorEvent],
+      truncated: false,
+    });
+    // Second call: subgraph still returns boundaryEvent (its blockTimestamp
+    // equals cutoff, so _gte picks it up). We must NOT re-ingest it.
+    getAwards.onCall(1).resolves({
+      bucketTakes: [boundaryEvent],
+      truncated: false,
+    });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+
+    await collector.ingestNewAwardsFromSubgraph();
+    const afterFirst = collector.lpMap.get(7000)!.toString();
+
+    await collector.ingestNewAwardsFromSubgraph();
+    const afterSecond = collector.lpMap.get(7000)!.toString();
+
+    expect(afterSecond).to.equal(afterFirst);
+  });
+
   it('dedupes events across the lookback overlap window', async () => {
     const signer = '0xabc0000000000000000000000000000000000000';
     const event = {
@@ -181,6 +236,47 @@ describe('LpCollector cursor advancement', () => {
     const secondAmount = collector.lpMap.get(2000)!.toString();
 
     expect(secondAmount).to.equal(firstAmount);
+  });
+});
+
+describe('LpCollector parse failure atomicity', () => {
+  afterEach(() => sinon.restore());
+
+  it('does NOT half-apply rewards when taker parses but kicker throws', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const getAwards = sinon.stub().resolves({
+      bucketTakes: [
+        {
+          id: 'take-malformed',
+          index: 5000,
+          taker: signer,
+          lpAwarded: {
+            lpAwardedTaker: '1.0', // valid
+            lpAwardedKicker: 'not-a-number', // throws
+            kicker: signer,
+          },
+          blockTimestamp: '100',
+        },
+      ],
+      truncated: false,
+    });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+
+    let thrown: unknown;
+    try {
+      await collector.ingestNewAwardsFromSubgraph();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).to.not.be.undefined;
+    // Taker reward must NOT have been added — kicker parse threw before any
+    // mutation, so the whole take should be left untouched for retry.
+    expect(collector.lpMap.has(5000)).to.be.false;
   });
 });
 

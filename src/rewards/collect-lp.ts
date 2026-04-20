@@ -108,11 +108,22 @@ export class LpCollector {
       const kickerMatches =
         take.lpAwarded.kicker.toLowerCase() === signerAddress;
 
+      // Parse both reward amounts UP FRONT before any lpMap mutation so a
+      // malformed value throws BEFORE we've partially applied rewards for
+      // this take. Otherwise a throw between taker and kicker addReward calls
+      // would double-count the taker portion on every retry cycle.
+      const takerAmount = takerMatches
+        ? parseBigDecimalToWad(take.lpAwarded.lpAwardedTaker)
+        : constants.Zero;
+      const kickerAmount = kickerMatches
+        ? parseBigDecimalToWad(take.lpAwarded.lpAwardedKicker)
+        : constants.Zero;
+
       if (takerMatches) {
-        this.addReward(take.index, take.lpAwarded.lpAwardedTaker, 'taker');
+        this.addRewardParsed(take.index, takerAmount, 'taker');
       }
       if (kickerMatches) {
-        this.addReward(take.index, take.lpAwarded.lpAwardedKicker, 'kicker');
+        this.addRewardParsed(take.index, kickerAmount, 'kicker');
       }
 
       this.seenEventIds.set(take.id, take.blockTimestamp);
@@ -133,15 +144,16 @@ export class LpCollector {
   }
 
   private pruneSeenEventIds(): void {
-    // Drop ids whose blockTimestamp is older than (cursor - lookback). Any
-    // future query only covers events >= that cutoff, so older ids can't be
-    // returned again.
+    // Drop ids whose blockTimestamp is strictly older than (cursor - lookback).
+    // We must KEEP ids at exactly the cutoff — the next query uses
+    // `blockTimestamp_gte: cutoff` and will re-return them, so dropping the
+    // boundary entries would cause them to be treated as new and double-counted.
     const cutoff = subtractSecondsClamped(
       this.cursorBlockTimestamp,
       LP_REWARD_LOOKBACK_SECONDS
     );
     this.seenEventIds.forEach((ts, id) => {
-      if (!bigIntStringGreater(ts, cutoff)) {
+      if (bigIntStringGreater(cutoff, ts)) {
         this.seenEventIds.delete(id);
       }
     });
@@ -342,12 +354,11 @@ export class LpCollector {
     return constants.Zero;
   }
 
-  private addReward(
+  private addRewardParsed(
     bucketIndex: number,
-    rewardLpDecimal: string,
+    rewardLp: BigNumber,
     role: 'taker' | 'kicker'
   ) {
-    const rewardLp = parseBigDecimalToWad(rewardLpDecimal);
     if (rewardLp.eq(constants.Zero)) return;
     const prevReward = this.lpMap.get(bucketIndex) ?? constants.Zero;
     const sumReward = prevReward.add(rewardLp);
