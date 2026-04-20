@@ -15,6 +15,11 @@ import { normalizeAddress } from '../discovery/targets';
  * `ingestNewAwardsFromSubgraph` / `collectLpRewards` / `lpMap` so existing
  * tests keep their shape.
  *
+ * Pick ONE of `ingestNewAwardsFromSubgraph()` or `collectLpRewards()` per
+ * test cycle — calling both in sequence runs the subgraph query twice and
+ * advances the cursor past the first call's events, which can falsify
+ * assertions that care about the final cursor state.
+ *
  * Production does NOT use this — production uses `LpManager` with
  * on-demand redeemer materialization across all pools.
  */

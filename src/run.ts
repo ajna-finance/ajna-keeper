@@ -438,9 +438,8 @@ async function collectLpRewardsLoop({
   const manager = new LpManager(ingester, resolveRedeemer);
 
   while (true) {
-    let touched: LpRedeemer[] = [];
     try {
-      touched = await manager.ingestAndDispatch();
+      await manager.ingestAndDispatch();
     } catch (ingestError) {
       // A failed subgraph fetch shouldn't kill the loop — next cycle
       // retries. The cursor hasn't advanced (ingest throws before cursor
@@ -451,7 +450,17 @@ async function collectLpRewardsLoop({
       );
     }
 
-    for (const redeemer of touched) {
+    // Sweep every redeemer with a non-empty lpMap, not just pools that
+    // received new events this cycle. Partial redemptions (e.g. residual
+    // below minAmount thresholds) leave an entry in lpMap; without this,
+    // that entry would sit until the next BucketTake touched the same
+    // pool — potentially never — and the LP would strand between restarts.
+    const toSweep: LpRedeemer[] = [];
+    for (const redeemer of Array.from(redeemers.values())) {
+      if (redeemer.lpMap.size > 0) toSweep.push(redeemer);
+    }
+
+    for (const redeemer of toSweep) {
       const pool = redeemer.pool;
       const normalized = normalizeAddress(pool.poolAddress);
       const poolConfig = poolConfigByAddress.get(normalized);

@@ -1,8 +1,14 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { Config } from '@ajna-finance/sdk';
-import type { AjnaConfigParams, KeeperConfig } from './schema';
-import { isValidLookbackSeconds } from './lp-reward';
+import type {
+  AjnaConfigParams,
+  CollectLpRewardSettings,
+  KeeperConfig,
+  RewardAction,
+} from './schema';
+import { RewardActionLabel, PostAuctionDex } from './schema';
+import { isValidLookbackSeconds, resolveCollectLpRewardForPool } from './lp-reward';
 import { logger } from '../logging';
 
 export async function readConfigFile(filePath: string): Promise<KeeperConfig> {
@@ -75,23 +81,86 @@ export function assertIsValidConfig(
   // fields. Without those, the redemption layer has no floor and would
   // attempt to redeem rounding-dust every cycle.
   if (config.defaultLpReward !== undefined) {
-    const d = config.defaultLpReward;
-    if (
-      typeof d.minAmountQuote !== 'number' ||
-      !Number.isFinite(d.minAmountQuote) ||
-      d.minAmountQuote < 0
-    ) {
-      throw new Error(
-        `defaultLpReward.minAmountQuote must be a non-negative number, got: ${JSON.stringify(d.minAmountQuote)}`
-      );
+    validateCollectLpRewardSettings(config.defaultLpReward, 'defaultLpReward');
+  }
+
+  // Dry-run the per-pool override merge for every pool so config errors
+  // (invalid reward-action shapes, legacy-mode per-pool entry missing
+  // mandatory fields) surface at startup rather than mid-loop in a
+  // resolver throw. An undefined return just means "no LP collection for
+  // this pool" — not an error.
+  if (config.pools) {
+    for (const pool of config.pools) {
+      try {
+        const merged = resolveCollectLpRewardForPool(
+          config.defaultLpReward,
+          pool.collectLpReward,
+          pool.address
+        );
+        if (merged) {
+          validateCollectLpRewardSettings(
+            merged,
+            `pools[${pool.address}].collectLpReward (merged)`
+          );
+        }
+      } catch (error) {
+        throw new Error(
+          `Invalid LP reward config for pool ${pool.address}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     }
-    if (
-      typeof d.minAmountCollateral !== 'number' ||
-      !Number.isFinite(d.minAmountCollateral) ||
-      d.minAmountCollateral < 0
-    ) {
+  }
+}
+
+function validateCollectLpRewardSettings(
+  settings: CollectLpRewardSettings,
+  path: string
+): void {
+  if (
+    typeof settings.minAmountQuote !== 'number' ||
+    !Number.isFinite(settings.minAmountQuote) ||
+    settings.minAmountQuote < 0
+  ) {
+    throw new Error(
+      `${path}.minAmountQuote must be a non-negative number, got: ${JSON.stringify(settings.minAmountQuote)}`
+    );
+  }
+  if (
+    typeof settings.minAmountCollateral !== 'number' ||
+    !Number.isFinite(settings.minAmountCollateral) ||
+    settings.minAmountCollateral < 0
+  ) {
+    throw new Error(
+      `${path}.minAmountCollateral must be a non-negative number, got: ${JSON.stringify(settings.minAmountCollateral)}`
+    );
+  }
+  if (settings.rewardActionQuote !== undefined) {
+    validateRewardAction(settings.rewardActionQuote, `${path}.rewardActionQuote`);
+  }
+  if (settings.rewardActionCollateral !== undefined) {
+    validateRewardAction(
+      settings.rewardActionCollateral,
+      `${path}.rewardActionCollateral`
+    );
+  }
+}
+
+function validateRewardAction(action: RewardAction, path: string): void {
+  if (
+    action.action !== RewardActionLabel.TRANSFER &&
+    action.action !== RewardActionLabel.EXCHANGE
+  ) {
+    throw new Error(
+      `${path}.action must be RewardActionLabel.TRANSFER or RewardActionLabel.EXCHANGE, got: ${JSON.stringify((action as any).action)}`
+    );
+  }
+  if (action.action === RewardActionLabel.EXCHANGE) {
+    const validDex = Object.values(PostAuctionDex) as string[];
+    if (!validDex.includes(action.dexProvider)) {
       throw new Error(
-        `defaultLpReward.minAmountCollateral must be a non-negative number, got: ${JSON.stringify(d.minAmountCollateral)}`
+        `${path}.dexProvider must be one of ${validDex.join(', ')}; got: ${JSON.stringify(action.dexProvider)}`
       );
     }
   }

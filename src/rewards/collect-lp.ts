@@ -16,7 +16,6 @@ import {
 } from '../transactions';
 import { decimaledToWei, weiToDecimaled } from '../utils';
 import { FungibleBucket } from '@ajna-finance/sdk/dist/classes/FungibleBucket';
-import { BucketTakeLPAwardItem } from '../subgraph';
 import { SubgraphReader } from '../read-transports';
 import { normalizeAddress } from '../discovery/targets';
 
@@ -383,6 +382,12 @@ export class LpRedeemer {
    * contained.
    */
   public async sweep(): Promise<void> {
+    // Caller serializes: `collectLpRewardsLoop`'s outer `while(true)` runs
+    // ingest → dispatch → sweep sequentially with no concurrent ingests
+    // mid-sweep. The `Array.from(entries())` snapshot below guards against
+    // mutation from `subtractReward` within this same loop (safe: delete
+    // of the current key doesn't affect the snapshot), NOT against
+    // cross-cycle interference.
     const lpMapEntries = Array.from(this.lpMap.entries()).filter(
       ([, rewardLp]) => rewardLp.gt(constants.Zero)
     );
@@ -650,8 +655,10 @@ export class LpRedeemer {
  * Resolves a pool address from a subgraph event to either an existing
  * LpRedeemer (cached) or a newly-materialized one (hydrating the
  * FungiblePool handle on-demand). Returns undefined if the pool cannot be
- * hydrated (e.g. ERC721 pool the factory can't construct, or hydration in
- * cooldown).
+ * hydrated — e.g. an ERC721 pool whose `(collateral, quote)` pair the
+ * fungible-pool factory resolves to a different address than the subgraph
+ * gave us (the deployment-mismatch assertion rejects it), or hydration is
+ * currently in cooldown after a prior failure.
  */
 export type LpRedeemerResolver = (
   poolAddress: string
@@ -673,29 +680,42 @@ export class LpManager {
    * redeemer (hydrating the handle on-demand), and return the redeemers
    * that have non-zero `lpMap` entries ready to sweep.
    *
-   * Pools that fail to hydrate (ERC721, deployment mismatch, cooldown) are
-   * skipped silently — the rewards stay safe on-chain and a later cycle
-   * can pick them up once the pool becomes hydratable. Skipping here
-   * doesn't corrupt cursor state: the ingester has already advanced past
-   * these events and recorded them in `seenEventIds`.
+   * Pools that fail to hydrate (deployment-mismatch rejection, e.g. an
+   * ERC721 pool whose (collateral, quote) the fungible factory resolves
+   * differently; hydration cooldown after a prior failure) are skipped
+   * silently — the rewards stay safe on-chain and a later cycle can pick
+   * them up once the pool becomes hydratable. Skipping here doesn't
+   * corrupt cursor state: the ingester has already advanced past these
+   * events and recorded them in `seenEventIds`.
    */
   public async ingestAndDispatch(): Promise<LpRedeemer[]> {
     const byPool = await this.ingester.ingest();
     const touched: LpRedeemer[] = [];
 
     for (const [poolAddress, rewards] of Array.from(byPool.entries())) {
-      const redeemer = await this.resolveRedeemer(poolAddress);
+      // Guard every resolver call — a throw here (e.g. pool config with an
+      // invalid per-pool `collectLpReward` that can't be resolved) must not
+      // starve sibling pools that come later in the iteration order. The
+      // ingester has already advanced past these events; dedupe in
+      // seenEventIds prevents re-processing on the next cycle, so a
+      // persistently-failing resolver drops the pool's events until the
+      // config is fixed and the process restarts.
+      let redeemer: LpRedeemer | undefined;
+      try {
+        redeemer = await this.resolveRedeemer(poolAddress);
+      } catch (error) {
+        logger.error(
+          `Failed to resolve LP redeemer for pool ${poolAddress}; skipping its events this cycle`,
+          error
+        );
+        continue;
+      }
       if (!redeemer) continue;
       for (const reward of rewards) redeemer.creditReward(reward);
       touched.push(redeemer);
     }
 
     return touched;
-  }
-
-  /** Exposed for tests / diagnostics. */
-  public getIngester(): LpIngester {
-    return this.ingester;
   }
 }
 

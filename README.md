@@ -254,7 +254,14 @@ const config: KeeperConfig = {
     redeemFirst: TokenToCollect.QUOTE,
     minAmountQuote: 10,
     minAmountCollateral: 0,
-    rewardActionQuote: { action: PostAuctionAction.EXCHANGE, dexProvider: PostAuctionDex.UNISWAPV3, fee: 3000 },
+    rewardActionQuote: {
+      action: RewardActionLabel.EXCHANGE,
+      dexProvider: PostAuctionDex.UNISWAP_V3,
+      address: '0xquoteTokenAddress',
+      targetToken: 'weth',
+      slippage: 2,
+      fee: 3000,
+    },
   },
   pools: [
     { address: '0xabc…', price: { … } }, // uses defaults
