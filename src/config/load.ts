@@ -41,9 +41,9 @@ export function assertIsValidConfig(
   if (config.lpRewardLookbackSeconds !== undefined) {
     const v = config.lpRewardLookbackSeconds;
     const hardMaxSeconds = 86_400; // 1 day
-    if (!Number.isFinite(v) || !Number.isInteger(v) || v < 0) {
+    if (typeof v !== 'number' || !Number.isFinite(v) || !Number.isInteger(v) || v < 0) {
       throw new Error(
-        `lpRewardLookbackSeconds must be a non-negative integer, got: ${v}`
+        `lpRewardLookbackSeconds must be a non-negative integer (number), got: ${JSON.stringify(v)} (typeof ${typeof v})`
       );
     }
     if (v > hardMaxSeconds) {

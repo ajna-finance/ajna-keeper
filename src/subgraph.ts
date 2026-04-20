@@ -502,8 +502,10 @@ export interface GetBucketTakeLPAwardsResponse {
   bucketTakes: BucketTakeLPAwardItem[];
 }
 
-const GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE = 1000;
-const GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES = 100;
+// Exported so the integration-test mock can mirror the same truncation cap
+// and stay aligned if production ever retunes these.
+export const GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE = 1000;
+export const GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES = 100;
 
 // Composite (blockTimestamp, id) cursor. Ordering by blockTimestamp guarantees
 // chronological forward progress; the `id_gt` tie-breaker handles multiple

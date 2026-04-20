@@ -48,6 +48,15 @@ describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
     ).to.throw(/non-negative integer/);
   });
 
+  it('rejects string-typed values with a typeof-clarifying message', () => {
+    expect(() =>
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        lpRewardLookbackSeconds: '60' as any,
+      })
+    ).to.throw(/typeof string/);
+  });
+
   it('rejects NaN and Infinity', () => {
     expect(() =>
       assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: Number.NaN })

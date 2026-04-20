@@ -354,6 +354,12 @@ describe('LpCollector collections', () => {
     // history with cursor='0'. The subgraph returns the same BucketTake
     // events but the signer's on-chain lpBalance is now 0.
     const secondRun = makeCollector();
+    await secondRun.ingestNewAwardsFromSubgraph();
+    // Guard: the test is only meaningful if ingest actually replayed events.
+    // Without this pre-check, `lpMap.size === 0` at the end would also pass
+    // trivially if the mock returned zero events for any reason.
+    expect(secondRun.lpMap.size).to.be.greaterThan(0);
+
     await secondRun.collectLpRewards();
 
     // The stale reward should have been pruned via the lpBalance=0 path in

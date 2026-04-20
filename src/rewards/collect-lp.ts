@@ -1,4 +1,5 @@
 import { FungiblePool, min, Signer } from '@ajna-finance/sdk';
+import { MAX_FENWICK_INDEX } from '../constants';
 import { BigNumber, constants, utils } from 'ethers';
 import {
   KeeperConfig,
@@ -51,10 +52,6 @@ export const LP_REWARD_LOOKBACK_SECONDS_DEFAULT = 60;
 // to double-count, so we never do it.
 const MAX_SEEN_EVENT_IDS = 100_000;
 
-// Ajna valid bucket index range is 0..MAX_FENWICK_INDEX inclusive
-// (see `@ajna-finance/sdk` constants — there are 7389 buckets total).
-const MAX_FENWICK_INDEX = 7388;
-
 export class LpCollector {
   public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndex, rewardLp>
 
@@ -72,6 +69,9 @@ export class LpCollector {
   private seenEventIds: Map<string, string> = new Map(); // id → blockTimestamp
   // Effective lookback window, resolved from config with a default fallback.
   private lookbackSeconds: number;
+  // Tracks the over-threshold state of `seenEventIds` so the advisory warn
+  // fires once on the rising edge (under → over) instead of every cycle.
+  private seenEventIdsOverThreshold: boolean = false;
 
   constructor(
     private pool: FungiblePool,
@@ -271,11 +271,17 @@ export class LpCollector {
     // advisory: memory is hard-bounded by `lookbackSeconds × event rate`,
     // and this log lets operators notice pathological pools or oversized
     // lookback windows before they become a problem.
-    if (this.seenEventIds.size >= MAX_SEEN_EVENT_IDS) {
+    //
+    // Fire only on the rising edge to avoid log spam — chronically-over
+    // pools would otherwise emit a WARN every cycle and flood alerting
+    // pipelines. Reset the latch once the set drops back under.
+    const overThresholdNow = this.seenEventIds.size >= MAX_SEEN_EVENT_IDS;
+    if (overThresholdNow && !this.seenEventIdsOverThreshold) {
       logger.warn(
         `seenEventIds lookback window (${this.seenEventIds.size}) meets or exceeds advisory threshold (${MAX_SEEN_EVENT_IDS}); verify pool event rate vs. lpRewardLookbackSeconds. pool: ${this.pool.name}`
       );
     }
+    this.seenEventIdsOverThreshold = overThresholdNow;
   }
 
   private pruneSeenEventIds(): void {
@@ -577,7 +583,15 @@ export function subtractSecondsClamped(
     const shift = BigNumber.from(seconds);
     if (cursorBn.lte(shift)) return '0';
     return cursorBn.sub(shift).toString();
-  } catch {
+  } catch (error) {
+    // Defense-in-depth for a corrupted cursor or a non-finite `seconds` that
+    // escaped upstream validation. Returning '0' triggers a full historical
+    // replay which is SAFE (dedupe catches re-ingested events), but silent
+    // replay hides the root cause; log so an operator can track it down.
+    logger.warn(
+      `subtractSecondsClamped failed to parse (cursor=${JSON.stringify(cursor)}, seconds=${seconds}); returning '0' and forcing replay.`,
+      error
+    );
     return '0';
   }
 }

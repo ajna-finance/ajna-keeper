@@ -6,6 +6,8 @@ import subgraphModule, {
   GetLiquidationResponse,
   GetLoanResponse,
   GetMeaningfulBucketResponse,
+  GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES,
+  GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
 } from '../subgraph';
 import { getProvider } from './test-utils';
 import { decimaledToWei, weiToDecimaled } from '../utils';
@@ -138,9 +140,10 @@ export function overrideGetBucketTakeLPAwards(
 }
 
 // Match production's `pageSize * maxPages` cap so the mock truncates at the
-// same boundary a real subgraph call would.
-const MOCK_LP_AWARDS_PAGE_SIZE = 1000;
-const MOCK_LP_AWARDS_MAX_PAGES = 100;
+// same boundary a real subgraph call would. Sourced from the production
+// constants to prevent drift.
+const MOCK_LP_AWARDS_PAGE_SIZE = GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE;
+const MOCK_LP_AWARDS_MAX_PAGES = GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES;
 
 // Coverage model: `getBucketTakeLPAwards` paginates INTERNALLY by advancing a
 // composite `(blockTimestamp, id)` cursor until a short page or `maxPages`
@@ -171,11 +174,12 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
     );
     // Matches production's page-1 semantics. On the first page, production's
     // query `blockTimestamp_gt: cursorTs OR (blockTimestamp == cursorTs AND
-    // id_gt: '')` reduces to `blockTimestamp >= cursorTs` because every id
-    // sorts strictly above the empty string. Subsequent pages advance a
-    // composite `(pageTs, pageId)` cursor, but the FULL paged result is
-    // equivalent to the single `>= cursorTs` selection sorted by `(ts, id)`
-    // and truncated at the cap — which is exactly what this mock returns.
+    // id_gt: '0x')` reduces to `blockTimestamp >= cursorTs` because every
+    // real Bytes id lexicographically exceeds the canonical empty-bytes
+    // sentinel `'0x'`. Subsequent pages advance a composite `(pageTs, pageId)`
+    // cursor, but the FULL paged result is equivalent to the single
+    // `>= cursorTs` selection sorted by `(ts, id)` and truncated at the
+    // cap — which is exactly what this mock returns.
     const cursorTs = BigNumber.from(cursorBlockTimestamp || '0');
     const signerLower = signerAddress.toLowerCase();
 
@@ -207,6 +211,12 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       const tx = await evt.getTransaction();
       const parsed = poolContract.interface.parseTransaction(tx);
       if (parsed.functionFragment.name !== 'bucketTake') {
+        // Escalated from silent skip so a future fixture that wraps
+        // bucketTake in multicall surfaces in test output rather than
+        // silently losing mock coverage.
+        logger.warn(
+          `Subgraph mock: skipping BucketTakeLPAwarded event whose originating tx called ${parsed.functionFragment.name} (expected 'bucketTake'). Production would still index this event — integration coverage is degraded for this scenario.`
+        );
         continue;
       }
       const [, , indexBn] = parsed.args as [string, boolean, BigNumber];
