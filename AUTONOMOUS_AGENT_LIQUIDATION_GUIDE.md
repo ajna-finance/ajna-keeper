@@ -93,7 +93,7 @@ Canonical working pattern from that repo:
 cast send 0x<TOKEN_ADDRESS> 'transfer(address,uint256)' 0x<RECIPIENT> 1000000000000000000 --rpc-url "$RPC_URL" --private-key "$OWNER_PRIVATE_KEY"
 ```
 
-The verified fixture wrapper in this repo does not rely on `token-deployer mint`. It deploys with large initial supply to the deployer and then uses plain ERC20 `transfer(...)` calls to fund the lender, borrower, keeper, and optional Uniswap LP inventory.
+The verified fixture wrapper in this repo does not rely on `token-deployer mint`. It deploys with large initial supply to the keeper (operator) and then uses plain ERC20 `transfer(...)` calls to fund the lender, borrower, and optional Uniswap LP inventory.
 
 ### `ajna-skills`
 
@@ -152,18 +152,39 @@ On a local Anvil fork, the easiest approach is to use funded default test accoun
 Example address derivation:
 
 ```bash
-export DEPLOYER_KEY="0x..."
-export LENDER_KEY="0x..."
-export BORROWER_KEY="0x..."
+# The single operator key. Funds lender and borrower, deploys tokens, owns
+# the pool/factory/taker contracts, later runs the keeper. The wrapper
+# script auto-generates lender and borrower keys on first run if the env
+# vars below are unset, so KEEPER_KEY is the only one you strictly need
+# for a fresh fixture.
 export KEEPER_KEY="0x..."
 
-export DEPLOYER_ADDRESS=$(cast wallet address --private-key "$DEPLOYER_KEY")
-export LENDER_ADDRESS=$(cast wallet address --private-key "$LENDER_KEY")
-export BORROWER_ADDRESS=$(cast wallet address --private-key "$BORROWER_KEY")
+# Optional — if unset, the wrapper auto-generates and persists to
+# ./.fixture-keys.json (path override: AJNA_AGENT_KEY_FILE).
+export LENDER_KEY="0x..."
+export BORROWER_KEY="0x..."
+
 export KEEPER_ADDRESS=$(cast wallet address --private-key "$KEEPER_KEY")
+# Lender/borrower addresses are reported by the wrapper at startup; if
+# you need them ahead of time, set LENDER_KEY/BORROWER_KEY explicitly and
+# derive the same way:
+#   export LENDER_ADDRESS=$(cast wallet address --private-key "$LENDER_KEY")
+#   export BORROWER_ADDRESS=$(cast wallet address --private-key "$BORROWER_KEY")
 ```
 
-If you want to run the keeper itself, create a JSON keystore for `KEEPER_KEY` inside this repo and point `keeperKeystore` at it.
+### Key management
+
+The fixture script resolves each role in this order:
+
+1. Env var set (`AJNA_AGENT_KEEPER_KEY`, `AJNA_AGENT_LENDER_KEY`, `AJNA_AGENT_BORROWER_KEY`) → use it.
+2. For lender and borrower only: if `AJNA_AGENT_KEY_FILE` (default `./.fixture-keys.json`) contains the role → reuse it.
+3. For lender and borrower only: generate a fresh wallet, write it to the key file (merging with anything already there), log the address.
+
+`AJNA_AGENT_KEEPER_KEY` is always required. The key file is written with mode `0600`. Make sure your `.gitignore` includes `.fixture-keys.json` (this repo's does) so the plaintext keys never get committed.
+
+Re-runs are idempotent: once lender and borrower keys are in the file, subsequent invocations reuse them. Delete the file to force regeneration. Set env vars explicitly to override whatever's in the file for a single run.
+
+If you want to run the keeper itself after the fixture is set up, create a JSON keystore for `KEEPER_KEY` inside this repo and point `keeperKeystore` at it.
 
 ## Environment Setup
 
@@ -212,9 +233,9 @@ npm run create-liquidatable-uniswap-fixture
   - adds full-range liquidity
   - deploys a keeper-owned `AjnaKeeperTakerFactory` and `UniswapV3KeeperTaker`
   - writes a ready-to-paste keeper config snippet path into the summary
-  - tops up lender, borrower, and optional keeper native gas by default so non-deployer actors can execute prepared actions on a fresh fork
+  - tops up lender and borrower native gas by default from the keeper
 
-In Uniswap external-take mode, `AJNA_AGENT_KEEPER_KEY` is required because the deployed factory and taker must be owned by the signer that will execute the keeper take path.
+`AJNA_AGENT_KEEPER_KEY` is always required. In Uniswap external-take mode it additionally becomes the owner of the deployed factory and taker contracts (which is also the signer that later executes the keeper take path — consistent ownership avoids a separate owner/operator split).
 
 Use the plain wrapper when you only need a liquidatable Ajna fixture. Use the Uniswap wrapper when you want the DEX and keeper-contract side of a manual external-take test bootstrapped too.
 
@@ -237,8 +258,8 @@ Create two requests. Keep them simple and mintable.
   "symbol": "QTEST",
   "chainId": 8453,
   "chainName": "base",
-  "owner": "${DEPLOYER_ADDRESS}",
-  "initialRecipient": "${DEPLOYER_ADDRESS}",
+  "owner": "${KEEPER_ADDRESS}",
+  "initialRecipient": "${KEEPER_ADDRESS}",
   "initialSupply": "200000000000000000000000",
   "decimals": 18,
   "mintable": true
@@ -254,8 +275,8 @@ Create two requests. Keep them simple and mintable.
   "symbol": "CTEST",
   "chainId": 8453,
   "chainName": "base",
-  "owner": "${DEPLOYER_ADDRESS}",
-  "initialRecipient": "${DEPLOYER_ADDRESS}",
+  "owner": "${KEEPER_ADDRESS}",
+  "initialRecipient": "${KEEPER_ADDRESS}",
   "initialSupply": "200000000000000000000000",
   "decimals": 18,
   "mintable": true
@@ -266,25 +287,25 @@ Broadcast both deployments:
 
 ```bash
 cd /home/mike/Projects-2026/token-deployer
-./bin/token-deployer deploy quote-request.json --broadcast --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
-./bin/token-deployer deploy collateral-request.json --broadcast --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
+./bin/token-deployer deploy quote-request.json --broadcast --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$KEEPER_KEY"
+./bin/token-deployer deploy collateral-request.json --broadcast --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$KEEPER_KEY"
 ```
 
 Capture the manifest paths and deployed token addresses from the deploy output.
 
-For the verified local-fixture path, fund actors with standard ERC20 transfers from the deployer:
+For the verified local-fixture path, fund actors with standard ERC20 transfers from the keeper (operator):
 
 ```bash
 cast send 0x<QTEST_ADDRESS> \
   'transfer(address,uint256)' "$LENDER_ADDRESS" 100000000000000000000000 \
-  --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
+  --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$KEEPER_KEY"
 
 cast send 0x<CTEST_ADDRESS> \
   'transfer(address,uint256)' "$BORROWER_ADDRESS" 100000000000000000000000 \
-  --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$DEPLOYER_KEY"
+  --rpc-url "$AJNA_RPC_URL_BASE" --private-key "$KEEPER_KEY"
 ```
 
-If you are also bootstrapping the Uniswap V3 external-take path, fund the keeper and the future LP inventory from the deployer in the same way. The wrapper script does this automatically.
+If you are also bootstrapping the Uniswap V3 external-take path, fund the future LP inventory from the keeper (operator) in the same way. The wrapper script does this automatically.
 
 ## Phase 2: Create the Ajna Pool
 
@@ -295,7 +316,7 @@ Example prepare payload:
 ```json
 {
   "network": "base",
-  "actorAddress": "${DEPLOYER_ADDRESS}",
+  "actorAddress": "${KEEPER_ADDRESS}",
   "collateralAddress": "0x<CTEST_ADDRESS>",
   "quoteAddress": "0x<QTEST_ADDRESS>",
   "interestRate": "50000000000000000",
@@ -308,9 +329,9 @@ Prepare and execute:
 ```bash
 cd /home/mike/Projects-2026/ajna-skills
 export AJNA_SKILLS_MODE=execute
-export AJNA_SIGNER_PRIVATE_KEY="$DEPLOYER_KEY"
+export AJNA_SIGNER_PRIVATE_KEY="$KEEPER_KEY"
 
-node dist/cli.js prepare-create-erc20-pool '{"network":"base","actorAddress":"'"$DEPLOYER_ADDRESS"'","collateralAddress":"0x<CTEST_ADDRESS>","quoteAddress":"0x<QTEST_ADDRESS>","interestRate":"50000000000000000","maxAgeSeconds":600}'
+node dist/cli.js prepare-create-erc20-pool '{"network":"base","actorAddress":"'"$KEEPER_ADDRESS"'","collateralAddress":"0x<CTEST_ADDRESS>","quoteAddress":"0x<QTEST_ADDRESS>","interestRate":"50000000000000000","maxAgeSeconds":600}'
 ```
 
 Take the resulting `preparedAction` and pass it into:
@@ -552,10 +573,9 @@ Minimum handoff shape. The wrapper script emits a superset of this, including re
     "lupIndex": 7388
   },
   "actors": {
-    "deployer": "0x...",
+    "keeper": "0x...",
     "lender": "0x...",
-    "borrower": "0x...",
-    "keeper": "0x..."
+    "borrower": "0x..."
   },
   "borrower": {
     "debt": "...",
@@ -685,7 +705,7 @@ A Hermes or OpenClaw agent should split the work into bounded tasks and persist 
 Inputs:
 
 - fork RPC
-- deployer key
+- keeper (operator) key
 - token request JSONs
 
 Outputs:
@@ -699,7 +719,7 @@ Outputs:
 Inputs:
 
 - token addresses
-- deployer key
+- keeper (operator) key
 
 Outputs:
 

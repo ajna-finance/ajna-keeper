@@ -25,3 +25,8 @@ _archivepackage-lock.json
 .context/
 *.dot
 .vscode/
+
+# Fixture-script auto-generated lender/borrower private keys — plaintext,
+# never commit. Override path via AJNA_AGENT_KEY_FILE if a different
+# location is used.
+.fixture-keys.json

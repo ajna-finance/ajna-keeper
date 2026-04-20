@@ -165,10 +165,16 @@ type FixtureSummary = {
   tempDir: string;
   outputPath: string;
   actors: {
-    deployer: string;
+    /**
+     * The operator key — funds the lender and borrower, deploys ERC20
+     * tokens, creates the pool, seeds Uniswap, owns the external-take
+     * factory/taker contracts. After startup, this is also the keeper
+     * signer. Previously split as a separate "deployer" role; merged
+     * because the two roles never run concurrently.
+     */
+    keeper: string;
     lender: string;
     borrower: string;
-    keeper?: string;
   };
   tokenRequests: {
     quote: JsonObject;
@@ -353,12 +359,21 @@ function usage() {
 
 Required env:
 - AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE
-- AJNA_AGENT_DEPLOYER_KEY
-- AJNA_AGENT_LENDER_KEY
-- AJNA_AGENT_BORROWER_KEY
+- AJNA_AGENT_KEEPER_KEY
+  (Single operator key: funds lender/borrower, deploys tokens, creates
+  the pool, seeds Uniswap, owns the external-take factory/taker, and
+  later runs the keeper. Previously split as DEPLOYER_KEY + KEEPER_KEY.)
 
 Optional env:
-- AJNA_AGENT_KEEPER_KEY
+- AJNA_AGENT_LENDER_KEY
+  (Optional. If unset, a fresh wallet is generated and persisted to the
+  key file. On re-runs the persisted key is reused.)
+- AJNA_AGENT_BORROWER_KEY
+  (Same resolution as LENDER_KEY.)
+- AJNA_AGENT_KEY_FILE
+  (Path to the JSON file storing auto-generated lender/borrower keys.
+  Default: ./.fixture-keys.json relative to cwd. File is written with
+  mode 0600; add .fixture-keys.json to .gitignore.)
 - AJNA_AGENT_TOKEN_DEPLOYER_REPO
 - AJNA_AGENT_AJNA_SKILLS_REPO
 - AJNA_AGENT_OUTPUT_PATH
@@ -387,7 +402,6 @@ Optional env:
 Optional Uniswap V3 external-take setup:
 - AJNA_AGENT_SEED_UNISWAP=yes|no (default: yes when external take is enabled)
 - AJNA_AGENT_DEPLOY_EXTERNAL_TAKE=yes|no (default: yes when external take is enabled)
-- AJNA_AGENT_KEEPER_KEY (required only when deploying a fresh factory/taker pair)
 - AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS (reuse existing factory)
 - AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS (reuse existing UniswapV3 taker)
 - AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW
@@ -504,6 +518,95 @@ function big(value: string): BigNumber {
 
 function actorAddress(privateKey: string): string {
   return new Wallet(privateKey).address;
+}
+
+const DEFAULT_KEY_FILE_RELATIVE_PATH = '.fixture-keys.json';
+
+type KeyFileRole = 'lender' | 'borrower';
+
+interface KeyFileContents {
+  lender?: string;
+  borrower?: string;
+}
+
+function resolveKeyFilePath(): string {
+  const configured = process.env.AJNA_AGENT_KEY_FILE;
+  if (configured && configured.length > 0) return path.resolve(configured);
+  return path.resolve(process.cwd(), DEFAULT_KEY_FILE_RELATIVE_PATH);
+}
+
+function readKeyFile(filePath: string): KeyFileContents {
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      console.warn(
+        `[fixture] Key file ${filePath} is not a JSON object; ignoring (a regenerated file will overwrite it).`
+      );
+      return {};
+    }
+    const result: KeyFileContents = {};
+    if (typeof parsed.lender === 'string' && parsed.lender.length > 0) {
+      result.lender = parsed.lender;
+    }
+    if (typeof parsed.borrower === 'string' && parsed.borrower.length > 0) {
+      result.borrower = parsed.borrower;
+    }
+    return result;
+  } catch (error) {
+    console.warn(
+      `[fixture] Failed to parse key file ${filePath}: ${error instanceof Error ? error.message : String(error)}. Ignoring (a regenerated file will overwrite it).`
+    );
+    return {};
+  }
+}
+
+function writeKeyFile(filePath: string, contents: KeyFileContents): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(contents, null, 2) + '\n', {
+    mode: 0o600,
+  });
+  // If the file already existed with looser mode, writeFileSync doesn't
+  // tighten it. Force 0600 defensively.
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Resolve a role key with env-var > key-file > auto-generate precedence.
+ *
+ * - Env var set → use it. Do NOT touch the key file. (Operator's explicit
+ *   override; stay out of their way.)
+ * - Else key file has this role → reuse.
+ * - Else generate a fresh wallet, write the merged key file (role + any
+ *   existing roles from the file), log the new address.
+ *
+ * Returns the private key and a short source label for logging.
+ */
+function resolveActorKey(
+  role: KeyFileRole,
+  envVarName: string,
+  keyFilePath: string
+): { privateKey: string; source: 'env' | 'file' | 'generated' } {
+  const fromEnv = process.env[envVarName];
+  if (fromEnv && fromEnv.length > 0) {
+    return { privateKey: fromEnv, source: 'env' };
+  }
+  const fileContents = readKeyFile(keyFilePath);
+  const fromFile = fileContents[role];
+  if (fromFile) {
+    return { privateKey: fromFile, source: 'file' };
+  }
+  // Generate fresh, merge into file, and persist.
+  const wallet = Wallet.createRandom();
+  const merged: KeyFileContents = { ...fileContents, [role]: wallet.privateKey };
+  writeKeyFile(keyFilePath, merged);
+  return { privateKey: wallet.privateKey, source: 'generated' };
 }
 
 function withGasBuffer(gasEstimate: BigNumber, minGas: number, multiplierBps = 12000): BigNumber {
@@ -1399,10 +1502,34 @@ async function main() {
     throw new Error('Missing AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE');
   }
 
-  const deployerKey = requiredEnv('AJNA_AGENT_DEPLOYER_KEY');
-  const lenderKey = requiredEnv('AJNA_AGENT_LENDER_KEY');
-  const borrowerKey = requiredEnv('AJNA_AGENT_BORROWER_KEY');
-  const keeperKey = process.env.AJNA_AGENT_KEEPER_KEY;
+  // AJNA_AGENT_KEEPER_KEY is the single operator key: funds all other actors,
+  // deploys ERC20 tokens, creates the Ajna pool, seeds Uniswap, and owns
+  // the external-take factory/taker contracts when those are deployed.
+  // (Previously split as DEPLOYER_KEY + KEEPER_KEY; merged because the
+  // two roles never run concurrently and conflating them removes an env
+  // var from the fixture's setup burden.)
+  const keeperKey = requiredEnv('AJNA_AGENT_KEEPER_KEY');
+
+  // Lender and borrower keys are optional. Resolution per role:
+  //   1. Env var set (AJNA_AGENT_LENDER_KEY / AJNA_AGENT_BORROWER_KEY) → use
+  //   2. Else AJNA_AGENT_KEY_FILE (default ./.fixture-keys.json) has the role → reuse
+  //   3. Else generate a fresh wallet, persist to the key file, log the address
+  // This lets first-time runs work with just AJNA_AGENT_KEEPER_KEY and makes
+  // re-runs idempotent — the file is read on each invocation and new keys
+  // only appear when one wasn't found.
+  const keyFilePath = resolveKeyFilePath();
+  const lenderResolution = resolveActorKey(
+    'lender',
+    'AJNA_AGENT_LENDER_KEY',
+    keyFilePath
+  );
+  const borrowerResolution = resolveActorKey(
+    'borrower',
+    'AJNA_AGENT_BORROWER_KEY',
+    keyFilePath
+  );
+  const lenderKey = lenderResolution.privateKey;
+  const borrowerKey = borrowerResolution.privateKey;
   const existingQuoteTokenAddress = optionalAddressEnv('AJNA_AGENT_QUOTE_TOKEN_ADDRESS');
   const existingCollateralTokenAddress = optionalAddressEnv('AJNA_AGENT_COLLATERAL_TOKEN_ADDRESS');
   const existingPoolAddress = optionalAddressEnv('AJNA_AGENT_POOL_ADDRESS');
@@ -1452,15 +1579,9 @@ async function main() {
     );
   }
 
-  if (
-    shouldDeployExternalTake &&
-    !keeperKey &&
-    !(existingKeeperTakerFactoryAddress && existingUniswapV3TakerAddress)
-  ) {
-    throw new Error(
-      'AJNA_AGENT_KEEPER_KEY is required when deploying fresh external-take contracts unless existing factory and taker addresses are both provided'
-    );
-  }
+  // Note: AJNA_AGENT_KEEPER_KEY is now always required (enforced above), so
+  // the former "keeper key only required for external-take deployment" check
+  // is no longer needed.
 
   const tokenDeployerRepo = resolveRepoPath('AJNA_AGENT_TOKEN_DEPLOYER_REPO', '../token-deployer');
   const ajnaSkillsRepo = resolveRepoPath('AJNA_AGENT_AJNA_SKILLS_REPO', '../ajna-skills');
@@ -1523,7 +1644,10 @@ async function main() {
     : '0';
   const quoteInitialSupplyRaw = big(quoteMintRaw)
     .add(big(quoteLiquidityRaw))
-    .add(keeperKey ? big(quoteKeeperBufferRaw) : BigNumber.from(0))
+    // Keeper is always present now (it's the operator key), so always
+    // include the buffer in the quote mint so the keeper has enough for
+    // downstream take/swap operations.
+    .add(big(quoteKeeperBufferRaw))
     .toString();
   const collateralInitialSupplyRaw = big(collateralMintRaw)
     .add(big(collateralLiquidityRaw))
@@ -1531,10 +1655,21 @@ async function main() {
   const maxRemoveAttempts = Number(optionalEnv('AJNA_AGENT_MAX_REMOVE_ATTEMPTS', '16'));
   const nativeGasFundWei = optionalEnv('AJNA_AGENT_NATIVE_GAS_FUND_WEI', '1000000000000000000');
 
-  const deployerAddress = actorAddress(deployerKey);
+  const keeperAddress = actorAddress(keeperKey);
   const lenderAddress = actorAddress(lenderKey);
   const borrowerAddress = actorAddress(borrowerKey);
-  const keeperAddress = keeperKey ? actorAddress(keeperKey) : undefined;
+
+  const keySourceLabel = (source: 'env' | 'file' | 'generated') =>
+    source === 'env'
+      ? 'env var'
+      : source === 'file'
+        ? `reused from ${keyFilePath}`
+        : `generated and saved to ${keyFilePath}`;
+  console.log(
+    `[fixture] Keeper (operator): ${keeperAddress}\n` +
+      `[fixture] Lender: ${lenderAddress} (${keySourceLabel(lenderResolution.source)})\n` +
+      `[fixture] Borrower: ${borrowerAddress} (${keySourceLabel(borrowerResolution.source)})`
+  );
 
   const quoteRequest = {
     standard: 'erc20',
@@ -1542,8 +1677,8 @@ async function main() {
     symbol: optionalEnv('AJNA_AGENT_QUOTE_TOKEN_SYMBOL', 'QTEST'),
     chainId: BASE_CHAIN_ID,
     chainName: BASE_CHAIN_NAME,
-    owner: deployerAddress,
-    initialRecipient: deployerAddress,
+    owner: keeperAddress,
+    initialRecipient: keeperAddress,
     initialSupply: quoteInitialSupplyRaw,
     decimals: 18,
     mintable: true,
@@ -1554,15 +1689,15 @@ async function main() {
     symbol: optionalEnv('AJNA_AGENT_COLLATERAL_TOKEN_SYMBOL', 'CTEST'),
     chainId: BASE_CHAIN_ID,
     chainName: BASE_CHAIN_NAME,
-    owner: deployerAddress,
-    initialRecipient: deployerAddress,
+    owner: keeperAddress,
+    initialRecipient: keeperAddress,
     initialSupply: collateralInitialSupplyRaw,
     decimals: 18,
     mintable: true,
   };
 
   const provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-  const deployerSigner = new Wallet(deployerKey, provider);
+  const keeperSigner = new Wallet(keeperKey, provider);
   const lenderSigner = new Wallet(lenderKey, provider);
   const borrowerSigner = new Wallet(borrowerKey, provider);
   // If an existing token address is provided via env var, always reuse it regardless of the
@@ -1576,10 +1711,10 @@ async function main() {
     tempDir,
     name: quoteRequest.name,
     symbol: quoteRequest.symbol,
-    owner: deployerAddress,
+    owner: keeperAddress,
     initialSupply: quoteRequest.initialSupply,
     rpcUrl,
-    privateKey: deployerKey,
+    privateKey: keeperKey,
     targetDir: path.join(tempDir, 'quote-token-workspace'),
   });
   const collateralManifest = await resolveFixtureToken({
@@ -1589,10 +1724,10 @@ async function main() {
     tempDir,
     name: collateralRequest.name,
     symbol: collateralRequest.symbol,
-    owner: deployerAddress,
+    owner: keeperAddress,
     initialSupply: collateralRequest.initialSupply,
     rpcUrl,
-    privateKey: deployerKey,
+    privateKey: keeperKey,
     targetDir: path.join(tempDir, 'collateral-token-workspace'),
   });
   const stages: FixtureStageSummary = {
@@ -1633,49 +1768,37 @@ async function main() {
   };
 
   if (shouldFundNativeGas) {
+    // The keeper is the funding source for the lender and borrower. It
+    // doesn't need to fund itself — it's already running with gas.
     await ensureNativeBalance({
-      signer: deployerSigner,
+      signer: keeperSigner,
       provider,
       to: lenderAddress,
       minimumWei: nativeGasFundWei,
     });
     await ensureNativeBalance({
-      signer: deployerSigner,
+      signer: keeperSigner,
       provider,
       to: borrowerAddress,
       minimumWei: nativeGasFundWei,
     });
-    if (keeperAddress && keeperAddress.toLowerCase() !== deployerAddress.toLowerCase()) {
-      await ensureNativeBalance({
-        signer: deployerSigner,
-        provider,
-        to: keeperAddress,
-        minimumWei: nativeGasFundWei,
-      });
-    }
   }
 
   if (shouldTransferTokens) {
     await transferErc20({
-      signer: deployerSigner,
+      signer: keeperSigner,
       tokenAddress: quoteManifest.deployedAddress,
       to: lenderAddress,
       amount: quoteMintRaw,
     });
     await transferErc20({
-      signer: deployerSigner,
+      signer: keeperSigner,
       tokenAddress: collateralManifest.deployedAddress,
       to: borrowerAddress,
       amount: collateralMintRaw,
     });
-    if (keeperAddress && keeperAddress.toLowerCase() !== deployerAddress.toLowerCase()) {
-      await transferErc20({
-        signer: deployerSigner,
-        tokenAddress: quoteManifest.deployedAddress,
-        to: keeperAddress,
-        amount: quoteKeeperBufferRaw,
-      });
-    }
+    // Keeper retains its own `quoteKeeperBufferRaw` in-place (already the
+    // mint recipient for the full quote supply). No self-transfer needed.
   }
 
   let uniswapSummary: FixtureSummary['uniswapV3ExternalTake'];
@@ -1694,7 +1817,7 @@ async function main() {
     );
     const liquidity = shouldSeedUniswap
       ? await createAndSeedUniswapV3Pool({
-          signer: deployerSigner,
+          signer: keeperSigner,
           quoteTokenAddress: quoteManifest.deployedAddress,
           collateralTokenAddress: collateralManifest.deployedAddress,
           quoteLiquidityRaw,
@@ -1711,7 +1834,7 @@ async function main() {
             uniswapV3TakerAddress: existingUniswapV3TakerAddress,
           })
         : await deployUniswapV3ExternalTakeContracts({
-            ownerSigner: new Wallet(keeperKey!, provider),
+            ownerSigner: keeperSigner,
             ajnaPoolFactoryAddress,
           })
       : existingKeeperTakerFactoryAddress && existingUniswapV3TakerAddress
@@ -1741,13 +1864,13 @@ async function main() {
           'prepare-create-erc20-pool',
           {
             network: 'base',
-            actorAddress: deployerAddress,
+            actorAddress: keeperAddress,
             collateralAddress: collateralManifest.deployedAddress,
             quoteAddress: quoteManifest.deployedAddress,
             interestRate,
             maxAgeSeconds: 600,
           },
-          deployerKey,
+          keeperKey,
           rpcUrl
         );
 
@@ -1982,10 +2105,9 @@ async function main() {
     tempDir,
     outputPath,
     actors: {
-      deployer: deployerAddress,
+      keeper: keeperAddress,
       lender: lenderAddress,
       borrower: borrowerAddress,
-      keeper: keeperAddress,
     },
     tokenRequests: {
       quote: quoteRequest,
