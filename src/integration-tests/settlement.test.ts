@@ -5,19 +5,23 @@ import { BigNumber, constants } from 'ethers';
 import { configureAjna, KeeperConfig, PoolConfig } from '../config';
 import { NonceTracker } from '../nonce';
 import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../settlement';
-import { LpCollector, collectBondFromPool, RewardActionTracker } from '../rewards';
+import { collectBondFromPool, RewardActionTracker } from '../rewards';
+import { makeSinglePoolLpCollector } from './lp-test-helpers';
 import { DexRouter } from '../dex/router';
 import { decimaledToWei, weiToDecimaled, delay } from '../utils';
 import { logger } from '../logging';
 import { MAINNET_CONFIG } from './test-config';
 import {
+  makeGetBucketTakeLPAwardsFromSdk,
   makeGetHighestMeaningfulBucket,
   makeGetLiquidationsFromSdk,
   makeGetLoansFromSdk,
+  overrideGetBucketTakeLPAwards,
   overrideGetHighestMeaningfulBucket,
   overrideGetLiquidations,
   overrideGetLoans,
 } from './subgraph-mock';
+import { createSubgraphReader } from '../read-transports';
 import {
   getProvider,
   impersonateSigner,
@@ -63,6 +67,7 @@ describe('Settlement Integration Tests', () => {
     overrideGetLoans(makeGetLoansFromSdk(pool));
     overrideGetLiquidations(makeGetLiquidationsFromSdk(pool));
     overrideGetHighestMeaningfulBucket(makeGetHighestMeaningfulBucket(pool));
+    overrideGetBucketTakeLPAwards(makeGetBucketTakeLPAwardsFromSdk(pool));
 
     // Standard settlement configuration for testing
     poolConfig = {
@@ -274,16 +279,14 @@ describe('Settlement Integration Tests', () => {
         dexRouter
       );
 
-      const lpCollector = new LpCollector(
+      const lpCollector = makeSinglePoolLpCollector(
         pool,
         kickerSigner,
-        poolConfig as any,
+        (poolConfig as any).collectLpReward,
         keeperConfig,
-        exchangeTracker
+        exchangeTracker,
+        createSubgraphReader({ subgraphUrl: 'mock://' })
       );
-
-      // Start LP collector subscriptions
-      await lpCollector.startSubscription();
 
       // Simulate LP collection triggering AuctionNotCleared error
       try {
@@ -293,25 +296,24 @@ describe('Settlement Integration Tests', () => {
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         console.log('LP collection error:', errorMessage);
-        
+
         if (errorMessage.includes('AuctionNotCleared')) {
           console.log('AuctionNotCleared detected - testing reactive settlement');
-          
+
           const settlementSuccess = await tryReactiveSettlement({
             pool,
             poolConfig,
             signer: kickerSigner,
             config: keeperConfig,
           });
-          
+
           console.log('Reactive settlement result:', settlementSuccess);
-          
+
           // The result depends on whether there are actually auctions to settle
           expect(typeof settlementSuccess).to.equal('boolean');
         }
       }
 
-      await lpCollector.stopSubscription();
       console.log('LP collection integration test completed');
     });
   });

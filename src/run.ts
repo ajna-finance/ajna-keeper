@@ -18,11 +18,23 @@ import {
 } from './utils';
 import { handleKicks } from './kick';
 import { logger } from './logging';
-import { collectBondFromPool, LpCollector, RewardActionTracker } from './rewards';
+import {
+  collectBondFromPool,
+  LpIngester,
+  LpManager,
+  LpRedeemer,
+  RewardActionTracker,
+} from './rewards';
+import {
+  isLpCollectionEnabled,
+  resolveCollectLpRewardForPool,
+} from './config';
 import { DexRouter } from './dex/router';
 import { tryReactiveSettlement } from './settlement';
 import {
   cacheConfiguredPool,
+  ensurePoolLoaded,
+  normalizeAddress,
   PoolHydrationCooldowns,
   PoolMap,
 } from './discovery/targets';
@@ -131,13 +143,6 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     config.keeperKeystore,
     config.ethRpcUrl
   );
-  // LP-reward collection attaches event listeners (collect-lp.ts), which makes
-  // ethers v5 background-poll getBlockNumber at pollingInterval. Default is 4s;
-  // raise to 30s when LP rewards are enabled so idle keepers make ~2 calls/min
-  // instead of ~15. Has no effect when no listeners are attached.
-  if (config.pools.some((pool) => !!pool.collectLpReward)) {
-    provider.pollingInterval = 30_000;
-  }
   const network = await provider.getNetwork();
   const chainId = network.chainId;
 
@@ -173,7 +178,14 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     settlementLoop({ config, signer, poolMap, discoveryRuntime });
   }
   collectBondLoop({ poolMap, config, signer, subgraph });
-  collectLpRewardsLoop({ poolMap, config, signer, subgraph });
+  collectLpRewardsLoop({
+    poolMap,
+    config,
+    signer,
+    subgraph,
+    ajna,
+    hydrationCooldowns,
+  });
 }
 
 async function getPoolsFromConfig(
@@ -350,45 +362,131 @@ async function collectLpRewardsLoop({
   config,
   signer,
   subgraph,
-}: KeepPoolParams & { subgraph: SubgraphReader }) {
-  const poolsWithCollectLpSettings = config.pools.filter(hasCollectLpSettings);
-  const lpCollectors: Map<string, LpCollector> = new Map();
+  ajna,
+  hydrationCooldowns,
+}: KeepPoolParams & {
+  subgraph: SubgraphReader;
+  ajna: AjnaSDK;
+  hydrationCooldowns: PoolHydrationCooldowns;
+}) {
+  // Early-exit if the operator didn't enable LP collection via either
+  // `defaultLpReward` or any per-pool `collectLpReward` override.
+  if (!isLpCollectionEnabled(config)) {
+    logger.info(
+      'LP reward collection disabled (no defaultLpReward or per-pool collectLpReward configured).'
+    );
+    return;
+  }
+
   const dexRouter = new DexRouter(signer, {
     oneInchRouters: config?.oneInchRouters ?? {},
     connectorTokens: config?.connectorTokens ?? [],
     tokenAddresses: config.tokenAddresses,
   });
-  const exchangeTracker = new RewardActionTracker(
-    signer,
-    config,
-    dexRouter
-  );
+  const exchangeTracker = new RewardActionTracker(signer, config, dexRouter);
 
-  for (const poolConfig of poolsWithCollectLpSettings) {
-    const pool = getPoolFromMap(poolMap, poolConfig.address)!;
-    const collector = new LpCollector(
+  // Memoized lowercase-address → PoolConfig lookup. Built once so both the
+  // resolver and the AuctionNotCleared settlement-retry path do O(1) lookups
+  // instead of repeated O(n) linear scans over `config.pools`.
+  const poolConfigByAddress = new Map<string, PoolConfig>();
+  for (const p of config.pools) {
+    poolConfigByAddress.set(normalizeAddress(p.address), p);
+  }
+
+  const ingester = new LpIngester(signer, subgraph, config);
+  const redeemers: Map<string, LpRedeemer> = new Map();
+
+  // Resolves (and lazily hydrates) the LpRedeemer for a pool address
+  // discovered in a subgraph event. Returns undefined if the pool can't
+  // be hydrated (ERC721, deployment mismatch, hydration cooldown) or if
+  // no LP settings apply — events for such pools are silently skipped.
+  const resolveRedeemer = async (
+    poolAddress: string
+  ): Promise<LpRedeemer | undefined> => {
+    const normalized = normalizeAddress(poolAddress);
+    const cached = redeemers.get(normalized);
+    if (cached) return cached;
+
+    const pool = await ensurePoolLoaded({
+      ajna,
+      poolMap,
+      poolAddress: normalized,
+      config,
+      hydrationCooldowns,
+    });
+    if (!pool) return undefined;
+
+    const matchingConfig = poolConfigByAddress.get(normalized);
+    const settings = resolveCollectLpRewardForPool(
+      config.defaultLpReward,
+      matchingConfig?.collectLpReward,
+      normalized
+    );
+    if (!settings) return undefined;
+
+    const redeemer = new LpRedeemer(
       pool,
       signer,
-      poolConfig,
+      settings,
       config,
       exchangeTracker
     );
-    lpCollectors.set(poolConfig.address, collector);
-    await collector.startSubscription();
-  }
+    redeemers.set(normalized, redeemer);
+    return redeemer;
+  };
+
+  const manager = new LpManager(ingester, resolveRedeemer);
 
   while (true) {
-    for (const poolConfig of poolsWithCollectLpSettings) {
-      const collector = lpCollectors.get(poolConfig.address)!;
+    try {
+      await manager.ingestAndDispatch();
+    } catch (ingestError) {
+      // A failed subgraph fetch shouldn't kill the loop — next cycle
+      // retries. The cursor hasn't advanced (ingest throws before cursor
+      // commit), so nothing is lost.
+      logger.error(
+        'LP ingest cycle failed; retrying next cycle',
+        ingestError
+      );
+    }
+
+    // Sweep every redeemer with a non-empty lpMap, not just pools that
+    // received new events this cycle. Partial redemptions (e.g. residual
+    // below minAmount thresholds) leave an entry in lpMap; without this,
+    // that entry would sit until the next BucketTake touched the same
+    // pool — potentially never — and the LP would strand between restarts.
+    const toSweep: LpRedeemer[] = [];
+    for (const redeemer of Array.from(redeemers.values())) {
+      if (redeemer.lpMap.size > 0) toSweep.push(redeemer);
+    }
+
+    for (const redeemer of toSweep) {
+      const pool = redeemer.pool;
+      const normalized = normalizeAddress(pool.poolAddress);
+      const poolConfig = poolConfigByAddress.get(normalized);
+
       try {
-        await collector.collectLpRewards();
+        await redeemer.sweep();
         await delay(config.delayBetweenActions);
       } catch (error) {
-        const pool = getPoolFromMap(poolMap, poolConfig.address)!;
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
 
         if (errorMessage.includes('AuctionNotCleared')) {
-          logger.info(`AuctionNotCleared detected - attempting settlement for ${pool.name}`);
+          logger.info(
+            `AuctionNotCleared detected - attempting settlement for ${pool.name}`
+          );
+
+          if (!poolConfig) {
+            // Auto-discovered pool without an explicit config entry has
+            // no settlement policy. Log and skip — the bucket stays in
+            // lpMap; next cycle retries (maybe the auction clears in
+            // the meantime).
+            logger.warn(
+              `Settlement skipped for ${pool.name}: no config entry (auto-discovered pool). LP remains pending.`
+            );
+            continue;
+          }
 
           try {
             const settled = await tryReactiveSettlement({
@@ -403,27 +501,62 @@ async function collectLpRewardsLoop({
             });
 
             if (settled) {
-              logger.info(`Retrying LP collection after settlement in ${pool.name}`);
-              await collector.collectLpRewards();
-              await delay(config.delayBetweenActions);
+              logger.info(
+                `Retrying LP collection after settlement in ${pool.name}`
+              );
+              try {
+                await redeemer.sweep();
+                await delay(config.delayBetweenActions);
+              } catch (retryError) {
+                const retryMessage =
+                  retryError instanceof Error
+                    ? retryError.message
+                    : String(retryError);
+                if (retryMessage.includes('AuctionNotCleared')) {
+                  // Pool has a SECOND jammed auction on a different bucket.
+                  // Next cycle will re-attempt settlement for that one;
+                  // this cycle's work stops here.
+                  logger.warn(
+                    `Pool ${pool.name} has a second auction still jammed after settling the first; next cycle will re-attempt settlement.`
+                  );
+                } else {
+                  logger.error(
+                    `LP sweep retry after settlement still failed for ${pool.name}`,
+                    retryError
+                  );
+                }
+              }
             } else {
-              logger.warn(`Settlement attempted but bonds still locked in ${pool.name}`);
+              logger.warn(
+                `Settlement attempted but bonds still locked in ${pool.name}`
+              );
             }
           } catch (settlementError) {
-            logger.error(`Settlement failed for ${pool.name}:`, settlementError);
+            logger.error(
+              `Settlement failed for ${pool.name}:`,
+              settlementError
+            );
           }
         } else {
-          logger.error(`Failed to collect LP reward from pool: ${pool.name}.`, error);
+          logger.error(
+            `Failed to collect LP reward from pool: ${pool.name}.`,
+            error
+          );
         }
       }
     }
-    await exchangeTracker.handleAllTokens();
+
+    try {
+      await exchangeTracker.handleAllTokens();
+    } catch (error) {
+      // A swap/transfer failure in one cycle must not kill the whole LP
+      // collection loop — next cycle will re-queue and retry any
+      // unprocessed tokens that are still sitting in the tracker.
+      logger.error(
+        'Failed to process queued reward-action tokens; continuing.',
+        error
+      );
+    }
     await delay(config.delayBetweenRuns);
   }
-}
-
-function hasCollectLpSettings(
-  config: PoolConfig
-): config is RequireFields<PoolConfig, 'collectLpReward'> {
-  return !!config.collectLpReward;
 }

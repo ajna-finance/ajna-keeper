@@ -11,13 +11,16 @@ import {
   setBalance,
 } from './test-utils';
 import {
+  makeGetBucketTakeLPAwardsFromSdk,
   makeGetHighestMeaningfulBucket,
   makeGetLiquidationsFromSdk,
   makeGetLoansFromSdk,
+  overrideGetBucketTakeLPAwards,
   overrideGetHighestMeaningfulBucket,
   overrideGetLiquidations,
   overrideGetLoans,
 } from './subgraph-mock';
+import { createSubgraphReader } from '../read-transports';
 import { expect } from 'chai';
 import {
   getLiquidationsToTake,
@@ -29,7 +32,8 @@ import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 import { NonceTracker } from '../nonce';
-import { LpCollector, RewardActionTracker, collectBondFromPool } from '../rewards';
+import { RewardActionTracker, collectBondFromPool } from '../rewards';
+import { makeSinglePoolLpCollector } from './lp-test-helpers';
 import { DexRouter } from '../dex/router';
 
 const setup = async () => {
@@ -41,6 +45,7 @@ const setup = async () => {
   overrideGetLoans(makeGetLoansFromSdk(pool));
   overrideGetLiquidations(makeGetLiquidationsFromSdk(pool));
   overrideGetHighestMeaningfulBucket(makeGetHighestMeaningfulBucket(pool));
+  overrideGetBucketTakeLPAwards(makeGetBucketTakeLPAwardsFromSdk(pool));
   await depositQuoteToken({
     pool,
     owner: MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress,
@@ -327,6 +332,7 @@ describe('handleLegacyOrArbTakes', () => {
     overrideGetLoans(makeGetLoansFromSdk(pool));
     overrideGetLiquidations(makeGetLiquidationsFromSdk(pool));
     overrideGetHighestMeaningfulBucket(makeGetHighestMeaningfulBucket(pool));
+    overrideGetBucketTakeLPAwards(makeGetBucketTakeLPAwardsFromSdk(pool));
     const bucket1 = pool.getBucketByPrice(decimaledToWei(1));
     const bucket2 = pool.getBucketByIndex(bucket1.index + 1);
     await depositQuoteToken({
@@ -425,15 +431,13 @@ describe('ArbTake → LP Collection chain', () => {
     );
 
     const dexRouter = new DexRouter(signer);
-    const lpCollector = new LpCollector(
+    const lpCollector = makeSinglePoolLpCollector(
       pool,
       signer,
       {
-        collectLpReward: {
-          redeemFirst: TokenToCollect.QUOTE,
-          minAmountQuote: 0,
-          minAmountCollateral: 0,
-        },
+        redeemFirst: TokenToCollect.QUOTE,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
       },
       {},
       new RewardActionTracker(
@@ -445,13 +449,11 @@ describe('ArbTake → LP Collection chain', () => {
           },
           delayBetweenActions: 0,
           pools: [],
-        },
+        } as any,
         dexRouter
-      )
+      ),
+      createSubgraphReader({ subgraphUrl: 'mock://' })
     );
-
-    // Start subscription BEFORE the arb take so the BucketTake event is captured
-    await lpCollector.startSubscription();
 
     // Execute arb take
     await handleLegacyOrArbTakes({
@@ -465,15 +467,10 @@ describe('ArbTake → LP Collection chain', () => {
       },
     });
 
-    // Wait for LP reward to be tracked
-    let rewardLp: BigNumber | undefined;
-    for (let i = 0; i < 50; i++) {
-      const entries = Array.from(lpCollector.lpMap.entries());
-      rewardLp = entries?.[0]?.[1];
-      if (rewardLp && rewardLp.gt(constants.Zero)) break;
-      await new Promise(r => setTimeout(r, 100));
-    }
+    await lpCollector.ingestNewAwardsFromSubgraph();
 
+    const entries = Array.from(lpCollector.lpMap.entries());
+    const rewardLp: BigNumber | undefined = entries?.[0]?.[1];
     expect(rewardLp).to.not.be.undefined;
     expect(rewardLp!.gt(constants.Zero)).to.be.true;
 
@@ -484,13 +481,13 @@ describe('ArbTake → LP Collection chain', () => {
     const lpBalance = await bucket.lpBalance(signerAddress);
     expect(weiToDecimaled(lpBalance)).to.be.greaterThan(0);
 
+    // Pick-one contract: ingest already ran above; call sweep directly
+    // instead of collectLpRewards (which would ingest a second time).
     let collectionError: unknown;
     try {
-      await lpCollector.collectLpRewards();
+      await lpCollector.redeemer.sweep();
     } catch (error) {
       collectionError = error;
-    } finally {
-      await lpCollector.stopSubscription();
     }
 
     expect(String(collectionError)).to.include('AuctionNotCleared');
