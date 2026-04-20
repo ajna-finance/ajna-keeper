@@ -75,6 +75,22 @@ export function assertIsValidConfig(
           'every cycle. Verify your subgraph really lags this much.'
       );
     }
+    // Cross-check against delayBetweenRuns. The lookback window must
+    // outrun the actual time between cycles, otherwise events indexed
+    // between cycles can fall off the subgraph query's floor before the
+    // next cycle gets to see them. Legal but almost never intentional.
+    if (
+      typeof config.delayBetweenRuns === 'number' &&
+      Number.isFinite(config.delayBetweenRuns) &&
+      v > 0 &&
+      v < config.delayBetweenRuns
+    ) {
+      logger.warn(
+        `lpRewardLookbackSeconds=${v} is less than delayBetweenRuns=${config.delayBetweenRuns}. ` +
+          'Events indexed between cycles may fall off the query floor before the next ingest sees them. ' +
+          `Recommended: lpRewardLookbackSeconds >= delayBetweenRuns + 30 (so ~${config.delayBetweenRuns + 30}).`
+      );
+    }
   }
 
   // `defaultLpReward`, when set, must specify the two mandatory min-amount
@@ -148,6 +164,15 @@ function validateCollectLpRewardSettings(
 }
 
 function validateRewardAction(action: RewardAction, path: string): void {
+  // Guard before any property reads so a caller passing `null` or a
+  // primitive (e.g. `rewardActionQuote: 42`, or explicit null to "disable"
+  // an inherited default) gets a clean shape error instead of a raw
+  // `TypeError: Cannot read properties of null`.
+  if (action === null || typeof action !== 'object') {
+    throw new Error(
+      `${path} must be an object, got: ${JSON.stringify(action)}`
+    );
+  }
   if (
     action.action !== RewardActionLabel.TRANSFER &&
     action.action !== RewardActionLabel.EXCHANGE
@@ -156,11 +181,56 @@ function validateRewardAction(action: RewardAction, path: string): void {
       `${path}.action must be RewardActionLabel.TRANSFER or RewardActionLabel.EXCHANGE, got: ${JSON.stringify((action as any).action)}`
     );
   }
-  if (action.action === RewardActionLabel.EXCHANGE) {
-    const validDex = Object.values(PostAuctionDex) as string[];
-    if (!validDex.includes(action.dexProvider)) {
+
+  if (action.action === RewardActionLabel.TRANSFER) {
+    if (
+      typeof action.to !== 'string' ||
+      !/^0x[0-9a-fA-F]{40}$/.test(action.to)
+    ) {
       throw new Error(
-        `${path}.dexProvider must be one of ${validDex.join(', ')}; got: ${JSON.stringify(action.dexProvider)}`
+        `${path}.to must be a 0x-prefixed 20-byte address, got: ${JSON.stringify(action.to)}`
+      );
+    }
+    return;
+  }
+
+  // EXCHANGE: validate dexProvider enum + required ExchangeReward fields.
+  const validDex = Object.values(PostAuctionDex) as string[];
+  if (!validDex.includes(action.dexProvider)) {
+    throw new Error(
+      `${path}.dexProvider must be one of ${validDex.join(', ')}; got: ${JSON.stringify(action.dexProvider)}`
+    );
+  }
+  if (
+    typeof action.address !== 'string' ||
+    !/^0x[0-9a-fA-F]{40}$/.test(action.address)
+  ) {
+    throw new Error(
+      `${path}.address must be a 0x-prefixed 20-byte token address, got: ${JSON.stringify(action.address)}`
+    );
+  }
+  if (typeof action.targetToken !== 'string' || action.targetToken.length === 0) {
+    throw new Error(
+      `${path}.targetToken must be a non-empty string, got: ${JSON.stringify(action.targetToken)}`
+    );
+  }
+  if (
+    typeof action.slippage !== 'number' ||
+    !Number.isFinite(action.slippage) ||
+    action.slippage < 0
+  ) {
+    throw new Error(
+      `${path}.slippage must be a non-negative number, got: ${JSON.stringify(action.slippage)}`
+    );
+  }
+  if (action.fee !== undefined) {
+    if (
+      typeof action.fee !== 'number' ||
+      !Number.isInteger(action.fee) ||
+      action.fee < 0
+    ) {
+      throw new Error(
+        `${path}.fee must be a non-negative integer when set, got: ${JSON.stringify(action.fee)}`
       );
     }
   }

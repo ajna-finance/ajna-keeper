@@ -1057,15 +1057,16 @@ For pools where you want to swap rewards with Uniswap V3, set `dexProvider: Post
   address: "0xpoolAddress",
   // Other pool settings...
   collectLpReward: {
-    redeemFirst: "QUOTE", // or "COLLATERAL"
-    minAmount: 0.001,
-    rewardAction: {
-      action: "EXCHANGE",
-      address: "0xtokenAddress", // Token to swap
-      targetToken: "weth",      // Target token (e.g., "weth", "usdc")
-      slippage: 1,             // Slippage (ignored for Uniswap)
-      dexProvider: PostAuctionDex.UNISWAP_V3, // Use enum
-      fee: 3000               // Fee tier (500, 3000, 10000)
+    redeemFirst: TokenToCollect.QUOTE, // or TokenToCollect.COLLATERAL
+    minAmountQuote: 0.001,
+    minAmountCollateral: 0.001,
+    rewardActionQuote: {
+      action: RewardActionLabel.EXCHANGE,
+      address: "0xtokenAddress", // Token to swap (quote token here)
+      targetToken: "weth",       // Target token (e.g., "weth", "usdc")
+      slippage: 1,               // Slippage (ignored for Uniswap)
+      dexProvider: PostAuctionDex.UNISWAP_V3,
+      fee: 3000                  // Fee tier (500, 3000, 10000)
     }
   }
 }
@@ -1079,14 +1080,15 @@ pools: [
     name: "WETH / USDC",
     address: "0x0b17159f2486f669a1f930926638008e2ccb4287",
     collectLpReward: {
-      redeemFirst: "COLLATERAL",
-      minAmount: 0.001,
+      redeemFirst: TokenToCollect.COLLATERAL,
+      minAmountQuote: 0.001,
+      minAmountCollateral: 0.001,
       rewardActionCollateral: {
         action: RewardActionLabel.EXCHANGE,
         address: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
         targetToken: "usdc",
         slippage: 1,
-        dexProvider: PostAuctionDex.UNISWAP_V3, // Use enum
+        dexProvider: PostAuctionDex.UNISWAP_V3,
         fee: FeeAmount.MEDIUM // Can use different fee tier than external takes!
       }
     }
@@ -1124,14 +1126,15 @@ pools: [
     name: "USD_T1 / USD_T2",
     address: "0x600ca6e0b5cf41e3e4b4242a5b170f3b02ce3da7",
     collectLpReward: {
-      redeemFirst: "COLLATERAL",
-      minAmount: 0.001,
+      redeemFirst: TokenToCollect.COLLATERAL,
+      minAmountQuote: 0.001,
+      minAmountCollateral: 0.001,
       rewardActionCollateral: {
         action: RewardActionLabel.EXCHANGE,
         address: "0x1f0d51a052aa79527fffaf3108fb4440d3f53ce6",
         targetToken: "usd_t2",
         slippage: 10,
-        dexProvider: PostAuctionDex.SUSHISWAP, // SushiSwap option
+        dexProvider: PostAuctionDex.SUSHISWAP,
         fee: FeeAmount.LOW // Can use different fee tier than external takes!
       }
     }

@@ -344,14 +344,18 @@ describe('LpCollector collections', () => {
     // Simulated cold start: construct a brand-new collector, which replays
     // history with cursor='0'. The subgraph returns the same BucketTake
     // events but the signer's on-chain lpBalance is now 0.
+    //
+    // Respect the facade's pick-one contract: ingest once, sweep directly
+    // via `redeemer.sweep()` (not `collectLpRewards()`, which would ingest
+    // a second time).
     const secondRun = makeCollector();
     await secondRun.ingestNewAwardsFromSubgraph();
-    // Guard: the test is only meaningful if ingest actually replayed events.
-    // Without this pre-check, `lpMap.size === 0` at the end would also pass
-    // trivially if the mock returned zero events for any reason.
+    // Guard: the test is only meaningful if ingest actually replayed
+    // events. Without this pre-check, `lpMap.size === 0` at the end would
+    // also pass trivially if the mock returned zero events.
     expect(secondRun.lpMap.size).to.be.greaterThan(0);
 
-    await secondRun.collectLpRewards();
+    await secondRun.redeemer.sweep();
 
     // The stale reward should have been pruned via the lpBalance=0 path in
     // collectLpRewardFromBucket, leaving lpMap empty.

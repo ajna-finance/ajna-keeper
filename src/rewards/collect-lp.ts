@@ -64,6 +64,14 @@ const MAX_SEEN_EVENT_IDS = 100_000;
 // failures is pathological and should surface its own aggregate signal.
 const QUARANTINE_ALARM_THRESHOLD = 5;
 
+// Number of consecutive sweep cycles in which a bucket's redeemable deposit
+// AND redeemable collateral both stay below the operator's minAmount
+// thresholds before the redeemer drops the entry. Keeps dusty buckets from
+// burning 2 RPC reads per cycle forever; `ingest` will re-credit the bucket
+// if a future BucketTake crosses the threshold. Reset to 0 on any cycle
+// that actually redeems anything.
+const MAX_CONSECUTIVE_BELOW_THRESHOLD_ATTEMPTS = 20;
+
 /**
  * Kick off `signer.getAddress()` at construction time and attach a no-op
  * logging catch so a rejection doesn't become an unhandled rejection at
@@ -187,8 +195,17 @@ export class LpIngester {
         BigNumber.from(take.blockTimestamp);
       } catch {
         logger.warn(
-          `BucketTake event has unparseable blockTimestamp; skipping. id: ${take.id}, ts: ${take.blockTimestamp}`
+          `BucketTake event has unparseable blockTimestamp; skipping (subsequent occurrences suppressed). id: ${take.id}, ts: ${take.blockTimestamp}`
         );
+        // Record under `seenEventIds` with the CURRENT cursor as a
+        // surrogate timestamp — the real one was unparseable. Next cycle's
+        // `seenEventIds.has(take.id)` at the top of the loop then short-
+        // circuits this event before we even re-warn, giving us warn-once
+        // semantics. Crucially, `pruneSeenEventIds` can still evict this
+        // entry as the cursor advances past `cursor - lookback`, so the
+        // dedupe map stays bounded (earlier per-id-latch design leaked
+        // memory because its separate set was never pruned).
+        this.seenEventIds.set(take.id, this.cursorBlockTimestamp);
         continue;
       }
 
@@ -351,6 +368,9 @@ export class LpRedeemer {
   public lpMap: Map<number, BigNumber> = new Map(); // bucketIndex → rewardLp
 
   private signerAddressPromise: Promise<string>;
+  // Consecutive-failure counter per bucket for the "both arms below
+  // minAmount threshold" case. See MAX_CONSECUTIVE_BELOW_THRESHOLD_ATTEMPTS.
+  private belowThresholdAttempts: Map<number, number> = new Map();
 
   constructor(
     public readonly pool: FungiblePool,
@@ -398,6 +418,29 @@ export class LpRedeemer {
           rewardLp
         );
         this.subtractReward(bucketIndex, lpConsumed);
+
+        if (lpConsumed.gt(constants.Zero)) {
+          // Any redemption progress resets the below-threshold counter.
+          this.belowThresholdAttempts.delete(bucketIndex);
+        } else if (this.lpMap.has(bucketIndex)) {
+          // lpBalance was non-zero (otherwise collectLpRewardFromBucket
+          // would have zero-pruned and lpMap wouldn't have this entry
+          // anymore) but both redemption arms were below the configured
+          // minAmount thresholds. Count attempts; drop after N consecutive
+          // fails so a dusty bucket doesn't burn 2 RPC reads per cycle
+          // forever. A future BucketTake will re-credit and re-try.
+          const attempts =
+            (this.belowThresholdAttempts.get(bucketIndex) ?? 0) + 1;
+          if (attempts >= MAX_CONSECUTIVE_BELOW_THRESHOLD_ATTEMPTS) {
+            logger.warn(
+              `Bucket ${bucketIndex} in pool ${this.pool.name} stayed below minAmount thresholds for ${attempts} consecutive cycles; dropping lpMap entry. A future BucketTake will re-credit if the bucket later clears the threshold.`
+            );
+            this.lpMap.delete(bucketIndex);
+            this.belowThresholdAttempts.delete(bucketIndex);
+          } else {
+            this.belowThresholdAttempts.set(bucketIndex, attempts);
+          }
+        }
       } catch (error) {
         // AuctionNotCleared is re-thrown so `run.ts` can trigger reactive
         // settlement. Other per-bucket errors stay contained — a
@@ -688,9 +731,8 @@ export class LpManager {
    * corrupt cursor state: the ingester has already advanced past these
    * events and recorded them in `seenEventIds`.
    */
-  public async ingestAndDispatch(): Promise<LpRedeemer[]> {
+  public async ingestAndDispatch(): Promise<void> {
     const byPool = await this.ingester.ingest();
-    const touched: LpRedeemer[] = [];
 
     for (const [poolAddress, rewards] of Array.from(byPool.entries())) {
       // Guard every resolver call — a throw here (e.g. pool config with an
@@ -712,10 +754,7 @@ export class LpManager {
       }
       if (!redeemer) continue;
       for (const reward of rewards) redeemer.creditReward(reward);
-      touched.push(redeemer);
     }
-
-    return touched;
   }
 }
 
@@ -761,6 +800,12 @@ export function subtractSecondsClamped(
   cursor: string,
   seconds: number
 ): string {
+  // Belt-and-suspenders: production callers route `seconds` through
+  // `isValidLookbackSeconds` in the LpIngester constructor, but this
+  // helper is exported — a direct caller could pass a negative value,
+  // which would ADD to the cursor via `cursorBn.sub(negative)`. Clamp
+  // here so the function's contract matches its name.
+  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
   try {
     const cursorBn = BigNumber.from(cursor);
     const shift = BigNumber.from(seconds);

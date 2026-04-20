@@ -117,9 +117,8 @@ describe('LpManager chain-wide dispatch', () => {
     };
 
     const manager = new LpManager(ingester, resolver);
-    const touched = await manager.ingestAndDispatch();
+    await manager.ingestAndDispatch();
 
-    expect(touched).to.have.length(2);
     // Each redeemer got only its own pool's reward.
     expect(redeemerA.lpMap.get(1000)!.toString()).to.equal(
       BigNumber.from('1000000000000000000').toString()
@@ -189,12 +188,11 @@ describe('LpManager chain-wide dispatch', () => {
     };
 
     const manager = new LpManager(ingester, resolver);
-    const touched = await manager.ingestAndDispatch();
+    await manager.ingestAndDispatch();
 
-    // Only POOL_B redeemer was returned. POOL_A's event was silently skipped
-    // (event is already in seenEventIds so it won't be retried this process).
-    expect(touched).to.have.length(1);
-    expect(touched[0]).to.equal(redeemerB);
+    // POOL_A's event was silently skipped (the resolver returned undefined;
+    // the event is already in seenEventIds so it won't be retried this
+    // process). Only POOL_B's redeemer accumulated a credit.
     expect(redeemerB.lpMap.get(2000)!.toString()).to.equal(
       BigNumber.from('1000000000000000000').toString()
     );
@@ -267,10 +265,81 @@ describe('LpManager chain-wide dispatch', () => {
     };
 
     const manager = new LpManager(ingester, resolver);
-    const firstTouched = await manager.ingestAndDispatch();
-    const secondTouched = await manager.ingestAndDispatch();
+    await manager.ingestAndDispatch();
+    const firstRedeemer = cache.get(POOL_A)!;
+    const firstLpMapSize = firstRedeemer.lpMap.size;
+    await manager.ingestAndDispatch();
+    const secondRedeemer = cache.get(POOL_A)!;
 
-    expect(firstTouched[0]).to.equal(secondTouched[0]);
-    expect(firstTouched[0].lpMap.size).to.equal(2);
+    // Same instance across cycles (memoized), lpMap accumulated across both.
+    expect(secondRedeemer).to.equal(firstRedeemer);
+    expect(firstLpMapSize).to.equal(1);
+    expect(secondRedeemer.lpMap.size).to.equal(2);
+  });
+
+  it('resolver throw for one pool does not starve sibling pools', async () => {
+    const signer = '0xdef0000000000000000000000000000000000999';
+    const fakeSigner = makeFakeSigner(signer);
+    const fakeTracker: any = { addToken: sinon.stub() };
+
+    // POOL_A's event is first, POOL_B's event is second. Resolver throws
+    // for POOL_A (simulating a malformed per-pool config). Without the
+    // try/catch in LpManager.ingestAndDispatch, the throw would unwind
+    // the for-loop and POOL_B would never get credited this cycle.
+    const getAwards = sinon.stub().resolves({
+      bucketTakes: [
+        {
+          id: 'take-A',
+          index: 1000,
+          taker: signer,
+          pool: { id: POOL_A },
+          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xk' },
+          blockTimestamp: '100',
+        },
+        {
+          id: 'take-B',
+          index: 2000,
+          taker: signer,
+          pool: { id: POOL_B },
+          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xk' },
+          blockTimestamp: '200',
+        },
+      ],
+    });
+
+    const ingester = new LpIngester(
+      fakeSigner,
+      { getBucketTakeLPAwards: getAwards } as any,
+      {}
+    );
+
+    const redeemerB = new LpRedeemer(
+      makeFakePool(POOL_B, 'POOL-B'),
+      fakeSigner,
+      {
+        redeemFirst: TokenToCollect.QUOTE,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
+      },
+      { dryRun: false },
+      fakeTracker
+    );
+
+    const resolver: LpRedeemerResolver = async (addr) => {
+      if (addr === POOL_A) {
+        throw new Error('simulated resolver failure');
+      }
+      if (addr === POOL_B) return redeemerB;
+      return undefined;
+    };
+
+    const manager = new LpManager(ingester, resolver);
+    // Must not throw — the per-pool resolver error is logged and skipped.
+    await manager.ingestAndDispatch();
+
+    // POOL_B still got its credit despite POOL_A's resolver failure.
+    expect(redeemerB.lpMap.get(2000)!.toString()).to.equal(
+      BigNumber.from('2000000000000000000').toString()
+    );
   });
 });

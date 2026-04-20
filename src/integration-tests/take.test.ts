@@ -481,9 +481,11 @@ describe('ArbTake → LP Collection chain', () => {
     const lpBalance = await bucket.lpBalance(signerAddress);
     expect(weiToDecimaled(lpBalance)).to.be.greaterThan(0);
 
+    // Pick-one contract: ingest already ran above; call sweep directly
+    // instead of collectLpRewards (which would ingest a second time).
     let collectionError: unknown;
     try {
-      await lpCollector.collectLpRewards();
+      await lpCollector.redeemer.sweep();
     } catch (error) {
       collectionError = error;
     }

@@ -133,9 +133,19 @@ export interface CollectLpRewardSettings {
   rewardActionCollateral?: RewardAction;
 }
 
-// Same shape but with all fields optional — used for per-pool overrides on
-// top of `defaultLpReward`. The merger fills required fields from the
-// default; operators can override any subset per pool.
+/**
+ * Per-pool override shape. All fields optional at the type level because the
+ * `resolveCollectLpRewardForPool` merger fills required fields from
+ * `defaultLpReward` when it's set.
+ *
+ * **Runtime contract (legacy mode only):** when `KeeperConfig.defaultLpReward`
+ * is NOT set, a per-pool `collectLpReward` entry must still supply
+ * `minAmountQuote` AND `minAmountCollateral`. The startup validator
+ * (`assertIsValidConfig` in `config/load.ts`) rejects any legacy-mode entry
+ * missing these fields. The type stays `Partial` to keep chain-wide mode
+ * ergonomic; if TypeScript flagged missing fields here, operators running
+ * chain-wide would have to spell out the override with needless repetition.
+ */
 export type CollectLpRewardOverride = Partial<CollectLpRewardSettings>;
 
 export interface SettlementConfig {

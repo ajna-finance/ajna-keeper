@@ -508,10 +508,23 @@ async function collectLpRewardsLoop({
                 await redeemer.sweep();
                 await delay(config.delayBetweenActions);
               } catch (retryError) {
-                logger.error(
-                  `LP sweep retry after settlement still failed for ${pool.name}`,
-                  retryError
-                );
+                const retryMessage =
+                  retryError instanceof Error
+                    ? retryError.message
+                    : String(retryError);
+                if (retryMessage.includes('AuctionNotCleared')) {
+                  // Pool has a SECOND jammed auction on a different bucket.
+                  // Next cycle will re-attempt settlement for that one;
+                  // this cycle's work stops here.
+                  logger.warn(
+                    `Pool ${pool.name} has a second auction still jammed after settling the first; next cycle will re-attempt settlement.`
+                  );
+                } else {
+                  logger.error(
+                    `LP sweep retry after settlement still failed for ${pool.name}`,
+                    retryError
+                  );
+                }
               }
             } else {
               logger.warn(

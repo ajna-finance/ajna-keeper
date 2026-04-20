@@ -55,13 +55,12 @@ export function resolveCollectLpRewardForPool(
           `minAmountCollateral are required on the per-pool entry in this mode.`
       );
     }
-    return {
-      redeemFirst: override.redeemFirst,
-      minAmountQuote: override.minAmountQuote,
-      minAmountCollateral: override.minAmountCollateral,
-      rewardActionQuote: override.rewardActionQuote,
-      rewardActionCollateral: override.rewardActionCollateral,
-    };
+    // Spread (not hand-rolled field list) so a future field added to
+    // `CollectLpRewardSettings` flows through legacy-mode configs too.
+    // The mandatory-min checks above guarantee the runtime shape satisfies
+    // `CollectLpRewardSettings` even though the compile-time type is
+    // `Partial<CollectLpRewardSettings>`.
+    return { ...override } as CollectLpRewardSettings;
   }
 
   if (!perPoolOverride) {
