@@ -47,10 +47,20 @@ export class LpCollector {
   public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndex, rewardLp>
 
   private signerAddressPromise: Promise<string>;
+  // Cross-cycle pagination cursor. Pagination within a single `getBucketTake
+  // LPAwards` call uses `id_gt` to advance through pages; this field carries
+  // the last ingested id forward so the next cycle continues where pagination
+  // stopped (crucial when a single cycle hits the max-pages truncation cap —
+  // without a persistent cursor, pagination would restart at '' every cycle
+  // and truncated tails would be permanently unreachable).
+  private cursorId: string = '';
+  // Timestamp cursor used for a small lookback window when querying the
+  // subgraph, so late-indexed events below the max-seen timestamp are still
+  // returned. Deduped client-side via `seenEventIds`.
   private cursorBlockTimestamp: string = '0';
-  // Dedupe set for events already processed. Bounded in practice — we only
-  // care about events within LP_REWARD_LOOKBACK_SECONDS of the cursor, so we
-  // prune entries older than (cursor - lookback).
+  // Dedupe set scoped to the lookback window. Only used to reject events
+  // re-returned by the lookback overlap; truly-new events (id beyond cursor)
+  // cannot collide with entries here because `id_gt` strictly advances.
   private seenEventIds: Map<string, string> = new Map(); // id → blockTimestamp
 
   constructor(
@@ -84,10 +94,12 @@ export class LpCollector {
   public async ingestNewAwardsFromSubgraph(): Promise<void> {
     const signerAddress = (await this.signerAddressPromise).toLowerCase();
 
-    // Query with a small overlap window (`cursor - LP_REWARD_LOOKBACK_SECONDS`)
-    // and switch to `_gte` in the GraphQL query so late-indexed events at the
-    // prior-cursor boundary are still returned. The seen-id set prevents
-    // double-processing events we already ingested.
+    // Query from `cursorId` forward. Within a single call, pagination uses
+    // `id_gt` to advance; across cycles we persist `cursorId` so a truncated
+    // cycle continues where it left off instead of restarting at ''.
+    // Additionally apply a small `blockTimestamp_gte` lookback so late-indexed
+    // events below our boundary are still fetched; `seenEventIds` dedupes
+    // those so they don't get double-counted.
     const queryCursor = subtractSecondsClamped(
       this.cursorBlockTimestamp,
       LP_REWARD_LOOKBACK_SECONDS
@@ -97,27 +109,50 @@ export class LpCollector {
       await this.subgraph.getBucketTakeLPAwards(
         this.pool.poolAddress,
         signerAddress,
-        queryCursor
+        queryCursor,
+        this.cursorId
       );
 
     let maxTimestamp = this.cursorBlockTimestamp;
+    let maxId = this.cursorId;
     for (const take of bucketTakes) {
       if (this.seenEventIds.has(take.id)) continue;
+
+      const takeIdLower = take.id.toLowerCase();
+
+      // Defensive: schema marks `lpAwarded` non-null, but guard anyway so a
+      // schema drift or GraphQL-library glitch can't throw and halt the pool.
+      if (!take.lpAwarded) {
+        logger.warn(
+          `BucketTake event missing lpAwarded field; skipping. pool: ${this.pool.name}, id: ${take.id}`
+        );
+        if (takeIdLower > maxId) maxId = takeIdLower;
+        continue;
+      }
 
       const takerMatches = take.taker.toLowerCase() === signerAddress;
       const kickerMatches =
         take.lpAwarded.kicker.toLowerCase() === signerAddress;
 
-      // Parse both reward amounts UP FRONT before any lpMap mutation so a
-      // malformed value throws BEFORE we've partially applied rewards for
-      // this take. Otherwise a throw between taker and kicker addReward calls
-      // would double-count the taker portion on every retry cycle.
-      const takerAmount = takerMatches
-        ? parseBigDecimalToWad(take.lpAwarded.lpAwardedTaker)
-        : constants.Zero;
-      const kickerAmount = kickerMatches
-        ? parseBigDecimalToWad(take.lpAwarded.lpAwardedKicker)
-        : constants.Zero;
+      // Quarantine per-event parse failures: log + skip, still advance cursor.
+      // A persistently malformed record would otherwise freeze the pool.
+      let takerAmount: BigNumber;
+      let kickerAmount: BigNumber;
+      try {
+        takerAmount = takerMatches
+          ? parseBigDecimalToWad(take.lpAwarded.lpAwardedTaker)
+          : constants.Zero;
+        kickerAmount = kickerMatches
+          ? parseBigDecimalToWad(take.lpAwarded.lpAwardedKicker)
+          : constants.Zero;
+      } catch (error) {
+        logger.error(
+          `Failed to parse BucketTake reward amounts; skipping event. pool: ${this.pool.name}, id: ${take.id}, taker: ${take.lpAwarded.lpAwardedTaker}, kicker: ${take.lpAwarded.lpAwardedKicker}`,
+          error
+        );
+        if (takeIdLower > maxId) maxId = takeIdLower;
+        continue;
+      }
 
       if (takerMatches) {
         this.addRewardParsed(take.index, takerAmount, 'taker');
@@ -127,18 +162,23 @@ export class LpCollector {
       }
 
       this.seenEventIds.set(take.id, take.blockTimestamp);
+      if (takeIdLower > maxId) maxId = takeIdLower;
 
       if (bigIntStringGreater(take.blockTimestamp, maxTimestamp)) {
         maxTimestamp = take.blockTimestamp;
       }
     }
 
-    // Only advance the cursor when we fetched a complete result set. On
-    // truncation, leave the cursor where it was so the next cycle re-fetches
-    // from the same point. Seen-id dedupe prevents reprocessing anything we
-    // already handled in this truncated batch.
+    // ALWAYS advance cursors, even on truncation. The id cursor guarantees
+    // forward progress across cycles even if a single call hits the pagination
+    // cap; on the next cycle we resume from where this one stopped.
+    this.cursorId = maxId;
+    this.cursorBlockTimestamp = maxTimestamp;
+
+    // Only prune the seen-id dedupe window when the result set was complete.
+    // On truncation, skip pruning so the lookback window remains intact for
+    // the truncated-tail continuation next cycle.
     if (!truncated) {
-      this.cursorBlockTimestamp = maxTimestamp;
       this.pruneSeenEventIds();
     }
   }

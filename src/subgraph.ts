@@ -113,9 +113,13 @@ async function paginateSubgraphCursor<TItem>(params: {
   getCursor: (item: TItem) => string | undefined;
   missingCursorWarning?: string;
   onTruncated?: () => void;
+  // Starting cursor for the first page. Defaults to '' (begin). Callers that
+  // persist a cross-cycle cursor pass it here so pagination resumes forward
+  // instead of restarting at the beginning on every call.
+  initialCursor?: string;
 }): Promise<TItem[]> {
   const items: TItem[] = [];
-  let cursor = '';
+  let cursor = params.initialCursor ?? '';
 
   for (let page = 0; page < params.maxPages; page++) {
     const pageItems = await params.fetchPage(cursor);
@@ -555,6 +559,7 @@ async function getBucketTakeLPAwards(
   poolAddress: string,
   signerAddress: string,
   sinceBlockTimestamp: string,
+  afterId: string,
   options?: SubgraphRequestOptions
 ): Promise<GetBucketTakeLPAwardsResponse> {
   const poolId = poolAddress.toLowerCase();
@@ -564,6 +569,7 @@ async function getBucketTakeLPAwards(
   const bucketTakes = await paginateSubgraphCursor<BucketTakeLPAwardItem>({
     pageSize: GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
     maxPages: GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES,
+    initialCursor: afterId,
     truncationWarning: `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for pool=${poolId}; results may be truncated`,
     onTruncated: () => {
       truncated = true;

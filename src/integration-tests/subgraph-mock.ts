@@ -137,12 +137,18 @@ export function overrideGetBucketTakeLPAwards(
   return undoFn;
 }
 
+// Match production pagination constants so integration tests exercise the
+// same truncation boundary behavior.
+const MOCK_LP_AWARDS_PAGE_SIZE = 1000;
+const MOCK_LP_AWARDS_MAX_PAGES = 100;
+
 export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
   return async (
     _subgraphUrl: string,
     _poolAddress: string,
     signerAddress: string,
-    sinceBlockTimestamp: string
+    sinceBlockTimestamp: string,
+    afterId: string
   ): Promise<GetBucketTakeLPAwardsResponse> => {
     const provider = getProvider();
     const poolContract = ERC20Pool__factory.connect(pool.poolAddress, provider);
@@ -151,10 +157,14 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       lpAwardedFilter,
       MAINNET_CONFIG.BLOCK_NUMBER
     );
-    const cursor = BigNumber.from(sinceBlockTimestamp || '0');
+    // Matches production: `blockTimestamp_gte: sinceTimestamp`. An empty
+    // string defaults to '0' which includes all events with any positive
+    // timestamp.
+    const cursorTs = BigNumber.from(sinceBlockTimestamp || '0');
+    const cursorId = (afterId ?? '').toLowerCase();
     const signerLower = signerAddress.toLowerCase();
 
-    const bucketTakes: BucketTakeLPAwardItem[] = [];
+    const candidates: BucketTakeLPAwardItem[] = [];
     for (const evt of events) {
       const { taker, kicker, lpAwardedTaker, lpAwardedKicker } = evt.args;
       const takerMatches = taker.toLowerCase() === signerLower;
@@ -165,7 +175,8 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
 
       const block = await evt.getBlock();
       const blockTimestamp = BigNumber.from(block.timestamp);
-      if (blockTimestamp.lte(cursor)) {
+      // Matches production `blockTimestamp_gte: sinceTimestamp`
+      if (blockTimestamp.lt(cursorTs)) {
         continue;
       }
 
@@ -180,8 +191,9 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       }
       const [, , indexBn] = parsed.args as [string, boolean, BigNumber];
 
-      bucketTakes.push({
-        id: `${evt.transactionHash}-${evt.logIndex.toString(16).padStart(6, '0')}`,
+      const id = `${evt.transactionHash}-${evt.logIndex.toString(16).padStart(6, '0')}`.toLowerCase();
+      candidates.push({
+        id,
         index: indexBn.toNumber(),
         taker: taker.toLowerCase(),
         lpAwarded: {
@@ -193,8 +205,15 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       });
     }
 
-    bucketTakes.sort((a, b) => a.id.localeCompare(b.id));
-    return { bucketTakes, truncated: false };
+    // Matches production: orderBy id asc + id_gt cursor.
+    candidates.sort((a, b) => a.id.localeCompare(b.id));
+    const filtered = candidates.filter((c) => c.id.toLowerCase() > cursorId);
+
+    // Matches production: clamp at pageSize * maxPages, report truncation.
+    const cap = MOCK_LP_AWARDS_PAGE_SIZE * MOCK_LP_AWARDS_MAX_PAGES;
+    const truncated = filtered.length > cap;
+    const bucketTakes = truncated ? filtered.slice(0, cap) : filtered;
+    return { bucketTakes, truncated };
   };
 }
 

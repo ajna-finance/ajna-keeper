@@ -23,7 +23,8 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       'http://example-subgraph',
       '0xPoOL1111111111111111111111111111111111AA',
       '0xSiGnEr2222222222222222222222222222222222',
-      '500'
+      '500',
+      ''
     );
 
     const variables = (requestStub.firstCall.args[0] as any).variables;
@@ -69,7 +70,8 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       'http://example-subgraph',
       '0xpool',
       '0xsigner',
-      '0'
+      '0',
+      ''
     );
 
     expect(result.bucketTakes).to.have.length(1001);
@@ -77,6 +79,23 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     expect(requestStub.callCount).to.equal(2);
     const secondVars = (requestStub.secondCall.args[0] as any).variables;
     expect(secondVars.afterId).to.equal('take-0999');
+  });
+
+  it('uses the caller-provided afterId as the initial pagination cursor', async () => {
+    const requestStub = sinon
+      .stub(graphqlRequest, 'request')
+      .resolves({ bucketTakes: [] });
+
+    await subgraph.getBucketTakeLPAwards(
+      'http://example-subgraph',
+      '0xpool',
+      '0xsigner',
+      '0',
+      'resume-from-this-id'
+    );
+
+    const variables = (requestStub.firstCall.args[0] as any).variables;
+    expect(variables.afterId).to.equal('resume-from-this-id');
   });
 
   it('reports truncated=true when pagination hits the max-pages cap', async () => {
@@ -105,7 +124,8 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       'http://example-subgraph',
       '0xpool',
       '0xsigner',
-      '0'
+      '0',
+      ''
     );
 
     expect(result.truncated).to.equal(true);
@@ -123,6 +143,7 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       '0xpool',
       '0xsigner',
       '0',
+      '',
       { fallbackUrls: ['http://fallback'] }
     );
 

@@ -151,9 +151,15 @@ describe('LpCollector cursor advancement', () => {
     await collector.ingestNewAwardsFromSubgraph();
     await collector.ingestNewAwardsFromSubgraph();
 
-    // Both calls used cursor '0' because truncation blocked advancement on the first.
-    expect(getAwards.firstCall.args[2]).to.equal('0');
-    expect(getAwards.secondCall.args[2]).to.equal('0');
+    // First call starts at afterId='' and cursor='0'. On truncation, both
+    // cursors advance (id cursor carries pagination forward across cycles so
+    // the truncated tail is still reachable, timestamp cursor advances normally).
+    expect(getAwards.firstCall.args[2]).to.equal('0'); // timestamp cursor
+    expect(getAwards.firstCall.args[3]).to.equal(''); // afterId cursor
+    // Second call resumes pagination from the last id seen, AND advances
+    // timestamp cursor minus lookback: 5000 - 60 = 4940.
+    expect(getAwards.secondCall.args[2]).to.equal(String(5000 - 60));
+    expect(getAwards.secondCall.args[3]).to.equal('t1');
   });
 
   it('does not double-count events at exactly the lookback cutoff boundary', async () => {
@@ -239,10 +245,10 @@ describe('LpCollector cursor advancement', () => {
   });
 });
 
-describe('LpCollector parse failure atomicity', () => {
+describe('LpCollector parse failure quarantine', () => {
   afterEach(() => sinon.restore());
 
-  it('does NOT half-apply rewards when taker parses but kicker throws', async () => {
+  it('does not half-apply and does not halt when a reward amount fails to parse', async () => {
     const signer = '0xabc0000000000000000000000000000000000000';
     const getAwards = sinon.stub().resolves({
       bucketTakes: [
@@ -252,10 +258,17 @@ describe('LpCollector parse failure atomicity', () => {
           taker: signer,
           lpAwarded: {
             lpAwardedTaker: '1.0', // valid
-            lpAwardedKicker: 'not-a-number', // throws
+            lpAwardedKicker: 'not-a-number', // parse throws
             kicker: signer,
           },
           blockTimestamp: '100',
+        },
+        {
+          id: 'take-valid',
+          index: 5001,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '2.5', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: '200',
         },
       ],
       truncated: false,
@@ -266,17 +279,88 @@ describe('LpCollector parse failure atomicity', () => {
       getBucketTakeLPAwards: getAwards,
     });
 
-    let thrown: unknown;
-    try {
-      await collector.ingestNewAwardsFromSubgraph();
-    } catch (error) {
-      thrown = error;
-    }
+    // No throw — quarantine logs + skips the bad event, continues.
+    await collector.ingestNewAwardsFromSubgraph();
 
-    expect(thrown).to.not.be.undefined;
-    // Taker reward must NOT have been added — kicker parse threw before any
-    // mutation, so the whole take should be left untouched for retry.
+    // Malformed take is skipped entirely (no partial taker reward applied)
     expect(collector.lpMap.has(5000)).to.be.false;
+    // Subsequent valid take is processed normally
+    expect(collector.lpMap.get(5001)!.toString()).to.equal(
+      utils.parseUnits('2.5', 18).toString()
+    );
+  });
+
+  it('advances cursor past a quarantined event so it does not freeze the pool', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const getAwards = sinon.stub();
+    getAwards.onCall(0).resolves({
+      bucketTakes: [
+        {
+          id: 'take-malformed',
+          index: 5000,
+          taker: signer,
+          lpAwarded: {
+            lpAwardedTaker: 'garbage',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
+          blockTimestamp: '300',
+        },
+      ],
+      truncated: false,
+    });
+    getAwards.onCall(1).resolves({ bucketTakes: [], truncated: false });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+
+    await collector.ingestNewAwardsFromSubgraph();
+    await collector.ingestNewAwardsFromSubgraph();
+
+    // Second call should have resumed past the quarantined id, not re-fetched
+    // from scratch.
+    expect(getAwards.secondCall.args[3]).to.equal('take-malformed');
+  });
+});
+
+describe('LpCollector null-field defense', () => {
+  afterEach(() => sinon.restore());
+
+  it('skips events with missing lpAwarded without throwing', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const getAwards = sinon.stub().resolves({
+      bucketTakes: [
+        {
+          id: 'take-null',
+          index: 6000,
+          taker: signer,
+          lpAwarded: null as any,
+          blockTimestamp: '400',
+        },
+        {
+          id: 'take-ok',
+          index: 6001,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '3.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: '500',
+        },
+      ],
+      truncated: false,
+    });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+
+    await collector.ingestNewAwardsFromSubgraph();
+
+    expect(collector.lpMap.has(6000)).to.be.false;
+    expect(collector.lpMap.get(6001)!.toString()).to.equal(
+      utils.parseUnits('3.0', 18).toString()
+    );
   });
 });
 
