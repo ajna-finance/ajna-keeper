@@ -31,13 +31,13 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     expect(variables).to.deep.equal({
       poolId: '0xpool1111111111111111111111111111111111aa',
       signerId: '0xsigner2222222222222222222222222222222222',
-      sinceTimestamp: '500',
+      cursorTs: '500',
+      cursorId: '',
       first: 1000,
-      afterId: '',
     });
   });
 
-  it('paginates and advances afterId by last item id', async () => {
+  it('advances the composite (cursorTs, cursorId) cursor across pages', async () => {
     const firstPage = Array.from({ length: 1000 }, (_, i) => ({
       id: `take-${String(i).padStart(4, '0')}`,
       index: 2000 + i,
@@ -78,10 +78,12 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     expect(result.truncated).to.equal(false);
     expect(requestStub.callCount).to.equal(2);
     const secondVars = (requestStub.secondCall.args[0] as any).variables;
-    expect(secondVars.afterId).to.equal('take-0999');
+    // Next page's cursor must be the last item's (blockTimestamp, id) pair
+    expect(secondVars.cursorTs).to.equal(String(1000 + 999));
+    expect(secondVars.cursorId).to.equal('take-0999');
   });
 
-  it('uses the caller-provided afterId as the initial pagination cursor', async () => {
+  it('uses the caller-provided (cursorTs, cursorId) as the initial pagination cursor', async () => {
     const requestStub = sinon
       .stub(graphqlRequest, 'request')
       .resolves({ bucketTakes: [] });
@@ -90,12 +92,13 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       'http://example-subgraph',
       '0xpool',
       '0xsigner',
-      '0',
+      '500',
       'resume-from-this-id'
     );
 
     const variables = (requestStub.firstCall.args[0] as any).variables;
-    expect(variables.afterId).to.equal('resume-from-this-id');
+    expect(variables.cursorTs).to.equal('500');
+    expect(variables.cursorId).to.equal('resume-from-this-id');
   });
 
   it('reports truncated=true when pagination hits the max-pages cap', async () => {

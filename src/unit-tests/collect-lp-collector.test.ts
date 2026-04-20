@@ -151,15 +151,14 @@ describe('LpCollector cursor advancement', () => {
     await collector.ingestNewAwardsFromSubgraph();
     await collector.ingestNewAwardsFromSubgraph();
 
-    // First call starts at afterId='' and cursor='0'. On truncation, both
-    // cursors advance (id cursor carries pagination forward across cycles so
-    // the truncated tail is still reachable, timestamp cursor advances normally).
-    expect(getAwards.firstCall.args[2]).to.equal('0'); // timestamp cursor
-    expect(getAwards.firstCall.args[3]).to.equal(''); // afterId cursor
-    // Second call resumes pagination from the last id seen, AND advances
-    // timestamp cursor minus lookback: 5000 - 60 = 4940.
+    // The query always receives `queryTs = cursorTs - lookback` and `''` for
+    // the cursorId — the id is only used internally for the chronological
+    // high-water mark. On truncation, cursors still advance so the next
+    // cycle's query shifts forward by `(5000 seen - 60 lookback) = 4940`.
+    expect(getAwards.firstCall.args[2]).to.equal('0');
+    expect(getAwards.firstCall.args[3]).to.equal('');
     expect(getAwards.secondCall.args[2]).to.equal(String(5000 - 60));
-    expect(getAwards.secondCall.args[3]).to.equal('t1');
+    expect(getAwards.secondCall.args[3]).to.equal('');
   });
 
   it('does not double-count events at exactly the lookback cutoff boundary', async () => {
@@ -319,9 +318,10 @@ describe('LpCollector parse failure quarantine', () => {
     await collector.ingestNewAwardsFromSubgraph();
     await collector.ingestNewAwardsFromSubgraph();
 
-    // Second call should have resumed past the quarantined id, not re-fetched
-    // from scratch.
-    expect(getAwards.secondCall.args[3]).to.equal('take-malformed');
+    // Second call's timestamp cursor must have advanced past the quarantined
+    // event's block (300 - 60 lookback = 240). This proves the pool is not
+    // frozen on the bad record.
+    expect(getAwards.secondCall.args[2]).to.equal(String(300 - 60));
   });
 });
 

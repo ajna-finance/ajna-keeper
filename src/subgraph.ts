@@ -113,13 +113,9 @@ async function paginateSubgraphCursor<TItem>(params: {
   getCursor: (item: TItem) => string | undefined;
   missingCursorWarning?: string;
   onTruncated?: () => void;
-  // Starting cursor for the first page. Defaults to '' (begin). Callers that
-  // persist a cross-cycle cursor pass it here so pagination resumes forward
-  // instead of restarting at the beginning on every call.
-  initialCursor?: string;
 }): Promise<TItem[]> {
   const items: TItem[] = [];
-  let cursor = params.initialCursor ?? '';
+  let cursor = '';
 
   for (let page = 0; page < params.maxPages; page++) {
     const pageItems = await params.fetchPage(cursor);
@@ -512,31 +508,46 @@ export interface GetBucketTakeLPAwardsResponse {
 const GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE = 1000;
 const GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES = 100;
 
+// Composite (blockTimestamp, id) cursor. Ordering by blockTimestamp guarantees
+// chronological forward progress; the `id_gt` tie-breaker handles multiple
+// events sharing the same timestamp. Subgraph event ids are txHash-logIndex
+// which are NOT time-monotonic, so an id-only cursor would permanently filter
+// events whose random tx hash lex-sorts below the cursor.
 const getBucketTakeLPAwardsQuery = gql`
   query GetBucketTakeLPAwards(
     $poolId: String!
     $signerId: Bytes!
-    $sinceTimestamp: BigInt!
+    $cursorTs: BigInt!
+    $cursorId: String!
     $first: Int!
-    $afterId: String!
   ) {
     bucketTakes(
       first: $first
-      orderBy: id
+      orderBy: blockTimestamp
       orderDirection: asc
       where: {
         or: [
           {
             pool: $poolId
             taker: $signerId
-            blockTimestamp_gte: $sinceTimestamp
-            id_gt: $afterId
+            blockTimestamp_gt: $cursorTs
+          }
+          {
+            pool: $poolId
+            taker: $signerId
+            blockTimestamp: $cursorTs
+            id_gt: $cursorId
           }
           {
             pool: $poolId
             liquidationAuction_: { kicker: $signerId }
-            blockTimestamp_gte: $sinceTimestamp
-            id_gt: $afterId
+            blockTimestamp_gt: $cursorTs
+          }
+          {
+            pool: $poolId
+            liquidationAuction_: { kicker: $signerId }
+            blockTimestamp: $cursorTs
+            id_gt: $cursorId
           }
         ]
       }
@@ -558,50 +569,74 @@ async function getBucketTakeLPAwards(
   subgraphUrl: string,
   poolAddress: string,
   signerAddress: string,
-  sinceBlockTimestamp: string,
-  afterId: string,
+  cursorBlockTimestamp: string,
+  cursorId: string,
   options?: SubgraphRequestOptions
 ): Promise<GetBucketTakeLPAwardsResponse> {
   const poolId = poolAddress.toLowerCase();
   const signerId = signerAddress.toLowerCase();
+  const bucketTakes: BucketTakeLPAwardItem[] = [];
   let truncated = false;
 
-  const bucketTakes = await paginateSubgraphCursor<BucketTakeLPAwardItem>({
-    pageSize: GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
-    maxPages: GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES,
-    initialCursor: afterId,
-    truncationWarning: `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for pool=${poolId}; results may be truncated`,
-    onTruncated: () => {
+  // Inline pagination so we can advance the composite (ts, id) cursor between
+  // pages. The shared paginateSubgraphCursor helper only supports a single
+  // opaque cursor, which isn't enough for composite-cursor pagination.
+  let pageTs = cursorBlockTimestamp;
+  let pageId = cursorId;
+
+  for (let page = 0; page < GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES; page++) {
+    const pageResult = await requestSubgraph<
+      { bucketTakes: BucketTakeLPAwardItem[] },
+      {
+        poolId: string;
+        signerId: string;
+        cursorTs: string;
+        cursorId: string;
+        first: number;
+      }
+    >({
+      subgraphUrl,
+      document: getBucketTakeLPAwardsQuery,
+      variables: {
+        poolId,
+        signerId,
+        cursorTs: pageTs,
+        cursorId: pageId,
+        first: GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
+      },
+      options,
+    });
+
+    const pageItems = pageResult.bucketTakes;
+    bucketTakes.push(...pageItems);
+
+    if (
+      page === GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES - 1 &&
+      pageItems.length === GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE
+    ) {
+      logger.warn(
+        `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
+      );
       truncated = true;
-    },
-    fetchPage: async (afterId) => {
-      const pageResult = await requestSubgraph<
-        { bucketTakes: BucketTakeLPAwardItem[] },
-        {
-          poolId: string;
-          signerId: string;
-          sinceTimestamp: string;
-          first: number;
-          afterId: string;
-        }
-      >({
-        subgraphUrl,
-        document: getBucketTakeLPAwardsQuery,
-        variables: {
-          poolId,
-          signerId,
-          sinceTimestamp: sinceBlockTimestamp,
-          first: GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
-          afterId,
-        },
-        options,
-      });
-      return pageResult.bucketTakes;
-    },
-    getCursor: (item) => item.id.toLowerCase(),
-    missingCursorWarning:
-      'LP reward discovery response omitted bucketTake id; stopping pagination early to avoid unstable cursors',
-  });
+    }
+
+    if (pageItems.length < GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE) {
+      break;
+    }
+
+    // Advance the composite cursor to the last item of this page. Because the
+    // server returned results in (blockTimestamp asc, id asc) order, the last
+    // item is the chronologically latest item of this page.
+    const lastItem = pageItems[pageItems.length - 1];
+    if (!lastItem.id || !lastItem.blockTimestamp) {
+      logger.warn(
+        'LP reward discovery response omitted id or blockTimestamp; stopping pagination early to avoid unstable cursors'
+      );
+      break;
+    }
+    pageTs = lastItem.blockTimestamp;
+    pageId = lastItem.id.toLowerCase();
+  }
 
   return { bucketTakes, truncated };
 }

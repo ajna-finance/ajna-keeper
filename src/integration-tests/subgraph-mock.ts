@@ -147,8 +147,8 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
     _subgraphUrl: string,
     _poolAddress: string,
     signerAddress: string,
-    sinceBlockTimestamp: string,
-    afterId: string
+    cursorBlockTimestamp: string,
+    cursorId: string
   ): Promise<GetBucketTakeLPAwardsResponse> => {
     const provider = getProvider();
     const poolContract = ERC20Pool__factory.connect(pool.poolAddress, provider);
@@ -157,11 +157,10 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       lpAwardedFilter,
       MAINNET_CONFIG.BLOCK_NUMBER
     );
-    // Matches production: `blockTimestamp_gte: sinceTimestamp`. An empty
-    // string defaults to '0' which includes all events with any positive
-    // timestamp.
-    const cursorTs = BigNumber.from(sinceBlockTimestamp || '0');
-    const cursorId = (afterId ?? '').toLowerCase();
+    // Matches the production composite cursor:
+    //   WHERE (ts > cursorTs) OR (ts == cursorTs AND id > cursorId)
+    const cursorTs = BigNumber.from(cursorBlockTimestamp || '0');
+    const cursorIdLower = (cursorId ?? '').toLowerCase();
     const signerLower = signerAddress.toLowerCase();
 
     const candidates: BucketTakeLPAwardItem[] = [];
@@ -175,10 +174,6 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
 
       const block = await evt.getBlock();
       const blockTimestamp = BigNumber.from(block.timestamp);
-      // Matches production `blockTimestamp_gte: sinceTimestamp`
-      if (blockTimestamp.lt(cursorTs)) {
-        continue;
-      }
 
       // Parse the originating bucketTake(borrower, depositTake, index) call to
       // recover the bucket index the same way production used to — this is
@@ -192,6 +187,11 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       const [, , indexBn] = parsed.args as [string, boolean, BigNumber];
 
       const id = `${evt.transactionHash}-${evt.logIndex.toString(16).padStart(6, '0')}`.toLowerCase();
+
+      // Apply composite cursor filter
+      if (blockTimestamp.lt(cursorTs)) continue;
+      if (blockTimestamp.eq(cursorTs) && id <= cursorIdLower) continue;
+
       candidates.push({
         id,
         index: indexBn.toNumber(),
@@ -205,14 +205,19 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       });
     }
 
-    // Matches production: orderBy id asc + id_gt cursor.
-    candidates.sort((a, b) => a.id.localeCompare(b.id));
-    const filtered = candidates.filter((c) => c.id.toLowerCase() > cursorId);
+    // Matches production orderBy: blockTimestamp asc, with id as tie-breaker.
+    candidates.sort((a, b) => {
+      const tsCmp = BigNumber.from(a.blockTimestamp).sub(
+        BigNumber.from(b.blockTimestamp)
+      );
+      if (!tsCmp.isZero()) return tsCmp.lt(0) ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
 
     // Matches production: clamp at pageSize * maxPages, report truncation.
     const cap = MOCK_LP_AWARDS_PAGE_SIZE * MOCK_LP_AWARDS_MAX_PAGES;
-    const truncated = filtered.length > cap;
-    const bucketTakes = truncated ? filtered.slice(0, cap) : filtered;
+    const truncated = candidates.length > cap;
+    const bucketTakes = truncated ? candidates.slice(0, cap) : candidates;
     return { bucketTakes, truncated };
   };
 }

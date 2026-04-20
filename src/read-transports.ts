@@ -44,8 +44,8 @@ export interface SubgraphReader {
   getBucketTakeLPAwards(
     poolAddress: string,
     signerAddress: string,
-    sinceBlockTimestamp: string,
-    afterId: string
+    cursorBlockTimestamp: string,
+    cursorId: string
   ): Promise<GetBucketTakeLPAwardsResponse>;
 }
 
@@ -118,15 +118,15 @@ export function createSubgraphReader(
     getBucketTakeLPAwards(
       poolAddress,
       signerAddress,
-      sinceBlockTimestamp,
-      afterId
+      cursorBlockTimestamp,
+      cursorId
     ) {
       return subgraph.getBucketTakeLPAwards(
         config.subgraphUrl,
         poolAddress,
         signerAddress,
-        sinceBlockTimestamp,
-        afterId,
+        cursorBlockTimestamp,
+        cursorId,
         {
           fallbackUrls: config.subgraphFallbackUrls,
         }
