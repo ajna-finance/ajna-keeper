@@ -51,6 +51,10 @@ export const LP_REWARD_LOOKBACK_SECONDS_DEFAULT = 60;
 // to double-count, so we never do it.
 const MAX_SEEN_EVENT_IDS = 100_000;
 
+// Ajna valid bucket index range is 0..MAX_FENWICK_INDEX inclusive
+// (see `@ajna-finance/sdk` constants — there are 7389 buckets total).
+const MAX_FENWICK_INDEX = 7388;
+
 export class LpCollector {
   public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndex, rewardLp>
 
@@ -179,31 +183,46 @@ export class LpCollector {
       this.seenEventIds.set(take.id, take.blockTimestamp);
       observeTimestamp(take.blockTimestamp);
 
-      // Defensive: schema marks `taker` and `lpAwarded` non-null, but guard
-      // anyway so a schema drift or GraphQL-library glitch can't throw and
-      // halt the pool.
-      if (!take.taker) {
-        logger.warn(
-          `BucketTake event missing taker field; skipping. pool: ${this.pool.name}, id: ${take.id}`
-        );
-        continue;
-      }
+      // Defensive: schema marks `taker`, `lpAwarded`, and `lpAwarded.kicker`
+      // non-null, but guard anyway so a schema drift or GraphQL-library glitch
+      // can't throw and halt the pool. `lpAwarded` missing is fatal (no
+      // amounts to parse); missing `taker` or `kicker` is non-fatal — we
+      // just can't credit that role. If BOTH are missing for our signer we
+      // log and move on.
       if (!take.lpAwarded) {
         logger.warn(
           `BucketTake event missing lpAwarded field; skipping. pool: ${this.pool.name}, id: ${take.id}`
         );
         continue;
       }
-      if (!take.lpAwarded.kicker) {
+
+      const takerMatches =
+        !!take.taker && take.taker.toLowerCase() === signerAddress;
+      const kickerMatches =
+        !!take.lpAwarded.kicker &&
+        take.lpAwarded.kicker.toLowerCase() === signerAddress;
+
+      if (!take.taker || !take.lpAwarded.kicker) {
         logger.warn(
-          `BucketTake event missing lpAwarded.kicker field; skipping. pool: ${this.pool.name}, id: ${take.id}`
+          `BucketTake event missing taker/kicker field; continuing best-effort. pool: ${this.pool.name}, id: ${take.id}, takerNull: ${!take.taker}, kickerNull: ${!take.lpAwarded.kicker}`
+        );
+      }
+
+      // Validate the bucket index before it lands in `lpMap`. Ajna valid
+      // bucket indices are 0..MAX_FENWICK_INDEX (7388). An out-of-range
+      // value from schema drift would later make `pool.getBucketByIndex`
+      // throw every cycle — harmless per-bucket (per-bucket try/catch
+      // catches), but a permanent RPC-waste if the entry never clears.
+      if (
+        !Number.isInteger(take.index) ||
+        take.index < 0 ||
+        take.index > MAX_FENWICK_INDEX
+      ) {
+        logger.warn(
+          `BucketTake event has out-of-range bucket index; skipping. pool: ${this.pool.name}, id: ${take.id}, index: ${take.index}`
         );
         continue;
       }
-
-      const takerMatches = take.taker.toLowerCase() === signerAddress;
-      const kickerMatches =
-        take.lpAwarded.kicker.toLowerCase() === signerAddress;
 
       // Quarantine per-event parse failures: log + skip, leave seen-id in
       // place so we don't re-error every cycle while the record remains

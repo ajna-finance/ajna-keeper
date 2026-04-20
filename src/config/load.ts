@@ -40,13 +40,21 @@ export function assertIsValidConfig(
   // non-finite inputs silently corrupt the cursor or disable dedupe.
   if (config.lpRewardLookbackSeconds !== undefined) {
     const v = config.lpRewardLookbackSeconds;
+    const hardMaxSeconds = 86_400; // 1 day
     if (!Number.isFinite(v) || !Number.isInteger(v) || v < 0) {
       throw new Error(
         `lpRewardLookbackSeconds must be a non-negative integer, got: ${v}`
       );
     }
-    // Warn (don't reject) at unusual bounds so an obvious misconfiguration
-    // surfaces in the log without blocking rare-but-legitimate choices.
+    if (v > hardMaxSeconds) {
+      throw new Error(
+        `lpRewardLookbackSeconds must not exceed ${hardMaxSeconds} (1 day), got: ${v}. ` +
+          'Larger values cause near-full historical replay every cycle; ' +
+          'if your subgraph really lags this much, fix the indexer instead.'
+      );
+    }
+    // Warn (don't reject) at unusual-but-legal bounds so an obvious
+    // misconfiguration surfaces in the log without blocking it.
     if (v === 0) {
       logger.warn(
         'lpRewardLookbackSeconds=0 disables the indexing-lag overlap; ' +

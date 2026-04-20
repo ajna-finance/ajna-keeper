@@ -59,6 +59,24 @@ describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
       })
     ).to.throw(/non-negative integer/);
   });
+
+  it('rejects values above the 1-day hard cap', () => {
+    expect(() =>
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        lpRewardLookbackSeconds: 86_401,
+      })
+    ).to.throw(/must not exceed 86400/);
+  });
+
+  it('accepts the 1-day hard cap exactly', () => {
+    expect(() =>
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        lpRewardLookbackSeconds: 86_400,
+      })
+    ).to.not.throw();
+  });
 });
 
 describe('config-load', () => {

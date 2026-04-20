@@ -410,7 +410,17 @@ async function collectLpRewardsLoop({
         }
       }
     }
-    await exchangeTracker.handleAllTokens();
+    try {
+      await exchangeTracker.handleAllTokens();
+    } catch (error) {
+      // A swap/transfer failure in one cycle must not kill the whole LP
+      // collection loop — next cycle will re-queue and retry any unprocessed
+      // tokens that are still sitting in the tracker.
+      logger.error(
+        'Failed to process queued reward-action tokens; continuing.',
+        error
+      );
+    }
     await delay(config.delayBetweenRuns);
   }
 }

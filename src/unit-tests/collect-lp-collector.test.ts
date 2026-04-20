@@ -179,7 +179,7 @@ describe('LpCollector cursor advancement', () => {
     };
     const anchorEvent = {
       id: 't-anchor',
-      index: 8000,
+      index: 7001,
       taker: signer,
       lpAwarded: {
         lpAwardedTaker: '2.0',
@@ -322,17 +322,18 @@ describe('LpCollector parse failure quarantine', () => {
 describe('LpCollector null-field defense', () => {
   afterEach(() => sinon.restore());
 
-  it('skips events with missing lpAwarded.kicker without throwing', async () => {
+  it('credits taker even when lpAwarded.kicker is null (best-effort non-fatal)', async () => {
     const signer = '0xabc0000000000000000000000000000000000000';
     const getAwards = sinon.stub().resolves({
       bucketTakes: [
         {
-          id: 'take-null-kicker',
+          id: 'take-null-kicker-taker-is-signer',
           index: 7000,
           taker: signer,
           lpAwarded: {
             lpAwardedTaker: '1.0',
             lpAwardedKicker: '0',
+            // Schema-drift simulation — guard must not drop the taker reward.
             kicker: null as any,
           },
           blockTimestamp: '600',
@@ -352,11 +353,94 @@ describe('LpCollector null-field defense', () => {
       getBucketTakeLPAwards: getAwards,
     });
 
-    // Would throw on .toLowerCase() of null before the fix — must not throw now
+    // Would throw on .toLowerCase() of null before the null-safe fix.
     await collector.ingestNewAwardsFromSubgraph();
 
-    expect(collector.lpMap.has(7000)).to.be.false;
+    expect(collector.lpMap.get(7000)!.toString()).to.equal(
+      utils.parseUnits('1.0', 18).toString()
+    );
     expect(collector.lpMap.get(7001)!.toString()).to.equal(
+      utils.parseUnits('2.0', 18).toString()
+    );
+  });
+
+  it('skips events with null kicker when signer is neither taker nor kicker', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const getAwards = sinon.stub().resolves({
+      bucketTakes: [
+        {
+          id: 'take-null-kicker-unrelated',
+          index: 7000,
+          taker: '0xstranger',
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '5.0',
+            kicker: null as any,
+          },
+          blockTimestamp: '600',
+        },
+      ],
+    });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+
+    await collector.ingestNewAwardsFromSubgraph();
+
+    // Null kicker + unrelated taker = no role match for signer; lpMap empty.
+    expect(collector.lpMap.size).to.equal(0);
+  });
+
+  it('skips events with out-of-range bucket index', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const getAwards = sinon.stub().resolves({
+      bucketTakes: [
+        {
+          id: 'take-bad-index-negative',
+          index: -1,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: '900',
+        },
+        {
+          id: 'take-bad-index-too-big',
+          index: 999_999,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: '901',
+        },
+        {
+          id: 'take-ok-index-0',
+          index: 0,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: '902',
+        },
+        {
+          id: 'take-ok-index-max',
+          index: 7388,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: '903',
+        },
+      ],
+    });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+
+    await collector.ingestNewAwardsFromSubgraph();
+
+    expect(collector.lpMap.has(-1)).to.be.false;
+    expect(collector.lpMap.has(999_999)).to.be.false;
+    expect(collector.lpMap.get(0)!.toString()).to.equal(
+      utils.parseUnits('1.0', 18).toString()
+    );
+    expect(collector.lpMap.get(7388)!.toString()).to.equal(
       utils.parseUnits('2.0', 18).toString()
     );
   });
@@ -367,14 +451,14 @@ describe('LpCollector null-field defense', () => {
       bucketTakes: [
         {
           id: 'take-bad-ts',
-          index: 8000,
+          index: 5000,
           taker: signer,
           lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
           blockTimestamp: 'not-a-number',
         },
         {
           id: 'take-ok',
-          index: 8001,
+          index: 5001,
           taker: signer,
           lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xdef' },
           blockTimestamp: '800',
@@ -392,8 +476,8 @@ describe('LpCollector null-field defense', () => {
     // The malformed-ts event is skipped entirely (not seen, not credited).
     // Without this guard the entry would land in `seenEventIds` with a junk
     // ts that neither prune nor cap can evict.
-    expect(collector.lpMap.has(8000)).to.be.false;
-    expect(collector.lpMap.get(8001)!.toString()).to.equal(
+    expect(collector.lpMap.has(5000)).to.be.false;
+    expect(collector.lpMap.get(5001)!.toString()).to.equal(
       utils.parseUnits('2.0', 18).toString()
     );
   });
