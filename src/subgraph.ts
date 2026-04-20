@@ -490,6 +490,9 @@ export interface BucketTakeLPAwardItem {
   id: string;
   index: number;
   taker: string;
+  pool: {
+    id: string;
+  };
   lpAwarded: {
     lpAwardedTaker: string;
     lpAwardedKicker: string;
@@ -522,7 +525,6 @@ export const GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES = 100;
 // but not misses.
 const getBucketTakeLPAwardsQuery = gql`
   query GetBucketTakeLPAwards(
-    $poolId: String!
     $signerId: Bytes!
     $cursorTs: BigInt!
     $cursorId: Bytes!
@@ -535,23 +537,19 @@ const getBucketTakeLPAwardsQuery = gql`
       where: {
         or: [
           {
-            pool: $poolId
             taker: $signerId
             blockTimestamp_gt: $cursorTs
           }
           {
-            pool: $poolId
             taker: $signerId
             blockTimestamp: $cursorTs
             id_gt: $cursorId
           }
           {
-            pool: $poolId
             liquidationAuction_: { kicker: $signerId }
             blockTimestamp_gt: $cursorTs
           }
           {
-            pool: $poolId
             liquidationAuction_: { kicker: $signerId }
             blockTimestamp: $cursorTs
             id_gt: $cursorId
@@ -562,6 +560,9 @@ const getBucketTakeLPAwardsQuery = gql`
       id
       index
       taker
+      pool {
+        id
+      }
       lpAwarded {
         lpAwardedTaker
         lpAwardedKicker
@@ -574,12 +575,10 @@ const getBucketTakeLPAwardsQuery = gql`
 
 async function getBucketTakeLPAwards(
   subgraphUrl: string,
-  poolAddress: string,
   signerAddress: string,
   cursorBlockTimestamp: string,
   options?: SubgraphRequestOptions
 ): Promise<GetBucketTakeLPAwardsResponse> {
-  const poolId = poolAddress.toLowerCase();
   const signerId = signerAddress.toLowerCase();
   const bucketTakes: BucketTakeLPAwardItem[] = [];
 
@@ -601,7 +600,6 @@ async function getBucketTakeLPAwards(
     const pageResult = await requestSubgraph<
       { bucketTakes: BucketTakeLPAwardItem[] },
       {
-        poolId: string;
         signerId: string;
         cursorTs: string;
         cursorId: string;
@@ -611,7 +609,6 @@ async function getBucketTakeLPAwards(
       subgraphUrl,
       document: getBucketTakeLPAwardsQuery,
       variables: {
-        poolId,
         signerId,
         cursorTs: pageTs,
         cursorId: pageId,
@@ -628,7 +625,7 @@ async function getBucketTakeLPAwards(
       pageItems.length === GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE
     ) {
       logger.warn(
-        `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
+        `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for signer=${signerId}; results may be truncated`
       );
     }
 

@@ -236,18 +236,47 @@ Collects liquidation bonds (which were used to kick loans) once they are fully c
 
 ### Collect Reward LP
 
-Redeems rewarded LP for either Quote or Collateral based on config.
+Redeems rewarded LP for either Quote or Collateral based on config. Works chain-wide: any pool where your signer acted as taker or kicker is covered, including pools that the static config doesn't enumerate (auto-discovered takes are included).
 
-Discovery is subgraph-based: each cycle the keeper queries the Ajna subgraph for `BucketTake` entities where the keeper's signer was taker or kicker, dedupes against an in-memory set, and sweeps the resulting LP rewards. On process start the cursor is reset so the first ingest replays the full `BucketTake` history for the configured pool+signer — this reclaims LP rewards that accrued before the keeper was started or during downtime.
+Discovery is subgraph-based: each cycle the keeper runs ONE chain-wide subgraph query for `BucketTake` entities where the signer was taker or kicker across every Ajna pool, dedupes against an in-memory set, and dispatches each event to a per-pool redemption state (materialized on-demand). On process start the cursor is reset so the first ingest replays the full `BucketTake` history for this signer — this reclaims LP rewards that accrued before the keeper was started or during downtime.
+
+**Enabling LP collection.** Two modes:
+
+1. **Chain-wide** (recommended): set `defaultLpReward` at the top level of `KeeperConfig`. Every pool the signer has activity in uses these defaults. Per-pool overrides via `pools[i].collectLpReward` are merged on top.
+2. **Legacy per-pool**: set `collectLpReward` on each pool in `pools[]` without a `defaultLpReward`. Only those pools are covered; auto-discovered pools are ignored.
+
+Example (chain-wide with one override):
+
+```ts
+const config: KeeperConfig = {
+  // ...
+  defaultLpReward: {
+    redeemFirst: TokenToCollect.QUOTE,
+    minAmountQuote: 10,
+    minAmountCollateral: 0,
+    rewardActionQuote: { action: PostAuctionAction.EXCHANGE, dexProvider: PostAuctionDex.UNISWAPV3, fee: 3000 },
+  },
+  pools: [
+    { address: '0xabc…', price: { … } }, // uses defaults
+    {
+      address: '0xdef…',
+      price: { … },
+      collectLpReward: { minAmountQuote: 100 }, // override: higher threshold for this pool
+    },
+  ],
+};
+```
 
 **Dedicated keeper key required.** The redemption step is bounded by the signer's on-chain `lpBalance` in each bucket; if the same signer also deposits LP into these pools as a lender, history replay can redeem principal to satisfy stale reward entries. Use a keeper-only signer that never deposits directly. The keeper does not move existing deposits — only the LP accumulated from acting as taker or kicker. Both roles on a given BucketTake mint LP into the same `bucketIndex`, so the on-chain `lpBalance` cap applies uniformly whether the signer was taker, kicker, or both.
 
+**ERC20 only.** The redemption path uses the Ajna `FungiblePoolFactory` to materialize pool handles, which only supports ERC20 pools. If your signer ever takes on an ERC721 pool, the event is skipped and the LP sits on-chain (same outcome as if the keeper were off for that pool).
+
 **Operational notes:**
 
-- **Cold-start replay cost.** The first ingest after a restart queries from `blockTimestamp=0` and paginates up to 100 pages × 1000 events = 100,000 `BucketTake`s in the worst case (typical keeper signers have much less history). The LP collection loop iterates pools sequentially, so the first cycle across `N` pools blocks for roughly `N × per-pool-replay-time` before any pool's LP tokens are swept; subsequent cycles only query the small delta past the last observed timestamp and are fast.
+- **Cold-start replay cost.** The first ingest after a restart queries from `blockTimestamp=0` and paginates up to 100 pages × 1000 events = 100,000 `BucketTake`s in the worst case (typical keeper signers have much less history). Subsequent cycles only query the small delta past the last observed timestamp and are fast. The first cycle also pays 2–3 RPC reads per unique pool the signer has activity in (one-time pool-handle construction + deployment validation, cached thereafter).
 - **Subgraph-down at startup.** If the subgraph is unreachable on the first cycle, the cursor stays at `0` and the next cycle re-runs the full historical query. The keeper does not persist cursor state to disk — reachability of the subgraph on first use matters. If you run against a flaky endpoint, configure `subgraphFallbackUrls` in `KeeperConfig`.
-- **Indexing-lag tolerance.** Each query is shifted back by `lpRewardLookbackSeconds` (default 60s) so late-indexed events that land just under the previous cursor are still re-seen. Dedupe is handled in-memory by an event-id set scoped to that window. Chains where Goldsky lag regularly exceeds 60s should raise this; the tunable lives on `KeeperConfig`.
-- **Subgraph-ahead-of-RPC race.** If the read RPC is lagging the subgraph at the moment a newly-ingested BucketTake is swept (uncommon — subgraph usually trails chain head, not leads it — but possible on load-balanced RPC pools that temporarily route to a stale node), the keeper can see `lpBalance=0` on-chain for a bucket the subgraph has already credited. The lpMap entry is then dropped and the event's id stays in the dedupe set, so the keeper won't re-discover it in the current process. **The LP itself is safe on-chain** — Ajna LP doesn't expire and the signer's claim persists. The keeper will redeem it on either (a) a subsequent BucketTake on the same bucket (the fresh credit triggers a sweep that reads the accumulated balance) or (b) the next process restart (cursor resets to `0` and replay re-credits everything). No fund loss; worst case is a deferred redemption.
+- **Indexing-lag tolerance.** Each query is shifted back by `lpRewardLookbackSeconds` (default 60s, max 86 400s) so late-indexed events that land just under the previous cursor are still re-seen. Dedupe is handled in-memory by an event-id set scoped to that window. Chains where Goldsky lag regularly exceeds 60s should raise this.
+- **Subgraph-ahead-of-RPC race.** If the read RPC is lagging the subgraph at the moment a newly-ingested BucketTake is swept (uncommon — subgraph usually trails chain head, not leads it — but possible on load-balanced RPC pools that temporarily route to a stale node), the keeper can see `lpBalance=0` on-chain for a bucket the subgraph has already credited. The lpMap entry is then dropped and the event's id stays in the dedupe set, so the keeper won't re-discover it in the current process. **The LP itself is safe on-chain** — Ajna LP doesn't expire and the signer's claim persists. The keeper will redeem it on either (a) a subsequent BucketTake on the same bucket (the fresh credit triggers a sweep that reads the accumulated on-chain balance) or (b) the next process restart (cursor resets to `0` and replay re-credits everything). No fund loss; worst case is a deferred redemption.
 
 ### Settlement
 

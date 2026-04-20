@@ -1,8 +1,14 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, constants, utils } from 'ethers';
-import { LpCollector, LP_REWARD_LOOKBACK_SECONDS_DEFAULT } from '../rewards/collect-lp';
+import {
+  LpIngester,
+  LpRedeemer,
+  LP_REWARD_LOOKBACK_SECONDS_DEFAULT,
+} from '../rewards/collect-lp';
 import { TokenToCollect } from '../config';
+
+const FAKE_POOL_ADDRESS = '0xpool';
 
 function makeFakeBucket(position: {
   lpBalance: BigNumber;
@@ -26,13 +32,19 @@ function makeFakeBucket(position: {
   };
 }
 
+/**
+ * Test facade: wires an LpIngester + LpRedeemer for a single fake pool and
+ * exposes the legacy `collectLpRewards` / `ingestNewAwardsFromSubgraph` /
+ * `lpMap` surface the existing tests rely on. Each event's `pool.id` is
+ * auto-injected if missing so test fixtures stay terse.
+ */
 function makeCollector(opts: {
   signerAddress: string;
   getBucketTakeLPAwards: sinon.SinonStub;
   bucket?: ReturnType<typeof makeFakeBucket>;
 }) {
   const fakePool: any = {
-    poolAddress: '0xpool',
+    poolAddress: FAKE_POOL_ADDRESS,
     name: 'TEST',
     quoteAddress: '0xquote',
     collateralAddress: '0xcollat',
@@ -42,25 +54,57 @@ function makeCollector(opts: {
   const fakeSigner: any = {
     getAddress: sinon.stub().resolves(opts.signerAddress),
   };
-  const fakeSubgraph: any = {
-    getBucketTakeLPAwards: opts.getBucketTakeLPAwards,
+  // Wrap the caller-supplied stub so events without `pool` get a synthetic
+  // `pool.id = FAKE_POOL_ADDRESS` — keeps existing fixtures working.
+  const wrappedGetAwards = async (...args: any[]) => {
+    const result = await opts.getBucketTakeLPAwards(...args);
+    if (result && Array.isArray(result.bucketTakes)) {
+      return {
+        ...result,
+        bucketTakes: result.bucketTakes.map((t: any) =>
+          t && !t.pool ? { ...t, pool: { id: FAKE_POOL_ADDRESS } } : t
+        ),
+      };
+    }
+    return result;
   };
+  const fakeSubgraph: any = { getBucketTakeLPAwards: wrappedGetAwards };
   const fakeTracker: any = { addToken: sinon.stub() };
 
-  return new LpCollector(
+  const ingester = new LpIngester(fakeSigner, fakeSubgraph, {});
+  const redeemer = new LpRedeemer(
     fakePool,
     fakeSigner,
     {
-      collectLpReward: {
-        redeemFirst: TokenToCollect.QUOTE,
-        minAmountQuote: 0,
-        minAmountCollateral: 0,
-      },
+      redeemFirst: TokenToCollect.QUOTE,
+      minAmountQuote: 0,
+      minAmountCollateral: 0,
     },
     { dryRun: false },
-    fakeTracker,
-    fakeSubgraph
+    fakeTracker
   );
+
+  return {
+    get lpMap() {
+      return redeemer.lpMap;
+    },
+    pool: fakePool,
+    ingester,
+    redeemer,
+    async ingestNewAwardsFromSubgraph() {
+      const byPool = await ingester.ingest();
+      for (const reward of byPool.get(FAKE_POOL_ADDRESS) ?? []) {
+        redeemer.creditReward(reward);
+      }
+    },
+    async collectLpRewards() {
+      const byPool = await ingester.ingest();
+      for (const reward of byPool.get(FAKE_POOL_ADDRESS) ?? []) {
+        redeemer.creditReward(reward);
+      }
+      await redeemer.sweep();
+    },
+  };
 }
 
 describe('LpCollector stale-entry prune', () => {
@@ -115,11 +159,11 @@ describe('LpCollector cursor advancement', () => {
     });
 
     await collector.ingestNewAwardsFromSubgraph();
-    expect(getAwards.firstCall.args[2]).to.equal('0');
+    expect(getAwards.firstCall.args[1]).to.equal('0');
 
     await collector.ingestNewAwardsFromSubgraph();
     // Second call queries cursor minus the lookback window (300 - 60 = 240)
-    expect(getAwards.secondCall.args[2]).to.equal(
+    expect(getAwards.secondCall.args[1]).to.equal(
       String(300 - LP_REWARD_LOOKBACK_SECONDS_DEFAULT)
     );
   });
@@ -151,8 +195,8 @@ describe('LpCollector cursor advancement', () => {
     // Cycle 1 queries from '0' and observes an event at ts=5000.
     // Cycle 2 queries from `(cursorTs - lookback) = 5000 - 60 = 4940`,
     // confirming the cursor advanced to the max observed ts.
-    expect(getAwards.firstCall.args[2]).to.equal('0');
-    expect(getAwards.secondCall.args[2]).to.equal(String(5000 - 60));
+    expect(getAwards.firstCall.args[1]).to.equal('0');
+    expect(getAwards.secondCall.args[1]).to.equal(String(5000 - 60));
   });
 
   it('does not double-count events at exactly the lookback cutoff boundary', async () => {
@@ -315,7 +359,7 @@ describe('LpCollector parse failure quarantine', () => {
     // Second call's timestamp cursor must have advanced past the quarantined
     // event's block (300 - 60 lookback = 240). This proves the pool is not
     // frozen on the bad record.
-    expect(getAwards.secondCall.args[2]).to.equal(String(300 - 60));
+    expect(getAwards.secondCall.args[1]).to.equal(String(300 - 60));
   });
 
   it('emits aggregate WARN when quarantine count crosses alarm threshold', async () => {

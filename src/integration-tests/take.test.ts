@@ -32,7 +32,8 @@ import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../constants';
 import { NonceTracker } from '../nonce';
-import { LpCollector, RewardActionTracker, collectBondFromPool } from '../rewards';
+import { RewardActionTracker, collectBondFromPool } from '../rewards';
+import { makeSinglePoolLpCollector } from './lp-test-helpers';
 import { DexRouter } from '../dex/router';
 
 const setup = async () => {
@@ -430,15 +431,13 @@ describe('ArbTake → LP Collection chain', () => {
     );
 
     const dexRouter = new DexRouter(signer);
-    const lpCollector = new LpCollector(
+    const lpCollector = makeSinglePoolLpCollector(
       pool,
       signer,
       {
-        collectLpReward: {
-          redeemFirst: TokenToCollect.QUOTE,
-          minAmountQuote: 0,
-          minAmountCollateral: 0,
-        },
+        redeemFirst: TokenToCollect.QUOTE,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
       },
       {},
       new RewardActionTracker(

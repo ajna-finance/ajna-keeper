@@ -125,13 +125,18 @@ export interface ExchangeReward {
 
 export type RewardAction = TransferReward | ExchangeReward;
 
-interface CollectLpRewardSettings {
+export interface CollectLpRewardSettings {
   redeemFirst?: TokenToCollect;
   minAmountQuote: number;
   minAmountCollateral: number;
   rewardActionQuote?: RewardAction;
   rewardActionCollateral?: RewardAction;
 }
+
+// Same shape but with all fields optional — used for per-pool overrides on
+// top of `defaultLpReward`. The merger fills required fields from the
+// default; operators can override any subset per pool.
+export type CollectLpRewardOverride = Partial<CollectLpRewardSettings>;
 
 export interface SettlementConfig {
   enabled: boolean;
@@ -224,7 +229,11 @@ export interface PoolConfig {
   take?: TakeSettings;
   collect?: CollectSettings;
   collectBond?: boolean;
-  collectLpReward?: CollectLpRewardSettings;
+  // When `defaultLpReward` is set at the KeeperConfig level, per-pool
+  // entries act as overrides and can omit any field. When there's no
+  // default, the per-pool entry must still supply `minAmountQuote` and
+  // `minAmountCollateral` — enforced by `resolveCollectLpRewardForPool`.
+  collectLpReward?: CollectLpRewardOverride;
   settlement?: SettlementConfig;
   price: PriceOrigin;
   dex?: DexConfig;
@@ -328,4 +337,9 @@ export interface KeeperConfig {
   // to this window, so larger values grow per-pool memory roughly linearly
   // with event rate × window. Defaults to 60.
   lpRewardLookbackSeconds?: number;
+  // Default LP-reward redemption settings applied to every pool the signer
+  // has activity in (including auto-discovered pools), unless a per-pool
+  // `collectLpReward` entry overrides it. Setting this enables chain-wide
+  // LP reward coverage; omitting it keeps the legacy per-pool-only mode.
+  defaultLpReward?: CollectLpRewardSettings;
 }

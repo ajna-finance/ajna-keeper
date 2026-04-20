@@ -2,7 +2,8 @@ import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
 
 import { expect } from 'chai';
 import { BigNumber, Wallet, constants } from 'ethers';
-import { LpCollector, RewardActionTracker } from '../rewards';
+import { RewardActionTracker } from '../rewards';
+import { makeSinglePoolLpCollector } from './lp-test-helpers';
 
 import { configureAjna, TokenToCollect } from '../config';
 import { DexRouter } from '../dex/router';
@@ -84,15 +85,13 @@ describe('LpCollector ingest', () => {
       MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress2
     );
     const dexRouter = new DexRouter(signer);
-    const lpCollector = new LpCollector(
+    const lpCollector = makeSinglePoolLpCollector(
       pool,
       signer,
       {
-        collectLpReward: {
-          redeemFirst: TokenToCollect.QUOTE,
-          minAmountQuote: 0,
-          minAmountCollateral: 0,
-        },
+        redeemFirst: TokenToCollect.QUOTE,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
       },
       {},
       new RewardActionTracker(
@@ -130,15 +129,13 @@ describe('LpCollector ingest', () => {
     const wallet = Wallet.fromMnemonic(USER1_MNEMONIC);
     const noActionSigner = wallet.connect(getProvider());
     const dexRouter = new DexRouter(noActionSigner);
-    const lpCollector = new LpCollector(
+    const lpCollector = makeSinglePoolLpCollector(
       pool,
       noActionSigner,
       {
-        collectLpReward: {
-          redeemFirst: TokenToCollect.QUOTE,
-          minAmountQuote: 0,
-          minAmountCollateral: 0,
-        },
+        redeemFirst: TokenToCollect.QUOTE,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
       },
       {},
       new RewardActionTracker(
@@ -179,15 +176,13 @@ describe('LpCollector ingest', () => {
       MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
     );
     const dexRouter = new DexRouter(kickerSigner);
-    const lpCollector = new LpCollector(
+    const lpCollector = makeSinglePoolLpCollector(
       pool,
       kickerSigner,
       {
-        collectLpReward: {
-          redeemFirst: TokenToCollect.QUOTE,
-          minAmountQuote: 0,
-          minAmountCollateral: 0,
-        },
+        redeemFirst: TokenToCollect.QUOTE,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
       },
       {},
       new RewardActionTracker(
@@ -237,15 +232,13 @@ describe('LpCollector collections', () => {
     );
     const dexRouter = new DexRouter(signer);
 
-    const lpCollector = new LpCollector(
+    const lpCollector = makeSinglePoolLpCollector(
       pool,
       signer,
       {
-        collectLpReward: {
-          redeemFirst: TokenToCollect.QUOTE,
-          minAmountQuote: 0,
-          minAmountCollateral: 0,
-        },
+        redeemFirst: TokenToCollect.QUOTE,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
       },
       {},
       new RewardActionTracker(
@@ -304,15 +297,13 @@ describe('LpCollector collections', () => {
     const dexRouter = new DexRouter(signer);
 
     const makeCollector = () =>
-      new LpCollector(
+      makeSinglePoolLpCollector(
         pool,
         signer,
         {
-          collectLpReward: {
-            redeemFirst: TokenToCollect.QUOTE,
-            minAmountQuote: 0,
-            minAmountCollateral: 0,
-          },
+          redeemFirst: TokenToCollect.QUOTE,
+          minAmountQuote: 0,
+          minAmountCollateral: 0,
         },
         {},
         new RewardActionTracker(

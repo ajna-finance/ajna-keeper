@@ -42,7 +42,6 @@ export interface SubgraphReader {
     maxPages?: number
   ): Promise<GetChainwideLiquidationAuctionsResponse>;
   getBucketTakeLPAwards(
-    poolAddress: string,
     signerAddress: string,
     cursorBlockTimestamp: string
   ): Promise<GetBucketTakeLPAwardsResponse>;
@@ -114,10 +113,9 @@ export function createSubgraphReader(
         }
       );
     },
-    getBucketTakeLPAwards(poolAddress, signerAddress, cursorBlockTimestamp) {
+    getBucketTakeLPAwards(signerAddress, cursorBlockTimestamp) {
       return subgraph.getBucketTakeLPAwards(
         config.subgraphUrl,
-        poolAddress,
         signerAddress,
         cursorBlockTimestamp,
         {

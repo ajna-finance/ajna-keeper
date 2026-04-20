@@ -22,14 +22,12 @@ describe('Subgraph getBucketTakeLPAwards', () => {
 
     await subgraph.getBucketTakeLPAwards(
       'http://example-subgraph',
-      '0xPoOL1111111111111111111111111111111111AA',
       '0xSiGnEr2222222222222222222222222222222222',
       '500'
     );
 
     const variables = (requestStub.firstCall.args[0] as any).variables;
     expect(variables).to.deep.equal({
-      poolId: '0xpool1111111111111111111111111111111111aa',
       signerId: '0xsigner2222222222222222222222222222222222',
       cursorTs: '500',
       cursorId: '0x',
@@ -55,7 +53,6 @@ describe('Subgraph getBucketTakeLPAwards', () => {
 
     const result = await subgraph.getBucketTakeLPAwards(
       'http://example-subgraph',
-      '0xpool',
       '0xsigner',
       '0'
     );
@@ -99,7 +96,6 @@ describe('Subgraph getBucketTakeLPAwards', () => {
 
     const result = await subgraph.getBucketTakeLPAwards(
       'http://example-subgraph',
-      '0xpool',
       '0xsigner',
       '0'
     );
@@ -120,7 +116,6 @@ describe('Subgraph getBucketTakeLPAwards', () => {
 
     await subgraph.getBucketTakeLPAwards(
       'http://example-subgraph',
-      '0xpool',
       '0xsigner',
       '500'
     );
@@ -158,7 +153,6 @@ describe('Subgraph getBucketTakeLPAwards', () => {
 
     await subgraph.getBucketTakeLPAwards(
       'http://example-subgraph',
-      '0xpool',
       '0xsigner',
       '0'
     );
@@ -179,7 +173,6 @@ describe('Subgraph getBucketTakeLPAwards', () => {
 
     const result = await subgraph.getBucketTakeLPAwards(
       'http://primary',
-      '0xpool',
       '0xsigner',
       '0',
       { fallbackUrls: ['http://fallback'] }

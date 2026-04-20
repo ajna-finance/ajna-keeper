@@ -2,8 +2,8 @@ import { FungiblePool, min, Signer } from '@ajna-finance/sdk';
 import { MAX_FENWICK_INDEX } from '../constants';
 import { BigNumber, constants, utils } from 'ethers';
 import {
+  CollectLpRewardSettings,
   KeeperConfig,
-  PoolConfig,
   RewardAction,
   TokenToCollect,
 } from '../config';
@@ -15,29 +15,35 @@ import {
 } from '../transactions';
 import { decimaledToWei, weiToDecimaled } from '../utils';
 import { FungibleBucket } from '@ajna-finance/sdk/dist/classes/FungibleBucket';
+import { BucketTakeLPAwardItem } from '../subgraph';
 import { SubgraphReader } from '../read-transports';
 
 /**
- * Collects LP rewarded from BucketTakes without collecting the user's deposits
- * or loans.
+ * LP-reward collection via subgraph polling.
  *
- * Uses subgraph-based polling instead of on-chain event listeners. Each
- * `collectLpRewards()` call fetches new `BucketTake` entities (filtered by
- * this signer as taker or kicker) since the last observed `blockTimestamp`,
- * hydrates the in-memory `lpMap`, then sweeps the map to redeem LP.
+ * Architecture: one chain-wide `LpIngester` fetches all `BucketTake` events
+ * where the signer was taker or kicker across every Ajna pool, then
+ * dispatches the parsed rewards to per-pool `LpRedeemer` instances. An
+ * `LpManager` orchestrates ingest + dispatch + sweep and materializes
+ * redeemers on-demand as new pool addresses surface in subgraph events.
  *
- * On process start the cursor is `'0'`, so the first ingest replays all
- * historical BucketTake rewards for this (pool, signer). This reclaims
- * unredeemed LP that accrued before a restart. Correctness is bounded by the
- * on-chain `lpBalance` cap in `collectLpRewardFromBucket`, and the
- * zero-balance prune there drops entries whose rewards were already redeemed
- * so the replay is self-cleaning after at most one cycle.
+ * Chain-wide scope means auto-discovered pools are covered automatically:
+ * if the signer takes on a pool that isn't in the static config,
+ * `LpManager` still redeems the resulting LP (using the configured
+ * `defaultLpReward` settings).
  *
- * Assumes the signer is a dedicated keeper key whose `lpBalance` in each
- * bucket is entirely reward-derived. If the same signer also deposits into
- * these pools, history replay after a restart can redeem principal to
- * satisfy stale reward entries — use a distinct keeper key to avoid this.
+ * Cold-start correctness: on process start the ingest cursor is `'0'`, so
+ * the first ingest replays all historical BucketTake rewards for the
+ * signer. Correctness is bounded by the on-chain `lpBalance` cap in each
+ * `LpRedeemer.sweep`; the zero-balance prune drops entries whose rewards
+ * were already redeemed before the restart.
+ *
+ * Assumes the signer is a dedicated keeper key whose on-chain `lpBalance`
+ * in each bucket is entirely reward-derived. If the same signer also
+ * deposits into these pools, history replay after restart can redeem
+ * principal — use a distinct keeper key to avoid this.
  */
+
 // Default overlap window subtracted from the cursor before each subgraph
 // query, so late-indexed events that land just under the previous cursor
 // boundary are still re-seen. Any event already processed is filtered out
@@ -57,15 +63,30 @@ const MAX_SEEN_EVENT_IDS = 100_000;
 // failures is pathological and should surface its own aggregate signal.
 const QUARANTINE_ALARM_THRESHOLD = 5;
 
-export class LpCollector {
-  public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndex, rewardLp>
+/**
+ * One parsed BucketTake reward destined for a specific pool's redeemer.
+ * Role-specific amounts are pre-computed here so the redeemer doesn't need
+ * to re-parse.
+ */
+export interface ParsedLpReward {
+  poolAddress: string; // lowercased
+  bucketIndex: number;
+  takerAmount: BigNumber;
+  kickerAmount: BigNumber;
+}
 
+/**
+ * Chain-wide ingester: owns the cursor, dedupe set, and subgraph query.
+ * Returns parsed rewards grouped by pool address so the caller can
+ * dispatch them to per-pool redeemers.
+ */
+export class LpIngester {
   private signerAddressPromise: Promise<string>;
   // Timestamp cursor advanced to the highest `blockTimestamp` seen so far.
-  // Each query subtracts `lookbackSeconds` from this value so
-  // late-indexed events within that window are still re-fetched; dedupe is
-  // handled by `seenEventIds`. A pure timestamp cursor is sufficient here —
-  // within a single query call, composite (ts, id) pagination in
+  // Each query subtracts `lookbackSeconds` from this value so late-indexed
+  // events within that window are still re-fetched; dedupe is handled by
+  // `seenEventIds`. A pure timestamp cursor is sufficient here — within a
+  // single query call, composite (ts, id) pagination in
   // `getBucketTakeLPAwards` handles same-timestamp events deterministically,
   // so we don't need a cross-cycle id cursor.
   private cursorBlockTimestamp: string = '0';
@@ -74,34 +95,27 @@ export class LpCollector {
   private seenEventIds: Map<string, string> = new Map(); // id → blockTimestamp
   // Effective lookback window, resolved from config with a default fallback.
   private lookbackSeconds: number;
-  // Tracks the over-threshold state of `seenEventIds` so the advisory warn
-  // fires once on the rising edge (under → over) instead of every cycle.
+  // Rising-edge latch on the advisory dedupe-threshold warn.
   private seenEventIdsOverThreshold: boolean = false;
 
   constructor(
-    private pool: FungiblePool,
     private signer: Signer,
-    private poolConfig: Required<Pick<PoolConfig, 'collectLpReward'>>,
-    private config: Pick<KeeperConfig, 'dryRun' | 'lpRewardLookbackSeconds'>,
-    private exchangeTracker: RewardActionTracker,
-    private subgraph: SubgraphReader
+    private subgraph: SubgraphReader,
+    config: Pick<KeeperConfig, 'lpRewardLookbackSeconds'>
   ) {
     // Attach a catch so a failed address resolution doesn't become an
     // unhandled rejection at process start (Node ≥15 is strict by default).
     // The same rejection will still surface on every `await` of this promise.
     this.signerAddressPromise = this.signer.getAddress();
     this.signerAddressPromise.catch((err) => {
-      logger.error(
-        `Failed to resolve signer address for pool ${this.pool.name}`,
-        err
-      );
+      logger.error('Failed to resolve signer address for LP ingester', err);
     });
 
     // Defense-in-depth beyond `load.ts` validation: if `lpRewardLookbackSeconds`
     // somehow arrives non-finite (e.g. a caller that bypassed the schema
     // validator), fall back to the default rather than letting NaN/Infinity
     // propagate into BigNumber arithmetic and silently break cursor math.
-    const configured = this.config.lpRewardLookbackSeconds;
+    const configured = config.lpRewardLookbackSeconds;
     this.lookbackSeconds =
       typeof configured === 'number' &&
       Number.isFinite(configured) &&
@@ -111,39 +125,12 @@ export class LpCollector {
         : LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
   }
 
-  public async collectLpRewards() {
-    await this.ingestNewAwardsFromSubgraph();
-
-    const lpMapEntries = Array.from(this.lpMap.entries()).filter(
-      ([bucketIndex, rewardLp]) => rewardLp.gt(constants.Zero)
-    );
-    for (let [bucketIndex, rewardLp] of lpMapEntries) {
-      try {
-        const lpConsumed = await this.collectLpRewardFromBucket(
-          bucketIndex,
-          rewardLp
-        );
-        this.subtractReward(bucketIndex, lpConsumed);
-      } catch (error) {
-        // AuctionNotCleared is re-thrown up the stack so `run.ts` can trigger
-        // reactive settlement. Other per-bucket errors stay contained — a
-        // persistently-failing bucket should not starve later buckets in the
-        // same cycle. The lpMap entry remains so the next cycle retries.
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        if (errorMessage.includes('AuctionNotCleared')) {
-          throw error;
-        }
-        logger.error(
-          `Failed to collect LP reward from bucket; continuing with remaining buckets. pool: ${this.pool.name}, bucketIndex: ${bucketIndex}`,
-          error
-        );
-      }
-    }
-  }
-
-  // Exposed for tests that want to verify reward tracking independently of
-  // the redemption flow. Production callers should use `collectLpRewards`.
-  public async ingestNewAwardsFromSubgraph(): Promise<void> {
+  /**
+   * Fetch new BucketTake events for this signer across every pool, apply
+   * all defensive parsing / quarantine / index-range checks, and return
+   * the accepted rewards grouped by pool address.
+   */
+  public async ingest(): Promise<Map<string, ParsedLpReward[]>> {
     const signerAddress = (await this.signerAddressPromise).toLowerCase();
 
     // Shift the query's timestamp cursor BACK by `lookbackSeconds` so
@@ -154,7 +141,6 @@ export class LpCollector {
       this.lookbackSeconds
     );
     const { bucketTakes } = await this.subgraph.getBucketTakeLPAwards(
-      this.pool.poolAddress,
       signerAddress,
       queryTs
     );
@@ -170,20 +156,28 @@ export class LpCollector {
     // that's silently draining rewards while the cursor still advances.
     let quarantineCount = 0;
 
+    const byPool: Map<string, ParsedLpReward[]> = new Map();
+    const push = (poolAddress: string, reward: ParsedLpReward) => {
+      const existing = byPool.get(poolAddress);
+      if (existing) existing.push(reward);
+      else byPool.set(poolAddress, [reward]);
+    };
+
     for (const take of bucketTakes) {
       if (this.seenEventIds.has(take.id)) continue;
 
-      // Reject unparseable blockTimestamp up-front — if we record an entry in
-      // `seenEventIds` with a junk ts, neither prune nor cap can evict it
-      // (both go through `bigIntStringGreater`, which returns false on parse
-      // error), and the entry pins the dedupe map permanently. A schema drift
-      // or GraphQL-library glitch that produces a non-numeric ts is exactly
-      // the case where halting ingest here protects memory bounds.
+      // Reject unparseable blockTimestamp up-front — if we record an entry
+      // in `seenEventIds` with a junk ts, neither prune nor cap can evict
+      // it (both go through `bigIntStringGreater`, which returns false on
+      // parse error), and the entry pins the dedupe map permanently. A
+      // schema drift or GraphQL-library glitch that produces a non-numeric
+      // ts is exactly the case where halting ingest here protects memory
+      // bounds.
       try {
         BigNumber.from(take.blockTimestamp);
       } catch {
         logger.warn(
-          `BucketTake event has unparseable blockTimestamp; skipping. pool: ${this.pool.name}, id: ${take.id}, ts: ${take.blockTimestamp}`
+          `BucketTake event has unparseable blockTimestamp; skipping. id: ${take.id}, ts: ${take.blockTimestamp}`
         );
         continue;
       }
@@ -194,15 +188,22 @@ export class LpCollector {
       this.seenEventIds.set(take.id, take.blockTimestamp);
       observeTimestamp(take.blockTimestamp);
 
+      const poolAddress = take.pool?.id?.toLowerCase();
+      if (!poolAddress) {
+        logger.warn(
+          `BucketTake event missing pool.id field; skipping. id: ${take.id}`
+        );
+        continue;
+      }
+
       // Defensive: schema marks `taker`, `lpAwarded`, and `lpAwarded.kicker`
       // non-null, but guard anyway so a schema drift or GraphQL-library glitch
-      // can't throw and halt the pool. `lpAwarded` missing is fatal (no
-      // amounts to parse); missing `taker` or `kicker` is non-fatal — we
-      // just can't credit that role. If BOTH are missing for our signer we
-      // log and move on.
+      // can't throw and halt ingest. `lpAwarded` missing is fatal (no amounts
+      // to parse); missing `taker` or `kicker` is non-fatal — we just can't
+      // credit that role.
       if (!take.lpAwarded) {
         logger.warn(
-          `BucketTake event missing lpAwarded field; skipping. pool: ${this.pool.name}, id: ${take.id}`
+          `BucketTake event missing lpAwarded field; skipping. pool: ${poolAddress}, id: ${take.id}`
         );
         continue;
       }
@@ -215,7 +216,7 @@ export class LpCollector {
 
       if (!take.taker || !take.lpAwarded.kicker) {
         logger.warn(
-          `BucketTake event missing taker/kicker field; continuing best-effort. pool: ${this.pool.name}, id: ${take.id}, takerNull: ${!take.taker}, kickerNull: ${!take.lpAwarded.kicker}`
+          `BucketTake event missing taker/kicker field; continuing best-effort. pool: ${poolAddress}, id: ${take.id}, takerNull: ${!take.taker}, kickerNull: ${!take.lpAwarded.kicker}`
         );
       }
 
@@ -230,7 +231,7 @@ export class LpCollector {
         take.index > MAX_FENWICK_INDEX
       ) {
         logger.warn(
-          `BucketTake event has out-of-range bucket index; skipping. pool: ${this.pool.name}, id: ${take.id}, index: ${take.index}`
+          `BucketTake event has out-of-range bucket index; skipping. pool: ${poolAddress}, id: ${take.id}, index: ${take.index}`
         );
         continue;
       }
@@ -249,24 +250,29 @@ export class LpCollector {
           : constants.Zero;
       } catch (error) {
         logger.error(
-          `Failed to parse BucketTake reward amounts; skipping event. pool: ${this.pool.name}, id: ${take.id}, taker: ${take.lpAwarded.lpAwardedTaker}, kicker: ${take.lpAwarded.lpAwardedKicker}`,
+          `Failed to parse BucketTake reward amounts; skipping event. pool: ${poolAddress}, id: ${take.id}, taker: ${take.lpAwarded.lpAwardedTaker}, kicker: ${take.lpAwarded.lpAwardedKicker}`,
           error
         );
         quarantineCount++;
         continue;
       }
 
-      if (takerMatches) {
-        this.addRewardParsed(take.index, takerAmount, 'taker');
+      if (!takerMatches && !kickerMatches) {
+        // Subgraph filter should have excluded this, but guard anyway.
+        continue;
       }
-      if (kickerMatches) {
-        this.addRewardParsed(take.index, kickerAmount, 'kicker');
-      }
+
+      push(poolAddress, {
+        poolAddress,
+        bucketIndex: take.index,
+        takerAmount,
+        kickerAmount,
+      });
     }
 
     if (quarantineCount >= QUARANTINE_ALARM_THRESHOLD) {
       logger.warn(
-        `Quarantined ${quarantineCount} BucketTake event(s) in a single ingest cycle for pool ${this.pool.name}; rewards are silently dropping. Likely schema drift in lpAwardedTaker/lpAwardedKicker — investigate before the cursor rolls past the lookback window.`
+        `Quarantined ${quarantineCount} BucketTake event(s) in a single ingest cycle; rewards are silently dropping. Likely schema drift in lpAwardedTaker/lpAwardedKicker — investigate before the cursor rolls past the lookback window.`
       );
     }
 
@@ -280,23 +286,30 @@ export class LpCollector {
     // Then check that memory stays bounded.
     this.pruneSeenEventIds();
     this.warnIfSeenEventIdsOverThreshold();
+
+    return byPool;
+  }
+
+  // Exposed for tests / diagnostics.
+  public getCursorBlockTimestamp(): string {
+    return this.cursorBlockTimestamp;
+  }
+  public getSeenEventIdsSize(): number {
+    return this.seenEventIds.size;
   }
 
   private warnIfSeenEventIdsOverThreshold(): void {
     // After `pruneSeenEventIds`, the remaining entries are all within the
-    // active lookback window and MUST be retained (evicting them would cause
-    // re-fetched events to double-count). `MAX_SEEN_EVENT_IDS` is therefore
-    // advisory: memory is hard-bounded by `lookbackSeconds × event rate`,
-    // and this log lets operators notice pathological pools or oversized
-    // lookback windows before they become a problem.
-    //
-    // Fire only on the rising edge to avoid log spam — chronically-over
-    // pools would otherwise emit a WARN every cycle and flood alerting
-    // pipelines. Reset the latch once the set drops back under.
+    // active lookback window and MUST be retained (evicting them would
+    // cause re-fetched events to double-count). `MAX_SEEN_EVENT_IDS` is
+    // therefore advisory: memory is hard-bounded by
+    // `lookbackSeconds × event rate`, and this log lets operators notice
+    // pathological pools or oversized lookback windows before they become
+    // a problem. Fire only on the rising edge to avoid log spam.
     const overThresholdNow = this.seenEventIds.size >= MAX_SEEN_EVENT_IDS;
     if (overThresholdNow && !this.seenEventIdsOverThreshold) {
       logger.warn(
-        `seenEventIds lookback window (${this.seenEventIds.size}) meets or exceeds advisory threshold (${MAX_SEEN_EVENT_IDS}); verify pool event rate vs. lpRewardLookbackSeconds. pool: ${this.pool.name}`
+        `seenEventIds lookback window (${this.seenEventIds.size}) meets or exceeds advisory threshold (${MAX_SEEN_EVENT_IDS}); verify signer activity vs. lpRewardLookbackSeconds.`
       );
     }
     this.seenEventIdsOverThreshold = overThresholdNow;
@@ -317,6 +330,77 @@ export class LpCollector {
       }
     });
   }
+}
+
+/**
+ * Per-pool redemption state. Owns the lpMap for one pool and the
+ * settings/handle needed to sweep it. Constructed lazily by `LpManager`
+ * on first event arrival for the pool.
+ */
+export class LpRedeemer {
+  public lpMap: Map<number, BigNumber> = new Map(); // bucketIndex → rewardLp
+
+  private signerAddressPromise: Promise<string>;
+
+  constructor(
+    public readonly pool: FungiblePool,
+    private signer: Signer,
+    private settings: CollectLpRewardSettings,
+    private config: Pick<KeeperConfig, 'dryRun'>,
+    private exchangeTracker: RewardActionTracker
+  ) {
+    this.signerAddressPromise = this.signer.getAddress();
+    this.signerAddressPromise.catch((err) => {
+      logger.error(
+        `Failed to resolve signer address for pool ${this.pool.name}`,
+        err
+      );
+    });
+  }
+
+  /** Credit an ingested reward for this pool into the lpMap. */
+  public creditReward(reward: ParsedLpReward): void {
+    if (!reward.takerAmount.eq(constants.Zero)) {
+      this.addRewardParsed(reward.bucketIndex, reward.takerAmount, 'taker');
+    }
+    if (!reward.kickerAmount.eq(constants.Zero)) {
+      this.addRewardParsed(reward.bucketIndex, reward.kickerAmount, 'kicker');
+    }
+  }
+
+  /**
+   * Sweep every non-zero entry in the lpMap, redeeming the corresponding
+   * quote and/or collateral on-chain. AuctionNotCleared re-throws to the
+   * caller so reactive settlement can run; other per-bucket errors stay
+   * contained.
+   */
+  public async sweep(): Promise<void> {
+    const lpMapEntries = Array.from(this.lpMap.entries()).filter(
+      ([, rewardLp]) => rewardLp.gt(constants.Zero)
+    );
+    for (let [bucketIndex, rewardLp] of lpMapEntries) {
+      try {
+        const lpConsumed = await this.collectLpRewardFromBucket(
+          bucketIndex,
+          rewardLp
+        );
+        this.subtractReward(bucketIndex, lpConsumed);
+      } catch (error) {
+        // AuctionNotCleared is re-thrown so `run.ts` can trigger reactive
+        // settlement. Other per-bucket errors stay contained — a
+        // persistently-failing bucket should not starve later buckets in
+        // the same cycle. The lpMap entry remains so the next cycle retries.
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('AuctionNotCleared')) {
+          throw error;
+        }
+        logger.error(
+          `Failed to collect LP reward from bucket; continuing with remaining buckets. pool: ${this.pool.name}, bucketIndex: ${bucketIndex}`,
+          error
+        );
+      }
+    }
+  }
 
   /**
    * Collects the lpReward from bucket. Returns amount of lp used.
@@ -331,7 +415,7 @@ export class LpCollector {
       minAmountCollateral,
       rewardActionQuote,
       rewardActionCollateral,
-    } = this.poolConfig.collectLpReward;
+    } = this.settings;
     const signerAddress = await this.signerAddressPromise;
     const bucket = this.pool.getBucketByIndex(bucketIndex);
     let { deposit, collateral } = await bucket.getStatus();
@@ -451,9 +535,9 @@ export class LpCollector {
     // Post-read is OUTSIDE the try above. The withdrawal already succeeded;
     // we're measuring how much LP it consumed. If this read fails (transient
     // RPC flake), let the error propagate — the per-bucket try/catch in
-    // `collectLpRewards` catches it, skips the fallback arm for this bucket
-    // so we don't attempt a redundant second tx, and retries next cycle
-    // with fresh on-chain state.
+    // `sweep` catches it, skips the fallback arm for this bucket so we
+    // don't attempt a redundant second tx, and retries next cycle with
+    // fresh on-chain state.
     const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
     const lpUsed = lpBalanceBefore.sub(lpBalanceAfter);
     if (lpUsed.lt(0)) {
@@ -517,9 +601,9 @@ export class LpCollector {
 
     // Post-read is OUTSIDE the try above. Same reasoning as redeemQuote:
     // the withdrawal already succeeded, and a post-read failure should
-    // propagate to the per-bucket try/catch in `collectLpRewards` rather
-    // than silently returning Zero (which would trigger a redundant
-    // fallback withdrawal tx on the other token side).
+    // propagate to the per-bucket try/catch in `sweep` rather than silently
+    // returning Zero (which would trigger a redundant fallback withdrawal
+    // tx on the other token side).
     const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
     const lpUsed = lpBalanceBefore.sub(lpBalanceAfter);
     if (lpUsed.lt(0)) {
@@ -554,12 +638,65 @@ export class LpCollector {
   }
 }
 
+/**
+ * Resolves a pool address from a subgraph event to either an existing
+ * LpRedeemer (cached) or a newly-materialized one (hydrating the
+ * FungiblePool handle on-demand). Returns undefined if the pool cannot be
+ * hydrated (e.g. ERC721 pool the factory can't construct, or hydration in
+ * cooldown).
+ */
+export type LpRedeemerResolver = (
+  poolAddress: string
+) => Promise<LpRedeemer | undefined>;
+
+/**
+ * Orchestrates ingest → dispatch. Sweep is the caller's responsibility so
+ * per-pool error handling (AuctionNotCleared → reactive settlement → retry)
+ * can live at the callsite with proper pool context.
+ */
+export class LpManager {
+  constructor(
+    private ingester: LpIngester,
+    private resolveRedeemer: LpRedeemerResolver
+  ) {}
+
+  /**
+   * Fetch new events chain-wide, credit each to the appropriate per-pool
+   * redeemer (hydrating the handle on-demand), and return the redeemers
+   * that have non-zero `lpMap` entries ready to sweep.
+   *
+   * Pools that fail to hydrate (ERC721, deployment mismatch, cooldown) are
+   * skipped silently — the rewards stay safe on-chain and a later cycle
+   * can pick them up once the pool becomes hydratable. Skipping here
+   * doesn't corrupt cursor state: the ingester has already advanced past
+   * these events and recorded them in `seenEventIds`.
+   */
+  public async ingestAndDispatch(): Promise<LpRedeemer[]> {
+    const byPool = await this.ingester.ingest();
+    const touched: LpRedeemer[] = [];
+
+    for (const [poolAddress, rewards] of Array.from(byPool.entries())) {
+      const redeemer = await this.resolveRedeemer(poolAddress);
+      if (!redeemer) continue;
+      for (const reward of rewards) redeemer.creditReward(reward);
+      touched.push(redeemer);
+    }
+
+    return touched;
+  }
+
+  /** Exposed for tests / diagnostics. */
+  public getIngester(): LpIngester {
+    return this.ingester;
+  }
+}
+
 // Subgraph serializes BigDecimal reward amounts (18-decimal fixed) as strings
 // like "123.456000000000000000". Convert to a WAD-scaled BigNumber. Throws on
-// malformed input; the caller in `ingestNewAwardsFromSubgraph` catches the
-// throw and quarantines the record (the seen-id + timestamp are recorded
-// BEFORE parse, so cursor advance and dedupe both still apply — the bad
-// event is dropped forever for this window and NOT retried every cycle).
+// malformed input; the caller in `LpIngester.ingest` catches the throw and
+// quarantines the record (the seen-id + timestamp are recorded BEFORE parse,
+// so cursor advance and dedupe both still apply — the bad event is dropped
+// forever for this window and NOT retried every cycle).
 //
 // Rejects negatives explicitly. `utils.parseUnits('-1.5', 18)` returns a
 // negative BigNumber, which would otherwise flow into `addRewardParsed`
@@ -590,7 +727,7 @@ export function bigIntStringGreater(a: string, b: string): boolean {
 }
 
 // Returns max(0, cursor - seconds) as a decimal string, matching the BigInt
-// timestamp format the subgraph expects. Clamps at zero so a fresh collector
+// timestamp format the subgraph expects. Clamps at zero so a fresh ingester
 // with cursor='0' still produces a valid BigInt query variable.
 export function subtractSecondsClamped(
   cursor: string,

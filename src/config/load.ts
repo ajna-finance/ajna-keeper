@@ -69,6 +69,31 @@ export function assertIsValidConfig(
       );
     }
   }
+
+  // `defaultLpReward`, when set, must specify the two mandatory min-amount
+  // fields. Without those, the redemption layer has no floor and would
+  // attempt to redeem rounding-dust every cycle.
+  if (config.defaultLpReward !== undefined) {
+    const d = config.defaultLpReward;
+    if (
+      typeof d.minAmountQuote !== 'number' ||
+      !Number.isFinite(d.minAmountQuote) ||
+      d.minAmountQuote < 0
+    ) {
+      throw new Error(
+        `defaultLpReward.minAmountQuote must be a non-negative number, got: ${JSON.stringify(d.minAmountQuote)}`
+      );
+    }
+    if (
+      typeof d.minAmountCollateral !== 'number' ||
+      !Number.isFinite(d.minAmountCollateral) ||
+      d.minAmountCollateral < 0
+    ) {
+      throw new Error(
+        `defaultLpReward.minAmountCollateral must be a non-negative number, got: ${JSON.stringify(d.minAmountCollateral)}`
+      );
+    }
+  }
 }
 
 function expectProperty<T, K extends keyof T>(config: T, key: K): void {

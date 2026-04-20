@@ -155,13 +155,15 @@ const MOCK_LP_AWARDS_MAX_PAGES = GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES;
 // against a stubbed `graphql-request`; integration tests don't need to
 // re-cover that path through the mock.
 //
-// Pool scoping is enforced via the closure over `pool` (all queryFilter calls
-// go to `pool.poolAddress`), mirroring production's `pool: $poolId` filter.
-// Multi-pool tests must construct a separate mock per pool.
+// Chain-wide scope: production queries by signer across ALL pools. Test
+// fixtures currently spin up ONE hardhat-fork pool per test, so the closure
+// still captures a single `pool` — the mock emits events only for that
+// pool's contract. Multi-pool tests should extend this to accept an array
+// of pools and union their event streams; for now one pool per test is
+// sufficient and matches every existing fixture.
 export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
   return async (
     _subgraphUrl: string,
-    _poolAddress: string,
     signerAddress: string,
     cursorBlockTimestamp: string
   ): Promise<GetBucketTakeLPAwardsResponse> => {
@@ -229,6 +231,7 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
         id,
         index: indexBn.toNumber(),
         taker: taker.toLowerCase(),
+        pool: { id: pool.poolAddress.toLowerCase() },
         lpAwarded: {
           lpAwardedTaker: utils.formatUnits(lpAwardedTaker, 18),
           lpAwardedKicker: utils.formatUnits(lpAwardedKicker, 18),

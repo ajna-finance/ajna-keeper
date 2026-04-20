@@ -5,7 +5,8 @@ import { BigNumber, constants } from 'ethers';
 import { configureAjna, KeeperConfig, PoolConfig } from '../config';
 import { NonceTracker } from '../nonce';
 import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../settlement';
-import { LpCollector, collectBondFromPool, RewardActionTracker } from '../rewards';
+import { collectBondFromPool, RewardActionTracker } from '../rewards';
+import { makeSinglePoolLpCollector } from './lp-test-helpers';
 import { DexRouter } from '../dex/router';
 import { decimaledToWei, weiToDecimaled, delay } from '../utils';
 import { logger } from '../logging';
@@ -278,10 +279,10 @@ describe('Settlement Integration Tests', () => {
         dexRouter
       );
 
-      const lpCollector = new LpCollector(
+      const lpCollector = makeSinglePoolLpCollector(
         pool,
         kickerSigner,
-        poolConfig as any,
+        (poolConfig as any).collectLpReward,
         keeperConfig,
         exchangeTracker,
         createSubgraphReader({ subgraphUrl: 'mock://' })
