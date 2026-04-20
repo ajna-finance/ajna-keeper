@@ -70,7 +70,7 @@ describe('LpCollector stale-entry prune', () => {
   it('deletes bucket entry from lpMap when on-chain lpBalance is zero', async () => {
     const signer = '0xabc0000000000000000000000000000000000000';
     const bucket = makeFakeBucket({ lpBalance: constants.Zero });
-    const getAwards = sinon.stub().resolves({ bucketTakes: [], truncated: false });
+    const getAwards = sinon.stub().resolves({ bucketTakes: [] });
     const collector = makeCollector({
       signerAddress: signer,
       getBucketTakeLPAwards: getAwards,
@@ -107,9 +107,8 @@ describe('LpCollector cursor advancement', () => {
           blockTimestamp: '300',
         },
       ],
-      truncated: false,
     });
-    getAwards.onCall(1).resolves({ bucketTakes: [], truncated: false });
+    getAwards.onCall(1).resolves({ bucketTakes: [] });
 
     const collector = makeCollector({
       signerAddress: signer,
@@ -139,9 +138,8 @@ describe('LpCollector cursor advancement', () => {
           blockTimestamp: '5000',
         },
       ],
-      truncated: true,
     });
-    getAwards.onCall(1).resolves({ bucketTakes: [], truncated: false });
+    getAwards.onCall(1).resolves({ bucketTakes: [] });
 
     const collector = makeCollector({
       signerAddress: signer,
@@ -190,13 +188,11 @@ describe('LpCollector cursor advancement', () => {
     const getAwards = sinon.stub();
     getAwards.onCall(0).resolves({
       bucketTakes: [boundaryEvent, anchorEvent],
-      truncated: false,
     });
     // Second call: subgraph still returns boundaryEvent (its blockTimestamp
     // equals cutoff, so _gte picks it up). We must NOT re-ingest it.
     getAwards.onCall(1).resolves({
       bucketTakes: [boundaryEvent],
-      truncated: false,
     });
 
     const collector = makeCollector({
@@ -223,8 +219,8 @@ describe('LpCollector cursor advancement', () => {
       blockTimestamp: '100',
     };
     const getAwards = sinon.stub();
-    getAwards.onCall(0).resolves({ bucketTakes: [event], truncated: false });
-    getAwards.onCall(1).resolves({ bucketTakes: [event], truncated: false });
+    getAwards.onCall(0).resolves({ bucketTakes: [event] });
+    getAwards.onCall(1).resolves({ bucketTakes: [event] });
 
     const collector = makeCollector({
       signerAddress: signer,
@@ -267,7 +263,6 @@ describe('LpCollector parse failure quarantine', () => {
           blockTimestamp: '200',
         },
       ],
-      truncated: false,
     });
 
     const collector = makeCollector({
@@ -303,9 +298,8 @@ describe('LpCollector parse failure quarantine', () => {
           blockTimestamp: '300',
         },
       ],
-      truncated: false,
     });
-    getAwards.onCall(1).resolves({ bucketTakes: [], truncated: false });
+    getAwards.onCall(1).resolves({ bucketTakes: [] });
 
     const collector = makeCollector({
       signerAddress: signer,
@@ -348,7 +342,6 @@ describe('LpCollector null-field defense', () => {
           blockTimestamp: '700',
         },
       ],
-      truncated: false,
     });
 
     const collector = makeCollector({
@@ -384,7 +377,6 @@ describe('LpCollector null-field defense', () => {
           blockTimestamp: '500',
         },
       ],
-      truncated: false,
     });
 
     const collector = makeCollector({
@@ -420,7 +412,6 @@ describe('LpCollector role handling', () => {
           blockTimestamp: '100',
         },
       ],
-      truncated: false,
     });
 
     const collector = makeCollector({

@@ -502,7 +502,6 @@ export interface BucketTakeLPAwardItem {
 
 export interface GetBucketTakeLPAwardsResponse {
   bucketTakes: BucketTakeLPAwardItem[];
-  truncated: boolean;
 }
 
 const GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE = 1000;
@@ -583,7 +582,6 @@ async function getBucketTakeLPAwards(
   const poolId = poolAddress.toLowerCase();
   const signerId = signerAddress.toLowerCase();
   const bucketTakes: BucketTakeLPAwardItem[] = [];
-  let truncated = false;
 
   // Within-call pagination advances a composite (pageTs, pageId) cursor between
   // pages so same-timestamp events are split deterministically by id. The
@@ -625,7 +623,6 @@ async function getBucketTakeLPAwards(
       logger.warn(
         `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for pool=${poolId}; results may be truncated`
       );
-      truncated = true;
     }
 
     if (pageItems.length < GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE) {
@@ -646,7 +643,7 @@ async function getBucketTakeLPAwards(
     pageId = lastItem.id.toLowerCase();
   }
 
-  return { bucketTakes, truncated };
+  return { bucketTakes };
 }
 
 // Exported as default module to enable mocking in tests.

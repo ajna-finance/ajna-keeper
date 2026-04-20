@@ -212,11 +212,11 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       return a.id.localeCompare(b.id);
     });
 
-    // Matches production: clamp at pageSize * maxPages, report truncation.
+    // Matches production: clamp at pageSize * maxPages.
     const cap = MOCK_LP_AWARDS_PAGE_SIZE * MOCK_LP_AWARDS_MAX_PAGES;
-    const truncated = candidates.length > cap;
-    const bucketTakes = truncated ? candidates.slice(0, cap) : candidates;
-    return { bucketTakes, truncated };
+    const bucketTakes =
+      candidates.length > cap ? candidates.slice(0, cap) : candidates;
+    return { bucketTakes };
   };
 }
 

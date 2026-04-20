@@ -4,6 +4,7 @@ import * as graphqlRequest from 'graphql-request';
 import subgraph from '../subgraph';
 import { resetReadRpcHealthForTests } from '../read-rpc';
 import { clearEndpointHealthState } from '../endpoint-health';
+import { logger } from '../logging';
 
 describe('Subgraph getBucketTakeLPAwards', () => {
   beforeEach(() => {
@@ -73,7 +74,6 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     );
 
     expect(result.bucketTakes).to.have.length(1001);
-    expect(result.truncated).to.equal(false);
     expect(requestStub.callCount).to.equal(2);
     const secondVars = (requestStub.secondCall.args[0] as any).variables;
     // Next page's cursor must be the last item's (blockTimestamp, id) pair
@@ -101,7 +101,7 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     expect(variables.cursorId).to.equal('');
   });
 
-  it('reports truncated=true when pagination hits the max-pages cap', async () => {
+  it('warns when pagination hits the max-pages cap', async () => {
     // Pretend every page is full so pagination keeps walking up to the cap
     const fullPage = Array.from({ length: 1000 }, (_, i) => ({
       id: `take-${Math.random().toString(16).slice(2)}-${i}`,
@@ -122,16 +122,21 @@ describe('Subgraph getBucketTakeLPAwards', () => {
           id: `cursor-${requestStub.callCount}-${idx}`,
         })),
       }));
+    const warnStub = sinon.stub(logger, 'warn');
 
-    const result = await subgraph.getBucketTakeLPAwards(
+    await subgraph.getBucketTakeLPAwards(
       'http://example-subgraph',
       '0xpool',
       '0xsigner',
       '0'
     );
 
-    expect(result.truncated).to.equal(true);
     expect(requestStub.callCount).to.equal(100);
+    expect(
+      warnStub.getCalls().some((call) =>
+        String(call.args[0]).includes('reached maxPages')
+      )
+    ).to.equal(true);
   });
 
   it('falls over to the fallback subgraph URL when the primary fails', async () => {
@@ -149,7 +154,6 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     );
 
     expect(result.bucketTakes).to.deep.equal([]);
-    expect(result.truncated).to.equal(false);
     expect((requestStub.secondCall.args[0] as any).url).to.equal('http://fallback');
   });
 });
