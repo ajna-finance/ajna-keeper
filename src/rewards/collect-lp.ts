@@ -139,6 +139,12 @@ export class LpCollector {
         );
         continue;
       }
+      if (!take.lpAwarded.kicker) {
+        logger.warn(
+          `BucketTake event missing lpAwarded.kicker field; skipping. pool: ${this.pool.name}, id: ${take.id}`
+        );
+        continue;
+      }
 
       const takerMatches = take.taker.toLowerCase() === signerAddress;
       const kickerMatches =

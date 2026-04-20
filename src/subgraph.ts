@@ -513,6 +513,14 @@ const GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES = 100;
 // events sharing the same timestamp. Subgraph event ids are txHash-logIndex
 // which are NOT time-monotonic, so an id-only cursor would permanently filter
 // events whose random tx hash lex-sorts below the cursor.
+//
+// Pagination relies on Graph Node's implementation-detail behavior of breaking
+// ties by `id ASC` when the explicit `orderBy` doesn't fully order the result
+// set. This is stable in practice (has been Graph Node's default for years)
+// but is not part of the Graph Protocol spec. If ties ever become unstable,
+// pagination across same-timestamp clusters larger than one page could miss
+// or duplicate events; `seenEventIds` on the caller side catches duplicates
+// but not misses.
 const getBucketTakeLPAwardsQuery = gql`
   query GetBucketTakeLPAwards(
     $poolId: String!

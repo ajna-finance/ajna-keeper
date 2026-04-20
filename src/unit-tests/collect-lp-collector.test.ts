@@ -325,6 +325,46 @@ describe('LpCollector parse failure quarantine', () => {
 describe('LpCollector null-field defense', () => {
   afterEach(() => sinon.restore());
 
+  it('skips events with missing lpAwarded.kicker without throwing', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const getAwards = sinon.stub().resolves({
+      bucketTakes: [
+        {
+          id: 'take-null-kicker',
+          index: 7000,
+          taker: signer,
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '0',
+            kicker: null as any,
+          },
+          blockTimestamp: '600',
+        },
+        {
+          id: 'take-ok',
+          index: 7001,
+          taker: signer,
+          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          blockTimestamp: '700',
+        },
+      ],
+      truncated: false,
+    });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+
+    // Would throw on .toLowerCase() of null before the fix — must not throw now
+    await collector.ingestNewAwardsFromSubgraph();
+
+    expect(collector.lpMap.has(7000)).to.be.false;
+    expect(collector.lpMap.get(7001)!.toString()).to.equal(
+      utils.parseUnits('2.0', 18).toString()
+    );
+  });
+
   it('skips events with missing lpAwarded without throwing', async () => {
     const signer = '0xabc0000000000000000000000000000000000000';
     const getAwards = sinon.stub().resolves({
