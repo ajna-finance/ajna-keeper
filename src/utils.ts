@@ -21,12 +21,88 @@ interface UtilsType {
 
 let Utils: UtilsType;
 
+/**
+ * Resolve the keystore password with a three-tier fallback:
+ *
+ *   1. `KEYSTORE_PASSWORD_FILE` — path to a file whose contents are the
+ *      password. Trailing newlines (LF or CRLF, any number) are stripped so
+ *      secrets written via `echo > file` or `op read > file` work. Empty
+ *      or unreadable files throw a clear error rather than silently
+ *      falling through.
+ *   2. `KEYSTORE_PASSWORD` — password directly in an env var.
+ *   3. Interactive prompt — existing behavior; preserved so tmux/screen
+ *      deployments aren't broken.
+ *
+ * Having BOTH env vars set at once is refused rather than silently picking
+ * one — stale-rotation bugs are a common incident pattern otherwise.
+ * Empty-string values (`KEYSTORE_PASSWORD=""`, `KEYSTORE_PASSWORD_FILE=""`)
+ * are treated as unset; operators who meant to clear a variable shouldn't
+ * accidentally authorize an empty password.
+ *
+ * The password value itself is NEVER logged. Only the source is mentioned
+ * in info-level logs so operators can confirm the right injection path
+ * was picked.
+ */
 export async function askPassword() {
+  const rawFilePath = process.env.KEYSTORE_PASSWORD_FILE;
+  const rawEnvPassword = process.env.KEYSTORE_PASSWORD;
+  const filePath = rawFilePath && rawFilePath.length > 0 ? rawFilePath : undefined;
+  const envPassword =
+    rawEnvPassword && rawEnvPassword.length > 0 ? rawEnvPassword : undefined;
+
+  if (filePath && envPassword) {
+    throw new Error(
+      'Both KEYSTORE_PASSWORD_FILE and KEYSTORE_PASSWORD are set. ' +
+        'Set only one to avoid ambiguity about which source is authoritative.'
+    );
+  }
+
+  if (filePath) {
+    let contents: string;
+    try {
+      contents = await fs.readFile(filePath, 'utf8');
+    } catch (error) {
+      throw new Error(
+        `Failed to read KEYSTORE_PASSWORD_FILE at ${filePath}: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    // Defensive: if the file is world-readable, nudge the operator. Not
+    // fatal — some ops environments deliberately tolerate this.
+    try {
+      const stats = await fs.stat(filePath);
+      if (stats.mode & 0o077) {
+        logger.warn(
+          `KEYSTORE_PASSWORD_FILE ${filePath} has permissions ` +
+            `${(stats.mode & 0o777).toString(8)}; recommend chmod 600 (or tighter).`
+        );
+      }
+    } catch {
+      /* stat errors are not worth failing on; readFile already succeeded */
+    }
+    // Strip trailing newlines only (LF, CRLF, any number). Don't use
+    // `.trim()` — an operator's password could legitimately end with
+    // whitespace we'd silently eat.
+    const pswd = contents.replace(/(\r?\n)+$/, '');
+    if (pswd.length === 0) {
+      throw new Error(
+        `KEYSTORE_PASSWORD_FILE at ${filePath} is empty (after stripping ` +
+          `trailing newlines). Populate it with the keystore password.`
+      );
+    }
+    logger.info(`Keystore unlock: using KEYSTORE_PASSWORD_FILE=${filePath}`);
+    return pswd;
+  }
+
+  if (envPassword) {
+    logger.info('Keystore unlock: using KEYSTORE_PASSWORD env var');
+    return envPassword;
+  }
+
   const pswd = await password({
     message: 'Please enter your keystore password',
     mask: '*',
   });
-
   return pswd;
 }
 

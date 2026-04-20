@@ -650,6 +650,41 @@ async function getBucketTakeLPAwards(
   return { bucketTakes };
 }
 
+export interface SubgraphMeta {
+  block: {
+    number: number;
+    timestamp: number;
+  };
+  deployment: string;
+  hasIndexingErrors: boolean;
+}
+
+const subgraphMetaQuery = gql`
+  query SubgraphMeta {
+    _meta {
+      block {
+        number
+        timestamp
+      }
+      deployment
+      hasIndexingErrors
+    }
+  }
+`;
+
+async function getSubgraphMeta(
+  subgraphUrl: string,
+  options?: SubgraphRequestOptions
+): Promise<SubgraphMeta> {
+  const result = await requestSubgraph<{ _meta: SubgraphMeta }, {}>({
+    subgraphUrl,
+    document: subgraphMetaQuery,
+    variables: {},
+    options,
+  });
+  return result._meta;
+}
+
 // Exported as default module to enable mocking in tests.
 export default {
   getLoans,
@@ -659,4 +694,5 @@ export default {
   getChainwideLiquidationAuctionsPage,
   getChainwideLiquidationAuctions,
   getBucketTakeLPAwards,
+  getSubgraphMeta,
 };

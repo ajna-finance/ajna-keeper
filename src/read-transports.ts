@@ -8,6 +8,7 @@ import subgraph, {
   GetLoanResponse,
   GetMeaningfulBucketResponse,
   GetUnsettledAuctionsResponse,
+  SubgraphMeta,
 } from './subgraph';
 
 export type SubgraphTransportConfig = Pick<
@@ -45,6 +46,7 @@ export interface SubgraphReader {
     signerAddress: string,
     cursorBlockTimestamp: string
   ): Promise<GetBucketTakeLPAwardsResponse>;
+  getSubgraphMeta(): Promise<SubgraphMeta>;
 }
 
 export interface ReadRpc {
@@ -122,6 +124,11 @@ export function createSubgraphReader(
           fallbackUrls: config.subgraphFallbackUrls,
         }
       );
+    },
+    getSubgraphMeta() {
+      return subgraph.getSubgraphMeta(config.subgraphUrl, {
+        fallbackUrls: config.subgraphFallbackUrls,
+      });
     },
   };
 }
