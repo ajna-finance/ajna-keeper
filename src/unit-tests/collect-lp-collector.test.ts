@@ -13,7 +13,6 @@ function makeFakeBucket(position: {
 }) {
   return {
     getStatus: sinon.stub().resolves({
-      exchangeRate: BigNumber.from(1),
       deposit: position.deposit ?? constants.Zero,
       collateral: position.collateral ?? constants.Zero,
     }),
@@ -159,11 +158,12 @@ describe('LpCollector cursor advancement', () => {
   it('does not double-count events at exactly the lookback cutoff boundary', async () => {
     // Regression test: an event whose blockTimestamp lands exactly on
     // (cursor - lookback) must be retained in seenEventIds across prune.
-    // The production query uses `blockTimestamp_gt: cursorTs - lookback`,
-    // which RE-INCLUDES any event strictly greater than the cutoff — i.e.
-    // the event at the boundary itself is still returned by the next
-    // query, so dedupe (not query-side filtering) is what prevents the
-    // double count.
+    // Production's query is a composite OR: `blockTimestamp_gt: cursorTs`
+    // OR `(blockTimestamp == cursorTs AND id_gt: '0x')`. The boundary event
+    // at ts == cutoff IS returned by the SECOND branch (since every real
+    // Bytes id sorts strictly above the canonical empty sentinel `'0x'`),
+    // so dedupe — not query-side filtering — is what prevents the double
+    // count when that event re-surfaces in the next cycle.
     const signer = '0xabc0000000000000000000000000000000000000';
     const LOOKBACK = LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
     const boundaryEvent = {
@@ -316,6 +316,39 @@ describe('LpCollector parse failure quarantine', () => {
     // event's block (300 - 60 lookback = 240). This proves the pool is not
     // frozen on the bad record.
     expect(getAwards.secondCall.args[2]).to.equal(String(300 - 60));
+  });
+
+  it('emits aggregate WARN when quarantine count crosses alarm threshold', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const bucketTakes = Array.from({ length: 5 }, (_, i) => ({
+      id: `take-malformed-${i}`,
+      index: 5000 + i,
+      taker: signer,
+      lpAwarded: {
+        lpAwardedTaker: 'garbage', // parse throws
+        lpAwardedKicker: '0',
+        kicker: '0xdef',
+      },
+      blockTimestamp: String(100 + i),
+    }));
+    const getAwards = sinon.stub().resolves({ bucketTakes });
+
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: getAwards,
+    });
+    const loggerModule = require('../logging');
+    const warnStub = sinon.stub(loggerModule.logger, 'warn');
+
+    await collector.ingestNewAwardsFromSubgraph();
+
+    // All 5 events quarantined → threshold of 5 → one aggregate WARN.
+    expect(
+      warnStub.getCalls().some((call) =>
+        String(call.args[0]).includes('Quarantined 5 BucketTake event(s)')
+      )
+    ).to.equal(true);
+    expect(collector.lpMap.size).to.equal(0);
   });
 });
 

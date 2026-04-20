@@ -52,6 +52,11 @@ export const LP_REWARD_LOOKBACK_SECONDS_DEFAULT = 60;
 // to double-count, so we never do it.
 const MAX_SEEN_EVENT_IDS = 100_000;
 
+// Threshold for the per-cycle quarantine alarm. A one-off bad record is
+// expected (operator already sees the ERROR log); a full cycle of parse
+// failures is pathological and should surface its own aggregate signal.
+const QUARANTINE_ALARM_THRESHOLD = 5;
+
 export class LpCollector {
   public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndex, rewardLp>
 
@@ -159,6 +164,12 @@ export class LpCollector {
       if (bigIntStringGreater(ts, maxTimestamp)) maxTimestamp = ts;
     };
 
+    // Count per-event parse-failure quarantines and surface a single WARN at
+    // end-of-cycle if the rate is suspicious. A one-off bad record is benign
+    // (already logged at ERROR); a whole cycle's worth suggests schema drift
+    // that's silently draining rewards while the cursor still advances.
+    let quarantineCount = 0;
+
     for (const take of bucketTakes) {
       if (this.seenEventIds.has(take.id)) continue;
 
@@ -241,6 +252,7 @@ export class LpCollector {
           `Failed to parse BucketTake reward amounts; skipping event. pool: ${this.pool.name}, id: ${take.id}, taker: ${take.lpAwarded.lpAwardedTaker}, kicker: ${take.lpAwarded.lpAwardedKicker}`,
           error
         );
+        quarantineCount++;
         continue;
       }
 
@@ -250,6 +262,12 @@ export class LpCollector {
       if (kickerMatches) {
         this.addRewardParsed(take.index, kickerAmount, 'kicker');
       }
+    }
+
+    if (quarantineCount >= QUARANTINE_ALARM_THRESHOLD) {
+      logger.warn(
+        `Quarantined ${quarantineCount} BucketTake event(s) in a single ingest cycle for pool ${this.pool.name}; rewards are silently dropping. Likely schema drift in lpAwardedTaker/lpAwardedKicker — investigate before the cursor rolls past the lookback window.`
+      );
     }
 
     // ALWAYS advance cursor, even on truncation — the server-side orderBy

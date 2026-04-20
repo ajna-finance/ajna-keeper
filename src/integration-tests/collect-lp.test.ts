@@ -73,7 +73,7 @@ const setup = async () => {
   return pool;
 };
 
-describe('LpCollector subscription', () => {
+describe('LpCollector ingest', () => {
   beforeEach(async () => {
     await resetHardhat();
   });
