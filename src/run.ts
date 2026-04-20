@@ -34,6 +34,7 @@ import { tryReactiveSettlement } from './settlement';
 import {
   cacheConfiguredPool,
   ensurePoolLoaded,
+  normalizeAddress,
   PoolHydrationCooldowns,
   PoolMap,
 } from './discovery/targets';
@@ -384,6 +385,14 @@ async function collectLpRewardsLoop({
   });
   const exchangeTracker = new RewardActionTracker(signer, config, dexRouter);
 
+  // Memoized lowercase-address → PoolConfig lookup. Built once so both the
+  // resolver and the AuctionNotCleared settlement-retry path do O(1) lookups
+  // instead of repeated O(n) linear scans over `config.pools`.
+  const poolConfigByAddress = new Map<string, PoolConfig>();
+  for (const p of config.pools) {
+    poolConfigByAddress.set(normalizeAddress(p.address), p);
+  }
+
   const ingester = new LpIngester(signer, subgraph, config);
   const redeemers: Map<string, LpRedeemer> = new Map();
 
@@ -394,7 +403,7 @@ async function collectLpRewardsLoop({
   const resolveRedeemer = async (
     poolAddress: string
   ): Promise<LpRedeemer | undefined> => {
-    const normalized = poolAddress.toLowerCase();
+    const normalized = normalizeAddress(poolAddress);
     const cached = redeemers.get(normalized);
     if (cached) return cached;
 
@@ -407,9 +416,7 @@ async function collectLpRewardsLoop({
     });
     if (!pool) return undefined;
 
-    const matchingConfig = config.pools.find(
-      (p) => p.address.toLowerCase() === normalized
-    );
+    const matchingConfig = poolConfigByAddress.get(normalized);
     const settings = resolveCollectLpRewardForPool(
       config.defaultLpReward,
       matchingConfig?.collectLpReward,
@@ -446,10 +453,8 @@ async function collectLpRewardsLoop({
 
     for (const redeemer of touched) {
       const pool = redeemer.pool;
-      const normalized = pool.poolAddress.toLowerCase();
-      const poolConfig = config.pools.find(
-        (p) => p.address.toLowerCase() === normalized
-      );
+      const normalized = normalizeAddress(pool.poolAddress);
+      const poolConfig = poolConfigByAddress.get(normalized);
 
       try {
         await redeemer.sweep();

@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { Config } from '@ajna-finance/sdk';
 import type { AjnaConfigParams, KeeperConfig } from './schema';
+import { isValidLookbackSeconds } from './lp-reward';
 import { logger } from '../logging';
 
 export async function readConfigFile(filePath: string): Promise<KeeperConfig> {
@@ -41,7 +42,7 @@ export function assertIsValidConfig(
   if (config.lpRewardLookbackSeconds !== undefined) {
     const v = config.lpRewardLookbackSeconds;
     const hardMaxSeconds = 86_400; // 1 day
-    if (typeof v !== 'number' || !Number.isFinite(v) || !Number.isInteger(v) || v < 0) {
+    if (!isValidLookbackSeconds(v)) {
       throw new Error(
         `lpRewardLookbackSeconds must be a non-negative integer (number), got: ${JSON.stringify(v)} (typeof ${typeof v})`
       );

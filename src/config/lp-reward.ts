@@ -6,6 +6,20 @@ import type {
 } from './schema';
 
 /**
+ * Shared type guard for `lpRewardLookbackSeconds`. Used by both the config
+ * validator (which throws on invalid input) and the `LpIngester` constructor
+ * (which falls back to the default on invalid input for defense-in-depth).
+ */
+export function isValidLookbackSeconds(v: unknown): v is number {
+  return (
+    typeof v === 'number' &&
+    Number.isFinite(v) &&
+    Number.isInteger(v) &&
+    v >= 0
+  );
+}
+
+/**
  * Merge `defaultLpReward` with a per-pool override (if any) and return a
  * fully-specified `CollectLpRewardSettings`.
  *

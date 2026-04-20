@@ -1,11 +1,8 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, constants, utils } from 'ethers';
-import {
-  LpIngester,
-  LpRedeemer,
-  LP_REWARD_LOOKBACK_SECONDS_DEFAULT,
-} from '../rewards/collect-lp';
+import { LP_REWARD_LOOKBACK_SECONDS_DEFAULT } from '../rewards/collect-lp';
+import { makeSinglePoolLpCollector } from '../rewards/test-helpers';
 import { TokenToCollect } from '../config';
 
 const FAKE_POOL_ADDRESS = '0xpool';
@@ -33,10 +30,11 @@ function makeFakeBucket(position: {
 }
 
 /**
- * Test facade: wires an LpIngester + LpRedeemer for a single fake pool and
- * exposes the legacy `collectLpRewards` / `ingestNewAwardsFromSubgraph` /
- * `lpMap` surface the existing tests rely on. Each event's `pool.id` is
- * auto-injected if missing so test fixtures stay terse.
+ * Test facade for a single fake pool. Wraps `makeSinglePoolLpCollector`
+ * with the fake-pool / fake-signer construction and `pool.id`
+ * auto-injection that unit-test fixtures need. Keeps the old
+ * `LpCollector`-shaped API (`lpMap`, `ingestNewAwardsFromSubgraph`,
+ * `collectLpRewards`) so existing tests need no per-test rewiring.
  */
 function makeCollector(opts: {
   signerAddress: string;
@@ -55,7 +53,8 @@ function makeCollector(opts: {
     getAddress: sinon.stub().resolves(opts.signerAddress),
   };
   // Wrap the caller-supplied stub so events without `pool` get a synthetic
-  // `pool.id = FAKE_POOL_ADDRESS` — keeps existing fixtures working.
+  // `pool.id = FAKE_POOL_ADDRESS`. Production events always have `pool`;
+  // unit-test fixtures omit it for brevity.
   const wrappedGetAwards = async (...args: any[]) => {
     const result = await opts.getBucketTakeLPAwards(...args);
     if (result && Array.isArray(result.bucketTakes)) {
@@ -71,8 +70,7 @@ function makeCollector(opts: {
   const fakeSubgraph: any = { getBucketTakeLPAwards: wrappedGetAwards };
   const fakeTracker: any = { addToken: sinon.stub() };
 
-  const ingester = new LpIngester(fakeSigner, fakeSubgraph, {});
-  const redeemer = new LpRedeemer(
+  return makeSinglePoolLpCollector(
     fakePool,
     fakeSigner,
     {
@@ -81,30 +79,9 @@ function makeCollector(opts: {
       minAmountCollateral: 0,
     },
     { dryRun: false },
-    fakeTracker
+    fakeTracker,
+    fakeSubgraph
   );
-
-  return {
-    get lpMap() {
-      return redeemer.lpMap;
-    },
-    pool: fakePool,
-    ingester,
-    redeemer,
-    async ingestNewAwardsFromSubgraph() {
-      const byPool = await ingester.ingest();
-      for (const reward of byPool.get(FAKE_POOL_ADDRESS) ?? []) {
-        redeemer.creditReward(reward);
-      }
-    },
-    async collectLpRewards() {
-      const byPool = await ingester.ingest();
-      for (const reward of byPool.get(FAKE_POOL_ADDRESS) ?? []) {
-        redeemer.creditReward(reward);
-      }
-      await redeemer.sweep();
-    },
-  };
 }
 
 describe('LpCollector stale-entry prune', () => {

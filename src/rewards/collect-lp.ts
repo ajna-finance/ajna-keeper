@@ -3,6 +3,7 @@ import { MAX_FENWICK_INDEX } from '../constants';
 import { BigNumber, constants, utils } from 'ethers';
 import {
   CollectLpRewardSettings,
+  isValidLookbackSeconds,
   KeeperConfig,
   RewardAction,
   TokenToCollect,
@@ -17,6 +18,7 @@ import { decimaledToWei, weiToDecimaled } from '../utils';
 import { FungibleBucket } from '@ajna-finance/sdk/dist/classes/FungibleBucket';
 import { BucketTakeLPAwardItem } from '../subgraph';
 import { SubgraphReader } from '../read-transports';
+import { normalizeAddress } from '../discovery/targets';
 
 /**
  * LP-reward collection via subgraph polling.
@@ -64,6 +66,23 @@ const MAX_SEEN_EVENT_IDS = 100_000;
 const QUARANTINE_ALARM_THRESHOLD = 5;
 
 /**
+ * Kick off `signer.getAddress()` at construction time and attach a no-op
+ * logging catch so a rejection doesn't become an unhandled rejection at
+ * process start (Node ≥15 is strict by default). The same rejection still
+ * surfaces on every subsequent `await` of the returned promise.
+ */
+function resolveSignerAddressWithLoggingCatch(
+  signer: Signer,
+  contextLabel: string
+): Promise<string> {
+  const promise = signer.getAddress();
+  promise.catch((err) => {
+    logger.error(`Failed to resolve signer address for ${contextLabel}`, err);
+  });
+  return promise;
+}
+
+/**
  * One parsed BucketTake reward destined for a specific pool's redeemer.
  * Role-specific amounts are pre-computed here so the redeemer doesn't need
  * to re-parse.
@@ -103,26 +122,18 @@ export class LpIngester {
     private subgraph: SubgraphReader,
     config: Pick<KeeperConfig, 'lpRewardLookbackSeconds'>
   ) {
-    // Attach a catch so a failed address resolution doesn't become an
-    // unhandled rejection at process start (Node ≥15 is strict by default).
-    // The same rejection will still surface on every `await` of this promise.
-    this.signerAddressPromise = this.signer.getAddress();
-    this.signerAddressPromise.catch((err) => {
-      logger.error('Failed to resolve signer address for LP ingester', err);
-    });
+    this.signerAddressPromise = resolveSignerAddressWithLoggingCatch(
+      this.signer,
+      'LP ingester'
+    );
 
     // Defense-in-depth beyond `load.ts` validation: if `lpRewardLookbackSeconds`
     // somehow arrives non-finite (e.g. a caller that bypassed the schema
     // validator), fall back to the default rather than letting NaN/Infinity
     // propagate into BigNumber arithmetic and silently break cursor math.
-    const configured = config.lpRewardLookbackSeconds;
-    this.lookbackSeconds =
-      typeof configured === 'number' &&
-      Number.isFinite(configured) &&
-      Number.isInteger(configured) &&
-      configured >= 0
-        ? configured
-        : LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
+    this.lookbackSeconds = isValidLookbackSeconds(config.lpRewardLookbackSeconds)
+      ? config.lpRewardLookbackSeconds
+      : LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
   }
 
   /**
@@ -131,7 +142,7 @@ export class LpIngester {
    * the accepted rewards grouped by pool address.
    */
   public async ingest(): Promise<Map<string, ParsedLpReward[]>> {
-    const signerAddress = (await this.signerAddressPromise).toLowerCase();
+    const signerAddress = normalizeAddress(await this.signerAddressPromise);
 
     // Shift the query's timestamp cursor BACK by `lookbackSeconds` so
     // late-indexed events that land just below our real cursor are still
@@ -188,13 +199,13 @@ export class LpIngester {
       this.seenEventIds.set(take.id, take.blockTimestamp);
       observeTimestamp(take.blockTimestamp);
 
-      const poolAddress = take.pool?.id?.toLowerCase();
-      if (!poolAddress) {
+      if (!take.pool?.id) {
         logger.warn(
           `BucketTake event missing pool.id field; skipping. id: ${take.id}`
         );
         continue;
       }
+      const poolAddress = normalizeAddress(take.pool.id);
 
       // Defensive: schema marks `taker`, `lpAwarded`, and `lpAwarded.kicker`
       // non-null, but guard anyway so a schema drift or GraphQL-library glitch
@@ -209,10 +220,10 @@ export class LpIngester {
       }
 
       const takerMatches =
-        !!take.taker && take.taker.toLowerCase() === signerAddress;
+        !!take.taker && normalizeAddress(take.taker) === signerAddress;
       const kickerMatches =
         !!take.lpAwarded.kicker &&
-        take.lpAwarded.kicker.toLowerCase() === signerAddress;
+        normalizeAddress(take.lpAwarded.kicker) === signerAddress;
 
       if (!take.taker || !take.lpAwarded.kicker) {
         logger.warn(
@@ -349,13 +360,10 @@ export class LpRedeemer {
     private config: Pick<KeeperConfig, 'dryRun'>,
     private exchangeTracker: RewardActionTracker
   ) {
-    this.signerAddressPromise = this.signer.getAddress();
-    this.signerAddressPromise.catch((err) => {
-      logger.error(
-        `Failed to resolve signer address for pool ${this.pool.name}`,
-        err
-      );
-    });
+    this.signerAddressPromise = resolveSignerAddressWithLoggingCatch(
+      this.signer,
+      `pool ${this.pool.name}`
+    );
   }
 
   /** Credit an ingested reward for this pool into the lpMap. */
