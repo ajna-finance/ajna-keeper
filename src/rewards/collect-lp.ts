@@ -37,11 +37,12 @@ import { SubgraphReader } from '../read-transports';
  * these pools, history replay after a restart can redeem principal to
  * satisfy stale reward entries — use a distinct keeper key to avoid this.
  */
-// Overlap window subtracted from the cursor before each subgraph query, so
-// late-indexed events that land just under the previous cursor boundary are
-// still re-seen. Any event already processed is filtered out by the seen-id
-// set. Keeps us tolerant of typical Goldsky indexing lag (~5–30s in practice).
-export const LP_REWARD_LOOKBACK_SECONDS = 60;
+// Default overlap window subtracted from the cursor before each subgraph
+// query, so late-indexed events that land just under the previous cursor
+// boundary are still re-seen. Any event already processed is filtered out
+// by the seen-id set. Fits typical Goldsky lag (~5–30s); operators on slower
+// chains can raise via `KeeperConfig.lpRewardLookbackSeconds`.
+export const LP_REWARD_LOOKBACK_SECONDS_DEFAULT = 60;
 
 // Hard cap on the dedupe map so sustained truncation or a pathological
 // backlog can't grow memory unboundedly. Oldest (by blockTimestamp) entries
@@ -55,7 +56,7 @@ export class LpCollector {
 
   private signerAddressPromise: Promise<string>;
   // Timestamp cursor advanced to the highest `blockTimestamp` seen so far.
-  // Each query subtracts `LP_REWARD_LOOKBACK_SECONDS` from this value so
+  // Each query subtracts `lookbackSeconds` from this value so
   // late-indexed events within that window are still re-fetched; dedupe is
   // handled by `seenEventIds`. A pure timestamp cursor is sufficient here —
   // within a single query call, composite (ts, id) pagination in
@@ -65,16 +66,20 @@ export class LpCollector {
   // Dedupe set scoped to the lookback window. Rejects events re-returned
   // across the overlap so they aren't double-counted.
   private seenEventIds: Map<string, string> = new Map(); // id → blockTimestamp
+  // Effective lookback window, resolved from config with a default fallback.
+  private lookbackSeconds: number;
 
   constructor(
     private pool: FungiblePool,
     private signer: Signer,
     private poolConfig: Required<Pick<PoolConfig, 'collectLpReward'>>,
-    private config: Pick<KeeperConfig, 'dryRun'>,
+    private config: Pick<KeeperConfig, 'dryRun' | 'lpRewardLookbackSeconds'>,
     private exchangeTracker: RewardActionTracker,
     private subgraph: SubgraphReader
   ) {
     this.signerAddressPromise = this.signer.getAddress();
+    this.lookbackSeconds =
+      this.config.lpRewardLookbackSeconds ?? LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
   }
 
   public async collectLpRewards() {
@@ -112,12 +117,12 @@ export class LpCollector {
   public async ingestNewAwardsFromSubgraph(): Promise<void> {
     const signerAddress = (await this.signerAddressPromise).toLowerCase();
 
-    // Shift the query's timestamp cursor BACK by LP_REWARD_LOOKBACK_SECONDS
-    // so late-indexed events that land just below our real cursor are still
+    // Shift the query's timestamp cursor BACK by `lookbackSeconds` so
+    // late-indexed events that land just below our real cursor are still
     // returned. `seenEventIds` dedupes the overlap.
     const queryTs = subtractSecondsClamped(
       this.cursorBlockTimestamp,
-      LP_REWARD_LOOKBACK_SECONDS
+      this.lookbackSeconds
     );
     const { bucketTakes } = await this.subgraph.getBucketTakeLPAwards(
       this.pool.poolAddress,
@@ -212,7 +217,7 @@ export class LpCollector {
     // dedupe to fire) and those already past the window (safe to evict).
     const cutoff = subtractSecondsClamped(
       this.cursorBlockTimestamp,
-      LP_REWARD_LOOKBACK_SECONDS
+      this.lookbackSeconds
     );
     const inWindow: Array<[string, string]> = [];
     const outOfWindow: Array<[string, string]> = [];
@@ -258,7 +263,7 @@ export class LpCollector {
     // the cutoff so lookback-window re-fetches still dedupe correctly.
     const cutoff = subtractSecondsClamped(
       this.cursorBlockTimestamp,
-      LP_REWARD_LOOKBACK_SECONDS
+      this.lookbackSeconds
     );
     this.seenEventIds.forEach((ts, id) => {
       if (bigIntStringGreater(cutoff, ts)) {
@@ -505,8 +510,10 @@ export class LpCollector {
 
 // Subgraph serializes BigDecimal reward amounts (18-decimal fixed) as strings
 // like "123.456000000000000000". Convert to a WAD-scaled BigNumber. Throws on
-// malformed input so the outer ingest loop halts WITHOUT advancing the cursor
-// — the reward will be re-fetched on the next cycle rather than silently lost.
+// malformed input; the caller in `ingestNewAwardsFromSubgraph` catches the
+// throw and quarantines the record (the seen-id + timestamp are recorded
+// BEFORE parse, so cursor advance and dedupe both still apply — the bad
+// event is dropped forever for this window and NOT retried every cycle).
 export function parseBigDecimalToWad(value: string): BigNumber {
   if (!value || /^-?0(\.0+)?$/.test(value)) {
     return constants.Zero;

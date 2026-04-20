@@ -242,6 +242,12 @@ Discovery is subgraph-based: each cycle the keeper queries the Ajna subgraph for
 
 **Dedicated keeper key required.** The redemption step is bounded by the signer's on-chain `lpBalance` in each bucket; if the same signer also deposits LP into these pools as a lender, history replay can redeem principal to satisfy stale reward entries. Use a keeper-only signer that never deposits directly. The keeper does not move existing deposits — only the LP accumulated from acting as taker or kicker.
 
+**Operational notes:**
+
+- **Cold-start replay cost.** The first ingest after a restart queries from `blockTimestamp=0` and paginates up to 100 pages × 1000 events = 100,000 `BucketTake`s. For a signer with a long history this can mean dozens of subgraph round-trips on the first cycle; subsequent cycles only query the small delta past the last observed timestamp.
+- **Subgraph-down at startup.** If the subgraph is unreachable on the first cycle, the cursor stays at `0` and the next cycle re-runs the full historical query. The keeper does not persist cursor state to disk — reachability of the subgraph on first use matters. If you run against a flaky endpoint, configure `subgraphFallbackUrls` in `KeeperConfig`.
+- **Indexing-lag tolerance.** Each query is shifted back by `lpRewardLookbackSeconds` (default 60s) so late-indexed events that land just under the previous cursor are still re-seen. Dedupe is handled in-memory by an event-id set scoped to that window. Chains where Goldsky lag regularly exceeds 60s should raise this; the tunable lives on `KeeperConfig`.
+
 ### Settlement
 
 Automatically settles completed auctions to unlock kicker bonds and handle bad debt scenarios. Settlement is triggered when:

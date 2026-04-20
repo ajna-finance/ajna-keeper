@@ -321,4 +321,11 @@ export interface KeeperConfig {
   universalRouterOverrides?: UniversalRouterOverrides;
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
+  // Seconds subtracted from the LP-reward subgraph cursor before each query,
+  // so late-indexed events that land just below the previous cursor are still
+  // re-fetched. Raise on chains where subgraph indexing lag exceeds the
+  // default (e.g. heavily congested L2s). The in-memory dedupe set is scoped
+  // to this window, so larger values grow per-pool memory roughly linearly
+  // with event rate × window. Defaults to 60.
+  lpRewardLookbackSeconds?: number;
 }

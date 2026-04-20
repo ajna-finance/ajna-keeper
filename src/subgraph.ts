@@ -112,7 +112,6 @@ async function paginateSubgraphCursor<TItem>(params: {
   fetchPage: (cursor: string) => Promise<TItem[]>;
   getCursor: (item: TItem) => string | undefined;
   missingCursorWarning?: string;
-  onTruncated?: () => void;
 }): Promise<TItem[]> {
   const items: TItem[] = [];
   let cursor = '';
@@ -126,7 +125,6 @@ async function paginateSubgraphCursor<TItem>(params: {
       pageItems.length === params.pageSize
     ) {
       logger.warn(params.truncationWarning);
-      if (params.onTruncated) params.onTruncated();
     }
 
     if (pageItems.length < params.pageSize) {

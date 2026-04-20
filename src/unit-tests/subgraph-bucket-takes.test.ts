@@ -37,6 +37,37 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     });
   });
 
+  it('paginates across same-timestamp events using the id tie-breaker', async () => {
+    // 1500 events all at the same blockTimestamp should split cleanly across
+    // two pages: page 1 returns 1000 (ids 0000..0999), page 2's query uses
+    // cursorTs=SAME_TS, cursorId='take-0999' to fetch the remaining 500.
+    const SAME_TS = '5000';
+    const allEvents = Array.from({ length: 1500 }, (_, i) => ({
+      id: `take-${String(i).padStart(4, '0')}`,
+      index: 2000 + i,
+      taker: '0xabc',
+      lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+      blockTimestamp: SAME_TS,
+    }));
+    const requestStub = sinon.stub(graphqlRequest, 'request');
+    requestStub.onCall(0).resolves({ bucketTakes: allEvents.slice(0, 1000) });
+    requestStub.onCall(1).resolves({ bucketTakes: allEvents.slice(1000) });
+
+    const result = await subgraph.getBucketTakeLPAwards(
+      'http://example-subgraph',
+      '0xpool',
+      '0xsigner',
+      '0'
+    );
+
+    expect(result.bucketTakes).to.have.length(1500);
+    expect(requestStub.callCount).to.equal(2);
+    const secondVars = (requestStub.secondCall.args[0] as any).variables;
+    // Composite cursor: same timestamp but id strictly above page-1's last.
+    expect(secondVars.cursorTs).to.equal(SAME_TS);
+    expect(secondVars.cursorId).to.equal('take-0999');
+  });
+
   it('advances the composite (cursorTs, cursorId) cursor across pages', async () => {
     const firstPage = Array.from({ length: 1000 }, (_, i) => ({
       id: `take-${String(i).padStart(4, '0')}`,

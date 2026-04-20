@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, constants, utils } from 'ethers';
-import { LpCollector, LP_REWARD_LOOKBACK_SECONDS } from '../rewards/collect-lp';
+import { LpCollector, LP_REWARD_LOOKBACK_SECONDS_DEFAULT } from '../rewards/collect-lp';
 import { TokenToCollect } from '../config';
 
 function makeFakeBucket(position: {
@@ -121,7 +121,7 @@ describe('LpCollector cursor advancement', () => {
     await collector.ingestNewAwardsFromSubgraph();
     // Second call queries cursor minus the lookback window (300 - 60 = 240)
     expect(getAwards.secondCall.args[2]).to.equal(
-      String(300 - LP_REWARD_LOOKBACK_SECONDS)
+      String(300 - LP_REWARD_LOOKBACK_SECONDS_DEFAULT)
     );
   });
 
@@ -162,7 +162,7 @@ describe('LpCollector cursor advancement', () => {
     // that the next query (using blockTimestamp_gte: cutoff) does not
     // re-ingest it as new.
     const signer = '0xabc0000000000000000000000000000000000000';
-    const LOOKBACK = LP_REWARD_LOOKBACK_SECONDS;
+    const LOOKBACK = LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
     const boundaryEvent = {
       id: 't-boundary',
       index: 7000,

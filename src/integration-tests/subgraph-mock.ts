@@ -137,11 +137,24 @@ export function overrideGetBucketTakeLPAwards(
   return undoFn;
 }
 
-// Match production pagination constants so integration tests exercise the
-// same truncation boundary behavior.
+// Match production's `pageSize * maxPages` cap so the mock truncates at the
+// same boundary a real subgraph call would.
 const MOCK_LP_AWARDS_PAGE_SIZE = 1000;
 const MOCK_LP_AWARDS_MAX_PAGES = 100;
 
+// Coverage model: `getBucketTakeLPAwards` paginates INTERNALLY by advancing a
+// composite `(blockTimestamp, id)` cursor until a short page or `maxPages`
+// hits. The externally-observable return is a flat, ordered list with the
+// final truncation applied. This mock stands in for that externally-visible
+// contract — it returns the same flat list production would return after
+// its internal pagination loop completes. Cross-page composite-cursor
+// semantics are exercised at the unit level in `subgraph-bucket-takes.test.ts`
+// against a stubbed `graphql-request`; integration tests don't need to
+// re-cover that path through the mock.
+//
+// Pool scoping is enforced via the closure over `pool` (all queryFilter calls
+// go to `pool.poolAddress`), mirroring production's `pool: $poolId` filter.
+// Multi-pool tests must construct a separate mock per pool.
 export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
   return async (
     _subgraphUrl: string,
@@ -156,10 +169,13 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       lpAwardedFilter,
       MAINNET_CONFIG.BLOCK_NUMBER
     );
-    // Matches production: events with blockTimestamp >= cursorBlockTimestamp
-    // (the first query page starts here; within-call composite pagination
-    // advances from there). The collector passes `cursorTs - lookback` to
-    // catch late-indexed events.
+    // Matches production's page-1 semantics. On the first page, production's
+    // query `blockTimestamp_gt: cursorTs OR (blockTimestamp == cursorTs AND
+    // id_gt: '')` reduces to `blockTimestamp >= cursorTs` because every id
+    // sorts strictly above the empty string. Subsequent pages advance a
+    // composite `(pageTs, pageId)` cursor, but the FULL paged result is
+    // equivalent to the single `>= cursorTs` selection sorted by `(ts, id)`
+    // and truncated at the cap — which is exactly what this mock returns.
     const cursorTs = BigNumber.from(cursorBlockTimestamp || '0');
     const signerLower = signerAddress.toLowerCase();
 
