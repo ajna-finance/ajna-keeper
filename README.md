@@ -296,7 +296,9 @@ const config: KeeperConfig = {
 };
 ```
 
-**Dedicated keeper key required.** The redemption step is bounded by the signer's on-chain `lpBalance` in each bucket; if the same signer also deposits LP into these pools as a lender, history replay can redeem principal to satisfy stale reward entries. Use a keeper-only signer that never deposits directly. The keeper does not move existing deposits — only the LP accumulated from acting as taker or kicker. Both roles on a given BucketTake mint LP into the same `bucketIndex`, so the on-chain `lpBalance` cap applies uniformly whether the signer was taker, kicker, or both.
+**Keeper signer must not also be a lender in the same pools.** The redemption step is bounded by the signer's on-chain `lpBalance` in each bucket. That bound is safe when every LP the signer holds came from being a taker or kicker — which is exactly what this module redeems. Sharing one signer across the take keeper, the kick keeper, and this LP-reward keeper is fine; they're all writing reward LP that we're collecting back.
+
+The conflict is with a signer that *also* deposits quote as a lender. After a restart the keeper replays history from cursor `0`, and the on-chain `lpBalance` includes both unredeemed reward LP and principal LP — the code can't tell them apart, so it may burn principal to satisfy a stale reward entry. If the operator both runs a keeper and provides liquidity to the same pools, use **separate keys** for the two roles. If the keeper signer never calls `addQuoteToken` directly, one key is fine.
 
 **ERC20 only.** The redemption path uses the Ajna `FungiblePoolFactory` to materialize pool handles, which only supports ERC20 pools. If your signer ever takes on an ERC721 pool, the event is skipped and the LP sits on-chain (same outcome as if the keeper were off for that pool).
 

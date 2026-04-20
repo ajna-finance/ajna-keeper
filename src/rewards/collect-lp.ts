@@ -39,10 +39,19 @@ import { normalizeAddress } from '../discovery/targets';
  * `LpRedeemer.sweep`; the zero-balance prune drops entries whose rewards
  * were already redeemed before the restart.
  *
- * Assumes the signer is a dedicated keeper key whose on-chain `lpBalance`
- * in each bucket is entirely reward-derived. If the same signer also
- * deposits into these pools, history replay after restart can redeem
- * principal — use a distinct keeper key to avoid this.
+ * Assumes the signer's on-chain `lpBalance` in each bucket is entirely
+ * from taker/kicker rewards. Using the same signer for the take keeper,
+ * kick keeper, and this LP-reward keeper is safe — taker/kicker LP is
+ * exactly what this module is designed to redeem.
+ *
+ * The conflict is when the signer also acts as a lender (direct
+ * `addQuoteToken` calls that mint LP via principal deposit). After a
+ * restart the history replay credits `lpMap` with cumulative historical
+ * rewards, and the on-chain `lpBalance` cap in `collectLpRewardFromBucket`
+ * can't distinguish reward LP from principal LP — the sweep may burn
+ * principal to satisfy a stale reward entry. If the same key both
+ * operates the keeper AND provides liquidity, use separate keys for
+ * those two roles.
  */
 
 // Default overlap window subtracted from the cursor before each subgraph
