@@ -46,7 +46,31 @@ const config: KeeperConfig = {
   multicallBlock: 5022,
   delayBetweenRuns: 15,
   delayBetweenActions: 1,
-  
+
+  // Chain-wide LP reward collection (recommended).
+  //
+  // When set, the keeper redeems BucketTake-derived LP across EVERY pool
+  // the signer has activity in — including pools that aren't listed under
+  // `pools[]` below (auto-discovered takes are covered automatically).
+  // Per-pool entries in `pools[].collectLpReward` still work as overrides
+  // on top of this default.
+  //
+  // Remove the whole block to disable chain-wide coverage; explicit per-pool
+  // `collectLpReward` entries (legacy mode) still redeem for listed pools.
+  defaultLpReward: {
+    redeemFirst: TokenToCollect.QUOTE,
+    minAmountQuote: 0.001,
+    minAmountCollateral: 0.001,
+    rewardActionQuote: {
+      action: RewardActionLabel.EXCHANGE,
+      address: '0xquoteTokenAddress', // token address of the quote token being swapped
+      targetToken: 'weth',
+      slippage: 1,
+      dexProvider: PostAuctionDex.UNISWAP_V3,
+      fee: FeeAmount.LOW,
+    },
+  },
+
   // 1inch Router Configuration (for chains with 1inch support)
   oneInchRouters: {
     1: '0x1111111254EEB25477B68fb85Ed929f73A960582',    // Ethereum
@@ -176,10 +200,12 @@ const config: KeeperConfig = {
         // marketPriceFactor: 0.99,  // More conservative for volatile pairs
       },
       collectBond: true,
+      // Example of a per-pool override on top of `defaultLpReward`.
+      // Only `redeemFirst` and `rewardActionCollateral` diverge from the
+      // default; `minAmountQuote`, `minAmountCollateral`, and
+      // `rewardActionQuote` fall through to the chain-wide default.
       collectLpReward: {
         redeemFirst: TokenToCollect.COLLATERAL,
-        minAmountQuote: 1000,
-        minAmountCollateral: 0.001,
         rewardActionCollateral: {
           action: RewardActionLabel.TRANSFER,
           to: '0x0000000000000000000000000000000000000000',

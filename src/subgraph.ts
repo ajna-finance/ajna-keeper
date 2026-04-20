@@ -486,12 +486,177 @@ async function getChainwideLiquidationAuctions(
 }
 
 
+export interface BucketTakeLPAwardItem {
+  id: string;
+  index: number;
+  taker: string;
+  pool: {
+    id: string;
+  };
+  lpAwarded: {
+    lpAwardedTaker: string;
+    lpAwardedKicker: string;
+    kicker: string;
+  };
+  blockTimestamp: string;
+}
+
+export interface GetBucketTakeLPAwardsResponse {
+  bucketTakes: BucketTakeLPAwardItem[];
+}
+
+// Exported so the integration-test mock can mirror the same truncation cap
+// and stay aligned if production ever retunes these.
+export const GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE = 1000;
+export const GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES = 100;
+
+// Composite (blockTimestamp, id) cursor. Ordering by blockTimestamp guarantees
+// chronological forward progress; the `id_gt` tie-breaker handles multiple
+// events sharing the same timestamp. Subgraph event ids are txHash-logIndex
+// which are NOT time-monotonic, so an id-only cursor would permanently filter
+// events whose random tx hash lex-sorts below the cursor.
+//
+// Pagination relies on Graph Node's implementation-detail behavior of breaking
+// ties by `id ASC` when the explicit `orderBy` doesn't fully order the result
+// set. This is stable in practice (has been Graph Node's default for years)
+// but is not part of the Graph Protocol spec. If ties ever become unstable,
+// pagination across same-timestamp clusters larger than one page could miss
+// or duplicate events; `seenEventIds` on the caller side catches duplicates
+// but not misses.
+const getBucketTakeLPAwardsQuery = gql`
+  query GetBucketTakeLPAwards(
+    $signerId: Bytes!
+    $cursorTs: BigInt!
+    $cursorId: Bytes!
+    $first: Int!
+  ) {
+    bucketTakes(
+      first: $first
+      orderBy: blockTimestamp
+      orderDirection: asc
+      where: {
+        or: [
+          {
+            taker: $signerId
+            blockTimestamp_gt: $cursorTs
+          }
+          {
+            taker: $signerId
+            blockTimestamp: $cursorTs
+            id_gt: $cursorId
+          }
+          {
+            liquidationAuction_: { kicker: $signerId }
+            blockTimestamp_gt: $cursorTs
+          }
+          {
+            liquidationAuction_: { kicker: $signerId }
+            blockTimestamp: $cursorTs
+            id_gt: $cursorId
+          }
+        ]
+      }
+    ) {
+      id
+      index
+      taker
+      pool {
+        id
+      }
+      lpAwarded {
+        lpAwardedTaker
+        lpAwardedKicker
+        kicker
+      }
+      blockTimestamp
+    }
+  }
+`;
+
+async function getBucketTakeLPAwards(
+  subgraphUrl: string,
+  signerAddress: string,
+  cursorBlockTimestamp: string,
+  options?: SubgraphRequestOptions
+): Promise<GetBucketTakeLPAwardsResponse> {
+  const signerId = signerAddress.toLowerCase();
+  const bucketTakes: BucketTakeLPAwardItem[] = [];
+
+  // Within-call pagination advances a composite (pageTs, pageId) cursor between
+  // pages so same-timestamp events are split deterministically by id. The
+  // caller's `cursorBlockTimestamp` anchors the first page; subsequent pages
+  // advance both fields from each page's last item.
+  //
+  // `pageId` uses `'0x'` (canonical empty-bytes hex) as the "before all ids"
+  // sentinel. BucketTake.id is a `Bytes!` in the Ajna subgraph schema; the
+  // query parameter is typed `Bytes!` to match, and an empty-bytes value
+  // lexicographically precedes every real id (which are `txHash-logIndex`
+  // hex-encoded and therefore always non-empty). Passing `''` here would
+  // rely on Graph Node's silent String→Bytes coercion and is not portable.
+  let pageTs = cursorBlockTimestamp;
+  let pageId = '0x';
+
+  for (let page = 0; page < GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES; page++) {
+    const pageResult = await requestSubgraph<
+      { bucketTakes: BucketTakeLPAwardItem[] },
+      {
+        signerId: string;
+        cursorTs: string;
+        cursorId: string;
+        first: number;
+      }
+    >({
+      subgraphUrl,
+      document: getBucketTakeLPAwardsQuery,
+      variables: {
+        signerId,
+        cursorTs: pageTs,
+        cursorId: pageId,
+        first: GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
+      },
+      options,
+    });
+
+    const pageItems = pageResult.bucketTakes;
+    bucketTakes.push(...pageItems);
+
+    if (
+      page === GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES - 1 &&
+      pageItems.length === GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE
+    ) {
+      logger.warn(
+        `LP reward discovery reached maxPages=${GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES} with pageSize=${GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE} for signer=${signerId}; results may be truncated`
+      );
+    }
+
+    if (pageItems.length < GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE) {
+      break;
+    }
+
+    // Advance the composite cursor to the last item of this page. Because the
+    // server returned results in (blockTimestamp asc, id asc) order, the last
+    // item is the chronologically latest item of this page.
+    const lastItem = pageItems[pageItems.length - 1];
+    if (!lastItem.id || !lastItem.blockTimestamp) {
+      logger.warn(
+        'LP reward discovery response omitted id or blockTimestamp; stopping pagination early to avoid unstable cursors'
+      );
+      break;
+    }
+    pageTs = lastItem.blockTimestamp;
+    pageId = lastItem.id.toLowerCase();
+  }
+
+  return { bucketTakes };
+}
+
 // Exported as default module to enable mocking in tests.
-export default { 
-  getLoans, 
-  getLiquidations, 
-  getHighestMeaningfulBucket, 
+export default {
+  getLoans,
+  getLiquidations,
+  getHighestMeaningfulBucket,
   getUnsettledAuctions,
   getChainwideLiquidationAuctionsPage,
   getChainwideLiquidationAuctions,
+  getBucketTakeLPAwards,
 };

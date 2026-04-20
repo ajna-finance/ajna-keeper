@@ -125,13 +125,28 @@ export interface ExchangeReward {
 
 export type RewardAction = TransferReward | ExchangeReward;
 
-interface CollectLpRewardSettings {
+export interface CollectLpRewardSettings {
   redeemFirst?: TokenToCollect;
   minAmountQuote: number;
   minAmountCollateral: number;
   rewardActionQuote?: RewardAction;
   rewardActionCollateral?: RewardAction;
 }
+
+/**
+ * Per-pool override shape. All fields optional at the type level because the
+ * `resolveCollectLpRewardForPool` merger fills required fields from
+ * `defaultLpReward` when it's set.
+ *
+ * **Runtime contract (legacy mode only):** when `KeeperConfig.defaultLpReward`
+ * is NOT set, a per-pool `collectLpReward` entry must still supply
+ * `minAmountQuote` AND `minAmountCollateral`. The startup validator
+ * (`assertIsValidConfig` in `config/load.ts`) rejects any legacy-mode entry
+ * missing these fields. The type stays `Partial` to keep chain-wide mode
+ * ergonomic; if TypeScript flagged missing fields here, operators running
+ * chain-wide would have to spell out the override with needless repetition.
+ */
+export type CollectLpRewardOverride = Partial<CollectLpRewardSettings>;
 
 export interface SettlementConfig {
   enabled: boolean;
@@ -224,7 +239,11 @@ export interface PoolConfig {
   take?: TakeSettings;
   collect?: CollectSettings;
   collectBond?: boolean;
-  collectLpReward?: CollectLpRewardSettings;
+  // When `defaultLpReward` is set at the KeeperConfig level, per-pool
+  // entries act as overrides and can omit any field. When there's no
+  // default, the per-pool entry must still supply `minAmountQuote` and
+  // `minAmountCollateral` — enforced by `resolveCollectLpRewardForPool`.
+  collectLpReward?: CollectLpRewardOverride;
   settlement?: SettlementConfig;
   price: PriceOrigin;
   dex?: DexConfig;
@@ -321,4 +340,16 @@ export interface KeeperConfig {
   universalRouterOverrides?: UniversalRouterOverrides;
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
+  // Seconds subtracted from the LP-reward subgraph cursor before each query,
+  // so late-indexed events that land just below the previous cursor are still
+  // re-fetched. Raise on chains where subgraph indexing lag exceeds the
+  // default (e.g. heavily congested L2s). The in-memory dedupe set is scoped
+  // to this window, so larger values grow per-pool memory roughly linearly
+  // with event rate × window. Defaults to 60.
+  lpRewardLookbackSeconds?: number;
+  // Default LP-reward redemption settings applied to every pool the signer
+  // has activity in (including auto-discovered pools), unless a per-pool
+  // `collectLpReward` entry overrides it. Setting this enables chain-wide
+  // LP reward coverage; omitting it keeps the legacy per-pool-only mode.
+  defaultLpReward?: CollectLpRewardSettings;
 }

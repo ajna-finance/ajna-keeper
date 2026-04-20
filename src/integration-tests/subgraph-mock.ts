@@ -1,8 +1,13 @@
 import { ERC20Pool__factory, FungiblePool, Loan } from '@ajna-finance/sdk';
+import { BigNumber, utils } from 'ethers';
 import subgraphModule, {
+  BucketTakeLPAwardItem,
+  GetBucketTakeLPAwardsResponse,
   GetLiquidationResponse,
   GetLoanResponse,
   GetMeaningfulBucketResponse,
+  GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES,
+  GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE,
 } from '../subgraph';
 import { getProvider } from './test-utils';
 import { decimaledToWei, weiToDecimaled } from '../utils';
@@ -121,6 +126,138 @@ export function overrideGetHighestMeaningfulBucket(
   };
   subgraphModule.getHighestMeaningfulBucket = fn;
   return undoFn;
+}
+
+export function overrideGetBucketTakeLPAwards(
+  fn: typeof subgraphModule.getBucketTakeLPAwards
+): () => void {
+  const original = subgraphModule.getBucketTakeLPAwards;
+  const undoFn = () => {
+    subgraphModule.getBucketTakeLPAwards = original;
+  };
+  subgraphModule.getBucketTakeLPAwards = fn;
+  return undoFn;
+}
+
+// Match production's `pageSize * maxPages` cap so the mock truncates at the
+// same boundary a real subgraph call would. Sourced from the production
+// constants to prevent drift.
+const MOCK_LP_AWARDS_PAGE_SIZE = GET_BUCKET_TAKE_LP_AWARDS_PAGE_SIZE;
+const MOCK_LP_AWARDS_MAX_PAGES = GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES;
+
+// Coverage model: `getBucketTakeLPAwards` paginates INTERNALLY by advancing a
+// composite `(blockTimestamp, id)` cursor until a short page or `maxPages`
+// hits. The externally-observable return is a flat, ordered list with the
+// final truncation applied. This mock stands in for that externally-visible
+// contract — it returns the same flat list production would return after
+// its internal pagination loop completes. Cross-page composite-cursor
+// semantics are exercised at the unit level in `subgraph-bucket-takes.test.ts`
+// against a stubbed `graphql-request`; integration tests don't need to
+// re-cover that path through the mock.
+//
+// Chain-wide scope: production queries by signer across ALL pools. Test
+// fixtures currently spin up ONE hardhat-fork pool per test, so the closure
+// still captures a single `pool` — the mock emits events only for that
+// pool's contract. Multi-pool tests should extend this to accept an array
+// of pools and union their event streams; for now one pool per test is
+// sufficient and matches every existing fixture.
+export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
+  return async (
+    _subgraphUrl: string,
+    signerAddress: string,
+    cursorBlockTimestamp: string
+  ): Promise<GetBucketTakeLPAwardsResponse> => {
+    const provider = getProvider();
+    const poolContract = ERC20Pool__factory.connect(pool.poolAddress, provider);
+    const lpAwardedFilter = poolContract.filters.BucketTakeLPAwarded();
+    const events = await poolContract.queryFilter(
+      lpAwardedFilter,
+      MAINNET_CONFIG.BLOCK_NUMBER
+    );
+    // Matches production's page-1 semantics. On the first page, production's
+    // query `blockTimestamp_gt: cursorTs OR (blockTimestamp == cursorTs AND
+    // id_gt: '0x')` reduces to `blockTimestamp >= cursorTs` because every
+    // real Bytes id lexicographically exceeds the canonical empty-bytes
+    // sentinel `'0x'`. Subsequent pages advance a composite `(pageTs, pageId)`
+    // cursor, but the FULL paged result is equivalent to the single
+    // `>= cursorTs` selection sorted by `(ts, id)` and truncated at the
+    // cap — which is exactly what this mock returns.
+    const cursorTs = BigNumber.from(cursorBlockTimestamp || '0');
+    const signerLower = signerAddress.toLowerCase();
+
+    const candidates: BucketTakeLPAwardItem[] = [];
+    for (const evt of events) {
+      const { taker, kicker, lpAwardedTaker, lpAwardedKicker } = evt.args;
+      const takerMatches = taker.toLowerCase() === signerLower;
+      const kickerMatches = kicker.toLowerCase() === signerLower;
+      if (!takerMatches && !kickerMatches) {
+        continue;
+      }
+
+      const block = await evt.getBlock();
+      const blockTimestamp = BigNumber.from(block.timestamp);
+
+      // Parse the originating bucketTake(borrower, depositTake, index) call
+      // to recover the bucket index the same way production used to — this
+      // path only runs in tests against hardhat forks where the subgraph
+      // can't see the local chain state.
+      //
+      // Known divergence from production: events emitted inside a Multicall3
+      // wrapper (or any other aggregator) are SKIPPED here because
+      // `parseTransaction` sees the wrapper's top-level function, not the
+      // inner bucketTake. Production reads `BucketTake.index` directly from
+      // the indexed entity and has no such restriction. Tests that wrap
+      // bucketTake in multicall will silently lose coverage against the
+      // mock. None of the current fixtures use that pattern; revisit if
+      // that changes.
+      const tx = await evt.getTransaction();
+      const parsed = poolContract.interface.parseTransaction(tx);
+      if (parsed.functionFragment.name !== 'bucketTake') {
+        // Escalated from silent skip so a future fixture that wraps
+        // bucketTake in multicall surfaces in test output rather than
+        // silently losing mock coverage.
+        logger.warn(
+          `Subgraph mock: skipping BucketTakeLPAwarded event whose originating tx called ${parsed.functionFragment.name} (expected 'bucketTake'). Production would still index this event — integration coverage is degraded for this scenario.`
+        );
+        continue;
+      }
+      const [, , indexBn] = parsed.args as [string, boolean, BigNumber];
+
+      const id = `${evt.transactionHash}-${evt.logIndex.toString(16).padStart(6, '0')}`.toLowerCase();
+
+      if (blockTimestamp.lt(cursorTs)) continue;
+
+      candidates.push({
+        id,
+        index: indexBn.toNumber(),
+        taker: taker.toLowerCase(),
+        pool: { id: pool.poolAddress.toLowerCase() },
+        lpAwarded: {
+          lpAwardedTaker: utils.formatUnits(lpAwardedTaker, 18),
+          lpAwardedKicker: utils.formatUnits(lpAwardedKicker, 18),
+          kicker: kicker.toLowerCase(),
+        },
+        blockTimestamp: blockTimestamp.toString(),
+      });
+    }
+
+    // Matches production orderBy: blockTimestamp asc, with id as tie-breaker.
+    // Use byte-order string compare (not `localeCompare`, which applies ICU
+    // collation and is locale-dependent) to match Graph Node's id ASC.
+    candidates.sort((a, b) => {
+      const tsCmp = BigNumber.from(a.blockTimestamp).sub(
+        BigNumber.from(b.blockTimestamp)
+      );
+      if (!tsCmp.isZero()) return tsCmp.lt(0) ? -1 : 1;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+
+    // Matches production: clamp at pageSize * maxPages.
+    const cap = MOCK_LP_AWARDS_PAGE_SIZE * MOCK_LP_AWARDS_MAX_PAGES;
+    const bucketTakes =
+      candidates.length > cap ? candidates.slice(0, cap) : candidates;
+    return { bucketTakes };
+  };
 }
 
 export function makeGetHighestMeaningfulBucket(pool: FungiblePool) {

@@ -95,7 +95,7 @@ const candidateTakePriorityCache = new WeakMap<
 >();
 const sharedDiscoveryScans = new Map<string, SharedDiscoveryScan>();
 
-function normalizeAddress(address: string): string {
+export function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
 
