@@ -126,7 +126,7 @@ describe('LpCollector cursor advancement', () => {
     );
   });
 
-  it('does NOT advance cursor when the subgraph result was truncated', async () => {
+  it('advances cursor on truncation so the next cycle makes forward progress', async () => {
     const signer = '0xabc0000000000000000000000000000000000000';
     const getAwards = sinon.stub();
     getAwards.onCall(0).resolves({
@@ -151,14 +151,11 @@ describe('LpCollector cursor advancement', () => {
     await collector.ingestNewAwardsFromSubgraph();
     await collector.ingestNewAwardsFromSubgraph();
 
-    // The query always receives `queryTs = cursorTs - lookback` and `''` for
-    // the cursorId — the id is only used internally for the chronological
-    // high-water mark. On truncation, cursors still advance so the next
-    // cycle's query shifts forward by `(5000 seen - 60 lookback) = 4940`.
+    // Query receives `queryTs = cursorTs - lookback`. On truncation, the
+    // cursor still advances so the next cycle shifts forward by
+    // `(5000 seen - 60 lookback) = 4940`.
     expect(getAwards.firstCall.args[2]).to.equal('0');
-    expect(getAwards.firstCall.args[3]).to.equal('');
     expect(getAwards.secondCall.args[2]).to.equal(String(5000 - 60));
-    expect(getAwards.secondCall.args[3]).to.equal('');
   });
 
   it('does not double-count events at exactly the lookback cutoff boundary', async () => {

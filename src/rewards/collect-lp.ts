@@ -54,20 +54,16 @@ export class LpCollector {
   public lpMap: Map<number, BigNumber> = new Map(); // Map<bucketIndex, rewardLp>
 
   private signerAddressPromise: Promise<string>;
-  // Cross-cycle pagination cursor. Pagination within a single `getBucketTake
-  // LPAwards` call uses `id_gt` to advance through pages; this field carries
-  // the last ingested id forward so the next cycle continues where pagination
-  // stopped (crucial when a single cycle hits the max-pages truncation cap —
-  // without a persistent cursor, pagination would restart at '' every cycle
-  // and truncated tails would be permanently unreachable).
-  private cursorId: string = '';
-  // Timestamp cursor used for a small lookback window when querying the
-  // subgraph, so late-indexed events below the max-seen timestamp are still
-  // returned. Deduped client-side via `seenEventIds`.
+  // Timestamp cursor advanced to the highest `blockTimestamp` seen so far.
+  // Each query subtracts `LP_REWARD_LOOKBACK_SECONDS` from this value so
+  // late-indexed events within that window are still re-fetched; dedupe is
+  // handled by `seenEventIds`. A pure timestamp cursor is sufficient here —
+  // within a single query call, composite (ts, id) pagination in
+  // `getBucketTakeLPAwards` handles same-timestamp events deterministically,
+  // so we don't need a cross-cycle id cursor.
   private cursorBlockTimestamp: string = '0';
-  // Dedupe set scoped to the lookback window. Only used to reject events
-  // re-returned by the lookback overlap; truly-new events (id beyond cursor)
-  // cannot collide with entries here because `id_gt` strictly advances.
+  // Dedupe set scoped to the lookback window. Rejects events re-returned
+  // across the overlap so they aren't double-counted.
   private seenEventIds: Map<string, string> = new Map(); // id → blockTimestamp
 
   constructor(
@@ -101,44 +97,32 @@ export class LpCollector {
   public async ingestNewAwardsFromSubgraph(): Promise<void> {
     const signerAddress = (await this.signerAddressPromise).toLowerCase();
 
-    // Composite (blockTimestamp, id) cursor. The subgraph query orders by
-    // blockTimestamp asc; `cursorId` is only used as a tie-breaker WITHIN
-    // the same-timestamp bucket. This avoids the trap of random-tx-hash ids
-    // making an id-only cursor non-monotonic across blocks.
-    //
     // Shift the query's timestamp cursor BACK by LP_REWARD_LOOKBACK_SECONDS
     // so late-indexed events that land just below our real cursor are still
-    // returned. `seenEventIds` dedupes the overlap. The empty id '' resets
-    // the in-timestamp tie-breaker for the lookback window — we want ALL
-    // events at (cursorTs - lookback) onwards, not just those after cursorId.
+    // returned. `seenEventIds` dedupes the overlap.
     const queryTs = subtractSecondsClamped(
       this.cursorBlockTimestamp,
       LP_REWARD_LOOKBACK_SECONDS
     );
-    const { bucketTakes, truncated } =
-      await this.subgraph.getBucketTakeLPAwards(
-        this.pool.poolAddress,
-        signerAddress,
-        queryTs,
-        ''
-      );
+    const { bucketTakes } = await this.subgraph.getBucketTakeLPAwards(
+      this.pool.poolAddress,
+      signerAddress,
+      queryTs
+    );
 
-    // Track chronological high-water mark within THIS batch. Both cursors
-    // advance together at the chronologically latest item seen.
     let maxTimestamp = this.cursorBlockTimestamp;
-    let maxId = this.cursorId;
-    const observeChronology = (ts: string, idLower: string) => {
-      if (bigIntStringGreater(ts, maxTimestamp)) {
-        maxTimestamp = ts;
-        maxId = idLower;
-      } else if (ts === maxTimestamp && idLower > maxId) {
-        maxId = idLower;
-      }
+    const observeTimestamp = (ts: string) => {
+      if (bigIntStringGreater(ts, maxTimestamp)) maxTimestamp = ts;
     };
 
     for (const take of bucketTakes) {
       if (this.seenEventIds.has(take.id)) continue;
-      const takeIdLower = take.id.toLowerCase();
+
+      // Record the event in the seen set BEFORE any early-return so a
+      // persistently malformed record does not get re-parsed on every cycle
+      // within the lookback window.
+      this.seenEventIds.set(take.id, take.blockTimestamp);
+      observeTimestamp(take.blockTimestamp);
 
       // Defensive: schema marks `taker` and `lpAwarded` non-null, but guard
       // anyway so a schema drift or GraphQL-library glitch can't throw and
@@ -147,14 +131,12 @@ export class LpCollector {
         logger.warn(
           `BucketTake event missing taker field; skipping. pool: ${this.pool.name}, id: ${take.id}`
         );
-        observeChronology(take.blockTimestamp, takeIdLower);
         continue;
       }
       if (!take.lpAwarded) {
         logger.warn(
           `BucketTake event missing lpAwarded field; skipping. pool: ${this.pool.name}, id: ${take.id}`
         );
-        observeChronology(take.blockTimestamp, takeIdLower);
         continue;
       }
 
@@ -162,8 +144,9 @@ export class LpCollector {
       const kickerMatches =
         take.lpAwarded.kicker.toLowerCase() === signerAddress;
 
-      // Quarantine per-event parse failures: log + skip, still advance cursor.
-      // A persistently malformed record would otherwise freeze the pool.
+      // Quarantine per-event parse failures: log + skip, leave seen-id in
+      // place so we don't re-error every cycle while the record remains
+      // malformed.
       let takerAmount: BigNumber;
       let kickerAmount: BigNumber;
       try {
@@ -178,7 +161,6 @@ export class LpCollector {
           `Failed to parse BucketTake reward amounts; skipping event. pool: ${this.pool.name}, id: ${take.id}, taker: ${take.lpAwarded.lpAwardedTaker}, kicker: ${take.lpAwarded.lpAwardedKicker}`,
           error
         );
-        observeChronology(take.blockTimestamp, takeIdLower);
         continue;
       }
 
@@ -188,37 +170,64 @@ export class LpCollector {
       if (kickerMatches) {
         this.addRewardParsed(take.index, kickerAmount, 'kicker');
       }
-
-      this.seenEventIds.set(take.id, take.blockTimestamp);
-      observeChronology(take.blockTimestamp, takeIdLower);
     }
 
-    // ALWAYS advance cursors, even on truncation. Forward progress is bounded
-    // by chronological order, so truncation just takes more cycles to drain.
+    // ALWAYS advance cursor, even on truncation — the server-side orderBy
+    // plus within-call composite pagination means the next cycle's query
+    // picks up where this one left off, just later in wall-clock time.
     this.cursorBlockTimestamp = maxTimestamp;
-    this.cursorId = maxId;
 
-    // Always attempt prune + cap. On truncation, the server-side orderBy
-    // guarantees that anything below (maxTimestamp - lookback) has already
-    // been seen; pruning older seen-ids is safe.
+    // Prune and cap seenEventIds. Prune drops entries below the lookback
+    // window (safe to forget). Cap evicts older entries if we're still over
+    // the memory cap — but never entries inside the active window.
     this.pruneSeenEventIds();
     this.capSeenEventIds();
   }
 
   private capSeenEventIds(): void {
     if (this.seenEventIds.size <= MAX_SEEN_EVENT_IDS) return;
-    // Sorting n entries by timestamp to evict oldest is O(n log n). Only runs
-    // when we're over cap, which shouldn't happen in steady state.
-    const entries = Array.from(this.seenEventIds.entries());
-    entries.sort((a, b) => {
-      try {
-        return BigNumber.from(a[1]).lt(BigNumber.from(b[1])) ? -1 : 1;
-      } catch {
-        return 0;
+    // Partition seen ids into those still within the active lookback window
+    // (MUST be retained — next cycle's query will re-return them and we need
+    // dedupe to fire) and those already past the window (safe to evict).
+    const cutoff = subtractSecondsClamped(
+      this.cursorBlockTimestamp,
+      LP_REWARD_LOOKBACK_SECONDS
+    );
+    const inWindow: Array<[string, string]> = [];
+    const outOfWindow: Array<[string, string]> = [];
+    this.seenEventIds.forEach((ts, id) => {
+      if (bigIntStringGreater(cutoff, ts)) {
+        outOfWindow.push([id, ts]);
+      } else {
+        inWindow.push([id, ts]);
       }
     });
-    const keep = entries.slice(entries.length - MAX_SEEN_EVENT_IDS);
-    this.seenEventIds = new Map(keep);
+
+    if (inWindow.length >= MAX_SEEN_EVENT_IDS) {
+      // Window itself exceeds the cap. Refuse to evict from the window —
+      // doing so would cause re-fetched events to double-count. Drop the
+      // out-of-window tail entirely and log a warning for the operator.
+      logger.warn(
+        `seenEventIds lookback window (${inWindow.length}) exceeds cap (${MAX_SEEN_EVENT_IDS}); dropping out-of-window entries only. pool: ${this.pool.name}`
+      );
+      this.seenEventIds = new Map(inWindow);
+      return;
+    }
+
+    // Sort out-of-window entries newest-first and keep as many as fit under
+    // the cap. A stable tie-breaker on id avoids arbitrary eviction at
+    // boundary timestamps.
+    outOfWindow.sort((a, b) => {
+      try {
+        const cmp = BigNumber.from(b[1]).sub(BigNumber.from(a[1]));
+        if (!cmp.isZero()) return cmp.lt(0) ? -1 : 1;
+      } catch {
+        /* fall through to id tie-breaker */
+      }
+      return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+    });
+    const remaining = MAX_SEEN_EVENT_IDS - inWindow.length;
+    this.seenEventIds = new Map([...inWindow, ...outOfWindow.slice(0, remaining)]);
   }
 
   private pruneSeenEventIds(): void {

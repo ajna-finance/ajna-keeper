@@ -570,7 +570,6 @@ async function getBucketTakeLPAwards(
   poolAddress: string,
   signerAddress: string,
   cursorBlockTimestamp: string,
-  cursorId: string,
   options?: SubgraphRequestOptions
 ): Promise<GetBucketTakeLPAwardsResponse> {
   const poolId = poolAddress.toLowerCase();
@@ -578,11 +577,12 @@ async function getBucketTakeLPAwards(
   const bucketTakes: BucketTakeLPAwardItem[] = [];
   let truncated = false;
 
-  // Inline pagination so we can advance the composite (ts, id) cursor between
-  // pages. The shared paginateSubgraphCursor helper only supports a single
-  // opaque cursor, which isn't enough for composite-cursor pagination.
+  // Within-call pagination advances a composite (pageTs, pageId) cursor between
+  // pages so same-timestamp events are split deterministically by id. The
+  // caller's `cursorBlockTimestamp` anchors the first page; subsequent pages
+  // advance both fields from each page's last item.
   let pageTs = cursorBlockTimestamp;
-  let pageId = cursorId;
+  let pageId = '';
 
   for (let page = 0; page < GET_BUCKET_TAKE_LP_AWARDS_MAX_PAGES; page++) {
     const pageResult = await requestSubgraph<

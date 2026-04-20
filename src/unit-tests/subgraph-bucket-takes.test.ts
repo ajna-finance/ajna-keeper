@@ -23,8 +23,7 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       'http://example-subgraph',
       '0xPoOL1111111111111111111111111111111111AA',
       '0xSiGnEr2222222222222222222222222222222222',
-      '500',
-      ''
+      '500'
     );
 
     const variables = (requestStub.firstCall.args[0] as any).variables;
@@ -70,8 +69,7 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       'http://example-subgraph',
       '0xpool',
       '0xsigner',
-      '0',
-      ''
+      '0'
     );
 
     expect(result.bucketTakes).to.have.length(1001);
@@ -79,11 +77,12 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     expect(requestStub.callCount).to.equal(2);
     const secondVars = (requestStub.secondCall.args[0] as any).variables;
     // Next page's cursor must be the last item's (blockTimestamp, id) pair
+    // for deterministic same-timestamp pagination.
     expect(secondVars.cursorTs).to.equal(String(1000 + 999));
     expect(secondVars.cursorId).to.equal('take-0999');
   });
 
-  it('uses the caller-provided (cursorTs, cursorId) as the initial pagination cursor', async () => {
+  it('starts each call at the caller-provided cursorBlockTimestamp', async () => {
     const requestStub = sinon
       .stub(graphqlRequest, 'request')
       .resolves({ bucketTakes: [] });
@@ -92,13 +91,14 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       'http://example-subgraph',
       '0xpool',
       '0xsigner',
-      '500',
-      'resume-from-this-id'
+      '500'
     );
 
     const variables = (requestStub.firstCall.args[0] as any).variables;
     expect(variables.cursorTs).to.equal('500');
-    expect(variables.cursorId).to.equal('resume-from-this-id');
+    // Within-call pagination always starts with an empty id cursor; it
+    // advances to the last page item's id between pages.
+    expect(variables.cursorId).to.equal('');
   });
 
   it('reports truncated=true when pagination hits the max-pages cap', async () => {
@@ -127,8 +127,7 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       'http://example-subgraph',
       '0xpool',
       '0xsigner',
-      '0',
-      ''
+      '0'
     );
 
     expect(result.truncated).to.equal(true);
@@ -146,7 +145,6 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       '0xpool',
       '0xsigner',
       '0',
-      '',
       { fallbackUrls: ['http://fallback'] }
     );
 

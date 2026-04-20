@@ -147,8 +147,7 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
     _subgraphUrl: string,
     _poolAddress: string,
     signerAddress: string,
-    cursorBlockTimestamp: string,
-    cursorId: string
+    cursorBlockTimestamp: string
   ): Promise<GetBucketTakeLPAwardsResponse> => {
     const provider = getProvider();
     const poolContract = ERC20Pool__factory.connect(pool.poolAddress, provider);
@@ -157,10 +156,11 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       lpAwardedFilter,
       MAINNET_CONFIG.BLOCK_NUMBER
     );
-    // Matches the production composite cursor:
-    //   WHERE (ts > cursorTs) OR (ts == cursorTs AND id > cursorId)
+    // Matches production: events with blockTimestamp >= cursorBlockTimestamp
+    // (the first query page starts here; within-call composite pagination
+    // advances from there). The collector passes `cursorTs - lookback` to
+    // catch late-indexed events.
     const cursorTs = BigNumber.from(cursorBlockTimestamp || '0');
-    const cursorIdLower = (cursorId ?? '').toLowerCase();
     const signerLower = signerAddress.toLowerCase();
 
     const candidates: BucketTakeLPAwardItem[] = [];
@@ -188,9 +188,7 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
 
       const id = `${evt.transactionHash}-${evt.logIndex.toString(16).padStart(6, '0')}`.toLowerCase();
 
-      // Apply composite cursor filter
       if (blockTimestamp.lt(cursorTs)) continue;
-      if (blockTimestamp.eq(cursorTs) && id <= cursorIdLower) continue;
 
       candidates.push({
         id,
