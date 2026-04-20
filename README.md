@@ -236,7 +236,11 @@ Collects liquidation bonds (which were used to kick loans) once they are fully c
 
 ### Collect Reward LP
 
-Redeems rewarded LP for either Quote or Collateral based on config. Note: This will only collect LP rewarded while the bot is running and will not collect deposits.
+Redeems rewarded LP for either Quote or Collateral based on config.
+
+Discovery is subgraph-based: each cycle the keeper queries the Ajna subgraph for `BucketTake` entities where the keeper's signer was taker or kicker, dedupes against an in-memory set, and sweeps the resulting LP rewards. On process start the cursor is reset so the first ingest replays the full `BucketTake` history for the configured pool+signer — this reclaims LP rewards that accrued before the keeper was started or during downtime.
+
+**Dedicated keeper key required.** The redemption step is bounded by the signer's on-chain `lpBalance` in each bucket; if the same signer also deposits LP into these pools as a lender, history replay can redeem principal to satisfy stale reward entries. Use a keeper-only signer that never deposits directly. The keeper does not move existing deposits — only the LP accumulated from acting as taker or kicker.
 
 ### Settlement
 

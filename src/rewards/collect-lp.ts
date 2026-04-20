@@ -84,11 +84,26 @@ export class LpCollector {
       ([bucketIndex, rewardLp]) => rewardLp.gt(constants.Zero)
     );
     for (let [bucketIndex, rewardLp] of lpMapEntries) {
-      const lpConsumed = await this.collectLpRewardFromBucket(
-        bucketIndex,
-        rewardLp
-      );
-      this.subtractReward(bucketIndex, lpConsumed);
+      try {
+        const lpConsumed = await this.collectLpRewardFromBucket(
+          bucketIndex,
+          rewardLp
+        );
+        this.subtractReward(bucketIndex, lpConsumed);
+      } catch (error) {
+        // AuctionNotCleared is re-thrown up the stack so `run.ts` can trigger
+        // reactive settlement. Other per-bucket errors stay contained — a
+        // persistently-failing bucket should not starve later buckets in the
+        // same cycle. The lpMap entry remains so the next cycle retries.
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('AuctionNotCleared')) {
+          throw error;
+        }
+        logger.error(
+          `Failed to collect LP reward from bucket; continuing with remaining buckets. pool: ${this.pool.name}, bucketIndex: ${bucketIndex}`,
+          error
+        );
+      }
     }
   }
 
@@ -351,12 +366,11 @@ export class LpCollector {
 
         await bucketRemoveQuoteToken(bucket, this.signer, quoteToWithdraw);
 
-        const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
-
-        logger.info(
-          `Collected LP reward as quote. pool: ${this.pool.name}, amount: ${weiToDecimaled(quoteToWithdraw)}`
-        );
-
+        // The withdrawal succeeded on-chain, so the quote tokens are now in
+        // the signer's wallet. Enqueue the reward action BEFORE the
+        // post-read: if `bucket.getPosition` throws (RPC flake, reorg),
+        // we would otherwise orphan the withdrawn tokens with no swap or
+        // transfer queued. Post-read is best-effort for lpUsed accounting.
         if (rewardActionQuote) {
           this.exchangeTracker.addToken(
             rewardActionQuote,
@@ -365,6 +379,11 @@ export class LpCollector {
           );
         }
 
+        logger.info(
+          `Collected LP reward as quote. pool: ${this.pool.name}, amount: ${weiToDecimaled(quoteToWithdraw)}`
+        );
+
+        const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
         const lpUsed = lpBalanceBefore.sub(lpBalanceAfter);
         if (lpUsed.lt(0)) {
           logger.warn(`Negative LP calculation detected in redeemQuote, using zero instead. Pool: ${this.pool.name}, lpBefore: ${lpBalanceBefore.toString()}, lpAfter: ${lpBalanceAfter.toString()}`);
@@ -413,12 +432,9 @@ export class LpCollector {
           collateralToWithdraw
         );
 
-        const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
-
-        logger.info(
-          `Collected LP reward as collateral. pool: ${this.pool.name}, token: ${this.pool.collateralSymbol}, amount: ${weiToDecimaled(collateralToWithdraw)}`
-        );
-
+        // Enqueue the reward action BEFORE the post-read so a failure on
+        // `bucket.getPosition` doesn't orphan the withdrawn collateral.
+        // Post-read is best-effort for lpUsed accounting.
         if (rewardActionCollateral) {
           this.exchangeTracker.addToken(
             rewardActionCollateral,
@@ -427,6 +443,11 @@ export class LpCollector {
           );
         }
 
+        logger.info(
+          `Collected LP reward as collateral. pool: ${this.pool.name}, token: ${this.pool.collateralSymbol}, amount: ${weiToDecimaled(collateralToWithdraw)}`
+        );
+
+        const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
         const lpUsed = lpBalanceBefore.sub(lpBalanceAfter);
         if (lpUsed.lt(0)) {
           logger.warn(`Negative LP calculation detected in redeemCollateral, using zero instead. Pool: ${this.pool.name}, lpBefore: ${lpBalanceBefore.toString()}, lpAfter: ${lpBalanceAfter.toString()}`);

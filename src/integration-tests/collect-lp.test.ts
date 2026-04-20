@@ -290,4 +290,74 @@ describe('LpCollector collections', () => {
     );
     expect(balanceAfterCollection.gt(balanceBeforeCollection)).to.be.true;
   });
+
+  it('prunes stale entries on cold-start replay after rewards were already redeemed', async () => {
+    // Simulates keeper restart: first run accrues + redeems LP, then a fresh
+    // LpCollector instance replays the full history from cursor '0'. The new
+    // collector must NOT re-redeem rewards that are already gone (lpBalance=0);
+    // the zero-balance prune should drop stale entries on the first sweep so
+    // the lpMap is empty at the end.
+    const pool = await setup();
+    const signer = await impersonateSigner(
+      MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
+    );
+    const dexRouter = new DexRouter(signer);
+
+    const makeCollector = () =>
+      new LpCollector(
+        pool,
+        signer,
+        {
+          collectLpReward: {
+            redeemFirst: TokenToCollect.QUOTE,
+            minAmountQuote: 0,
+            minAmountCollateral: 0,
+          },
+        },
+        {},
+        new RewardActionTracker(
+          signer,
+          {
+            uniswapOverrides: {
+              wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
+              uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
+            },
+            delayBetweenActions: 0,
+            pools: [],
+          } as any,
+          dexRouter
+        ),
+        createSubgraphReader({ subgraphUrl: 'mock://' })
+      );
+
+    // First keeper run: accrue rewards via bucketTake, settle, redeem.
+    const firstRun = makeCollector();
+    await handleLegacyOrArbTakes({
+      pool,
+      poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
+      signer,
+      config: {
+        dryRun: false,
+        subgraphUrl: '',
+        delayBetweenActions: 0,
+      },
+    });
+    const liquidation = pool.getLiquidation(
+      MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress
+    );
+    const settleTx = await liquidation.settle(signer);
+    await settleTx.verifyAndSubmit();
+    await NonceTracker.getNonce(signer);
+    await firstRun.collectLpRewards();
+
+    // Simulated cold start: construct a brand-new collector, which replays
+    // history with cursor='0'. The subgraph returns the same BucketTake
+    // events but the signer's on-chain lpBalance is now 0.
+    const secondRun = makeCollector();
+    await secondRun.collectLpRewards();
+
+    // The stale reward should have been pruned via the lpBalance=0 path in
+    // collectLpRewardFromBucket, leaving lpMap empty.
+    expect(secondRun.lpMap.size).to.equal(0);
+  });
 });
