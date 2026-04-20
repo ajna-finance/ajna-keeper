@@ -23,6 +23,7 @@ function createDiscoveryTransports(gasPrice: BigNumber = BigNumber.from(1)) {
       getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
       getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
       getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
+      getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
     },
     readRpc: {
       getGasPrice: sinon.stub().resolves(gasPrice),
@@ -207,6 +208,7 @@ describe('Discovery Handlers', () => {
             getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
             getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
             getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
+            getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
           },
           readRpc: {
             getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
@@ -308,6 +310,7 @@ describe('Discovery Handlers', () => {
           getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
           getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
           getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
+          getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
         },
         readRpc: {
           getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
@@ -403,6 +406,7 @@ describe('Discovery Handlers', () => {
           getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
           getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
           getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
+          getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
         },
         readRpc: {
           getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
@@ -490,6 +494,7 @@ describe('Discovery Handlers', () => {
           getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
           getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
           getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
+          getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
         },
         readRpc: {
           getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('100', 'gwei')),

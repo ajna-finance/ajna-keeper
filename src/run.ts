@@ -1,5 +1,5 @@
 import { AjnaSDK, Signer } from '@ajna-finance/sdk';
-import { Wallet } from 'ethers';
+import { providers, Wallet } from 'ethers';
 import {
   configureAjna,
   getAutoDiscoverSettlementPolicy,
@@ -66,6 +66,98 @@ interface LoopIterationResult {
 }
 
 const LOOP_CRASH_RECOVERY_DELAY_SECONDS = 30;
+
+// Max wall-clock gap between the subgraph's recorded timestamp for a block
+// and the RPC's recorded timestamp for the same block, in seconds. Normal
+// drift is zero (the block is the block); the tolerance only exists to
+// absorb non-determinism like indexer clock skew during reorg replay.
+// Cross-chain mismatches produce skews measured in days-to-years, so the
+// exact value doesn't matter as long as it's small.
+const SUBGRAPH_CHAIN_CONSISTENCY_MAX_SKEW_SECONDS = 60;
+
+/**
+ * Pre-flight check: the subgraph endpoint must be indexing the same chain
+ * as the connected RPC. Misconfigured `subgraphUrl` (pointing at a different
+ * chain's Ajna deployment) is a silent failure mode — auto-discovery surfaces
+ * pool addresses that have no contract code on the actual chain, which
+ * operators see as mysterious hydration errors.
+ *
+ * Check: fetch the subgraph's `_meta` (reports the block it's synced to,
+ * with that block's timestamp), then ask the RPC for the same block number
+ * and compare timestamps. If they differ by more than a trivial margin, the
+ * two are tracking different chains.
+ *
+ * Throws with an actionable error message on mismatch; returns quietly on
+ * agreement.
+ */
+export async function assertSubgraphChainConsistency(params: {
+  subgraph: SubgraphReader;
+  provider: providers.Provider;
+  chainId: number;
+}): Promise<void> {
+  const { subgraph, provider, chainId } = params;
+
+  let meta: Awaited<ReturnType<SubgraphReader['getSubgraphMeta']>>;
+  try {
+    meta = await subgraph.getSubgraphMeta();
+  } catch (error) {
+    throw new Error(
+      `Subgraph chain-consistency pre-flight failed: could not fetch _meta from subgraph endpoint. ` +
+        `Verify subgraphUrl is reachable and the subgraph supports the _meta query. ` +
+        `Underlying error: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  // Graph Node's `_meta.block` is schema-non-null but returns null in
+  // practice for a subgraph that's been deployed but hasn't indexed its
+  // first block yet. Guard before dereferencing so the operator gets an
+  // actionable error instead of a raw TypeError.
+  if (!meta.block) {
+    throw new Error(
+      `Subgraph has no indexed blocks yet (deployment: ${meta.deployment}). ` +
+        `Wait for the subgraph to index at least one block, or verify subgraphUrl ` +
+        `points at a healthy endpoint.`
+    );
+  }
+
+  let rpcBlock: Awaited<ReturnType<providers.Provider['getBlock']>>;
+  try {
+    rpcBlock = await provider.getBlock(meta.block.number);
+  } catch (error) {
+    // ethers throws on transient RPC failures (vs. returning null for
+    // not-found). Distinguish so the operator sees "RPC unhealthy" rather
+    // than "chain mismatch" when the RPC itself is the problem.
+    throw new Error(
+      `Subgraph chain-consistency pre-flight failed: RPC rejected getBlock(${meta.block.number}). ` +
+        `Verify ethRpcUrl is reachable. Underlying error: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!rpcBlock) {
+    throw new Error(
+      `Subgraph reports syncing to block ${meta.block.number}, but that block does not exist on the connected RPC ` +
+        `(chainId=${chainId}). Subgraph is almost certainly indexing a different chain than the keeper is running on. ` +
+        `Verify config.subgraphUrl matches the chain of config.ethRpcUrl.`
+    );
+  }
+
+  const skew = Math.abs(rpcBlock.timestamp - meta.block.timestamp);
+  if (skew > SUBGRAPH_CHAIN_CONSISTENCY_MAX_SKEW_SECONDS) {
+    throw new Error(
+      `Subgraph chain-consistency mismatch: block ${meta.block.number} has timestamp ${rpcBlock.timestamp} ` +
+        `on the connected RPC (chainId=${chainId}) but ${meta.block.timestamp} in the subgraph ` +
+        `(${skew}s apart). This means the subgraph is indexing a different chain than the keeper is ` +
+        `running on. Verify config.subgraphUrl matches the chain of config.ethRpcUrl. ` +
+        `(Subgraph deployment: ${meta.deployment})`
+    );
+  }
+
+  if (meta.hasIndexingErrors) {
+    logger.warn(
+      `Subgraph reports indexing errors at block ${meta.block.number} (deployment: ${meta.deployment}). ` +
+        `Data served may be incomplete or stale; monitor for discovery anomalies.`
+    );
+  }
+}
 
 function isPermanentTakeWriteTransportInitializationError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -154,12 +246,18 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     chainId,
   });
 
+  // Subgraph chain-consistency check runs BEFORE any pool hydration so a
+  // misconfigured `subgraphUrl` (pointing at a different chain's Ajna
+  // deployment) surfaces immediately rather than after N × 2-3 RPC reads of
+  // wasted static-pool hydration work.
+  const subgraph = createSubgraphReader(config);
+  await assertSubgraphChainConsistency({ subgraph, provider, chainId });
+
   const ajna = new AjnaSDK(provider);
   logger.info('...and pools:');
   const poolMap = await getPoolsFromConfig(ajna, config);
   const hydrationCooldowns: PoolHydrationCooldowns = new Map();
   const discoverySnapshotState = {};
-  const subgraph = createSubgraphReader(config);
   const discoveryRuntime = createDiscoveryRuntime({
     ajna,
     poolMap,

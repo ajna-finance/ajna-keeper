@@ -167,6 +167,28 @@ The easiest way to create an encrypted JSON wallet is to use the create-keystore
 Run the script with `yarn create-keystore`. Then follow the onscreen prompts.
 Ensure that the generated wallet is saved in the directory specified by the `keeperKeystore` property in `config.ts`.
 
+#### Supplying the keystore password
+
+The keeper resolves the keystore password from the first of:
+
+1. **`KEYSTORE_PASSWORD_FILE`** (recommended for automation) — path to a file whose contents are the password. Trailing newlines are stripped so `echo "…" > pwd.txt` and `op read 'op://Vault/item/password' > pwd.txt` both work. The file is read once at startup; permissions loose enough to let other users read it (anything beyond `0600`) trigger a startup WARN.
+2. **`KEYSTORE_PASSWORD`** — password directly in an env var. Useful for container platforms that inject secrets via `env:` references (Kubernetes, Docker `--env-file`, `op run --env-file=…`). More leak-prone than the file path (visible in `/proc/$PID/environ` for processes sharing the user), but works in any deployment.
+3. **Interactive prompt** — the existing behavior. Used when neither env var is set. Fine for tmux / screen sessions with a human attendant.
+
+Setting both `KEYSTORE_PASSWORD_FILE` and `KEYSTORE_PASSWORD` is refused to avoid stale-rotation bugs (you rotate the file but forget to clear the env var). Empty-string env vars are treated as unset.
+
+**systemd recipe** (the cleanest non-interactive path — systemd handles the secret lifecycle, the keeper never sees the literal secret on the process command line):
+
+```ini
+# /etc/systemd/system/ajna-keeper.service
+[Service]
+LoadCredential=keystore-password:/etc/ajna-keeper/keystore-password
+Environment=KEYSTORE_PASSWORD_FILE=%d/keystore-password
+ExecStart=/usr/bin/node /opt/ajna-keeper/dist/run.js /etc/ajna-keeper/config.ts
+```
+
+`%d` expands to `/run/credentials/ajna-keeper.service/` at runtime; the credential file is owned by root and only readable by the service user, and is unmounted when the service stops.
+
 ### Execution
 
 #### Using Makefile (Recommended)
