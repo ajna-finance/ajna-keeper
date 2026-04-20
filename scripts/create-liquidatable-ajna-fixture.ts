@@ -259,6 +259,22 @@ const AJNA_POOL_TOKEN_ABI = [
 ];
 const UNISWAP_V3_LIQUIDITY_SOURCE = 2;
 
+// Ajna pool interest rates in 1e18-fixed WAD form.
+//   1e17 = 0.1 = 10% APR (the factory maximum at time of writing; the
+//   realistic-1d profile uses it because higher rates accelerate kick-
+//   eligibility on a local fork).
+//   5e16 = 0.05 = 5% APR (default for non-realistic profiles).
+// If Ajna ever raises the factory cap, update FACTORY_MAX_INTEREST_RATE_WAD.
+const FACTORY_MAX_INTEREST_RATE_WAD = '100000000000000000';
+const DEFAULT_INTEREST_RATE_WAD = '50000000000000000';
+
+// Ajna ERC20Pool's custom error when removing quote would push LUP below
+// HTP. We match both the error-name form and the selector hex because
+// different provider error shapes surface one or the other. If the Ajna
+// ABI ever renames this error, both need updating.
+const LUP_BELOW_HTP_ERROR_NAME = 'LUPBelowHTP()';
+const LUP_BELOW_HTP_ERROR_SELECTOR = '0x444507e1';
+
 type CliOptions = {
   withUniswapV3ExternalTake: boolean;
   fundNativeGas: boolean;
@@ -569,11 +585,17 @@ function writeKeyFile(filePath: string, contents: KeyFileContents): void {
     mode: 0o600,
   });
   // If the file already existed with looser mode, writeFileSync doesn't
-  // tighten it. Force 0600 defensively.
+  // tighten it. Force 0600 defensively. Log failures instead of silently
+  // swallowing — an operator with a noexec FS or root-owned file needs
+  // to know the private keys may still be world-readable.
   try {
     fs.chmodSync(filePath, 0o600);
-  } catch {
-    /* best-effort */
+  } catch (error) {
+    console.warn(
+      `[fixture] Failed to enforce 0600 on ${filePath}: ` +
+        `${error instanceof Error ? error.message : String(error)}. ` +
+        `Verify the file permissions manually — it contains plaintext private keys.`
+    );
   }
 }
 
@@ -962,13 +984,18 @@ async function inspectBorrowerDirect(
     poolInfoUtils.borrowerInfo(poolAddress, owner),
     pool.debtInfo(),
   ]);
+  // ERC20Pool.debtInfo() returns an unnamed 4-tuple:
+  //   [0] poolDebt_, [1] accruedDebt_, [2] debtInAuction_, [3] t0Debt_
+  // Typechain doesn't emit named properties for this ABI so we index by
+  // position. Update the index if Ajna ever re-shapes the tuple.
+  const [, , poolDebtInAuction] = debtInfo;
   return {
     owner,
     debt: borrowerInfo.debt_.toString(),
     collateral: borrowerInfo.collateral_.toString(),
     thresholdPrice: borrowerInfo.thresholdPrice_.toString(),
     neutralPrice: borrowerInfo.t0Np_.toString(),
-    poolDebtInAuction: debtInfo[2].toString(),
+    poolDebtInAuction: poolDebtInAuction.toString(),
   };
 }
 
@@ -1037,7 +1064,10 @@ async function resolveSafeQuoteRemovalAmount(params: {
       return candidate;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes('LUPBelowHTP()') && !message.includes('0x444507e1')) {
+      if (
+        !message.includes(LUP_BELOW_HTP_ERROR_NAME) &&
+        !message.includes(LUP_BELOW_HTP_ERROR_SELECTOR)
+      ) {
         throw error;
       }
       candidate = candidate.div(2);
@@ -1182,6 +1212,22 @@ async function simulateBorrowToKickability(params: {
   }
 }
 
+// Auto-tune phase 1 (upper-bound probe) grows the candidate borrow amount
+// by this percentage per step until the simulation reports kick-eligibility
+// within the target delay. 5% per step is the balance point: smaller steps
+// burn RPC round-trips on doomed simulations; larger steps overshoot and
+// make the subsequent binary search converge to a value well above the
+// minimum kickable borrow amount, producing a fixture with more auction
+// headroom than needed.
+const BORROW_PROBE_GROWTH_BPS = 10_500;
+
+// Auto-tune phase 2 (binary search) halves the [lower, upper] range this
+// many times. 18 halvings ≈ 2^-18 (~4e-6) of the initial range — far
+// tighter than any WAD-precision borrow delta we care about. Each halving
+// is one simulation round-trip, so this also bounds the RPC cost of the
+// tune at ~20 calls worst case.
+const BORROW_BINARY_SEARCH_ITERATIONS = 18;
+
 async function autoTuneBorrowAmountWad(params: {
   provider: ethers.providers.JsonRpcProvider;
   poolAddress: string;
@@ -1224,8 +1270,8 @@ async function autoTuneBorrowAmountWad(params: {
     });
   };
 
-  let lowerResult = await evaluate(lower);
-  if (lowerResult.keeperKickEligibleAfterDelay) {
+  const initialLowerResult = await evaluate(lower);
+  if (initialLowerResult.keeperKickEligibleAfterDelay) {
     return {
       targetKickDelayDays: params.targetKickDelayDays,
       targetKickDelaySeconds,
@@ -1237,7 +1283,7 @@ async function autoTuneBorrowAmountWad(params: {
   }
 
   while (upper.lt(maxBorrowAmount)) {
-    const nextUpper = upper.mul(105).div(100);
+    const nextUpper = upper.mul(BORROW_PROBE_GROWTH_BPS).div(10_000);
     upper = nextUpper.gt(upper) ? nextUpper : upper.add(1);
     if (upper.gt(maxBorrowAmount)) {
       upper = maxBorrowAmount;
@@ -1247,7 +1293,6 @@ async function autoTuneBorrowAmountWad(params: {
       break;
     }
     lower = upper;
-    lowerResult = upperResult;
     if (upper.eq(maxBorrowAmount)) {
       throw new Error(
         `Auto-tune could not find a borrow amount that becomes kickable within ${params.targetKickDelayDays} days before hitting the lend amount cap`
@@ -1255,7 +1300,7 @@ async function autoTuneBorrowAmountWad(params: {
     }
   }
 
-  for (let i = 0; i < 18; i += 1) {
+  for (let i = 0; i < BORROW_BINARY_SEARCH_ITERATIONS; i += 1) {
     const mid = lower.add(upper).div(2);
     if (mid.lte(lower) || mid.gte(upper)) {
       break;
@@ -1265,7 +1310,6 @@ async function autoTuneBorrowAmountWad(params: {
       upper = mid;
     } else {
       lower = mid;
-      lowerResult = midResult;
     }
   }
 
@@ -1383,6 +1427,11 @@ async function createAndSeedUniswapV3Pool(params: {
     amount0Min: 0,
     amount1Min: 0,
     recipient,
+    // 1-hour deadline measured from the fetched block's timestamp. Fork
+    // block timestamps can drift relative to wall clock (the fixture
+    // uses `evm_increaseTime` elsewhere in the run), so base the
+    // deadline off `latestBlock.timestamp` rather than `Date.now()`.
+    // 1 hour is comfortably beyond the mint's RPC-call budget.
     deadline: latestBlock.timestamp + 3600,
   };
   const mintGasEstimate = await positionManager.estimateGas.mint(mintParams);
@@ -1465,10 +1514,15 @@ async function deployUniswapV3ExternalTakeContracts(params: {
   );
   await uniswapV3Taker.deployed();
 
-  const setTakerGasEstimate = await keeperTakerFactory.estimateGas.setTaker(2, uniswapV3Taker.address);
-  const setTakerTx = await keeperTakerFactory.setTaker(2, uniswapV3Taker.address, {
-    gasLimit: withGasBuffer(setTakerGasEstimate, 250_000),
-  });
+  const setTakerGasEstimate = await keeperTakerFactory.estimateGas.setTaker(
+    UNISWAP_V3_LIQUIDITY_SOURCE,
+    uniswapV3Taker.address
+  );
+  const setTakerTx = await keeperTakerFactory.setTaker(
+    UNISWAP_V3_LIQUIDITY_SOURCE,
+    uniswapV3Taker.address,
+    { gasLimit: withGasBuffer(setTakerGasEstimate, 250_000) }
+  );
   await setTakerTx.wait();
 
   return {
@@ -1502,20 +1556,18 @@ async function main() {
     throw new Error('Missing AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE');
   }
 
-  // AJNA_AGENT_KEEPER_KEY is the single operator key: funds all other actors,
-  // deploys ERC20 tokens, creates the Ajna pool, seeds Uniswap, and owns
-  // the external-take factory/taker contracts when those are deployed.
-  // (Previously split as DEPLOYER_KEY + KEEPER_KEY; merged because the
-  // two roles never run concurrently and conflating them removes an env
-  // var from the fixture's setup burden.)
+  // AJNA_AGENT_KEEPER_KEY is the single operator key: funds all other
+  // actors, deploys ERC20 tokens, creates the Ajna pool, seeds Uniswap,
+  // and owns the external-take factory/taker contracts when those are
+  // deployed.
   const keeperKey = requiredEnv('AJNA_AGENT_KEEPER_KEY');
 
   // Lender and borrower keys are optional. Resolution per role:
   //   1. Env var set (AJNA_AGENT_LENDER_KEY / AJNA_AGENT_BORROWER_KEY) → use
   //   2. Else AJNA_AGENT_KEY_FILE (default ./.fixture-keys.json) has the role → reuse
   //   3. Else generate a fresh wallet, persist to the key file, log the address
-  // This lets first-time runs work with just AJNA_AGENT_KEEPER_KEY and makes
-  // re-runs idempotent — the file is read on each invocation and new keys
+  // First-time runs work with just AJNA_AGENT_KEEPER_KEY. Re-runs are
+  // idempotent — the file is read on each invocation and fresh keys
   // only appear when one wasn't found.
   const keyFilePath = resolveKeyFilePath();
   const lenderResolution = resolveActorKey(
@@ -1579,10 +1631,6 @@ async function main() {
     );
   }
 
-  // Note: AJNA_AGENT_KEEPER_KEY is now always required (enforced above), so
-  // the former "keeper key only required for external-take deployment" check
-  // is no longer needed.
-
   const tokenDeployerRepo = resolveRepoPath('AJNA_AGENT_TOKEN_DEPLOYER_REPO', '../token-deployer');
   const ajnaSkillsRepo = resolveRepoPath('AJNA_AGENT_AJNA_SKILLS_REPO', '../ajna-skills');
   const fixtureProfile = process.env.AJNA_AGENT_PROFILE;
@@ -1595,7 +1643,10 @@ async function main() {
     process.env.AJNA_AGENT_OUTPUT_PATH ?? path.join(tempDir, 'fixture-summary.json')
   );
 
-  const defaultInterestRate = fixtureProfile === 'realistic-1d' ? '100000000000000000' : '50000000000000000';
+  const defaultInterestRate =
+    fixtureProfile === 'realistic-1d'
+      ? FACTORY_MAX_INTEREST_RATE_WAD
+      : DEFAULT_INTEREST_RATE_WAD;
   const interestRate = optionalEnv('AJNA_AGENT_INTEREST_RATE', defaultInterestRate);
   const bucketIndex = Number(optionalEnv('AJNA_AGENT_BUCKET_INDEX', '4600'));
   const limitIndex = Number(optionalEnv('AJNA_AGENT_LIMIT_INDEX', '5000'));

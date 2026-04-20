@@ -140,12 +140,11 @@ Use it to validate the keeper path you actually changed:
 
 ## Actor Model
 
-Use separate actors so the agent can reason about ownership and later hand the state off cleanly.
+Three actors; one operator, two counterparties. Separating them lets the agent reason about ownership and hand state off cleanly.
 
-- `DEPLOYER`: owns both test tokens and broadcasts token deployment
-- `LENDER`: receives quote tokens and provides Ajna quote liquidity
-- `BORROWER`: receives collateral tokens and opens the loan
-- `KEEPER`: the keeper signer used for `ajna-keeper`
+- `KEEPER`: the single operator key. Owns and broadcasts the test token deployments, creates the pool, seeds Uniswap, optionally owns the external-take factory/taker, and later runs `ajna-keeper` itself.
+- `LENDER`: receives quote tokens from the keeper and provides Ajna quote liquidity.
+- `BORROWER`: receives collateral tokens from the keeper and opens the loan.
 
 On a local Anvil fork, the easiest approach is to use funded default test accounts and derive addresses from their keys.
 

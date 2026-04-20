@@ -73,6 +73,11 @@ type HarnessReport = {
   takeAttempts: number;
 };
 
+// This harness targets a Base fork by design — the addresses below are
+// Ajna's Base mainnet deployment. If Ajna redeploys on Base, these need to
+// be updated alongside the fixture script's BASE_AJNA_ERC20_POOL_FACTORY.
+// The `erc20PoolFactory` value must match
+// scripts/create-liquidatable-ajna-fixture.ts::BASE_AJNA_ERC20_POOL_FACTORY.
 const BASE_AJNA_CONFIG = {
   erc20PoolFactory: '0x214f62B5836D83f3D6c4f71F174209097B1A779C',
   erc721PoolFactory: '0xeefEC5d1Cc4bde97279d01D88eFf9e0fEe981769',
@@ -83,6 +88,13 @@ const BASE_AJNA_CONFIG = {
   burnWrapper: '',
   lenderHelper: '',
 };
+
+// Sentinel URL for the subgraph in harness mode. The subgraph calls that
+// matter (getLoans, getLiquidations) are monkey-patched to read directly
+// from the pool contract. If something bypasses the override and hits the
+// network, the `.invalid` TLD (IANA-reserved, RFC 6761) guarantees DNS
+// failure so we see a loud error rather than a silent real-subgraph call.
+const FIXTURE_SUBGRAPH_SENTINEL_URL = 'http://fixture-subgraph.override.invalid';
 
 function overrideGetLoans(
   fn: typeof subgraphModule.getLoans
@@ -145,7 +157,14 @@ function makeGetLiquidationsFromFixture(
           liquidationAuctions: collateral > minCollateral ? [{ borrower }] : [],
         },
       };
-    } catch {
+    } catch (error) {
+      // Same discipline as `tryGetLiquidationStatus`: benign "no auction"
+      // collapses to an empty list, but real RPC failures surface. If this
+      // ever silently returned [] for an RPC timeout, the harness would
+      // report "no liquidation to take" and pass the test incorrectly.
+      if (!isBenignNoLiquidationError(error)) {
+        throw error;
+      }
       return {
         pool: {
           hpb: Number(hpb.toString()) / 1e18,
@@ -161,12 +180,21 @@ function usage() {
   return `Usage: ts-node scripts/run-fixture-keeper-harness.ts --summary /path/to/fixture-summary.json [--dry-run] [--auto-warp-to-take] [--take-warp-seconds N] [--max-take-warps N]\n\nRequired env:\n- AJNA_AGENT_KEEPER_KEY\n\nOptional env:\n- AJNA_AGENT_HARNESS_OUTPUT_PATH\n`;
 }
 
+// Defaults calibrated against the verified 1-day/3-day local-fixture
+// profile described in AUTONOMOUS_AGENT_LIQUIDATION_GUIDE.md. 86400s (1
+// day) per warp × 3 warps gives a ~3-day window, long enough for the
+// auction to cross the take-price threshold on a standard Ajna pool
+// without overshooting so far that the fixture's neutral-price
+// snapshot becomes stale.
+const DEFAULT_TAKE_WARP_SECONDS = 86_400;
+const DEFAULT_MAX_TAKE_WARPS = 3;
+
 function parseArgs(argv: string[]) {
   let summaryPath: string | undefined;
   let dryRun = false;
   let autoWarpToTake = false;
-  let takeWarpSeconds = 86400;
-  let maxTakeWarps = 3;
+  let takeWarpSeconds = DEFAULT_TAKE_WARP_SECONDS;
+  let maxTakeWarps = DEFAULT_MAX_TAKE_WARPS;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -230,6 +258,51 @@ async function getLiquidationStatus(pool: FungiblePool, borrower: string) {
   };
 }
 
+/**
+ * Heuristic: does this error mean "no liquidation auction exists for this
+ * borrower right now" (legitimate state to observe) versus a real RPC /
+ * chain failure (should be surfaced, not swallowed)?
+ *
+ * The Ajna SDK's `pool.getLiquidation(...)` throws when no auction row is
+ * found. Ethers provider errors (`CALL_EXCEPTION`, `SERVER_ERROR`,
+ * `NETWORK_ERROR`, `TIMEOUT`) indicate real problems that silently
+ * swallowing would hide. We treat anything lacking one of those ethers
+ * error codes as the benign "no auction" case and return undefined.
+ */
+function isBenignNoLiquidationError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return true;
+  const code = (error as { code?: string }).code;
+  if (typeof code === 'string') {
+    const hardFailureCodes = new Set([
+      'CALL_EXCEPTION',
+      'SERVER_ERROR',
+      'NETWORK_ERROR',
+      'TIMEOUT',
+    ]);
+    if (hardFailureCodes.has(code)) return false;
+  }
+  return true;
+}
+
+async function tryGetLiquidationStatus(
+  pool: FungiblePool,
+  borrower: string,
+  context: string
+): Promise<Awaited<ReturnType<typeof getLiquidationStatus>> | undefined> {
+  try {
+    return await getLiquidationStatus(pool, borrower);
+  } catch (error) {
+    if (isBenignNoLiquidationError(error)) return undefined;
+    process.stderr.write(
+      `[harness] ${context}: getLiquidationStatus failed with a non-benign error; ` +
+        `surfacing the raw error. Underlying: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`
+    );
+    throw error;
+  }
+}
+
 async function main() {
   const { summaryPath, dryRun, autoWarpToTake, takeWarpSeconds, maxTakeWarps } = parseArgs(process.argv.slice(2));
   const keeperKey = process.env.AJNA_AGENT_KEEPER_KEY;
@@ -290,15 +363,11 @@ async function main() {
       pool.quoteAddress
     );
 
-    let liquidationStatusBeforeKick: HarnessReport['liquidationStatusAfterKick'] | undefined;
-    try {
-      liquidationStatusBeforeKick = await getLiquidationStatus(
-        pool,
-        summary.borrower.owner
-      );
-    } catch {
-      liquidationStatusBeforeKick = undefined;
-    }
+    const liquidationStatusBeforeKick = await tryGetLiquidationStatus(
+      pool,
+      summary.borrower.owner,
+      'pre-kick status read'
+    );
 
     await handleKicks({
       pool,
@@ -308,7 +377,7 @@ async function main() {
         dryRun,
         delayBetweenActions: 0,
         coinGeckoApiKey: '',
-        subgraphUrl: 'http://fixture-subgraph.override.invalid',
+        subgraphUrl: FIXTURE_SUBGRAPH_SENTINEL_URL,
         tokenAddresses: {
           weth: summary.uniswapV3ExternalTake.routerConfig.wethAddress,
         },
@@ -317,15 +386,11 @@ async function main() {
       chainId: 8453,
     });
 
-    let liquidationStatusAfterKick: HarnessReport['liquidationStatusAfterKick'];
-    try {
-      liquidationStatusAfterKick = await getLiquidationStatus(
-        pool,
-        summary.borrower.owner
-      );
-    } catch {
-      liquidationStatusAfterKick = undefined;
-    }
+    const liquidationStatusAfterKick = await tryGetLiquidationStatus(
+      pool,
+      summary.borrower.owner,
+      'post-kick status read'
+    );
 
     const collateralBeforeTake = liquidationStatusAfterKick?.collateral;
 
@@ -343,7 +408,7 @@ async function main() {
         config: {
           dryRun,
           delayBetweenActions: 0,
-          subgraphUrl: 'http://fixture-subgraph.override.invalid',
+          subgraphUrl: FIXTURE_SUBGRAPH_SENTINEL_URL,
           keeperTakerFactory:
             summary.uniswapV3ExternalTake.deployment.keeperTakerFactory,
           takerContracts: {
@@ -354,14 +419,16 @@ async function main() {
         },
       });
 
-      try {
-        liquidationStatusAfterTake = await getLiquidationStatus(
-          pool,
-          summary.borrower.owner
-        );
-      } catch {
-        liquidationStatusAfterTake = null;
-      }
+      // Callers downstream distinguish `null` ("no auction right now")
+      // from a defined status, so normalize the benign-undefined case
+      // from `tryGetLiquidationStatus` back to `null`. Non-benign errors
+      // propagate and halt the harness loudly.
+      const postTakeStatus = await tryGetLiquidationStatus(
+        pool,
+        summary.borrower.owner,
+        'post-take status read'
+      );
+      liquidationStatusAfterTake = postTakeStatus ?? null;
 
       collateralReducedByTake =
         collateralBeforeTake !== undefined && liquidationStatusAfterTake !== null
