@@ -1,0 +1,369 @@
+# Combined Dynamic Route Selection Plan
+
+## Goal
+
+Build a safe, incremental route-selection stack for autodiscover external takes:
+
+- express profit floors in native-token terms so they work across quote tokens
+- select the best supported fee tier for UniV3-style routes
+- select between UniswapV3 and SushiSwap for factory external takes
+- bind execution to the quote-approved route without execution-time reselection
+- rank viable routes by expected net profit, not gross quote output
+- keep RPC growth bounded and observable
+
+This plan combines:
+
+- [NATIVE_PROFIT_FLOOR_PLAN.md](/home/mike/Projects-2026/ajna-keeper/NATIVE_PROFIT_FLOOR_PLAN.md)
+- [DYNAMIC_FEE_TIER_SELECTION_PLAN.md](/home/mike/Projects-2026/ajna-keeper/DYNAMIC_FEE_TIER_SELECTION_PLAN.md)
+- [DYNAMIC_LIQUIDITY_SOURCE_SELECTION_PLAN.md](/home/mike/Projects-2026/ajna-keeper/DYNAMIC_LIQUIDITY_SOURCE_SELECTION_PLAN.md)
+
+## Guiding Invariants
+
+- Evaluation and execution must use the same approved route.
+- Execution must not silently switch DEXs or fee tiers.
+- `amountOutMinimum` continues to come from the approved quote and profitability floor.
+- Route-specific gas cost must be included before route ranking.
+- Route ranking must optimize expected net profit after gas and slippage/risk buffers, after filtering routes that fail configured floors.
+- New route selection applies only to factory external takes, not the legacy 1inch path.
+- No keeper-level ERC20 pre-approvals to taker contracts are needed for this work.
+- Curve is Phase 2 because current Curve support is config-driven, not registry-driven.
+- Candidate-level context should be computed once and passed through the selector and DEX adapters.
+
+## Recommended Implementation Order
+
+### Phase 1: Native Profit Floor
+
+Implement `minProfitNative` first because both fee-tier and cross-DEX selection need a consistent quote-token profitability floor.
+
+Changes:
+
+- Add `AutoDiscoverTakePolicy.minProfitNative?: string` in wei.
+- Extend validation for decimal-string BigInt parsing and non-negativity.
+- Extend [src/discovery/gas-policy.ts](/home/mike/Projects-2026/ajna-keeper/src/discovery/gas-policy.ts) so native-to-quote conversion is requested when `minProfitNative` is set.
+- Add a shared helper that converts native wei to quote-token raw units from `NativeToQuoteConversion`.
+- Reuse the same conversion for gas cost and native profit floor.
+- Reject a candidate if `minProfitNative` is set and conversion fails.
+- Extend existing arb-take gating so arb takes remain disabled when any quote-denominated profit floor is active.
+
+RPC impact:
+
+- No new RPC infrastructure.
+- If gas policy already needed native-to-quote conversion, this adds only integer math.
+- If no existing policy needed conversion, this adds one existing conversion quote per candidate.
+
+### Phase 2: Dynamic Fee Tier Selection
+
+Implement fee-tier selection next, using a route-shaped selector even though v1 only varies `feeTier`.
+
+Changes:
+
+- Add `candidateFeeTiers?: number[]` to UniswapV3 and SushiSwap router override config.
+- Auto-include `defaultFeeTier` in the effective tier list.
+- Add `selectedFeeTier?: number` to `ExternalTakeQuoteEvaluation`.
+- Add a shared `selectBestFactoryRouteQuote(...)` helper in [src/take/factory/shared.ts](/home/mike/Projects-2026/ajna-keeper/src/take/factory/shared.ts).
+- For this phase, every `RouteCandidate` has the same configured `liquiditySource` and only varies `feeTier`.
+- Wire UniswapV3 and SushiSwap evaluation to probe configured tiers sequentially.
+- Wire execution to use `quoteEvaluation.selectedFeeTier ?? defaultFeeTier`.
+
+Execution invariant:
+
+- Do not re-quote or reselect tiers at execution time.
+- If the selected tier becomes stale, the protected transaction should fail rather than silently route elsewhere.
+
+RPC impact:
+
+- UniswapV3 with three tiers: up to three quote calls per candidate.
+- SushiSwap with three tiers: up to three existence checks plus up to three quote calls on a cold path.
+- Add a short TTL pair-tier existence cache for Sushi to avoid repeated missing-pool checks.
+
+### Phase 3: Dynamic Liquidity Source Selection
+
+Implement cross-source selection after the native floor and fee-tier selector exist.
+
+v1 sources:
+
+- `LiquiditySource.UNISWAPV3`
+- `LiquiditySource.SUSHISWAP`
+
+Changes:
+
+- Add `AutoDiscoverTakePolicy.allowedLiquiditySources?: LiquiditySource[]`.
+- Add chain-level `dexGasOverrides?: Partial<Record<LiquiditySource, string>>`.
+- Reject `LiquiditySource.ONEINCH` for factory external takes.
+- Reject `LiquiditySource.CURVE` in v1 with a clear Phase 2 message.
+- Add `selectedLiquiditySource?: LiquiditySource` to `ExternalTakeQuoteEvaluation`.
+- Generalize `RouteCandidate` to include `liquiditySource` and `feeTier`.
+- Evaluate every allowed source and fee-tier route sequentially.
+- Compute route-specific gas-adjusted profitability before ranking.
+- Pick the best profitable route by expected net profit after route-specific floor checks.
+- Dispatch execution through the selected source, not the configured default source.
+
+Execution invariant:
+
+- `selectedLiquiditySource` is binding.
+- Every execution-time branch that currently reads `poolConfig.take.liquiditySource` must use the resolved selected source.
+- This includes taker address selection, DEX-specific tx args, amount-out-minimum inputs, and logs.
+
+RPC impact:
+
+- With UniV3 and SushiSwap and three tiers each, cold path is up to six existence checks plus six route quote calls.
+- Native-to-quote conversion can be up to one per source when route-specific gas/profit floors are active.
+- Cache native-to-quote conversion by `(chain, quoteToken, liquiditySource, block-or-loop-id)` where possible.
+
+### Phase 4: Curve Dynamic Source Selection
+
+Add Curve only after UniV3/Sushi source selection is stable.
+
+Scope:
+
+- Start from configured `curveRouterOverrides.poolConfigs`.
+- Resolve configured Curve pools for the candidate token pair.
+- Use one matching configured pool per candidate before considering multi-pool probing.
+- Add Curve gas defaults and overrides.
+- Extend route logging and integration tests to cover `CurveKeeperTaker`.
+
+Non-scope:
+
+- No Curve registry lookup unless a separate registry-discovery plan is implemented.
+- No multi-pool Curve optimization until configured-pool selection proves useful.
+
+## Shared Data Model
+
+Suggested internal route model:
+
+```ts
+type FactoryRouteCandidate = {
+  liquiditySource: LiquiditySource;
+  feeTier?: number;
+  curvePool?: Address;
+};
+```
+
+Suggested per-candidate context:
+
+```ts
+type RouteEvaluationContext = {
+  chainId: number;
+  poolAddress: Address;
+  borrower: Address;
+  quoteToken: Address;
+  collateralToken: Address;
+  quoteTokenDecimals: number;
+  collateralTokenDecimals: number;
+  collateralAmount: bigint;
+  auctionRepayRequirementRaw: bigint;
+  marketPriceRaw: bigint;
+  currentGasPrice: bigint;
+  minExpectedProfitQuoteRaw?: bigint;
+  minProfitNativeWei?: bigint;
+  defaultLiquiditySource: LiquiditySource;
+  defaultFeeTierBySource: Partial<Record<LiquiditySource, number>>;
+};
+```
+
+Build this once per candidate. DEX adapters should not re-fetch token decimals, default tiers, market price, auction repay requirements, or gas inputs.
+
+Suggested selected quote fields:
+
+```ts
+type ExternalTakeQuoteEvaluation = {
+  selectedFeeTier?: number;
+  selectedLiquiditySource?: LiquiditySource;
+  // existing quote, collateral, market price, and reason fields
+};
+```
+
+Rules:
+
+- Phase 2 writes `selectedFeeTier`.
+- Phase 3 writes both `selectedLiquiditySource` and `selectedFeeTier`.
+- Phase 4 may write `selectedLiquiditySource` and `curvePool` or an equivalent Curve route identifier.
+- Do not introduce a separate execution-plan object unless the existing quote evaluation object becomes insufficient.
+
+## Shared Abstractions
+
+### Profitability policy
+
+Create one shared profitability helper instead of duplicating floor math in Uniswap, Sushi, Curve, and autodiscover code:
+
+```ts
+type RouteProfitability = {
+  routeGasCostQuoteRaw: bigint;
+  nativeProfitFloorQuoteRaw: bigint;
+  configuredProfitFloorQuoteRaw: bigint;
+  slippageRiskBufferQuoteRaw: bigint;
+  requiredProfitFloorQuoteRaw: bigint;
+  expectedNetProfitQuoteRaw: bigint;
+  surplusOverFloorQuoteRaw: bigint;
+  isProfitable: boolean;
+};
+```
+
+Responsibilities:
+
+- convert native gas and native profit floor to quote-token raw units
+- apply `minExpectedProfitQuote`
+- apply route-specific gas estimates
+- apply any configured slippage or risk buffer
+- return both expected net profit and surplus over the required floor
+
+This helper should be used by fee-tier selection, dynamic source selection, and future global `marketPriceFactor`/defensive-take work.
+
+### Route adapters
+
+Keep DEX-specific adapters narrow:
+
+```ts
+type FactoryRouteAdapter = {
+  liquiditySource: LiquiditySource;
+  exists(route: FactoryRouteCandidate, context: RouteEvaluationContext): Promise<boolean>;
+  quote(route: FactoryRouteCandidate, context: RouteEvaluationContext): Promise<RouteQuote | null>;
+  buildTakeArgs(route: FactoryRouteCandidate, quote: ExternalTakeQuoteEvaluation): TakeArgs;
+};
+```
+
+Adapters should not decide profitability or select routes. They only answer existence, quote, and transaction-construction questions for their DEX.
+
+### Normalized route config
+
+Normalize route config once per candidate:
+
+- effective allowed sources
+- effective fee tiers per source
+- default source for tie-breaking
+- default fee tier per source for tie-breaking
+- rejected unsupported sources with validation reasons
+
+This prevents each adapter from reimplementing config fallback behavior.
+
+## Shared Selection Algorithm
+
+The same selector should support fee-tier-only and cross-source selection.
+
+Flow:
+
+1. Build `RouteEvaluationContext` once for the candidate.
+2. Normalize route config once into a bounded route list.
+3. Order probes by configured default route, recent route success, then remaining routes.
+4. Apply route existence pre-filtering.
+5. Probe routes sequentially within the quote budget.
+6. For each successful route quote, compute `RouteProfitability`.
+7. Reject routes with non-positive `surplusOverFloorQuoteRaw`.
+8. Rank profitable routes by highest `expectedNetProfitQuoteRaw`.
+9. Break ties by configured default source, then default fee tier.
+10. Return the approved quote with selected route metadata and profitability details.
+
+This avoids duplicating profitability rules in Uniswap and Sushi adapters.
+
+Probe ordering is a latency optimization, not a correctness shortcut. When budget allows, the selector should still evaluate every viable route before choosing. If a quote budget is exhausted, logs must show which routes were skipped.
+
+## Gas And Profit Floor Handling
+
+Route ranking must use route-specific gas cost before choosing the winner:
+
+```text
+routeGasCostNative = gasUsed[route.liquiditySource] * currentGasPrice
+routeGasCostQuoteRaw = nativeToQuote(routeGasCostNative, route.liquiditySource)
+nativeProfitFloorQuoteRaw = nativeToQuote(minProfitNative, route.liquiditySource)
+grossProfitQuoteRaw = expectedQuoteOutRaw - auctionRepayRequirementRaw
+expectedNetProfitQuoteRaw = grossProfitQuoteRaw - routeGasCostQuoteRaw - slippageRiskBufferQuoteRaw
+requiredProfitFloorQuoteRaw = max(nativeProfitFloorQuoteRaw, minExpectedProfitQuoteRaw)
+surplusOverFloorQuoteRaw = expectedNetProfitQuoteRaw - requiredProfitFloorQuoteRaw
+```
+
+The selector should not choose the highest gross quote and then apply gas afterward. That can choose the wrong route when a DEX has materially higher execution gas. First reject routes below the required floor, then select the viable route with the highest `expectedNetProfitQuoteRaw`; use gross quote only as a final tie-breaker if net profit is equal.
+
+`amountOutMinimum` remains execution protection, not the route-ranking score. It should continue to be derived from the approved quote and required floor after the route has been selected.
+
+## Caching And Reuse
+
+Runtime caches that improve profitability and efficacy without changing behavior:
+
+- Token decimals by `(chain, token)`.
+- Quote providers, router helpers, and taker contract instances by `(chain, liquiditySource)`.
+- Pool-existence checks by `(chain, liquiditySource, tokenA, tokenB, feeTier)`.
+- Native-to-quote conversion by `(chain, quoteToken, liquiditySource, block-or-loop-id)`.
+- Recent route success metadata by `(chain, liquiditySource, tokenA, tokenB, feeTier)` for probe ordering.
+
+Cache rules:
+
+- Existence cache can use a short TTL because pool existence rarely changes.
+- Native conversion cache should be scoped to one loop or block-height window.
+- Recent-success cache is only for ordering; it must not skip a route that is still inside the quote budget.
+- Provider and decimals caches can live for the process lifetime.
+
+## Approval Model
+
+Do not add keeper startup approval grants for this roadmap.
+
+Current factory takers perform the relevant approvals inside the transaction:
+
+- quote token approval to the Ajna pool around `pool.take`
+- collateral approval to the router or Permit2 in the callback
+- approval reset where already implemented
+
+The keeper should validate configured taker addresses and router overrides at startup, but it should not grant broad ERC20 allowances from the keeper wallet to all possible takers.
+
+## Operational Controls
+
+Keep v1 conservative:
+
+- sequential probing
+- two or three candidate fee tiers max
+- UniV3 and SushiSwap only for dynamic source selection
+- no same-cycle retry
+- no parallel route fanout
+- no cross-candidate quote cache beyond small existence and native-conversion caches
+- shared candidate context so adapters do not recompute decimals, market price, gas inputs, or floors
+- default/recent-success routes probed first, with full evaluation when quote budget allows
+
+Telemetry to add:
+
+- selected route at evaluation time
+- selected route at execution time
+- per-route quote outcomes when no route is viable
+- route-specific gas estimate used in the floor
+- expected net profit, surplus over floor, and each floor component used for scoring
+- routes skipped because quote budget was exhausted
+- execution revert reason and selected route metadata
+- observed gas divergence from configured route gas estimate
+
+## Testing Plan
+
+Unit tests:
+
+- `minProfitNative` parsing, conversion, max-floor behavior, and failure-on-missing-conversion.
+- `candidateFeeTiers` validation and default-tier auto-inclusion.
+- route selector tie-breaking by default source and default fee tier.
+- execution uses `selectedFeeTier`.
+- execution dispatch uses `selectedLiquiditySource`.
+- route-specific gas floor changes winner selection when gross quote and expected net profit differ.
+- selector filters by `surplusOverFloorQuoteRaw` and ranks by `expectedNetProfitQuoteRaw`, not gross `quoteAmountRaw`.
+- adapters receive shared `RouteEvaluationContext` and do not recompute token decimals or floor inputs.
+- recent-success probe ordering changes probe order but not selected route when budget allows all routes.
+- 1inch and Curve are rejected from v1 `allowedLiquiditySources`.
+
+Integration tests:
+
+- factory take with selected Uniswap fee tier.
+- factory take with selected Sushi fee tier.
+- autodiscover candidate where UniV3 wins.
+- autodiscover candidate where SushiSwap wins.
+- stale selected route reverts safely under `amountOutMinimum` rather than reselecting.
+- warm pool-existence cache reduces repeated missing-route checks.
+- native-to-quote conversion is reused across fee tiers for the same source in one candidate evaluation.
+
+Phase 4 integration tests:
+
+- configured Curve pool matching selects `CurveKeeperTaker`.
+- Curve route participates in the same route selector after config-driven matching.
+
+## Acceptance Criteria
+
+Phase 1 is complete when autodiscover can enforce a native-denominated profit floor across multiple quote tokens and safely reject candidates when conversion is unavailable.
+
+Phase 2 is complete when UniV3 and Sushi can choose the best configured fee tier and execution uses the approved selected tier.
+
+Phase 3 is complete when autodiscover can choose between UniV3 and Sushi routes by expected net profit, account for route-specific gas before ranking, and dispatch execution through the selected source.
+
+Phase 4 is complete when Curve can participate through configured pool matching without adding registry lookup assumptions to the v1 route selector.
