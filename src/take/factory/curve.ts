@@ -3,7 +3,11 @@ import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
-import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
+import {
+  ExternalTakeQuoteEvaluation,
+  TakeActionConfig,
+  TakeLiquidationPlan,
+} from '../types';
 import { estimateGasWithBuffer, weiToDecimaled } from '../../utils';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types';
 import {
@@ -26,6 +30,7 @@ import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
 } from '../write-transport';
+import { logTakeExecutionTelemetry } from '../execution-telemetry';
 
 const CURVE_L2_PROPAGATION_DELAY_MS = 2_000;
 
@@ -49,7 +54,9 @@ export async function evaluateCurveFactoryQuote({
   routeContext?: FactoryRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (!config.curveRouterOverrides) {
-    logger.debug(`Factory: No curveRouterOverrides configured for pool ${pool.name}`);
+    logger.debug(
+      `Factory: No curveRouterOverrides configured for pool ${pool.name}`
+    );
     return {
       isTakeable: false,
       reason: 'missing curveRouterOverrides',
@@ -59,7 +66,9 @@ export async function evaluateCurveFactoryQuote({
   const curveConfig = config.curveRouterOverrides;
 
   if (!curveConfig.poolConfigs || !curveConfig.wethAddress) {
-    logger.debug(`Factory: Missing required Curve configuration for pool ${pool.name}`);
+    logger.debug(
+      `Factory: Missing required Curve configuration for pool ${pool.name}`
+    );
     return {
       isTakeable: false,
       reason: 'missing required Curve configuration',
@@ -74,7 +83,9 @@ export async function evaluateCurveFactoryQuote({
       runtimeCache,
     });
     if (!quoteProvider) {
-      logger.debug(`Factory: Curve quote provider not available for pool ${pool.name}`);
+      logger.debug(
+        `Factory: Curve quote provider not available for pool ${pool.name}`
+      );
       return {
         isTakeable: false,
         reason: 'Curve quote provider unavailable',
@@ -114,7 +125,9 @@ export async function evaluateCurveFactoryQuote({
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
-      logger.debug(`Factory: Failed to get Curve quote for pool ${pool.name}: ${quoteResult.error}`);
+      logger.debug(
+        `Factory: Failed to get Curve quote for pool ${pool.name}: ${quoteResult.error}`
+      );
       return {
         isTakeable: false,
         reason: quoteResult.error ?? 'Curve quote failed',
@@ -140,7 +153,9 @@ export async function evaluateCurveFactoryQuote({
 
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
-      logger.debug(`Factory: No marketPriceFactor configured for pool ${pool.name}`);
+      logger.debug(
+        `Factory: No marketPriceFactor configured for pool ${pool.name}`
+      );
       return {
         isTakeable: false,
         reason: 'marketPriceFactor is not configured',
@@ -180,7 +195,9 @@ export async function evaluateCurveFactoryQuote({
       curvePool: quoteResult.selectedPool,
     };
   } catch (error) {
-    logger.error(`Factory: Error getting Curve quote for pool ${pool.name}: ${error}`);
+    logger.error(
+      `Factory: Error getting Curve quote for pool ${pool.name}: ${error}`
+    );
     return {
       isTakeable: false,
       reason: error instanceof Error ? error.message : String(error),
@@ -203,7 +220,10 @@ export async function executeCurveFactoryTake({
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<
     FactoryExecutionConfig,
-    'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses' | 'takeWriteTransport'
+    | 'keeperTakerFactory'
+    | 'curveRouterOverrides'
+    | 'tokenAddresses'
+    | 'takeWriteTransport'
   >;
 }): Promise<void> {
   const takeWriteTransport = resolveTakeWriteTransport(signer, config);
@@ -218,8 +238,7 @@ export async function executeCurveFactoryTake({
     throw new Error(message);
   }
   if (!quoteEvaluation.curvePool) {
-    const message =
-      `Factory: selected Curve pool required for ${pool.collateralAddress}/${pool.quoteAddress}`;
+    const message = `Factory: selected Curve pool required for ${pool.collateralAddress}/${pool.quoteAddress}`;
     logger.error(message);
     throw new Error(message);
   }
@@ -281,27 +300,45 @@ export async function executeCurveFactoryTake({
       setTimeout(resolve, CURVE_L2_PROPAGATION_DELAY_MS)
     );
 
-    await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {
-      const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
-      const txArgs = [
-        pool.poolAddress,
-        liquidation.borrower,
-        liquidation.auctionPrice,
-        liquidation.collateral,
-        Number(LiquiditySource.CURVE),
-        resolvedCurvePool.address,
-        encodedSwapDetails,
-      ] as const;
-      const gasLimit = await estimateGasWithBuffer(
-        () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
-        fallbackGasLimit,
-        `Factory Curve take ${pool.name}/${liquidation.borrower}`
-      );
-      const txRequest = await factory.populateTransaction.takeWithAtomicSwap(...txArgs, {
-        gasLimit,
-        nonce: nonce.toString(),
-      });
-      return await submitTakeTransaction(takeWriteTransport, txRequest);
+    const receipt = await NonceTracker.queueTransaction(
+      takeWriteTransport.signer,
+      async (nonce: number) => {
+        const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
+        const txArgs = [
+          pool.poolAddress,
+          liquidation.borrower,
+          liquidation.auctionPrice,
+          liquidation.collateral,
+          Number(LiquiditySource.CURVE),
+          resolvedCurvePool.address,
+          encodedSwapDetails,
+        ] as const;
+        const gasLimit = await estimateGasWithBuffer(
+          () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
+          fallbackGasLimit,
+          `Factory Curve take ${pool.name}/${liquidation.borrower}`
+        );
+        const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
+          ...txArgs,
+          {
+            gasLimit,
+            nonce: nonce.toString(),
+          }
+        );
+        return await submitTakeTransaction(takeWriteTransport, txRequest);
+      }
+    );
+    logTakeExecutionTelemetry({
+      path: 'factory',
+      source: LiquiditySource.CURVE,
+      poolName: pool.name,
+      poolAddress: pool.poolAddress,
+      borrower: liquidation.borrower,
+      receipt,
+      routeProfitability: quoteEvaluation.routeProfitability,
+      approvedMinOutRaw: quoteEvaluation.approvedMinOutRaw,
+      curvePoolAddress: resolvedCurvePool.address,
+      takeWriteTransport,
     });
 
     logger.info(

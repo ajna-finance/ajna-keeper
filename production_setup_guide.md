@@ -77,7 +77,9 @@ Implications:
 
 - External takes prefer the configured default, then quote viable candidate tiers when configured
 - Missing Uni/Sushi pools are skipped before `takeRouteQuoteBudgetPerCandidate` is applied
+- Budget-approved factory routes are quoted with bounded parallelism, then ranked deterministically by expected net profit
 - `allowedLiquiditySources`, when set, is the complete factory route allowlist; include the default source explicitly if it should remain eligible
+- `allowedExternalTakePaths: ['oneinch', 'factory']` can compare the 1inch aggregator path against the best factory route
 - Low `takeRouteQuoteBudgetPerCandidate` values reduce quote latency but can skip a more profitable route that was not probed
 - Changing fee-tier policy is a config-and-restart change, not a contract redeploy
 - There is no per-pool external-take fee override in the current config schema
@@ -555,15 +557,18 @@ Recommended rollout order:
 1. Keep `dryRunNewPools: true` and inspect discovered skip/action logs first.
 2. Enable discovered `settlement` before discovered external `take` if you want the lower-risk path first.
 3. Prefer `autoDiscover.take.maxGasCostNative` and `autoDiscover.settlement.maxGasCostNative` before quote-denominated gas caps. Native gas caps use the RPC gas price directly and avoid extra native-to-quote conversion fetches.
-4. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` only when `discoveredDefaults.take.liquiditySource` is a factory route (`UNISWAPV3`, `SUSHISWAP`, or `CURVE`). When set, `allowedLiquiditySources` is the complete route allowlist; 1inch is still a single-source aggregator path and is not compared against factory DEX routes by the current selector.
+4. Use `allowedExternalTakePaths: ['oneinch', 'factory']` when you want discovered external takes to compare 1inch against the best factory route. If omitted, autodiscover preserves the legacy single-path behavior from `discoveredDefaults.take.liquiditySource`.
 5. Prefer `autoDiscover.take.minProfitNative` over `minExpectedProfitQuote` when you want one profit floor across mixed quote tokens. It is a wei-denominated native-token floor, not a USD field.
 6. To approximate a USD target, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18`. Example: a $3 floor at ETH=$3,000 is `0.001 ETH`, or `1000000000000000` wei. Recalibrate periodically because the USD value drifts with native token price.
 7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
-8. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
+8. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
 9. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
 10. Use `autoDiscover.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `takeWrite` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
+11. If `discoveredDefaults.take.liquiditySource` is `ONEINCH` and `allowedExternalTakePaths` also includes `'factory'`, set `defaultFactoryLiquiditySource` so the factory selector has a default source and tie-breaker.
+12. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
+13. Use `autoDiscover.take.validateRouteDeployments: true` for production startup preflight when startup latency is acceptable.
 
-Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; override it with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed execution costs. `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion. Gas-price freshness defaults are 5 seconds on L1 and 15 seconds on common L2s; use `l1GasPriceFreshnessTtlMs` / `l2GasPriceFreshnessTtlMs` only if your RPC latency profile requires a different window.
+Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; override it with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed execution costs. `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion. Gas-price freshness defaults are 5 seconds on L1 and 15 seconds on common L2s; use `l1GasPriceFreshnessTtlMs` / `l2GasPriceFreshnessTtlMs` only if your RPC latency profile requires a different window. `gasPriceDriftToleranceBasisPoints` optionally forces final pre-submission reapproval when current gas differs materially from the evaluation snapshot.
 
 ## Step 6: DEX Configuration Best Practices
 
@@ -606,7 +611,9 @@ Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets a
 - Use the runtime `defaultFeeTier` as the preferred route
 - Can compare `candidateFeeTiers` and execute with the selected tier
 - Apply `takeRouteQuoteBudgetPerCandidate` after unavailable pools are filtered out
+- Quote the remaining budget-approved routes with bounded parallelism
 - Treat `allowedLiquiditySources` as an explicit allowlist, not an additive list
+- Can compare 1inch against the factory selector when `allowedExternalTakePaths` includes both paths
 - Cannot be customized per pool in the current config schema
 - Can be changed by updating config and restarting the keeper
 

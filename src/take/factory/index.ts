@@ -47,6 +47,8 @@ import {
 
 type LiquidationToTake = TakeLiquidationPlan;
 
+const FACTORY_ROUTE_QUOTE_CONCURRENCY = 3;
+
 export type {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
@@ -316,7 +318,12 @@ export async function getFactoryTakeQuoteEvaluation(
         );
       }
 
-      for (const route of routesToEvaluate) {
+      const evaluateFactoryRoute = async (
+        route: FactoryRouteCandidate
+      ): Promise<{
+        route: FactoryRouteCandidate;
+        evaluation: ExternalTakeQuoteEvaluation;
+      }> => {
         const rawEvaluation =
           route.liquiditySource === LiquiditySource.UNISWAPV3
             ? await checkUniswapV3Quote(
@@ -363,8 +370,37 @@ export async function getFactoryTakeQuoteEvaluation(
           liquiditySource: route.liquiditySource,
           context: routeSelection?.routeProfitabilityContext,
         });
-        evaluations.push({ route, evaluation });
+        return { route, evaluation };
+      };
+
+      const routeEvaluationResults: Array<{
+        route: FactoryRouteCandidate;
+        evaluation: ExternalTakeQuoteEvaluation;
+      }> = new Array(routesToEvaluate.length);
+      let nextRouteIndex = 0;
+      const routeQuoteWorkerCount = Math.min(
+        FACTORY_ROUTE_QUOTE_CONCURRENCY,
+        routesToEvaluate.length
+      );
+
+      await Promise.all(
+        Array.from({ length: routeQuoteWorkerCount }, async () => {
+          while (nextRouteIndex < routesToEvaluate.length) {
+            const routeIndex = nextRouteIndex;
+            nextRouteIndex += 1;
+            routeEvaluationResults[routeIndex] = await evaluateFactoryRoute(
+              routesToEvaluate[routeIndex]
+            );
+          }
+        })
+      );
+
+      if (routeEvaluationResults.length > 1) {
+        logger.debug(
+          `Factory: quoted ${routeEvaluationResults.length} route(s) for pool ${pool.name} with concurrency=${routeQuoteWorkerCount}`
+        );
       }
+      evaluations.push(...routeEvaluationResults);
 
       const selectedRoute = selectBestFactoryRouteEvaluation({
         evaluations,

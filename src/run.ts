@@ -25,10 +25,7 @@ import {
   LpRedeemer,
   RewardActionTracker,
 } from './rewards';
-import {
-  isLpCollectionEnabled,
-  resolveCollectLpRewardForPool,
-} from './config';
+import { isLpCollectionEnabled, resolveCollectLpRewardForPool } from './config';
 import { DexRouter } from './dex/router';
 import { tryReactiveSettlement } from './settlement';
 import {
@@ -39,6 +36,7 @@ import {
   PoolMap,
 } from './discovery/targets';
 import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery/runtime';
+import { validateAutoDiscoverRouteDeployments } from './discovery/route-preflight';
 import { createSubgraphReader, SubgraphReader } from './read-transports';
 import {
   createTakeWriteTransport,
@@ -159,11 +157,15 @@ export async function assertSubgraphChainConsistency(params: {
   }
 }
 
-function isPermanentTakeWriteTransportInitializationError(error: unknown): boolean {
+function isPermanentTakeWriteTransportInitializationError(
+  error: unknown
+): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     message.includes('does not match keeper chainId') ||
-    message.includes('requires the keeper signer to be connected to a provider') ||
+    message.includes(
+      'requires the keeper signer to be connected to a provider'
+    ) ||
     message.includes('Unsupported take write transport mode')
   );
 }
@@ -245,6 +247,11 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     signer,
     chainId,
   });
+  if (
+    getAutoDiscoverTakePolicy(config.autoDiscover)?.validateRouteDeployments
+  ) {
+    await validateAutoDiscoverRouteDeployments({ config, provider, chainId });
+  }
 
   // Subgraph chain-consistency check runs BEFORE any pool hydration so a
   // misconfigured `subgraphUrl` (pointing at a different chain's Ajna
@@ -542,10 +549,7 @@ async function collectLpRewardsLoop({
       // A failed subgraph fetch shouldn't kill the loop — next cycle
       // retries. The cursor hasn't advanced (ingest throws before cursor
       // commit), so nothing is lost.
-      logger.error(
-        'LP ingest cycle failed; retrying next cycle',
-        ingestError
-      );
+      logger.error('LP ingest cycle failed; retrying next cycle', ingestError);
     }
 
     // Sweep every redeemer with a non-empty lpMap, not just pools that

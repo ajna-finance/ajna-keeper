@@ -34,13 +34,16 @@ export interface GasPolicyResult {
   gasCostQuote: number;
   gasCostQuoteRaw?: BigNumber;
   minProfitNativeQuoteRaw?: BigNumber;
+  gasPriceRaw?: BigNumber;
   gasPriceGwei: number;
+  gasLimit?: BigNumber;
+  l2GasCostBufferBasisPoints?: number;
   quoteTokenDecimals?: number;
   reason?: string;
 }
 
 const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
-const DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS = 13_000;
+export const DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS = 13_000;
 export const DEFAULT_L1_DISCOVERY_GAS_PRICE_TTL_MS = 5 * 1000;
 export const DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS = 15 * 1000;
 const L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER = new Set([
@@ -82,6 +85,22 @@ function applyL2GasCostBuffer(
     .mul(BigNumber.from(bufferBasisPoints))
     .add(BASIS_POINTS_DENOMINATOR.sub(1))
     .div(BASIS_POINTS_DENOMINATOR);
+}
+
+export function getEffectiveL2GasCostBufferBasisPoints(
+  policy?: Pick<AutoDiscoverTakePolicy, 'l2GasCostBufferBasisPoints'>,
+  chainId?: number
+): number | undefined {
+  if (
+    chainId === undefined ||
+    !L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER.has(chainId)
+  ) {
+    return undefined;
+  }
+  return (
+    policy?.l2GasCostBufferBasisPoints ??
+    DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS
+  );
 }
 
 export function createDiscoveryTransportsForConfig(
@@ -481,13 +500,18 @@ export async function evaluateGasPolicy(params: {
   const gasPrice =
     params.gasPrice ?? (await params.transports.readRpc.getGasPrice());
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
+  const gasResultMetadata = {
+    gasPriceRaw: gasPrice,
+    gasPriceGwei,
+    gasLimit: params.gasLimit,
+  };
   const maxGasPriceGwei = params.policy?.maxGasPriceGwei;
   if (maxGasPriceGwei !== undefined && gasPriceGwei > maxGasPriceGwei) {
     return {
       approved: false,
       gasCostNative: 0,
       gasCostQuote: 0,
-      gasPriceGwei,
+      ...gasResultMetadata,
       reason: `gas price ${gasPriceGwei.toFixed(2)} gwei exceeds maxGasPriceGwei ${maxGasPriceGwei}`,
     };
   }
@@ -496,6 +520,10 @@ export async function evaluateGasPolicy(params: {
     params.chainId ??
     params.rpcCache?.chainId ??
     (await tryResolveSignerChainId(params.signer));
+  const l2GasCostBufferBasisPoints = getEffectiveL2GasCostBufferBasisPoints(
+    params.policy,
+    chainId
+  );
   const unbufferedGasCostNativeRaw = gasPrice.mul(params.gasLimit);
   const gasCostNativeRaw = applyL2GasCostBuffer(
     unbufferedGasCostNativeRaw,
@@ -514,7 +542,8 @@ export async function evaluateGasPolicy(params: {
       approved: false,
       gasCostNative,
       gasCostQuote: 0,
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
       reason: `estimated gas cost ${gasCostNative.toFixed(6)} exceeds maxGasCostNative ${maxGasCostNative}`,
     };
   }
@@ -529,7 +558,8 @@ export async function evaluateGasPolicy(params: {
       approved: true,
       gasCostNative,
       gasCostQuote: 0,
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
     };
   }
 
@@ -564,7 +594,8 @@ export async function evaluateGasPolicy(params: {
       gasCostNative,
       gasCostQuote: 0,
       gasCostQuoteRaw: BigNumber.from(0),
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
       quoteTokenDecimals: quoteDecimals,
     };
   }
@@ -577,7 +608,8 @@ export async function evaluateGasPolicy(params: {
       approved: false,
       gasCostNative,
       gasCostQuote: 0,
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
       reason: 'no wrapped native token configured for gas cost conversion',
     };
   }
@@ -603,7 +635,8 @@ export async function evaluateGasPolicy(params: {
         approved: false,
         gasCostNative,
         gasCostQuote: 0,
-        gasPriceGwei,
+        ...gasResultMetadata,
+        l2GasCostBufferBasisPoints,
         reason: 'no liquidity source available for gas cost conversion',
       };
     }
@@ -625,7 +658,8 @@ export async function evaluateGasPolicy(params: {
         approved: false,
         gasCostNative,
         gasCostQuote: 0,
-        gasPriceGwei,
+        ...gasResultMetadata,
+        l2GasCostBufferBasisPoints,
         reason: 'failed to quote gas cost into quote token',
       };
     }
@@ -642,7 +676,8 @@ export async function evaluateGasPolicy(params: {
       gasCostNative,
       gasCostQuote,
       gasCostQuoteRaw,
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
       quoteTokenDecimals: quoteDecimals,
       reason: `estimated gas cost ${gasCostQuote.toFixed(6)} exceeds maxGasCostQuote ${maxGasCostQuote}`,
     };
@@ -668,7 +703,8 @@ export async function evaluateGasPolicy(params: {
         gasCostNative,
         gasCostQuote,
         gasCostQuoteRaw,
-        gasPriceGwei,
+        ...gasResultMetadata,
+        l2GasCostBufferBasisPoints,
         quoteTokenDecimals: quoteDecimals,
         reason: 'failed to quote minProfitNative into quote token',
       };
@@ -681,7 +717,8 @@ export async function evaluateGasPolicy(params: {
     gasCostQuote,
     gasCostQuoteRaw,
     minProfitNativeQuoteRaw,
-    gasPriceGwei,
+    ...gasResultMetadata,
+    l2GasCostBufferBasisPoints,
     quoteTokenDecimals: quoteDecimals,
   };
 }

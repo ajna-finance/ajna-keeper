@@ -42,6 +42,7 @@ import {
   logSkippedTakeCandidate,
   processTakeCandidates,
 } from './engine';
+import { logTakeExecutionTelemetry } from './execution-telemetry';
 
 type HandleTakeConfigBase = Pick<
   KeeperConfig,
@@ -777,6 +778,17 @@ export async function takeLiquidation({
           takeWriteTransport,
           txRequest
         );
+        logTakeExecutionTelemetry({
+          path: 'oneinch',
+          source: LiquiditySource.ONEINCH,
+          poolName: pool.name,
+          poolAddress: pool.poolAddress,
+          borrower,
+          receipt,
+          routeProfitability: approvedQuoteEvaluation.routeProfitability,
+          approvedMinOutRaw: approvedQuoteEvaluation.approvedMinOutRaw,
+          takeWriteTransport,
+        });
         logger.info(
           `Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
         );

@@ -42,6 +42,7 @@ const MAX_MIN_PROFIT_NATIVE_WEI = BigInt('1000000000000000000000000000');
 const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
 const MIN_L2_GAS_COST_BUFFER_BPS = 10_000;
 const MAX_L2_GAS_COST_BUFFER_BPS = 30_000;
+const MAX_GAS_PRICE_DRIFT_TOLERANCE_BPS = 100_000;
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,
@@ -93,6 +94,12 @@ function requireOptionalPositive(value: unknown, message: string): void {
 function requireOptionalNonNegative(value: unknown, message: string): void {
   if (value !== undefined) {
     requireNonNegative(value, message);
+  }
+}
+
+function requireOptionalBoolean(value: unknown, message: string): void {
+  if (value !== undefined && typeof value !== 'boolean') {
+    throw new Error(message);
   }
 }
 
@@ -614,6 +621,16 @@ export function validateAutoDiscoverConfig(
       MIN_L2_GAS_COST_BUFFER_BPS,
       MAX_L2_GAS_COST_BUFFER_BPS,
       'AutoDiscoverConfig.take: l2GasCostBufferBasisPoints must be an integer between 10000 and 30000'
+    );
+    requireOptionalIntegerRange(
+      takePolicy.gasPriceDriftToleranceBasisPoints,
+      0,
+      MAX_GAS_PRICE_DRIFT_TOLERANCE_BPS,
+      'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 100000'
+    );
+    requireOptionalBoolean(
+      takePolicy.validateRouteDeployments,
+      'AutoDiscoverConfig.take: validateRouteDeployments must be a boolean'
     );
     validateExternalTakeTransportPolicy(takePolicy.externalTakeTransportPolicy);
     if (

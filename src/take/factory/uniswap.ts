@@ -3,7 +3,11 @@ import { BigNumber, ethers } from 'ethers';
 import { DEFAULT_FEE_TIER_BY_SOURCE, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
-import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
+import {
+  ExternalTakeQuoteEvaluation,
+  TakeActionConfig,
+  TakeLiquidationPlan,
+} from '../types';
 import { estimateGasWithBuffer, weiToDecimaled } from '../../utils';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types';
 import {
@@ -26,6 +30,7 @@ import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
 } from '../write-transport';
+import { logTakeExecutionTelemetry } from '../execution-telemetry';
 
 export async function evaluateUniswapV3FactoryQuote({
   pool,
@@ -49,7 +54,9 @@ export async function evaluateUniswapV3FactoryQuote({
   routeContext?: FactoryRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (!config.universalRouterOverrides) {
-    logger.debug(`Factory: No universalRouterOverrides configured for pool ${pool.name}`);
+    logger.debug(
+      `Factory: No universalRouterOverrides configured for pool ${pool.name}`
+    );
     return {
       isTakeable: false,
       reason: 'missing universalRouterOverrides',
@@ -63,7 +70,9 @@ export async function evaluateUniswapV3FactoryQuote({
     !routerConfig.poolFactoryAddress ||
     !routerConfig.wethAddress
   ) {
-    logger.debug(`Factory: Missing required router configuration for pool ${pool.name}`);
+    logger.debug(
+      `Factory: Missing required router configuration for pool ${pool.name}`
+    );
     return {
       isTakeable: false,
       reason: 'missing required Uniswap router configuration',
@@ -77,7 +86,9 @@ export async function evaluateUniswapV3FactoryQuote({
       runtimeCache,
     });
     if (!quoteProvider) {
-      logger.debug(`Factory: UniswapV3QuoteProvider not available for pool ${pool.name}`);
+      logger.debug(
+        `Factory: UniswapV3QuoteProvider not available for pool ${pool.name}`
+      );
       return {
         isTakeable: false,
         reason: 'Uniswap V3 quote provider unavailable',
@@ -85,7 +96,9 @@ export async function evaluateUniswapV3FactoryQuote({
     }
 
     const quoterAddress = quoteProvider.getQuoterAddress();
-    logger.debug(`Factory: Using QuoterV2 at ${quoterAddress} for pool ${pool.name}`);
+    logger.debug(
+      `Factory: Using QuoterV2 at ${quoterAddress} for pool ${pool.name}`
+    );
 
     const context =
       routeContext ??
@@ -154,7 +167,9 @@ export async function evaluateUniswapV3FactoryQuote({
 
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
-      logger.debug(`Factory: No marketPriceFactor configured for pool ${pool.name}`);
+      logger.debug(
+        `Factory: No marketPriceFactor configured for pool ${pool.name}`
+      );
       return {
         isTakeable: false,
         reason: 'marketPriceFactor is not configured',
@@ -176,7 +191,8 @@ export async function evaluateUniswapV3FactoryQuote({
         routerConfig.defaultSlippage
       ),
       routeContext: context,
-      failureReason: 'quoted output below required Uniswap V3 profitability floor',
+      failureReason:
+        'quoted output below required Uniswap V3 profitability floor',
     });
 
     logger.debug(
@@ -193,7 +209,9 @@ export async function evaluateUniswapV3FactoryQuote({
 
     return evaluation;
   } catch (error) {
-    logger.error(`Factory: Error getting official Uniswap V3 quote for pool ${pool.name}: ${error}`);
+    logger.error(
+      `Factory: Error getting official Uniswap V3 quote for pool ${pool.name}: ${error}`
+    );
     return {
       isTakeable: false,
       reason: error instanceof Error ? error.message : String(error),
@@ -226,7 +244,8 @@ export async function executeUniswapV3FactoryTake({
   );
 
   if (!config.universalRouterOverrides) {
-    const message = 'Factory: universalRouterOverrides required for UniswapV3 takes';
+    const message =
+      'Factory: universalRouterOverrides required for UniswapV3 takes';
     logger.error(message);
     throw new Error(message);
   }
@@ -265,14 +284,16 @@ export async function executeUniswapV3FactoryTake({
 
   const encodedSwapDetails = ethers.utils.defaultAbiCoder.encode(
     ['(address,address,address,uint24,uint256,uint256)'],
-    [[
-      swapDetails.universalRouter,
-      swapDetails.permit2,
-      swapDetails.targetToken,
-      swapDetails.feeTier,
-      swapDetails.amountOutMinimum,
-      swapDetails.deadline,
-    ]]
+    [
+      [
+        swapDetails.universalRouter,
+        swapDetails.permit2,
+        swapDetails.targetToken,
+        swapDetails.feeTier,
+        swapDetails.amountOutMinimum,
+        swapDetails.deadline,
+      ],
+    ]
   );
 
   try {
@@ -284,27 +305,45 @@ export async function executeUniswapV3FactoryTake({
       })
     );
 
-    await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {
-      const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
-      const txArgs = [
-        pool.poolAddress,
-        liquidation.borrower,
-        liquidation.auctionPrice,
-        liquidation.collateral,
-        Number(LiquiditySource.UNISWAPV3),
-        swapDetails.universalRouter,
-        encodedSwapDetails,
-      ] as const;
-      const gasLimit = await estimateGasWithBuffer(
-        () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
-        fallbackGasLimit,
-        `Factory Uniswap take ${pool.name}/${liquidation.borrower}`
-      );
-      const txRequest = await factory.populateTransaction.takeWithAtomicSwap(...txArgs, {
-        gasLimit,
-        nonce: nonce.toString(),
-      });
-      return await submitTakeTransaction(takeWriteTransport, txRequest);
+    const receipt = await NonceTracker.queueTransaction(
+      takeWriteTransport.signer,
+      async (nonce: number) => {
+        const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
+        const txArgs = [
+          pool.poolAddress,
+          liquidation.borrower,
+          liquidation.auctionPrice,
+          liquidation.collateral,
+          Number(LiquiditySource.UNISWAPV3),
+          swapDetails.universalRouter,
+          encodedSwapDetails,
+        ] as const;
+        const gasLimit = await estimateGasWithBuffer(
+          () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
+          fallbackGasLimit,
+          `Factory Uniswap take ${pool.name}/${liquidation.borrower}`
+        );
+        const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
+          ...txArgs,
+          {
+            gasLimit,
+            nonce: nonce.toString(),
+          }
+        );
+        return await submitTakeTransaction(takeWriteTransport, txRequest);
+      }
+    );
+    logTakeExecutionTelemetry({
+      path: 'factory',
+      source: LiquiditySource.UNISWAPV3,
+      poolName: pool.name,
+      poolAddress: pool.poolAddress,
+      borrower: liquidation.borrower,
+      receipt,
+      routeProfitability: quoteEvaluation.routeProfitability,
+      approvedMinOutRaw: quoteEvaluation.approvedMinOutRaw,
+      selectedFeeTier: quoteEvaluation.selectedFeeTier,
+      takeWriteTransport,
     });
 
     logger.info(

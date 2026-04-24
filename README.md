@@ -475,7 +475,9 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 - Can add `candidateFeeTiers` to probe other deployed pools for the same token pair
 - Applies the selected quote route to execution, including the selected fee tier
 - Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
+- Quotes budget-approved factory routes with bounded parallelism, then ranks them deterministically by expected net profit
 - Treats `allowedLiquiditySources`, when set, as the complete factory route allowlist. Include the default source in that list if it should remain eligible.
+- Can compare the best factory route against 1inch when `autoDiscover.take.allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`.
 - A low `takeRouteQuoteBudgetPerCandidate` reduces quote latency but can miss a more profitable route that was not probed.
 - No per-pool external-take fee override today
 - Change requires updating config and restarting the keeper
@@ -569,12 +571,16 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
-- Dynamic `allowedLiquiditySources` is factory-only in this PR. Use it only when `discoveredDefaults.take.liquiditySource` is `UNISWAPV3`, `SUSHISWAP`, or `CURVE`; when set, it is the complete factory route allowlist. 1inch remains a single-source aggregator path and is not compared against factory DEX routes by this selector.
+- `allowedExternalTakePaths: ['oneinch', 'factory']` enables top-level comparison between the 1inch aggregator path and the best factory path. If omitted, autodiscover preserves the legacy single-path behavior from `discoveredDefaults.take.liquiditySource`.
+- `allowedLiquiditySources` remains factory-only. Use it to restrict factory route selection to `UNISWAPV3`, `SUSHISWAP`, and/or `CURVE`; when set, it is the complete factory route allowlist and cannot include `ONEINCH`.
+- If `discoveredDefaults.take.liquiditySource` is `ONEINCH` and `allowedExternalTakePaths` also includes `'factory'`, set `defaultFactoryLiquiditySource` so the factory selector has a default source and tie-breaker.
 - `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
 - Once an auction has appeared in subgraph discovery, the keeper keeps it in a short-lived hot-auction cache so fast take loops can keep probing it even if a later subgraph refresh temporarily omits it. Tune with `autoDiscover.take.hotAuctionCandidateTtlMs` and `autoDiscover.take.maxHotAuctionCandidates`; set the TTL to `0` to disable the cache.
 - On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token. Override with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed gas costs.
 - Gas-price freshness defaults are short for take profitability checks: 5 seconds on L1 and 15 seconds on common L2s. Override with `autoDiscover.take.l1GasPriceFreshnessTtlMs` and `autoDiscover.take.l2GasPriceFreshnessTtlMs` if your RPC conditions require it.
+- `autoDiscover.take.gasPriceDriftToleranceBasisPoints` optionally forces final pre-submission reapproval when the current gas price has drifted materially from the evaluation snapshot.
 - For live discovered external takes, `autoDiscover.take.externalTakeTransportPolicy` can be `allow_public`, `prefer_private_or_relay`, or `require_private_or_relay`. Use `require_private_or_relay` only when `takeWrite` is configured for `private_rpc` or `relay`; dry runs skip write submission but still warn if no private/relay transport is configured.
+- `autoDiscover.take.validateRouteDeployments: true` enables startup preflight checks for enabled external-take routers, takers, factory registry entries, and configured Curve pools.
 - `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.
 
 For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).

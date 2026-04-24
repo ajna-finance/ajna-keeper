@@ -43,10 +43,16 @@ export interface FactoryRouteSelectionOptions {
 
 export interface FactoryRouteProfitabilityContext {
   routeExecutionCostQuoteRawBySource?: LiquiditySourceMap<BigNumber>;
+  routeGasLimitBySource?: LiquiditySourceMap<BigNumber>;
   nativeProfitFloorQuoteRawBySource?: LiquiditySourceMap<BigNumber>;
   configuredProfitFloorQuoteRaw?: BigNumber;
   slippageRiskBufferQuoteRaw?: BigNumber;
   routeRejectionReasonsBySource?: LiquiditySourceMap<string>;
+  gasPriceWei?: BigNumber;
+  gasPriceGwei?: number;
+  gasPriceAgeMs?: number;
+  gasPriceFreshnessTtlMs?: number;
+  l2GasCostBufferBasisPoints?: number;
   gasPolicyEvaluatedAt?: number;
 }
 
@@ -1153,6 +1159,7 @@ export async function buildFactoryQuoteEvaluation(params: {
       requiredOutputFloorQuoteRaw: marketFactorFloorQuoteRaw,
       expectedNetProfitQuoteRaw: grossProfitQuoteRaw,
       surplusOverFloorQuoteRaw,
+      routeGasLimit: undefined,
     },
     reason: isProfitable ? params.successReason : params.failureReason,
   };
@@ -1192,6 +1199,8 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
     params.context.routeExecutionCostQuoteRawBySource?.[
       params.liquiditySource
     ] ?? ZERO;
+  const routeGasLimit =
+    params.context.routeGasLimitBySource?.[params.liquiditySource];
   const nativeProfitFloorQuoteRaw =
     params.context.nativeProfitFloorQuoteRawBySource?.[
       params.liquiditySource
@@ -1255,6 +1264,12 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       requiredOutputFloorQuoteRaw,
       expectedNetProfitQuoteRaw,
       surplusOverFloorQuoteRaw,
+      routeGasLimit,
+      gasPriceWei: params.context.gasPriceWei,
+      gasPriceGwei: params.context.gasPriceGwei,
+      gasPriceAgeMs: params.context.gasPriceAgeMs,
+      gasPriceFreshnessTtlMs: params.context.gasPriceFreshnessTtlMs,
+      l2GasCostBufferBasisPoints: params.context.l2GasCostBufferBasisPoints,
       gasPolicyEvaluatedAt: params.context.gasPolicyEvaluatedAt,
     },
   };

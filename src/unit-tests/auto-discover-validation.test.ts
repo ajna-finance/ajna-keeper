@@ -235,6 +235,24 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: l2GasCostBufferBasisPoints must be an integer between 10000 and 30000'
     );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      gasPriceDriftToleranceBasisPoints: -1,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 100000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      validateRouteDeployments: 'yes' as unknown as boolean,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: validateRouteDeployments must be a boolean'
+    );
   });
 
   it('validates external take write transport policy', () => {

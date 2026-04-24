@@ -914,7 +914,13 @@ describe('Take Factory', () => {
           inFlight += 1;
           maxInFlight = Math.max(maxInFlight, inFlight);
           const delayMs =
-            feeTier === 3000 ? 20 : feeTier === 500 ? 5 : feeTier === 100 ? 1 : 2;
+            feeTier === 3000
+              ? 20
+              : feeTier === 500
+                ? 5
+                : feeTier === 100
+                  ? 1
+                  : 2;
           await new Promise((resolve) => setTimeout(resolve, delayMs));
           inFlight -= 1;
           return feeTier !== 3000;
@@ -942,12 +948,10 @@ describe('Take Factory', () => {
             universalRouterOverrides: {
               universalRouterAddress:
                 '0x3333333333333333333333333333333333333333',
-              poolFactoryAddress:
-                '0x4444444444444444444444444444444444444444',
+              poolFactoryAddress: '0x4444444444444444444444444444444444444444',
               defaultFeeTier: 3000,
               wethAddress: '0x5555555555555555555555555555555555555555',
-              quoterV2Address:
-                '0x6666666666666666666666666666666666666666',
+              quoterV2Address: '0x6666666666666666666666666666666666666666',
             },
           } as any,
         });
@@ -962,6 +966,85 @@ describe('Take Factory', () => {
           reason: 'Uniswap V3 pool not found',
         },
       ]);
+    });
+
+    it('quotes budget-approved factory routes with bounded parallelism', async () => {
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const uniswapQuoteStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+        .callsFake(async (_amountIn, _tokenIn, _tokenOut, feeTier?: number) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          const delayMs =
+            feeTier === 3000
+              ? 20
+              : feeTier === 500
+                ? 5
+                : feeTier === 100
+                  ? 1
+                  : 2;
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          inFlight -= 1;
+          return {
+            success: true,
+            dstAmount: ethers.utils.parseUnits(
+              feeTier === 10_000 ? '125' : feeTier === 500 ? '119' : '112',
+              6
+            ),
+          } as any;
+        });
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Parallel Quote Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(BigNumber.from('1000000000000')),
+        },
+      };
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        {
+          name: 'Parallel Quote Pool',
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.99,
+          },
+        } as any,
+        {
+          universalRouterOverrides: {
+            universalRouterAddress:
+              '0x3333333333333333333333333333333333333333',
+            poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+            defaultFeeTier: 3000,
+            candidateFeeTiers: [500, 100, 10_000],
+            wethAddress: '0x5555555555555555555555555555555555555555',
+            quoterV2Address: '0x6666666666666666666666666666666666666666',
+          },
+        } as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache()
+      );
+
+      expect(evaluation.isTakeable).to.be.true;
+      expect(evaluation.selectedFeeTier).to.equal(10_000);
+      expect(uniswapQuoteStub.callCount).to.equal(4);
+      expect(maxInFlight).to.be.greaterThan(1);
+      expect(maxInFlight).to.be.at.most(3);
     });
 
     it('uses recent successful routes to improve budget-limited probing', async () => {

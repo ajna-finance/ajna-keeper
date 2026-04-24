@@ -87,6 +87,7 @@ interface ExecuteTakeDecisionParams<
   dryRun: boolean;
   delayBetweenActions: number;
   revalidateBeforeExecution?: boolean;
+  reapproveExternalTakeBeforeExecution?: EvaluateTakeDecisionParams<TPoolConfig>['approveExternalTake'];
   onSkip?: (params: {
     candidate: TakeBorrowerCandidate;
     stage: 'evaluation' | 'revalidation' | 'execution';
@@ -125,6 +126,7 @@ interface ProcessTakeCandidatesParams<
   candidates: TakeBorrowerCandidate[];
   approveExternalTake?: EvaluateTakeDecisionParams<TPoolConfig>['approveExternalTake'];
   approveArbTake?: EvaluateTakeDecisionParams<TPoolConfig>['approveArbTake'];
+  reapproveExternalTakeBeforeExecution?: ExecuteTakeDecisionParams<TPoolConfig>['reapproveExternalTakeBeforeExecution'];
   onFound?: (decision: TakeDecision) => void;
 }
 
@@ -363,6 +365,7 @@ export async function executeTakeDecision<
   dryRun,
   delayBetweenActions,
   revalidateBeforeExecution,
+  reapproveExternalTakeBeforeExecution,
   onSkip,
   onExecuted,
   arbTakeActionLabel,
@@ -428,6 +431,34 @@ export async function executeTakeDecision<
           stage: 'revalidation',
           reason:
             'approved external take quote is stale after auction price increased',
+          decision,
+        });
+        return;
+      }
+    }
+
+    if (
+      approvedTake &&
+      quoteEvaluation &&
+      reapproveExternalTakeBeforeExecution
+    ) {
+      const approval = await reapproveExternalTakeBeforeExecution({
+        pool,
+        signer,
+        poolConfig,
+        candidate: { borrower: decision.borrower },
+        price: Number(weiToDecimaled(auctionPrice)),
+        auctionPrice,
+        collateral,
+        quoteEvaluation,
+      });
+      if (!approval.approved) {
+        onSkip?.({
+          candidate: { borrower: decision.borrower },
+          stage: 'revalidation',
+          reason:
+            approval.reason ??
+            'approved external take failed final pre-submission policy check',
           decision,
         });
         return;
@@ -535,6 +566,7 @@ export async function processTakeCandidates<
   delayBetweenActions,
   approveExternalTake,
   approveArbTake,
+  reapproveExternalTakeBeforeExecution,
   revalidateBeforeExecution,
   onSkip,
   onExecuted,
@@ -583,6 +615,7 @@ export async function processTakeCandidates<
         dryRun,
         delayBetweenActions,
         revalidateBeforeExecution,
+        reapproveExternalTakeBeforeExecution,
         onSkip,
         onExecuted,
         arbTakeActionLabel,

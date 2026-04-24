@@ -220,10 +220,21 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    */
   l2GasCostBufferBasisPoints?: number;
   /**
+   * Optional maximum allowed absolute gas-price drift between quote evaluation
+   * and final pre-submission approval. 2000 means 20%. When omitted, freshness
+   * TTLs still apply but drift does not reject otherwise-fresh quotes.
+   */
+  gasPriceDriftToleranceBasisPoints?: number;
+  /**
    * Controls whether discovered external takes may fall back to public RPC
    * submission, or must use private RPC / relay write transport.
    */
   externalTakeTransportPolicy?: ExternalTakeTransportPolicy;
+  /**
+   * Optional startup preflight that checks enabled route contracts have code
+   * and factory taker registry entries match configured taker addresses.
+   */
+  validateRouteDeployments?: boolean;
   /**
    * Maximum factory-route quote probes per liquidation candidate. Only applies
    * when discoveredDefaults.take.liquiditySource is a factory route source.

@@ -17,6 +17,12 @@ export interface RouteProfitabilityBreakdown {
   requiredOutputFloorQuoteRaw?: BigNumber;
   expectedNetProfitQuoteRaw?: BigNumber;
   surplusOverFloorQuoteRaw?: BigNumber;
+  routeGasLimit?: BigNumber;
+  gasPriceWei?: BigNumber;
+  gasPriceGwei?: number;
+  gasPriceAgeMs?: number;
+  gasPriceFreshnessTtlMs?: number;
+  l2GasCostBufferBasisPoints?: number;
   gasPolicyEvaluatedAt?: number;
 }
 
