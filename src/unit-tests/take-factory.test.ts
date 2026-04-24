@@ -426,14 +426,17 @@ describe('Take Factory', () => {
         success: true,
         dstAmount: ethers.utils.parseUnits('120', 6).toString(),
       } as any);
-      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+      const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+      const quoteTokenScaleStub = sinon
+        .stub()
+        .resolves(BigNumber.from('1000000000000'));
 
       const pool = {
         name: 'Test Pool',
         collateralAddress: '0x1111111111111111111111111111111111111111',
         quoteAddress: '0x2222222222222222222222222222222222222222',
         contract: {
-          quoteTokenScale: sinon.stub().resolves(BigNumber.from('1000000000000')),
+          quoteTokenScale: quoteTokenScaleStub,
         },
       };
       const poolConfig = {
@@ -481,6 +484,8 @@ describe('Take Factory', () => {
       );
 
       expect(runtimeCache.uniswapV3).to.equal(cachedProvider);
+      expect(decimalsStub.calledTwice).to.be.true;
+      expect(quoteTokenScaleStub.calledOnce).to.be.true;
     });
 
     it('reuses a shared SushiSwap quote provider cache across quote evaluations', async () => {
@@ -648,16 +653,17 @@ describe('Take Factory', () => {
           success: true,
           dstAmount: ethers.utils.parseUnits('120', 6),
         } as any);
-      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+      const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+      const quoteTokenScaleStub = sinon
+        .stub()
+        .resolves(BigNumber.from('1000000000000'));
 
       const pool = {
         name: 'Dynamic Route Pool',
         collateralAddress: '0x1111111111111111111111111111111111111111',
         quoteAddress: '0x2222222222222222222222222222222222222222',
         contract: {
-          quoteTokenScale: sinon
-            .stub()
-            .resolves(BigNumber.from('1000000000000')),
+          quoteTokenScale: quoteTokenScaleStub,
         },
       };
       const poolConfig = {
@@ -722,6 +728,203 @@ describe('Take Factory', () => {
       ).to.be.true;
       expect(uniswapQuoteStub.calledTwice).to.be.true;
       expect(sushiQuoteStub.calledOnce).to.be.true;
+      expect(decimalsStub.calledTwice).to.be.true;
+      expect(quoteTokenScaleStub.calledOnce).to.be.true;
+    });
+
+    it('uses recent successful routes to improve budget-limited probing', async () => {
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'isAvailable')
+        .returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      const uniswapQuoteStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+        .callsFake(async (_amountIn, _tokenIn, _tokenOut, feeTier?: number) => ({
+          success: true,
+          dstAmount:
+            feeTier === 500
+              ? ethers.utils.parseUnits('119', 6)
+              : ethers.utils.parseUnits('112', 6),
+        }) as any);
+      sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'initialize')
+        .resolves(true);
+      const sushiQuoteStub = sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+        .resolves({
+          success: true,
+          dstAmount: ethers.utils.parseUnits('130', 6),
+        } as any);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Recent Route Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'Recent Route Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        universalRouterOverrides: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [500],
+          wethAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+        },
+        sushiswapRouterOverrides: {
+          swapRouterAddress: '0x8888888888888888888888888888888888888888',
+          quoterV2Address: '0x9999999999999999999999999999999999999999',
+          factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          defaultFeeTier: 500,
+          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      };
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.recentRouteSuccesses = new Map([
+        [
+          `${LiquiditySource.UNISWAPV3}:500:${pool.collateralAddress.toLowerCase()}:${pool.quoteAddress.toLowerCase()}`,
+          Date.now(),
+        ],
+      ]);
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        runtimeCache,
+        {
+          allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+          routeQuoteBudgetPerCandidate: 2,
+        }
+      );
+
+      expect(evaluation.isTakeable).to.be.true;
+      expect(evaluation.selectedLiquiditySource).to.equal(
+        LiquiditySource.UNISWAPV3
+      );
+      expect(evaluation.selectedFeeTier).to.equal(500);
+      expect(uniswapQuoteStub.calledTwice).to.be.true;
+      expect(sushiQuoteStub.called).to.be.false;
+    });
+
+    it('allows configured Curve routes to participate in dynamic source selection', async () => {
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'isAvailable')
+        .returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'getQuote').resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('110', 6).toString(),
+      } as any);
+      sinon.stub(CurveQuoteProvider.prototype, 'initialize').resolves(true);
+      const selectedCurvePool = {
+        address: '0xcccccccccccccccccccccccccccccccccccccccc',
+        poolType: CurvePoolType.STABLE,
+        tokenInIndex: 1,
+        tokenOutIndex: 0,
+      };
+      const curveQuoteStub = sinon
+        .stub(CurveQuoteProvider.prototype, 'getQuote')
+        .resolves({
+          success: true,
+          dstAmount: ethers.utils.parseUnits('120', 6),
+          selectedPool: selectedCurvePool,
+        } as any);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Dynamic Curve Route Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'Dynamic Curve Route Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        universalRouterOverrides: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          defaultFeeTier: 3000,
+          wethAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+        },
+        curveRouterOverrides: {
+          poolConfigs: {
+            'COLLATERAL-QUOTE': {
+              address: selectedCurvePool.address,
+              poolType: CurvePoolType.STABLE,
+            },
+          },
+          defaultSlippage: 0.5,
+          wethAddress: '0x8888888888888888888888888888888888888888',
+        },
+        tokenAddresses: {
+          COLLATERAL: '0x1111111111111111111111111111111111111111',
+          QUOTE: '0x2222222222222222222222222222222222222222',
+        },
+      };
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        {
+          allowedLiquiditySources: [LiquiditySource.CURVE],
+          routeProfitabilityContext: {
+            routeExecutionCostQuoteRawBySource: {
+              [LiquiditySource.UNISWAPV3]: ethers.utils.parseUnits('1', 6),
+              [LiquiditySource.CURVE]: ethers.utils.parseUnits('3', 6),
+            },
+            configuredProfitFloorQuoteRaw: ethers.utils.parseUnits('2', 6),
+          },
+        }
+      );
+
+      expect(evaluation.isTakeable).to.be.true;
+      expect(evaluation.selectedLiquiditySource).to.equal(LiquiditySource.CURVE);
+      expect(evaluation.curvePool).to.deep.equal(selectedCurvePool);
+      expect(curveQuoteStub.calledOnce).to.be.true;
+      expect(
+        evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.eq(
+          ethers.utils.parseUnits('17', 6)
+        )
+      ).to.be.true;
     });
   });
 

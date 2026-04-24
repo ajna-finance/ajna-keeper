@@ -21,12 +21,18 @@ import {
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
   FactoryRouteCandidate,
+  FactoryRouteEvaluationContext,
   FactoryRouteSelectionOptions,
   FactoryTakeConfig,
   FactoryTakeParams,
   applyFactoryRouteProfitabilityPolicy,
+  buildFactoryRouteEvaluationContext,
   createFactoryQuoteProviderRuntimeCache,
+  formatFactoryRouteCandidate,
   getFactoryRouteCandidates,
+  orderFactoryRouteCandidates,
+  recordFactoryRouteSuccess,
+  selectBestFactoryRouteEvaluation,
 } from './shared';
 import {
   evaluateCurveFactoryQuote,
@@ -201,19 +207,50 @@ export async function getFactoryTakeQuoteEvaluation(
   try {
     if (
       poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3 ||
-      poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP
+      poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP ||
+      poolConfig.take.liquiditySource === LiquiditySource.CURVE
     ) {
-      const routes = getFactoryRouteCandidates({
+      const routeContext = await buildFactoryRouteEvaluationContext({
+        pool,
+        signer,
+        auctionPriceWad,
+        collateral,
+        marketPriceFactor: poolConfig.take.marketPriceFactor!,
+        runtimeCache,
+      });
+      const routes = orderFactoryRouteCandidates({
+        routes: getFactoryRouteCandidates({
+          defaultLiquiditySource: poolConfig.take.liquiditySource,
+          config,
+          selection: routeSelection,
+        }),
         defaultLiquiditySource: poolConfig.take.liquiditySource,
         config,
-        selection: routeSelection,
+        pool,
+        runtimeCache,
       });
+      const routeQuoteBudget = routeSelection?.routeQuoteBudgetPerCandidate;
+      const routesToEvaluate =
+        routeQuoteBudget !== undefined
+          ? routes.slice(0, routeQuoteBudget)
+          : routes;
+      const skippedRoutes =
+        routeQuoteBudget !== undefined && routes.length > routeQuoteBudget
+          ? routes.slice(routeQuoteBudget)
+          : [];
+      if (skippedRoutes.length > 0) {
+        logger.debug(
+          `Factory: route quote budget exhausted for pool ${pool.name}; skipped routes=${skippedRoutes
+            .map(formatFactoryRouteCandidate)
+            .join(', ')}`
+        );
+      }
       const evaluations: Array<{
         route: FactoryRouteCandidate;
         evaluation: ExternalTakeQuoteEvaluation;
       }> = [];
 
-      for (const route of routes) {
+      for (const route of routesToEvaluate) {
         const rejectionReason =
           routeSelection?.routeProfitabilityContext
             ?.routeRejectionReasonsBySource?.[route.liquiditySource];
@@ -234,18 +271,37 @@ export async function getFactoryTakeQuoteEvaluation(
                   config,
                   signer,
                   runtimeCache,
-                  route.feeTier
+                  route.feeTier,
+                  routeContext
                 )
-              : await checkSushiSwapQuote(
-                  pool,
-                  auctionPriceWad,
-                  collateral,
-                  poolConfig,
-                  config,
-                  signer,
-                  runtimeCache,
-                  route.feeTier
-                );
+              : route.liquiditySource === LiquiditySource.SUSHISWAP
+                ? await checkSushiSwapQuote(
+                    pool,
+                    auctionPriceWad,
+                    collateral,
+                    poolConfig,
+                    config,
+                    signer,
+                    runtimeCache,
+                    route.feeTier,
+                    routeContext
+                  )
+                : route.liquiditySource === LiquiditySource.CURVE
+                  ? await checkCurveQuote(
+                      pool,
+                      auctionPriceWad,
+                      collateral,
+                      poolConfig,
+                      config,
+                      signer,
+                      runtimeCache,
+                      routeContext
+                    )
+                  : {
+                      isTakeable: false,
+                      reason: `unsupported route source ${route.liquiditySource}`,
+                      selectedLiquiditySource: route.liquiditySource,
+                    };
         const evaluation = applyFactoryRouteProfitabilityPolicy({
           evaluation: rawEvaluation,
           liquiditySource: route.liquiditySource,
@@ -254,47 +310,35 @@ export async function getFactoryTakeQuoteEvaluation(
         evaluations.push({ route, evaluation });
       }
 
-      const takeableEvaluations = evaluations.filter(
-        ({ evaluation }) => evaluation.isTakeable && evaluation.quoteAmountRaw
-      );
-      if (takeableEvaluations.length > 0) {
-        takeableEvaluations.sort((left, right) => {
-          const leftProfit =
-            left.evaluation.routeProfitability?.expectedNetProfitQuoteRaw ??
-            left.evaluation.quoteAmountRaw!;
-          const rightProfit =
-            right.evaluation.routeProfitability?.expectedNetProfitQuoteRaw ??
-            right.evaluation.quoteAmountRaw!;
-          if (!leftProfit.eq(rightProfit)) {
-            return leftProfit.gt(rightProfit) ? -1 : 1;
-          }
-          if (
-            left.route.liquiditySource === poolConfig.take.liquiditySource &&
-            right.route.liquiditySource !== poolConfig.take.liquiditySource
-          ) {
-            return -1;
-          }
-          if (
-            left.route.liquiditySource !== poolConfig.take.liquiditySource &&
-            right.route.liquiditySource === poolConfig.take.liquiditySource
-          ) {
-            return 1;
-          }
-          return 0;
+      const selectedRoute = selectBestFactoryRouteEvaluation({
+        evaluations,
+        defaultLiquiditySource: poolConfig.take.liquiditySource,
+        config,
+      });
+      if (selectedRoute) {
+        const selected = selectedRoute.evaluation;
+        recordFactoryRouteSuccess({
+          route: selectedRoute.route,
+          pool,
+          runtimeCache,
         });
-
-        const selected = takeableEvaluations[0].evaluation;
         logger.debug(
-          `Factory: selected route source=${selected.selectedLiquiditySource} feeTier=${selected.selectedFeeTier ?? 'n/a'} for pool ${pool.name}`
+          `Factory: selected route source=${selected.selectedLiquiditySource} feeTier=${selected.selectedFeeTier ?? 'n/a'} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} requiredOutputFloorRaw=${selected.routeProfitability?.requiredOutputFloorQuoteRaw?.toString() ?? selected.approvedMinOutRaw?.toString() ?? 'n/a'} surplusRaw=${selected.routeProfitability?.surplusOverFloorQuoteRaw?.toString() ?? 'n/a'} for pool ${pool.name}${
+            skippedRoutes.length > 0 ? ' (route quote budget limited)' : ''
+          }`
         );
         return selected;
       }
 
-      const reason = evaluations
-        .map(
+      const reason = [
+        ...evaluations.map(
           ({ route, evaluation }) =>
-            `${LiquiditySource[route.liquiditySource]}:${route.feeTier ?? 'default'}=${evaluation.reason ?? 'not takeable'}`
-        )
+            `${formatFactoryRouteCandidate(route)}=${evaluation.reason ?? 'not takeable'}`
+        ),
+        ...skippedRoutes.map(
+          (route) => `${formatFactoryRouteCandidate(route)}=skipped by route quote budget`
+        ),
+      ]
         .join('; ');
       return {
         isTakeable: false,
@@ -302,18 +346,6 @@ export async function getFactoryTakeQuoteEvaluation(
           ? `no viable factory route: ${reason}`
           : 'no factory routes configured',
       };
-    }
-
-    if (poolConfig.take.liquiditySource === LiquiditySource.CURVE) {
-      return await checkCurveQuote(
-        pool,
-        auctionPriceWad,
-        collateral,
-        poolConfig,
-        config,
-        signer,
-        runtimeCache
-      );
     }
 
     logger.debug(`Factory: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`);
@@ -342,7 +374,8 @@ async function checkUniswapV3Quote(
   config: Pick<FactoryTakeParams['config'], 'universalRouterOverrides'>,
   signer: Signer,
   runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  feeTier?: number
+  feeTier?: number,
+  routeContext?: FactoryRouteEvaluationContext
 ): Promise<ExternalTakeQuoteEvaluation> {
   return evaluateUniswapV3FactoryQuote({
     pool,
@@ -353,6 +386,7 @@ async function checkUniswapV3Quote(
     signer,
     runtimeCache,
     feeTier,
+    routeContext,
   });
 }
 
@@ -368,7 +402,8 @@ async function checkSushiSwapQuote(
   config: Pick<FactoryTakeParams['config'], 'sushiswapRouterOverrides'>,
   signer: Signer,
   runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  feeTier?: number
+  feeTier?: number,
+  routeContext?: FactoryRouteEvaluationContext
 ): Promise<ExternalTakeQuoteEvaluation> {
   return evaluateSushiSwapFactoryQuote({
     pool,
@@ -379,6 +414,7 @@ async function checkSushiSwapQuote(
     signer,
     runtimeCache,
     feeTier,
+    routeContext,
   });
 }
 
@@ -393,7 +429,8 @@ async function checkCurveQuote(
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'curveRouterOverrides' | 'tokenAddresses'>,
   signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache
+  runtimeCache?: FactoryQuoteProviderRuntimeCache,
+  routeContext?: FactoryRouteEvaluationContext
 ): Promise<ExternalTakeQuoteEvaluation> {
   return evaluateCurveFactoryQuote({
     pool,
@@ -403,6 +440,7 @@ async function checkCurveQuote(
     config,
     signer,
     runtimeCache,
+    routeContext,
   });
 }
 

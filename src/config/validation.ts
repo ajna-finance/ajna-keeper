@@ -20,6 +20,7 @@ import {
 const FACTORY_DYNAMIC_SOURCES = [
   LiquiditySource.UNISWAPV3,
   LiquiditySource.SUSHISWAP,
+  LiquiditySource.CURVE,
 ];
 const V1_FACTORY_FEE_TIERS = [500, 3000, 10000];
 
@@ -454,14 +455,9 @@ export function validateAutoDiscoverConfig(
             'AutoDiscoverConfig.take: allowedLiquiditySources cannot include ONEINCH for factory external takes'
           );
         }
-        if (source === LiquiditySource.CURVE) {
-          throw new Error(
-            'AutoDiscoverConfig.take: CURVE dynamic source selection is Phase 2; configure Curve as the default liquiditySource instead'
-          );
-        }
         if (!FACTORY_DYNAMIC_SOURCES.includes(source)) {
           throw new Error(
-            'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3 and SUSHISWAP'
+            'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3, SUSHISWAP, and CURVE'
           );
         }
         validateTakeSettings(

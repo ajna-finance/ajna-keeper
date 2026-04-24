@@ -26,6 +26,7 @@ import { decimaledToWei } from '../utils';
 import { getDecimalsErc20 } from '../erc20';
 
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
+const CURVE_EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(1_500_000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
 const WAD = ethers.constants.WeiPerEther;
 const ZERO = BigNumber.from(0);
@@ -36,10 +37,14 @@ function maxBigNumber(...values: BigNumber[]): BigNumber {
 
 function isDynamicFactorySource(
   source: LiquiditySource | undefined
-): source is LiquiditySource.UNISWAPV3 | LiquiditySource.SUSHISWAP {
+): source is
+  | LiquiditySource.UNISWAPV3
+  | LiquiditySource.SUSHISWAP
+  | LiquiditySource.CURVE {
   return (
     source === LiquiditySource.UNISWAPV3 ||
-    source === LiquiditySource.SUSHISWAP
+    source === LiquiditySource.SUSHISWAP ||
+    source === LiquiditySource.CURVE
   );
 }
 
@@ -61,7 +66,12 @@ function getExternalTakeGasLimit(
   source: LiquiditySource
 ): BigNumber {
   const override = policy?.dexGasOverrides?.[source];
-  return override ? BigNumber.from(override) : EXTERNAL_TAKE_GAS_LIMIT;
+  if (override) {
+    return BigNumber.from(override);
+  }
+  return source === LiquiditySource.CURVE
+    ? CURVE_EXTERNAL_TAKE_GAS_LIMIT
+    : EXTERNAL_TAKE_GAS_LIMIT;
 }
 
 function getQuoteTokenScaleFromDecimals(

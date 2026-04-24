@@ -2,7 +2,6 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../config';
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
@@ -12,6 +11,8 @@ import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
+  FactoryRouteEvaluationContext,
+  buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
   getSwapDeadline,
@@ -30,6 +31,7 @@ export async function evaluateUniswapV3FactoryQuote({
   signer,
   runtimeCache,
   feeTier,
+  routeContext,
 }: {
   pool: FungiblePool;
   auctionPriceWad: BigNumber;
@@ -39,6 +41,7 @@ export async function evaluateUniswapV3FactoryQuote({
   signer: Signer;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
   feeTier?: number;
+  routeContext?: FactoryRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (!config.universalRouterOverrides) {
     logger.debug(`Factory: No universalRouterOverrides configured for pool ${pool.name}`);
@@ -88,23 +91,34 @@ export async function evaluateUniswapV3FactoryQuote({
     const quoterAddress = quoteProvider.getQuoterAddress();
     logger.debug(`Factory: Using QuoterV2 at ${quoterAddress} for pool ${pool.name}`);
 
-    const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
-    const quoteDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
-    const collateralInTokenDecimals = convertWadToTokenDecimals(collateral, collateralDecimals);
+    const context =
+      routeContext ??
+      (await buildFactoryRouteEvaluationContext({
+        pool,
+        signer,
+        auctionPriceWad,
+        collateral,
+        marketPriceFactor: poolConfig.take.marketPriceFactor!,
+        runtimeCache,
+      }));
 
     logger.debug(
       `Factory: Getting official Uniswap V3 quote for ${ethers.utils.formatUnits(
-        collateralInTokenDecimals,
-        collateralDecimals
+        context.collateralInTokenDecimals,
+        context.collateralTokenDecimals
       )} collateral in pool ${pool.name}`
     );
 
     const selectedFeeTier = feeTier ?? routerConfig.defaultFeeTier ?? 3000;
     const quoteResult = await quoteProvider.getQuote(
-      collateralInTokenDecimals,
+      context.collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
-      selectedFeeTier
+      selectedFeeTier,
+      {
+        inputDecimals: context.collateralTokenDecimals,
+        outputDecimals: context.quoteTokenDecimals,
+      }
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
@@ -118,10 +132,10 @@ export async function evaluateUniswapV3FactoryQuote({
     }
 
     const quoteAmountRaw = BigNumber.from(quoteResult.dstAmount);
-    const collateralAmount = Number(
-      ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)
+    const collateralAmount = context.collateralAmount;
+    const quoteAmount = Number(
+      ethers.utils.formatUnits(quoteAmountRaw, context.quoteTokenDecimals)
     );
-    const quoteAmount = Number(ethers.utils.formatUnits(quoteAmountRaw, quoteDecimals));
     const auctionPrice = Number(weiToDecimaled(auctionPriceWad));
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
@@ -153,6 +167,7 @@ export async function evaluateUniswapV3FactoryQuote({
       collateralAmount,
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
       selectedFeeTier,
+      routeContext: context,
       failureReason: 'quoted output below required Uniswap V3 profitability floor',
     });
 

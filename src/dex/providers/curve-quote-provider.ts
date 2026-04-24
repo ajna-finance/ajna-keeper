@@ -51,6 +51,11 @@ interface QuoteResult {
   selectedPool?: CurvePoolSelection;
 }
 
+interface QuoteDecimals {
+  inputDecimals: number;
+  outputDecimals: number;
+}
+
 /**
  * Curve Quote Provider for External Take Profitability Analysis
  * 
@@ -327,7 +332,8 @@ export class CurveQuoteProvider {
   async getQuote(
     amountIn: BigNumber,
     tokenIn: string,
-    tokenOut: string
+    tokenOut: string,
+    decimals?: QuoteDecimals
   ): Promise<QuoteResult> {
     try {
       if (!this.isInitialized) {
@@ -384,8 +390,10 @@ export class CurveQuoteProvider {
       }
 
       // Get correct decimals for proper formatting
-      const inputDecimals = await getDecimalsErc20(this.signer, tokenIn);
-      const outputDecimals = await getDecimalsErc20(this.signer, tokenOut);
+      const inputDecimals =
+        decimals?.inputDecimals ?? (await getDecimalsErc20(this.signer, tokenIn));
+      const outputDecimals =
+        decimals?.outputDecimals ?? (await getDecimalsErc20(this.signer, tokenOut));
 
       logger.debug(`Curve quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`);
 

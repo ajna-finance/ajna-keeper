@@ -11,6 +11,11 @@ interface QuoteResult {
   error?: string;
 }
 
+interface QuoteDecimals {
+  inputDecimals: number;
+  outputDecimals: number;
+}
+
 interface UniswapV3Config {
   universalRouterAddress: string;
   poolFactoryAddress: string;
@@ -45,7 +50,8 @@ export class UniswapV3QuoteProvider {
     srcAmount: BigNumber,
     srcToken: string,
     dstToken: string,
-    feeTier?: number
+    feeTier?: number,
+    decimals?: QuoteDecimals
   ): Promise<QuoteResult> {
     try {
       const tier = feeTier || this.config.defaultFeeTier;
@@ -75,8 +81,10 @@ export class UniswapV3QuoteProvider {
       };
       
       // Get correct decimals for proper formatting
-      const inputDecimals = await getDecimalsErc20(this.signer, srcToken);
-      const outputDecimals = await getDecimalsErc20(this.signer, dstToken);
+      const inputDecimals =
+        decimals?.inputDecimals ?? (await getDecimalsErc20(this.signer, srcToken));
+      const outputDecimals =
+        decimals?.outputDecimals ?? (await getDecimalsErc20(this.signer, dstToken));
       logger.debug(`Getting Uniswap V3 quote using QuoterV2 at ${this.config.quoterV2Address}: ${ethers.utils.formatUnits(srcAmount, inputDecimals)} ${srcToken} -> ${dstToken} (fee: ${tier})`);
 
       // CRITICAL: Use callStatic because QuoterV2 works by reverting with the result

@@ -34,6 +34,11 @@ interface QuoteResult {
   gasEstimate?: BigNumber;
 }
 
+interface QuoteDecimals {
+  inputDecimals: number;
+  outputDecimals: number;
+}
+
 /**
  * SushiSwap V3 Quote Provider for External Take Profitability Analysis
  * 
@@ -46,6 +51,10 @@ export class SushiSwapQuoteProvider {
   private quoterContract?: ethers.Contract;
   private factoryContract: ethers.Contract;
   private isInitialized: boolean = false;
+  private poolExistenceCache = new Map<
+    string,
+    { exists: boolean; expiresAt: number }
+  >();
 
   constructor(signer: Signer, config: SushiSwapQuoteConfig) {
     this.signer = signer;
@@ -145,9 +154,26 @@ export class SushiSwapQuoteProvider {
       }
 
       const fee = feeTier || this.config.defaultFeeTier;
+      const cacheKey = [
+        tokenA.toLowerCase(),
+        tokenB.toLowerCase(),
+        fee,
+      ].join(':');
+      const cached = this.poolExistenceCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        logger.debug(
+          `SushiSwap pool existence cache hit: ${tokenA}/${tokenB} fee=${fee} exists=${cached.exists}`
+        );
+        return cached.exists;
+      }
+
       const poolAddress = await this.factoryContract.getPool(tokenA, tokenB, fee);
       
       const exists = poolAddress !== '0x0000000000000000000000000000000000000000';
+      this.poolExistenceCache.set(cacheKey, {
+        exists,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
       
       if (exists) {
         logger.debug(`SushiSwap pool found: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`);
@@ -171,7 +197,8 @@ export class SushiSwapQuoteProvider {
     amountIn: BigNumber,
     tokenIn: string,
     tokenOut: string,
-    feeTier?: number
+    feeTier?: number,
+    decimals?: QuoteDecimals
   ): Promise<QuoteResult> {
     try {
       if (!this.isInitialized) {
@@ -217,8 +244,10 @@ export class SushiSwapQuoteProvider {
       }
 
       // Get correct decimals for proper formatting
-      const inputDecimals = await getDecimalsErc20(this.signer, tokenIn);
-      const outputDecimals = await getDecimalsErc20(this.signer, tokenOut);
+      const inputDecimals =
+        decimals?.inputDecimals ?? (await getDecimalsErc20(this.signer, tokenIn));
+      const outputDecimals =
+        decimals?.outputDecimals ?? (await getDecimalsErc20(this.signer, tokenOut));
 
       logger.debug(`SushiSwap quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`);
 

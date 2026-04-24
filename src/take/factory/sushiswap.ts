@@ -2,7 +2,6 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../config';
 import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
@@ -12,6 +11,8 @@ import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
+  FactoryRouteEvaluationContext,
+  buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
   getSwapDeadline,
@@ -30,6 +31,7 @@ export async function evaluateSushiSwapFactoryQuote({
   signer,
   runtimeCache,
   feeTier,
+  routeContext,
 }: {
   pool: FungiblePool;
   auctionPriceWad: BigNumber;
@@ -39,6 +41,7 @@ export async function evaluateSushiSwapFactoryQuote({
   signer: Signer;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
   feeTier?: number;
+  routeContext?: FactoryRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (!config.sushiswapRouterOverrides) {
     logger.debug(`Factory: No sushiswapRouterOverrides configured for pool ${pool.name}`);
@@ -87,23 +90,34 @@ export async function evaluateSushiSwapFactoryQuote({
       };
     }
 
-    const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
-    const quoteDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
-    const collateralInTokenDecimals = convertWadToTokenDecimals(collateral, collateralDecimals);
+    const context =
+      routeContext ??
+      (await buildFactoryRouteEvaluationContext({
+        pool,
+        signer,
+        auctionPriceWad,
+        collateral,
+        marketPriceFactor: poolConfig.take.marketPriceFactor!,
+        runtimeCache,
+      }));
 
     logger.debug(
       `Factory: Getting SushiSwap quote for ${ethers.utils.formatUnits(
-        collateralInTokenDecimals,
-        collateralDecimals
+        context.collateralInTokenDecimals,
+        context.collateralTokenDecimals
       )} collateral in pool ${pool.name}`
     );
 
     const selectedFeeTier = feeTier ?? sushiConfig.defaultFeeTier ?? 500;
     const quoteResult = await quoteProvider.getQuote(
-      collateralInTokenDecimals,
+      context.collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
-      selectedFeeTier
+      selectedFeeTier,
+      {
+        inputDecimals: context.collateralTokenDecimals,
+        outputDecimals: context.quoteTokenDecimals,
+      }
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
@@ -114,11 +128,11 @@ export async function evaluateSushiSwapFactoryQuote({
       };
     }
 
-    const collateralAmount = Number(
-      ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)
-    );
+    const collateralAmount = context.collateralAmount;
     const quoteAmountRaw = quoteResult.dstAmount;
-    const quoteAmount = Number(ethers.utils.formatUnits(quoteAmountRaw, quoteDecimals));
+    const quoteAmount = Number(
+      ethers.utils.formatUnits(quoteAmountRaw, context.quoteTokenDecimals)
+    );
     const auctionPrice = Number(weiToDecimaled(auctionPriceWad));
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
@@ -150,6 +164,7 @@ export async function evaluateSushiSwapFactoryQuote({
       collateralAmount,
       selectedLiquiditySource: LiquiditySource.SUSHISWAP,
       selectedFeeTier,
+      routeContext: context,
       failureReason:
         'quoted output below required SushiSwap profitability floor',
     });

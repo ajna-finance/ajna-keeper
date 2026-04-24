@@ -298,7 +298,7 @@ describe('take write submission', () => {
       poolConfig: {
         name: 'Factory Curve Pool',
         take: {
-          liquiditySource: LiquiditySource.CURVE,
+          liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
         },
       },
@@ -345,6 +345,7 @@ describe('take write submission', () => {
     expect(queueTransactionStub.calledOnce).to.be.true;
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
     const takeArgs = populateTransactionStub.firstCall.args;
+    expect(takeArgs[4]).to.equal(Number(LiquiditySource.CURVE));
     expect(takeArgs[5].toLowerCase()).to.equal('0x00000000000000000000000000000000000000c3');
     const decoded = ethers.utils.defaultAbiCoder.decode(
       ['address', 'uint8', 'uint8', 'uint8', 'uint256', 'uint256'],
