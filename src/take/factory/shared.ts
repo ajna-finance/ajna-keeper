@@ -3,10 +3,7 @@ import { quoteTokenScale } from '@ajna-finance/sdk/dist/contracts/pool';
 import { BigNumber, ethers } from 'ethers';
 import { KeeperConfig, LiquiditySource, PoolConfig } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
-import {
-  SubgraphConfigInput,
-  WithSubgraph,
-} from '../../read-transports';
+import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
 import { RequireFields } from '../../utils';
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
@@ -39,8 +36,12 @@ export interface FactoryRouteSelectionOptions {
 }
 
 export interface FactoryRouteProfitabilityContext {
-  routeExecutionCostQuoteRawBySource?: Partial<Record<LiquiditySource, BigNumber>>;
-  nativeProfitFloorQuoteRawBySource?: Partial<Record<LiquiditySource, BigNumber>>;
+  routeExecutionCostQuoteRawBySource?: Partial<
+    Record<LiquiditySource, BigNumber>
+  >;
+  nativeProfitFloorQuoteRawBySource?: Partial<
+    Record<LiquiditySource, BigNumber>
+  >;
   configuredProfitFloorQuoteRaw?: BigNumber;
   slippageRiskBufferQuoteRaw?: BigNumber;
   routeRejectionReasonsBySource?: Partial<Record<LiquiditySource, string>>;
@@ -108,6 +109,19 @@ export const BASIS_POINTS_DENOMINATOR = 10_000;
 export const MARKET_FACTOR_SCALE = 1_000_000;
 const MAX_UINT24_FEE_TIER = 16_777_215;
 const ZERO = BigNumber.from(0);
+const MAX_RECENT_ROUTE_SUCCESSES = 512;
+const MAX_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
+const MAX_QUOTE_TOKEN_SCALE_CACHE_ENTRIES = 512;
+
+function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
+  while (map.size > maxSize) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey === undefined) {
+      return;
+    }
+    map.delete(oldestKey);
+  }
+}
 
 export function ceilWmul(x: BigNumber, y: BigNumber): BigNumber {
   return x.mul(y).add(WAD.sub(1)).div(WAD);
@@ -118,7 +132,10 @@ export function ceilDiv(x: BigNumber, y: BigNumber): BigNumber {
 }
 
 export function maxBigNumber(...values: BigNumber[]): BigNumber {
-  return values.reduce((max, value) => (value.gt(max) ? value : max), values[0]);
+  return values.reduce(
+    (max, value) => (value.gt(max) ? value : max),
+    values[0]
+  );
 }
 
 export async function getSwapDeadline(
@@ -138,7 +155,9 @@ export function getMarketPriceFactorUnits(marketPriceFactor: number): number {
   return scaled;
 }
 
-export function getSlippageBasisPoints(defaultSlippage: number | undefined): number {
+export function getSlippageBasisPoints(
+  defaultSlippage: number | undefined
+): number {
   const slippagePercentage = defaultSlippage ?? 1.0;
   const basisPoints = Math.floor(slippagePercentage * 100);
   return Math.max(0, Math.min(BASIS_POINTS_DENOMINATOR, basisPoints));
@@ -158,17 +177,15 @@ export function getEffectiveFactoryFeeTiers(
   defaultFeeTier: number,
   candidateFeeTiers?: number[]
 ): number[] {
-  const tiers = candidateFeeTiers?.length ? candidateFeeTiers : [defaultFeeTier];
+  const tiers = candidateFeeTiers?.length
+    ? candidateFeeTiers
+    : [defaultFeeTier];
   const effective = [defaultFeeTier, ...tiers].filter(isValidFactoryFeeTier);
   return Array.from(new Set(effective));
 }
 
 function isValidFactoryFeeTier(tier: number): boolean {
-  return (
-    Number.isInteger(tier) &&
-    tier > 0 &&
-    tier <= MAX_UINT24_FEE_TIER
-  );
+  return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
 }
 
 function isDynamicFactorySource(source: LiquiditySource): boolean {
@@ -195,8 +212,11 @@ export function getDefaultFactoryFeeTierForSource(
   return undefined;
 }
 
-export function formatFactoryRouteCandidate(route: FactoryRouteCandidate): string {
-  const source = LiquiditySource[route.liquiditySource] ?? route.liquiditySource;
+export function formatFactoryRouteCandidate(
+  route: FactoryRouteCandidate
+): string {
+  const source =
+    LiquiditySource[route.liquiditySource] ?? route.liquiditySource;
   return route.feeTier !== undefined
     ? `${source}:${route.feeTier}`
     : `${source}:configured`;
@@ -230,10 +250,24 @@ function isDefaultFactoryRoute(params: {
     params.route.liquiditySource,
     params.config
   );
-  return defaultFeeTier === undefined || params.route.feeTier === defaultFeeTier;
+  return (
+    defaultFeeTier === undefined || params.route.feeTier === defaultFeeTier
+  );
 }
 
 const RECENT_ROUTE_SUCCESS_TTL_MS = 10 * 60 * 1000;
+
+function pruneExpiredRouteSuccesses(
+  successes: Map<string, number>,
+  now: number
+): void {
+  for (const [key, timestamp] of Array.from(successes.entries())) {
+    if (now - timestamp > RECENT_ROUTE_SUCCESS_TTL_MS) {
+      successes.delete(key);
+    }
+  }
+  pruneMapToMaxSize(successes, MAX_RECENT_ROUTE_SUCCESSES);
+}
 
 export function orderFactoryRouteCandidates(params: {
   routes: FactoryRouteCandidate[];
@@ -248,11 +282,7 @@ export function orderFactoryRouteCandidates(params: {
   const now = Date.now();
   const successes = params.runtimeCache?.recentRouteSuccesses;
   if (successes) {
-    for (const [key, timestamp] of Array.from(successes.entries())) {
-      if (now - timestamp > RECENT_ROUTE_SUCCESS_TTL_MS) {
-        successes.delete(key);
-      }
-    }
+    pruneExpiredRouteSuccesses(successes, now);
   }
 
   return params.routes
@@ -296,6 +326,10 @@ export function recordFactoryRouteSuccess(params: {
   if (!params.runtimeCache.recentRouteSuccesses) {
     params.runtimeCache.recentRouteSuccesses = new Map();
   }
+  pruneExpiredRouteSuccesses(
+    params.runtimeCache.recentRouteSuccesses,
+    Date.now()
+  );
   params.runtimeCache.recentRouteSuccesses.set(
     getFactoryRouteKey({
       route: params.route,
@@ -303,6 +337,10 @@ export function recordFactoryRouteSuccess(params: {
       quoteTokenAddress: params.pool.quoteAddress,
     }),
     Date.now()
+  );
+  pruneMapToMaxSize(
+    params.runtimeCache.recentRouteSuccesses,
+    MAX_RECENT_ROUTE_SUCCESSES
   );
 }
 
@@ -564,8 +602,10 @@ function compareFactoryRouteEvaluations(
     >;
   }
 ): number {
-  const leftProfit = left.evaluation.routeProfitability?.expectedNetProfitQuoteRaw;
-  const rightProfit = right.evaluation.routeProfitability?.expectedNetProfitQuoteRaw;
+  const leftProfit =
+    left.evaluation.routeProfitability?.expectedNetProfitQuoteRaw;
+  const rightProfit =
+    right.evaluation.routeProfitability?.expectedNetProfitQuoteRaw;
   if (!leftProfit || !rightProfit) {
     throw new Error(
       'Factory: takeable route missing expected net profit metadata'
@@ -635,13 +675,12 @@ export function selectBestFactoryRouteEvaluation(params: {
     return true;
   });
 
-  return takeableEvaluations
-    .sort((left, right) =>
-      compareFactoryRouteEvaluations(left, right, {
-        defaultLiquiditySource: params.defaultLiquiditySource,
-        config: params.config,
-      })
-    )[0];
+  return takeableEvaluations.sort((left, right) =>
+    compareFactoryRouteEvaluations(left, right, {
+      defaultLiquiditySource: params.defaultLiquiditySource,
+      config: params.config,
+    })
+  )[0];
 }
 
 function pushFactoryRouteCandidate(
@@ -679,7 +718,9 @@ export function getFactoryRouteCandidates(params: {
         ]
       : [params.defaultLiquiditySource];
 
-  const uniqueSources = Array.from(new Set(sources)).filter(isDynamicFactorySource);
+  const uniqueSources = Array.from(new Set(sources)).filter(
+    isDynamicFactorySource
+  );
   const routesBySource = new Map<LiquiditySource, FactoryRouteCandidate[]>();
   for (const source of uniqueSources) {
     if (source === LiquiditySource.UNISWAPV3) {
@@ -713,7 +754,11 @@ export function getFactoryRouteCandidates(params: {
   const seenRoutes = new Set<string>();
 
   for (const source of uniqueSources) {
-    pushFactoryRouteCandidate(orderedRoutes, seenRoutes, routesBySource.get(source)?.[0]);
+    pushFactoryRouteCandidate(
+      orderedRoutes,
+      seenRoutes,
+      routesBySource.get(source)?.[0]
+    );
   }
   for (const source of uniqueSources) {
     for (const route of routesBySource.get(source)?.slice(1) ?? []) {
@@ -751,6 +796,10 @@ export async function getCachedFactoryTokenDecimals(
       runtimeCache.tokenDecimals = new Map();
     }
     runtimeCache.tokenDecimals.set(cacheKey, decimals);
+    pruneMapToMaxSize(
+      runtimeCache.tokenDecimals,
+      MAX_TOKEN_DECIMAL_CACHE_ENTRIES
+    );
   }
   return decimals;
 }
@@ -786,6 +835,10 @@ async function getCachedQuoteTokenScale(
     runtimeCache.quoteTokenScales = new Map();
   }
   runtimeCache.quoteTokenScales.set(poolKey, scale);
+  pruneMapToMaxSize(
+    runtimeCache.quoteTokenScales,
+    MAX_QUOTE_TOKEN_SCALE_CACHE_ENTRIES
+  );
   return scale;
 }
 
@@ -797,25 +850,28 @@ export async function buildFactoryRouteEvaluationContext(params: {
   marketPriceFactor: number;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
 }): Promise<FactoryRouteEvaluationContext> {
-  const [collateralTokenDecimals, quoteTokenDecimals, auctionRepayRequirementQuoteRaw] =
-    await Promise.all([
-      getCachedFactoryTokenDecimals(
-        params.signer,
-        params.pool.collateralAddress,
-        params.runtimeCache
-      ),
-      getCachedFactoryTokenDecimals(
-        params.signer,
-        params.pool.quoteAddress,
-        params.runtimeCache
-      ),
-      getQuoteAmountDueRaw(
-        params.pool,
-        params.auctionPriceWad,
-        params.collateral,
-        params.runtimeCache
-      ),
-    ]);
+  const [
+    collateralTokenDecimals,
+    quoteTokenDecimals,
+    auctionRepayRequirementQuoteRaw,
+  ] = await Promise.all([
+    getCachedFactoryTokenDecimals(
+      params.signer,
+      params.pool.collateralAddress,
+      params.runtimeCache
+    ),
+    getCachedFactoryTokenDecimals(
+      params.signer,
+      params.pool.quoteAddress,
+      params.runtimeCache
+    ),
+    getQuoteAmountDueRaw(
+      params.pool,
+      params.auctionPriceWad,
+      params.collateral,
+      params.runtimeCache
+    ),
+  ]);
   const collateralInTokenDecimals = convertWadToTokenDecimals(
     params.collateral,
     collateralTokenDecimals
@@ -928,9 +984,7 @@ export async function buildFactoryQuoteEvaluation(params: {
   return {
     isTakeable: isProfitable,
     marketPrice: params.quoteAmount / collateralAmount,
-    takeablePrice:
-      (params.quoteAmount / collateralAmount) *
-      marketPriceFactor,
+    takeablePrice: (params.quoteAmount / collateralAmount) * marketPriceFactor,
     quoteAmount: params.quoteAmount,
     quoteAmountRaw: params.quoteAmountRaw,
     selectedLiquiditySource: params.selectedLiquiditySource,
@@ -1016,7 +1070,9 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
   const expectedNetProfitQuoteRaw = quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
     ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
     : ZERO;
-  const surplusOverFloorQuoteRaw = quoteAmountRaw.gte(requiredOutputFloorQuoteRaw)
+  const surplusOverFloorQuoteRaw = quoteAmountRaw.gte(
+    requiredOutputFloorQuoteRaw
+  )
     ? quoteAmountRaw.sub(requiredOutputFloorQuoteRaw)
     : ZERO;
   const approvedMinOutRaw = params.evaluation.approvedMinOutRaw
@@ -1026,7 +1082,8 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       )
     : requiredOutputFloorQuoteRaw;
   const isTakeable =
-    params.evaluation.isTakeable && quoteAmountRaw.gte(requiredOutputFloorQuoteRaw);
+    params.evaluation.isTakeable &&
+    quoteAmountRaw.gte(requiredOutputFloorQuoteRaw);
 
   return {
     ...params.evaluation,

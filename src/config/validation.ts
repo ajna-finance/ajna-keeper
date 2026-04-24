@@ -27,9 +27,7 @@ const MAX_UINT24_FEE_TIER = 16_777_215;
 const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
 const MAX_DEX_GAS_OVERRIDE = BigInt(2_000_000);
-const MAX_MIN_PROFIT_NATIVE_WEI = BigInt(
-  '1000000000000000000000000000'
-);
+const MAX_MIN_PROFIT_NATIVE_WEI = BigInt('1000000000000000000000000000');
 const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
 
 function validateQuoteDenominatedGasPolicy(
@@ -51,7 +49,9 @@ function validateQuoteDenominatedGasPolicy(
 
 function validateDecimalStringBigInt(value: string, fieldName: string): void {
   if (!/^(0|[1-9]\d*)$/.test(value)) {
-    throw new Error(`${fieldName} must be a non-negative decimal integer string`);
+    throw new Error(
+      `${fieldName} must be a non-negative decimal integer string`
+    );
   }
 }
 
@@ -60,10 +60,7 @@ function validateCandidateFeeTiers(
   defaultFeeTier: number | undefined,
   fieldName: string
 ): void {
-  if (
-    defaultFeeTier !== undefined &&
-    !isValidFactoryFeeTier(defaultFeeTier)
-  ) {
+  if (defaultFeeTier !== undefined && !isValidFactoryFeeTier(defaultFeeTier)) {
     throw new Error(
       `${fieldName}: defaultFeeTier must be a positive uint24 fee tier`
     );
@@ -73,7 +70,9 @@ function validateCandidateFeeTiers(
     return;
   }
   if (!Array.isArray(tiers) || tiers.length === 0) {
-    throw new Error(`${fieldName}: candidateFeeTiers must be a non-empty array`);
+    throw new Error(
+      `${fieldName}: candidateFeeTiers must be a non-empty array`
+    );
   }
   if (tiers.length > MAX_CANDIDATE_FEE_TIERS) {
     throw new Error(
@@ -89,7 +88,9 @@ function validateCandidateFeeTiers(
       );
     }
     if (seen.has(tier)) {
-      throw new Error(`${fieldName}: candidateFeeTiers cannot contain duplicates`);
+      throw new Error(
+        `${fieldName}: candidateFeeTiers cannot contain duplicates`
+      );
     }
     if (!STANDARD_V3_FEE_TIERS.has(tier)) {
       logger.warn(
@@ -101,11 +102,7 @@ function validateCandidateFeeTiers(
 }
 
 function isValidFactoryFeeTier(tier: number): boolean {
-  return (
-    Number.isInteger(tier) &&
-    tier > 0 &&
-    tier <= MAX_UINT24_FEE_TIER
-  );
+  return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
 }
 
 function validateRouterFeeTiers(config: KeeperConfig): void {
@@ -152,6 +149,15 @@ function getEffectiveFactoryRouteSources(
     }
   }
   return sources;
+}
+
+function isFactoryDynamicSource(
+  source: LiquiditySource | undefined
+): source is
+  | LiquiditySource.UNISWAPV3
+  | LiquiditySource.SUSHISWAP
+  | LiquiditySource.CURVE {
+  return source !== undefined && FACTORY_DYNAMIC_SOURCES.includes(source);
 }
 
 export function validatePostAuctionDex(
@@ -359,10 +365,7 @@ export function validateTakeSettings(
     if (config.minCollateral! <= 0) {
       throw new Error('TakeSettings: minCollateral must be greater than 0');
     }
-    if (
-      config.hpbPriceFactor === undefined ||
-      config.hpbPriceFactor <= 0
-    ) {
+    if (config.hpbPriceFactor === undefined || config.hpbPriceFactor <= 0) {
       throw new Error('TakeSettings: hpbPriceFactor must be positive');
     }
   }
@@ -378,14 +381,10 @@ export function validateSettlementSettings(config: SettlementConfig): void {
     throw new Error('SettlementConfig: minAuctionAge cannot be negative');
   }
   if (config.maxBucketDepth !== undefined && config.maxBucketDepth <= 0) {
-    throw new Error(
-      'SettlementConfig: maxBucketDepth must be greater than 0'
-    );
+    throw new Error('SettlementConfig: maxBucketDepth must be greater than 0');
   }
   if (config.maxIterations !== undefined && config.maxIterations <= 0) {
-    throw new Error(
-      'SettlementConfig: maxIterations must be greater than 0'
-    );
+    throw new Error('SettlementConfig: maxIterations must be greater than 0');
   }
 }
 
@@ -403,7 +402,9 @@ export function validateAutoDiscoverConfig(
   const settlementPolicy = getAutoDiscoverSettlementPolicy(autoDiscover);
 
   if (autoDiscover.kick) {
-    throw new Error('AutoDiscoverConfig: kick discovery is not supported in V1');
+    throw new Error(
+      'AutoDiscoverConfig: kick discovery is not supported in V1'
+    );
   }
   if (!takePolicy && !settlementPolicy) {
     throw new Error(
@@ -503,7 +504,24 @@ export function validateAutoDiscoverConfig(
 
     validateTakeSettings(discoveredTake, config, chainId);
 
+    const discoveredTakeUsesFactory = isFactoryDynamicSource(
+      discoveredTake.liquiditySource
+    );
+    if (
+      takePolicy.takeRouteQuoteBudgetPerCandidate !== undefined &&
+      !discoveredTakeUsesFactory
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
+      );
+    }
+
     if (takePolicy.allowedLiquiditySources !== undefined) {
+      if (!discoveredTakeUsesFactory) {
+        throw new Error(
+          'AutoDiscoverConfig.take: allowedLiquiditySources requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
+        );
+      }
       if (takePolicy.allowedLiquiditySources.length === 0) {
         throw new Error(
           'AutoDiscoverConfig.take: allowedLiquiditySources must be non-empty'
@@ -560,7 +578,9 @@ export function validateAutoDiscoverConfig(
     }
 
     if (takePolicy.dexGasOverrides !== undefined) {
-      for (const [source, value] of Object.entries(takePolicy.dexGasOverrides)) {
+      for (const [source, value] of Object.entries(
+        takePolicy.dexGasOverrides
+      )) {
         if (value === undefined) {
           continue;
         }

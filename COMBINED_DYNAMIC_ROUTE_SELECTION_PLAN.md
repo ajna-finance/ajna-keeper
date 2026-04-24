@@ -215,6 +215,12 @@ type ApprovedFactoryRouteQuote = ExternalTakeQuoteEvaluation & {
 
 `quoteAmountRaw` is required on `ApprovedFactoryRouteQuote`. Do not add a second route-output field such as `expectedQuoteOutRaw`; that creates two sources of truth.
 
+### Follow-up TODO: type-split quote lifecycle
+
+The current implementation relies on fail-closed runtime guards to ensure execution only consumes a fully approved route quote. A future maintainability refactor should split the quote lifecycle into distinct types, for example `RawFactoryRouteQuote` or `UnappliedFactoryQuoteEvaluation`, `PolicyAppliedFactoryRouteEvaluation`, and `ApprovedFactoryRouteQuote`.
+
+The selector and execution paths should accept only the approved type. This is not required for the current PR because the runtime guards enforce the invariant, but it would reduce future drift risk by making half-populated or policy-unapplied evaluations unrepresentable.
+
 Rules:
 
 - Phase 2 writes `selectedFeeTier`.
@@ -261,8 +267,14 @@ Keep DEX-specific adapters narrow:
 ```ts
 type FactoryRouteAdapter = {
   liquiditySource: LiquiditySource;
-  exists(route: FactoryRouteCandidate, context: RouteEvaluationContext): Promise<boolean>;
-  quote(route: FactoryRouteCandidate, context: RouteEvaluationContext): Promise<RouteQuote | null>;
+  exists(
+    route: FactoryRouteCandidate,
+    context: RouteEvaluationContext
+  ): Promise<boolean>;
+  quote(
+    route: FactoryRouteCandidate,
+    context: RouteEvaluationContext
+  ): Promise<RouteQuote | null>;
   buildTakeArgs(args: {
     route: FactoryRouteCandidate;
     approvedQuote: ApprovedFactoryRouteQuote;

@@ -28,7 +28,9 @@ describe('take write submission', () => {
       getChainId: sinon.stub().resolves(1),
     };
     const writeSigner = {
-      getAddress: sinon.stub().resolves('0x00000000000000000000000000000000000000aa'),
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
       getTransactionCount: sinon.stub().resolves(0),
     };
     const takeWriteTransport = {
@@ -54,9 +56,7 @@ describe('take write submission', () => {
       },
     };
 
-    sinon
-      .stub(AjnaKeeperTaker__factory, 'connect')
-      .returns(keeperTaker as any);
+    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
     sinon
       .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
       .resolves({ data: '0xdeadbeef' } as any);
@@ -125,7 +125,9 @@ describe('take write submission', () => {
     });
 
     expect(
-      (AjnaKeeperTaker__factory.connect as sinon.SinonStub).calledOnceWithExactly(
+      (
+        AjnaKeeperTaker__factory.connect as sinon.SinonStub
+      ).calledOnceWithExactly(
         '0x00000000000000000000000000000000000000dd',
         readSigner
       )
@@ -139,7 +141,9 @@ describe('take write submission', () => {
       getChainId: sinon.stub().resolves(1),
     };
     const writeSigner = {
-      getAddress: sinon.stub().resolves('0x00000000000000000000000000000000000000aa'),
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
       getTransactionCount: sinon.stub().resolves(0),
     };
     const takeWriteTransport = {
@@ -187,10 +191,12 @@ describe('take write submission', () => {
     } as any);
     sinon.stub(shared, 'getQuoteAmountDueRaw').resolves(BigNumber.from(950));
     sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (signer, txFunction) => {
-      expect(signer).to.equal(writeSigner);
-      return await txFunction(7);
-    });
+    sinon
+      .stub(NonceTracker, 'queueTransaction')
+      .callsFake(async (signer, txFunction) => {
+        expect(signer).to.equal(writeSigner);
+        return await txFunction(7);
+      });
 
     await takeLiquidation({
       pool: {
@@ -234,7 +240,9 @@ describe('take write submission', () => {
 
     const encodedDetails = populateTransactionStub.firstCall.args[6];
     const decoded = ethers.utils.defaultAbiCoder.decode(
-      ['(address,(address,address,address,address,uint256,uint256,uint256),bytes)'],
+      [
+        '(address,(address,address,address,address,uint256,uint256,uint256),bytes)',
+      ],
       encodedDetails
     );
     expect(decoded[0][1][5].toString()).to.equal('1100');
@@ -244,7 +252,9 @@ describe('take write submission', () => {
     const clock = sinon.useFakeTimers();
     const readSigner = {};
     const writeSigner = {
-      getAddress: sinon.stub().resolves('0x00000000000000000000000000000000000000ef'),
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000ef'),
       getTransactionCount: sinon.stub().resolves(0),
       provider: {
         getBlock: sinon.stub().resolves({ timestamp: 123 }),
@@ -272,8 +282,12 @@ describe('take write submission', () => {
       },
     };
 
-    sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns(factory as any);
-    sinon.stub(shared, 'computeFactoryAmountOutMinimum').resolves(BigNumber.from(10));
+    sinon
+      .stub(AjnaKeeperTakerFactory__factory, 'connect')
+      .returns(factory as any);
+    sinon
+      .stub(shared, 'computeFactoryAmountOutMinimum')
+      .resolves(BigNumber.from(10));
     sinon.stub(shared, 'getSwapDeadline').callsFake(async (signer) => {
       expect(signer).to.equal(readSigner);
       return 456;
@@ -284,7 +298,10 @@ describe('take write submission', () => {
         expect(signer).to.equal(writeSigner);
         return await txFunction(3);
       });
-    const initializeStub = sinon.stub(CurveQuoteProvider.prototype, 'initialize');
+    const initializeStub = sinon.stub(
+      CurveQuoteProvider.prototype,
+      'initialize'
+    );
     const resolvePoolSelectionStub = sinon.stub(
       CurveQuoteProvider.prototype,
       'resolvePoolSelection'
@@ -350,12 +367,16 @@ describe('take write submission', () => {
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
     const takeArgs = populateTransactionStub.firstCall.args;
     expect(takeArgs[4]).to.equal(Number(LiquiditySource.CURVE));
-    expect(takeArgs[5].toLowerCase()).to.equal('0x00000000000000000000000000000000000000c3');
+    expect(takeArgs[5].toLowerCase()).to.equal(
+      '0x00000000000000000000000000000000000000c3'
+    );
     const decoded = ethers.utils.defaultAbiCoder.decode(
       ['address', 'uint8', 'uint8', 'uint8', 'uint256', 'uint256'],
       takeArgs[6]
     );
-    expect(decoded[0].toLowerCase()).to.equal('0x00000000000000000000000000000000000000c3');
+    expect(decoded[0].toLowerCase()).to.equal(
+      '0x00000000000000000000000000000000000000c3'
+    );
     expect(decoded[1]).to.equal(0);
     expect(decoded[2]).to.equal(1);
     expect(decoded[3]).to.equal(0);
@@ -435,10 +456,53 @@ describe('take write submission', () => {
     expect(connectStub.called).to.be.false;
   });
 
+  it('validates factory dry-run quotes before reporting a would-take action', async () => {
+    const connectStub = sinon.stub(AjnaKeeperTakerFactory__factory, 'connect');
+
+    const result = await takeLiquidationFactory({
+      pool: {
+        name: 'Factory Take Pool',
+        poolAddress: '0x0000000000000000000000000000000000000011',
+        collateralAddress: '0x0000000000000000000000000000000000000012',
+        quoteAddress: '0x0000000000000000000000000000000000000013',
+      } as any,
+      poolConfig: {
+        name: 'Factory Take Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.95,
+        },
+      },
+      signer: {} as any,
+      liquidation: {
+        borrower: '0xBorrower',
+        hpbIndex: 0,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+        isTakeable: true,
+        isArbTakeable: false,
+        externalTakeQuoteEvaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(11),
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+          selectedFeeTier: 3000,
+        },
+      },
+      config: {
+        dryRun: true,
+      },
+    });
+
+    expect(result).to.equal(false);
+    expect(connectStub.called).to.be.false;
+  });
+
   it('uses the configured take write transport for Uniswap factory take submission', async () => {
     const readSigner = {};
     const writeSigner = {
-      getAddress: sinon.stub().resolves('0x00000000000000000000000000000000000000ee'),
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000ee'),
       getTransactionCount: sinon.stub().resolves(0),
       provider: {
         getBlock: sinon.stub().resolves({ timestamp: 123 }),
@@ -524,7 +588,9 @@ describe('take write submission', () => {
     });
 
     expect(
-      (AjnaKeeperTakerFactory__factory.connect as sinon.SinonStub).calledOnceWithExactly(
+      (
+        AjnaKeeperTakerFactory__factory.connect as sinon.SinonStub
+      ).calledOnceWithExactly(
         '0x0000000000000000000000000000000000000013',
         readSigner
       )

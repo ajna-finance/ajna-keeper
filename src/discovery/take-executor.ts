@@ -76,14 +76,6 @@ function getExternalTakeGasLimit(
     : EXTERNAL_TAKE_GAS_LIMIT;
 }
 
-function isSoftRouteGasConversionFailure(reason: string | undefined): boolean {
-  return (
-    reason === 'failed to quote gas cost into quote token' ||
-    reason === 'no liquidity source available for gas cost conversion' ||
-    reason === 'no wrapped native token configured for gas cost conversion'
-  );
-}
-
 function getQuoteTokenScaleFromDecimals(
   quoteTokenDecimals: number
 ): BigNumber | undefined {
@@ -104,7 +96,10 @@ function getAuctionCostQuoteRaw(params: {
     return undefined;
   }
 
-  const quoteDueWad = params.collateral.mul(params.price).add(WAD.sub(1)).div(WAD);
+  const quoteDueWad = params.collateral
+    .mul(params.price)
+    .add(WAD.sub(1))
+    .div(WAD);
   return quoteDueWad.add(scale.sub(1)).div(scale);
 }
 
@@ -137,9 +132,6 @@ async function buildFactoryRouteProfitabilityContext(params: {
   const requiresQuoteProfitability =
     params.takePolicy?.minExpectedProfitQuote !== undefined ||
     params.takePolicy?.minProfitNative !== undefined;
-  const requiresHardQuoteGasPolicy =
-    params.takePolicy?.maxGasCostQuote !== undefined ||
-    requiresQuoteProfitability;
 
   if (!requiresRouteGasRanking && !requiresQuoteProfitability) {
     return undefined;
@@ -162,8 +154,9 @@ async function buildFactoryRouteProfitabilityContext(params: {
   const nativeProfitFloorQuoteRawBySource: Partial<
     Record<LiquiditySource, BigNumber>
   > = {};
-  const routeRejectionReasonsBySource: Partial<Record<LiquiditySource, string>> =
-    {};
+  const routeRejectionReasonsBySource: Partial<
+    Record<LiquiditySource, string>
+  > = {};
 
   for (const source of sources) {
     const gasPolicy = await evaluateGasPolicy({
@@ -186,16 +179,10 @@ async function buildFactoryRouteProfitabilityContext(params: {
     });
 
     if (!gasPolicy.approved) {
-      if (
-        requiresRouteGasRanking &&
-        !requiresHardQuoteGasPolicy &&
-        isSoftRouteGasConversionFailure(gasPolicy.reason)
-      ) {
-        logger.debug(
-          `Route gas conversion unavailable for ${LiquiditySource[source] ?? source}; ranking this source without quote-denominated gas cost: ${gasPolicy.reason}`
+      if (requiresRouteGasRanking) {
+        logger.warn(
+          `Rejecting route source ${LiquiditySource[source] ?? source} because quote-denominated gas conversion failed: ${gasPolicy.reason ?? 'route gas policy rejected source'}`
         );
-        routeExecutionCostQuoteRawBySource[source] = ZERO;
-        continue;
       }
       routeRejectionReasonsBySource[source] =
         gasPolicy.reason ?? 'route gas policy rejected source';
@@ -433,7 +420,9 @@ export async function handleDiscoveredTakeTarget(
       pool: params.pool,
       signer: params.signer,
       poolConfig: params.target,
-      candidates: params.target.candidates.map(({ borrower }) => ({ borrower })),
+      candidates: params.target.candidates.map(({ borrower }) => ({
+        borrower,
+      })),
       subgraph: transports.subgraph,
       externalTakeAdapter,
       externalExecutionConfig: externalExecutionConfig as any,
