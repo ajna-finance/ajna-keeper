@@ -400,6 +400,8 @@ export async function getOneInchPathQuoteEvaluation(
       return {
         isTakeable: false,
         reason: quoteResult.error ?? '1inch quote failed',
+        quoteFailureRetryable: quoteResult.retryable,
+        quoteFailureCode: quoteResult.errorCode,
       };
     }
 

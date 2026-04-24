@@ -150,6 +150,11 @@ async function validateFactoryRegistry(params: {
   }
 }
 
+/**
+ * Performs startup-only checks for the contracts required by the enabled
+ * autodiscover external-take paths. This is intentionally fail-fast: route
+ * deployment mismatches should be fixed before the keeper enters a hot cycle.
+ */
 export async function validateAutoDiscoverRouteDeployments(params: {
   config: KeeperConfig;
   provider: providers.Provider;

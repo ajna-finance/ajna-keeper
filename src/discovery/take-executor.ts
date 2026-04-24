@@ -44,6 +44,9 @@ const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
 const WAD = ethers.constants.WeiPerEther;
 const ZERO = BigNumber.from(0);
 const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
+const DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS = 2_000;
+const DEFAULT_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS = 30_000;
+const DEFAULT_ONEINCH_QUOTE_FAILURE_THRESHOLD = 2;
 
 function isDynamicFactorySource(
   source: LiquiditySource | undefined
@@ -147,9 +150,10 @@ function getGasPriceDriftBasisPoints(params: {
   if (evaluatedGasPrice.isZero()) {
     return currentGasPrice.isZero() ? 0 : Number.POSITIVE_INFINITY;
   }
-  const delta = evaluatedGasPrice.gt(currentGasPrice)
-    ? evaluatedGasPrice.sub(currentGasPrice)
-    : currentGasPrice.sub(evaluatedGasPrice);
+  if (!currentGasPrice.gt(evaluatedGasPrice)) {
+    return 0;
+  }
+  const delta = currentGasPrice.sub(evaluatedGasPrice);
   return delta.mul(BASIS_POINTS_DENOMINATOR).div(evaluatedGasPrice).toNumber();
 }
 
@@ -260,6 +264,152 @@ function formatSignedQuoteAmount(params: {
     params.quoteTokenDecimals
   );
   return params.negative ? `-${formatted}` : formatted;
+}
+
+class OneInchQuoteTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`1inch quote timed out after ${timeoutMs}ms`);
+    this.name = 'OneInchQuoteTimeoutError';
+  }
+}
+
+function getOneInchQuoteTimeoutMs(
+  takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>
+): number {
+  return (
+    takePolicy?.oneInchQuoteTimeoutMs ?? DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS
+  );
+}
+
+function getOneInchQuoteFailureCooldownMs(
+  takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>
+): number {
+  return (
+    takePolicy?.oneInchQuoteFailureCooldownMs ??
+    DEFAULT_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS
+  );
+}
+
+function getOneInchQuoteFailureThreshold(
+  takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>
+): number {
+  return (
+    takePolicy?.oneInchQuoteFailureThreshold ??
+    DEFAULT_ONEINCH_QUOTE_FAILURE_THRESHOLD
+  );
+}
+
+async function withOneInchQuoteTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new OneInchQuoteTimeoutError(timeoutMs)),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function getOneInchCircuitState(rpcCache?: DiscoveryRpcCache): {
+  failures: number;
+  cooldownUntilMs?: number;
+} {
+  if (!rpcCache) {
+    return { failures: 0 };
+  }
+  rpcCache.oneInchQuoteCircuit ??= { failures: 0 };
+  return rpcCache.oneInchQuoteCircuit;
+}
+
+function getOneInchCircuitOpenReason(params: {
+  rpcCache?: DiscoveryRpcCache;
+  takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>;
+  nowMs?: number;
+}): string | undefined {
+  const state = getOneInchCircuitState(params.rpcCache);
+  const nowMs = params.nowMs ?? Date.now();
+  if (state.cooldownUntilMs !== undefined && state.cooldownUntilMs > nowMs) {
+    return `1inch quote circuit open until ${state.cooldownUntilMs}`;
+  }
+  if (state.cooldownUntilMs !== undefined && state.cooldownUntilMs <= nowMs) {
+    state.failures = 0;
+    state.cooldownUntilMs = undefined;
+  }
+  return undefined;
+}
+
+function recordOneInchQuoteSuccess(rpcCache?: DiscoveryRpcCache): void {
+  if (!rpcCache?.oneInchQuoteCircuit) {
+    return;
+  }
+  rpcCache.oneInchQuoteCircuit.failures = 0;
+  rpcCache.oneInchQuoteCircuit.cooldownUntilMs = undefined;
+}
+
+function recordOneInchQuoteFailure(params: {
+  rpcCache?: DiscoveryRpcCache;
+  takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>;
+  nowMs?: number;
+}): void {
+  const state = getOneInchCircuitState(params.rpcCache);
+  state.failures += 1;
+  const failureThreshold = getOneInchQuoteFailureThreshold(params.takePolicy);
+  if (state.failures < failureThreshold) {
+    return;
+  }
+  state.cooldownUntilMs =
+    (params.nowMs ?? Date.now()) +
+    getOneInchQuoteFailureCooldownMs(params.takePolicy);
+}
+
+function applySimpleQuoteProfitability(params: {
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  auctionCostQuoteRaw: BigNumber;
+  routeGasLimit: BigNumber;
+  gasCostQuoteRaw?: BigNumber;
+  gasPriceRaw?: BigNumber;
+  gasPriceGwei?: number;
+  gasPriceAgeMs?: number;
+  gasPriceFreshnessTtlMs?: number;
+  l2GasCostBufferBasisPoints?: number;
+}): void {
+  const quoteAmountRaw = params.quoteEvaluation.quoteAmountRaw;
+  if (!quoteAmountRaw) {
+    return;
+  }
+
+  const routeExecutionCostQuoteRaw = params.gasCostQuoteRaw ?? ZERO;
+  const breakEvenQuoteAmountRaw = params.auctionCostQuoteRaw.add(
+    routeExecutionCostQuoteRaw
+  );
+  params.quoteEvaluation.routeProfitability = {
+    ...params.quoteEvaluation.routeProfitability,
+    auctionRepayRequirementQuoteRaw:
+      params.quoteEvaluation.routeProfitability
+        ?.auctionRepayRequirementQuoteRaw ?? params.auctionCostQuoteRaw,
+    routeExecutionCostQuoteRaw,
+    expectedNetProfitQuoteRaw: quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
+      ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
+      : ZERO,
+    routeGasLimit: params.routeGasLimit,
+    gasPriceWei: params.gasPriceRaw,
+    gasPriceGwei: params.gasPriceGwei,
+    gasPriceAgeMs: params.gasPriceAgeMs,
+    gasPriceFreshnessTtlMs: params.gasPriceFreshnessTtlMs,
+    l2GasCostBufferBasisPoints: params.l2GasCostBufferBasisPoints,
+    gasPolicyEvaluatedAt: Date.now(),
+  };
 }
 
 function hasFreshFactoryRouteGasPolicy(params: {
@@ -525,7 +675,12 @@ function logDiscoveredTakeTargetSummary(params: {
 }
 
 function isInactiveAuctionSkipReason(reason: string): boolean {
-  return reason.includes('auction no longer has collateral onchain');
+  return (
+    reason.includes('auction no longer has collateral onchain') ||
+    reason.includes('approved external take quote no longer matches collateral') ||
+    reason.includes('approved external take quote is stale after auction price increased') ||
+    reason.includes('onchain revalidation changed the auction state')
+  );
 }
 
 function isPrivateOrRelayTakeWriteTransport(
@@ -772,7 +927,22 @@ export async function handleDiscoveredTakeTarget(
 
     const quoteAmountRaw = quoteEvaluation.quoteAmountRaw;
     const gasCostQuoteRaw = gasPolicy.gasCostQuoteRaw;
-    const quoteTokenDecimals = gasPolicy.quoteTokenDecimals;
+    const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
+    const hasQuoteProfitFloor =
+      minExpectedProfitQuote !== undefined ||
+      takePolicy?.minProfitNative !== undefined;
+    const needsSimpleProfitability =
+      quoteAmountRaw !== undefined &&
+      (takePolicy?.allowedExternalTakePaths !== undefined ||
+        hasQuoteProfitFloor ||
+        gasCostQuoteRaw !== undefined);
+    let quoteTokenDecimals = gasPolicy.quoteTokenDecimals;
+    if (quoteTokenDecimals === undefined && needsSimpleProfitability) {
+      quoteTokenDecimals = await getDecimalsErc20(
+        params.signer,
+        params.pool.quoteAddress
+      );
+    }
     const auctionCostQuoteRaw =
       quoteTokenDecimals !== undefined
         ? getAuctionCostQuoteRaw({
@@ -781,17 +951,24 @@ export async function handleDiscoveredTakeTarget(
             quoteTokenDecimals,
           })
         : undefined;
-    if (quoteAmountRaw && gasCostQuoteRaw && auctionCostQuoteRaw) {
-      const breakEvenQuoteAmountRaw = auctionCostQuoteRaw.add(gasCostQuoteRaw);
+    if (quoteAmountRaw && auctionCostQuoteRaw) {
+      applySimpleQuoteProfitability({
+        quoteEvaluation,
+        auctionCostQuoteRaw,
+        routeGasLimit,
+        gasCostQuoteRaw,
+        gasPriceRaw: gasPolicy.gasPriceRaw,
+        gasPriceGwei: gasPolicy.gasPriceGwei,
+        gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
+        gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
+          takePolicy,
+          rpcCache?.chainId
+        ),
+        l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
+      });
+    } else if (quoteAmountRaw) {
       quoteEvaluation.routeProfitability = {
         ...quoteEvaluation.routeProfitability,
-        auctionRepayRequirementQuoteRaw:
-          quoteEvaluation.routeProfitability?.auctionRepayRequirementQuoteRaw ??
-          auctionCostQuoteRaw,
-        routeExecutionCostQuoteRaw: gasCostQuoteRaw,
-        expectedNetProfitQuoteRaw: quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
-          ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
-          : ZERO,
         routeGasLimit,
         gasPriceWei: gasPolicy.gasPriceRaw,
         gasPriceGwei: gasPolicy.gasPriceGwei,
@@ -805,10 +982,6 @@ export async function handleDiscoveredTakeTarget(
       };
     }
 
-    const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
-    const hasQuoteProfitFloor =
-      minExpectedProfitQuote !== undefined ||
-      takePolicy?.minProfitNative !== undefined;
     if (hasQuoteProfitFloor) {
       const minExpectedProfitQuoteRaw =
         quoteTokenDecimals !== undefined && minExpectedProfitQuote !== undefined
@@ -1061,16 +1234,57 @@ export async function handleDiscoveredTakeTarget(
     auctionPrice: BigNumber;
     collateral: BigNumber;
   }): Promise<ExternalTakeQuoteEvaluation> => {
-    const evaluation = await takeModule.getOneInchPathQuoteEvaluation(
-      pool,
-      price,
-      collateral,
-      poolConfig,
-      { delayBetweenActions: params.config.delayBetweenActions },
-      signer,
-      params.config.oneInchRouters,
-      params.config.connectorTokens
-    );
+    const circuitOpenReason = getOneInchCircuitOpenReason({
+      rpcCache,
+      takePolicy,
+    });
+    if (circuitOpenReason) {
+      return {
+        isTakeable: false,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quotedAuctionPriceWad: auctionPrice,
+        quotedCollateralWad: collateral,
+        reason: circuitOpenReason,
+      };
+    }
+
+    let evaluation: ExternalTakeQuoteEvaluation;
+    try {
+      evaluation = await withOneInchQuoteTimeout(
+        takeModule.getOneInchPathQuoteEvaluation(
+          pool,
+          price,
+          collateral,
+          poolConfig,
+          { delayBetweenActions: params.config.delayBetweenActions },
+          signer,
+          params.config.oneInchRouters,
+          params.config.connectorTokens
+        ),
+        getOneInchQuoteTimeoutMs(takePolicy)
+      );
+    } catch (error) {
+      recordOneInchQuoteFailure({ rpcCache, takePolicy });
+      return {
+        isTakeable: false,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quotedAuctionPriceWad: auctionPrice,
+        quotedCollateralWad: collateral,
+        reason: error instanceof Error ? error.message : String(error),
+        quoteFailureRetryable: true,
+        quoteFailureCode:
+          error instanceof OneInchQuoteTimeoutError ? 'timeout' : 'exception',
+      };
+    }
+
+    if (evaluation.quoteFailureRetryable) {
+      recordOneInchQuoteFailure({ rpcCache, takePolicy });
+    } else {
+      recordOneInchQuoteSuccess(rpcCache);
+    }
+
     return {
       ...evaluation,
       externalTakePath: 'oneinch',

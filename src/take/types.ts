@@ -48,6 +48,8 @@ export interface ExternalTakeQuoteEvaluation {
   takeablePrice?: number;
   quoteAmount?: number;
   quoteAmountRaw?: BigNumber;
+  quoteFailureRetryable?: boolean;
+  quoteFailureCode?: number | string;
   selectedLiquiditySource?: LiquiditySource;
   selectedFeeTier?: number;
   approvedMinOutRaw?: BigNumber;

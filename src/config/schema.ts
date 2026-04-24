@@ -221,10 +221,24 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   l2GasCostBufferBasisPoints?: number;
   /**
    * Optional maximum allowed absolute gas-price drift between quote evaluation
-   * and final pre-submission approval. 2000 means 20%. When omitted, freshness
-   * TTLs still apply but drift does not reject otherwise-fresh quotes.
+   * and final pre-submission approval. Only upward drift rejects; lower gas is
+   * favorable. 2000 means 20%. When omitted, freshness TTLs still apply but
+   * drift does not reject otherwise-fresh quotes.
    */
   gasPriceDriftToleranceBasisPoints?: number;
+  /**
+   * Maximum time to wait for a 1inch quote while probing hybrid external-take
+   * paths. Defaults to 2000ms.
+   */
+  oneInchQuoteTimeoutMs?: number;
+  /**
+   * Cooldown after repeated retryable 1inch quote failures. Defaults to 30000ms.
+   */
+  oneInchQuoteFailureCooldownMs?: number;
+  /**
+   * Retryable 1inch quote failures before cooldown opens. Defaults to 2.
+   */
+  oneInchQuoteFailureThreshold?: number;
   /**
    * Controls whether discovered external takes may fall back to public RPC
    * submission, or must use private RPC / relay write transport.

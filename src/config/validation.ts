@@ -40,9 +40,12 @@ const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
 const MAX_DEX_GAS_OVERRIDE = BigInt(2_000_000);
 const MAX_MIN_PROFIT_NATIVE_WEI = BigInt('1000000000000000000000000000');
 const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
-const MIN_L2_GAS_COST_BUFFER_BPS = 10_000;
-const MAX_L2_GAS_COST_BUFFER_BPS = 30_000;
-const MAX_GAS_PRICE_DRIFT_TOLERANCE_BPS = 100_000;
+const VALIDATION_BOUNDS = {
+  minL2GasCostBufferBps: 10_000,
+  maxL2GasCostBufferBps: 30_000,
+  // Keep drift tolerance bounded to operationally sane values; 5000 = 50%.
+  maxGasPriceDriftToleranceBps: 5_000,
+};
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,
@@ -618,15 +621,29 @@ export function validateAutoDiscoverConfig(
     );
     requireOptionalIntegerRange(
       takePolicy.l2GasCostBufferBasisPoints,
-      MIN_L2_GAS_COST_BUFFER_BPS,
-      MAX_L2_GAS_COST_BUFFER_BPS,
+      VALIDATION_BOUNDS.minL2GasCostBufferBps,
+      VALIDATION_BOUNDS.maxL2GasCostBufferBps,
       'AutoDiscoverConfig.take: l2GasCostBufferBasisPoints must be an integer between 10000 and 30000'
     );
     requireOptionalIntegerRange(
       takePolicy.gasPriceDriftToleranceBasisPoints,
       0,
-      MAX_GAS_PRICE_DRIFT_TOLERANCE_BPS,
-      'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 100000'
+      VALIDATION_BOUNDS.maxGasPriceDriftToleranceBps,
+      'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 5000'
+    );
+    requireOptionalPositive(
+      takePolicy.oneInchQuoteTimeoutMs,
+      'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be greater than 0'
+    );
+    requireOptionalNonNegative(
+      takePolicy.oneInchQuoteFailureCooldownMs,
+      'AutoDiscoverConfig.take: oneInchQuoteFailureCooldownMs cannot be negative'
+    );
+    requireOptionalIntegerRange(
+      takePolicy.oneInchQuoteFailureThreshold,
+      1,
+      100,
+      'AutoDiscoverConfig.take: oneInchQuoteFailureThreshold must be an integer between 1 and 100'
     );
     requireOptionalBoolean(
       takePolicy.validateRouteDeployments,
@@ -721,11 +738,21 @@ export function validateAutoDiscoverConfig(
       );
     }
     if (
+      externalTakePaths.has('factory') &&
+      externalTakePaths.has('oneinch') &&
+      discoveredTake.liquiditySource === LiquiditySource.ONEINCH &&
+      takePolicy.validateRouteDeployments !== true
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory while discoveredDefaults.take.liquiditySource is ONEINCH'
+      );
+    }
+    if (
       takePolicy.takeRouteQuoteBudgetPerCandidate !== undefined &&
       !externalTakePaths.has('factory')
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
+        'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires an enabled factory external take path'
       );
     }
 

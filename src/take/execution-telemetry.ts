@@ -1,10 +1,12 @@
-import { BigNumber, providers } from 'ethers';
+import { BigNumber, providers, utils } from 'ethers';
 import { LiquiditySource } from '../config';
 import { logger } from '../logging';
 import { RouteProfitabilityBreakdown } from './types';
 import { TakeWriteTransport } from './write-transport';
 
 const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
+export const TAKE_EXECUTION_TELEMETRY_VERSION = 1;
+// Warn when observed execution gas diverges materially from route policy input.
 const OBSERVED_GAS_DIVERGENCE_WARNING_BPS = 2_000;
 
 function formatLiquiditySource(source: LiquiditySource | undefined): string {
@@ -24,6 +26,14 @@ function computeDivergenceBasisPoints(params: {
     ? params.expected.sub(params.observed)
     : params.observed.sub(params.expected);
   return delta.mul(BASIS_POINTS_DENOMINATOR).div(params.expected).toNumber();
+}
+
+function formatBorrowerTelemetryId(borrower: string): string {
+  const normalized = utils.isAddress(borrower)
+    ? utils.getAddress(borrower).toLowerCase()
+    : borrower.toLowerCase();
+  const hash = utils.keccak256(utils.toUtf8Bytes(normalized));
+  return hash.slice(0, 10);
 }
 
 export function logTakeExecutionTelemetry(params: {
@@ -49,11 +59,12 @@ export function logTakeExecutionTelemetry(params: {
         })
       : undefined;
   const message =
-    `Take execution telemetry: path=${params.path}` +
+    `Take execution telemetry: version=${TAKE_EXECUTION_TELEMETRY_VERSION}` +
+    ` path=${params.path}` +
     ` source=${formatLiquiditySource(params.source)}` +
     ` pool=${params.poolAddress}` +
     ` poolName="${params.poolName}"` +
-    ` borrower=${params.borrower}` +
+    ` borrowerHash=${formatBorrowerTelemetryId(params.borrower)}` +
     ` tx=${params.receipt.transactionHash}` +
     ` gasUsed=${observedGasUsed?.toString() ?? 'n/a'}` +
     ` routeGasEstimate=${routeGasLimit?.toString() ?? 'n/a'}` +

@@ -52,7 +52,13 @@ export class DexRouter {
     amount: BigNumber,
     tokenIn: string,
     tokenOut: string
-  ): Promise<{ success: boolean; dstAmount?: string; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    dstAmount?: string;
+    error?: string;
+    retryable?: boolean;
+    errorCode?: number;
+  }> {
     const url = `${process.env.ONEINCH_API}/${chainId}/quote`;
 
     const params: {
@@ -87,8 +93,14 @@ export class DexRouter {
       return { success: true, dstAmount: response.data.dstAmount };
     } catch (error: Error | any) {
       const errorMsg = error.response?.data?.description || error.message;
+      const status = error.response?.status;
       logger.error(`Failed to get quote from 1inch: ${errorMsg}`);
-      return { success: false, error: errorMsg };
+      return {
+        success: false,
+        error: errorMsg,
+        retryable: status === 429 || status === undefined || status >= 500,
+        errorCode: status,
+      };
     }
   }
 
