@@ -570,6 +570,7 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - Dynamic `allowedLiquiditySources` is factory-only in this PR. Use it only when `discoveredDefaults.take.liquiditySource` is `UNISWAPV3`, `SUSHISWAP`, or `CURVE`; 1inch remains a single-source aggregator path and is not compared against factory DEX routes by this selector.
 - `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
 - On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token.
+- `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.
 
 For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).
 

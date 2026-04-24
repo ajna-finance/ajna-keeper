@@ -151,6 +151,20 @@ function getEffectiveFactoryRouteSources(
   return sources;
 }
 
+function getEffectiveTakeGasOverrideSources(
+  discoveredTake: TakeSettings,
+  allowedLiquiditySources: LiquiditySource[] | undefined
+): Set<LiquiditySource> {
+  const sources = getEffectiveFactoryRouteSources(
+    discoveredTake,
+    allowedLiquiditySources
+  );
+  if (discoveredTake.liquiditySource === LiquiditySource.ONEINCH) {
+    sources.add(LiquiditySource.ONEINCH);
+  }
+  return sources;
+}
+
 function isFactoryDynamicSource(
   source: LiquiditySource | undefined
 ): source is
@@ -560,6 +574,10 @@ export function validateAutoDiscoverConfig(
       discoveredTake,
       takePolicy.allowedLiquiditySources
     );
+    const effectiveTakeGasOverrideSources = getEffectiveTakeGasOverrideSources(
+      discoveredTake,
+      takePolicy.allowedLiquiditySources
+    );
     if (
       config.universalRouterOverrides?.candidateFeeTiers !== undefined &&
       !effectiveFactorySources.has(LiquiditySource.UNISWAPV3)
@@ -594,15 +612,15 @@ export function validateAutoDiscoverConfig(
             `AutoDiscoverConfig.take: dexGasOverrides.${source} is not a valid LiquiditySource`
           );
         }
-        if (liquiditySource === LiquiditySource.ONEINCH) {
+        if (
+          liquiditySource === LiquiditySource.ONEINCH &&
+          !effectiveTakeGasOverrideSources.has(liquiditySource)
+        ) {
           throw new Error(
-            'AutoDiscoverConfig.take: dexGasOverrides cannot include ONEINCH for factory external takes'
+            'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires discoveredDefaults.take.liquiditySource to be ONEINCH'
           );
         }
-        if (
-          !FACTORY_DYNAMIC_SOURCES.includes(liquiditySource) ||
-          !effectiveFactorySources.has(liquiditySource)
-        ) {
+        if (!effectiveTakeGasOverrideSources.has(liquiditySource)) {
           throw new Error(
             `AutoDiscoverConfig.take: dexGasOverrides.${sourceLabel} is not enabled by discoveredDefaults.take.liquiditySource or allowedLiquiditySources`
           );

@@ -28,4 +28,5 @@ export interface DiscoveryRpcCache {
   gasPrice?: BigNumber;
   gasPriceFetchedAt?: number;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
+  gasQuoteFallbackWarningKeys?: Set<string>;
 }

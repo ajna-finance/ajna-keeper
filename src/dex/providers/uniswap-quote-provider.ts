@@ -32,6 +32,9 @@ const QUOTER_V2_ABI = [
 const UNISWAP_FACTORY_ABI = [
   'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)',
 ];
+const UNISWAP_V3_POOL_ABI = [
+  'function liquidity() external view returns (uint128)',
+];
 const MAX_POOL_EXISTENCE_CACHE_ENTRIES = 1024;
 
 function prunePoolExistenceCache(
@@ -198,7 +201,16 @@ export class UniswapV3QuoteProvider {
         tokenB,
         fee
       );
-      const exists = poolAddress !== ethers.constants.AddressZero;
+      let exists = false;
+      if (poolAddress !== ethers.constants.AddressZero) {
+        const poolContract = new ethers.Contract(
+          poolAddress,
+          UNISWAP_V3_POOL_ABI,
+          this.signer
+        );
+        const activeLiquidity: BigNumber = await poolContract.liquidity();
+        exists = activeLiquidity.gt(0);
+      }
       this.poolExistenceCache.set(cacheKey, {
         exists,
         expiresAt: Date.now() + 5 * 60 * 1000,
@@ -207,7 +219,11 @@ export class UniswapV3QuoteProvider {
 
       if (exists) {
         logger.debug(
-          `Uniswap V3 pool found: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
+          `Uniswap V3 pool found with active liquidity: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
+        );
+      } else if (poolAddress !== ethers.constants.AddressZero) {
+        logger.debug(
+          `Uniswap V3 pool has no active liquidity: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
         );
       } else {
         logger.debug(

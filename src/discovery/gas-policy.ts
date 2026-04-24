@@ -93,6 +93,15 @@ function resolveGasQuoteSource(
   return resolveConfiguredGasQuoteLiquiditySource(config, chainId);
 }
 
+async function tryResolveSignerChainId(
+  signer: Signer
+): Promise<number | undefined> {
+  const maybeSigner = signer as Signer & { getChainId?: () => Promise<number> };
+  return typeof maybeSigner.getChainId === 'function'
+    ? await maybeSigner.getChainId()
+    : undefined;
+}
+
 function getGasQuoteSourceCandidates(params: {
   config: DiscoveryExecutionConfig;
   chainId?: number;
@@ -138,6 +147,54 @@ function getGasQuoteFeeTiers(
   );
 }
 
+function getGasQuoteCacheKey(params: {
+  chainId?: number;
+  tokenIn: string;
+  tokenOut: string;
+}): string | undefined {
+  if (params.chainId === undefined) {
+    return undefined;
+  }
+  return `${params.chainId}:${params.tokenIn.toLowerCase()}:${params.tokenOut.toLowerCase()}`;
+}
+
+function logGasQuoteFallback(params: {
+  usedLiquiditySource: LiquiditySource;
+  preferredLiquiditySource?: LiquiditySource;
+  rpcCache?: DiscoveryRpcCache;
+  gasQuoteCacheKey?: string;
+}): void {
+  if (
+    params.preferredLiquiditySource === undefined ||
+    params.usedLiquiditySource === params.preferredLiquiditySource
+  ) {
+    return;
+  }
+
+  const message = `Gas quote conversion used ${
+    LiquiditySource[params.usedLiquiditySource] ?? params.usedLiquiditySource
+  } after preferred source ${
+    LiquiditySource[params.preferredLiquiditySource] ??
+    params.preferredLiquiditySource
+  } was unavailable`;
+  if (!params.rpcCache || params.gasQuoteCacheKey === undefined) {
+    logger.warn(message);
+    return;
+  }
+
+  if (!params.rpcCache.gasQuoteFallbackWarningKeys) {
+    params.rpcCache.gasQuoteFallbackWarningKeys = new Set();
+  }
+  const warningKey = `${params.gasQuoteCacheKey}:${params.preferredLiquiditySource}:${params.usedLiquiditySource}`;
+  if (params.rpcCache.gasQuoteFallbackWarningKeys.has(warningKey)) {
+    logger.debug(message);
+    return;
+  }
+
+  params.rpcCache.gasQuoteFallbackWarningKeys.add(warningKey);
+  logger.warn(message);
+}
+
 async function quoteTokensByLiquiditySource(params: {
   signer: Signer;
   config: DiscoveryExecutionConfig;
@@ -152,7 +209,11 @@ async function quoteTokensByLiquiditySource(params: {
   }
 
   if (params.liquiditySource === LiquiditySource.ONEINCH) {
-    const chainId = params.chainId ?? (await params.signer.getChainId());
+    const chainId =
+      params.chainId ?? (await tryResolveSignerChainId(params.signer));
+    if (chainId === undefined) {
+      return undefined;
+    }
     if (!params.config.oneInchRouters?.[chainId]) {
       return undefined;
     }
@@ -200,6 +261,14 @@ async function quoteTokensByLiquiditySource(params: {
       routerConfig.candidateFeeTiers,
       3000
     )) {
+      const poolExists = await quoteProvider.poolExists(
+        params.tokenIn,
+        params.tokenOut,
+        feeTier
+      );
+      if (!poolExists) {
+        continue;
+      }
       const quoteResult = await quoteProvider.getQuote(
         params.amountIn,
         params.tokenIn,
@@ -208,6 +277,7 @@ async function quoteTokensByLiquiditySource(params: {
       );
       if (quoteResult.success && quoteResult.dstAmount) {
         const quote = BigNumber.from(quoteResult.dstAmount);
+        // Use the highest output to conservatively price gas in quote-token terms.
         bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
       }
     }
@@ -249,6 +319,7 @@ async function quoteTokensByLiquiditySource(params: {
       );
       if (quoteResult.success && quoteResult.dstAmount) {
         const quote = BigNumber.from(quoteResult.dstAmount);
+        // Use the highest output to conservatively price gas in quote-token terms.
         bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
       }
     }
@@ -294,6 +365,9 @@ async function quoteTokensByGasQuoteSources(params: {
   tokenIn: string;
   tokenOut: string;
   chainId?: number;
+  preferredLiquiditySource?: LiquiditySource;
+  rpcCache?: DiscoveryRpcCache;
+  gasQuoteCacheKey?: string;
 }): Promise<
   { amountOut: BigNumber; liquiditySource: LiquiditySource } | undefined
 > {
@@ -309,6 +383,12 @@ async function quoteTokensByGasQuoteSources(params: {
         chainId: params.chainId,
       });
       if (amountOut) {
+        logGasQuoteFallback({
+          usedLiquiditySource: liquiditySource,
+          preferredLiquiditySource: params.preferredLiquiditySource,
+          rpcCache: params.rpcCache,
+          gasQuoteCacheKey: params.gasQuoteCacheKey,
+        });
         return { amountOut, liquiditySource };
       }
     } catch (error) {
@@ -363,15 +443,18 @@ export async function evaluateGasPolicy(params: {
     };
   }
 
-  const cachedChainId = params.chainId ?? params.rpcCache?.chainId;
+  const chainId =
+    params.chainId ??
+    params.rpcCache?.chainId ??
+    (await tryResolveSignerChainId(params.signer));
   const unbufferedGasCostNativeRaw = gasPrice.mul(params.gasLimit);
   const gasCostNativeRaw = applyL2GasCostBuffer(
     unbufferedGasCostNativeRaw,
-    cachedChainId
+    chainId
   );
   if (!gasCostNativeRaw.eq(unbufferedGasCostNativeRaw)) {
     logger.debug(
-      `Applied conservative L2 gas cost buffer for chainId ${cachedChainId}: ${unbufferedGasCostNativeRaw.toString()} -> ${gasCostNativeRaw.toString()}`
+      `Applied conservative L2 gas cost buffer for chainId ${chainId}: ${unbufferedGasCostNativeRaw.toString()} -> ${gasCostNativeRaw.toString()}`
     );
   }
   const gasCostNative = Number(ethers.utils.formatEther(gasCostNativeRaw));
@@ -400,7 +483,6 @@ export async function evaluateGasPolicy(params: {
     };
   }
 
-  const chainId = cachedChainId ?? (await params.signer.getChainId());
   const resolvedGasQuoteSource = resolveGasQuoteSource(params.config, chainId);
   const preferredLiquiditySource =
     params.preferredLiquiditySource !== undefined &&
@@ -449,6 +531,11 @@ export async function evaluateGasPolicy(params: {
       reason: 'no wrapped native token configured for gas cost conversion',
     };
   }
+  const gasQuoteCacheKey = getGasQuoteCacheKey({
+    chainId,
+    tokenIn: wrappedNativeAddress,
+    tokenOut: params.quoteTokenAddress,
+  });
 
   let gasCostQuote: number;
   let gasCostQuoteRaw: BigNumber;
@@ -479,6 +566,9 @@ export async function evaluateGasPolicy(params: {
       tokenIn: wrappedNativeAddress,
       tokenOut: params.quoteTokenAddress,
       chainId,
+      preferredLiquiditySource,
+      rpcCache: params.rpcCache,
+      gasQuoteCacheKey,
     });
     if (!quotedAmount) {
       return {
@@ -488,11 +578,6 @@ export async function evaluateGasPolicy(params: {
         gasPriceGwei,
         reason: 'failed to quote gas cost into quote token',
       };
-    }
-    if (quotedAmount.liquiditySource !== preferredLiquiditySource) {
-      logger.debug(
-        `Gas quote conversion used ${LiquiditySource[quotedAmount.liquiditySource] ?? quotedAmount.liquiditySource} after preferred source ${preferredLiquiditySource !== undefined ? (LiquiditySource[preferredLiquiditySource] ?? preferredLiquiditySource) : 'none'} was unavailable`
-      );
     }
     gasCostQuoteRaw = quotedAmount.amountOut;
     gasCostQuote = Number(
@@ -523,6 +608,9 @@ export async function evaluateGasPolicy(params: {
       wrappedNativeAddress,
       quoteTokenAddress: params.quoteTokenAddress,
       chainId,
+      preferredLiquiditySource,
+      rpcCache: params.rpcCache,
+      gasQuoteCacheKey,
     });
     if (minProfitNativeQuoteRaw === undefined) {
       return {
@@ -556,6 +644,9 @@ async function quoteExactNativeAmountToQuote(params: {
   wrappedNativeAddress: string;
   quoteTokenAddress: string;
   chainId?: number;
+  preferredLiquiditySource?: LiquiditySource;
+  rpcCache?: DiscoveryRpcCache;
+  gasQuoteCacheKey?: string;
 }): Promise<BigNumber | undefined> {
   if (params.amountInNative.isZero()) {
     return BigNumber.from(0);
@@ -577,6 +668,9 @@ async function quoteExactNativeAmountToQuote(params: {
     tokenIn: params.wrappedNativeAddress,
     tokenOut: params.quoteTokenAddress,
     chainId: params.chainId,
+    preferredLiquiditySource: params.preferredLiquiditySource,
+    rpcCache: params.rpcCache,
+    gasQuoteCacheKey: params.gasQuoteCacheKey,
   });
   return quotedAmount?.amountOut;
 }

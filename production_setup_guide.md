@@ -559,7 +559,7 @@ Recommended rollout order:
 7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
 8. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
 
-Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper.
+Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion.
 
 ## Step 6: DEX Configuration Best Practices
 

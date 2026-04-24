@@ -127,6 +127,65 @@ describe('Discovery Gas Policy', () => {
     expect(oneInchQuoteStub.calledOnce).to.be.true;
   });
 
+  it('applies the L2 gas buffer when only signer.getChainId can resolve the chain', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const gasPrice = ethers.utils.parseUnits('1', 'gwei');
+    const gasLimit = BigNumber.from(900000);
+    const bufferedGasCostNativeRaw = gasPrice
+      .mul(gasLimit)
+      .mul(13000)
+      .add(9999)
+      .div(10000);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .callsFake(async (_chainId, amountIn: BigNumber) => ({
+        success: true,
+        dstAmount: amountIn.eq(bufferedGasCostNativeRaw)
+          ? ethers.utils.parseUnits('1.3', 6).toString()
+          : ethers.utils.parseUnits('1', 6).toString(),
+      }));
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(8453),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 2,
+          },
+        },
+        oneInchRouters: {
+          8453: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(gasPrice),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 2,
+      },
+      gasLimit,
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice,
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1.3', 6))).to.be
+      .true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+  });
+
   it('falls back when oneInchRouters is present but empty', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
 
@@ -233,6 +292,9 @@ describe('Discovery Gas Policy', () => {
     const uniswapAvailabilityStub = sinon
       .stub(UniswapV3QuoteProvider.prototype, 'isAvailable')
       .returns(true);
+    const uniswapPoolExistsStub = sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'poolExists')
+      .resolves(true);
     const uniswapQuoteStub = sinon
       .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
       .resolves({
@@ -286,6 +348,7 @@ describe('Discovery Gas Policy', () => {
     expect(result.approved).to.be.true;
     expect(oneInchQuoteStub.called).to.be.false;
     expect(uniswapAvailabilityStub.calledOnce).to.be.true;
+    expect(uniswapPoolExistsStub.calledOnce).to.be.true;
     expect(uniswapQuoteStub.calledOnce).to.be.true;
   });
 
@@ -295,6 +358,7 @@ describe('Discovery Gas Policy', () => {
       .stub(DexRouter.prototype, 'getQuoteFromOneInch')
       .resolves({ success: false, error: 'no route' });
     sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+    sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
     const uniswapQuoteStub = sinon
       .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
       .resolves({
@@ -357,6 +421,11 @@ describe('Discovery Gas Policy', () => {
   it('uses candidate fee tiers for Uniswap gas quote conversion', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+    const poolExistsStub = sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'poolExists')
+      .callsFake(
+        async (_tokenIn, _tokenOut, feeTier?: number) => feeTier === 500
+      );
     const uniswapQuoteStub = sinon
       .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
       .callsFake(
@@ -417,9 +486,9 @@ describe('Discovery Gas Policy', () => {
     expect(result.approved).to.be.true;
     expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('3', 6))).to.be
       .true;
-    expect(uniswapQuoteStub.calledTwice).to.be.true;
-    expect(uniswapQuoteStub.firstCall.args[3]).to.equal(3000);
-    expect(uniswapQuoteStub.secondCall.args[3]).to.equal(500);
+    expect(poolExistsStub.calledTwice).to.be.true;
+    expect(uniswapQuoteStub.calledOnce).to.be.true;
+    expect(uniswapQuoteStub.firstCall.args[3]).to.equal(500);
   });
 
   it('quotes minProfitNative as a fresh exact native amount separate from gas cost', async () => {

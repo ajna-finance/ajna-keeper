@@ -326,18 +326,15 @@ export function recordFactoryRouteSuccess(params: {
   if (!params.runtimeCache.recentRouteSuccesses) {
     params.runtimeCache.recentRouteSuccesses = new Map();
   }
-  pruneExpiredRouteSuccesses(
-    params.runtimeCache.recentRouteSuccesses,
-    Date.now()
-  );
-  params.runtimeCache.recentRouteSuccesses.set(
-    getFactoryRouteKey({
-      route: params.route,
-      collateralTokenAddress: params.pool.collateralAddress,
-      quoteTokenAddress: params.pool.quoteAddress,
-    }),
-    Date.now()
-  );
+  const now = Date.now();
+  pruneExpiredRouteSuccesses(params.runtimeCache.recentRouteSuccesses, now);
+  const routeKey = getFactoryRouteKey({
+    route: params.route,
+    collateralTokenAddress: params.pool.collateralAddress,
+    quoteTokenAddress: params.pool.quoteAddress,
+  });
+  params.runtimeCache.recentRouteSuccesses.delete(routeKey);
+  params.runtimeCache.recentRouteSuccesses.set(routeKey, now);
   pruneMapToMaxSize(
     params.runtimeCache.recentRouteSuccesses,
     MAX_RECENT_ROUTE_SUCCESSES
