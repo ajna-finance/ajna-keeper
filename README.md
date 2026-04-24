@@ -475,6 +475,8 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 - Can add `candidateFeeTiers` to probe other deployed pools for the same token pair
 - Applies the selected quote route to execution, including the selected fee tier
 - Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
+- Treats `allowedLiquiditySources`, when set, as the complete factory route allowlist. Include the default source in that list if it should remain eligible.
+- A low `takeRouteQuoteBudgetPerCandidate` reduces quote latency but can miss a more profitable route that was not probed.
 - No per-pool external-take fee override today
 - Change requires updating config and restarting the keeper
 
@@ -567,7 +569,7 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
-- Dynamic `allowedLiquiditySources` is factory-only in this PR. Use it only when `discoveredDefaults.take.liquiditySource` is `UNISWAPV3`, `SUSHISWAP`, or `CURVE`; 1inch remains a single-source aggregator path and is not compared against factory DEX routes by this selector.
+- Dynamic `allowedLiquiditySources` is factory-only in this PR. Use it only when `discoveredDefaults.take.liquiditySource` is `UNISWAPV3`, `SUSHISWAP`, or `CURVE`; when set, it is the complete factory route allowlist. 1inch remains a single-source aggregator path and is not compared against factory DEX routes by this selector.
 - `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
 - On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token.
 - `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.

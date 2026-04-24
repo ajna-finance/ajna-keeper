@@ -80,7 +80,7 @@ const config: KeeperConfig = {
       // maxGasCostQuote: 1,
       // minExpectedProfitQuote: 1,
       // If discoveredDefaults.take enables factory external takes later, import
-      // LiquiditySource and keep route probing bounded and targeted:
+      // LiquiditySource and list every factory route that may execute:
       // allowedLiquiditySources: [LiquiditySource.UNISWAPV3, LiquiditySource.SUSHISWAP],
       // takeRouteQuoteBudgetPerCandidate: 2,
       // minProfitNative: '1000000000000000', // 0.001 ETH minimum net profit

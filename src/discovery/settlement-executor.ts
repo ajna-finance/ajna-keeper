@@ -15,6 +15,7 @@ import {
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
 import { AuctionToSettle, SettlementHandler } from '../settlement';
+import { createDiscoveryRpcCache } from './rpc-cache';
 
 const SETTLEMENT_GAS_LIMIT = BigNumber.from(800000);
 
@@ -126,16 +127,10 @@ export async function handleDiscoveredSettlementTarget(
   );
   const rpcCache =
     params.rpcCache ??
-    (params.signer.provider
-      ? {
-          chainId:
-          typeof params.signer.getChainId === 'function'
-            ? await params.signer.getChainId()
-            : undefined,
-	          gasPrice: await transports.readRpc.getGasPrice(),
-	          gasPriceFetchedAt: Date.now(),
-	        }
-      : undefined);
+    (await createDiscoveryRpcCache({
+      signer: params.signer,
+      readRpc: transports.readRpc,
+    }));
   const approvedAuctions: AuctionToSettle[] = [];
   const settlementPolicy = getAutoDiscoverSettlementPolicy(
     params.config.autoDiscover

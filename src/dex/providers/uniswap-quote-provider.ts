@@ -4,7 +4,11 @@
 import { BigNumber, ethers } from 'ethers';
 import { logger } from '../../logging';
 import { getDecimalsErc20 } from '../../erc20';
-import { PoolExistenceCache } from './pool-existence-cache';
+import {
+  PoolExistenceCache,
+  POOL_EXISTS_CACHE_TTL_MS,
+  UNINITIALIZED_POOL_CACHE_TTL_MS,
+} from './pool-existence-cache';
 
 interface QuoteResult {
   success: boolean;
@@ -36,9 +40,6 @@ const UNISWAP_FACTORY_ABI = [
 const UNISWAP_V3_POOL_ABI = [
   'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
 ];
-const POOL_EXISTS_CACHE_TTL_MS = 5 * 60 * 1000;
-const UNINITIALIZED_POOL_CACHE_TTL_MS = 30 * 1000;
-
 /**
  * Official Uniswap V3 quote provider using QuoterV2 contract
  * Uses the configured QuoterV2 address per chain - clean and simple!

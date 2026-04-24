@@ -771,12 +771,8 @@ export function getFactoryRouteCandidates(params: {
   selection?: FactoryRouteSelectionOptions;
 }): FactoryRouteCandidate[] {
   const sources =
-    params.selection?.allowedLiquiditySources?.length &&
-    isDynamicFactorySource(params.defaultLiquiditySource)
-      ? [
-          params.defaultLiquiditySource,
-          ...params.selection.allowedLiquiditySources,
-        ]
+    params.selection?.allowedLiquiditySources?.length
+      ? params.selection.allowedLiquiditySources
       : [params.defaultLiquiditySource];
 
   const uniqueSources = Array.from(new Set(sources)).filter(

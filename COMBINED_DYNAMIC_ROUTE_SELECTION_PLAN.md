@@ -96,12 +96,12 @@ v1 sources:
 
 Changes:
 
-- Add `AutoDiscoverTakePolicy.allowedLiquiditySources?: LiquiditySource[]`.
+- Add `AutoDiscoverTakePolicy.allowedLiquiditySources?: LiquiditySource[]` as the complete factory route allowlist when set.
 - Add chain-level `dexGasOverrides?: Partial<Record<LiquiditySource, string>>`.
 - Reject `LiquiditySource.ONEINCH` for factory external takes.
 - Add `selectedLiquiditySource?: LiquiditySource` to `ExternalTakeQuoteEvaluation`.
 - Generalize `RouteCandidate` to include `liquiditySource` and optional `feeTier`.
-- Evaluate every allowed source and fee-tier route sequentially.
+- Evaluate every route from `allowedLiquiditySources` when set; otherwise evaluate the configured default source and its fee-tier candidates.
 - For Curve, evaluate the configured pool selected by `CurveQuoteProvider` for the candidate token pair and bind the selected pool into the approved quote evaluation.
 - Compute route-specific gas-adjusted profitability before ranking.
 - Pick the best profitable route by expected net profit after route-specific floor checks.
@@ -322,6 +322,8 @@ Probe ordering is a latency optimization, not a correctness shortcut. When budge
 
 Use a per-candidate route quote budget for this selector. Any existing per-run autodiscover quote budget remains an outer limiter that can stop candidate processing before route selection starts.
 
+`allowedLiquiditySources` is intentionally authoritative, not additive. If it is set, the configured default source is not probed unless it is also listed. This keeps operator route restrictions explicit and avoids executing through a source the operator expected to exclude.
+
 ## Gas And Profit Floor Handling
 
 Route ranking must use route-specific gas cost before choosing the winner:
@@ -435,6 +437,7 @@ Unit tests:
 - quote-budget exhaustion returns best probed route and logs skipped routes.
 - `approvedMinOutRaw` preserves the market-factor floor and includes auction repayment, route execution cost, required profit floor, and slippage/risk buffer.
 - 1inch is rejected from v1 `allowedLiquiditySources`.
+- `allowedLiquiditySources` excludes the configured default source unless that source is explicitly listed.
 - configured Curve pool matching selects `CurveKeeperTaker`.
 - Curve route participates in the same route selector after config-driven matching.
 

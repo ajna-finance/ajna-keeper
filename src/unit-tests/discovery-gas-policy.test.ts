@@ -348,7 +348,7 @@ describe('Discovery Gas Policy', () => {
 
     expect(result.approved).to.be.true;
     expect(oneInchQuoteStub.called).to.be.false;
-    expect(uniswapAvailabilityStub.calledOnce).to.be.true;
+    expect(uniswapAvailabilityStub.called).to.be.true;
     expect(uniswapPoolExistsStub.calledOnce).to.be.true;
     expect(uniswapQuoteStub.calledOnce).to.be.true;
   });

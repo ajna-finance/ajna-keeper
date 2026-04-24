@@ -91,4 +91,52 @@ describe('PoolExistenceCache', () => {
       )
     ).to.equal(false);
   });
+
+  it('refreshes insertion order when an existing entry is written again', () => {
+    const cache = new PoolExistenceCache(2);
+
+    cache.set(
+      '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      500,
+      true,
+      1_000
+    );
+    cache.set(
+      '0xcccccccccccccccccccccccccccccccccccccccc',
+      '0xdddddddddddddddddddddddddddddddddddddddd',
+      500,
+      false,
+      1_000
+    );
+    cache.set(
+      '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      500,
+      true,
+      1_000
+    );
+    cache.set(
+      '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+      '0xffffffffffffffffffffffffffffffffffffffff',
+      500,
+      true,
+      1_000
+    );
+
+    expect(
+      cache.get(
+        '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        500
+      )
+    ).to.equal(true);
+    expect(
+      cache.get(
+        '0xcccccccccccccccccccccccccccccccccccccccc',
+        '0xdddddddddddddddddddddddddddddddddddddddd',
+        500
+      )
+    ).to.be.undefined;
+  });
 });

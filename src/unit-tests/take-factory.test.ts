@@ -9,6 +9,7 @@ import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider'
 import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
 import * as erc20 from '../erc20';
 import {
+  getFactoryRouteCandidates,
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
 } from '../take/factory/shared';
@@ -647,6 +648,23 @@ describe('Take Factory', () => {
   });
 
   describe('Dynamic factory route selection', () => {
+    it('treats allowedLiquiditySources as the complete factory route allowlist', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.UNISWAPV3,
+        config: {
+          universalRouterOverrides: { defaultFeeTier: 3000 },
+          sushiswapRouterOverrides: { defaultFeeTier: 500 },
+        },
+        selection: {
+          allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
+      ]);
+    });
+
     it('rejects takeable route evaluations without net-profit metadata', () => {
       expect(() =>
         selectBestFactoryRouteEvaluation({
@@ -751,7 +769,10 @@ describe('Take Factory', () => {
         ) as any,
         runtimeCache,
         {
-          allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+          allowedLiquiditySources: [
+            LiquiditySource.UNISWAPV3,
+            LiquiditySource.SUSHISWAP,
+          ],
           routeProfitabilityContext: {
             routeExecutionCostQuoteRawBySource: {
               [LiquiditySource.UNISWAPV3]: ethers.utils.parseUnits('1', 6),
@@ -863,7 +884,10 @@ describe('Take Factory', () => {
         ) as any,
         runtimeCache,
         {
-          allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+          allowedLiquiditySources: [
+            LiquiditySource.UNISWAPV3,
+            LiquiditySource.SUSHISWAP,
+          ],
           routeQuoteBudgetPerCandidate: 2,
           routeProfitabilityContext: {
             routeExecutionCostQuoteRawBySource: {
@@ -1048,7 +1072,10 @@ describe('Take Factory', () => {
         ) as any,
         takeFactory.createFactoryQuoteProviderRuntimeCache(),
         {
-          allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+          allowedLiquiditySources: [
+            LiquiditySource.UNISWAPV3,
+            LiquiditySource.SUSHISWAP,
+          ],
         }
       );
 

@@ -30,7 +30,6 @@ import {
 } from '../read-transports';
 import { handleSettlements } from '../settlement';
 import { ChainwideLiquidationAuction } from '../subgraph';
-import { createFactoryQuoteProviderRuntimeCache } from '../take/factory';
 import { handleTakes } from '../take';
 import {
   createTakeWriteTransport,
@@ -38,6 +37,7 @@ import {
   TakeWriteTransport,
 } from '../take/write-transport';
 import { delay } from '../utils';
+import { createDiscoveryRpcCache } from './rpc-cache';
 
 export interface DiscoverySnapshotState {
   latestLiquidationAuctions?: ChainwideLiquidationAuction[];
@@ -302,10 +302,6 @@ async function getSettlementCycleLiquidationAuctions(
   };
 }
 
-function createEmptyDiscoveryRpcCache(): DiscoveryRpcCache {
-  return {};
-}
-
 async function resolveTakeCycleTargets(
   state: BoundDiscoveryRuntimeState,
   liquidationAuctions?: ChainwideLiquidationAuction[]
@@ -338,24 +334,11 @@ async function createDiscoveryCycleRpcCache(params: {
   state: BoundDiscoveryRuntimeState;
   includeFactoryQuoteProviders?: boolean;
 }): Promise<DiscoveryRpcCache | undefined> {
-  if (!params.state.signer.provider) {
-    return undefined;
-  }
-
-  return {
-    ...createEmptyDiscoveryRpcCache(),
-    chainId:
-      typeof params.state.signer.getChainId === 'function'
-        ? await params.state.signer.getChainId()
-        : undefined,
-    gasPrice: await params.state.readTransports.readRpc.getGasPrice(),
-    gasPriceFetchedAt: Date.now(),
-    ...(params.includeFactoryQuoteProviders
-      ? {
-          factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
-        }
-      : {}),
-  };
+  return await createDiscoveryRpcCache({
+    signer: params.state.signer,
+    readRpc: params.state.readTransports.readRpc,
+    includeFactoryQuoteProviders: params.includeFactoryQuoteProviders,
+  });
 }
 
 async function ensureFreshDiscoveryGasPrice(params: {

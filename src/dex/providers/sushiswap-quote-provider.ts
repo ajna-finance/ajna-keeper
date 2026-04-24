@@ -5,7 +5,11 @@
 import { ethers, BigNumber, Signer } from 'ethers';
 import { logger } from '../../logging';
 import { getDecimalsErc20 } from '../../erc20';
-import { PoolExistenceCache } from './pool-existence-cache';
+import {
+  PoolExistenceCache,
+  POOL_EXISTS_CACHE_TTL_MS,
+  UNINITIALIZED_POOL_CACHE_TTL_MS,
+} from './pool-existence-cache';
 
 // SushiSwap V3 QuoterV2 ABI with CORRECT field order (from production testing)
 const SUSHI_QUOTER_ABI = [
@@ -22,9 +26,6 @@ const SUSHI_FACTORY_ABI = [
 const SUSHI_V3_POOL_ABI = [
   'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
 ];
-const POOL_EXISTS_CACHE_TTL_MS = 5 * 60 * 1000;
-const UNINITIALIZED_POOL_CACHE_TTL_MS = 30 * 1000;
-
 interface SushiSwapQuoteConfig {
   swapRouterAddress: string;
   quoterV2Address?: string;
@@ -109,7 +110,8 @@ export class SushiSwapQuoteProvider {
           logger.warn(
             `SushiSwap QuoterV2 not found at ${this.config.quoterV2Address}`
           );
-          // Continue without quoter - can still do direct swaps
+          this.quoterContract = undefined;
+          return false;
         } else {
           // Verify quoter is working
           try {
@@ -122,6 +124,8 @@ export class SushiSwapQuoteProvider {
               logger.warn(
                 `SushiSwap quoter factory mismatch: expected ${this.config.factoryAddress}, got ${factory}`
               );
+              this.quoterContract = undefined;
+              return false;
             } else {
               logger.debug(
                 `SushiSwap QuoterV2 initialized successfully at ${this.config.quoterV2Address}`
@@ -130,8 +134,11 @@ export class SushiSwapQuoteProvider {
           } catch (error) {
             logger.warn(`SushiSwap QuoterV2 validation failed: ${error}`);
             this.quoterContract = undefined;
+            return false;
           }
         }
+      } else {
+        return false;
       }
 
       this.isInitialized = true;
@@ -146,7 +153,7 @@ export class SushiSwapQuoteProvider {
    * Check if quote provider is available and ready
    */
   isAvailable(): boolean {
-    return this.isInitialized;
+    return this.isInitialized && this.quoterContract !== undefined;
   }
 
   /**

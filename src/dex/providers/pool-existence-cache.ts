@@ -1,4 +1,6 @@
 const DEFAULT_MAX_POOL_EXISTENCE_CACHE_ENTRIES = 1024;
+export const POOL_EXISTS_CACHE_TTL_MS = 5 * 60 * 1000;
+export const UNINITIALIZED_POOL_CACHE_TTL_MS = 30 * 1000;
 
 interface PoolExistenceCacheEntry {
   exists: boolean;
@@ -34,6 +36,7 @@ export class PoolExistenceCache {
     ttlMs: number
   ): void {
     const key = this.getKey(tokenA, tokenB, feeTier);
+    this.entries.delete(key);
     this.entries.set(key, {
       exists,
       expiresAt: Date.now() + ttlMs,

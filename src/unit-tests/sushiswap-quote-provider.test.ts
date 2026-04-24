@@ -53,6 +53,27 @@ describe('SushiSwap Quote Provider', () => {
 
       expect(config).to.not.have.property('quoterV2Address');
     });
+
+    it('marks the provider unavailable when configured QuoterV2 has no bytecode', async () => {
+      const providerRpc = new ethers.providers.JsonRpcProvider();
+      sinon
+        .stub(providerRpc, 'getCode')
+        .onFirstCall()
+        .resolves('0x123456')
+        .onSecondCall()
+        .resolves('0x');
+      const signer = ethers.Wallet.createRandom().connect(providerRpc);
+      const provider = new SushiSwapQuoteProvider(signer, {
+        swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD',
+        quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
+        factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
+        defaultFeeTier: 500,
+        wethAddress: '0x4200000000000000000000000000000000000006',
+      });
+
+      expect(await provider.initialize()).to.equal(false);
+      expect(provider.isAvailable()).to.equal(false);
+    });
   });
 
   describe('Configuration Validation Logic', () => {

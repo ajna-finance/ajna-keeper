@@ -18,23 +18,25 @@ import * as takeModule from '../take';
 import * as takeFactoryModule from '../take/factory';
 import { ExternalTakeAdapter, processTakeCandidates } from '../take/engine';
 import { TakeWriteTransport } from '../take/write-transport';
-import {
-  FactoryRouteProfitabilityContext,
-  createFactoryQuoteProviderRuntimeCache,
-} from '../take/factory';
+import { FactoryRouteProfitabilityContext } from '../take/factory';
 import {
   applyFactoryRouteProfitabilityPolicy,
   maxBigNumber,
 } from '../take/factory/shared';
 import { decimaledToWei } from '../utils';
 import { getDecimalsErc20 } from '../erc20';
+import { createDiscoveryRpcCache } from './rpc-cache';
 
 // Conservative per-route execution limits used for profitability screening.
 // Operators can override these with autoDiscover.take.dexGasOverrides.
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const CURVE_EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(1_500_000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
-const APPROVAL_GAS_PRICE_TTL_MS = 15 * 1000;
+const L1_APPROVAL_GAS_PRICE_TTL_MS = 5 * 1000;
+const L2_APPROVAL_GAS_PRICE_TTL_MS = 15 * 1000;
+const L2_CHAIN_IDS_WITH_STABLE_GAS = new Set([
+  10, 8453, 42161, 11155420, 84532, 421614,
+]);
 const WAD = ethers.constants.WeiPerEther;
 const ZERO = BigNumber.from(0);
 
@@ -55,13 +57,15 @@ function getFactoryRouteSelectionSources(
   defaultLiquiditySource: LiquiditySource | undefined,
   allowedLiquiditySources?: LiquiditySource[]
 ): LiquiditySource[] {
-  if (!isDynamicFactorySource(defaultLiquiditySource)) {
-    return [];
+  if (allowedLiquiditySources?.length) {
+    return Array.from(new Set(allowedLiquiditySources)).filter(
+      isDynamicFactorySource
+    );
   }
 
-  return Array.from(
-    new Set([defaultLiquiditySource, ...(allowedLiquiditySources ?? [])])
-  ).filter(isDynamicFactorySource);
+  return isDynamicFactorySource(defaultLiquiditySource)
+    ? [defaultLiquiditySource]
+    : [];
 }
 
 function getExternalTakeGasLimit(
@@ -122,6 +126,7 @@ function hasFreshFactoryRouteGasPolicy(params: {
       gasPolicyEvaluatedAt?: number;
     };
   };
+  chainId?: number;
   now?: number;
 }): boolean {
   const evaluatedAt =
@@ -130,7 +135,16 @@ function hasFreshFactoryRouteGasPolicy(params: {
     return false;
   }
 
-  return (params.now ?? Date.now()) - evaluatedAt <= APPROVAL_GAS_PRICE_TTL_MS;
+  return (
+    (params.now ?? Date.now()) - evaluatedAt <=
+    getApprovalGasPriceTtlMs(params.chainId)
+  );
+}
+
+function getApprovalGasPriceTtlMs(chainId?: number): number {
+  return chainId !== undefined && L2_CHAIN_IDS_WITH_STABLE_GAS.has(chainId)
+    ? L2_APPROVAL_GAS_PRICE_TTL_MS
+    : L1_APPROVAL_GAS_PRICE_TTL_MS;
 }
 
 async function refreshDiscoveryGasPriceIfStale(params: {
@@ -147,7 +161,8 @@ async function refreshDiscoveryGasPriceIfStale(params: {
   const hasFreshGasPrice =
     rpcCache.gasPrice !== undefined &&
     fetchedAt !== undefined &&
-    Date.now() - fetchedAt <= (params.maxAgeMs ?? APPROVAL_GAS_PRICE_TTL_MS);
+    Date.now() - fetchedAt <=
+      (params.maxAgeMs ?? getApprovalGasPriceTtlMs(rpcCache.chainId));
   if (hasFreshGasPrice) {
     return;
   }
@@ -333,17 +348,11 @@ export async function handleDiscoveredTakeTarget(
   };
   const rpcCache =
     params.rpcCache ??
-    (params.signer.provider
-      ? {
-          chainId:
-            typeof params.signer.getChainId === 'function'
-              ? await params.signer.getChainId()
-              : undefined,
-          gasPrice: await transports.readRpc.getGasPrice(),
-          gasPriceFetchedAt: Date.now(),
-          factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
-        }
-      : undefined);
+    (await createDiscoveryRpcCache({
+      signer: params.signer,
+      readRpc: transports.readRpc,
+      includeFactoryQuoteProviders: true,
+    }));
   const takePolicy = getAutoDiscoverTakePolicy(params.config.autoDiscover);
   const externalTakeAdapter: ExternalTakeAdapter<any, any> =
     params.target.take.liquiditySource === LiquiditySource.ONEINCH
@@ -504,9 +513,14 @@ export async function handleDiscoveredTakeTarget(
           isDynamicFactorySource(selectedLiquiditySource)
             ? selectedLiquiditySource
             : undefined;
+        // Only factory-dynamic approvals carry gasPolicyEvaluatedAt from route
+        // selection. 1inch and pool-configured sources always re-check here.
         if (
           selectedFactoryLiquiditySource !== undefined &&
-          hasFreshFactoryRouteGasPolicy({ quoteEvaluation })
+          hasFreshFactoryRouteGasPolicy({
+            quoteEvaluation,
+            chainId: rpcCache?.chainId,
+          })
         ) {
           return { approved: true };
         }

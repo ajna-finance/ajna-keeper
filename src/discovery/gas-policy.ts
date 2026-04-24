@@ -16,14 +16,17 @@ import {
 } from '../read-transports';
 import { logger } from '../logging';
 import { DexRouter } from '../dex/router';
-import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
-import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provider';
 import { getDecimalsErc20 } from '../erc20';
 import {
   DiscoveryExecutionConfig,
   DiscoveryExecutionTransportConfig,
   DiscoveryRpcCache,
 } from './types';
+import {
+  getCurveQuoteProvider,
+  getSushiSwapQuoteProvider,
+  getUniswapV3QuoteProvider,
+} from '../take/factory/shared';
 
 export interface GasPolicyResult {
   approved: boolean;
@@ -256,6 +259,7 @@ async function quoteTokensByLiquiditySource(params: {
   tokenIn: string;
   tokenOut: string;
   chainId?: number;
+  rpcCache?: DiscoveryRpcCache;
 }): Promise<BigNumber | undefined> {
   if (params.tokenIn.toLowerCase() === params.tokenOut.toLowerCase()) {
     return params.amountIn;
@@ -298,16 +302,12 @@ async function quoteTokensByLiquiditySource(params: {
       return undefined;
     }
 
-    const quoteProvider = new UniswapV3QuoteProvider(params.signer, {
-      universalRouterAddress: routerConfig.universalRouterAddress,
-      poolFactoryAddress: routerConfig.poolFactoryAddress,
-      defaultFeeTier:
-        routerConfig.defaultFeeTier ||
-        DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
-      wethAddress: routerConfig.wethAddress,
-      quoterV2Address: routerConfig.quoterV2Address,
+    const quoteProvider = getUniswapV3QuoteProvider({
+      signer: params.signer,
+      routerConfig,
+      runtimeCache: params.rpcCache?.factoryQuoteProviders,
     });
-    if (!quoteProvider.isAvailable()) {
+    if (!quoteProvider) {
       return undefined;
     }
     return await quoteFactoryV3GasConversion({
@@ -331,17 +331,12 @@ async function quoteTokensByLiquiditySource(params: {
     ) {
       return undefined;
     }
-    const quoteProvider = new SushiSwapQuoteProvider(params.signer, {
-      swapRouterAddress: sushiConfig.swapRouterAddress,
-      quoterV2Address: sushiConfig.quoterV2Address,
-      factoryAddress: sushiConfig.factoryAddress,
-      defaultFeeTier:
-        sushiConfig.defaultFeeTier ||
-        DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
-      wethAddress: sushiConfig.wethAddress,
+    const quoteProvider = await getSushiSwapQuoteProvider({
+      signer: params.signer,
+      routerConfig: sushiConfig,
+      runtimeCache: params.rpcCache?.factoryQuoteProviders,
     });
-    const initialized = await quoteProvider.initialize();
-    if (!initialized) {
+    if (!quoteProvider) {
       return undefined;
     }
     return await quoteFactoryV3GasConversion({
@@ -360,17 +355,13 @@ async function quoteTokensByLiquiditySource(params: {
     if (!curveConfig?.poolConfigs || !curveConfig.wethAddress) {
       return undefined;
     }
-    const { CurveQuoteProvider } = await import(
-      '../dex/providers/curve-quote-provider'
-    );
-    const quoteProvider = new CurveQuoteProvider(params.signer, {
-      poolConfigs: curveConfig.poolConfigs as any,
-      defaultSlippage: curveConfig.defaultSlippage || 1.0,
-      wethAddress: curveConfig.wethAddress,
-      tokenAddresses: params.config.tokenAddresses || {},
+    const quoteProvider = await getCurveQuoteProvider({
+      signer: params.signer,
+      routerConfig: curveConfig,
+      tokenAddresses: params.config.tokenAddresses,
+      runtimeCache: params.rpcCache?.factoryQuoteProviders,
     });
-    const initialized = await quoteProvider.initialize();
-    if (!initialized) {
+    if (!quoteProvider) {
       return undefined;
     }
     const quoteResult = await quoteProvider.getQuote(
@@ -410,6 +401,7 @@ async function quoteTokensByGasQuoteSources(params: {
         tokenIn: params.tokenIn,
         tokenOut: params.tokenOut,
         chainId: params.chainId,
+        rpcCache: params.rpcCache,
       });
       if (amountOut) {
         logGasQuoteFallback({

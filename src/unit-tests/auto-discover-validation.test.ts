@@ -141,6 +141,76 @@ describe('auto-discover validation', () => {
     );
   });
 
+  it('rejects non-string native profit and gas override integer values', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      minProfitNative: 1 as unknown as string,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: minProfitNative must be a non-negative decimal integer string'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      dexGasOverrides: {
+        [LiquiditySource.UNISWAPV3]: 900000 as unknown as string,
+      },
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: dexGasOverrides.2 must be a non-negative decimal integer string'
+    );
+  });
+
+  it('treats allowedLiquiditySources as authoritative for source validation', () => {
+    const config = baseConfig();
+    delete config.universalRouterOverrides;
+    config.takerContracts = {
+      SushiSwap: '0x4444444444444444444444444444444444444444',
+    };
+    config.sushiswapRouterOverrides = {
+      swapRouterAddress: '0x5555555555555555555555555555555555555555',
+      factoryAddress: '0x7777777777777777777777777777777777777777',
+      quoterV2Address: '0x1212121212121212121212121212121212121212',
+      wethAddress: '0x4200000000000000000000000000000000000006',
+      defaultFeeTier: 500,
+    };
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('rejects gas overrides for factory sources outside the explicit allowlist', () => {
+    const config = baseConfig();
+    config.takerContracts = {
+      UniswapV3: '0x3333333333333333333333333333333333333333',
+      SushiSwap: '0x4444444444444444444444444444444444444444',
+    };
+    config.sushiswapRouterOverrides = {
+      swapRouterAddress: '0x5555555555555555555555555555555555555555',
+      factoryAddress: '0x7777777777777777777777777777777777777777',
+      quoterV2Address: '0x1212121212121212121212121212121212121212',
+      wethAddress: '0x4200000000000000000000000000000000000006',
+      defaultFeeTier: 500,
+    };
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+      dexGasOverrides: {
+        [LiquiditySource.UNISWAPV3]: '900000',
+      },
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: dexGasOverrides.UNISWAPV3 is not enabled by the effective take liquidity sources'
+    );
+  });
+
   it('rejects malformed numeric take-write timeouts', () => {
     const config = baseConfig();
     config.takeWrite = {

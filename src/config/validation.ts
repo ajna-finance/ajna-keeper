@@ -47,8 +47,8 @@ function validateQuoteDenominatedGasPolicy(
   }
 }
 
-function validateDecimalStringBigInt(value: string, fieldName: string): void {
-  if (!/^(0|[1-9]\d*)$/.test(value)) {
+function validateDecimalStringBigInt(value: unknown, fieldName: string): void {
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
     throw new Error(
       `${fieldName} must be a non-negative decimal integer string`
     );
@@ -165,13 +165,14 @@ function getEffectiveFactoryRouteSources(
   allowedLiquiditySources: LiquiditySource[] | undefined
 ): Set<LiquiditySource> {
   const sources = new Set<LiquiditySource>();
-  if (
-    discoveredTake.liquiditySource !== undefined &&
-    FACTORY_DYNAMIC_SOURCES.includes(discoveredTake.liquiditySource)
-  ) {
-    sources.add(discoveredTake.liquiditySource);
-  }
-  for (const source of allowedLiquiditySources ?? []) {
+  const configuredSources =
+    allowedLiquiditySources !== undefined
+      ? allowedLiquiditySources
+      : discoveredTake.liquiditySource !== undefined
+        ? [discoveredTake.liquiditySource]
+        : [];
+
+  for (const source of configuredSources) {
     if (FACTORY_DYNAMIC_SOURCES.includes(source)) {
       sources.add(source);
     }
@@ -187,7 +188,10 @@ function getEffectiveTakeGasOverrideSources(
     discoveredTake,
     allowedLiquiditySources
   );
-  if (discoveredTake.liquiditySource === LiquiditySource.ONEINCH) {
+  if (
+    allowedLiquiditySources === undefined &&
+    discoveredTake.liquiditySource === LiquiditySource.ONEINCH
+  ) {
     sources.add(LiquiditySource.ONEINCH);
   }
   return sources;
@@ -515,8 +519,6 @@ export function validateAutoDiscoverConfig(
       );
     }
 
-    validateTakeSettings(discoveredTake, config, chainId);
-
     const discoveredTakeUsesFactory = isFactoryDynamicSource(
       discoveredTake.liquiditySource
     );
@@ -567,6 +569,8 @@ export function validateAutoDiscoverConfig(
           chainId
         );
       }
+    } else {
+      validateTakeSettings(discoveredTake, config, chainId);
     }
 
     const effectiveFactorySources = getEffectiveFactoryRouteSources(
@@ -621,7 +625,7 @@ export function validateAutoDiscoverConfig(
         }
         if (!effectiveTakeGasOverrideSources.has(liquiditySource)) {
           throw new Error(
-            `AutoDiscoverConfig.take: dexGasOverrides.${sourceLabel} is not enabled by discoveredDefaults.take.liquiditySource or allowedLiquiditySources`
+            `AutoDiscoverConfig.take: dexGasOverrides.${sourceLabel} is not enabled by the effective take liquidity sources`
           );
         }
         validateDecimalStringBigInt(

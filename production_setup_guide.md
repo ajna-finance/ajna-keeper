@@ -77,6 +77,8 @@ Implications:
 
 - External takes prefer the configured default, then quote viable candidate tiers when configured
 - Missing Uni/Sushi pools are skipped before `takeRouteQuoteBudgetPerCandidate` is applied
+- `allowedLiquiditySources`, when set, is the complete factory route allowlist; include the default source explicitly if it should remain eligible
+- Low `takeRouteQuoteBudgetPerCandidate` values reduce quote latency but can skip a more profitable route that was not probed
 - Changing fee-tier policy is a config-and-restart change, not a contract redeploy
 - There is no per-pool external-take fee override in the current config schema
 - LP reward swaps remain more flexible because `rewardAction.fee` can override per pool
@@ -553,7 +555,7 @@ Recommended rollout order:
 1. Keep `dryRunNewPools: true` and inspect discovered skip/action logs first.
 2. Enable discovered `settlement` before discovered external `take` if you want the lower-risk path first.
 3. Prefer `autoDiscover.take.maxGasCostNative` and `autoDiscover.settlement.maxGasCostNative` before quote-denominated gas caps. Native gas caps use the RPC gas price directly and avoid extra native-to-quote conversion fetches.
-4. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` only when `discoveredDefaults.take.liquiditySource` is a factory route (`UNISWAPV3`, `SUSHISWAP`, or `CURVE`). 1inch is still a single-source aggregator path and is not compared against factory DEX routes by the current selector.
+4. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` only when `discoveredDefaults.take.liquiditySource` is a factory route (`UNISWAPV3`, `SUSHISWAP`, or `CURVE`). When set, `allowedLiquiditySources` is the complete route allowlist; 1inch is still a single-source aggregator path and is not compared against factory DEX routes by the current selector.
 5. Prefer `autoDiscover.take.minProfitNative` over `minExpectedProfitQuote` when you want one profit floor across mixed quote tokens. It is a wei-denominated native-token floor, not a USD field.
 6. To approximate a USD target, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18`. Example: a $3 floor at ETH=$3,000 is `0.001 ETH`, or `1000000000000000` wei. Recalibrate periodically because the USD value drifts with native token price.
 7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
@@ -602,6 +604,7 @@ Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets a
 - Use the runtime `defaultFeeTier` as the preferred route
 - Can compare `candidateFeeTiers` and execute with the selected tier
 - Apply `takeRouteQuoteBudgetPerCandidate` after unavailable pools are filtered out
+- Treat `allowedLiquiditySources` as an explicit allowlist, not an additive list
 - Cannot be customized per pool in the current config schema
 - Can be changed by updating config and restarting the keeper
 
