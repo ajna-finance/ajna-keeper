@@ -282,6 +282,20 @@ export async function getFactoryTakeQuoteEvaluation(
         );
       }
 
+      const availableSourceCount = new Set(
+        availableRoutes.map((route) => route.liquiditySource)
+      ).size;
+      if (
+        availableSourceCount > 1 &&
+        !routeSelection?.routeProfitabilityContext
+      ) {
+        return {
+          isTakeable: false,
+          reason:
+            'route profitability context required for dynamic liquidity source selection',
+        };
+      }
+
       const routesToEvaluate =
         routeQuoteBudget !== undefined
           ? availableRoutes.slice(0, routeQuoteBudget)
@@ -526,19 +540,6 @@ export async function takeLiquidationFactory({
   const { borrower } = liquidation;
   const { dryRun, keeperTakerFactory } = config;
 
-  if (dryRun) {
-    logger.info(
-      `DryRun - would Factory Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${poolConfig.take.liquiditySource}`
-    );
-    return true;
-  }
-
-  if (!keeperTakerFactory) {
-    return failFactoryTakeExecution(
-      'Factory: keeperTakerFactory address not configured'
-    );
-  }
-
   const externalTakeQuoteEvaluation =
     liquidation.externalTakeQuoteEvaluation ??
     (await getFactoryTakeQuoteEvaluation(
@@ -550,6 +551,19 @@ export async function takeLiquidationFactory({
       signer,
       config.runtimeCache
     ));
+
+  if (dryRun) {
+    logger.info(
+      `DryRun - would Factory Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, selectedSource=${externalTakeQuoteEvaluation.selectedLiquiditySource ?? 'n/a'}, selectedFeeTier=${externalTakeQuoteEvaluation.selectedFeeTier ?? 'n/a'}, approvedMinOutRaw=${externalTakeQuoteEvaluation.approvedMinOutRaw?.toString() ?? 'n/a'}`
+    );
+    return true;
+  }
+
+  if (!keeperTakerFactory) {
+    return failFactoryTakeExecution(
+      'Factory: keeperTakerFactory address not configured'
+    );
+  }
 
   if (!externalTakeQuoteEvaluation.isTakeable) {
     return failFactoryTakeExecution(
@@ -564,8 +578,40 @@ export async function takeLiquidationFactory({
   }
 
   const selectedLiquiditySource =
-    externalTakeQuoteEvaluation.selectedLiquiditySource ??
-    poolConfig.take.liquiditySource;
+    externalTakeQuoteEvaluation.selectedLiquiditySource;
+  if (selectedLiquiditySource === undefined) {
+    return failFactoryTakeExecution(
+      `Factory: Missing selected liquidity source for ${pool.name}/${borrower}; refusing to execute an unbound route`
+    );
+  }
+  if (!externalTakeQuoteEvaluation.approvedMinOutRaw) {
+    return failFactoryTakeExecution(
+      `Factory: Missing approved min-out floor for ${pool.name}/${borrower}; refusing to execute an unbound swap`
+    );
+  }
+  if (
+    (selectedLiquiditySource === LiquiditySource.UNISWAPV3 ||
+      selectedLiquiditySource === LiquiditySource.SUSHISWAP) &&
+    externalTakeQuoteEvaluation.selectedFeeTier === undefined
+  ) {
+    return failFactoryTakeExecution(
+      `Factory: Missing selected fee tier for ${pool.name}/${borrower}; refusing to execute an unbound route`
+    );
+  }
+  if (
+    selectedLiquiditySource === LiquiditySource.CURVE &&
+    !externalTakeQuoteEvaluation.curvePool
+  ) {
+    return failFactoryTakeExecution(
+      `Factory: Missing selected Curve pool for ${pool.name}/${borrower}; refusing to execute an unbound route`
+    );
+  }
+
+  const routeMetadata =
+    `source=${LiquiditySource[selectedLiquiditySource] ?? selectedLiquiditySource}` +
+    ` feeTier=${externalTakeQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
+    ` approvedMinOutRaw=${externalTakeQuoteEvaluation.approvedMinOutRaw.toString()}` +
+    ` curvePool=${externalTakeQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
 
   try {
     if (selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
@@ -627,7 +673,7 @@ export async function takeLiquidationFactory({
     );
   } catch (error) {
     logger.error(
-      `Factory take execution failed for ${pool.name}/${borrower}`,
+      `Factory take execution failed for ${pool.name}/${borrower} ${routeMetadata}`,
       error
     );
     return false;

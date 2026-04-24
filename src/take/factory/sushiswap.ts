@@ -14,6 +14,7 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  getSlippageFloorQuoteRaw,
   getSushiSwapQuoteProvider,
   getSwapDeadline,
 } from './shared';
@@ -153,6 +154,10 @@ export async function evaluateSushiSwapFactoryQuote({
       collateralAmount,
       selectedLiquiditySource: LiquiditySource.SUSHISWAP,
       selectedFeeTier,
+      existingSlippageFloorQuoteRaw: getSlippageFloorQuoteRaw(
+        quoteAmountRaw,
+        sushiConfig.defaultSlippage
+      ),
       routeContext: context,
       failureReason:
         'quoted output below required SushiSwap profitability floor',
@@ -201,13 +206,16 @@ export async function executeSushiSwapFactoryTake({
     logger.error(message);
     throw new Error(message);
   }
+  if (quoteEvaluation.selectedFeeTier === undefined) {
+    const message = 'Factory: selectedFeeTier required for SushiSwap takes';
+    logger.error(message);
+    throw new Error(message);
+  }
 
   const minimalAmountOut = await computeFactoryAmountOutMinimum({
     pool,
     liquidation,
     quoteEvaluation,
-    liquiditySource: LiquiditySource.SUSHISWAP,
-    config,
     marketPriceFactor: poolConfig.take.marketPriceFactor!,
   });
   const deadline = await getSwapDeadline(signer);
@@ -222,10 +230,7 @@ export async function executeSushiSwapFactoryTake({
   const swapDetails = {
     swapRouter: config.sushiswapRouterOverrides.swapRouterAddress!,
     targetToken: pool.quoteAddress,
-    feeTier:
-      quoteEvaluation.selectedFeeTier ??
-      config.sushiswapRouterOverrides.defaultFeeTier ??
-      500,
+    feeTier: quoteEvaluation.selectedFeeTier,
     amountOutMinimum: minimalAmountOut,
     deadline,
   };

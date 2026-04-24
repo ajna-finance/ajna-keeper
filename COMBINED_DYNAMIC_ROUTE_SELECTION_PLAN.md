@@ -6,7 +6,7 @@ Build a safe, incremental route-selection stack for autodiscover external takes:
 
 - express profit floors in native-token terms so they work across quote tokens
 - select the best supported fee tier for UniV3-style routes
-- select between UniswapV3 and SushiSwap for factory external takes
+- select between UniswapV3, SushiSwap, and configured Curve routes for factory external takes
 - bind execution to the quote-approved route without execution-time reselection
 - rank viable routes by expected net profit, not gross quote output
 - keep RPC growth bounded and observable
@@ -26,9 +26,16 @@ This plan combines:
 - Route ranking must optimize expected net profit after gas and slippage/risk buffers, after filtering routes that fail configured floors.
 - New route selection applies only to factory external takes, not the legacy 1inch path.
 - No keeper-level ERC20 pre-approvals to taker contracts are needed for this work.
-- Curve is Phase 2 because current Curve support is config-driven, not registry-driven.
+- Curve participates through configured pool matching only. No registry lookup or execution-time Curve reselection is required.
 - Candidate-level context should be computed once and passed through the selector and DEX adapters.
 - Native-to-quote conversion rates should not be cached in v1. Quote fresh for each candidate/source where conversion is needed.
+
+## Current Implementation Status
+
+- Phase 1 is implemented for factory external takes.
+- Phase 2 is implemented for UniswapV3 and SushiSwap fee-tier selection.
+- Phase 3 is implemented for UniswapV3, SushiSwap, and configured Curve pool matching.
+- Phase 4 is not implemented; it is reserved for registry-backed or multi-pool Curve discovery.
 
 ## Recommended Implementation Order
 
@@ -64,7 +71,7 @@ Changes:
 - Add a shared `selectBestFactoryRouteQuote(...)` helper in [src/take/factory/shared.ts](/home/mike/Projects-2026/ajna-keeper/src/take/factory/shared.ts).
 - For this phase, every `RouteCandidate` has the same configured `liquiditySource` and only varies `feeTier`.
 - Wire UniswapV3 and SushiSwap evaluation to probe configured tiers sequentially.
-- Wire execution to use `quoteEvaluation.selectedFeeTier ?? defaultFeeTier`.
+- Wire execution to require `quoteEvaluation.selectedFeeTier`; if it is missing, fail closed instead of falling back to a config default.
 
 Execution invariant:
 
@@ -85,16 +92,17 @@ v1 sources:
 
 - `LiquiditySource.UNISWAPV3`
 - `LiquiditySource.SUSHISWAP`
+- `LiquiditySource.CURVE`, when `curveRouterOverrides.poolConfigs` contains a matching configured pool
 
 Changes:
 
 - Add `AutoDiscoverTakePolicy.allowedLiquiditySources?: LiquiditySource[]`.
 - Add chain-level `dexGasOverrides?: Partial<Record<LiquiditySource, string>>`.
 - Reject `LiquiditySource.ONEINCH` for factory external takes.
-- Reject `LiquiditySource.CURVE` in v1 with a clear Phase 2 message.
 - Add `selectedLiquiditySource?: LiquiditySource` to `ExternalTakeQuoteEvaluation`.
-- Generalize `RouteCandidate` to include `liquiditySource` and `feeTier`.
+- Generalize `RouteCandidate` to include `liquiditySource` and optional `feeTier`.
 - Evaluate every allowed source and fee-tier route sequentially.
+- For Curve, evaluate the configured pool selected by `CurveQuoteProvider` for the candidate token pair and bind the selected pool into the approved quote evaluation.
 - Compute route-specific gas-adjusted profitability before ranking.
 - Pick the best profitable route by expected net profit after route-specific floor checks.
 - Dispatch execution through the selected source, not the configured default source.
@@ -108,20 +116,19 @@ Execution invariant:
 RPC impact:
 
 - With UniV3 and SushiSwap and three tiers each, cold path is up to six existence checks plus six route quote calls.
+- Curve adds one configured-pool quote call for candidates where Curve is allowed.
 - Native-to-quote conversion can be up to two fresh conversion quotes per source when both route execution cost and `minProfitNative` are active.
 - Do not cache native-to-quote conversion rates in v1. The call volume is liquidation-gated, and fresh conversion is safer for profitability.
 
-### Phase 4: Curve Dynamic Source Selection
+### Phase 4: Curve Registry Expansion
 
-Add Curve only after UniV3/Sushi source selection is stable.
+Configured Curve pool matching is implemented in Phase 3. A later Curve phase should only cover registry or multi-pool expansion.
 
 Scope:
 
-- Start from configured `curveRouterOverrides.poolConfigs`.
-- Resolve configured Curve pools for the candidate token pair.
-- Use one matching configured pool per candidate before considering multi-pool probing.
-- Add Curve gas defaults and overrides.
-- Extend route logging and integration tests to cover `CurveKeeperTaker`.
+- Discover Curve pools from an explicit registry source if operators need routes beyond configured `curveRouterOverrides.poolConfigs`.
+- Consider probing multiple matching Curve pools only after single configured-pool matching has enough production evidence.
+- Keep the same approved-quote binding used by UniV3/Sushi/Curve v1: selected source, selected pool, approved min-out, and route profitability metadata must all be execution inputs.
 
 Non-scope:
 
@@ -136,7 +143,13 @@ Suggested internal route model:
 type FactoryRouteCandidate = {
   liquiditySource: LiquiditySource;
   feeTier?: number;
-  curvePool?: Address;
+};
+
+type ApprovedCurvePoolSelection = {
+  address: string;
+  poolType: CurvePoolType;
+  tokenInIndex: number;
+  tokenOutIndex: number;
 };
 ```
 
@@ -205,8 +218,8 @@ type ApprovedFactoryRouteQuote = ExternalTakeQuoteEvaluation & {
 Rules:
 
 - Phase 2 writes `selectedFeeTier`.
-- Phase 3 writes both `selectedLiquiditySource` and `selectedFeeTier`.
-- Phase 4 may write `selectedLiquiditySource` and `curvePool` or an equivalent Curve route identifier.
+- Phase 3 writes `selectedLiquiditySource`; UniV3/Sushi also write `selectedFeeTier`, and Curve writes `curvePool`.
+- Phase 4 may add registry-derived Curve candidates, but execution should still consume the same selected `ApprovedCurvePoolSelection` shape on the approved quote evaluation.
 - Do not introduce a separate execution-plan object unless the existing quote evaluation object becomes insufficient.
 
 ## Shared Abstractions
@@ -374,8 +387,8 @@ The keeper should validate configured taker addresses and router overrides at st
 Keep v1 conservative:
 
 - sequential probing
-- two or three candidate fee tiers max
-- UniV3 and SushiSwap only for dynamic source selection
+- bounded candidate fee tiers; validation caps at eight, but production configs should prefer two or three
+- UniV3, SushiSwap, and configured Curve pool matching only for dynamic source selection
 - no same-cycle retry
 - no parallel route fanout
 - no cross-candidate quote cache beyond low-risk existence and metadata caches
@@ -409,7 +422,9 @@ Unit tests:
 - recent-success probe ordering changes probe order but not selected route when budget allows all routes.
 - quote-budget exhaustion returns best probed route and logs skipped routes.
 - `approvedMinOutRaw` preserves the market-factor floor and includes auction repayment, route execution cost, required profit floor, and slippage/risk buffer.
-- 1inch and Curve are rejected from v1 `allowedLiquiditySources`.
+- 1inch is rejected from v1 `allowedLiquiditySources`.
+- configured Curve pool matching selects `CurveKeeperTaker`.
+- Curve route participates in the same route selector after config-driven matching.
 
 Integration tests:
 
@@ -417,14 +432,10 @@ Integration tests:
 - factory take with selected Sushi fee tier.
 - autodiscover candidate where UniV3 wins.
 - autodiscover candidate where SushiSwap wins.
+- autodiscover candidate where a configured Curve pool wins.
 - stale selected route reverts safely under `amountOutMinimum` rather than reselecting.
 - warm pool-existence cache reduces repeated missing-route checks.
 - native-to-quote conversion is quoted fresh per candidate/source and is not reused as a cached conversion rate.
-
-Phase 4 integration tests:
-
-- configured Curve pool matching selects `CurveKeeperTaker`.
-- Curve route participates in the same route selector after config-driven matching.
 
 ## Acceptance Criteria
 
@@ -432,6 +443,6 @@ Phase 1 is complete when autodiscover can enforce a native-denominated profit fl
 
 Phase 2 is complete when UniV3 and Sushi can choose the best configured fee tier and execution uses the approved selected tier.
 
-Phase 3 is complete when autodiscover can choose between UniV3 and Sushi routes by expected net profit, account for route-specific gas before ranking, and dispatch execution through the selected source.
+Phase 3 is complete when autodiscover can choose between UniV3, Sushi, and configured Curve routes by expected net profit, account for route-specific gas before ranking, and dispatch execution through the selected source without execution-time reselection.
 
-Phase 4 is complete when Curve can participate through configured pool matching without adding registry lookup assumptions to the v1 route selector.
+Phase 4 is complete only if registry-backed Curve discovery or multi-pool Curve probing is added without weakening the Phase 3 route-binding invariants.

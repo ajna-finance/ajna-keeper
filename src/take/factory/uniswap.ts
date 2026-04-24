@@ -14,6 +14,7 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  getSlippageFloorQuoteRaw,
   getUniswapV3QuoteProvider,
   getSwapDeadline,
 } from './shared';
@@ -158,6 +159,10 @@ export async function evaluateUniswapV3FactoryQuote({
       collateralAmount,
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
       selectedFeeTier,
+      existingSlippageFloorQuoteRaw: getSlippageFloorQuoteRaw(
+        quoteAmountRaw,
+        routerConfig.defaultSlippage
+      ),
       routeContext: context,
       failureReason: 'quoted output below required Uniswap V3 profitability floor',
     });
@@ -205,13 +210,16 @@ export async function executeUniswapV3FactoryTake({
     logger.error(message);
     throw new Error(message);
   }
+  if (quoteEvaluation.selectedFeeTier === undefined) {
+    const message = 'Factory: selectedFeeTier required for UniswapV3 takes';
+    logger.error(message);
+    throw new Error(message);
+  }
 
   const minimalAmountOut = await computeFactoryAmountOutMinimum({
     pool,
     liquidation,
     quoteEvaluation,
-    liquiditySource: LiquiditySource.UNISWAPV3,
-    config,
     marketPriceFactor: poolConfig.take.marketPriceFactor!,
   });
   const deadline = await getSwapDeadline(signer);
@@ -227,10 +235,7 @@ export async function executeUniswapV3FactoryTake({
     universalRouter: config.universalRouterOverrides.universalRouterAddress!,
     permit2: config.universalRouterOverrides.permit2Address!,
     targetToken: pool.quoteAddress,
-    feeTier:
-      quoteEvaluation.selectedFeeTier ??
-      config.universalRouterOverrides.defaultFeeTier ??
-      3000,
+    feeTier: quoteEvaluation.selectedFeeTier,
     amountOutMinimum: minimalAmountOut,
     deadline,
   };

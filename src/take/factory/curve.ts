@@ -1,7 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../../config';
-import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
@@ -16,6 +15,7 @@ import {
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
   getCurveQuoteProvider,
+  getSlippageFloorQuoteRaw,
   getSwapDeadline,
 } from './shared';
 import {
@@ -146,6 +146,10 @@ export async function evaluateCurveFactoryQuote({
       quoteAmount,
       collateralAmount,
       selectedLiquiditySource: LiquiditySource.CURVE,
+      existingSlippageFloorQuoteRaw: getSlippageFloorQuoteRaw(
+        quoteAmountRaw,
+        curveConfig.defaultSlippage
+      ),
       routeContext: context,
       failureReason: 'quoted output below required Curve profitability floor',
     });
@@ -196,32 +200,15 @@ export async function executeCurveFactoryTake({
     logger.error(message);
     throw new Error(message);
   }
+  if (!quoteEvaluation.curvePool) {
+    const message =
+      `Factory: selected Curve pool required for ${pool.collateralAddress}/${pool.quoteAddress}`;
+    logger.error(message);
+    throw new Error(message);
+  }
 
   try {
-    let selectedCurvePool = quoteEvaluation.curvePool;
-
-    if (!selectedCurvePool) {
-      const quoteProvider = new CurveQuoteProvider(signer, {
-        poolConfigs: config.curveRouterOverrides.poolConfigs! as any,
-        defaultSlippage: config.curveRouterOverrides.defaultSlippage || 1.0,
-        wethAddress: config.curveRouterOverrides.wethAddress!,
-        tokenAddresses: config.tokenAddresses || {},
-      });
-
-      selectedCurvePool = await quoteProvider.resolvePoolSelection(
-        pool.collateralAddress,
-        pool.quoteAddress
-      );
-    }
-
-    if (!selectedCurvePool) {
-      const message =
-        `Factory: Could not resolve a Curve pool selection for ${pool.collateralAddress}/${pool.quoteAddress}`;
-      logger.error(message);
-      throw new Error(message);
-    }
-
-    const resolvedCurvePool = selectedCurvePool;
+    const resolvedCurvePool = quoteEvaluation.curvePool;
 
     logger.debug(
       `Factory: Found Curve pool tokens: ${pool.collateralAddress}@${resolvedCurvePool.tokenInIndex}, ${pool.quoteAddress}@${resolvedCurvePool.tokenOutIndex}`
@@ -231,8 +218,6 @@ export async function executeCurveFactoryTake({
       pool,
       liquidation,
       quoteEvaluation,
-      liquiditySource: LiquiditySource.CURVE,
-      config,
       marketPriceFactor: poolConfig.take.marketPriceFactor!,
     });
     const deadline = await getSwapDeadline(signer);

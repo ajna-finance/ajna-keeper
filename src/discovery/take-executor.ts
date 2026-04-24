@@ -22,18 +22,20 @@ import {
   FactoryRouteProfitabilityContext,
   createFactoryQuoteProviderRuntimeCache,
 } from '../take/factory';
+import {
+  applyFactoryRouteProfitabilityPolicy,
+  maxBigNumber,
+} from '../take/factory/shared';
 import { decimaledToWei } from '../utils';
 import { getDecimalsErc20 } from '../erc20';
 
+// Conservative per-route execution limits used for profitability screening.
+// Operators can override these with autoDiscover.take.dexGasOverrides.
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const CURVE_EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(1_500_000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
 const WAD = ethers.constants.WeiPerEther;
 const ZERO = BigNumber.from(0);
-
-function maxBigNumber(...values: BigNumber[]): BigNumber {
-  return values.reduce((max, value) => (value.gt(max) ? value : max), values[0]);
-}
 
 function isDynamicFactorySource(
   source: LiquiditySource | undefined
@@ -72,6 +74,14 @@ function getExternalTakeGasLimit(
   return source === LiquiditySource.CURVE
     ? CURVE_EXTERNAL_TAKE_GAS_LIMIT
     : EXTERNAL_TAKE_GAS_LIMIT;
+}
+
+function isSoftRouteGasConversionFailure(reason: string | undefined): boolean {
+  return (
+    reason === 'failed to quote gas cost into quote token' ||
+    reason === 'no liquidity source available for gas cost conversion' ||
+    reason === 'no wrapped native token configured for gas cost conversion'
+  );
 }
 
 function getQuoteTokenScaleFromDecimals(
@@ -127,6 +137,9 @@ async function buildFactoryRouteProfitabilityContext(params: {
   const requiresQuoteProfitability =
     params.takePolicy?.minExpectedProfitQuote !== undefined ||
     params.takePolicy?.minProfitNative !== undefined;
+  const requiresHardQuoteGasPolicy =
+    params.takePolicy?.maxGasCostQuote !== undefined ||
+    requiresQuoteProfitability;
 
   if (!requiresRouteGasRanking && !requiresQuoteProfitability) {
     return undefined;
@@ -173,6 +186,17 @@ async function buildFactoryRouteProfitabilityContext(params: {
     });
 
     if (!gasPolicy.approved) {
+      if (
+        requiresRouteGasRanking &&
+        !requiresHardQuoteGasPolicy &&
+        isSoftRouteGasConversionFailure(gasPolicy.reason)
+      ) {
+        logger.debug(
+          `Route gas conversion unavailable for ${LiquiditySource[source] ?? source}; ranking this source without quote-denominated gas cost: ${gasPolicy.reason}`
+        );
+        routeExecutionCostQuoteRawBySource[source] = ZERO;
+        continue;
+      }
       routeRejectionReasonsBySource[source] =
         gasPolicy.reason ?? 'route gas policy rejected source';
       continue;
@@ -277,12 +301,11 @@ export async function handleDiscoveredTakeTarget(
     (params.signer.provider
       ? {
           chainId:
-          typeof params.signer.getChainId === 'function'
-            ? await params.signer.getChainId()
-            : undefined,
+            typeof params.signer.getChainId === 'function'
+              ? await params.signer.getChainId()
+              : undefined,
           gasPrice: await transports.readRpc.getGasPrice(),
           gasPriceFetchedAt: Date.now(),
-          gasQuoteConversions: new Map(),
           factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
         }
       : undefined);
@@ -424,9 +447,21 @@ export async function handleDiscoveredTakeTarget(
         collateral,
         quoteEvaluation,
       }) => {
-        const selectedLiquiditySource =
-          quoteEvaluation.selectedLiquiditySource ??
-          params.target.take.liquiditySource;
+        let selectedLiquiditySource = quoteEvaluation.selectedLiquiditySource;
+        if (selectedLiquiditySource === undefined) {
+          const configuredLiquiditySource = params.target.take.liquiditySource;
+          if (
+            configuredLiquiditySource !== LiquiditySource.ONEINCH &&
+            isDynamicFactorySource(configuredLiquiditySource)
+          ) {
+            return {
+              approved: false,
+              reason:
+                'factory route approval missing selected liquidity source',
+            };
+          }
+          selectedLiquiditySource = configuredLiquiditySource;
+        }
 
         const gasPolicy = await evaluateGasPolicy({
           signer: params.signer,
@@ -460,92 +495,140 @@ export async function handleDiscoveredTakeTarget(
           const quoteAmountRaw = quoteEvaluation.quoteAmountRaw;
           const gasCostQuoteRaw = gasPolicy.gasCostQuoteRaw;
           const quoteTokenDecimals = gasPolicy.quoteTokenDecimals;
-          const auctionCostQuoteRaw =
-            quoteTokenDecimals !== undefined
-              ? getAuctionCostQuoteRaw({
-                  price: auctionPrice,
-                  collateral,
-                  quoteTokenDecimals,
-                })
-              : undefined;
-
-          if (
-            quoteAmountRaw &&
-            gasCostQuoteRaw &&
+          const minExpectedProfitQuoteRaw =
             quoteTokenDecimals !== undefined &&
-            auctionCostQuoteRaw
-          ) {
-            const breakEvenQuoteAmountRaw = auctionCostQuoteRaw.add(gasCostQuoteRaw);
-            const minExpectedProfitQuoteRaw =
-              minExpectedProfitQuote !== undefined
-                ? decimaledToWei(minExpectedProfitQuote, quoteTokenDecimals)
-                : ZERO;
-            const minProfitNativeQuoteRaw =
-              gasPolicy.minProfitNativeQuoteRaw ?? ZERO;
-            const requiredProfitFloorRaw = maxBigNumber(
-              minExpectedProfitQuoteRaw,
-              minProfitNativeQuoteRaw
-            );
-            const requiredQuoteAmountRaw = breakEvenQuoteAmountRaw.add(
-              requiredProfitFloorRaw
-            );
-            quoteEvaluation.approvedMinOutRaw = quoteEvaluation.approvedMinOutRaw
-              ? maxBigNumber(
-                  quoteEvaluation.approvedMinOutRaw,
-                  requiredQuoteAmountRaw
-                )
-              : requiredQuoteAmountRaw;
-            quoteEvaluation.routeProfitability = {
-              ...quoteEvaluation.routeProfitability,
-              routeExecutionCostQuoteRaw: gasCostQuoteRaw,
-              configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
-              nativeProfitFloorQuoteRaw: minProfitNativeQuoteRaw,
-              requiredProfitFloorQuoteRaw: requiredProfitFloorRaw,
-              requiredOutputFloorQuoteRaw: requiredQuoteAmountRaw,
-              expectedNetProfitQuoteRaw: quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
-                ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
-                : ZERO,
-              surplusOverFloorQuoteRaw: quoteAmountRaw.gte(requiredQuoteAmountRaw)
-                ? quoteAmountRaw.sub(requiredQuoteAmountRaw)
-                : ZERO,
-            };
-            if (quoteAmountRaw.lt(requiredQuoteAmountRaw)) {
-              const expectedProfitRaw = quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
-                ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
-                : breakEvenQuoteAmountRaw.sub(quoteAmountRaw);
-              stats.profitFloorRejects += 1;
-              return {
-                approved: false,
-                reason: `expected take profit ${formatSignedQuoteAmount({
-                  rawAmount: expectedProfitRaw,
-                  quoteTokenDecimals,
-                  negative: quoteAmountRaw.lt(breakEvenQuoteAmountRaw),
-                })} below required profit floor`,
-              };
-            }
-          } else {
-            if (takePolicy?.minProfitNative !== undefined) {
+            minExpectedProfitQuote !== undefined
+              ? decimaledToWei(minExpectedProfitQuote, quoteTokenDecimals)
+              : ZERO;
+          const factoryLiquiditySource =
+            selectedLiquiditySource !== undefined &&
+            isDynamicFactorySource(selectedLiquiditySource)
+              ? selectedLiquiditySource
+              : undefined;
+          const canApplyFactoryProfitability =
+            factoryLiquiditySource !== undefined &&
+            quoteAmountRaw !== undefined &&
+            gasCostQuoteRaw !== undefined &&
+            quoteTokenDecimals !== undefined;
+
+          if (canApplyFactoryProfitability) {
+            const refreshedEvaluation = applyFactoryRouteProfitabilityPolicy({
+              evaluation: quoteEvaluation,
+              liquiditySource: factoryLiquiditySource,
+              context: {
+                routeExecutionCostQuoteRawBySource: {
+                  [factoryLiquiditySource]: gasCostQuoteRaw,
+                },
+                nativeProfitFloorQuoteRawBySource: {
+                  [factoryLiquiditySource]:
+                    gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
+                },
+                configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
+              },
+            });
+            Object.assign(quoteEvaluation, refreshedEvaluation);
+            if (!refreshedEvaluation.isTakeable) {
               stats.profitFloorRejects += 1;
               return {
                 approved: false,
                 reason:
-                  'quote-normalized minProfitNative floor is not available',
+                  refreshedEvaluation.reason ??
+                  'route quote below required output floor',
               };
             }
-            const auctionCostQuote = price * (quoteEvaluation.collateralAmount ?? 0);
-            const expectedProfit =
-              (quoteEvaluation.quoteAmount ?? 0) -
-              auctionCostQuote -
-              gasPolicy.gasCostQuote;
+          } else {
+            const auctionCostQuoteRaw =
+              quoteTokenDecimals !== undefined
+                ? getAuctionCostQuoteRaw({
+                    price: auctionPrice,
+                    collateral,
+                    quoteTokenDecimals,
+                  })
+                : undefined;
+
             if (
-              minExpectedProfitQuote !== undefined &&
-              expectedProfit < minExpectedProfitQuote
+              quoteAmountRaw &&
+              gasCostQuoteRaw &&
+              quoteTokenDecimals !== undefined &&
+              auctionCostQuoteRaw
             ) {
-              stats.profitFloorRejects += 1;
-              return {
-                approved: false,
-                reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
+              const breakEvenQuoteAmountRaw =
+                auctionCostQuoteRaw.add(gasCostQuoteRaw);
+              const minProfitNativeQuoteRaw =
+                gasPolicy.minProfitNativeQuoteRaw ?? ZERO;
+              const requiredProfitFloorRaw = maxBigNumber(
+                minExpectedProfitQuoteRaw,
+                minProfitNativeQuoteRaw
+              );
+              const requiredQuoteAmountRaw = breakEvenQuoteAmountRaw.add(
+                requiredProfitFloorRaw
+              );
+              quoteEvaluation.approvedMinOutRaw =
+                quoteEvaluation.approvedMinOutRaw
+                  ? maxBigNumber(
+                      quoteEvaluation.approvedMinOutRaw,
+                      requiredQuoteAmountRaw
+                    )
+                  : requiredQuoteAmountRaw;
+              quoteEvaluation.routeProfitability = {
+                ...quoteEvaluation.routeProfitability,
+                routeExecutionCostQuoteRaw: gasCostQuoteRaw,
+                configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
+                nativeProfitFloorQuoteRaw: minProfitNativeQuoteRaw,
+                requiredProfitFloorQuoteRaw: requiredProfitFloorRaw,
+                requiredOutputFloorQuoteRaw: requiredQuoteAmountRaw,
+                expectedNetProfitQuoteRaw: quoteAmountRaw.gte(
+                  breakEvenQuoteAmountRaw
+                )
+                  ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
+                  : ZERO,
+                surplusOverFloorQuoteRaw: quoteAmountRaw.gte(
+                  requiredQuoteAmountRaw
+                )
+                  ? quoteAmountRaw.sub(requiredQuoteAmountRaw)
+                  : ZERO,
               };
+              if (quoteAmountRaw.lt(requiredQuoteAmountRaw)) {
+                const expectedProfitRaw = quoteAmountRaw.gte(
+                  breakEvenQuoteAmountRaw
+                )
+                  ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
+                  : breakEvenQuoteAmountRaw.sub(quoteAmountRaw);
+                stats.profitFloorRejects += 1;
+                return {
+                  approved: false,
+                  reason: `expected take profit ${formatSignedQuoteAmount({
+                    rawAmount: expectedProfitRaw,
+                    quoteTokenDecimals,
+                    negative: quoteAmountRaw.lt(breakEvenQuoteAmountRaw),
+                  })} below required profit floor`,
+                };
+              }
+            } else {
+              if (takePolicy?.minProfitNative !== undefined) {
+                stats.profitFloorRejects += 1;
+                return {
+                  approved: false,
+                  reason:
+                    'quote-normalized minProfitNative floor is not available',
+                };
+              }
+              const auctionCostQuote =
+                price * (quoteEvaluation.collateralAmount ?? 0);
+              const expectedProfit =
+                (quoteEvaluation.quoteAmount ?? 0) -
+                auctionCostQuote -
+                gasPolicy.gasCostQuote;
+              if (
+                minExpectedProfitQuote !== undefined &&
+                expectedProfit < minExpectedProfitQuote
+              ) {
+                stats.profitFloorRejects += 1;
+                return {
+                  approved: false,
+                  reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
+                };
+              }
             }
           }
         }
@@ -560,7 +643,10 @@ export async function handleDiscoveredTakeTarget(
           stats.arbProfitUnavailableRejects += 1;
           return {
             approved: false,
-            reason: 'quote-normalized profit is not available',
+            reason:
+              takePolicy?.minProfitNative !== undefined
+                ? `arb-take blocked: minProfitNative=${takePolicy.minProfitNative} requires quote-normalized profit, which is not supported for arb-takes`
+                : `arb-take blocked: minExpectedProfitQuote=${takePolicy?.minExpectedProfitQuote} requires quote-normalized profit, which is not supported for arb-takes`,
           };
         }
 

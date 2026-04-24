@@ -144,6 +144,16 @@ export function getSlippageBasisPoints(defaultSlippage: number | undefined): num
   return Math.max(0, Math.min(BASIS_POINTS_DENOMINATOR, basisPoints));
 }
 
+export function getSlippageFloorQuoteRaw(
+  quoteAmountRaw: BigNumber,
+  defaultSlippage: number | undefined
+): BigNumber {
+  const slippageBasisPoints = getSlippageBasisPoints(defaultSlippage);
+  return quoteAmountRaw
+    .mul(BASIS_POINTS_DENOMINATOR - slippageBasisPoints)
+    .div(BASIS_POINTS_DENOMINATOR);
+}
+
 export function getEffectiveFactoryFeeTiers(
   defaultFeeTier: number,
   candidateFeeTiers?: number[]
@@ -305,7 +315,8 @@ export function getUniswapV3QuoteProvider(params: {
   if (
     !routerConfig?.universalRouterAddress ||
     !routerConfig.poolFactoryAddress ||
-    !routerConfig.wethAddress
+    !routerConfig.wethAddress ||
+    !routerConfig.quoterV2Address
   ) {
     return undefined;
   }
@@ -339,7 +350,8 @@ export async function getSushiSwapQuoteProvider(params: {
   if (
     !routerConfig?.swapRouterAddress ||
     !routerConfig.factoryAddress ||
-    !routerConfig.wethAddress
+    !routerConfig.wethAddress ||
+    !routerConfig.quoterV2Address
   ) {
     return undefined;
   }
@@ -429,11 +441,20 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
         route.feeTier ??
         params.config.universalRouterOverrides?.defaultFeeTier ??
         3000;
-      const exists = await quoteProvider.poolExists(
-        params.pool.collateralAddress,
-        params.pool.quoteAddress,
-        feeTier
-      );
+      let exists: boolean;
+      try {
+        exists = await quoteProvider.poolExists(
+          params.pool.collateralAddress,
+          params.pool.quoteAddress,
+          feeTier
+        );
+      } catch (error) {
+        unavailableRoutes.push({
+          route,
+          reason: `Uniswap V3 pool existence check failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        continue;
+      }
       if (exists) {
         availableRoutes.push(route);
       } else {
@@ -463,11 +484,20 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
         route.feeTier ??
         params.config.sushiswapRouterOverrides?.defaultFeeTier ??
         500;
-      const exists = await quoteProvider.poolExists(
-        params.pool.collateralAddress,
-        params.pool.quoteAddress,
-        feeTier
-      );
+      let exists: boolean;
+      try {
+        exists = await quoteProvider.poolExists(
+          params.pool.collateralAddress,
+          params.pool.quoteAddress,
+          feeTier
+        );
+      } catch (error) {
+        unavailableRoutes.push({
+          route,
+          reason: `SushiSwap pool existence check failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        continue;
+      }
       if (exists) {
         availableRoutes.push(route);
       } else {
@@ -534,12 +564,13 @@ function compareFactoryRouteEvaluations(
     >;
   }
 ): number {
-  const leftProfit =
-    left.evaluation.routeProfitability?.expectedNetProfitQuoteRaw ??
-    left.evaluation.quoteAmountRaw!;
-  const rightProfit =
-    right.evaluation.routeProfitability?.expectedNetProfitQuoteRaw ??
-    right.evaluation.quoteAmountRaw!;
+  const leftProfit = left.evaluation.routeProfitability?.expectedNetProfitQuoteRaw;
+  const rightProfit = right.evaluation.routeProfitability?.expectedNetProfitQuoteRaw;
+  if (!leftProfit || !rightProfit) {
+    throw new Error(
+      'Factory: takeable route missing expected net profit metadata'
+    );
+  }
   if (!leftProfit.eq(rightProfit)) {
     return leftProfit.gt(rightProfit) ? -1 : 1;
   }
@@ -592,10 +623,19 @@ export function selectBestFactoryRouteEvaluation(params: {
     'universalRouterOverrides' | 'sushiswapRouterOverrides'
   >;
 }): FactoryRouteEvaluationResult | undefined {
-  return params.evaluations
-    .filter(
-      ({ evaluation }) => evaluation.isTakeable && evaluation.quoteAmountRaw
-    )
+  const takeableEvaluations = params.evaluations.filter(({ evaluation }) => {
+    if (!evaluation.isTakeable || !evaluation.quoteAmountRaw) {
+      return false;
+    }
+    if (!evaluation.routeProfitability?.expectedNetProfitQuoteRaw) {
+      throw new Error(
+        'Factory: takeable route missing expected net profit metadata'
+      );
+    }
+    return true;
+  });
+
+  return takeableEvaluations
     .sort((left, right) =>
       compareFactoryRouteEvaluations(left, right, {
         defaultLiquiditySource: params.defaultLiquiditySource,
@@ -803,22 +843,18 @@ export async function computeFactoryAmountOutMinimum({
   pool,
   liquidation,
   quoteEvaluation,
-  liquiditySource,
-  config,
   marketPriceFactor,
 }: {
   pool: FungiblePool;
   liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  liquiditySource: LiquiditySource;
-  config: Pick<
-    FactoryExecutionConfig,
-    'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides'
-  >;
   marketPriceFactor: number;
 }): Promise<BigNumber> {
   if (!quoteEvaluation.quoteAmountRaw) {
     throw new Error('Factory: quoteAmountRaw missing from evaluation');
+  }
+  if (!quoteEvaluation.approvedMinOutRaw) {
+    throw new Error('Factory: approvedMinOutRaw missing from evaluation');
   }
 
   const quoteAmountDueRaw = await getQuoteAmountDueRaw(
@@ -830,32 +866,17 @@ export async function computeFactoryAmountOutMinimum({
     quoteAmountDueRaw.mul(MARKET_FACTOR_SCALE),
     BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
   );
-
-  let slippageBasisPoints = 100;
-  if (liquiditySource === LiquiditySource.UNISWAPV3) {
-    slippageBasisPoints = getSlippageBasisPoints(
-      config.universalRouterOverrides?.defaultSlippage
-    );
-  } else if (liquiditySource === LiquiditySource.SUSHISWAP) {
-    slippageBasisPoints = getSlippageBasisPoints(
-      config.sushiswapRouterOverrides?.defaultSlippage
-    );
-  } else if (liquiditySource === LiquiditySource.CURVE) {
-    slippageBasisPoints = getSlippageBasisPoints(
-      config.curveRouterOverrides?.defaultSlippage
+  const minimumSanityFloor = maxBigNumber(
+    quoteAmountDueRaw,
+    profitabilityFloor
+  );
+  if (quoteEvaluation.approvedMinOutRaw.lt(minimumSanityFloor)) {
+    throw new Error(
+      'Factory: approvedMinOutRaw below auction repayment/market-factor floor'
     );
   }
 
-  const slippageFloor = quoteEvaluation.quoteAmountRaw
-    .mul(BASIS_POINTS_DENOMINATOR - slippageBasisPoints)
-    .div(BASIS_POINTS_DENOMINATOR);
-
-  const floors = [quoteAmountDueRaw, profitabilityFloor, slippageFloor];
-  if (quoteEvaluation.approvedMinOutRaw) {
-    floors.push(quoteEvaluation.approvedMinOutRaw);
-  }
-
-  return maxBigNumber(...floors);
+  return quoteEvaluation.approvedMinOutRaw;
 }
 
 export async function buildFactoryQuoteEvaluation(params: {
@@ -868,6 +889,7 @@ export async function buildFactoryQuoteEvaluation(params: {
   collateralAmount: number;
   selectedLiquiditySource: LiquiditySource;
   selectedFeeTier?: number;
+  existingSlippageFloorQuoteRaw?: BigNumber;
   routeContext?: FactoryRouteEvaluationContext;
   successReason?: string;
   failureReason: string;
@@ -896,6 +918,12 @@ export async function buildFactoryQuoteEvaluation(params: {
   )
     ? params.quoteAmountRaw.sub(marketFactorFloorQuoteRaw)
     : ZERO;
+  const approvedMinOutRaw = params.existingSlippageFloorQuoteRaw
+    ? maxBigNumber(
+        marketFactorFloorQuoteRaw,
+        params.existingSlippageFloorQuoteRaw
+      )
+    : marketFactorFloorQuoteRaw;
 
   return {
     isTakeable: isProfitable,
@@ -907,7 +935,7 @@ export async function buildFactoryQuoteEvaluation(params: {
     quoteAmountRaw: params.quoteAmountRaw,
     selectedLiquiditySource: params.selectedLiquiditySource,
     selectedFeeTier: params.selectedFeeTier,
-    approvedMinOutRaw: marketFactorFloorQuoteRaw,
+    approvedMinOutRaw,
     collateralAmount,
     routeProfitability: {
       auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
@@ -948,7 +976,11 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
   const auctionRepayRequirementQuoteRaw =
     routeProfitability?.auctionRepayRequirementQuoteRaw;
   if (!auctionRepayRequirementQuoteRaw) {
-    return params.evaluation;
+    return {
+      ...params.evaluation,
+      isTakeable: false,
+      reason: 'route profitability context missing auction repay requirement',
+    };
   }
 
   const routeExecutionCostQuoteRaw =

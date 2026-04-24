@@ -153,7 +153,7 @@ export class SushiSwapQuoteProvider {
         await this.initialize();
       }
 
-      const fee = feeTier || this.config.defaultFeeTier;
+      const fee = feeTier ?? this.config.defaultFeeTier;
       const cacheKey = [
         tokenA.toLowerCase(),
         tokenB.toLowerCase(),
@@ -169,7 +169,7 @@ export class SushiSwapQuoteProvider {
 
       const poolAddress = await this.factoryContract.getPool(tokenA, tokenB, fee);
       
-      const exists = poolAddress !== '0x0000000000000000000000000000000000000000';
+      const exists = poolAddress !== ethers.constants.AddressZero;
       this.poolExistenceCache.set(cacheKey, {
         exists,
         expiresAt: Date.now() + 5 * 60 * 1000,
@@ -185,7 +185,7 @@ export class SushiSwapQuoteProvider {
 
     } catch (error) {
       logger.debug(`Error checking SushiSwap pool existence: ${error}`);
-      return false;
+      throw error;
     }
   }
 
@@ -213,7 +213,7 @@ export class SushiSwapQuoteProvider {
         return { success: false, error: 'QuoterV2 not available - use direct swap approach' };
       }
 
-      const fee = feeTier || this.config.defaultFeeTier;
+      const fee = feeTier ?? this.config.defaultFeeTier;
 
       // Verify pool exists first
       const poolExists = await this.poolExists(tokenIn, tokenOut, fee);

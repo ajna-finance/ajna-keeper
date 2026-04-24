@@ -303,9 +303,7 @@ async function getSettlementCycleLiquidationAuctions(
 }
 
 function createEmptyDiscoveryRpcCache(): DiscoveryRpcCache {
-  return {
-    gasQuoteConversions: new Map(),
-  };
+  return {};
 }
 
 async function resolveTakeCycleTargets(

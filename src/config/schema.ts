@@ -165,7 +165,17 @@ export interface AutoDiscoverActionPolicy {
 }
 
 export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
+  /**
+   * Quote-token profit floor in human token units. When both this and
+   * minProfitNative are set, the effective floor is the stricter of this
+   * quote-denominated floor and the freshly converted native floor.
+   */
   minExpectedProfitQuote?: number;
+  /**
+   * Native-token profit floor in wei. Quoted fresh into each candidate's quote
+   * token for external takes; arb-takes are skipped when this is set because
+   * they do not produce quote-normalized profit.
+   */
   minProfitNative?: string;
   takeQuoteBudgetPerRun?: number;
   takeRouteQuoteBudgetPerCandidate?: number;

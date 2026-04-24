@@ -70,13 +70,15 @@ export function hasConfiguredGasQuoteLiquiditySource(
       return !!(
         config.universalRouterOverrides?.universalRouterAddress &&
         config.universalRouterOverrides.poolFactoryAddress &&
-        config.universalRouterOverrides.wethAddress
+        config.universalRouterOverrides.wethAddress &&
+        config.universalRouterOverrides.quoterV2Address
       );
     case LiquiditySource.SUSHISWAP:
       return !!(
         config.sushiswapRouterOverrides?.swapRouterAddress &&
         config.sushiswapRouterOverrides.factoryAddress &&
-        config.sushiswapRouterOverrides.wethAddress
+        config.sushiswapRouterOverrides.wethAddress &&
+        config.sushiswapRouterOverrides.quoterV2Address
       );
     case LiquiditySource.CURVE:
       return !!(

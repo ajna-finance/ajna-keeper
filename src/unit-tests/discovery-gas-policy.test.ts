@@ -25,9 +25,7 @@ describe('Discovery Gas Policy', () => {
       provider: {},
       getChainId: sinon.stub().resolves(1),
     };
-    const rpcCache = {
-      gasQuoteConversions: new Map<string, BigNumber | null>(),
-    };
+    const rpcCache = {};
     const params = {
       signer: signer as any,
       config: {
@@ -69,7 +67,6 @@ describe('Discovery Gas Policy', () => {
     expect(firstResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to.be.true;
     expect(firstResult.quoteTokenDecimals).to.equal(6);
     expect(oneInchQuoteStub.calledTwice).to.be.true;
-    expect(rpcCache.gasQuoteConversions.size).to.equal(0);
   });
 
   it('uses the cached discovery chainId instead of calling signer.getChainId per evaluation', async () => {
@@ -116,7 +113,6 @@ describe('Discovery Gas Policy', () => {
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
         chainId: 1,
-        gasQuoteConversions: new Map<string, BigNumber | null>(),
       },
     });
 
@@ -156,9 +152,7 @@ describe('Discovery Gas Policy', () => {
       gasLimit: BigNumber.from(900000),
       quoteTokenAddress: '0x9999999999999999999999999999999999999999',
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
-      rpcCache: {
-        gasQuoteConversions: new Map<string, BigNumber | null>(),
-      },
+      rpcCache: {},
     });
 
     expect(result.approved).to.be.false;
@@ -209,9 +203,7 @@ describe('Discovery Gas Policy', () => {
       quoteTokenAddress: '0x9999999999999999999999999999999999999999',
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
-      rpcCache: {
-        gasQuoteConversions: new Map<string, BigNumber | null>(),
-      },
+      rpcCache: {},
     });
 
     expect(result.approved).to.be.true;
@@ -253,6 +245,7 @@ describe('Discovery Gas Policy', () => {
         universalRouterOverrides: {
           universalRouterAddress: '0x2222222222222222222222222222222222222222',
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
         },
         tokenAddresses: {
@@ -271,9 +264,7 @@ describe('Discovery Gas Policy', () => {
       quoteTokenAddress: '0x9999999999999999999999999999999999999999',
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
-      rpcCache: {
-        gasQuoteConversions: new Map<string, BigNumber | null>(),
-      },
+      rpcCache: {},
     });
 
     expect(result.approved).to.be.true;
@@ -285,12 +276,13 @@ describe('Discovery Gas Policy', () => {
   it('quotes minProfitNative as a fresh exact native amount separate from gas cost', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const gasCostNativeRaw = ethers.utils.parseUnits('1', 'gwei').mul(900000);
+    const bufferedGasCostNativeRaw = gasCostNativeRaw.mul(13000).add(9999).div(10000);
     const minProfitNative = ethers.utils.parseEther('0.01');
     const oneInchQuoteStub = sinon
       .stub(DexRouter.prototype, 'getQuoteFromOneInch')
       .callsFake(async (_chainId, amountIn: BigNumber) => ({
         success: true,
-        dstAmount: amountIn.eq(gasCostNativeRaw)
+        dstAmount: amountIn.eq(bufferedGasCostNativeRaw)
           ? ethers.utils.parseUnits('1', 6).toString()
           : ethers.utils.parseUnits('20', 6).toString(),
       }));
@@ -330,7 +322,6 @@ describe('Discovery Gas Policy', () => {
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
         chainId: 8453,
-        gasQuoteConversions: new Map<string, BigNumber | null>(),
       },
     });
 

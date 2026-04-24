@@ -8,6 +8,7 @@ import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provide
 import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
 import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
 import * as erc20 from '../erc20';
+import { selectBestFactoryRouteEvaluation } from '../take/factory/shared';
 
 describe('Take Factory', () => {
   let mockSigner: any;
@@ -635,6 +636,29 @@ describe('Take Factory', () => {
   });
 
   describe('Dynamic factory route selection', () => {
+    it('rejects takeable route evaluations without net-profit metadata', () => {
+      expect(() =>
+        selectBestFactoryRouteEvaluation({
+          evaluations: [
+            {
+              route: { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 3000 },
+              evaluation: {
+                isTakeable: true,
+                quoteAmountRaw: ethers.utils.parseUnits('120', 6),
+                selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+                selectedFeeTier: 3000,
+                approvedMinOutRaw: ethers.utils.parseUnits('118', 6),
+              },
+            },
+          ],
+          defaultLiquiditySource: LiquiditySource.UNISWAPV3,
+          config: {
+            universalRouterOverrides: { defaultFeeTier: 3000 },
+          },
+        })
+      ).to.throw('Factory: takeable route missing expected net profit metadata');
+    });
+
     it('ranks viable Uni/Sushi routes by gas-adjusted net profit and keeps the selected fee tier', async () => {
       sinon
         .stub(UniswapV3QuoteProvider.prototype, 'isAvailable')
@@ -733,7 +757,7 @@ describe('Take Factory', () => {
       );
       expect(evaluation.selectedFeeTier).to.equal(500);
       expect(
-        evaluation.approvedMinOutRaw?.eq(ethers.utils.parseUnits('103', 6))
+        evaluation.approvedMinOutRaw?.eq(ethers.utils.parseUnits('117.81', 6))
       ).to.be.true;
       expect(
         evaluation.routeProfitability?.surplusOverFloorQuoteRaw?.eq(
@@ -835,6 +859,12 @@ describe('Take Factory', () => {
         {
           allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
           routeQuoteBudgetPerCandidate: 2,
+          routeProfitabilityContext: {
+            routeExecutionCostQuoteRawBySource: {
+              [LiquiditySource.UNISWAPV3]: BigNumber.from(0),
+              [LiquiditySource.SUSHISWAP]: BigNumber.from(0),
+            },
+          },
         }
       );
 
@@ -844,6 +874,93 @@ describe('Take Factory', () => {
       );
       expect(evaluation.selectedFeeTier).to.equal(500);
       expect(uniswapQuoteStub.calledTwice).to.be.true;
+      expect(sushiQuoteStub.called).to.be.false;
+    });
+
+    it('refuses cross-source route selection without profitability context', async () => {
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'isAvailable')
+        .returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'poolExists')
+        .resolves(true);
+      const uniswapQuoteStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+        .resolves({
+          success: true,
+          dstAmount: ethers.utils.parseUnits('120', 6).toString(),
+        } as any);
+      sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'initialize')
+        .resolves(true);
+      sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'poolExists')
+        .resolves(true);
+      const sushiQuoteStub = sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+        .resolves({
+          success: true,
+          dstAmount: ethers.utils.parseUnits('121', 6),
+        } as any);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Missing Context Route Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'Missing Context Route Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        universalRouterOverrides: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          defaultFeeTier: 3000,
+          wethAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+        },
+        sushiswapRouterOverrides: {
+          swapRouterAddress: '0x8888888888888888888888888888888888888888',
+          quoterV2Address: '0x9999999999999999999999999999999999999999',
+          factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          defaultFeeTier: 500,
+          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      };
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        {
+          allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+        }
+      );
+
+      expect(evaluation.isTakeable).to.be.false;
+      expect(evaluation.reason).to.equal(
+        'route profitability context required for dynamic liquidity source selection'
+      );
+      expect(uniswapQuoteStub.called).to.be.false;
       expect(sushiQuoteStub.called).to.be.false;
     });
 

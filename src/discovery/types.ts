@@ -27,6 +27,5 @@ export interface DiscoveryRpcCache {
   chainId?: number;
   gasPrice?: BigNumber;
   gasPriceFetchedAt?: number;
-  gasQuoteConversions?: Map<string, BigNumber | null>;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
 }

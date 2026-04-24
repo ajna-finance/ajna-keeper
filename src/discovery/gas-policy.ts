@@ -35,6 +35,30 @@ export interface GasPolicyResult {
   reason?: string;
 }
 
+const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
+const L2_GAS_COST_BUFFER_BASIS_POINTS = BigNumber.from(13_000);
+const L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER = new Set([
+  10,
+  8453,
+  42161,
+  11155420,
+  84532,
+  421614,
+]);
+
+function applyL2GasCostBuffer(
+  gasCostNativeRaw: BigNumber,
+  chainId?: number
+): BigNumber {
+  if (chainId === undefined || !L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER.has(chainId)) {
+    return gasCostNativeRaw;
+  }
+  return gasCostNativeRaw
+    .mul(L2_GAS_COST_BUFFER_BASIS_POINTS)
+    .add(BASIS_POINTS_DENOMINATOR.sub(1))
+    .div(BASIS_POINTS_DENOMINATOR);
+}
+
 export function createDiscoveryTransportsForConfig(
   config: DiscoveryExecutionTransportConfig,
   signer: Signer
@@ -111,7 +135,8 @@ async function quoteTokensByLiquiditySource(params: {
     if (
       !routerConfig?.universalRouterAddress ||
       !routerConfig.poolFactoryAddress ||
-      !routerConfig.wethAddress
+      !routerConfig.wethAddress ||
+      !routerConfig.quoterV2Address
     ) {
       return undefined;
     }
@@ -142,7 +167,8 @@ async function quoteTokensByLiquiditySource(params: {
     if (
       !sushiConfig?.swapRouterAddress ||
       !sushiConfig.factoryAddress ||
-      !sushiConfig.wethAddress
+      !sushiConfig.wethAddress ||
+      !sushiConfig.quoterV2Address
     ) {
       return undefined;
     }
@@ -241,7 +267,17 @@ export async function evaluateGasPolicy(params: {
     };
   }
 
-  const gasCostNativeRaw = gasPrice.mul(params.gasLimit);
+  const cachedChainId = params.chainId ?? params.rpcCache?.chainId;
+  const unbufferedGasCostNativeRaw = gasPrice.mul(params.gasLimit);
+  const gasCostNativeRaw = applyL2GasCostBuffer(
+    unbufferedGasCostNativeRaw,
+    cachedChainId
+  );
+  if (!gasCostNativeRaw.eq(unbufferedGasCostNativeRaw)) {
+    logger.debug(
+      `Applied conservative L2 gas cost buffer for chainId ${cachedChainId}: ${unbufferedGasCostNativeRaw.toString()} -> ${gasCostNativeRaw.toString()}`
+    );
+  }
   const gasCostNative = Number(ethers.utils.formatEther(gasCostNativeRaw));
   const maxGasCostNative = params.policy?.maxGasCostNative;
   if (maxGasCostNative !== undefined && gasCostNative > maxGasCostNative) {
@@ -268,8 +304,7 @@ export async function evaluateGasPolicy(params: {
     };
   }
 
-  const chainId =
-    params.chainId ?? params.rpcCache?.chainId ?? (await params.signer.getChainId());
+  const chainId = cachedChainId ?? (await params.signer.getChainId());
   const resolvedGasQuoteSource = resolveGasQuoteSource(params.config, chainId);
   const preferredLiquiditySource =
     params.preferredLiquiditySource !== undefined &&

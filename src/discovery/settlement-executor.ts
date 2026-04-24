@@ -132,10 +132,9 @@ export async function handleDiscoveredSettlementTarget(
           typeof params.signer.getChainId === 'function'
             ? await params.signer.getChainId()
             : undefined,
-          gasPrice: await transports.readRpc.getGasPrice(),
-          gasPriceFetchedAt: Date.now(),
-          gasQuoteConversions: new Map(),
-        }
+	          gasPrice: await transports.readRpc.getGasPrice(),
+	          gasPriceFetchedAt: Date.now(),
+	        }
       : undefined);
   const approvedAuctions: AuctionToSettle[] = [];
   const settlementPolicy = getAutoDiscoverSettlementPolicy(

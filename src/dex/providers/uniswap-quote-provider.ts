@@ -63,7 +63,7 @@ export class UniswapV3QuoteProvider {
     decimals?: QuoteDecimals
   ): Promise<QuoteResult> {
     try {
-      const tier = feeTier || this.config.defaultFeeTier;
+      const tier = feeTier ?? this.config.defaultFeeTier;
       
       // Check if QuoterV2 address is configured
       if (!this.config.quoterV2Address) {
@@ -147,7 +147,7 @@ export class UniswapV3QuoteProvider {
     feeTier?: number
   ): Promise<boolean> {
     try {
-      const fee = feeTier || this.config.defaultFeeTier;
+      const fee = feeTier ?? this.config.defaultFeeTier;
       const [token0, token1] = [
         tokenA.toLowerCase(),
         tokenB.toLowerCase(),
@@ -187,7 +187,7 @@ export class UniswapV3QuoteProvider {
       return exists;
     } catch (error) {
       logger.debug(`Error checking Uniswap V3 pool existence: ${error}`);
-      return false;
+      throw error;
     }
   }
 

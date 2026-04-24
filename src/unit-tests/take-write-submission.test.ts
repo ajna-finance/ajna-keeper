@@ -6,6 +6,7 @@ import * as erc20 from '../erc20';
 import * as oneInch from '../dex/one-inch';
 import { NonceTracker } from '../nonce';
 import { takeLiquidation } from '../take';
+import { takeLiquidationFactory } from '../take/factory';
 import { DexRouter } from '../dex/router';
 import { executeUniswapV3FactoryTake } from '../take/factory/uniswap';
 import { executeCurveFactoryTake } from '../take/factory/curve';
@@ -216,6 +217,7 @@ describe('take write submission', () => {
         externalTakeQuoteEvaluation: {
           isTakeable: true,
           quoteAmountRaw: BigNumber.from(1000),
+          approvedMinOutRaw: BigNumber.from(1100),
         },
       },
       config: {
@@ -235,7 +237,7 @@ describe('take write submission', () => {
       ['(address,(address,address,address,address,uint256,uint256,uint256),bytes)'],
       encodedDetails
     );
-    expect(decoded[0][1][5].toString()).to.equal('1000');
+    expect(decoded[0][1][5].toString()).to.equal('1100');
   });
 
   it('uses the configured take write transport for Curve factory take submission without reselecting the pool', async () => {
@@ -314,6 +316,8 @@ describe('take write submission', () => {
       quoteEvaluation: {
         isTakeable: true,
         quoteAmountRaw: BigNumber.from(11),
+        approvedMinOutRaw: BigNumber.from(10),
+        selectedLiquiditySource: LiquiditySource.CURVE,
         curvePool: {
           address: '0x00000000000000000000000000000000000000c3',
           poolType: CurvePoolType.STABLE,
@@ -355,6 +359,80 @@ describe('take write submission', () => {
     expect(decoded[1]).to.equal(0);
     expect(decoded[2]).to.equal(1);
     expect(decoded[3]).to.equal(0);
+  });
+
+  it('refuses factory execution when an approved quote is missing route-binding fields', async () => {
+    const connectStub = sinon.stub(AjnaKeeperTakerFactory__factory, 'connect');
+    const basePool = {
+      name: 'Factory Take Pool',
+      poolAddress: '0x0000000000000000000000000000000000000011',
+      collateralAddress: '0x0000000000000000000000000000000000000012',
+      quoteAddress: '0x0000000000000000000000000000000000000013',
+    } as any;
+    const basePoolConfig = {
+      name: 'Factory Take Pool',
+      take: {
+        liquiditySource: LiquiditySource.UNISWAPV3,
+        marketPriceFactor: 0.95,
+      },
+    };
+    const baseLiquidation = {
+      borrower: '0xBorrower',
+      hpbIndex: 0,
+      collateral: ethers.utils.parseEther('1'),
+      auctionPrice: ethers.utils.parseEther('1'),
+      isTakeable: true,
+      isArbTakeable: false,
+    };
+
+    const cases = [
+      {
+        label: 'selected liquidity source',
+        quoteEvaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(11),
+          approvedMinOutRaw: BigNumber.from(10),
+          selectedFeeTier: 3000,
+        },
+      },
+      {
+        label: 'approved min-out',
+        quoteEvaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(11),
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+          selectedFeeTier: 3000,
+        },
+      },
+      {
+        label: 'selected fee tier',
+        quoteEvaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(11),
+          approvedMinOutRaw: BigNumber.from(10),
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+        },
+      },
+    ];
+
+    for (const { label, quoteEvaluation } of cases) {
+      const result = await takeLiquidationFactory({
+        pool: basePool,
+        poolConfig: basePoolConfig,
+        signer: {} as any,
+        liquidation: {
+          ...baseLiquidation,
+          externalTakeQuoteEvaluation: quoteEvaluation,
+        },
+        config: {
+          dryRun: false,
+          keeperTakerFactory: '0x0000000000000000000000000000000000000014',
+        },
+      });
+      expect(result, label).to.equal(false);
+    }
+
+    expect(connectStub.called).to.be.false;
   });
 
   it('uses the configured take write transport for Uniswap factory take submission', async () => {
@@ -430,6 +508,9 @@ describe('take write submission', () => {
       quoteEvaluation: {
         isTakeable: true,
         quoteAmountRaw: BigNumber.from(11),
+        approvedMinOutRaw: BigNumber.from(10),
+        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+        selectedFeeTier: 3000,
       },
       config: {
         keeperTakerFactory: '0x0000000000000000000000000000000000000013',
