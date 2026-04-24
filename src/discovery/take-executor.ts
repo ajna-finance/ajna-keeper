@@ -34,6 +34,7 @@ import { getDecimalsErc20 } from '../erc20';
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const CURVE_EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(1_500_000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
+const APPROVAL_GAS_PRICE_TTL_MS = 15 * 1000;
 const WAD = ethers.constants.WeiPerEther;
 const ZERO = BigNumber.from(0);
 
@@ -115,6 +116,46 @@ function formatSignedQuoteAmount(params: {
   return params.negative ? `-${formatted}` : formatted;
 }
 
+function hasFreshFactoryRouteGasPolicy(params: {
+  quoteEvaluation: {
+    routeProfitability?: {
+      gasPolicyEvaluatedAt?: number;
+    };
+  };
+  now?: number;
+}): boolean {
+  const evaluatedAt =
+    params.quoteEvaluation.routeProfitability?.gasPolicyEvaluatedAt;
+  if (evaluatedAt === undefined) {
+    return false;
+  }
+
+  return (params.now ?? Date.now()) - evaluatedAt <= APPROVAL_GAS_PRICE_TTL_MS;
+}
+
+async function refreshDiscoveryGasPriceIfStale(params: {
+  rpcCache?: DiscoveryRpcCache;
+  transports: DiscoveryReadTransports;
+  maxAgeMs?: number;
+}): Promise<void> {
+  const rpcCache = params.rpcCache;
+  if (!rpcCache) {
+    return;
+  }
+
+  const fetchedAt = rpcCache.gasPriceFetchedAt;
+  const hasFreshGasPrice =
+    rpcCache.gasPrice !== undefined &&
+    fetchedAt !== undefined &&
+    Date.now() - fetchedAt <= (params.maxAgeMs ?? APPROVAL_GAS_PRICE_TTL_MS);
+  if (hasFreshGasPrice) {
+    return;
+  }
+
+  rpcCache.gasPrice = await params.transports.readRpc.getGasPrice();
+  rpcCache.gasPriceFetchedAt = Date.now();
+}
+
 async function buildFactoryRouteProfitabilityContext(params: {
   pool: FungiblePool;
   signer: Signer;
@@ -137,6 +178,11 @@ async function buildFactoryRouteProfitabilityContext(params: {
     return undefined;
   }
 
+  await refreshDiscoveryGasPriceIfStale({
+    rpcCache: params.rpcCache,
+    transports: params.transports,
+  });
+
   const quoteTokenDecimals = await getDecimalsErc20(
     params.signer,
     params.pool.quoteAddress
@@ -157,6 +203,7 @@ async function buildFactoryRouteProfitabilityContext(params: {
   const routeRejectionReasonsBySource: Partial<
     Record<LiquiditySource, string>
   > = {};
+  const gasPolicyEvaluatedAt = Date.now();
 
   for (const source of sources) {
     const gasPolicy = await evaluateGasPolicy({
@@ -202,6 +249,7 @@ async function buildFactoryRouteProfitabilityContext(params: {
     nativeProfitFloorQuoteRawBySource,
     configuredProfitFloorQuoteRaw,
     routeRejectionReasonsBySource,
+    gasPolicyEvaluatedAt,
   };
 }
 
@@ -451,6 +499,22 @@ export async function handleDiscoveredTakeTarget(
           }
           selectedLiquiditySource = configuredLiquiditySource;
         }
+        const selectedFactoryLiquiditySource =
+          selectedLiquiditySource !== undefined &&
+          isDynamicFactorySource(selectedLiquiditySource)
+            ? selectedLiquiditySource
+            : undefined;
+        if (
+          selectedFactoryLiquiditySource !== undefined &&
+          hasFreshFactoryRouteGasPolicy({ quoteEvaluation })
+        ) {
+          return { approved: true };
+        }
+
+        await refreshDiscoveryGasPriceIfStale({
+          rpcCache,
+          transports,
+        });
 
         const gasPolicy = await evaluateGasPolicy({
           signer: params.signer,
@@ -489,13 +553,8 @@ export async function handleDiscoveredTakeTarget(
             minExpectedProfitQuote !== undefined
               ? decimaledToWei(minExpectedProfitQuote, quoteTokenDecimals)
               : ZERO;
-          const factoryLiquiditySource =
-            selectedLiquiditySource !== undefined &&
-            isDynamicFactorySource(selectedLiquiditySource)
-              ? selectedLiquiditySource
-              : undefined;
           const canApplyFactoryProfitability =
-            factoryLiquiditySource !== undefined &&
+            selectedFactoryLiquiditySource !== undefined &&
             quoteAmountRaw !== undefined &&
             gasCostQuoteRaw !== undefined &&
             quoteTokenDecimals !== undefined;
@@ -503,16 +562,17 @@ export async function handleDiscoveredTakeTarget(
           if (canApplyFactoryProfitability) {
             const refreshedEvaluation = applyFactoryRouteProfitabilityPolicy({
               evaluation: quoteEvaluation,
-              liquiditySource: factoryLiquiditySource,
+              liquiditySource: selectedFactoryLiquiditySource,
               context: {
                 routeExecutionCostQuoteRawBySource: {
-                  [factoryLiquiditySource]: gasCostQuoteRaw,
+                  [selectedFactoryLiquiditySource]: gasCostQuoteRaw,
                 },
                 nativeProfitFloorQuoteRawBySource: {
-                  [factoryLiquiditySource]:
+                  [selectedFactoryLiquiditySource]:
                     gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
                 },
                 configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
+                gasPolicyEvaluatedAt: Date.now(),
               },
             });
             Object.assign(quoteEvaluation, refreshedEvaluation);
@@ -576,6 +636,7 @@ export async function handleDiscoveredTakeTarget(
                 )
                   ? quoteAmountRaw.sub(requiredQuoteAmountRaw)
                   : ZERO,
+                gasPolicyEvaluatedAt: Date.now(),
               };
               if (quoteAmountRaw.lt(requiredQuoteAmountRaw)) {
                 const expectedProfitRaw = quoteAmountRaw.gte(
@@ -638,6 +699,11 @@ export async function handleDiscoveredTakeTarget(
                 : `arb-take blocked: minExpectedProfitQuote=${takePolicy?.minExpectedProfitQuote} requires quote-normalized profit, which is not supported for arb-takes`,
           };
         }
+
+        await refreshDiscoveryGasPriceIfStale({
+          rpcCache,
+          transports,
+        });
 
         const gasPolicy = await evaluateGasPolicy({
           signer: params.signer,

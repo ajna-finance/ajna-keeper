@@ -311,6 +311,14 @@ async function quoteTokensByLiquiditySource(params: {
       sushiConfig.candidateFeeTiers,
       500
     )) {
+      const poolExists = await quoteProvider.poolExists(
+        params.tokenIn,
+        params.tokenOut,
+        feeTier
+      );
+      if (!poolExists) {
+        continue;
+      }
       const quoteResult = await quoteProvider.getQuote(
         params.amountIn,
         params.tokenIn,

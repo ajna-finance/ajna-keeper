@@ -33,9 +33,11 @@ const UNISWAP_FACTORY_ABI = [
   'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)',
 ];
 const UNISWAP_V3_POOL_ABI = [
-  'function liquidity() external view returns (uint128)',
+  'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
 ];
 const MAX_POOL_EXISTENCE_CACHE_ENTRIES = 1024;
+const POOL_EXISTS_CACHE_TTL_MS = 5 * 60 * 1000;
+const UNINITIALIZED_POOL_CACHE_TTL_MS = 30 * 1000;
 
 function prunePoolExistenceCache(
   cache: Map<string, { exists: boolean; expiresAt: number }>
@@ -208,22 +210,26 @@ export class UniswapV3QuoteProvider {
           UNISWAP_V3_POOL_ABI,
           this.signer
         );
-        const activeLiquidity: BigNumber = await poolContract.liquidity();
-        exists = activeLiquidity.gt(0);
+        const slot0 = await poolContract.slot0();
+        exists = BigNumber.from(slot0.sqrtPriceX96 ?? slot0[0]).gt(0);
       }
       this.poolExistenceCache.set(cacheKey, {
         exists,
-        expiresAt: Date.now() + 5 * 60 * 1000,
+        expiresAt:
+          Date.now() +
+          (exists || poolAddress === ethers.constants.AddressZero
+            ? POOL_EXISTS_CACHE_TTL_MS
+            : UNINITIALIZED_POOL_CACHE_TTL_MS),
       });
       prunePoolExistenceCache(this.poolExistenceCache);
 
       if (exists) {
         logger.debug(
-          `Uniswap V3 pool found with active liquidity: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
+          `Uniswap V3 initialized pool found: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
         );
       } else if (poolAddress !== ethers.constants.AddressZero) {
         logger.debug(
-          `Uniswap V3 pool has no active liquidity: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
+          `Uniswap V3 pool is not initialized at the current slot0 price: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
         );
       } else {
         logger.debug(

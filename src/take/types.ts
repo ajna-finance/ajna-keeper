@@ -12,6 +12,7 @@ export interface RouteProfitabilityBreakdown {
   requiredOutputFloorQuoteRaw?: BigNumber;
   expectedNetProfitQuoteRaw?: BigNumber;
   surplusOverFloorQuoteRaw?: BigNumber;
+  gasPolicyEvaluatedAt?: number;
 }
 
 export interface TakeActionConfig {

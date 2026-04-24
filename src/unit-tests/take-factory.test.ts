@@ -883,6 +883,81 @@ describe('Take Factory', () => {
       expect(sushiQuoteStub.called).to.be.false;
     });
 
+    it('prioritizes a recent successful route over the default route when budget is one', async () => {
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
+      const uniswapQuoteStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+        .callsFake(
+          async (_amountIn, _tokenIn, _tokenOut, feeTier?: number) =>
+            ({
+              success: true,
+              dstAmount:
+                feeTier === 500
+                  ? ethers.utils.parseUnits('119', 6)
+                  : ethers.utils.parseUnits('112', 6),
+            }) as any
+        );
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Budget One Recent Route Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.recentRouteSuccesses = new Map([
+        [
+          `${LiquiditySource.UNISWAPV3}:500:${pool.collateralAddress.toLowerCase()}:${pool.quoteAddress.toLowerCase()}`,
+          Date.now(),
+        ],
+      ]);
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        {
+          name: 'Budget One Recent Route Pool',
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.99,
+          },
+        } as any,
+        {
+          universalRouterOverrides: {
+            universalRouterAddress:
+              '0x3333333333333333333333333333333333333333',
+            poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+            defaultFeeTier: 3000,
+            candidateFeeTiers: [500],
+            wethAddress: '0x5555555555555555555555555555555555555555',
+            quoterV2Address: '0x6666666666666666666666666666666666666666',
+          },
+        } as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        runtimeCache,
+        {
+          routeQuoteBudgetPerCandidate: 1,
+        }
+      );
+
+      expect(evaluation.isTakeable).to.be.true;
+      expect(evaluation.selectedFeeTier).to.equal(500);
+      expect(uniswapQuoteStub.calledOnce).to.be.true;
+      expect(uniswapQuoteStub.firstCall.args[3]).to.equal(500);
+    });
+
     it('refreshes recent route success insertion order before LRU pruning', () => {
       const pool = {
         collateralAddress: '0x1111111111111111111111111111111111111111',

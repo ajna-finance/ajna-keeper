@@ -5,6 +5,7 @@ import { LiquiditySource } from '../config';
 import { evaluateGasPolicy } from '../discovery/gas-policy';
 import { DexRouter } from '../dex/router';
 import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
+import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provider';
 import * as erc20 from '../erc20';
 
 describe('Discovery Gas Policy', () => {
@@ -489,6 +490,72 @@ describe('Discovery Gas Policy', () => {
     expect(poolExistsStub.calledTwice).to.be.true;
     expect(uniswapQuoteStub.calledOnce).to.be.true;
     expect(uniswapQuoteStub.firstCall.args[3]).to.equal(500);
+  });
+
+  it('checks SushiSwap pool availability before gas quote conversion', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
+    const poolExistsStub = sinon
+      .stub(SushiSwapQuoteProvider.prototype, 'poolExists')
+      .callsFake(
+        async (_tokenIn, _tokenOut, feeTier?: number) => feeTier === 100
+      );
+    const sushiQuoteStub = sinon
+      .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('4', 6),
+      } as any);
+
+    const result = await evaluateGasPolicy({
+      signer: ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      ) as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        sushiswapRouterOverrides: {
+          swapRouterAddress: '0x2222222222222222222222222222222222222222',
+          factoryAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 500,
+          candidateFeeTiers: [100],
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.SUSHISWAP,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 8453,
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('4', 6))).to.be
+      .true;
+    expect(poolExistsStub.calledTwice).to.be.true;
+    expect(sushiQuoteStub.calledOnce).to.be.true;
+    expect(sushiQuoteStub.firstCall.args[3]).to.equal(100);
   });
 
   it('quotes minProfitNative as a fresh exact native amount separate from gas cost', async () => {

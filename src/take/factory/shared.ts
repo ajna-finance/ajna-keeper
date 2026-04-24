@@ -45,6 +45,7 @@ export interface FactoryRouteProfitabilityContext {
   configuredProfitFloorQuoteRaw?: BigNumber;
   slippageRiskBufferQuoteRaw?: BigNumber;
   routeRejectionReasonsBySource?: Partial<Record<LiquiditySource, string>>;
+  gasPolicyEvaluatedAt?: number;
 }
 
 type FactoryTakeConfigBase = Pick<
@@ -304,11 +305,16 @@ export function orderFactoryRouteCandidates(params: {
       };
     })
     .sort((left, right) => {
-      if (left.isDefault !== right.isDefault) {
-        return left.isDefault ? -1 : 1;
+      const leftHasRecentSuccess = left.recentSuccessAt > 0;
+      const rightHasRecentSuccess = right.recentSuccessAt > 0;
+      if (leftHasRecentSuccess !== rightHasRecentSuccess) {
+        return leftHasRecentSuccess ? -1 : 1;
       }
       if (left.recentSuccessAt !== right.recentSuccessAt) {
         return right.recentSuccessAt - left.recentSuccessAt;
+      }
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
       }
       return left.index - right.index;
     })
@@ -1101,6 +1107,7 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       requiredOutputFloorQuoteRaw,
       expectedNetProfitQuoteRaw,
       surplusOverFloorQuoteRaw,
+      gasPolicyEvaluatedAt: params.context.gasPolicyEvaluatedAt,
     },
   };
 }
