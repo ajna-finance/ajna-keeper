@@ -2,7 +2,10 @@ import { expect } from 'chai';
 import {
   KeeperConfig,
   LiquiditySource,
+  TakeWriteTransportMode,
   validateAutoDiscoverConfig,
+  validateTakeSettings,
+  validateTakeWriteConfig,
 } from '../config';
 
 describe('auto-discover validation', () => {
@@ -79,5 +82,74 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('rejects non-finite and non-number take thresholds', () => {
+    expect(() =>
+      validateTakeSettings(
+        {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: Number.NaN,
+        },
+        {} as KeeperConfig
+      )
+    ).to.throw('TakeSettings: marketPriceFactor must be positive');
+
+    expect(() =>
+      validateTakeSettings(
+        {
+          minCollateral: '1' as unknown as number,
+          hpbPriceFactor: 0.98,
+        },
+        {} as KeeperConfig
+      )
+    ).to.throw('TakeSettings: minCollateral must be greater than 0');
+
+    expect(() =>
+      validateTakeSettings(
+        {
+          minCollateral: 1,
+          hpbPriceFactor: Number.POSITIVE_INFINITY,
+        },
+        {} as KeeperConfig
+      )
+    ).to.throw('TakeSettings: hpbPriceFactor must be positive');
+  });
+
+  it('rejects malformed numeric auto-discover policy values', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      maxPoolsPerRun: Number.NaN,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxPoolsPerRun must be greater than 0'
+    );
+
+    config.autoDiscover!.take = false;
+    config.autoDiscover!.settlement = {
+      enabled: true,
+      maxGasCostNative: '0.01' as unknown as number,
+    };
+    config.discoveredDefaults!.settlement = {
+      enabled: true,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.settlement: maxGasCostNative cannot be negative'
+    );
+  });
+
+  it('rejects malformed numeric take-write timeouts', () => {
+    const config = baseConfig();
+    config.takeWrite = {
+      mode: TakeWriteTransportMode.PUBLIC_RPC,
+      receiptTimeoutMs: Number.POSITIVE_INFINITY,
+    };
+
+    expect(() => validateTakeWriteConfig(config)).to.throw(
+      'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+    );
   });
 });

@@ -3,6 +3,7 @@ import { BigNumber, ethers } from 'ethers';
 import {
   AutoDiscoverActionPolicy,
   AutoDiscoverTakePolicy,
+  DEFAULT_FEE_TIER_BY_SOURCE,
   LiquiditySource,
   hasConfiguredGasQuoteLiquiditySource,
   resolveConfiguredGasQuoteLiquiditySource,
@@ -147,6 +148,58 @@ function getGasQuoteFeeTiers(
   );
 }
 
+interface FactoryV3GasQuoteProvider {
+  poolExists(
+    tokenA: string,
+    tokenB: string,
+    feeTier?: number
+  ): Promise<boolean>;
+  getQuote(
+    amountIn: BigNumber,
+    tokenIn: string,
+    tokenOut: string,
+    feeTier?: number
+  ): Promise<{ success: boolean; dstAmount?: BigNumber | string }>;
+}
+
+async function quoteFactoryV3GasConversion(params: {
+  quoteProvider: FactoryV3GasQuoteProvider;
+  amountIn: BigNumber;
+  tokenIn: string;
+  tokenOut: string;
+  defaultFeeTier?: number;
+  candidateFeeTiers?: number[];
+  fallbackFeeTier: number;
+}): Promise<BigNumber | undefined> {
+  let bestQuote: BigNumber | undefined;
+  for (const feeTier of getGasQuoteFeeTiers(
+    params.defaultFeeTier,
+    params.candidateFeeTiers,
+    params.fallbackFeeTier
+  )) {
+    const poolExists = await params.quoteProvider.poolExists(
+      params.tokenIn,
+      params.tokenOut,
+      feeTier
+    );
+    if (!poolExists) {
+      continue;
+    }
+    const quoteResult = await params.quoteProvider.getQuote(
+      params.amountIn,
+      params.tokenIn,
+      params.tokenOut,
+      feeTier
+    );
+    if (quoteResult.success && quoteResult.dstAmount) {
+      const quote = BigNumber.from(quoteResult.dstAmount);
+      // Use the highest output to conservatively price gas in quote-token terms.
+      bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
+    }
+  }
+  return bestQuote;
+}
+
 function getGasQuoteCacheKey(params: {
   chainId?: number;
   tokenIn: string;
@@ -248,40 +301,24 @@ async function quoteTokensByLiquiditySource(params: {
     const quoteProvider = new UniswapV3QuoteProvider(params.signer, {
       universalRouterAddress: routerConfig.universalRouterAddress,
       poolFactoryAddress: routerConfig.poolFactoryAddress,
-      defaultFeeTier: routerConfig.defaultFeeTier || 3000,
+      defaultFeeTier:
+        routerConfig.defaultFeeTier ||
+        DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
       wethAddress: routerConfig.wethAddress,
       quoterV2Address: routerConfig.quoterV2Address,
     });
     if (!quoteProvider.isAvailable()) {
       return undefined;
     }
-    let bestQuote: BigNumber | undefined;
-    for (const feeTier of getGasQuoteFeeTiers(
-      routerConfig.defaultFeeTier,
-      routerConfig.candidateFeeTiers,
-      3000
-    )) {
-      const poolExists = await quoteProvider.poolExists(
-        params.tokenIn,
-        params.tokenOut,
-        feeTier
-      );
-      if (!poolExists) {
-        continue;
-      }
-      const quoteResult = await quoteProvider.getQuote(
-        params.amountIn,
-        params.tokenIn,
-        params.tokenOut,
-        feeTier
-      );
-      if (quoteResult.success && quoteResult.dstAmount) {
-        const quote = BigNumber.from(quoteResult.dstAmount);
-        // Use the highest output to conservatively price gas in quote-token terms.
-        bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
-      }
-    }
-    return bestQuote;
+    return await quoteFactoryV3GasConversion({
+      quoteProvider,
+      amountIn: params.amountIn,
+      tokenIn: params.tokenIn,
+      tokenOut: params.tokenOut,
+      defaultFeeTier: routerConfig.defaultFeeTier,
+      candidateFeeTiers: routerConfig.candidateFeeTiers,
+      fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+    });
   }
 
   if (params.liquiditySource === LiquiditySource.SUSHISWAP) {
@@ -298,40 +335,24 @@ async function quoteTokensByLiquiditySource(params: {
       swapRouterAddress: sushiConfig.swapRouterAddress,
       quoterV2Address: sushiConfig.quoterV2Address,
       factoryAddress: sushiConfig.factoryAddress,
-      defaultFeeTier: sushiConfig.defaultFeeTier || 500,
+      defaultFeeTier:
+        sushiConfig.defaultFeeTier ||
+        DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
       wethAddress: sushiConfig.wethAddress,
     });
     const initialized = await quoteProvider.initialize();
     if (!initialized) {
       return undefined;
     }
-    let bestQuote: BigNumber | undefined;
-    for (const feeTier of getGasQuoteFeeTiers(
-      sushiConfig.defaultFeeTier,
-      sushiConfig.candidateFeeTiers,
-      500
-    )) {
-      const poolExists = await quoteProvider.poolExists(
-        params.tokenIn,
-        params.tokenOut,
-        feeTier
-      );
-      if (!poolExists) {
-        continue;
-      }
-      const quoteResult = await quoteProvider.getQuote(
-        params.amountIn,
-        params.tokenIn,
-        params.tokenOut,
-        feeTier
-      );
-      if (quoteResult.success && quoteResult.dstAmount) {
-        const quote = BigNumber.from(quoteResult.dstAmount);
-        // Use the highest output to conservatively price gas in quote-token terms.
-        bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
-      }
-    }
-    return bestQuote;
+    return await quoteFactoryV3GasConversion({
+      quoteProvider,
+      amountIn: params.amountIn,
+      tokenIn: params.tokenIn,
+      tokenOut: params.tokenOut,
+      defaultFeeTier: sushiConfig.defaultFeeTier,
+      candidateFeeTiers: sushiConfig.candidateFeeTiers,
+      fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
+    });
   }
 
   if (params.liquiditySource === LiquiditySource.CURVE) {

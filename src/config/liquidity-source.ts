@@ -25,6 +25,17 @@ export const WRAPPED_NATIVE_TOKEN_SYMBOLS = [
   'wone',
 ];
 
+type DefaultFactoryFeeTierSource =
+  | LiquiditySource.UNISWAPV3
+  | LiquiditySource.SUSHISWAP;
+
+export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
+  Record<DefaultFactoryFeeTierSource, number>
+> = {
+  [LiquiditySource.UNISWAPV3]: 3000,
+  [LiquiditySource.SUSHISWAP]: 500,
+};
+
 export function getTokenAddressCaseInsensitive(
   addresses: { [tokenSymbol: string]: string } | undefined,
   symbol: string

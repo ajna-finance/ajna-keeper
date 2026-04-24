@@ -5,6 +5,7 @@
 import { ethers, BigNumber, Signer } from 'ethers';
 import { logger } from '../../logging';
 import { getDecimalsErc20 } from '../../erc20';
+import { PoolExistenceCache } from './pool-existence-cache';
 
 // SushiSwap V3 QuoterV2 ABI with CORRECT field order (from production testing)
 const SUSHI_QUOTER_ABI = [
@@ -21,21 +22,8 @@ const SUSHI_FACTORY_ABI = [
 const SUSHI_V3_POOL_ABI = [
   'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
 ];
-const MAX_POOL_EXISTENCE_CACHE_ENTRIES = 1024;
 const POOL_EXISTS_CACHE_TTL_MS = 5 * 60 * 1000;
 const UNINITIALIZED_POOL_CACHE_TTL_MS = 30 * 1000;
-
-function prunePoolExistenceCache(
-  cache: Map<string, { exists: boolean; expiresAt: number }>
-): void {
-  while (cache.size > MAX_POOL_EXISTENCE_CACHE_ENTRIES) {
-    const oldestKey = cache.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    cache.delete(oldestKey);
-  }
-}
 
 interface SushiSwapQuoteConfig {
   swapRouterAddress: string;
@@ -69,10 +57,7 @@ export class SushiSwapQuoteProvider {
   private quoterContract?: ethers.Contract;
   private factoryContract: ethers.Contract;
   private isInitialized: boolean = false;
-  private poolExistenceCache = new Map<
-    string,
-    { exists: boolean; expiresAt: number }
-  >();
+  private poolExistenceCache = new PoolExistenceCache();
 
   constructor(signer: Signer, config: SushiSwapQuoteConfig) {
     this.signer = signer;
@@ -185,17 +170,12 @@ export class SushiSwapQuoteProvider {
       }
 
       const fee = feeTier ?? this.config.defaultFeeTier;
-      const [token0, token1] = [
-        tokenA.toLowerCase(),
-        tokenB.toLowerCase(),
-      ].sort();
-      const cacheKey = [token0, token1, fee].join(':');
-      const cached = this.poolExistenceCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
+      const cached = this.poolExistenceCache.get(tokenA, tokenB, fee);
+      if (cached !== undefined) {
         logger.debug(
-          `SushiSwap pool existence cache hit: ${tokenA}/${tokenB} fee=${fee} exists=${cached.exists}`
+          `SushiSwap pool existence cache hit: ${tokenA}/${tokenB} fee=${fee} exists=${cached}`
         );
-        return cached.exists;
+        return cached;
       }
 
       const poolAddress = await this.factoryContract.getPool(
@@ -214,15 +194,15 @@ export class SushiSwapQuoteProvider {
         const slot0 = await poolContract.slot0();
         exists = BigNumber.from(slot0.sqrtPriceX96 ?? slot0[0]).gt(0);
       }
-      this.poolExistenceCache.set(cacheKey, {
+      this.poolExistenceCache.set(
+        tokenA,
+        tokenB,
+        fee,
         exists,
-        expiresAt:
-          Date.now() +
-          (exists || poolAddress === ethers.constants.AddressZero
-            ? POOL_EXISTS_CACHE_TTL_MS
-            : UNINITIALIZED_POOL_CACHE_TTL_MS),
-      });
-      prunePoolExistenceCache(this.poolExistenceCache);
+        exists || poolAddress === ethers.constants.AddressZero
+          ? POOL_EXISTS_CACHE_TTL_MS
+          : UNINITIALIZED_POOL_CACHE_TTL_MS
+      );
 
       if (exists) {
         logger.debug(

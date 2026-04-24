@@ -13,6 +13,8 @@ import { NonceTracker } from '../nonce';
 import {
   CurvePoolType,
   CurveRouterOverrides,
+  DEFAULT_FEE_TIER_BY_SOURCE,
+  LiquiditySource,
   PostAuctionDex,
 } from '../config';
 
@@ -313,7 +315,9 @@ export class DexRouter {
         slippage,
         sushiswapSettings.swapRouterAddress!,
         sushiswapSettings.quoterV2Address!,
-        feeAmount || sushiswapSettings.defaultFeeTier || 500,
+        feeAmount ||
+          sushiswapSettings.defaultFeeTier ||
+          DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
         sushiswapSettings.factoryAddress,
       );
       
@@ -436,7 +440,9 @@ export class DexRouter {
     to: string,
     dexProvider: PostAuctionDex,
     slippage: number = 1,
-    feeAmount: number = 3000,
+    feeAmount: number = DEFAULT_FEE_TIER_BY_SOURCE[
+      LiquiditySource.UNISWAPV3
+    ],
     combinedSettings?: { 
       uniswap?: {
         wethAddress?: string; 

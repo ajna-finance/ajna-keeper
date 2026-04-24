@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { LiquiditySource } from '../../config';
+import { DEFAULT_FEE_TIER_BY_SOURCE, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
@@ -101,7 +101,10 @@ export async function evaluateUniswapV3FactoryQuote({
       )} collateral in pool ${pool.name}`
     );
 
-    const selectedFeeTier = feeTier ?? routerConfig.defaultFeeTier ?? 3000;
+    const selectedFeeTier =
+      feeTier ??
+      routerConfig.defaultFeeTier ??
+      DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3];
     const quoteResult = await quoteProvider.getQuote(
       context.collateralInTokenDecimals,
       pool.collateralAddress,
