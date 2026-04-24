@@ -22,7 +22,9 @@ function createDiscoveryTransports(gasPrice: BigNumber = BigNumber.from(1)) {
       getLiquidations: sinon.stub().rejects(new Error('unused')),
       getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
       getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-      getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
+      getChainwideLiquidationAuctions: sinon
+        .stub()
+        .rejects(new Error('unused')),
       getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
       getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
     },
@@ -38,7 +40,10 @@ describe('Discovery Handlers', () => {
   });
 
   it('skips a discovered take when subgraph data is stale before onchain revalidation', async () => {
-    const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
+    const takeLiquidationStub = sinon
+      .stub(takeModule, 'takeLiquidation')
+      .resolves();
+    const onCandidateInactive = sinon.spy();
     sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
       isTakeable: true,
       quoteAmount: 10,
@@ -111,9 +116,100 @@ describe('Discovery Handlers', () => {
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
+      onCandidateInactive,
     });
 
     expect(takeLiquidationStub.called).to.be.false;
+    expect(onCandidateInactive.calledOnce).to.be.true;
+    expect(onCandidateInactive.firstCall.args[0]).to.deep.equal({
+      poolAddress: pool.poolAddress,
+      borrower: '0xBorrowerA',
+    });
+  });
+
+  it('skips discovered external takes when private write transport is required but unavailable', async () => {
+    const takeLiquidationStub = sinon
+      .stub(takeModule, 'takeLiquidation')
+      .resolves();
+    const quoteStub = sinon
+      .stub(takeModule, 'getOneInchTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        quoteAmount: 10,
+        collateralAmount: 1,
+        marketPrice: 10,
+        takeablePrice: 12,
+        quoteAmountRaw: BigNumber.from(10),
+      });
+    const warnStub = sinon.stub(logger, 'warn');
+    const pool = {
+      name: 'Public Transport Pool',
+      poolAddress: '0x1111111111111111111111111111111111111111',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('1'),
+        }),
+      }),
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+      },
+      getChainId: sinon.stub().resolves(1),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerTransport',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            externalTakeTransportPolicy: 'require_private_or_relay',
+          },
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(),
+    });
+
+    expect(quoteStub.called).to.be.false;
+    expect(takeLiquidationStub.called).to.be.false;
+    expect(
+      warnStub.calledWithMatch(
+        sinon.match(
+          'externalTakeTransportPolicy=require_private_or_relay; skipping target'
+        )
+      )
+    ).to.be.true;
   });
 
   it('bubbles a discovered external take failure and does not fall through to arbTake', async () => {
@@ -205,9 +301,13 @@ describe('Discovery Handlers', () => {
             cacheKey: 'test-subgraph',
             getLoans: sinon.stub().rejects(new Error('unused')),
             getLiquidations: sinon.stub().rejects(new Error('unused')),
-            getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
+            getHighestMeaningfulBucket: sinon
+              .stub()
+              .rejects(new Error('unused')),
             getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-            getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
+            getChainwideLiquidationAuctions: sinon
+              .stub()
+              .rejects(new Error('unused')),
             getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
             getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
           },
@@ -217,7 +317,9 @@ describe('Discovery Handlers', () => {
         },
       });
     } catch (error) {
-      expect.fail(`Did not expect discovered take handler to throw: ${String(error)}`);
+      expect.fail(
+        `Did not expect discovered take handler to throw: ${String(error)}`
+      );
     }
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
@@ -234,7 +336,9 @@ describe('Discovery Handlers', () => {
       },
       submitTransaction: sinon.stub(),
     };
-    const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
+    const takeLiquidationStub = sinon
+      .stub(takeModule, 'takeLiquidation')
+      .resolves();
     sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
       isTakeable: true,
       quoteAmount: 10,
@@ -309,7 +413,9 @@ describe('Discovery Handlers', () => {
           getLiquidations: sinon.stub().rejects(new Error('unused')),
           getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
           getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-          getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
+          getChainwideLiquidationAuctions: sinon
+            .stub()
+            .rejects(new Error('unused')),
           getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
           getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
         },
@@ -405,7 +511,9 @@ describe('Discovery Handlers', () => {
           getLiquidations: sinon.stub().rejects(new Error('unused')),
           getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
           getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-          getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
+          getChainwideLiquidationAuctions: sinon
+            .stub()
+            .rejects(new Error('unused')),
           getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
           getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
         },
@@ -416,14 +524,17 @@ describe('Discovery Handlers', () => {
     });
 
     expect(arbTakeLiquidationStub.calledOnce).to.be.true;
-    expect(arbTakeLiquidationStub.firstCall.args[0].config.takeWriteTransport).to.equal(
-      takeWriteTransport
-    );
+    expect(
+      arbTakeLiquidationStub.firstCall.args[0].config.takeWriteTransport
+    ).to.equal(takeWriteTransport);
   });
 
   it('rejects a discovered settlement target before onchain settlement reads when gas policy fails', async () => {
     const handleCandidateAuctionsStub = sinon
-      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .stub(
+        settlementModule.SettlementHandler.prototype,
+        'handleCandidateAuctions'
+      )
       .resolves();
     const needsSettlementStub = sinon
       .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
@@ -439,7 +550,9 @@ describe('Discovery Handlers', () => {
     };
     const signer = {
       provider: {
-        getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('100', 'gwei')),
+        getGasPrice: sinon
+          .stub()
+          .resolves(ethers.utils.parseUnits('100', 'gwei')),
       },
       getAddress: sinon
         .stub()
@@ -493,12 +606,16 @@ describe('Discovery Handlers', () => {
           getLiquidations: sinon.stub().rejects(new Error('unused')),
           getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
           getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-          getChainwideLiquidationAuctions: sinon.stub().rejects(new Error('unused')),
+          getChainwideLiquidationAuctions: sinon
+            .stub()
+            .rejects(new Error('unused')),
           getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
           getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
         },
         readRpc: {
-          getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('100', 'gwei')),
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('100', 'gwei')),
         },
       },
     });
@@ -509,7 +626,10 @@ describe('Discovery Handlers', () => {
 
   it('skips a discovered settlement when onchain revalidation says the auction no longer needs settlement', async () => {
     const handleCandidateAuctionsStub = sinon
-      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .stub(
+        settlementModule.SettlementHandler.prototype,
+        'handleCandidateAuctions'
+      )
       .resolves();
     sinon
       .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
@@ -575,10 +695,12 @@ describe('Discovery Handlers', () => {
     expect(handleCandidateAuctionsStub.called).to.be.false;
   });
 
-
   it('uses the onchain kickTime when hydrating prevalidated discovered settlements', async () => {
     const handleCandidateAuctionsStub = sinon
-      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .stub(
+        settlementModule.SettlementHandler.prototype,
+        'handleCandidateAuctions'
+      )
       .resolves();
     sinon
       .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
@@ -654,7 +776,10 @@ describe('Discovery Handlers', () => {
 
   it('does not require take profit-floor gas quoting for discovered settlement candidates', async () => {
     const handleCandidateAuctionsStub = sinon
-      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .stub(
+        settlementModule.SettlementHandler.prototype,
+        'handleCandidateAuctions'
+      )
       .resolves();
     sinon
       .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
@@ -718,12 +843,17 @@ describe('Discovery Handlers', () => {
 
     expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
     expect(handleCandidateAuctionsStub.firstCall.args[0]).to.have.length(1);
-    expect(handleCandidateAuctionsStub.firstCall.args[0][0].borrower).to.equal('0xBorrowerC');
+    expect(handleCandidateAuctionsStub.firstCall.args[0][0].borrower).to.equal(
+      '0xBorrowerC'
+    );
   });
 
   it('allows discovered settlement to use a native gas cap without quote conversion config', async () => {
     const handleCandidateAuctionsStub = sinon
-      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .stub(
+        settlementModule.SettlementHandler.prototype,
+        'handleCandidateAuctions'
+      )
       .resolves();
     sinon
       .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
@@ -737,7 +867,9 @@ describe('Discovery Handlers', () => {
     };
     const signer = {
       provider: {
-        getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('1', 'gwei')),
+        getGasPrice: sinon
+          .stub()
+          .resolves(ethers.utils.parseUnits('1', 'gwei')),
       },
     };
 
@@ -781,14 +913,18 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
-      transports: createDiscoveryTransports(ethers.utils.parseUnits('1', 'gwei')),
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
     });
 
     expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
   });
 
   it('quotes exact native gas cost instead of reusing the discovered take quote', async () => {
-    const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
+    const takeLiquidationStub = sinon
+      .stub(takeModule, 'takeLiquidation')
+      .resolves();
     sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
       isTakeable: true,
       quoteAmount: 2100,
@@ -798,10 +934,12 @@ describe('Discovery Handlers', () => {
       takeablePrice: 2200,
     });
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
-    const oneInchQuoteStub = sinon.stub(DexRouter.prototype, 'getQuoteFromOneInch').resolves({
-      success: true,
-      dstAmount: ethers.utils.parseUnits('1', 6).toString(),
-    });
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('1', 6).toString(),
+      });
 
     const pool = {
       name: 'WETH / USDC',
@@ -817,7 +955,9 @@ describe('Discovery Handlers', () => {
     };
     const signer = {
       provider: {
-        getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('1', 'gwei')),
+        getGasPrice: sinon
+          .stub()
+          .resolves(ethers.utils.parseUnits('1', 'gwei')),
       },
       getChainId: sinon.stub().resolves(8453),
     };
@@ -866,7 +1006,9 @@ describe('Discovery Handlers', () => {
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
-      transports: createDiscoveryTransports(ethers.utils.parseUnits('1', 'gwei')),
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
@@ -874,7 +1016,9 @@ describe('Discovery Handlers', () => {
   });
 
   it('uses raw quote units for discovered take profit-floor checks', async () => {
-    const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
+    const takeLiquidationStub = sinon
+      .stub(takeModule, 'takeLiquidation')
+      .resolves();
     sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
       isTakeable: true,
       quoteAmount: Number('9007199254740993'),
@@ -1240,7 +1384,9 @@ describe('Discovery Handlers', () => {
   });
 
   it('logs execution-stage discovered take failures separately from evaluation skips', async () => {
-    sinon.stub(takeModule, 'takeLiquidation').rejects(new Error('execution boom'));
+    sinon
+      .stub(takeModule, 'takeLiquidation')
+      .rejects(new Error('execution boom'));
     sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
       isTakeable: true,
       quoteAmount: 10,
@@ -1333,7 +1479,10 @@ describe('Discovery Handlers', () => {
 
   it('skips malformed discovered settlement candidates without aborting the target', async () => {
     const handleCandidateAuctionsStub = sinon
-      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .stub(
+        settlementModule.SettlementHandler.prototype,
+        'handleCandidateAuctions'
+      )
       .resolves();
     sinon
       .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')
@@ -1411,7 +1560,10 @@ describe('Discovery Handlers', () => {
 
   it('logs a discovered settlement summary with skip counters', async () => {
     sinon
-      .stub(settlementModule.SettlementHandler.prototype, 'handleCandidateAuctions')
+      .stub(
+        settlementModule.SettlementHandler.prototype,
+        'handleCandidateAuctions'
+      )
       .resolves();
     sinon
       .stub(settlementModule.SettlementHandler.prototype, 'needsSettlement')

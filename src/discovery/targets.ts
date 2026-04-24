@@ -24,6 +24,8 @@ const DISCOVERY_PAGE_SIZE = 100;
 const DISCOVERY_MAX_PAGES = 100;
 const DISCOVERY_SCAN_CACHE_WINDOW_MS = 1000;
 const INVALID_KICK_TIME_MS = Number.MAX_SAFE_INTEGER;
+const DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS = 10 * 60_000;
+const DEFAULT_MAX_HOT_AUCTION_CANDIDATES = 1000;
 
 export type PoolMap = Map<string, FungiblePool>;
 export type PoolHydrationCooldowns = Map<string, number>;
@@ -85,6 +87,28 @@ interface SharedDiscoveryScan {
   liquidationAuctions?: ChainwideLiquidationAuction[];
 }
 
+interface HotAuctionCandidateCacheEntry {
+  chainId: number;
+  candidate: DiscoveredAuctionCandidate;
+  lastSeenAtMs: number;
+}
+
+export interface HotAuctionCandidateCacheSnapshot {
+  candidates: DiscoveredAuctionCandidate[];
+  expiredCount: number;
+}
+
+export interface HotAuctionCandidateCacheConfig {
+  ttlMs?: number;
+  maxCandidates?: number;
+}
+
+export interface BuildDiscoveredTakeTargetsOptions {
+  hotAuctionCandidateCache?: HotAuctionCandidateCache;
+  chainId?: number;
+  nowMs?: number;
+}
+
 const candidateDebtRemainingCache = new WeakMap<
   DiscoveredAuctionCandidate,
   DecimalValue
@@ -99,11 +123,18 @@ export function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
 
-function getCachedPool(poolMap: PoolMap, address: string): FungiblePool | undefined {
+function getCachedPool(
+  poolMap: PoolMap,
+  address: string
+): FungiblePool | undefined {
   return poolMap.get(address) ?? poolMap.get(normalizeAddress(address));
 }
 
-function cachePool(poolMap: PoolMap, address: string, pool: FungiblePool): void {
+function cachePool(
+  poolMap: PoolMap,
+  address: string,
+  pool: FungiblePool
+): void {
   poolMap.set(address, pool);
   const normalized = normalizeAddress(address);
   if (normalized !== address) {
@@ -152,8 +183,121 @@ function poolAllowed(config: KeeperConfig, poolAddress: string): boolean {
   return true;
 }
 
-function candidateKey(candidate: { poolAddress: string; borrower: string }): string {
+function candidateKey(candidate: {
+  poolAddress: string;
+  borrower: string;
+}): string {
   return `${normalizeAddress(candidate.poolAddress)}:${candidate.borrower.toLowerCase()}`;
+}
+
+function hotCandidateKey(params: {
+  chainId: number;
+  poolAddress: string;
+  borrower: string;
+}): string {
+  return `${params.chainId}:${normalizeAddress(
+    params.poolAddress
+  )}:${params.borrower.toLowerCase()}`;
+}
+
+export class HotAuctionCandidateCache {
+  private readonly ttlMs: number;
+  private readonly maxCandidates: number;
+  private readonly entries = new Map<string, HotAuctionCandidateCacheEntry>();
+
+  constructor(config: HotAuctionCandidateCacheConfig = {}) {
+    this.ttlMs = config.ttlMs ?? DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS;
+    this.maxCandidates =
+      config.maxCandidates ?? DEFAULT_MAX_HOT_AUCTION_CANDIDATES;
+  }
+
+  get enabled(): boolean {
+    return this.ttlMs > 0 && this.maxCandidates > 0;
+  }
+
+  upsertFreshCandidates(params: {
+    chainId: number;
+    candidates: DiscoveredAuctionCandidate[];
+    nowMs?: number;
+  }): number {
+    if (!this.enabled) {
+      return 0;
+    }
+    const nowMs = params.nowMs ?? Date.now();
+    let upserted = 0;
+    for (const candidate of params.candidates) {
+      const key = hotCandidateKey({
+        chainId: params.chainId,
+        poolAddress: candidate.poolAddress,
+        borrower: candidate.borrower,
+      });
+      this.entries.delete(key);
+      this.entries.set(key, {
+        chainId: params.chainId,
+        candidate,
+        lastSeenAtMs: nowMs,
+      });
+      upserted += 1;
+    }
+    this.pruneExpired(nowMs);
+    this.pruneToMax();
+    return upserted;
+  }
+
+  getActiveCandidates(params: {
+    chainId: number;
+    nowMs?: number;
+  }): HotAuctionCandidateCacheSnapshot {
+    if (!this.enabled) {
+      return { candidates: [], expiredCount: 0 };
+    }
+    const nowMs = params.nowMs ?? Date.now();
+    const expiredCount = this.pruneExpired(nowMs);
+    const candidates: DiscoveredAuctionCandidate[] = [];
+    this.entries.forEach((entry) => {
+      if (entry.chainId === params.chainId) {
+        candidates.push(entry.candidate);
+      }
+    });
+    return { candidates, expiredCount };
+  }
+
+  removeCandidate(params: {
+    chainId: number;
+    poolAddress: string;
+    borrower: string;
+  }): boolean {
+    return this.entries.delete(hotCandidateKey(params));
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  private pruneExpired(nowMs: number): number {
+    let expiredCount = 0;
+    const expiredKeys: string[] = [];
+    this.entries.forEach((entry, key) => {
+      if (nowMs - entry.lastSeenAtMs > this.ttlMs) {
+        expiredKeys.push(key);
+      }
+    });
+    for (const key of expiredKeys) {
+      this.entries.delete(key);
+      expiredCount += 1;
+    }
+    return expiredCount;
+  }
+
+  private pruneToMax(): void {
+    while (this.entries.size > this.maxCandidates) {
+      const oldestKey = this.entries.keys().next().value;
+      if (oldestKey === undefined) {
+        return;
+      }
+      this.entries.delete(oldestKey);
+    }
+  }
 }
 
 interface DecimalValue {
@@ -207,12 +351,18 @@ function compareIntegerStrings(left: string, right: string): number {
     return leftNegative ? -1 : 1;
   }
 
-  const leftUnsigned = normalizeIntegerString(leftNegative ? left.slice(1) : left);
-  const rightUnsigned = normalizeIntegerString(rightNegative ? right.slice(1) : right);
+  const leftUnsigned = normalizeIntegerString(
+    leftNegative ? left.slice(1) : left
+  );
+  const rightUnsigned = normalizeIntegerString(
+    rightNegative ? right.slice(1) : right
+  );
   const multiplier = leftNegative ? -1 : 1;
 
   if (leftUnsigned.length !== rightUnsigned.length) {
-    return leftUnsigned.length > rightUnsigned.length ? multiplier : -multiplier;
+    return leftUnsigned.length > rightUnsigned.length
+      ? multiplier
+      : -multiplier;
   }
   if (leftUnsigned === rightUnsigned) {
     return 0;
@@ -234,8 +384,12 @@ function isPositiveDecimalString(value: string | undefined): boolean {
 function multiplyIntegerStrings(left: string, right: string): string {
   const leftNegative = left.startsWith('-');
   const rightNegative = right.startsWith('-');
-  const leftUnsigned = normalizeIntegerString(leftNegative ? left.slice(1) : left);
-  const rightUnsigned = normalizeIntegerString(rightNegative ? right.slice(1) : right);
+  const leftUnsigned = normalizeIntegerString(
+    leftNegative ? left.slice(1) : left
+  );
+  const rightUnsigned = normalizeIntegerString(
+    rightNegative ? right.slice(1) : right
+  );
   if (leftUnsigned === '0' || rightUnsigned === '0') {
     return '0';
   }
@@ -243,7 +397,11 @@ function multiplyIntegerStrings(left: string, right: string): string {
   const digits = new Array(leftUnsigned.length + rightUnsigned.length).fill(0);
   for (let leftIndex = leftUnsigned.length - 1; leftIndex >= 0; leftIndex--) {
     const leftDigit = Number(leftUnsigned[leftIndex]);
-    for (let rightIndex = rightUnsigned.length - 1; rightIndex >= 0; rightIndex--) {
+    for (
+      let rightIndex = rightUnsigned.length - 1;
+      rightIndex >= 0;
+      rightIndex--
+    ) {
       const rightDigit = Number(rightUnsigned[rightIndex]);
       const offset = leftIndex + rightIndex + 1;
       const total = digits[offset] + leftDigit * rightDigit;
@@ -264,22 +422,34 @@ function multiplyIntegerStrings(left: string, right: string): string {
   return leftNegative !== rightNegative ? `-${product}` : product;
 }
 
-function multiplyDecimalValues(left: DecimalValue, right: DecimalValue): DecimalValue {
+function multiplyDecimalValues(
+  left: DecimalValue,
+  right: DecimalValue
+): DecimalValue {
   return {
     digits: multiplyIntegerStrings(left.digits, right.digits),
     scale: left.scale + right.scale,
   };
 }
 
-function compareCandidateIdentity(left: DiscoveredAuctionCandidate, right: DiscoveredAuctionCandidate): number {
-  const poolComparison = normalizeAddress(left.poolAddress).localeCompare(normalizeAddress(right.poolAddress));
+function compareCandidateIdentity(
+  left: DiscoveredAuctionCandidate,
+  right: DiscoveredAuctionCandidate
+): number {
+  const poolComparison = normalizeAddress(left.poolAddress).localeCompare(
+    normalizeAddress(right.poolAddress)
+  );
   if (poolComparison !== 0) {
     return poolComparison;
   }
-  return left.borrower.toLowerCase().localeCompare(right.borrower.toLowerCase());
+  return left.borrower
+    .toLowerCase()
+    .localeCompare(right.borrower.toLowerCase());
 }
 
-function debtRemainingValue(candidate: DiscoveredAuctionCandidate): DecimalValue {
+function debtRemainingValue(
+  candidate: DiscoveredAuctionCandidate
+): DecimalValue {
   const cached = candidateDebtRemainingCache.get(candidate);
   if (cached) {
     return cached;
@@ -290,7 +460,9 @@ function debtRemainingValue(candidate: DiscoveredAuctionCandidate): DecimalValue
   return parsed;
 }
 
-function takePriorityValue(candidate: DiscoveredAuctionCandidate): DecimalValue {
+function takePriorityValue(
+  candidate: DiscoveredAuctionCandidate
+): DecimalValue {
   const cached = candidateTakePriorityCache.get(candidate);
   if (cached) {
     return cached;
@@ -303,13 +475,16 @@ function takePriorityValue(candidate: DiscoveredAuctionCandidate): DecimalValue 
   const debtRemaining = debtRemainingValue(candidate);
   const priority =
     compareDecimalValues(collateralValue, debtRemaining) >= 0
-    ? collateralValue
-    : debtRemaining;
+      ? collateralValue
+      : debtRemaining;
   candidateTakePriorityCache.set(candidate, priority);
   return priority;
 }
 
-function compareTakeCandidates(left: DiscoveredAuctionCandidate, right: DiscoveredAuctionCandidate): number {
+function compareTakeCandidates(
+  left: DiscoveredAuctionCandidate,
+  right: DiscoveredAuctionCandidate
+): number {
   const priorityComparison = compareDecimalValues(
     takePriorityValue(right),
     takePriorityValue(left)
@@ -381,7 +556,36 @@ function hasValidCandidateNumericFields(
   return true;
 }
 
-function hydrateCandidate(candidate: ChainwideLiquidationAuction): DiscoveredAuctionCandidate {
+function hasValidDiscoveredCandidateNumericFields(
+  config: KeeperConfig,
+  candidate: DiscoveredAuctionCandidate
+): boolean {
+  const numericFields: Array<[string, string | undefined]> = [
+    ['debtRemaining', candidate.debtRemaining],
+    ['collateralRemaining', candidate.collateralRemaining],
+    ['neutralPrice', candidate.neutralPrice],
+    ['debt', candidate.debt],
+    ['collateral', candidate.collateral],
+  ];
+
+  for (const [fieldName, fieldValue] of numericFields) {
+    try {
+      parseDecimalValue(fieldValue);
+    } catch (error) {
+      logDiscoverySkip(
+        config,
+        `hot take cache ignored ${normalizeAddress(candidate.poolAddress)}/${candidate.borrower} because ${fieldName} was malformed: ${(error as Error).message}`
+      );
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function hydrateCandidate(
+  candidate: ChainwideLiquidationAuction
+): DiscoveredAuctionCandidate {
   const parsedKickTime = Number(candidate.kickTime || '0');
   return {
     poolAddress: candidate.pool.id,
@@ -469,10 +673,7 @@ export async function getChainwideLiquidationAuctionsShared(
   }
 
   const promise = subgraphReader
-    .getChainwideLiquidationAuctions(
-      DISCOVERY_PAGE_SIZE,
-      DISCOVERY_MAX_PAGES
-    )
+    .getChainwideLiquidationAuctions(DISCOVERY_PAGE_SIZE, DISCOVERY_MAX_PAGES)
     .then(({ liquidationAuctions }) => {
       sharedDiscoveryScans.set(cacheKey, {
         liquidationAuctions,
@@ -538,7 +739,8 @@ export function getManualSettlementTargets(
 export async function buildDiscoveredTakeTargets(
   config: KeeperConfig,
   liquidationAuctionsInput?: ChainwideLiquidationAuction[],
-  subgraphReader: SubgraphReader = createSubgraphReader(config)
+  subgraphReader: SubgraphReader = createSubgraphReader(config),
+  options: BuildDiscoveredTakeTargetsOptions = {}
 ): Promise<ResolvedTakeTarget[]> {
   const autoDiscover = config.autoDiscover;
   const takePolicy = getAutoDiscoverTakePolicy(autoDiscover);
@@ -557,11 +759,13 @@ export async function buildDiscoveredTakeTargets(
     liquidationAuctionsInput ??
     (await getChainwideLiquidationAuctionsShared(config, subgraphReader));
 
-  const takeCandidates = dedupeCandidates(
+  const freshTakeCandidates = dedupeCandidates(
     liquidationAuctions
       .filter((candidate) => poolAllowed(config, candidate.pool.id))
       .filter((candidate) => hasValidCandidateNumericFields(config, candidate))
-      .filter((candidate) => isPositiveDecimalString(candidate.collateralRemaining))
+      .filter((candidate) =>
+        isPositiveDecimalString(candidate.collateralRemaining)
+      )
       .filter((candidate) => {
         const normalizedPool = normalizeAddress(candidate.pool.id);
         if (manualTakePools.has(normalizedPool)) {
@@ -575,6 +779,53 @@ export async function buildDiscoveredTakeTargets(
       })
       .map((candidate) => hydrateCandidate(candidate))
   );
+  let takeCandidates = freshTakeCandidates;
+  const hotAuctionCandidateCache = options.hotAuctionCandidateCache;
+  if (hotAuctionCandidateCache?.enabled && options.chainId !== undefined) {
+    const nowMs = options.nowMs ?? Date.now();
+    hotAuctionCandidateCache.upsertFreshCandidates({
+      chainId: options.chainId,
+      candidates: freshTakeCandidates,
+      nowMs,
+    });
+    const hotSnapshot = hotAuctionCandidateCache.getActiveCandidates({
+      chainId: options.chainId,
+      nowMs,
+    });
+    const freshCandidateKeys = new Set(
+      freshTakeCandidates.map((candidate) => candidateKey(candidate))
+    );
+    const hotOnlyCandidates = hotSnapshot.candidates.filter((candidate) => {
+      if (freshCandidateKeys.has(candidateKey(candidate))) {
+        return false;
+      }
+      if (!poolAllowed(config, candidate.poolAddress)) {
+        return false;
+      }
+      if (!hasValidDiscoveredCandidateNumericFields(config, candidate)) {
+        return false;
+      }
+      if (!isPositiveDecimalString(candidate.collateralRemaining)) {
+        return false;
+      }
+      const normalizedPool = normalizeAddress(candidate.poolAddress);
+      if (manualTakePools.has(normalizedPool)) {
+        logDiscoverySkip(
+          config,
+          `hot take cache ignored ${normalizedPool} because manual take config wins`
+        );
+        return false;
+      }
+      return true;
+    });
+    takeCandidates = dedupeCandidates([
+      ...freshTakeCandidates,
+      ...hotOnlyCandidates,
+    ]);
+    logger.debug(
+      `Hot take candidate cache: fresh=${freshTakeCandidates.length} hotOnly=${hotOnlyCandidates.length} active=${hotSnapshot.candidates.length} expired=${hotSnapshot.expiredCount} retained=${hotAuctionCandidateCache.size}`
+    );
+  }
 
   takeCandidates.sort(compareTakeCandidates);
 
@@ -583,7 +834,7 @@ export async function buildDiscoveredTakeTargets(
     discoveredTakeDefaults !== undefined &&
     hasExternalTakeSettings(discoveredTakeDefaults);
   const quoteBudget = appliesQuoteBudget
-    ? takePolicy.takeQuoteBudgetPerRun ?? takeCandidates.length
+    ? (takePolicy.takeQuoteBudgetPerRun ?? takeCandidates.length)
     : takeCandidates.length;
   const budgetedCandidates = takeCandidates.slice(0, quoteBudget);
   if (budgetedCandidates.length < takeCandidates.length) {
@@ -596,12 +847,19 @@ export async function buildDiscoveredTakeTargets(
   const grouped = groupCandidatesByPool(budgetedCandidates);
   const groupedEntries = Array.from(grouped.entries()).sort(
     ([, leftCandidates], [, rightCandidates]) =>
-      compareCandidateGroups(leftCandidates, rightCandidates, compareTakeCandidates)
+      compareCandidateGroups(
+        leftCandidates,
+        rightCandidates,
+        compareTakeCandidates
+      )
   );
   const maxPoolsPerRun = takePolicy.maxPoolsPerRun ?? groupedEntries.length;
 
   const targets: ResolvedTakeTarget[] = [];
-  for (const [poolAddress, candidates] of groupedEntries.slice(0, maxPoolsPerRun)) {
+  for (const [poolAddress, candidates] of groupedEntries.slice(
+    0,
+    maxPoolsPerRun
+  )) {
     const manualPool = poolIndex.get(poolAddress);
     const takeConfig = manualPool?.take ?? config.discoveredDefaults?.take;
     if (!takeConfig) {
@@ -690,7 +948,10 @@ export async function buildDiscoveredSettlementTargets(
     settlementPolicy.maxPoolsPerRun ?? groupedEntries.length;
 
   const targets: ResolvedSettlementTarget[] = [];
-  for (const [poolAddress, candidates] of groupedEntries.slice(0, maxPoolsPerRun)) {
+  for (const [poolAddress, candidates] of groupedEntries.slice(
+    0,
+    maxPoolsPerRun
+  )) {
     const manualPool = poolIndex.get(poolAddress);
     const settlementConfig =
       manualPool?.settlement ?? config.discoveredDefaults?.settlement;
@@ -729,10 +990,14 @@ export function validateResolvedTakeTarget(
   config: KeeperConfig
 ): void {
   if (!ethers.utils.isAddress(target.poolAddress)) {
-    throw new Error(`ResolvedTakeTarget: invalid pool address ${target.poolAddress}`);
+    throw new Error(
+      `ResolvedTakeTarget: invalid pool address ${target.poolAddress}`
+    );
   }
   if (target.candidates.length === 0) {
-    throw new Error(`ResolvedTakeTarget: no candidates for ${target.poolAddress}`);
+    throw new Error(
+      `ResolvedTakeTarget: no candidates for ${target.poolAddress}`
+    );
   }
   validateTakeSettings(target.take, config);
 }
@@ -758,10 +1023,11 @@ async function assertDiscoveredPoolMatchesAjnaDeployment(params: {
   pool: FungiblePool;
   expectedPoolAddress: Address;
 }): Promise<void> {
-  const deployedPoolAddress = await params.ajna.fungiblePoolFactory.getPoolAddress(
-    params.pool.collateralAddress,
-    params.pool.quoteAddress
-  );
+  const deployedPoolAddress =
+    await params.ajna.fungiblePoolFactory.getPoolAddress(
+      params.pool.collateralAddress,
+      params.pool.quoteAddress
+    );
   const normalizedExpected = normalizeAddress(params.expectedPoolAddress);
   const normalizedDeployed = normalizeAddress(deployedPoolAddress);
 
@@ -829,7 +1095,8 @@ export async function ensurePoolLoaded(params: {
     return pool;
   } catch (error) {
     const cooldownSeconds =
-      params.config.autoDiscover?.hydrateCooldownSec ?? params.config.delayBetweenRuns;
+      params.config.autoDiscover?.hydrateCooldownSec ??
+      params.config.delayBetweenRuns;
     params.hydrationCooldowns.set(
       normalizedPool,
       Date.now() + cooldownSeconds * 1000

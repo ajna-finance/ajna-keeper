@@ -20,9 +20,12 @@ describe('shared arbTake helpers', () => {
       name: 'Test Pool',
       poolAddress: '0x1111111111111111111111111111111111111111',
       collateralAddress: '0x2222222222222222222222222222222222222222',
-      getBucketByIndex: sinon.stub().withArgs(321).returns({
-        price: ethers.utils.parseEther('10'),
-      }),
+      getBucketByIndex: sinon
+        .stub()
+        .withArgs(321)
+        .returns({
+          price: ethers.utils.parseEther('10'),
+        }),
     };
 
     const poolConfig = {
@@ -65,7 +68,10 @@ describe('shared arbTake helpers', () => {
     const pool = {
       name: 'Execution Pool',
       poolAddress: '0x3333333333333333333333333333333333333333',
-      getLiquidation: sinon.stub().withArgs('0xBorrower').returns(liquidationSdk),
+      getLiquidation: sinon
+        .stub()
+        .withArgs('0xBorrower')
+        .returns(liquidationSdk),
     };
 
     const liquidation = {
@@ -90,7 +96,10 @@ describe('shared arbTake helpers', () => {
       liquidation,
       config: {
         dryRun: false,
-        takeWriteTransport: { submitTransaction: sinon.stub(), signer: {} } as any,
+        takeWriteTransport: {
+          submitTransaction: sinon.stub(),
+          signer: {},
+        } as any,
       },
       actionLabel: 'Factory ArbTake',
       logPrefix: 'Factory: ',
@@ -166,9 +175,9 @@ describe('shared arbTake helpers', () => {
     });
 
     expect(arbTakeLiquidationStub.calledOnce).to.equal(true);
-    expect(arbTakeLiquidationStub.firstCall.args[0].config.takeWriteTransport).to.equal(
-      takeWriteTransport
-    );
+    expect(
+      arbTakeLiquidationStub.firstCall.args[0].config.takeWriteTransport
+    ).to.equal(takeWriteTransport);
   });
 
   it('recomputes arb take eligibility during revalidation before execution', async () => {
@@ -231,6 +240,133 @@ describe('shared arbTake helpers', () => {
     expect(arbTakeLiquidationStub.called).to.equal(false);
     expect(onSkip.calledOnce).to.equal(true);
     expect(onSkip.firstCall.args[0].stage).to.equal('revalidation');
+  });
+
+  it('skips external take execution when approved quote collateral is stale', async () => {
+    const executeExternalTakeStub = sinon.stub().resolves(true);
+    const quotedCollateral = ethers.utils.parseEther('1');
+    const getStatusStub = sinon.stub();
+    getStatusStub
+      .onCall(0)
+      .resolves({
+        collateral: quotedCollateral,
+        price: ethers.utils.parseEther('1'),
+      })
+      .onCall(1)
+      .resolves({
+        collateral: ethers.utils.parseEther('2'),
+        price: ethers.utils.parseEther('0.9'),
+      });
+    const pool = {
+      name: 'Execution Pool',
+      poolAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+    };
+    const onSkip = sinon.stub();
+
+    await processTakeCandidates({
+      pool: pool as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Execution Pool',
+        take: {
+          marketPriceFactor: 0.99,
+          liquiditySource: LiquiditySource.ONEINCH,
+        },
+      } as any,
+      candidates: [{ borrower: '0xBorrower' }],
+      subgraph: { cacheKey: 'test-subgraph' } as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          takeablePrice: 2,
+          quoteAmountRaw: BigNumber.from(100),
+          quotedCollateralWad: quotedCollateral,
+          quotedAuctionPriceWad: ethers.utils.parseEther('1'),
+        }),
+        executeExternalTake: executeExternalTakeStub,
+      } as any,
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      revalidateBeforeExecution: true,
+      onSkip,
+    });
+
+    expect(executeExternalTakeStub.called).to.equal(false);
+    expect(onSkip.calledOnce).to.equal(true);
+    expect(onSkip.firstCall.args[0].reason).to.equal(
+      'approved external take quote no longer matches collateral'
+    );
+  });
+
+  it('skips external take execution when approved quote price is stale', async () => {
+    const executeExternalTakeStub = sinon.stub().resolves(true);
+    const quotedCollateral = ethers.utils.parseEther('1');
+    const quotedAuctionPrice = ethers.utils.parseEther('1');
+    const getStatusStub = sinon.stub();
+    getStatusStub
+      .onCall(0)
+      .resolves({
+        collateral: quotedCollateral,
+        price: quotedAuctionPrice,
+      })
+      .onCall(1)
+      .resolves({
+        collateral: quotedCollateral,
+        price: ethers.utils.parseEther('1.1'),
+      });
+    const pool = {
+      name: 'Execution Pool',
+      poolAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+    };
+    const onSkip = sinon.stub();
+
+    await processTakeCandidates({
+      pool: pool as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Execution Pool',
+        take: {
+          marketPriceFactor: 0.99,
+          liquiditySource: LiquiditySource.ONEINCH,
+        },
+      } as any,
+      candidates: [{ borrower: '0xBorrower' }],
+      subgraph: { cacheKey: 'test-subgraph' } as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          takeablePrice: 2,
+          quoteAmountRaw: BigNumber.from(100),
+          quotedCollateralWad: quotedCollateral,
+          quotedAuctionPriceWad: quotedAuctionPrice,
+        }),
+        executeExternalTake: executeExternalTakeStub,
+      } as any,
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      revalidateBeforeExecution: true,
+      onSkip,
+    });
+
+    expect(executeExternalTakeStub.called).to.equal(false);
+    expect(onSkip.calledOnce).to.equal(true);
+    expect(onSkip.firstCall.args[0].reason).to.equal(
+      'approved external take quote is stale after auction price increased'
+    );
   });
 
   it('skips arb take after a successful external take changes the auction state', async () => {
@@ -306,12 +442,14 @@ describe('shared arbTake helpers', () => {
   });
 
   it('continues processing later candidates when an earlier candidate throws', async () => {
-    const executeExternalTakeStub = sinon.stub().callsFake(async ({ liquidation }: any) => {
-      if (liquidation.borrower === '0xBorrowerA') {
-        throw new Error('quote provider failed');
-      }
-      return true;
-    });
+    const executeExternalTakeStub = sinon
+      .stub()
+      .callsFake(async ({ liquidation }: any) => {
+        if (liquidation.borrower === '0xBorrowerA') {
+          throw new Error('quote provider failed');
+        }
+        return true;
+      });
     const onSkip = sinon.stub();
     const onFound = sinon.stub();
     const onExecuted = sinon.stub();
@@ -322,9 +460,10 @@ describe('shared arbTake helpers', () => {
       getLiquidation: sinon.stub().callsFake((borrower: string) => ({
         getStatus: sinon.stub().resolves({
           collateral: ethers.utils.parseEther('1'),
-          price: borrower === '0xBorrowerA'
-            ? ethers.utils.parseEther('1')
-            : ethers.utils.parseEther('0.5'),
+          price:
+            borrower === '0xBorrowerA'
+              ? ethers.utils.parseEther('1')
+              : ethers.utils.parseEther('0.5'),
         }),
       })),
     };
@@ -339,10 +478,7 @@ describe('shared arbTake helpers', () => {
           marketPriceFactor: 0.99,
         },
       } as any,
-      candidates: [
-        { borrower: '0xBorrowerA' },
-        { borrower: '0xBorrowerB' },
-      ],
+      candidates: [{ borrower: '0xBorrowerA' }, { borrower: '0xBorrowerB' }],
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'legacy',
@@ -366,7 +502,9 @@ describe('shared arbTake helpers', () => {
     expect(onSkip.firstCall.args[0].reason).to.include('quote provider failed');
     expect(onFound.callCount).to.equal(2);
     expect(onExecuted.calledOnce).to.equal(true);
-    expect(onExecuted.firstCall.args[0].decision.borrower).to.equal('0xBorrowerB');
+    expect(onExecuted.firstCall.args[0].decision.borrower).to.equal(
+      '0xBorrowerB'
+    );
   });
 
   it('returns false when arb take execution fails', async () => {

@@ -107,9 +107,9 @@ interface ProcessTakeCandidatesParams<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
 > extends Omit<
-    EvaluateTakeDecisionParams<TPoolConfig>,
-    'candidate' | 'approveExternalTake' | 'approveArbTake'
-  >,
+      EvaluateTakeDecisionParams<TPoolConfig>,
+      'candidate' | 'approveExternalTake' | 'approveArbTake'
+    >,
     Pick<
       ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>,
       | 'externalExecutionConfig'
@@ -202,7 +202,8 @@ export async function revalidateTakeDecision(params: {
 
   return {
     approvedTake:
-      params.takeablePrice !== undefined && currentPrice <= params.takeablePrice,
+      params.takeablePrice !== undefined &&
+      currentPrice <= params.takeablePrice,
     approvedArbTake,
     collateral,
     auctionPrice: liquidationStatus.price,
@@ -252,7 +253,6 @@ export async function evaluateTakeDecision<
 
   if (
     poolConfig.take.marketPriceFactor !== undefined &&
-    poolConfig.take.liquiditySource !== undefined &&
     externalTakeAdapter.evaluateExternalTake
   ) {
     const quoteEvaluation = await externalTakeAdapter.evaluateExternalTake({
@@ -401,29 +401,58 @@ export async function executeTakeDecision<
       onSkip?.({
         candidate: { borrower: decision.borrower },
         stage: 'revalidation',
-        reason: 'onchain revalidation changed the auction state',
+        reason: !collateral.gt(0)
+          ? 'auction no longer has collateral onchain'
+          : 'onchain revalidation changed the auction state',
         decision,
       });
       return;
     }
+
+    const quoteEvaluation = decision.quoteEvaluation;
+    if (approvedTake && quoteEvaluation?.quotedCollateralWad) {
+      if (!collateral.eq(quoteEvaluation.quotedCollateralWad)) {
+        onSkip?.({
+          candidate: { borrower: decision.borrower },
+          stage: 'revalidation',
+          reason: 'approved external take quote no longer matches collateral',
+          decision,
+        });
+        return;
+      }
+    }
+    if (approvedTake && quoteEvaluation?.quotedAuctionPriceWad) {
+      if (auctionPrice.gt(quoteEvaluation.quotedAuctionPriceWad)) {
+        onSkip?.({
+          candidate: { borrower: decision.borrower },
+          stage: 'revalidation',
+          reason:
+            'approved external take quote is stale after auction price increased',
+          decision,
+        });
+        return;
+      }
+    }
   }
 
   if (approvedTake && externalTakeAdapter.executeExternalTake) {
-    const externalTakeSucceeded = await externalTakeAdapter.executeExternalTake({
-      pool,
-      signer,
-      poolConfig,
-      liquidation: {
-        borrower: decision.borrower,
-        hpbIndex,
-        collateral,
-        auctionPrice,
-        isTakeable: true,
-        isArbTakeable: approvedArbTake,
-        externalTakeQuoteEvaluation: decision.quoteEvaluation,
-      },
-      config: externalExecutionConfig,
-    });
+    const externalTakeSucceeded = await externalTakeAdapter.executeExternalTake(
+      {
+        pool,
+        signer,
+        poolConfig,
+        liquidation: {
+          borrower: decision.borrower,
+          hpbIndex,
+          collateral,
+          auctionPrice,
+          isTakeable: true,
+          isArbTakeable: approvedArbTake,
+          externalTakeQuoteEvaluation: decision.quoteEvaluation,
+        },
+        config: externalExecutionConfig,
+      }
+    );
     if (externalTakeSucceeded === false) {
       throw new Error(
         `External take execution failed for ${pool.name}/${decision.borrower}`
@@ -577,7 +606,9 @@ export function formatTakeStrategyLog(
   approvedArbTake: boolean
 ): string {
   if (approvedTake && approvedArbTake) {
-    return strategyKind === 'factory' ? 'factory take and arbTake' : 'take and arbTake';
+    return strategyKind === 'factory'
+      ? 'factory take and arbTake'
+      : 'take and arbTake';
   }
   if (approvedTake) {
     return strategyKind === 'factory' ? 'factory take' : 'take';

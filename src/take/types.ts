@@ -1,5 +1,10 @@
 import { BigNumber } from 'ethers';
-import { CurvePoolType, LiquiditySource, TakeSettings } from '../config';
+import {
+  CurvePoolType,
+  ExternalTakePathKind,
+  LiquiditySource,
+  TakeSettings,
+} from '../config';
 
 export interface RouteProfitabilityBreakdown {
   auctionRepayRequirementQuoteRaw?: BigNumber;
@@ -20,7 +25,11 @@ export interface TakeActionConfig {
   take: TakeSettings;
 }
 
-export type ExternalTakeStrategyKind = 'none' | 'oneinch' | 'factory';
+export type ExternalTakeStrategyKind =
+  | 'none'
+  | 'oneinch'
+  | 'factory'
+  | 'hybrid';
 
 export interface TakeBorrowerCandidate {
   borrower: string;
@@ -28,6 +37,7 @@ export interface TakeBorrowerCandidate {
 
 export interface ExternalTakeQuoteEvaluation {
   isTakeable: boolean;
+  externalTakePath?: ExternalTakePathKind;
   marketPrice?: number;
   takeablePrice?: number;
   quoteAmount?: number;
@@ -37,6 +47,9 @@ export interface ExternalTakeQuoteEvaluation {
   approvedMinOutRaw?: BigNumber;
   routeProfitability?: RouteProfitabilityBreakdown;
   collateralAmount?: number;
+  quotedAuctionPriceWad?: BigNumber;
+  quotedCollateralWad?: BigNumber;
+  auctionIdentity?: string;
   curvePool?: {
     address: string;
     poolType: CurvePoolType;

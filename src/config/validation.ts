@@ -1,4 +1,6 @@
 import {
+  ExternalTakeTransportPolicy,
+  ExternalTakePathKind,
   KeeperConfig,
   LiquiditySource,
   PostAuctionDex,
@@ -23,12 +25,23 @@ const FACTORY_DYNAMIC_SOURCES = [
   LiquiditySource.SUSHISWAP,
   LiquiditySource.CURVE,
 ];
+const EXTERNAL_TAKE_PATHS = new Set<ExternalTakePathKind>([
+  'oneinch',
+  'factory',
+]);
+const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
+  'allow_public',
+  'prefer_private_or_relay',
+  'require_private_or_relay',
+]);
 const MAX_UINT24_FEE_TIER = 16_777_215;
 const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
 const MAX_DEX_GAS_OVERRIDE = BigInt(2_000_000);
 const MAX_MIN_PROFIT_NATIVE_WEI = BigInt('1000000000000000000000000000');
 const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
+const MIN_L2_GAS_COST_BUFFER_BPS = 10_000;
+const MAX_L2_GAS_COST_BUFFER_BPS = 30_000;
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,
@@ -80,6 +93,25 @@ function requireOptionalPositive(value: unknown, message: string): void {
 function requireOptionalNonNegative(value: unknown, message: string): void {
   if (value !== undefined) {
     requireNonNegative(value, message);
+  }
+}
+
+function requireOptionalIntegerRange(
+  value: unknown,
+  min: number,
+  max: number,
+  message: string
+): void {
+  if (value === undefined) {
+    return;
+  }
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < min ||
+    value > max
+  ) {
+    throw new Error(message);
   }
 }
 
@@ -162,14 +194,20 @@ function parseLiquiditySourceKey(source: string): LiquiditySource | undefined {
 
 function getEffectiveFactoryRouteSources(
   discoveredTake: TakeSettings,
-  allowedLiquiditySources: LiquiditySource[] | undefined
+  allowedLiquiditySources: LiquiditySource[] | undefined,
+  defaultFactoryLiquiditySource?: LiquiditySource
 ): Set<LiquiditySource> {
   const sources = new Set<LiquiditySource>();
+  const defaultFactorySource = isFactoryDynamicSource(
+    discoveredTake.liquiditySource
+  )
+    ? discoveredTake.liquiditySource
+    : defaultFactoryLiquiditySource;
   const configuredSources =
     allowedLiquiditySources !== undefined
       ? allowedLiquiditySources
-      : discoveredTake.liquiditySource !== undefined
-        ? [discoveredTake.liquiditySource]
+      : defaultFactorySource !== undefined
+        ? [defaultFactorySource]
         : [];
 
   for (const source of configuredSources) {
@@ -182,19 +220,96 @@ function getEffectiveFactoryRouteSources(
 
 function getEffectiveTakeGasOverrideSources(
   discoveredTake: TakeSettings,
-  allowedLiquiditySources: LiquiditySource[] | undefined
+  allowedLiquiditySources: LiquiditySource[] | undefined,
+  defaultFactoryLiquiditySource: LiquiditySource | undefined,
+  externalTakePaths: Set<ExternalTakePathKind>
 ): Set<LiquiditySource> {
   const sources = getEffectiveFactoryRouteSources(
     discoveredTake,
-    allowedLiquiditySources
+    allowedLiquiditySources,
+    defaultFactoryLiquiditySource
   );
-  if (
-    allowedLiquiditySources === undefined &&
-    discoveredTake.liquiditySource === LiquiditySource.ONEINCH
-  ) {
+  if (externalTakePaths.has('oneinch')) {
     sources.add(LiquiditySource.ONEINCH);
   }
   return sources;
+}
+
+function getEffectiveExternalTakePaths(
+  discoveredTake: TakeSettings,
+  allowedExternalTakePaths: ExternalTakePathKind[] | undefined
+): Set<ExternalTakePathKind> {
+  if (allowedExternalTakePaths !== undefined) {
+    return new Set(allowedExternalTakePaths);
+  }
+  if (discoveredTake.liquiditySource === LiquiditySource.ONEINCH) {
+    return new Set<ExternalTakePathKind>(['oneinch']);
+  }
+  if (isFactoryDynamicSource(discoveredTake.liquiditySource)) {
+    return new Set<ExternalTakePathKind>(['factory']);
+  }
+  return new Set<ExternalTakePathKind>();
+}
+
+function validateAllowedExternalTakePaths(
+  paths: ExternalTakePathKind[] | undefined
+): void {
+  if (paths === undefined) {
+    return;
+  }
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new Error(
+      'AutoDiscoverConfig.take: allowedExternalTakePaths must be non-empty'
+    );
+  }
+  const seen = new Set<ExternalTakePathKind>();
+  for (const path of paths) {
+    if (!EXTERNAL_TAKE_PATHS.has(path)) {
+      throw new Error(
+        'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch and factory'
+      );
+    }
+    if (seen.has(path)) {
+      throw new Error(
+        'AutoDiscoverConfig.take: allowedExternalTakePaths cannot contain duplicates'
+      );
+    }
+    seen.add(path);
+  }
+}
+
+function validateExternalTakeTransportPolicy(
+  policy: ExternalTakeTransportPolicy | undefined
+): void {
+  if (policy === undefined) {
+    return;
+  }
+  if (!EXTERNAL_TAKE_TRANSPORT_POLICIES.has(policy)) {
+    throw new Error(
+      'AutoDiscoverConfig.take: externalTakeTransportPolicy must be allow_public, prefer_private_or_relay, or require_private_or_relay'
+    );
+  }
+}
+
+function getConfiguredTakeWriteMode(
+  config: KeeperConfig
+): TakeWriteTransportMode | undefined {
+  if (config.takeWrite) {
+    return config.takeWrite.mode;
+  }
+  const hasTakeWriteRpcUrl =
+    Object.prototype.hasOwnProperty.call(config, 'takeWriteRpcUrl') &&
+    (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl !== undefined;
+  return hasTakeWriteRpcUrl ? TakeWriteTransportMode.PRIVATE_RPC : undefined;
+}
+
+function isPrivateOrRelayTakeWriteMode(
+  mode: TakeWriteTransportMode | undefined
+): boolean {
+  return (
+    mode === TakeWriteTransportMode.PRIVATE_RPC ||
+    mode === TakeWriteTransportMode.RELAY
+  );
 }
 
 function isFactoryDynamicSource(
@@ -474,10 +589,53 @@ export function validateAutoDiscoverConfig(
       takePolicy.takeQuoteBudgetPerRun,
       'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be greater than 0'
     );
+    requireOptionalNonNegative(
+      takePolicy.hotAuctionCandidateTtlMs,
+      'AutoDiscoverConfig.take: hotAuctionCandidateTtlMs cannot be negative'
+    );
+    requireOptionalPositive(
+      takePolicy.maxHotAuctionCandidates,
+      'AutoDiscoverConfig.take: maxHotAuctionCandidates must be greater than 0'
+    );
     requireOptionalPositive(
       takePolicy.takeRouteQuoteBudgetPerCandidate,
       'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be greater than 0'
     );
+    requireOptionalNonNegative(
+      takePolicy.l1GasPriceFreshnessTtlMs,
+      'AutoDiscoverConfig.take: l1GasPriceFreshnessTtlMs cannot be negative'
+    );
+    requireOptionalNonNegative(
+      takePolicy.l2GasPriceFreshnessTtlMs,
+      'AutoDiscoverConfig.take: l2GasPriceFreshnessTtlMs cannot be negative'
+    );
+    requireOptionalIntegerRange(
+      takePolicy.l2GasCostBufferBasisPoints,
+      MIN_L2_GAS_COST_BUFFER_BPS,
+      MAX_L2_GAS_COST_BUFFER_BPS,
+      'AutoDiscoverConfig.take: l2GasCostBufferBasisPoints must be an integer between 10000 and 30000'
+    );
+    validateExternalTakeTransportPolicy(takePolicy.externalTakeTransportPolicy);
+    if (
+      takePolicy.externalTakeTransportPolicy === 'require_private_or_relay' &&
+      !isPrivateOrRelayTakeWriteMode(getConfiguredTakeWriteMode(config)) &&
+      !config.dryRun
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: externalTakeTransportPolicy=require_private_or_relay requires takeWrite private_rpc, relay, or takeWriteRpcUrl'
+      );
+    }
+    if (
+      (takePolicy.externalTakeTransportPolicy === 'prefer_private_or_relay' ||
+        (takePolicy.externalTakeTransportPolicy ===
+          'require_private_or_relay' &&
+          config.dryRun)) &&
+      !isPrivateOrRelayTakeWriteMode(getConfiguredTakeWriteMode(config))
+    ) {
+      logger.warn(
+        `AutoDiscoverConfig.take: externalTakeTransportPolicy=${takePolicy.externalTakeTransportPolicy} is set but no private_rpc/relay take write transport is configured; discovered external takes may use public RPC fallback`
+      );
+    }
     requireOptionalNonNegative(
       takePolicy.minExpectedProfitQuote,
       'AutoDiscoverConfig.take: minExpectedProfitQuote cannot be negative'
@@ -519,12 +677,35 @@ export function validateAutoDiscoverConfig(
       );
     }
 
-    const discoveredTakeUsesFactory = isFactoryDynamicSource(
-      discoveredTake.liquiditySource
+    validateAllowedExternalTakePaths(takePolicy.allowedExternalTakePaths);
+    const externalTakePaths = getEffectiveExternalTakePaths(
+      discoveredTake,
+      takePolicy.allowedExternalTakePaths
     );
     if (
+      takePolicy.defaultFactoryLiquiditySource !== undefined &&
+      !isFactoryDynamicSource(takePolicy.defaultFactoryLiquiditySource)
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource must be UNISWAPV3, SUSHISWAP, or CURVE'
+      );
+    }
+    const effectiveDefaultFactoryLiquiditySource = isFactoryDynamicSource(
+      discoveredTake.liquiditySource
+    )
+      ? discoveredTake.liquiditySource
+      : takePolicy.defaultFactoryLiquiditySource;
+    if (
+      externalTakePaths.has('factory') &&
+      effectiveDefaultFactoryLiquiditySource === undefined
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource required when allowedExternalTakePaths includes factory and discoveredDefaults.take.liquiditySource is not a factory source'
+      );
+    }
+    if (
       takePolicy.takeRouteQuoteBudgetPerCandidate !== undefined &&
-      !discoveredTakeUsesFactory
+      !externalTakePaths.has('factory')
     ) {
       throw new Error(
         'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
@@ -532,9 +713,9 @@ export function validateAutoDiscoverConfig(
     }
 
     if (takePolicy.allowedLiquiditySources !== undefined) {
-      if (!discoveredTakeUsesFactory) {
+      if (!externalTakePaths.has('factory')) {
         throw new Error(
-          'AutoDiscoverConfig.take: allowedLiquiditySources requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
+          'AutoDiscoverConfig.take: allowedLiquiditySources requires a factory external take path'
         );
       }
       if (takePolicy.allowedLiquiditySources.length === 0) {
@@ -569,17 +750,55 @@ export function validateAutoDiscoverConfig(
           chainId
         );
       }
+      if (
+        takePolicy.defaultFactoryLiquiditySource !== undefined &&
+        effectiveDefaultFactoryLiquiditySource !== undefined &&
+        !takePolicy.allowedLiquiditySources.includes(
+          effectiveDefaultFactoryLiquiditySource
+        )
+      ) {
+        throw new Error(
+          'AutoDiscoverConfig.take: allowedLiquiditySources must include the effective default factory liquidity source'
+        );
+      }
     } else {
+      if (externalTakePaths.has('factory')) {
+        validateTakeSettings(
+          {
+            ...discoveredTake,
+            liquiditySource: effectiveDefaultFactoryLiquiditySource,
+          },
+          config,
+          chainId
+        );
+      }
+    }
+
+    if (externalTakePaths.has('oneinch')) {
+      validateTakeSettings(
+        {
+          ...discoveredTake,
+          liquiditySource: LiquiditySource.ONEINCH,
+        },
+        config,
+        chainId
+      );
+    }
+
+    if (!externalTakePaths.size) {
       validateTakeSettings(discoveredTake, config, chainId);
     }
 
     const effectiveFactorySources = getEffectiveFactoryRouteSources(
       discoveredTake,
-      takePolicy.allowedLiquiditySources
+      takePolicy.allowedLiquiditySources,
+      effectiveDefaultFactoryLiquiditySource
     );
     const effectiveTakeGasOverrideSources = getEffectiveTakeGasOverrideSources(
       discoveredTake,
-      takePolicy.allowedLiquiditySources
+      takePolicy.allowedLiquiditySources,
+      effectiveDefaultFactoryLiquiditySource,
+      externalTakePaths
     );
     if (
       config.universalRouterOverrides?.candidateFeeTiers !== undefined &&
@@ -620,7 +839,7 @@ export function validateAutoDiscoverConfig(
           !effectiveTakeGasOverrideSources.has(liquiditySource)
         ) {
           throw new Error(
-            'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires discoveredDefaults.take.liquiditySource to be ONEINCH'
+            'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires an enabled 1inch external take path'
           );
         }
         if (!effectiveTakeGasOverrideSources.has(liquiditySource)) {
@@ -659,7 +878,8 @@ export function validateAutoDiscoverConfig(
     if (
       (takePolicy.minExpectedProfitQuote !== undefined ||
         takePolicy.minProfitNative !== undefined) &&
-      !hasExternalTakeSettings(discoveredTake)
+      (!externalTakePaths.size ||
+        discoveredTake.marketPriceFactor === undefined)
     ) {
       throw new Error(
         'AutoDiscoverConfig: quote-normalized profit floors require discoveredDefaults.take to configure an external take path'

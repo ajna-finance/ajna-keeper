@@ -60,7 +60,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires discoveredDefaults.take.liquiditySource to be ONEINCH'
+      'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires an enabled 1inch external take path'
     );
   });
 
@@ -82,6 +82,63 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('accepts hybrid 1inch plus factory autodiscover take paths', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+      dexGasOverrides: {
+        [LiquiditySource.ONEINCH]: '900000',
+        [LiquiditySource.UNISWAPV3]: '900000',
+      },
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('requires the factory allowlist to include the default hybrid factory source', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+    config.takerContracts = {
+      UniswapV3: '0x3333333333333333333333333333333333333333',
+      SushiSwap: '0x4444444444444444444444444444444444444444',
+    };
+    config.sushiswapRouterOverrides = {
+      swapRouterAddress: '0x5555555555555555555555555555555555555555',
+      factoryAddress: '0x7777777777777777777777777777777777777777',
+      quoterV2Address: '0x1212121212121212121212121212121212121212',
+      wethAddress: '0x4200000000000000000000000000000000000006',
+      defaultFeeTier: 500,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: allowedLiquiditySources must include the effective default factory liquidity source'
+    );
   });
 
   it('rejects non-finite and non-number take thresholds', () => {
@@ -139,6 +196,78 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.settlement: maxGasCostNative cannot be negative'
     );
+  });
+
+  it('validates hot-auction cache and gas control policy values', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      hotAuctionCandidateTtlMs: -1,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: hotAuctionCandidateTtlMs cannot be negative'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      maxHotAuctionCandidates: 0,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxHotAuctionCandidates must be greater than 0'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      l1GasPriceFreshnessTtlMs: -1,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: l1GasPriceFreshnessTtlMs cannot be negative'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      l2GasCostBufferBasisPoints: 9_999,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: l2GasCostBufferBasisPoints must be an integer between 10000 and 30000'
+    );
+  });
+
+  it('validates external take write transport policy', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      externalTakeTransportPolicy: 'strict' as any,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeTransportPolicy must be allow_public, prefer_private_or_relay, or require_private_or_relay'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      externalTakeTransportPolicy: 'require_private_or_relay',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeTransportPolicy=require_private_or_relay requires takeWrite private_rpc, relay, or takeWriteRpcUrl'
+    );
+
+    config.takeWrite = {
+      mode: TakeWriteTransportMode.PRIVATE_RPC,
+      rpcUrl: 'http://private-rpc',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+
+    delete config.takeWrite;
+    config.dryRun = true;
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
   it('rejects non-string native profit and gas override integer values', () => {

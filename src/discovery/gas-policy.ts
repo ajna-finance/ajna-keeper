@@ -40,14 +40,37 @@ export interface GasPolicyResult {
 }
 
 const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
-const L2_GAS_COST_BUFFER_BASIS_POINTS = BigNumber.from(13_000);
+const DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS = 13_000;
+export const DEFAULT_L1_DISCOVERY_GAS_PRICE_TTL_MS = 5 * 1000;
+export const DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS = 15 * 1000;
 const L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER = new Set([
   10, 8453, 42161, 11155420, 84532, 421614,
 ]);
+const L2_CHAIN_IDS_WITH_STABLE_GAS = new Set([
+  10, 8453, 42161, 11155420, 84532, 421614,
+]);
+
+export function getDiscoveryGasPriceFreshnessTtlMs(
+  policy?: Pick<
+    AutoDiscoverTakePolicy,
+    'l1GasPriceFreshnessTtlMs' | 'l2GasPriceFreshnessTtlMs'
+  >,
+  chainId?: number
+): number {
+  if (chainId !== undefined && L2_CHAIN_IDS_WITH_STABLE_GAS.has(chainId)) {
+    return (
+      policy?.l2GasPriceFreshnessTtlMs ?? DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS
+    );
+  }
+  return (
+    policy?.l1GasPriceFreshnessTtlMs ?? DEFAULT_L1_DISCOVERY_GAS_PRICE_TTL_MS
+  );
+}
 
 function applyL2GasCostBuffer(
   gasCostNativeRaw: BigNumber,
-  chainId?: number
+  chainId?: number,
+  bufferBasisPoints: number = DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS
 ): BigNumber {
   if (
     chainId === undefined ||
@@ -56,7 +79,7 @@ function applyL2GasCostBuffer(
     return gasCostNativeRaw;
   }
   return gasCostNativeRaw
-    .mul(L2_GAS_COST_BUFFER_BASIS_POINTS)
+    .mul(BigNumber.from(bufferBasisPoints))
     .add(BASIS_POINTS_DENOMINATOR.sub(1))
     .div(BASIS_POINTS_DENOMINATOR);
 }
@@ -430,7 +453,12 @@ export async function evaluateGasPolicy(params: {
     AutoDiscoverActionPolicy,
     'maxGasCostNative' | 'maxGasCostQuote' | 'maxGasPriceGwei'
   > &
-    Pick<AutoDiscoverTakePolicy, 'minExpectedProfitQuote' | 'minProfitNative'>;
+    Pick<
+      AutoDiscoverTakePolicy,
+      | 'minExpectedProfitQuote'
+      | 'minProfitNative'
+      | 'l2GasCostBufferBasisPoints'
+    >;
   gasLimit: BigNumber;
   quoteTokenAddress: string;
   preferredLiquiditySource?: LiquiditySource;
@@ -471,7 +499,8 @@ export async function evaluateGasPolicy(params: {
   const unbufferedGasCostNativeRaw = gasPrice.mul(params.gasLimit);
   const gasCostNativeRaw = applyL2GasCostBuffer(
     unbufferedGasCostNativeRaw,
-    chainId
+    chainId,
+    params.policy?.l2GasCostBufferBasisPoints
   );
   if (!gasCostNativeRaw.eq(unbufferedGasCostNativeRaw)) {
     logger.debug(

@@ -72,6 +72,11 @@ export enum LiquiditySource {
 }
 
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
+export type ExternalTakePathKind = 'oneinch' | 'factory';
+export type ExternalTakeTransportPolicy =
+  | 'allow_public'
+  | 'prefer_private_or_relay'
+  | 'require_private_or_relay';
 
 export enum CurvePoolType {
   STABLE = 'stable',
@@ -183,6 +188,42 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    */
   minProfitNative?: string;
   takeQuoteBudgetPerRun?: number;
+  /**
+   * Milliseconds to keep already-seen liquidation candidates eligible for
+   * probing even if the next subgraph refresh omits them. Set to 0 to disable.
+   */
+  hotAuctionCandidateTtlMs?: number;
+  /**
+   * Maximum hot-auction candidates retained in memory across take cycles.
+   */
+  maxHotAuctionCandidates?: number;
+  /**
+   * External take execution paths eligible for discovered liquidation takes.
+   * When omitted, autodiscover preserves the legacy single-path behavior from
+   * discoveredDefaults.take.liquiditySource.
+   */
+  allowedExternalTakePaths?: ExternalTakePathKind[];
+  /**
+   * Factory path to use when discoveredDefaults.take.liquiditySource is 1inch
+   * but allowedExternalTakePaths also enables the factory execution path.
+   */
+  defaultFactoryLiquiditySource?: LiquiditySource;
+  /**
+   * Freshness windows for gas prices used in discovered external-take
+   * profitability checks. L2 defaults are intentionally longer than L1.
+   */
+  l1GasPriceFreshnessTtlMs?: number;
+  l2GasPriceFreshnessTtlMs?: number;
+  /**
+   * Basis-point multiplier applied to estimated L2 gas costs to cover L1 data
+   * fees and sequencer-specific cost drift. 13000 means 1.3x.
+   */
+  l2GasCostBufferBasisPoints?: number;
+  /**
+   * Controls whether discovered external takes may fall back to public RPC
+   * submission, or must use private RPC / relay write transport.
+   */
+  externalTakeTransportPolicy?: ExternalTakeTransportPolicy;
   /**
    * Maximum factory-route quote probes per liquidation candidate. Only applies
    * when discoveredDefaults.take.liquiditySource is a factory route source.

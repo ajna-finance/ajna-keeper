@@ -5,7 +5,11 @@ import { clearSharedDiscoveryScans } from '../discovery/targets';
 import { clearSharedSettlementScannerCache } from '../settlement/scanner';
 import { createDiscoveryRuntime } from '../discovery/runtime';
 import { processKickCycle, runTakeLoopIteration } from '../run';
-import { KeeperConfig, PriceOriginSource, TakeWriteTransportMode } from '../config';
+import {
+  KeeperConfig,
+  PriceOriginSource,
+  TakeWriteTransportMode,
+} from '../config';
 import * as readRpc from '../read-rpc';
 import * as takeModule from '../take';
 import * as settlementModule from '../settlement';
@@ -47,23 +51,31 @@ function createTestDiscoveryRuntime(params: {
   if (factory?.getPoolByAddress && !factory.getPoolAddress) {
     const hydratedPoolAddresses = new Map<string, string>();
     const originalGetPoolByAddress = factory.getPoolByAddress.bind(factory);
-    factory.getPoolByAddress = sinon.stub().callsFake(async (poolAddress: string) => {
-      const pool = await originalGetPoolByAddress(poolAddress);
-      if (pool?.collateralAddress && pool?.quoteAddress && pool?.poolAddress) {
-        hydratedPoolAddresses.set(
-          `${String(pool.collateralAddress).toLowerCase()}:${String(pool.quoteAddress).toLowerCase()}`,
-          String(pool.poolAddress)
+    factory.getPoolByAddress = sinon
+      .stub()
+      .callsFake(async (poolAddress: string) => {
+        const pool = await originalGetPoolByAddress(poolAddress);
+        if (
+          pool?.collateralAddress &&
+          pool?.quoteAddress &&
+          pool?.poolAddress
+        ) {
+          hydratedPoolAddresses.set(
+            `${String(pool.collateralAddress).toLowerCase()}:${String(pool.quoteAddress).toLowerCase()}`,
+            String(pool.poolAddress)
+          );
+        }
+        return pool;
+      });
+    factory.getPoolAddress = sinon
+      .stub()
+      .callsFake(async (collateralAddress: string, quoteAddress: string) => {
+        return (
+          hydratedPoolAddresses.get(
+            `${String(collateralAddress).toLowerCase()}:${String(quoteAddress).toLowerCase()}`
+          ) ?? ethers.constants.AddressZero
         );
-      }
-      return pool;
-    });
-    factory.getPoolAddress = sinon.stub().callsFake(async (collateralAddress: string, quoteAddress: string) => {
-      return (
-        hydratedPoolAddresses.get(
-          `${String(collateralAddress).toLowerCase()}:${String(quoteAddress).toLowerCase()}`
-        ) ?? ethers.constants.AddressZero
-      );
-    });
+      });
   }
 
   const signer = {
@@ -166,7 +178,6 @@ describe('Run Loop Discovery Integration', () => {
     );
   });
 
-
   it('retries take write transport initialization on later take cycles after a startup failure', async () => {
     const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
     const takeWriteTransport = {
@@ -178,8 +189,10 @@ describe('Run Loop Discovery Integration', () => {
       },
       submitTransaction: sinon.stub(),
     };
-    const createTakeWriteTransportStub = sinon
-      .stub(takeWriteTransportModule, 'createTakeWriteTransport');
+    const createTakeWriteTransportStub = sinon.stub(
+      takeWriteTransportModule,
+      'createTakeWriteTransport'
+    );
     createTakeWriteTransportStub
       .onFirstCall()
       .rejects(new Error('transport unavailable'));
@@ -307,20 +320,22 @@ describe('Run Loop Discovery Integration', () => {
     const handleDiscoveredSettlementTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
       .resolves();
-    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
-      liquidationAuctions: [
-        {
-          borrower: '0xBorrowerA',
-          kickTime: '1',
-          debtRemaining: '3',
-          collateralRemaining: '2',
-          neutralPrice: '4',
-          debt: '3',
-          collateral: '2',
-          pool: { id: '0x4444444444444444444444444444444444444444' },
-        },
-      ],
-    });
+    const discoveryStub = sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerA',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '2',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '2',
+            pool: { id: '0x4444444444444444444444444444444444444444' },
+          },
+        ],
+      });
 
     const discoveredPool = {
       name: 'Discovered Pool',
@@ -381,7 +396,8 @@ describe('Run Loop Discovery Integration', () => {
 
     expect(handleDiscoveredTakeTargetStub.calledOnce).to.be.true;
     expect(handleDiscoveredSettlementTargetStub.calledOnce).to.be.true;
-    expect(handleDiscoveredTakeTargetStub.firstCall.args[0].target.dryRun).to.be.true;
+    expect(handleDiscoveredTakeTargetStub.firstCall.args[0].target.dryRun).to.be
+      .true;
     expect(
       handleDiscoveredTakeTargetStub.firstCall.args[0].target.candidates
     ).to.have.length(1);
@@ -472,8 +488,10 @@ describe('Run Loop Discovery Integration', () => {
 
     expect(handleDiscoveredTakeTargetStub.calledTwice).to.be.true;
     expect(gasPriceStub.calledOnce).to.be.true;
-    const firstRpcCache = handleDiscoveredTakeTargetStub.firstCall.args[0].rpcCache!;
-    const secondRpcCache = handleDiscoveredTakeTargetStub.secondCall.args[0].rpcCache!;
+    const firstRpcCache =
+      handleDiscoveredTakeTargetStub.firstCall.args[0].rpcCache!;
+    const secondRpcCache =
+      handleDiscoveredTakeTargetStub.secondCall.args[0].rpcCache!;
     expect(firstRpcCache.gasPrice!.toString()).to.equal('123');
     expect(secondRpcCache.gasPrice!.toString()).to.equal('123');
   });
@@ -482,13 +500,15 @@ describe('Run Loop Discovery Integration', () => {
     let nowMs = 1_000;
     sinon.stub(Date, 'now').callsFake(() => nowMs);
     const observedGasPrices: string[] = [];
-    const handleDiscoveredTakeTargetStub = sinon
-      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget');
+    const handleDiscoveredTakeTargetStub = sinon.stub(
+      discoveryHandlers,
+      'handleDiscoveredTakeTarget'
+    );
     handleDiscoveredTakeTargetStub
       .onFirstCall()
       .callsFake(async (params: any) => {
         observedGasPrices.push(params.rpcCache.gasPrice.toString());
-        nowMs = 31_000;
+        nowMs = 2_100;
       });
     handleDiscoveredTakeTargetStub
       .onSecondCall()
@@ -554,7 +574,10 @@ describe('Run Loop Discovery Integration', () => {
       ...BASE_CONFIG,
       autoDiscover: {
         enabled: true,
-        take: true,
+        take: {
+          enabled: true,
+          l1GasPriceFreshnessTtlMs: 1_000,
+        },
       },
       discoveredDefaults: {
         take: {
@@ -580,8 +603,10 @@ describe('Run Loop Discovery Integration', () => {
     let nowMs = 0;
     sinon.stub(Date, 'now').callsFake(() => nowMs);
     const observedGasPrices: string[] = [];
-    const handleDiscoveredTakeTargetStub = sinon
-      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget');
+    const handleDiscoveredTakeTargetStub = sinon.stub(
+      discoveryHandlers,
+      'handleDiscoveredTakeTarget'
+    );
     handleDiscoveredTakeTargetStub
       .onFirstCall()
       .callsFake(async (params: any) => {
@@ -694,7 +719,9 @@ describe('Run Loop Discovery Integration', () => {
     expect(
       loggerErrorStub
         .getCalls()
-        .some((call) => String(call.args[0]).includes('Failed to handle take for pool:'))
+        .some((call) =>
+          String(call.args[0]).includes('Failed to handle take for pool:')
+        )
     ).to.equal(true);
   });
 
@@ -733,7 +760,9 @@ describe('Run Loop Discovery Integration', () => {
     };
     const signer = {
       provider: {
-        getGasPrice: sinon.stub().rejects(new Error('should use read-rpc helper')),
+        getGasPrice: sinon
+          .stub()
+          .rejects(new Error('should use read-rpc helper')),
       },
       getChainId: sinon.stub().resolves(1),
       getAddress: sinon
@@ -764,7 +793,8 @@ describe('Run Loop Discovery Integration', () => {
       discoverySnapshotState: {},
     }).runTakeCycle();
 
-    const firstCallParams = handleDiscoveredTakeTargetStub.firstCall.args[0] as any;
+    const firstCallParams = handleDiscoveredTakeTargetStub.firstCall
+      .args[0] as any;
     expect(resilientGasPriceStub.calledOnce).to.be.true;
     expect(handleDiscoveredTakeTargetStub.calledOnce).to.be.true;
     expect(firstCallParams.rpcCache.gasPrice.toString()).to.equal('789');
@@ -862,20 +892,22 @@ describe('Run Loop Discovery Integration', () => {
     const handleDiscoveredSettlementTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
       .resolves();
-    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
-      liquidationAuctions: [
-        {
-          borrower: '0xBorrowerA',
-          kickTime: '1',
-          debtRemaining: '3',
-          collateralRemaining: '0',
-          neutralPrice: '4',
-          debt: '3',
-          collateral: '0',
-          pool: { id: '0x4444444444444444444444444444444444444444' },
-        },
-      ],
-    });
+    const discoveryStub = sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerA',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '0',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '0',
+            pool: { id: '0x4444444444444444444444444444444444444444' },
+          },
+        ],
+      });
 
     const getPoolByAddressStub = sinon.stub().resolves({
       name: 'Discovered Settlement Pool',
@@ -935,20 +967,22 @@ describe('Run Loop Discovery Integration', () => {
     const handleDiscoveredSettlementTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
       .resolves();
-    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
-      liquidationAuctions: [
-        {
-          borrower: '0xBorrowerFresh',
-          kickTime: '2',
-          debtRemaining: '3',
-          collateralRemaining: '0',
-          neutralPrice: '4',
-          debt: '3',
-          collateral: '0',
-          pool: { id: '0x9999999999999999999999999999999999999999' },
-        },
-      ],
-    });
+    const discoveryStub = sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerFresh',
+            kickTime: '2',
+            debtRemaining: '3',
+            collateralRemaining: '0',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '0',
+            pool: { id: '0x9999999999999999999999999999999999999999' },
+          },
+        ],
+      });
 
     const ajna = {
       fungiblePoolFactory: {
@@ -1014,8 +1048,8 @@ describe('Run Loop Discovery Integration', () => {
     expect(discoveryStub.calledOnce).to.be.true;
     expect(handleDiscoveredSettlementTargetStub.calledOnce).to.be.true;
     expect(
-      handleDiscoveredSettlementTargetStub.firstCall.args[0].target.candidates[0]
-        .borrower
+      handleDiscoveredSettlementTargetStub.firstCall.args[0].target
+        .candidates[0].borrower
     ).to.equal('0xBorrowerFresh');
   });
 
@@ -1118,8 +1152,10 @@ describe('Run Loop Discovery Integration', () => {
     let nowMs = 0;
     sinon.stub(Date, 'now').callsFake(() => nowMs);
     const observedGasPrices: string[] = [];
-    const handleDiscoveredSettlementTargetStub = sinon
-      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget');
+    const handleDiscoveredSettlementTargetStub = sinon.stub(
+      discoveryHandlers,
+      'handleDiscoveredSettlementTarget'
+    );
     handleDiscoveredSettlementTargetStub
       .onFirstCall()
       .callsFake(async (params: any) => {
@@ -1192,7 +1228,9 @@ describe('Run Loop Discovery Integration', () => {
 
     const gasPriceStub = sinon.stub();
     gasPriceStub.onCall(0).resolves(BigNumber.from(456));
-    gasPriceStub.onCall(1).rejects(new Error('transient settlement read rpc error'));
+    gasPriceStub
+      .onCall(1)
+      .rejects(new Error('transient settlement read rpc error'));
     gasPriceStub.onCall(2).resolves(BigNumber.from(654));
     const loggerErrorStub = sinon.stub(logger, 'error');
     const signer = {
@@ -1256,20 +1294,22 @@ describe('Run Loop Discovery Integration', () => {
     const handleDiscoveredSettlementTargetStub = sinon
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
       .resolves();
-    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
-      liquidationAuctions: [
-        {
-          borrower: '0xBorrowerA',
-          kickTime: '1',
-          debtRemaining: '3',
-          collateralRemaining: '0',
-          neutralPrice: '4',
-          debt: '3',
-          collateral: '0',
-          pool: { id: '0x4444444444444444444444444444444444444444' },
-        },
-      ],
-    });
+    const discoveryStub = sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerA',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '0',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '0',
+            pool: { id: '0x4444444444444444444444444444444444444444' },
+          },
+        ],
+      });
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
@@ -1351,28 +1391,30 @@ describe('Run Loop Discovery Integration', () => {
     const handleSettlementsStub = sinon
       .stub(settlementModule, 'handleSettlements')
       .resolves();
-    const handleDiscoveredSettlementTargetStub = sinon
-      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget');
+    const handleDiscoveredSettlementTargetStub = sinon.stub(
+      discoveryHandlers,
+      'handleDiscoveredSettlementTarget'
+    );
     handleDiscoveredSettlementTargetStub
       .onFirstCall()
       .rejects(new Error('temporary discovered settlement failure'));
-    handleDiscoveredSettlementTargetStub
-      .onSecondCall()
-      .resolves();
-    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
-      liquidationAuctions: [
-        {
-          borrower: '0xBorrowerA',
-          kickTime: '1',
-          debtRemaining: '3',
-          collateralRemaining: '0',
-          neutralPrice: '4',
-          debt: '3',
-          collateral: '0',
-          pool: { id: '0x4444444444444444444444444444444444444444' },
-        },
-      ],
-    });
+    handleDiscoveredSettlementTargetStub.onSecondCall().resolves();
+    const discoveryStub = sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .resolves({
+        liquidationAuctions: [
+          {
+            borrower: '0xBorrowerA',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '0',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '0',
+            pool: { id: '0x4444444444444444444444444444444444444444' },
+          },
+        ],
+      });
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
@@ -1458,8 +1500,13 @@ describe('Run Loop Discovery Integration', () => {
       .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
       .resolves();
     const loggerWarnStub = sinon.stub(logger, 'warn');
-    const discoveryStub = sinon.stub(subgraph, 'getChainwideLiquidationAuctions');
-    discoveryStub.onFirstCall().rejects(new Error('temporary discovery outage'));
+    const discoveryStub = sinon.stub(
+      subgraph,
+      'getChainwideLiquidationAuctions'
+    );
+    discoveryStub
+      .onFirstCall()
+      .rejects(new Error('temporary discovery outage'));
     discoveryStub.onSecondCall().resolves({
       liquidationAuctions: [
         {
@@ -1553,7 +1600,6 @@ describe('Run Loop Discovery Integration', () => {
       )
     ).to.be.true;
   });
-
 
   it('does not reuse an overly stale cached settlement snapshot after refresh failures', async () => {
     let nowMs = 300_000;
@@ -1812,10 +1858,15 @@ describe('Run Loop Discovery Integration', () => {
 
     await createTestDiscoveryRuntime({
       config,
-      poolMap: new Map([[config.pools[0].address, {
-        name: 'Manual Take Pool',
-        poolAddress: config.pools[0].address,
-      } as any]]),
+      poolMap: new Map([
+        [
+          config.pools[0].address,
+          {
+            name: 'Manual Take Pool',
+            poolAddress: config.pools[0].address,
+          } as any,
+        ],
+      ]),
       discoverySnapshotState: {},
     }).runTakeCycle();
 
@@ -1826,7 +1877,6 @@ describe('Run Loop Discovery Integration', () => {
       )
     ).to.be.true;
   });
-
 
   it('does not reuse an overly stale cached take snapshot after refresh failures', async () => {
     let nowMs = 300_000;
@@ -1867,10 +1917,15 @@ describe('Run Loop Discovery Integration', () => {
 
     await createTestDiscoveryRuntime({
       config,
-      poolMap: new Map([[config.pools[0].address, {
-        name: 'Manual Take Pool',
-        poolAddress: config.pools[0].address,
-      } as any]]),
+      poolMap: new Map([
+        [
+          config.pools[0].address,
+          {
+            name: 'Manual Take Pool',
+            poolAddress: config.pools[0].address,
+          } as any,
+        ],
+      ]),
       discoverySnapshotState: {
         fetchedAt: 0,
         latestLiquidationAuctions: [

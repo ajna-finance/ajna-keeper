@@ -24,10 +24,7 @@ import {
 } from '../read-transports';
 import { handleFactoryTakes } from './factory';
 import * as factoryShared from './factory/shared';
-import {
-  arbTakeLiquidation,
-  checkIfArbTakeable,
-} from './arb';
+import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
@@ -110,7 +107,8 @@ export async function handleTakes({
   const resolvedConfig: HandleTakeConfig = resolveSubgraphConfig(config);
   const dexManager = new SmartDexManager(signer, resolvedConfig);
   const requestedLiquiditySource = poolConfig.take.liquiditySource;
-  const deploymentType = await dexManager.detectDeploymentTypeForPool(poolConfig);
+  const deploymentType =
+    await dexManager.detectDeploymentTypeForPool(poolConfig);
   const validation = await dexManager.validateDeploymentForPool(poolConfig);
 
   logger.debug(
@@ -122,7 +120,9 @@ export async function handleTakes({
 
   switch (deploymentType) {
     case 'single':
-      logger.debug(`Using single contract (1inch) take handler for pool: ${pool.name}`);
+      logger.debug(
+        `Using single contract (1inch) take handler for pool: ${pool.name}`
+      );
       await handleLegacyOrArbTakes({
         signer,
         takeWriteTransport,
@@ -133,7 +133,9 @@ export async function handleTakes({
       break;
 
     case 'factory':
-      logger.debug(`Using factory (multi-DEX) take handler for pool: ${pool.name}`);
+      logger.debug(
+        `Using factory (multi-DEX) take handler for pool: ${pool.name}`
+      );
       await handleFactoryTakes({
         signer,
         takeWriteTransport,
@@ -167,7 +169,6 @@ export async function handleTakes({
       break;
   }
 }
-
 
 /**
  * Handle the non-factory take path:
@@ -315,6 +316,35 @@ export async function getOneInchTakeQuoteEvaluation(
     };
   }
 
+  return getOneInchPathQuoteEvaluation(
+    pool,
+    price,
+    collateral,
+    poolConfig,
+    config,
+    signer,
+    oneInchRouters,
+    connectorTokens
+  );
+}
+
+export async function getOneInchPathQuoteEvaluation(
+  pool: FungiblePool,
+  price: number,
+  collateral: BigNumber,
+  poolConfig: TakeActionConfig,
+  config: Partial<Pick<KeeperConfig, 'delayBetweenActions'>>,
+  signer: Signer,
+  oneInchRouters: { [chainId: number]: string } | undefined,
+  connectorTokens: string[] | undefined
+): Promise<ExternalTakeQuoteEvaluation> {
+  if (!poolConfig.take.marketPriceFactor) {
+    return {
+      isTakeable: false,
+      reason: '1inch marketPriceFactor is not configured',
+    };
+  }
+
   if (!collateral.gt(0)) {
     logger.debug(
       `Invalid collateral amount: ${collateral.toString()} for pool ${pool.name}`
@@ -344,11 +374,16 @@ export async function getOneInchTakeQuoteEvaluation(
       oneInchRouters: oneInchRouters ?? {},
       connectorTokens: connectorTokens ?? [],
     });
-    
-    // In checkIfTakeable function, before the dexRouter quote call:
-    const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
-    const collateralInTokenDecimals = convertWadToTokenDecimals(collateral, collateralDecimals);
 
+    // In checkIfTakeable function, before the dexRouter quote call:
+    const collateralDecimals = await getDecimalsErc20(
+      signer,
+      pool.collateralAddress
+    );
+    const collateralInTokenDecimals = convertWadToTokenDecimals(
+      collateral,
+      collateralDecimals
+    );
 
     const quoteResult = await dexRouter.getQuoteFromOneInch(
       chainId,
@@ -359,7 +394,7 @@ export async function getOneInchTakeQuoteEvaluation(
 
     if (!quoteResult.success) {
       logger.debug(
-        `No valid quote data for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}: ${quoteResult.error}`	      
+        `No valid quote data for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}: ${quoteResult.error}`
       );
       return {
         isTakeable: false,
@@ -370,7 +405,7 @@ export async function getOneInchTakeQuoteEvaluation(
     const amountOut = ethers.BigNumber.from(quoteResult.dstAmount);
     if (amountOut.isZero()) {
       logger.debug(
-	`Zero amountOut for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}`      
+        `Zero amountOut for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}`
       );
       return {
         isTakeable: false,
@@ -382,7 +417,7 @@ export async function getOneInchTakeQuoteEvaluation(
 
     //collateralAmount is the human readable amount
     const collateralAmount = Number(
-     ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)  // ← Use converted amount
+      ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals) // ← Use converted amount
     );
 
     //quoteAmount is supposed to be the human readable amount
@@ -400,12 +435,17 @@ export async function getOneInchTakeQuoteEvaluation(
 
     return {
       isTakeable: takeable,
+      externalTakePath: 'oneinch',
       marketPrice,
       takeablePrice,
       quoteAmount,
       quoteAmountRaw: amountOut,
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
       collateralAmount,
-      reason: takeable ? undefined : 'auction price above external take threshold',
+      quotedCollateralWad: collateral,
+      reason: takeable
+        ? undefined
+        : 'auction price above external take threshold',
     };
   } catch (error) {
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);
@@ -507,16 +547,18 @@ export async function* getLiquidationsToTake({
     let arbHpbIndex = 0;
 
     if (poolConfig.take.marketPriceFactor && poolConfig.take.liquiditySource) {
-      isTakeable = (await checkIfTakeable(
-        pool,
-        price,
-        collateral,
-        poolConfig,
-        resolvedConfig,
-        signer,
-        oneInchRouters,
-        connectorTokens
-      )).isTakeable;
+      isTakeable = (
+        await checkIfTakeable(
+          pool,
+          price,
+          collateral,
+          poolConfig,
+          resolvedConfig,
+          signer,
+          oneInchRouters,
+          connectorTokens
+        )
+      ).isTakeable;
     }
 
     if (poolConfig.take.minCollateral && poolConfig.take.hpbPriceFactor) {
@@ -535,11 +577,17 @@ export async function* getLiquidationsToTake({
     }
 
     if (isTakeable || isArbTakeable) {
-      const strategyLog = isTakeable && !isArbTakeable ? 'take'
-        : !isTakeable && isArbTakeable ? 'arbTake'
-        : isTakeable && isArbTakeable ? 'take and arbTake'
-        : 'none';
-      logger.info(`Found liquidation to ${strategyLog} - pool: ${pool.name}, borrower: ${borrower}, auctionPrice: ${price.toFixed(6)}, collateral: ${weiToDecimaled(collateral)}`);
+      const strategyLog =
+        isTakeable && !isArbTakeable
+          ? 'take'
+          : !isTakeable && isArbTakeable
+            ? 'arbTake'
+            : isTakeable && isArbTakeable
+              ? 'take and arbTake'
+              : 'none';
+      logger.info(
+        `Found liquidation to ${strategyLog} - pool: ${pool.name}, borrower: ${borrower}, auctionPrice: ${price.toFixed(6)}, collateral: ${weiToDecimaled(collateral)}`
+      );
 
       yield {
         borrower,
@@ -550,7 +598,6 @@ export async function* getLiquidationsToTake({
         isArbTakeable,
       };
       continue;
-
     } else {
       logger.debug(
         `Not taking liquidation since price ${price} is too high - pool: ${pool.name}, borrower: ${borrower}`
@@ -565,7 +612,11 @@ interface TakeLiquidationParams
   liquidation: LiquidationToTake;
   config: Pick<
     KeeperConfig,
-    'dryRun' | 'delayBetweenActions' | 'connectorTokens' | 'oneInchRouters' | 'keeperTaker'
+    | 'dryRun'
+    | 'delayBetweenActions'
+    | 'connectorTokens'
+    | 'oneInchRouters'
+    | 'keeperTaker'
   > &
     TakeWriteTransportConfig;
 }
@@ -581,13 +632,22 @@ export async function takeLiquidation({
   const { dryRun } = config;
 
   if (dryRun) {
+    const selectedLiquiditySource =
+      liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource ??
+      poolConfig.take.liquiditySource;
     logger.info(
-      `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${poolConfig.take.liquiditySource}`
+      `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${selectedLiquiditySource}`
     );
     return true;
   }
 
-  if (poolConfig.take.liquiditySource !== LiquiditySource.ONEINCH) {
+  const suppliedQuoteEvaluation = liquidation.externalTakeQuoteEvaluation;
+  const usesOneInchExecutionPath =
+    poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ||
+    suppliedQuoteEvaluation?.externalTakePath === 'oneinch' ||
+    suppliedQuoteEvaluation?.selectedLiquiditySource ===
+      LiquiditySource.ONEINCH;
+  if (!usesOneInchExecutionPath) {
     logger.error(
       `Valid liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
     );
@@ -596,7 +656,7 @@ export async function takeLiquidation({
 
   try {
     const approvedQuoteEvaluation =
-      liquidation.externalTakeQuoteEvaluation ??
+      suppliedQuoteEvaluation ??
       (await getOneInchTakeQuoteEvaluation(
         pool,
         Number(weiToDecimaled(liquidation.auctionPrice)),
@@ -681,7 +741,7 @@ export async function takeLiquidation({
         `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
         `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
         `  Collateral (Token Decimals): ${collateralInTokenDecimals.toString()}\n` +
-        `  Liquidity Source: ${poolConfig.take.liquiditySource}\n` +
+        `  Liquidity Source: ${LiquiditySource.ONEINCH}\n` +
         `  1inch Router: ${dexRouter.getRouter(chainId)}\n` +
         `  Required Min Return: ${requiredMinReturnAmount.toString()}\n` +
         `  Swap Data Length: ${swapData.data.length} chars`
@@ -699,7 +759,7 @@ export async function takeLiquidation({
           liquidation.borrower,
           liquidation.auctionPrice,
           liquidation.collateral,
-          Number(poolConfig.take.liquiditySource),
+          Number(LiquiditySource.ONEINCH),
           dexRouter.getRouter(chainId)!,
           swapDetailsBytes,
         ] as const;
@@ -713,7 +773,10 @@ export async function takeLiquidation({
             gasLimit,
             nonce: nonce.toString(),
           });
-        const receipt = await submitTakeTransaction(takeWriteTransport, txRequest);
+        const receipt = await submitTakeTransaction(
+          takeWriteTransport,
+          txRequest
+        );
         logger.info(
           `Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
         );

@@ -860,10 +860,9 @@ export function getFactoryRouteCandidates(params: {
   >;
   selection?: FactoryRouteSelectionOptions;
 }): FactoryRouteCandidate[] {
-  const sources =
-    params.selection?.allowedLiquiditySources?.length
-      ? params.selection.allowedLiquiditySources
-      : [params.defaultLiquiditySource];
+  const sources = params.selection?.allowedLiquiditySources?.length
+    ? params.selection.allowedLiquiditySources
+    : [params.defaultLiquiditySource];
 
   const uniqueSources = Array.from(new Set(sources)).filter(
     isDynamicFactorySource
@@ -1132,6 +1131,7 @@ export async function buildFactoryQuoteEvaluation(params: {
 
   return {
     isTakeable: isProfitable,
+    externalTakePath: 'factory',
     marketPrice: params.quoteAmount / collateralAmount,
     takeablePrice: (params.quoteAmount / collateralAmount) * marketPriceFactor,
     quoteAmount: params.quoteAmount,
@@ -1140,6 +1140,8 @@ export async function buildFactoryQuoteEvaluation(params: {
     selectedFeeTier: params.selectedFeeTier,
     approvedMinOutRaw,
     collateralAmount,
+    quotedAuctionPriceWad: params.auctionPriceWad,
+    quotedCollateralWad: params.collateral,
     routeProfitability: {
       auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
       routeExecutionCostQuoteRaw: ZERO,
