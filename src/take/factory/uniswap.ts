@@ -1,7 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../config';
-import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
@@ -15,6 +14,7 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  getUniswapV3QuoteProvider,
   getSwapDeadline,
 } from './shared';
 import {
@@ -66,21 +66,12 @@ export async function evaluateUniswapV3FactoryQuote({
   }
 
   try {
-    let quoteProvider = runtimeCache?.uniswapV3;
-    if (quoteProvider === undefined) {
-      quoteProvider = new UniswapV3QuoteProvider(signer, {
-        universalRouterAddress: routerConfig.universalRouterAddress,
-        poolFactoryAddress: routerConfig.poolFactoryAddress,
-        defaultFeeTier: routerConfig.defaultFeeTier || 3000,
-        wethAddress: routerConfig.wethAddress,
-        quoterV2Address: routerConfig.quoterV2Address,
-      });
-      if (runtimeCache) {
-        runtimeCache.uniswapV3 = quoteProvider.isAvailable() ? quoteProvider : null;
-      }
-    }
-
-    if (!quoteProvider || !quoteProvider.isAvailable()) {
+    const quoteProvider = getUniswapV3QuoteProvider({
+      signer,
+      routerConfig,
+      runtimeCache,
+    });
+    if (!quoteProvider) {
       logger.debug(`Factory: UniswapV3QuoteProvider not available for pool ${pool.name}`);
       return {
         isTakeable: false,

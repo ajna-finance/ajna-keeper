@@ -70,7 +70,8 @@ const config: KeeperConfig = {
     permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
     poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
     quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
-    defaultFeeTier: 3000,      // 0.3% fee tier
+    defaultFeeTier: 3000,      // Preferred/default 0.3% fee tier
+    candidateFeeTiers: [500, 10000], // Optional extra deployed tiers to probe per external take
     defaultSlippage: 0.5,      // 0.5% slippage
   },
 

@@ -15,6 +15,7 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  getCurveQuoteProvider,
   getSwapDeadline,
 } from './shared';
 import {
@@ -60,21 +61,12 @@ export async function evaluateCurveFactoryQuote({
   }
 
   try {
-    let quoteProvider = runtimeCache?.curve;
-    if (quoteProvider === undefined) {
-      const candidateProvider = new CurveQuoteProvider(signer, {
-        poolConfigs: curveConfig.poolConfigs as any,
-        defaultSlippage: curveConfig.defaultSlippage || 1.0,
-        wethAddress: curveConfig.wethAddress,
-        tokenAddresses: config.tokenAddresses || {},
-      });
-      const initialized = await candidateProvider.initialize();
-      quoteProvider = initialized ? candidateProvider : null;
-      if (runtimeCache) {
-        runtimeCache.curve = quoteProvider;
-      }
-    }
-
+    const quoteProvider = await getCurveQuoteProvider({
+      signer,
+      routerConfig: curveConfig,
+      tokenAddresses: config.tokenAddresses,
+      runtimeCache,
+    });
     if (!quoteProvider) {
       logger.debug(`Factory: Curve quote provider not available for pool ${pool.name}`);
       return {

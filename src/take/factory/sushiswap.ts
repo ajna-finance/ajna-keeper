@@ -1,7 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../config';
-import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
@@ -15,6 +14,7 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  getSushiSwapQuoteProvider,
   getSwapDeadline,
 } from './shared';
 import {
@@ -66,22 +66,11 @@ export async function evaluateSushiSwapFactoryQuote({
   }
 
   try {
-    let quoteProvider = runtimeCache?.sushiswap;
-    if (quoteProvider === undefined) {
-      const candidateProvider = new SushiSwapQuoteProvider(signer, {
-        swapRouterAddress: sushiConfig.swapRouterAddress,
-        quoterV2Address: sushiConfig.quoterV2Address,
-        factoryAddress: sushiConfig.factoryAddress,
-        defaultFeeTier: sushiConfig.defaultFeeTier || 500,
-        wethAddress: sushiConfig.wethAddress,
-      });
-      const initialized = await candidateProvider.initialize();
-      quoteProvider = initialized ? candidateProvider : null;
-      if (runtimeCache) {
-        runtimeCache.sushiswap = quoteProvider;
-      }
-    }
-
+    const quoteProvider = await getSushiSwapQuoteProvider({
+      signer,
+      routerConfig: sushiConfig,
+      runtimeCache,
+    });
     if (!quoteProvider) {
       logger.debug(`Factory: SushiSwap quote provider not available for pool ${pool.name}`);
       return {

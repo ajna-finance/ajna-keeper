@@ -402,6 +402,7 @@ export async function handleDiscoveredTakeTarget(
           curveRouterOverrides: params.config.curveRouterOverrides,
           tokenAddresses: params.config.tokenAddresses,
           takeWriteTransport: params.takeWriteTransport,
+          runtimeCache: rpcCache?.factoryQuoteProviders,
         };
 
   try {

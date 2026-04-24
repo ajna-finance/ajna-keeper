@@ -22,7 +22,7 @@ const FACTORY_DYNAMIC_SOURCES = [
   LiquiditySource.SUSHISWAP,
   LiquiditySource.CURVE,
 ];
-const V1_FACTORY_FEE_TIERS = [500, 3000, 10000];
+const MAX_UINT24_FEE_TIER = 16_777_215;
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,
@@ -54,11 +54,10 @@ function validateCandidateFeeTiers(
 ): void {
   if (
     defaultFeeTier !== undefined &&
-    (!Number.isInteger(defaultFeeTier) ||
-      !V1_FACTORY_FEE_TIERS.includes(defaultFeeTier))
+    !isValidFactoryFeeTier(defaultFeeTier)
   ) {
     throw new Error(
-      `${fieldName}: defaultFeeTier must be one of ${V1_FACTORY_FEE_TIERS.join(', ')}`
+      `${fieldName}: defaultFeeTier must be a positive uint24 fee tier`
     );
   }
 
@@ -71,9 +70,9 @@ function validateCandidateFeeTiers(
 
   const seen = new Set<number>();
   for (const tier of tiers) {
-    if (!Number.isInteger(tier) || !V1_FACTORY_FEE_TIERS.includes(tier)) {
+    if (!isValidFactoryFeeTier(tier)) {
       throw new Error(
-        `${fieldName}: candidateFeeTiers must contain only ${V1_FACTORY_FEE_TIERS.join(', ')}`
+        `${fieldName}: candidateFeeTiers must contain only positive uint24 fee tiers`
       );
     }
     if (seen.has(tier)) {
@@ -81,6 +80,14 @@ function validateCandidateFeeTiers(
     }
     seen.add(tier);
   }
+}
+
+function isValidFactoryFeeTier(tier: number): boolean {
+  return (
+    Number.isInteger(tier) &&
+    tier > 0 &&
+    tier <= MAX_UINT24_FEE_TIER
+  );
 }
 
 function validateRouterFeeTiers(config: KeeperConfig): void {

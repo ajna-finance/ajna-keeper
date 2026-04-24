@@ -28,6 +28,7 @@ import {
   applyFactoryRouteProfitabilityPolicy,
   buildFactoryRouteEvaluationContext,
   createFactoryQuoteProviderRuntimeCache,
+  filterFactoryRouteCandidatesByAvailability,
   formatFactoryRouteCandidate,
   getFactoryRouteCandidates,
   orderFactoryRouteCandidates,
@@ -107,6 +108,7 @@ export async function handleFactoryTakes({
       curveRouterOverrides: resolvedConfig.curveRouterOverrides,
       tokenAddresses: resolvedConfig.tokenAddresses,
       takeWriteTransport,
+      runtimeCache: quoteProviderCache,
     },
     dryRun: resolvedConfig.dryRun ?? false,
     delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
@@ -165,14 +167,19 @@ export function createFactoryTakeAdapter(params: {
       poolConfig,
       liquidation,
       config,
-    }) =>
-      takeLiquidationFactory({
+    }) => {
+      const executionConfig =
+        params.runtimeCache && !config.runtimeCache
+          ? { ...config, runtimeCache: params.runtimeCache }
+          : config;
+      return takeLiquidationFactory({
         pool,
         signer,
         poolConfig,
         liquidation,
-        config,
-      }),
+        config: executionConfig,
+      });
+    },
   };
 }
 
@@ -230,13 +237,58 @@ export async function getFactoryTakeQuoteEvaluation(
         runtimeCache,
       });
       const routeQuoteBudget = routeSelection?.routeQuoteBudgetPerCandidate;
+      const routeRejectionReasons =
+        routeSelection?.routeProfitabilityContext
+          ?.routeRejectionReasonsBySource;
+      const evaluations: Array<{
+        route: FactoryRouteCandidate;
+        evaluation: ExternalTakeQuoteEvaluation;
+      }> = [];
+      const availabilityCandidateRoutes: FactoryRouteCandidate[] = [];
+
+      for (const route of routes) {
+        const rejectionReason = routeRejectionReasons?.[route.liquiditySource];
+        if (rejectionReason) {
+          evaluations.push({
+            route,
+            evaluation: {
+              isTakeable: false,
+              reason: rejectionReason,
+              selectedLiquiditySource: route.liquiditySource,
+              selectedFeeTier: route.feeTier,
+            },
+          });
+        } else {
+          availabilityCandidateRoutes.push(route);
+        }
+      }
+
+      const { availableRoutes, unavailableRoutes } =
+        await filterFactoryRouteCandidatesByAvailability({
+          routes: availabilityCandidateRoutes,
+          pool,
+          signer,
+          config,
+          runtimeCache,
+        });
+      if (unavailableRoutes.length > 0) {
+        logger.debug(
+          `Factory: skipped unavailable routes for pool ${pool.name}: ${unavailableRoutes
+            .map(
+              ({ route, reason }) =>
+                `${formatFactoryRouteCandidate(route)}=${reason}`
+            )
+            .join(', ')}`
+        );
+      }
+
       const routesToEvaluate =
         routeQuoteBudget !== undefined
-          ? routes.slice(0, routeQuoteBudget)
-          : routes;
+          ? availableRoutes.slice(0, routeQuoteBudget)
+          : availableRoutes;
       const skippedRoutes =
-        routeQuoteBudget !== undefined && routes.length > routeQuoteBudget
-          ? routes.slice(routeQuoteBudget)
+        routeQuoteBudget !== undefined && availableRoutes.length > routeQuoteBudget
+          ? availableRoutes.slice(routeQuoteBudget)
           : [];
       if (skippedRoutes.length > 0) {
         logger.debug(
@@ -245,24 +297,10 @@ export async function getFactoryTakeQuoteEvaluation(
             .join(', ')}`
         );
       }
-      const evaluations: Array<{
-        route: FactoryRouteCandidate;
-        evaluation: ExternalTakeQuoteEvaluation;
-      }> = [];
 
       for (const route of routesToEvaluate) {
-        const rejectionReason =
-          routeSelection?.routeProfitabilityContext
-            ?.routeRejectionReasonsBySource?.[route.liquiditySource];
         const rawEvaluation =
-          rejectionReason !== undefined
-            ? {
-                isTakeable: false,
-                reason: rejectionReason,
-                selectedLiquiditySource: route.liquiditySource,
-                selectedFeeTier: route.feeTier,
-              }
-            : route.liquiditySource === LiquiditySource.UNISWAPV3
+          route.liquiditySource === LiquiditySource.UNISWAPV3
               ? await checkUniswapV3Quote(
                   pool,
                   auctionPriceWad,
@@ -317,11 +355,6 @@ export async function getFactoryTakeQuoteEvaluation(
       });
       if (selectedRoute) {
         const selected = selectedRoute.evaluation;
-        recordFactoryRouteSuccess({
-          route: selectedRoute.route,
-          pool,
-          runtimeCache,
-        });
         logger.debug(
           `Factory: selected route source=${selected.selectedLiquiditySource} feeTier=${selected.selectedFeeTier ?? 'n/a'} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} requiredOutputFloorRaw=${selected.routeProfitability?.requiredOutputFloorQuoteRaw?.toString() ?? selected.approvedMinOutRaw?.toString() ?? 'n/a'} surplusRaw=${selected.routeProfitability?.surplusOverFloorQuoteRaw?.toString() ?? 'n/a'} for pool ${pool.name}${
             skippedRoutes.length > 0 ? ' (route quote budget limited)' : ''
@@ -334,6 +367,9 @@ export async function getFactoryTakeQuoteEvaluation(
         ...evaluations.map(
           ({ route, evaluation }) =>
             `${formatFactoryRouteCandidate(route)}=${evaluation.reason ?? 'not takeable'}`
+        ),
+        ...unavailableRoutes.map(
+          ({ route, reason }) => `${formatFactoryRouteCandidate(route)}=${reason}`
         ),
         ...skippedRoutes.map(
           (route) => `${formatFactoryRouteCandidate(route)}=skipped by route quote budget`
@@ -449,6 +485,22 @@ function failFactoryTakeExecution(message: string): false {
   return false;
 }
 
+function recordExecutedFactoryRouteSuccess(params: {
+  pool: FungiblePool;
+  selectedLiquiditySource: LiquiditySource;
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): void {
+  recordFactoryRouteSuccess({
+    route: {
+      liquiditySource: params.selectedLiquiditySource,
+      feeTier: params.quoteEvaluation.selectedFeeTier,
+    },
+    pool: params.pool,
+    runtimeCache: params.runtimeCache,
+  });
+}
+
 /**
  * Execute external take using factory pattern
  */
@@ -466,7 +518,10 @@ export async function takeLiquidationFactory({
   config: Pick<
     FactoryTakeParams['config'],
     'dryRun' | 'keeperTakerFactory' | 'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses'
-  > & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
+  > & {
+    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
+    runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  };
 }): Promise<boolean> {
   const { borrower } = liquidation;
   const { dryRun, keeperTakerFactory } = config;
@@ -492,7 +547,8 @@ export async function takeLiquidationFactory({
       liquidation.collateral,
       poolConfig,
       config,
-      signer
+      signer,
+      config.runtimeCache
     ));
 
   if (!externalTakeQuoteEvaluation.isTakeable) {
@@ -521,6 +577,12 @@ export async function takeLiquidationFactory({
         quoteEvaluation: externalTakeQuoteEvaluation,
         config,
       });
+      recordExecutedFactoryRouteSuccess({
+        pool,
+        selectedLiquiditySource,
+        quoteEvaluation: externalTakeQuoteEvaluation,
+        runtimeCache: config.runtimeCache,
+      });
       return true;
     }
 
@@ -533,6 +595,12 @@ export async function takeLiquidationFactory({
         quoteEvaluation: externalTakeQuoteEvaluation,
         config,
       });
+      recordExecutedFactoryRouteSuccess({
+        pool,
+        selectedLiquiditySource,
+        quoteEvaluation: externalTakeQuoteEvaluation,
+        runtimeCache: config.runtimeCache,
+      });
       return true;
     }
 
@@ -544,6 +612,12 @@ export async function takeLiquidationFactory({
         liquidation,
         quoteEvaluation: externalTakeQuoteEvaluation,
         config,
+      });
+      recordExecutedFactoryRouteSuccess({
+        pool,
+        selectedLiquiditySource,
+        quoteEvaluation: externalTakeQuoteEvaluation,
+        runtimeCache: config.runtimeCache,
       });
       return true;
     }

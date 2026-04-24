@@ -448,9 +448,11 @@ A 1inch API key may be obtained from their [developer portal](https://portal.1in
 
 ### Critical Fee Tier Configuration for External Takes
 
-For Uniswap V3 and SushiSwap external takes, the keeper currently chooses one runtime `defaultFeeTier` per DEX per keeper instance. That value is passed into quote evaluation and execution for each external take. It is not baked into deployed bytecode, so changing it is a config-and-restart decision, not a redeploy.
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and can optionally probe additional `candidateFeeTiers` per DEX during quote evaluation. The selected fee tier is then carried into execution. These values are not baked into deployed bytecode, so changing them is a config-and-restart decision, not a redeploy.
 
 **Fee Tier Value → Percentage → Common Use:**
+- `100` = 0.01% = 1 basis point (where deployed)
+- `200`, `300`, `400` = newer low-fee tiers on supported deployments
 - `500` = 0.05% = 5 basis points (stablecoins)
 - `3000` = 0.3% = 30 basis points (most common)
 - `10000` = 1.0% = 100 basis points (exotic pairs)
@@ -458,9 +460,10 @@ For Uniswap V3 and SushiSwap external takes, the keeper currently chooses one ru
 **External Takes vs Post-Auction Swaps:**
 
 **For External Takes (Time-Sensitive):**
-- Uses `universalRouterOverrides.defaultFeeTier` or `sushiswapRouterOverrides.defaultFeeTier`
-- One global default per DEX per keeper instance
-- Applies to both quote evaluation and execution
+- Uses `universalRouterOverrides.defaultFeeTier` or `sushiswapRouterOverrides.defaultFeeTier` as the preferred route
+- Can add `candidateFeeTiers` to probe other deployed pools for the same token pair
+- Applies the selected quote route to execution, including the selected fee tier
+- Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
 - No per-pool external-take fee override today
 - Change requires updating config and restarting the keeper
 
@@ -468,6 +471,7 @@ For Uniswap V3 and SushiSwap external takes, the keeper currently chooses one ru
 - Can override per pool using `fee: FeeAmount.MEDIUM` in `rewardAction`
 - Falls back to the same global default if no override is specified
 - Flexible and changeable without redeploying contracts
+- Not affected by dynamic external-take route selection
 
 ### Pre-Deployment Fee Tier Research (REQUIRED)
 
@@ -476,7 +480,7 @@ Before enabling Uniswap V3 or SushiSwap external takes:
 **Step 1: List all token pairs from your pools**
 **Step 2: Check Uniswap Info or SushiSwap Analytics for each pair's fee-tier liquidity**
 **Step 3: Weight by expected liquidation value and frequency, not just TVL**
-**Step 4: Set `defaultFeeTier` in config**
+**Step 4: Set `defaultFeeTier` and, when useful, `candidateFeeTiers` in config**
 **Step 5: Revisit periodically as liquidity shifts**
 
 Example research process:
@@ -488,9 +492,9 @@ Research Results:
 - DAI/USDC: 500 tier has $100M TVL, 3000 tier has $30M TVL
 - RARE/WETH: Only exists in 10000 tier
 
-Decision: Use defaultFeeTier: 3000
-Rationale: Optimizes highest-value pair (USDC/WETH)
-Plan: LP rewards can override per pool, while uncommon pairs may be better handled with 1inch, arbTake, or a separate keeper config
+Decision: Use defaultFeeTier: 3000 and candidateFeeTiers: [500, 10000]
+Rationale: Prefer the highest-value pair (USDC/WETH), but probe the other deployed tiers when auctions appear
+Plan: Keep the candidate list small enough for quote latency; LP rewards can still override per pool
 ```
 
 ### Choose Your Deployment Approach
@@ -680,7 +684,8 @@ const config: KeeperConfig = {
     permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-    defaultFeeTier: 3000, // Global default for Uniswap external takes
+    defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
+    candidateFeeTiers: [500, 10000], // Optional additional tiers to probe per take
     defaultSlippage: 0.5,
   },
   
@@ -693,15 +698,15 @@ const config: KeeperConfig = {
 }
 ```
 
-**⚠️ Important: Uniswap V3 Pool Selection and Fee Tier Configuration**
+**Important: Uniswap V3 Pool Selection and Fee Tier Configuration**
 
-Uniswap external takes currently quote and execute against the configured `defaultFeeTier` only (`500` = 0.05%, `3000` = 0.3%, `10000` = 1%). The keeper does not dynamically probe alternative fee tiers per take, so choose the default that best matches your highest-value pairs.
+Uniswap external takes use `defaultFeeTier` as the preferred route and can probe `candidateFeeTiers` for the same token pair. The keeper checks whether a pool exists before spending quote budget, then quotes viable routes and executes with the selected fee tier.
 
 To check liquidity:
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) for your network
 2. Search for your token pair (e.g., USDC/WETH)
 3. Compare TVL across different fee tiers
-4. Set `defaultFeeTier` to the most liquid option for your most important pairs
+4. Set `defaultFeeTier` to your preferred/common route and add only useful alternatives to `candidateFeeTiers`
 5. Monitor and update as liquidity shifts over time
 
 Low-liquidity pools can cause swap failures or poor pricing that impacts liquidation profitability.
@@ -726,7 +731,8 @@ const config: KeeperConfig = {
     quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
-    defaultFeeTier: 500, // Global default for SushiSwap external takes
+    defaultFeeTier: 500, // Preferred/default SushiSwap external-take route
+    candidateFeeTiers: [3000], // Optional additional tiers to probe per take
     defaultSlippage: 10.0,
   },
   
@@ -739,14 +745,14 @@ const config: KeeperConfig = {
 }
 ```
 
-**⚠️ Important: SushiSwap Pool Selection and Fee Tier Configuration**
+**Important: SushiSwap Pool Selection and Fee Tier Configuration**
 
-SushiSwap external takes currently quote and execute against the configured `defaultFeeTier` only (typically `500` = 0.05% or `3000` = 0.3%). The keeper does not dynamically probe alternative fee tiers per take, so choose the default that best matches your highest-value pairs.
+SushiSwap external takes use `defaultFeeTier` as the preferred route and can probe `candidateFeeTiers` for deployed pools. Missing pools are skipped before quote-budgeting; viable routes are ranked by profitability and executed with the selected fee tier.
 
 To verify optimal pools:
 1. Check [SushiSwap Analytics](https://sushi.com/pool) for your network
 2. Compare liquidity across fee tiers for your token pairs
-3. Set `defaultFeeTier` to the highest-liquidity option for your most important pairs
+3. Set `defaultFeeTier` to your preferred/common route and add useful alternatives to `candidateFeeTiers`
 4. Test with small amounts before production deployment
 5. Revisit the setting as market conditions change
 
@@ -878,11 +884,13 @@ const config: KeeperConfig = {
     'SushiSwap': '0x[taker-address]'
   },
   universalRouterOverrides: { 
-    defaultFeeTier: 3000, // Global default for Uniswap external takes
+    defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
+    candidateFeeTiers: [500, 10000], // Optional extra tiers to probe
     /* other addresses */ 
   },
   sushiswapRouterOverrides: { 
-    defaultFeeTier: 3000, // Global default for SushiSwap external takes  
+    defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
+    candidateFeeTiers: [500], // Optional extra tiers to probe
     /* other addresses */ 
   },
   

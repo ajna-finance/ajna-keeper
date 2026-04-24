@@ -79,6 +79,7 @@ export type FactoryExecutionConfig = Pick<
   | 'tokenAddresses'
 > & {
   takeWriteTransport?: TakeWriteTransport;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
 };
 
 export type FactoryQuoteConfig = Pick<
@@ -105,7 +106,7 @@ export function createFactoryQuoteProviderRuntimeCache(): FactoryQuoteProviderRu
 export const WAD = ethers.constants.WeiPerEther;
 export const BASIS_POINTS_DENOMINATOR = 10_000;
 export const MARKET_FACTOR_SCALE = 1_000_000;
-const V1_FACTORY_FEE_TIERS = [500, 3000, 10000];
+const MAX_UINT24_FEE_TIER = 16_777_215;
 const ZERO = BigNumber.from(0);
 
 export function ceilWmul(x: BigNumber, y: BigNumber): BigNumber {
@@ -147,13 +148,17 @@ export function getEffectiveFactoryFeeTiers(
   defaultFeeTier: number,
   candidateFeeTiers?: number[]
 ): number[] {
-  const tiers = candidateFeeTiers?.length
-    ? candidateFeeTiers
-    : [defaultFeeTier];
-  const effective = [defaultFeeTier, ...tiers].filter((tier) =>
-    V1_FACTORY_FEE_TIERS.includes(tier)
-  );
+  const tiers = candidateFeeTiers?.length ? candidateFeeTiers : [defaultFeeTier];
+  const effective = [defaultFeeTier, ...tiers].filter(isValidFactoryFeeTier);
   return Array.from(new Set(effective));
+}
+
+function isValidFactoryFeeTier(tier: number): boolean {
+  return (
+    Number.isInteger(tier) &&
+    tier > 0 &&
+    tier <= MAX_UINT24_FEE_TIER
+  );
 }
 
 function isDynamicFactorySource(source: LiquiditySource): boolean {
@@ -289,6 +294,228 @@ export function recordFactoryRouteSuccess(params: {
     }),
     Date.now()
   );
+}
+
+export function getUniswapV3QuoteProvider(params: {
+  signer: Signer;
+  routerConfig?: FactoryQuoteConfig['universalRouterOverrides'];
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): UniswapV3QuoteProvider | undefined {
+  const routerConfig = params.routerConfig;
+  if (
+    !routerConfig?.universalRouterAddress ||
+    !routerConfig.poolFactoryAddress ||
+    !routerConfig.wethAddress
+  ) {
+    return undefined;
+  }
+
+  let quoteProvider = params.runtimeCache?.uniswapV3;
+  if (quoteProvider === undefined) {
+    const candidateProvider = new UniswapV3QuoteProvider(params.signer, {
+      universalRouterAddress: routerConfig.universalRouterAddress,
+      poolFactoryAddress: routerConfig.poolFactoryAddress,
+      defaultFeeTier: routerConfig.defaultFeeTier ?? 3000,
+      wethAddress: routerConfig.wethAddress,
+      quoterV2Address: routerConfig.quoterV2Address,
+    });
+    quoteProvider = candidateProvider.isAvailable() ? candidateProvider : null;
+    if (params.runtimeCache) {
+      params.runtimeCache.uniswapV3 = quoteProvider;
+    }
+  }
+
+  return quoteProvider && quoteProvider.isAvailable()
+    ? quoteProvider
+    : undefined;
+}
+
+export async function getSushiSwapQuoteProvider(params: {
+  signer: Signer;
+  routerConfig?: FactoryQuoteConfig['sushiswapRouterOverrides'];
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): Promise<SushiSwapQuoteProvider | undefined> {
+  const routerConfig = params.routerConfig;
+  if (
+    !routerConfig?.swapRouterAddress ||
+    !routerConfig.factoryAddress ||
+    !routerConfig.wethAddress
+  ) {
+    return undefined;
+  }
+
+  let quoteProvider = params.runtimeCache?.sushiswap;
+  if (quoteProvider === undefined) {
+    const candidateProvider = new SushiSwapQuoteProvider(params.signer, {
+      swapRouterAddress: routerConfig.swapRouterAddress,
+      quoterV2Address: routerConfig.quoterV2Address,
+      factoryAddress: routerConfig.factoryAddress,
+      defaultFeeTier: routerConfig.defaultFeeTier ?? 500,
+      wethAddress: routerConfig.wethAddress,
+    });
+    const initialized = await candidateProvider.initialize();
+    quoteProvider = initialized ? candidateProvider : null;
+    if (params.runtimeCache) {
+      params.runtimeCache.sushiswap = quoteProvider;
+    }
+  }
+
+  return quoteProvider ?? undefined;
+}
+
+export async function getCurveQuoteProvider(params: {
+  signer: Signer;
+  routerConfig?: FactoryQuoteConfig['curveRouterOverrides'];
+  tokenAddresses?: FactoryQuoteConfig['tokenAddresses'];
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): Promise<CurveQuoteProvider | undefined> {
+  const routerConfig = params.routerConfig;
+  if (!routerConfig?.poolConfigs || !routerConfig.wethAddress) {
+    return undefined;
+  }
+
+  let quoteProvider = params.runtimeCache?.curve;
+  if (quoteProvider === undefined) {
+    const candidateProvider = new CurveQuoteProvider(params.signer, {
+      poolConfigs: routerConfig.poolConfigs as any,
+      defaultSlippage: routerConfig.defaultSlippage ?? 1.0,
+      wethAddress: routerConfig.wethAddress,
+      tokenAddresses: params.tokenAddresses ?? {},
+    });
+    const initialized = await candidateProvider.initialize();
+    quoteProvider = initialized ? candidateProvider : null;
+    if (params.runtimeCache) {
+      params.runtimeCache.curve = quoteProvider;
+    }
+  }
+
+  return quoteProvider ?? undefined;
+}
+
+export interface FactoryRouteAvailabilitySkip {
+  route: FactoryRouteCandidate;
+  reason: string;
+}
+
+export async function filterFactoryRouteCandidatesByAvailability(params: {
+  routes: FactoryRouteCandidate[];
+  pool: Pick<FungiblePool, 'name' | 'collateralAddress' | 'quoteAddress'>;
+  signer: Signer;
+  config: FactoryQuoteConfig;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): Promise<{
+  availableRoutes: FactoryRouteCandidate[];
+  unavailableRoutes: FactoryRouteAvailabilitySkip[];
+}> {
+  const availableRoutes: FactoryRouteCandidate[] = [];
+  const unavailableRoutes: FactoryRouteAvailabilitySkip[] = [];
+
+  for (const route of params.routes) {
+    if (route.liquiditySource === LiquiditySource.UNISWAPV3) {
+      const quoteProvider = getUniswapV3QuoteProvider({
+        signer: params.signer,
+        routerConfig: params.config.universalRouterOverrides,
+        runtimeCache: params.runtimeCache,
+      });
+      if (!quoteProvider) {
+        unavailableRoutes.push({
+          route,
+          reason: 'Uniswap V3 quote provider unavailable',
+        });
+        continue;
+      }
+
+      const feeTier =
+        route.feeTier ??
+        params.config.universalRouterOverrides?.defaultFeeTier ??
+        3000;
+      const exists = await quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress,
+        feeTier
+      );
+      if (exists) {
+        availableRoutes.push(route);
+      } else {
+        unavailableRoutes.push({
+          route,
+          reason: 'Uniswap V3 pool not found',
+        });
+      }
+      continue;
+    }
+
+    if (route.liquiditySource === LiquiditySource.SUSHISWAP) {
+      const quoteProvider = await getSushiSwapQuoteProvider({
+        signer: params.signer,
+        routerConfig: params.config.sushiswapRouterOverrides,
+        runtimeCache: params.runtimeCache,
+      });
+      if (!quoteProvider) {
+        unavailableRoutes.push({
+          route,
+          reason: 'SushiSwap quote provider unavailable',
+        });
+        continue;
+      }
+
+      const feeTier =
+        route.feeTier ??
+        params.config.sushiswapRouterOverrides?.defaultFeeTier ??
+        500;
+      const exists = await quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress,
+        feeTier
+      );
+      if (exists) {
+        availableRoutes.push(route);
+      } else {
+        unavailableRoutes.push({
+          route,
+          reason: 'SushiSwap pool not found',
+        });
+      }
+      continue;
+    }
+
+    if (route.liquiditySource === LiquiditySource.CURVE) {
+      const quoteProvider = await getCurveQuoteProvider({
+        signer: params.signer,
+        routerConfig: params.config.curveRouterOverrides,
+        tokenAddresses: params.config.tokenAddresses,
+        runtimeCache: params.runtimeCache,
+      });
+      if (!quoteProvider) {
+        unavailableRoutes.push({
+          route,
+          reason: 'Curve quote provider unavailable',
+        });
+        continue;
+      }
+
+      const exists = await quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress
+      );
+      if (exists) {
+        availableRoutes.push(route);
+      } else {
+        unavailableRoutes.push({
+          route,
+          reason: 'Curve pool not configured for token pair',
+        });
+      }
+      continue;
+    }
+
+    unavailableRoutes.push({
+      route,
+      reason: `unsupported route source ${route.liquiditySource}`,
+    });
+  }
+
+  return { availableRoutes, unavailableRoutes };
 }
 
 export interface FactoryRouteEvaluationResult {

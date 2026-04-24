@@ -55,7 +55,8 @@ const config: KeeperConfig = {
     universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B', // HEMI UniversalRouter based on gov proposal
     wethAddress: '0x4200000000000000000000000000000000000006', // Wrapped ETH on HEMI
     permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
-    defaultFeeTier: 3000, // 0.3% as default for this chain
+    defaultFeeTier: 3000, // Preferred/default 0.3% route for this chain
+    candidateFeeTiers: [500], // Optional extra deployed tiers to probe per external take
     defaultSlippage: 0.5, // 0.5% as default slippage
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5', // QuoterV2 for accurate pricing
@@ -67,7 +68,8 @@ const config: KeeperConfig = {
     quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',   // From production test  
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',   // From production test
     wethAddress: '0x4200000000000000000000000000000000000006',      // WETH on Hemi
-    defaultFeeTier: 500,    // 0.05% fee tier (from production test)
+    defaultFeeTier: 500,    // Preferred/default 0.05% fee tier
+    candidateFeeTiers: [3000], // Optional extra deployed tiers to probe per external take
     defaultSlippage: 10.0,  // 10% conservative slippage (from production test)
   },
 

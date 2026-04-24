@@ -54,22 +54,25 @@ Important operational details:
 
 ### What the Current Keeper Actually Does
 
-For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data, but the keeper currently chooses that fee tier from one runtime `defaultFeeTier` per DEX per keeper instance.
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and can optionally probe additional `candidateFeeTiers` per DEX during quote evaluation. The selected fee tier is carried into execution.
 
 ```typescript
 universalRouterOverrides: {
-  defaultFeeTier: 3000, // Global runtime default for Uniswap external takes
+  defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
+  candidateFeeTiers: [500, 10000], // Optional additional tiers to probe
   // ... other settings
 },
 sushiswapRouterOverrides: {
-  defaultFeeTier: 500,  // Global runtime default for SushiSwap external takes
+  defaultFeeTier: 500,  // Preferred/default SushiSwap external-take route
+  candidateFeeTiers: [3000], // Optional additional tiers to probe
   // ... other settings
 }
 ```
 
 Implications:
-- External takes use the configured default for both quoting and execution
-- Changing the default is a config-and-restart change, not a contract redeploy
+- External takes prefer the configured default, then quote viable candidate tiers when configured
+- Missing Uni/Sushi pools are skipped before `takeRouteQuoteBudgetPerCandidate` is applied
+- Changing fee-tier policy is a config-and-restart change, not a contract redeploy
 - There is no per-pool external-take fee override in the current config schema
 - LP reward swaps remain more flexible because `rewardAction.fee` can override per pool
 - 1inch does not use this model because the API routes dynamically
@@ -101,7 +104,8 @@ For SushiSwap:
 
 **Step 3: Make a Strategic Default Selection**
 - Optimize for the weighted majority of your expected liquidation flow, not for every pair equally
-- If a few important pairs want a different tier, decide whether they should use 1inch, arbTake, or a separate keeper config
+- Add only useful alternate deployed tiers to `candidateFeeTiers`; every viable candidate can require an additional quote
+- If a few important pairs need a different DEX entirely, decide whether they should use 1inch, arbTake, or a separate keeper config
 - Revisit the default periodically as liquidity migrates
 
 **Real-World Example Decision Process (Based on Production Configs):**
@@ -111,19 +115,21 @@ Hemi Network Pools Analysis:
 - vusd/usdc_e (medium value): Most liquidity in 500 tier (0.05%)
 - usd_t1/usdc_t (high frequency): Most liquidity in 3000 tier (0.3%)
 
-Production Decision: Use defaultFeeTier: 3000
+Production Decision: Use defaultFeeTier: 3000 and candidateFeeTiers: [500]
 Rationale:
 - Optimize for highest-frequency pair (usd_t1/usdc_t)
-- External takes get the best route for the majority of expected flow
+- External takes prefer the majority route, while still probing the 500-tier cluster when a pool exists
 - Use `fee: FeeAmount.LOW` overrides in LP rewards for vcred/vusd pairs
-- Consider a separate keeper config if the 500-tier cluster becomes strategically important
+- Consider a separate keeper config if the 500-tier cluster needs a different DEX/gas policy
 
 Result in Production Config:
 universalRouterOverrides: {
   defaultFeeTier: 3000, // Uniswap external takes default to 0.3% in this keeper instance
+  candidateFeeTiers: [500],
 },
 sushiswapRouterOverrides: {
   defaultFeeTier: 3000, // SushiSwap external takes default to 0.3% in this keeper instance
+  candidateFeeTiers: [500],
 }
 ```
 
@@ -131,11 +137,11 @@ sushiswapRouterOverrides: {
 
 When liquidity shifts materially:
 1. Re-check the relevant pairs on the DEX analytics page
-2. Update `defaultFeeTier` in config
+2. Update `defaultFeeTier` and/or `candidateFeeTiers` in config
 3. Restart the keeper
 4. Re-test with small amounts before relying on the new route selection
 
-This makes fee tier selection a **strategic runtime configuration decision**. It is still important, but it is no longer a contract-redeploy decision in the current keeper.
+This makes fee tier selection a **strategic runtime configuration decision**. It is still important because every added candidate can increase read/quote latency, but it is no longer a contract-redeploy decision.
 
 ## Step 2: Contract Deployment for External Takes
 
@@ -518,7 +524,7 @@ Recommended rollout order:
 
 ### Pool Liquidity Verification
 
-**Critical for Production Success:** For Uniswap V3 and SushiSwap external takes, the current keeper uses the configured `defaultFeeTier` at runtime. It does not automatically probe better tiers per take, so your default needs to reflect the pairs you care about most.
+**Critical for Production Success:** For Uniswap V3 and SushiSwap external takes, the keeper prefers `defaultFeeTier` and can probe `candidateFeeTiers` per take. Keep the candidate list focused on tiers that are actually deployed and useful for your pairs; missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
 
 **For Uniswap V3:**
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) → your network
@@ -527,14 +533,14 @@ Recommended rollout order:
    - 500 (0.05%) - typically stablecoin pairs
    - 3000 (0.3%) - most common for major pairs
    - 10000 (1%) - exotic or volatile pairs
-4. Set `defaultFeeTier` to the highest-liquidity option for your most important pairs
+4. Set `defaultFeeTier` to the preferred route and add useful alternatives to `candidateFeeTiers`
 5. For LP rewards, set `fee: FeeAmount.MEDIUM` (or the appropriate tier)
 
 **For SushiSwap:**
 1. Check [SushiSwap Analytics](https://www.sushi.com/pool) → your network
 2. Verify pool existence and liquidity for your pairs
 3. Most SushiSwap pools use 500 (0.05%) or 3000 (0.3%) tiers
-4. Set `defaultFeeTier` to the best-supported option for your most important pairs
+4. Set `defaultFeeTier` to the best-supported option and add useful alternatives to `candidateFeeTiers`
 5. Use higher `defaultSlippage` (5-10%) when liquidity is thinner
 
 **For Curve:**
@@ -548,8 +554,9 @@ Recommended rollout order:
 
 **External Takes (Time-Sensitive):**
 - Execute during active auctions when timing is critical
-- Use the runtime `defaultFeeTier` from router overrides
-- Apply that same tier to quote evaluation and execution
+- Use the runtime `defaultFeeTier` as the preferred route
+- Can compare `candidateFeeTiers` and execute with the selected tier
+- Apply `takeRouteQuoteBudgetPerCandidate` after unavailable pools are filtered out
 - Cannot be customized per pool in the current config schema
 - Can be changed by updating config and restarting the keeper
 
@@ -565,6 +572,7 @@ Recommended rollout order:
 ```typescript
 universalRouterOverrides: {
   defaultFeeTier: 3000, // Optimize for most common pairs (WETH/USDC, etc.)
+  candidateFeeTiers: [500, 10000], // Optional targeted alternatives
   defaultSlippage: 0.5,
   // ... other settings
 }
@@ -764,7 +772,8 @@ const config: KeeperConfig = {
     universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
     wethAddress: '0x4200000000000000000000000000000000000006',
     permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
-    defaultFeeTier: 3000, // Global default for Uniswap external takes
+    defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
+    candidateFeeTiers: [500], // Optional targeted alternatives
     defaultSlippage: 0.5,
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
@@ -776,7 +785,8 @@ const config: KeeperConfig = {
     quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
-    defaultFeeTier: 3000, // Global default for SushiSwap external takes
+    defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
+    candidateFeeTiers: [500], // Optional targeted alternatives
     defaultSlippage: 1.0,
   },
   
@@ -1179,16 +1189,16 @@ This indicates the auction needs more settlement iterations or has complex debt 
 **External-Take Fee Tier Issues:**
 ```bash
 # Symptom: "External takes consistently unprofitable"
-# Cause: Keeper defaultFeeTier points at a weaker liquidity tier for the pairs you care about
-# Solution: Re-check liquidity, update defaultFeeTier, and restart the keeper
+# Cause: Keeper route policy points at weaker liquidity tiers for the pairs you care about
+# Solution: Re-check liquidity, update defaultFeeTier/candidateFeeTiers, and restart the keeper
 
 # Symptom: "High price impact on external takes"
-# Cause: External-take default is set to a low-liquidity tier for that pair
-# Solution: Change the default, route those pools through 1inch, or split those pools into a separate keeper config
+# Cause: No configured candidate route has enough liquidity for that pair
+# Solution: Add the deployed high-liquidity fee tier, route those pools through 1inch, or split those pools into a separate keeper config
 
 # Symptom: "LP rewards more profitable than external takes"
-# Cause: LP rewards can use per-pool fee overrides while external takes share one DEX default
-# Solution: Normal in mixed-pair deployments; consider separate keeper configs if the gap matters operationally
+# Cause: LP rewards can use per-pool fee overrides and are not constrained by active-auction take policy
+# Solution: Normal in mixed-pair deployments; consider candidate fee tiers or separate keeper configs if the gap matters operationally
 ```
 
 **SushiSwap Quote Provider Issues:**
@@ -1200,7 +1210,7 @@ This indicates the auction needs more settlement iterations or has complex debt 
 # Solution: Verify quoterV2Address and factory addresses
 
 # Log: "No SushiSwap pool for tokenA/tokenB with fee 3000"
-# Solution: Try different fee tier (500) or verify token addresses
+# Solution: Add the deployed fee tier to candidateFeeTiers or verify token addresses
 ```
 
 **Multi-DEX Factory Issues:**
