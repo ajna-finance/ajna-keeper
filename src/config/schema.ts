@@ -71,6 +71,8 @@ export enum LiquiditySource {
   CURVE = 4,
 }
 
+export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
+
 export enum CurvePoolType {
   STABLE = 'stable',
   CRYPTO = 'crypto',
@@ -191,7 +193,7 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    * supported here because it uses a separate aggregator execution path.
    */
   allowedLiquiditySources?: LiquiditySource[];
-  dexGasOverrides?: Partial<Record<LiquiditySource, string>>;
+  dexGasOverrides?: LiquiditySourceMap<string>;
 }
 
 export interface AutoDiscoverSettlementPolicy

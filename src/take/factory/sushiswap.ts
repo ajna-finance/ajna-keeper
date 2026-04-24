@@ -14,6 +14,10 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  formatFactoryExecutionLog,
+  formatFactoryPriceCheckLog,
+  formatFactoryQuoteRequestLog,
+  formatFactoryTakeSubmissionLog,
   getSlippageFloorQuoteRaw,
   getSushiSwapQuoteProvider,
   getSwapDeadline,
@@ -91,17 +95,22 @@ export async function evaluateSushiSwapFactoryQuote({
         runtimeCache,
       }));
 
-    logger.debug(
-      `Factory: Getting SushiSwap quote for ${ethers.utils.formatUnits(
-        context.collateralInTokenDecimals,
-        context.collateralTokenDecimals
-      )} collateral in pool ${pool.name}`
-    );
-
     const selectedFeeTier =
       feeTier ??
       sushiConfig.defaultFeeTier ??
       DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP];
+    logger.debug(
+      formatFactoryQuoteRequestLog({
+        source: LiquiditySource.SUSHISWAP,
+        poolName: pool.name,
+        collateralAmount: ethers.utils.formatUnits(
+          context.collateralInTokenDecimals,
+          context.collateralTokenDecimals
+        ),
+        feeTier: selectedFeeTier,
+      })
+    );
+
     const quoteResult = await quoteProvider.getQuote(
       context.collateralInTokenDecimals,
       pool.collateralAddress,
@@ -167,7 +176,15 @@ export async function evaluateSushiSwapFactoryQuote({
     });
 
     logger.debug(
-      `SushiSwap price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${(evaluation.marketPrice ?? 0).toFixed(4)}, takeable=${(evaluation.takeablePrice ?? 0).toFixed(4)}, feeTier=${selectedFeeTier}, profitable=${evaluation.isTakeable}`
+      formatFactoryPriceCheckLog({
+        source: LiquiditySource.SUSHISWAP,
+        poolName: pool.name,
+        auctionPrice,
+        marketPrice: evaluation.marketPrice,
+        takeablePrice: evaluation.takeablePrice,
+        feeTier: selectedFeeTier,
+        profitable: evaluation.isTakeable,
+      })
     );
 
     return evaluation;
@@ -224,10 +241,13 @@ export async function executeSushiSwapFactoryTake({
   const deadline = await getSwapDeadline(signer);
 
   logger.debug(
-    `Factory: Using WAD amounts for SushiSwap pool ${pool.name}:\n` +
-      `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
-      `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
-      `  Minimal Amount Out: ${minimalAmountOut.toString()} (quoted bound)`
+    formatFactoryExecutionLog({
+      source: LiquiditySource.SUSHISWAP,
+      poolName: pool.name,
+      collateralWad: liquidation.collateral,
+      auctionPriceWad: liquidation.auctionPrice,
+      minimalAmountOut,
+    })
   );
 
   const swapDetails = {
@@ -245,7 +265,11 @@ export async function executeSushiSwapFactoryTake({
 
   try {
     logger.debug(
-      `Factory: Sending SushiSwap Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
+      formatFactoryTakeSubmissionLog({
+        source: LiquiditySource.SUSHISWAP,
+        poolAddress: pool.poolAddress,
+        borrower: liquidation.borrower,
+      })
     );
 
     await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {

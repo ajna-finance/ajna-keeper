@@ -14,6 +14,10 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  formatFactoryExecutionLog,
+  formatFactoryPriceCheckLog,
+  formatFactoryQuoteRequestLog,
+  formatFactoryTakeSubmissionLog,
   getSlippageFloorQuoteRaw,
   getUniswapV3QuoteProvider,
   getSwapDeadline,
@@ -94,17 +98,22 @@ export async function evaluateUniswapV3FactoryQuote({
         runtimeCache,
       }));
 
-    logger.debug(
-      `Factory: Getting official Uniswap V3 quote for ${ethers.utils.formatUnits(
-        context.collateralInTokenDecimals,
-        context.collateralTokenDecimals
-      )} collateral in pool ${pool.name}`
-    );
-
     const selectedFeeTier =
       feeTier ??
       routerConfig.defaultFeeTier ??
       DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3];
+    logger.debug(
+      formatFactoryQuoteRequestLog({
+        source: LiquiditySource.UNISWAPV3,
+        poolName: pool.name,
+        collateralAmount: ethers.utils.formatUnits(
+          context.collateralInTokenDecimals,
+          context.collateralTokenDecimals
+        ),
+        feeTier: selectedFeeTier,
+      })
+    );
+
     const quoteResult = await quoteProvider.getQuote(
       context.collateralInTokenDecimals,
       pool.collateralAddress,
@@ -171,7 +180,15 @@ export async function evaluateUniswapV3FactoryQuote({
     });
 
     logger.debug(
-      `Price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${(evaluation.marketPrice ?? 0).toFixed(4)}, takeable=${(evaluation.takeablePrice ?? 0).toFixed(4)}, source=UNISWAPV3 feeTier=${selectedFeeTier}, profitable=${evaluation.isTakeable}`
+      formatFactoryPriceCheckLog({
+        source: LiquiditySource.UNISWAPV3,
+        poolName: pool.name,
+        auctionPrice,
+        marketPrice: evaluation.marketPrice,
+        takeablePrice: evaluation.takeablePrice,
+        feeTier: selectedFeeTier,
+        profitable: evaluation.isTakeable,
+      })
     );
 
     return evaluation;
@@ -228,10 +245,13 @@ export async function executeUniswapV3FactoryTake({
   const deadline = await getSwapDeadline(signer);
 
   logger.debug(
-    `Factory: Executing Uniswap V3 take for pool ${pool.name}:\n` +
-      `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
-      `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
-      `  Minimal Amount Out: ${minimalAmountOut.toString()} (quoted bound)`
+    formatFactoryExecutionLog({
+      source: LiquiditySource.UNISWAPV3,
+      poolName: pool.name,
+      collateralWad: liquidation.collateral,
+      auctionPriceWad: liquidation.auctionPrice,
+      minimalAmountOut,
+    })
   );
 
   const swapDetails = {
@@ -257,7 +277,11 @@ export async function executeUniswapV3FactoryTake({
 
   try {
     logger.debug(
-      `Factory: Sending Uniswap V3 Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
+      formatFactoryTakeSubmissionLog({
+        source: LiquiditySource.UNISWAPV3,
+        poolAddress: pool.poolAddress,
+        borrower: liquidation.borrower,
+      })
     );
 
     await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {

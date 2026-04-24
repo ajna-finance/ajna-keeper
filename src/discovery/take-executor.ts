@@ -1,6 +1,10 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { LiquiditySource, getAutoDiscoverTakePolicy } from '../config';
+import {
+  LiquiditySource,
+  LiquiditySourceMap,
+  getAutoDiscoverTakePolicy,
+} from '../config';
 import { ResolvedTakeTarget } from './targets';
 import { logger } from '../logging';
 import {
@@ -209,15 +213,9 @@ async function buildFactoryRouteProfitabilityContext(params: {
           quoteTokenDecimals
         )
       : ZERO;
-  const routeExecutionCostQuoteRawBySource: Partial<
-    Record<LiquiditySource, BigNumber>
-  > = {};
-  const nativeProfitFloorQuoteRawBySource: Partial<
-    Record<LiquiditySource, BigNumber>
-  > = {};
-  const routeRejectionReasonsBySource: Partial<
-    Record<LiquiditySource, string>
-  > = {};
+  const routeExecutionCostQuoteRawBySource: LiquiditySourceMap<BigNumber> = {};
+  const nativeProfitFloorQuoteRawBySource: LiquiditySourceMap<BigNumber> = {};
+  const routeRejectionReasonsBySource: LiquiditySourceMap<string> = {};
   const gasPolicyEvaluatedAt = Date.now();
 
   for (const source of sources) {

@@ -9,6 +9,7 @@ import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider'
 import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
 import * as erc20 from '../erc20';
 import {
+  filterFactoryRouteCandidatesByAvailability,
   getFactoryRouteCandidates,
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
@@ -801,6 +802,166 @@ describe('Take Factory', () => {
       expect(decimalsStub.calledTwice).to.be.true;
       expect(quoteTokenScaleStub.calledOnce).to.be.true;
       expect(runtimeCache.recentRouteSuccesses).to.equal(undefined);
+    });
+
+    it('rejects routes with gas conversion failures instead of ranking them with zero gas', async () => {
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      const uniswapPoolExistsStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'poolExists')
+        .resolves(true);
+      const uniswapQuoteStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+        .resolves({
+          success: true,
+          dstAmount: ethers.utils.parseUnits('500', 6),
+        } as any);
+      sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
+      sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(true);
+      const sushiQuoteStub = sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+        .resolves({
+          success: true,
+          dstAmount: ethers.utils.parseUnits('115', 6),
+        } as any);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Gas Conversion Rejection Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'Gas Conversion Rejection Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        universalRouterOverrides: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          defaultFeeTier: 3000,
+          wethAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+        },
+        sushiswapRouterOverrides: {
+          swapRouterAddress: '0x8888888888888888888888888888888888888888',
+          quoterV2Address: '0x9999999999999999999999999999999999999999',
+          factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          defaultFeeTier: 500,
+          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      };
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        {
+          allowedLiquiditySources: [
+            LiquiditySource.UNISWAPV3,
+            LiquiditySource.SUSHISWAP,
+          ],
+          routeProfitabilityContext: {
+            routeRejectionReasonsBySource: {
+              [LiquiditySource.UNISWAPV3]:
+                'failed to quote gas cost into quote token',
+            },
+            routeExecutionCostQuoteRawBySource: {
+              [LiquiditySource.SUSHISWAP]: ethers.utils.parseUnits('1', 6),
+            },
+          },
+        }
+      );
+
+      expect(evaluation.isTakeable).to.be.true;
+      expect(evaluation.selectedLiquiditySource).to.equal(
+        LiquiditySource.SUSHISWAP
+      );
+      expect(evaluation.selectedFeeTier).to.equal(500);
+      expect(
+        evaluation.routeProfitability?.routeExecutionCostQuoteRaw?.eq(
+          ethers.utils.parseUnits('1', 6)
+        )
+      ).to.be.true;
+      expect(uniswapPoolExistsStub.called).to.be.false;
+      expect(uniswapQuoteStub.called).to.be.false;
+      expect(sushiQuoteStub.calledOnce).to.be.true;
+    });
+
+    it('checks route availability with bounded parallelism while preserving route order', async () => {
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const poolExistsStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'poolExists')
+        .callsFake(async (_tokenA, _tokenB, feeTier?: number) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          const delayMs =
+            feeTier === 3000 ? 20 : feeTier === 500 ? 5 : feeTier === 100 ? 1 : 2;
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          inFlight -= 1;
+          return feeTier !== 3000;
+        });
+
+      const routes = [
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 3000 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 500 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 100 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 10_000 },
+      ];
+
+      const { availableRoutes, unavailableRoutes } =
+        await filterFactoryRouteCandidatesByAvailability({
+          routes,
+          pool: {
+            name: 'Parallel Availability Pool',
+            collateralAddress: '0x1111111111111111111111111111111111111111',
+            quoteAddress: '0x2222222222222222222222222222222222222222',
+          } as any,
+          signer: ethers.Wallet.createRandom().connect(
+            new ethers.providers.JsonRpcProvider()
+          ) as any,
+          config: {
+            universalRouterOverrides: {
+              universalRouterAddress:
+                '0x3333333333333333333333333333333333333333',
+              poolFactoryAddress:
+                '0x4444444444444444444444444444444444444444',
+              defaultFeeTier: 3000,
+              wethAddress: '0x5555555555555555555555555555555555555555',
+              quoterV2Address:
+                '0x6666666666666666666666666666666666666666',
+            },
+          } as any,
+        });
+
+      expect(poolExistsStub.callCount).to.equal(4);
+      expect(maxInFlight).to.be.greaterThan(1);
+      expect(maxInFlight).to.be.at.most(3);
+      expect(availableRoutes).to.deep.equal(routes.slice(1));
+      expect(unavailableRoutes).to.deep.equal([
+        {
+          route: routes[0],
+          reason: 'Uniswap V3 pool not found',
+        },
+      ]);
     });
 
     it('uses recent successful routes to improve budget-limited probing', async () => {

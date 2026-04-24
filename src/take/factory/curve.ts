@@ -14,6 +14,10 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  formatFactoryExecutionLog,
+  formatFactoryPriceCheckLog,
+  formatFactoryQuoteRequestLog,
+  formatFactoryTakeSubmissionLog,
   getCurveQuoteProvider,
   getSlippageFloorQuoteRaw,
   getSwapDeadline,
@@ -22,6 +26,8 @@ import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
 } from '../write-transport';
+
+const CURVE_L2_PROPAGATION_DELAY_MS = 2_000;
 
 export async function evaluateCurveFactoryQuote({
   pool,
@@ -87,10 +93,14 @@ export async function evaluateCurveFactoryQuote({
       }));
 
     logger.debug(
-      `Factory: Getting Curve quote for ${ethers.utils.formatUnits(
-        context.collateralInTokenDecimals,
-        context.collateralTokenDecimals
-      )} collateral in pool ${pool.name}`
+      formatFactoryQuoteRequestLog({
+        source: LiquiditySource.CURVE,
+        poolName: pool.name,
+        collateralAmount: ethers.utils.formatUnits(
+          context.collateralInTokenDecimals,
+          context.collateralTokenDecimals
+        ),
+      })
     );
 
     const quoteResult = await quoteProvider.getQuote(
@@ -155,7 +165,14 @@ export async function evaluateCurveFactoryQuote({
     });
 
     logger.debug(
-      `Curve price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${(evaluation.marketPrice ?? 0).toFixed(4)}, takeable=${(evaluation.takeablePrice ?? 0).toFixed(4)}, profitable=${evaluation.isTakeable}`
+      formatFactoryPriceCheckLog({
+        source: LiquiditySource.CURVE,
+        poolName: pool.name,
+        auctionPrice,
+        marketPrice: evaluation.marketPrice,
+        takeablePrice: evaluation.takeablePrice,
+        profitable: evaluation.isTakeable,
+      })
     );
 
     return {
@@ -223,13 +240,18 @@ export async function executeCurveFactoryTake({
     const deadline = await getSwapDeadline(signer);
 
     logger.debug(
-      `Factory: Executing Curve take for pool ${pool.name}:\n` +
-        `  Pool Address: ${resolvedCurvePool.address}\n` +
-        `  Pool Type: ${resolvedCurvePool.poolType}\n` +
-        `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
-        `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
-        `  Token Indices: ${resolvedCurvePool.tokenInIndex} -> ${resolvedCurvePool.tokenOutIndex}\n` +
-        `  Minimal Amount Out: ${minimalAmountOut.toString()} (quoted bound)`
+      formatFactoryExecutionLog({
+        source: LiquiditySource.CURVE,
+        poolName: pool.name,
+        collateralWad: liquidation.collateral,
+        auctionPriceWad: liquidation.auctionPrice,
+        minimalAmountOut,
+        extraLines: [
+          `Pool Address: ${resolvedCurvePool.address}`,
+          `Pool Type: ${resolvedCurvePool.poolType}`,
+          `Token Indices: ${resolvedCurvePool.tokenInIndex} -> ${resolvedCurvePool.tokenOutIndex}`,
+        ],
+      })
     );
 
     const encodedSwapDetails = ethers.utils.defaultAbiCoder.encode(
@@ -245,13 +267,19 @@ export async function executeCurveFactoryTake({
     );
 
     logger.debug(
-      `Factory: Sending Curve Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
+      formatFactoryTakeSubmissionLog({
+        source: LiquiditySource.CURVE,
+        poolAddress: pool.poolAddress,
+        borrower: liquidation.borrower,
+      })
     );
 
     logger.debug(
-      'Adding 2000ms state propagation delay before factory take (L2 sequencer protection)'
+      `Adding ${CURVE_L2_PROPAGATION_DELAY_MS}ms state propagation delay before factory take (L2 sequencer protection)`
     );
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) =>
+      setTimeout(resolve, CURVE_L2_PROPAGATION_DELAY_MS)
+    );
 
     await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {
       const fallbackGasLimit = ethers.BigNumber.from(1_500_000);

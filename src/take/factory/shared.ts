@@ -5,6 +5,7 @@ import {
   DEFAULT_FEE_TIER_BY_SOURCE,
   KeeperConfig,
   LiquiditySource,
+  LiquiditySourceMap,
   PoolConfig,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
@@ -41,15 +42,11 @@ export interface FactoryRouteSelectionOptions {
 }
 
 export interface FactoryRouteProfitabilityContext {
-  routeExecutionCostQuoteRawBySource?: Partial<
-    Record<LiquiditySource, BigNumber>
-  >;
-  nativeProfitFloorQuoteRawBySource?: Partial<
-    Record<LiquiditySource, BigNumber>
-  >;
+  routeExecutionCostQuoteRawBySource?: LiquiditySourceMap<BigNumber>;
+  nativeProfitFloorQuoteRawBySource?: LiquiditySourceMap<BigNumber>;
   configuredProfitFloorQuoteRaw?: BigNumber;
   slippageRiskBufferQuoteRaw?: BigNumber;
-  routeRejectionReasonsBySource?: Partial<Record<LiquiditySource, string>>;
+  routeRejectionReasonsBySource?: LiquiditySourceMap<string>;
   gasPolicyEvaluatedAt?: number;
 }
 
@@ -118,6 +115,7 @@ const ZERO = BigNumber.from(0);
 const MAX_RECENT_ROUTE_SUCCESSES = 512;
 const MAX_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 const MAX_QUOTE_TOKEN_SCALE_CACHE_ENTRIES = 512;
+const FACTORY_ROUTE_AVAILABILITY_CONCURRENCY = 3;
 
 function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
   while (map.size > maxSize) {
@@ -232,6 +230,80 @@ export function formatFactoryRouteCandidate(
   return route.feeTier !== undefined
     ? `${source}:${route.feeTier}`
     : `${source}:configured`;
+}
+
+function getFactoryRouteSourceLabel(source: LiquiditySource): string {
+  switch (source) {
+    case LiquiditySource.ONEINCH:
+      return '1inch';
+    case LiquiditySource.UNISWAPV3:
+      return 'Uniswap V3';
+    case LiquiditySource.SUSHISWAP:
+      return 'SushiSwap';
+    case LiquiditySource.CURVE:
+      return 'Curve';
+    default:
+      return LiquiditySource[source] ?? String(source);
+  }
+}
+
+export function formatFactoryQuoteRequestLog(params: {
+  source: LiquiditySource;
+  poolName: string;
+  collateralAmount: string;
+  feeTier?: number;
+}): string {
+  const feeTier =
+    params.feeTier !== undefined ? ` feeTier=${params.feeTier}` : '';
+  return `Factory: Getting ${getFactoryRouteSourceLabel(params.source)} quote for ${params.collateralAmount} collateral in pool ${params.poolName}${feeTier}`;
+}
+
+export function formatFactoryPriceCheckLog(params: {
+  source: LiquiditySource;
+  poolName: string;
+  auctionPrice: number;
+  marketPrice?: number;
+  takeablePrice?: number;
+  feeTier?: number;
+  profitable: boolean;
+}): string {
+  const feeTier =
+    params.feeTier !== undefined ? ` feeTier=${params.feeTier}` : '';
+  return (
+    `Factory: price check source=${getFactoryRouteSourceLabel(params.source)} pool=${params.poolName}` +
+    ` auction=${params.auctionPrice.toFixed(4)}` +
+    ` market=${(params.marketPrice ?? 0).toFixed(4)}` +
+    ` takeable=${(params.takeablePrice ?? 0).toFixed(4)}` +
+    `${feeTier} profitable=${params.profitable}`
+  );
+}
+
+export function formatFactoryExecutionLog(params: {
+  source: LiquiditySource;
+  poolName: string;
+  collateralWad: BigNumber;
+  auctionPriceWad: BigNumber;
+  minimalAmountOut: BigNumber;
+  extraLines?: string[];
+}): string {
+  const extraLines = params.extraLines?.length
+    ? `${params.extraLines.map((line) => `\n  ${line}`).join('')}`
+    : '';
+  return (
+    `Factory: Executing ${getFactoryRouteSourceLabel(params.source)} take for pool ${params.poolName}:` +
+    `${extraLines}\n` +
+    `  Collateral (WAD): ${params.collateralWad.toString()}\n` +
+    `  Auction Price (WAD): ${params.auctionPriceWad.toString()}\n` +
+    `  Minimal Amount Out: ${params.minimalAmountOut.toString()} (quoted bound)`
+  );
+}
+
+export function formatFactoryTakeSubmissionLog(params: {
+  source: LiquiditySource;
+  poolAddress: string;
+  borrower: string;
+}): string {
+  return `Factory: Sending ${getFactoryRouteSourceLabel(params.source)} Take Tx - poolAddress: ${params.poolAddress}, borrower: ${params.borrower}`;
 }
 
 export function getFactoryRouteKey(params: {
@@ -628,12 +700,30 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
 }> {
   const availableRoutes: FactoryRouteCandidate[] = [];
   const unavailableRoutes: FactoryRouteAvailabilitySkip[] = [];
+  const availabilityResults: FactoryRouteAvailabilityResult[] = new Array(
+    params.routes.length
+  );
+  let nextRouteIndex = 0;
+  const workerCount = Math.min(
+    FACTORY_ROUTE_AVAILABILITY_CONCURRENCY,
+    params.routes.length
+  );
 
-  for (const route of params.routes) {
-    const availability = await checkFactoryRouteCandidateAvailability({
-      ...params,
-      route,
-    });
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextRouteIndex < params.routes.length) {
+        const routeIndex = nextRouteIndex;
+        nextRouteIndex += 1;
+        availabilityResults[routeIndex] =
+          await checkFactoryRouteCandidateAvailability({
+            ...params,
+            route: params.routes[routeIndex],
+          });
+      }
+    })
+  );
+
+  for (const availability of availabilityResults) {
     if (availability.available) {
       availableRoutes.push(availability.route);
     } else {
