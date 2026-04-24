@@ -71,6 +71,8 @@ export enum LiquiditySource {
   CURVE = 4,
 }
 
+export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
+
 export enum CurvePoolType {
   STABLE = 'stable',
   CRYPTO = 'crypto',
@@ -165,8 +167,33 @@ export interface AutoDiscoverActionPolicy {
 }
 
 export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
+  /**
+   * Quote-token profit floor in human token units. When both this and
+   * minProfitNative are set, the effective floor is the stricter of this
+   * quote-denominated floor and the freshly converted native floor.
+   *
+   * Prefer minProfitNative for cross-token keeper operations where quote assets
+   * differ across discovered pools.
+   */
   minExpectedProfitQuote?: number;
+  /**
+   * Native-token profit floor in wei. Quoted fresh into each candidate's quote
+   * token for external takes; arb-takes are skipped when this is set because
+   * they do not produce quote-normalized profit.
+   */
+  minProfitNative?: string;
   takeQuoteBudgetPerRun?: number;
+  /**
+   * Maximum factory-route quote probes per liquidation candidate. Only applies
+   * when discoveredDefaults.take.liquiditySource is a factory route source.
+   */
+  takeRouteQuoteBudgetPerCandidate?: number;
+  /**
+   * Factory-route sources eligible for dynamic route selection. 1inch is not
+   * supported here because it uses a separate aggregator execution path.
+   */
+  allowedLiquiditySources?: LiquiditySource[];
+  dexGasOverrides?: LiquiditySourceMap<string>;
 }
 
 export interface AutoDiscoverSettlementPolicy
@@ -262,6 +289,7 @@ export interface UniversalRouterOverrides {
   permit2Address?: string;
   poolFactoryAddress?: string;
   defaultFeeTier?: number;
+  candidateFeeTiers?: number[];
   defaultSlippage?: number;
   quoterV2Address?: string;
   wethAddress?: string;
@@ -272,6 +300,7 @@ export interface SushiswapRouterOverrides {
   quoterV2Address?: string;
   factoryAddress?: string;
   defaultFeeTier?: number;
+  candidateFeeTiers?: number[];
   defaultSlippage?: number;
   wethAddress?: string;
 }

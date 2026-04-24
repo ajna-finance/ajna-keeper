@@ -15,6 +15,8 @@ const STABLESWAP_ABI = [
   'function fee() external view returns (uint256)',
 ];
 
+const MAX_CURVE_TOKEN_INDEX_PROBES = 16;
+
 // CryptoSwap ABI (uint256 indices) - from working test scripts
 const CRYPTOSWAP_ABI = [
   'function coins(uint256 i) external view returns (address)',
@@ -49,6 +51,11 @@ interface QuoteResult {
   error?: string;
   gasEstimate?: BigNumber;
   selectedPool?: CurvePoolSelection;
+}
+
+interface QuoteDecimals {
+  inputDecimals: number;
+  outputDecimals: number;
 }
 
 /**
@@ -307,8 +314,8 @@ export class CurveQuoteProvider {
     let tokenInIndex: number | undefined;
     let tokenOutIndex: number | undefined;
 
-    // Discover token indices (pattern from test scripts)
-    for (let i = 0; i < 8; i++) {
+    // Probe enough slots to handle larger metapools while still stopping on the first out-of-range revert.
+    for (let i = 0; i < MAX_CURVE_TOKEN_INDEX_PROBES; i++) {
       try {
         const tokenAddr = await poolContract.coins(i);
         if (tokenAddr.toLowerCase() === tokenInForLookup.toLowerCase()) tokenInIndex = i;
@@ -327,7 +334,8 @@ export class CurveQuoteProvider {
   async getQuote(
     amountIn: BigNumber,
     tokenIn: string,
-    tokenOut: string
+    tokenOut: string,
+    decimals?: QuoteDecimals
   ): Promise<QuoteResult> {
     try {
       if (!this.isInitialized) {
@@ -384,8 +392,10 @@ export class CurveQuoteProvider {
       }
 
       // Get correct decimals for proper formatting
-      const inputDecimals = await getDecimalsErc20(this.signer, tokenIn);
-      const outputDecimals = await getDecimalsErc20(this.signer, tokenOut);
+      const inputDecimals =
+        decimals?.inputDecimals ?? (await getDecimalsErc20(this.signer, tokenIn));
+      const outputDecimals =
+        decimals?.outputDecimals ?? (await getDecimalsErc20(this.signer, tokenOut));
 
       logger.debug(`Curve quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`);
 

@@ -192,12 +192,7 @@ describe('Factory slippage bound', function () {
       quoteEvaluation: {
         isTakeable: true,
         quoteAmountRaw: quotedAmountRaw,
-      },
-      liquiditySource: LiquiditySource.SUSHISWAP,
-      config: {
-        sushiswapRouterOverrides: {
-          defaultSlippage: 1.0,
-        },
+        approvedMinOutRaw: quotedAmountRaw.mul(99).div(100),
       },
       marketPriceFactor: 0.95,
     });

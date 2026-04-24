@@ -224,8 +224,8 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
             );
         }
 
-        // Execute the swap with conservative gas limit
-        (bool success, bytes memory result) = details.poolAddress.call{gas: 300000}(swapCalldata);
+        // Execute the swap using the transaction-level gas limit selected by the keeper.
+        (bool success, bytes memory result) = details.poolAddress.call(swapCalldata);
         if (!success) {
             revert SwapFailed();
         }

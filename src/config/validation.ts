@@ -2,9 +2,11 @@ import {
   KeeperConfig,
   LiquiditySource,
   PostAuctionDex,
+  SushiswapRouterOverrides,
   SettlementConfig,
   TakeSettings,
   TakeWriteTransportMode,
+  UniversalRouterOverrides,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   hasExternalTakeSettings,
@@ -14,6 +16,19 @@ import {
   hasConfiguredWrappedNativeAddress,
   resolveConfiguredGasQuoteLiquiditySource,
 } from './liquidity-source';
+import { logger } from '../logging';
+
+const FACTORY_DYNAMIC_SOURCES = [
+  LiquiditySource.UNISWAPV3,
+  LiquiditySource.SUSHISWAP,
+  LiquiditySource.CURVE,
+];
+const MAX_UINT24_FEE_TIER = 16_777_215;
+const MAX_CANDIDATE_FEE_TIERS = 8;
+const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
+const MAX_DEX_GAS_OVERRIDE = BigInt(2_000_000);
+const MAX_MIN_PROFIT_NATIVE_WEI = BigInt('1000000000000000000000000000');
+const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,
@@ -30,6 +45,165 @@ function validateQuoteDenominatedGasPolicy(
       `${fieldName} requires a configured wrapped native token address`
     );
   }
+}
+
+function validateDecimalStringBigInt(value: unknown, fieldName: string): void {
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
+    throw new Error(
+      `${fieldName} must be a non-negative decimal integer string`
+    );
+  }
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function requirePositive(value: unknown, message: string): void {
+  if (!isFiniteNumber(value) || value <= 0) {
+    throw new Error(message);
+  }
+}
+
+function requireNonNegative(value: unknown, message: string): void {
+  if (!isFiniteNumber(value) || value < 0) {
+    throw new Error(message);
+  }
+}
+
+function requireOptionalPositive(value: unknown, message: string): void {
+  if (value !== undefined) {
+    requirePositive(value, message);
+  }
+}
+
+function requireOptionalNonNegative(value: unknown, message: string): void {
+  if (value !== undefined) {
+    requireNonNegative(value, message);
+  }
+}
+
+function validateCandidateFeeTiers(
+  tiers: number[] | undefined,
+  defaultFeeTier: number | undefined,
+  fieldName: string
+): void {
+  if (defaultFeeTier !== undefined && !isValidFactoryFeeTier(defaultFeeTier)) {
+    throw new Error(
+      `${fieldName}: defaultFeeTier must be a positive uint24 fee tier`
+    );
+  }
+
+  if (tiers === undefined) {
+    return;
+  }
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    throw new Error(
+      `${fieldName}: candidateFeeTiers must be a non-empty array`
+    );
+  }
+  if (tiers.length > MAX_CANDIDATE_FEE_TIERS) {
+    throw new Error(
+      `${fieldName}: candidateFeeTiers cannot contain more than ${MAX_CANDIDATE_FEE_TIERS} entries`
+    );
+  }
+
+  const seen = new Set<number>();
+  for (const tier of tiers) {
+    if (!isValidFactoryFeeTier(tier)) {
+      throw new Error(
+        `${fieldName}: candidateFeeTiers must contain only positive uint24 fee tiers`
+      );
+    }
+    if (seen.has(tier)) {
+      throw new Error(
+        `${fieldName}: candidateFeeTiers cannot contain duplicates`
+      );
+    }
+    if (!STANDARD_V3_FEE_TIERS.has(tier)) {
+      logger.warn(
+        `${fieldName}: candidateFeeTiers includes non-standard fee tier ${tier}; verify this tier is deployed on the target DEX before production use`
+      );
+    }
+    seen.add(tier);
+  }
+}
+
+function isValidFactoryFeeTier(tier: number): boolean {
+  return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
+}
+
+function validateRouterFeeTiers(config: KeeperConfig): void {
+  const uniswapConfig: UniversalRouterOverrides | undefined =
+    config.universalRouterOverrides;
+  const sushiConfig: SushiswapRouterOverrides | undefined =
+    config.sushiswapRouterOverrides;
+  validateCandidateFeeTiers(
+    uniswapConfig?.candidateFeeTiers,
+    uniswapConfig?.defaultFeeTier,
+    'UniversalRouterOverrides'
+  );
+  validateCandidateFeeTiers(
+    sushiConfig?.candidateFeeTiers,
+    sushiConfig?.defaultFeeTier,
+    'SushiswapRouterOverrides'
+  );
+}
+
+function parseLiquiditySourceKey(source: string): LiquiditySource | undefined {
+  const parsed = Number(source);
+  if (!Number.isInteger(parsed)) {
+    return undefined;
+  }
+  return Object.values(LiquiditySource).includes(parsed)
+    ? (parsed as LiquiditySource)
+    : undefined;
+}
+
+function getEffectiveFactoryRouteSources(
+  discoveredTake: TakeSettings,
+  allowedLiquiditySources: LiquiditySource[] | undefined
+): Set<LiquiditySource> {
+  const sources = new Set<LiquiditySource>();
+  const configuredSources =
+    allowedLiquiditySources !== undefined
+      ? allowedLiquiditySources
+      : discoveredTake.liquiditySource !== undefined
+        ? [discoveredTake.liquiditySource]
+        : [];
+
+  for (const source of configuredSources) {
+    if (FACTORY_DYNAMIC_SOURCES.includes(source)) {
+      sources.add(source);
+    }
+  }
+  return sources;
+}
+
+function getEffectiveTakeGasOverrideSources(
+  discoveredTake: TakeSettings,
+  allowedLiquiditySources: LiquiditySource[] | undefined
+): Set<LiquiditySource> {
+  const sources = getEffectiveFactoryRouteSources(
+    discoveredTake,
+    allowedLiquiditySources
+  );
+  if (
+    allowedLiquiditySources === undefined &&
+    discoveredTake.liquiditySource === LiquiditySource.ONEINCH
+  ) {
+    sources.add(LiquiditySource.ONEINCH);
+  }
+  return sources;
+}
+
+function isFactoryDynamicSource(
+  source: LiquiditySource | undefined
+): source is
+  | LiquiditySource.UNISWAPV3
+  | LiquiditySource.SUSHISWAP
+  | LiquiditySource.CURVE {
+  return source !== undefined && FACTORY_DYNAMIC_SOURCES.includes(source);
 }
 
 export function validatePostAuctionDex(
@@ -101,12 +275,10 @@ export function validateTakeSettings(
       );
     }
 
-    if (
-      config.marketPriceFactor === undefined ||
-      config.marketPriceFactor <= 0
-    ) {
-      throw new Error('TakeSettings: marketPriceFactor must be positive');
-    }
+    requirePositive(
+      config.marketPriceFactor,
+      'TakeSettings: marketPriceFactor must be positive'
+    );
 
     if (config.liquiditySource === LiquiditySource.ONEINCH) {
       if (!keeperConfig.keeperTaker) {
@@ -153,10 +325,11 @@ export function validateTakeSettings(
         !routerOverrides.universalRouterAddress ||
         !routerOverrides.permit2Address ||
         !routerOverrides.poolFactoryAddress ||
-        !routerOverrides.wethAddress
+        !routerOverrides.wethAddress ||
+        !routerOverrides.quoterV2Address
       ) {
         throw new Error(
-          'TakeSettings: universalRouterOverrides.universalRouterAddress, permit2Address, poolFactoryAddress, and wethAddress required when liquiditySource is UNISWAPV3'
+          'TakeSettings: universalRouterOverrides.universalRouterAddress, permit2Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
         );
       }
     }
@@ -184,10 +357,11 @@ export function validateTakeSettings(
       if (
         !routerOverrides.swapRouterAddress ||
         !routerOverrides.factoryAddress ||
-        !routerOverrides.wethAddress
+        !routerOverrides.wethAddress ||
+        !routerOverrides.quoterV2Address
       ) {
         throw new Error(
-          'TakeSettings: sushiswapRouterOverrides.swapRouterAddress, factoryAddress, and wethAddress required when liquiditySource is SUSHISWAP'
+          'TakeSettings: sushiswapRouterOverrides.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
         );
       }
     }
@@ -232,15 +406,14 @@ export function validateTakeSettings(
   }
 
   if (hasArbTake) {
-    if (config.minCollateral! <= 0) {
-      throw new Error('TakeSettings: minCollateral must be greater than 0');
-    }
-    if (
-      config.hpbPriceFactor === undefined ||
-      config.hpbPriceFactor <= 0
-    ) {
-      throw new Error('TakeSettings: hpbPriceFactor must be positive');
-    }
+    requirePositive(
+      config.minCollateral,
+      'TakeSettings: minCollateral must be greater than 0'
+    );
+    requirePositive(
+      config.hpbPriceFactor,
+      'TakeSettings: hpbPriceFactor must be positive'
+    );
   }
 }
 
@@ -250,25 +423,26 @@ export function validateSettlementSettings(config: SettlementConfig): void {
       'SettlementConfig: enabled must be true for active settlement targets'
     );
   }
-  if (config.minAuctionAge !== undefined && config.minAuctionAge < 0) {
-    throw new Error('SettlementConfig: minAuctionAge cannot be negative');
-  }
-  if (config.maxBucketDepth !== undefined && config.maxBucketDepth <= 0) {
-    throw new Error(
-      'SettlementConfig: maxBucketDepth must be greater than 0'
-    );
-  }
-  if (config.maxIterations !== undefined && config.maxIterations <= 0) {
-    throw new Error(
-      'SettlementConfig: maxIterations must be greater than 0'
-    );
-  }
+  requireOptionalNonNegative(
+    config.minAuctionAge,
+    'SettlementConfig: minAuctionAge cannot be negative'
+  );
+  requireOptionalPositive(
+    config.maxBucketDepth,
+    'SettlementConfig: maxBucketDepth must be greater than 0'
+  );
+  requireOptionalPositive(
+    config.maxIterations,
+    'SettlementConfig: maxIterations must be greater than 0'
+  );
 }
 
 export function validateAutoDiscoverConfig(
   config: KeeperConfig,
   chainId?: number
 ): void {
+  validateRouterFeeTiers(config);
+
   const autoDiscover = config.autoDiscover;
   if (!autoDiscover?.enabled) {
     return;
@@ -277,71 +451,66 @@ export function validateAutoDiscoverConfig(
   const settlementPolicy = getAutoDiscoverSettlementPolicy(autoDiscover);
 
   if (autoDiscover.kick) {
-    throw new Error('AutoDiscoverConfig: kick discovery is not supported in V1');
+    throw new Error(
+      'AutoDiscoverConfig: kick discovery is not supported in V1'
+    );
   }
   if (!takePolicy && !settlementPolicy) {
     throw new Error(
       'AutoDiscoverConfig: enable at least one of take or settlement'
     );
   }
-  if (
-    autoDiscover.hydrateCooldownSec !== undefined &&
-    autoDiscover.hydrateCooldownSec < 0
-  ) {
-    throw new Error(
-      'AutoDiscoverConfig: hydrateCooldownSec cannot be negative'
-    );
-  }
+  requireOptionalNonNegative(
+    autoDiscover.hydrateCooldownSec,
+    'AutoDiscoverConfig: hydrateCooldownSec cannot be negative'
+  );
 
   if (takePolicy) {
-    if (
-      takePolicy.maxPoolsPerRun !== undefined &&
-      takePolicy.maxPoolsPerRun <= 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.take: maxPoolsPerRun must be greater than 0'
+    requireOptionalPositive(
+      takePolicy.maxPoolsPerRun,
+      'AutoDiscoverConfig.take: maxPoolsPerRun must be greater than 0'
+    );
+    requireOptionalPositive(
+      takePolicy.takeQuoteBudgetPerRun,
+      'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be greater than 0'
+    );
+    requireOptionalPositive(
+      takePolicy.takeRouteQuoteBudgetPerCandidate,
+      'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be greater than 0'
+    );
+    requireOptionalNonNegative(
+      takePolicy.minExpectedProfitQuote,
+      'AutoDiscoverConfig.take: minExpectedProfitQuote cannot be negative'
+    );
+    if (takePolicy.minProfitNative !== undefined) {
+      validateDecimalStringBigInt(
+        takePolicy.minProfitNative,
+        'AutoDiscoverConfig.take: minProfitNative'
       );
+      const minProfitNativeWei = BigInt(takePolicy.minProfitNative);
+      if (minProfitNativeWei === BigInt(0)) {
+        logger.warn(
+          'AutoDiscoverConfig.take: minProfitNative is set to 0; this is equivalent to disabling the native profit floor'
+        );
+      }
+      if (minProfitNativeWei > MAX_MIN_PROFIT_NATIVE_WEI) {
+        throw new Error(
+          `AutoDiscoverConfig.take: minProfitNative must not exceed ${MAX_MIN_PROFIT_NATIVE_WEI.toString()} wei`
+        );
+      }
     }
-    if (
-      takePolicy.takeQuoteBudgetPerRun !== undefined &&
-      takePolicy.takeQuoteBudgetPerRun <= 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be greater than 0'
-      );
-    }
-    if (
-      takePolicy.minExpectedProfitQuote !== undefined &&
-      takePolicy.minExpectedProfitQuote < 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.take: minExpectedProfitQuote cannot be negative'
-      );
-    }
-    if (
-      takePolicy.maxGasPriceGwei !== undefined &&
-      takePolicy.maxGasPriceGwei <= 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.take: maxGasPriceGwei must be greater than 0'
-      );
-    }
-    if (
-      takePolicy.maxGasCostNative !== undefined &&
-      takePolicy.maxGasCostNative < 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.take: maxGasCostNative cannot be negative'
-      );
-    }
-    if (
-      takePolicy.maxGasCostQuote !== undefined &&
-      takePolicy.maxGasCostQuote < 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.take: maxGasCostQuote cannot be negative'
-      );
-    }
+    requireOptionalPositive(
+      takePolicy.maxGasPriceGwei,
+      'AutoDiscoverConfig.take: maxGasPriceGwei must be greater than 0'
+    );
+    requireOptionalNonNegative(
+      takePolicy.maxGasCostNative,
+      'AutoDiscoverConfig.take: maxGasCostNative cannot be negative'
+    );
+    requireOptionalNonNegative(
+      takePolicy.maxGasCostQuote,
+      'AutoDiscoverConfig.take: maxGasCostQuote cannot be negative'
+    );
 
     const discoveredTake = config.discoveredDefaults?.take;
     if (!discoveredTake) {
@@ -350,7 +519,127 @@ export function validateAutoDiscoverConfig(
       );
     }
 
-    validateTakeSettings(discoveredTake, config, chainId);
+    const discoveredTakeUsesFactory = isFactoryDynamicSource(
+      discoveredTake.liquiditySource
+    );
+    if (
+      takePolicy.takeRouteQuoteBudgetPerCandidate !== undefined &&
+      !discoveredTakeUsesFactory
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
+      );
+    }
+
+    if (takePolicy.allowedLiquiditySources !== undefined) {
+      if (!discoveredTakeUsesFactory) {
+        throw new Error(
+          'AutoDiscoverConfig.take: allowedLiquiditySources requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
+        );
+      }
+      if (takePolicy.allowedLiquiditySources.length === 0) {
+        throw new Error(
+          'AutoDiscoverConfig.take: allowedLiquiditySources must be non-empty'
+        );
+      }
+      const seenSources = new Set<LiquiditySource>();
+      for (const source of takePolicy.allowedLiquiditySources) {
+        if (seenSources.has(source)) {
+          throw new Error(
+            'AutoDiscoverConfig.take: allowedLiquiditySources cannot contain duplicates'
+          );
+        }
+        seenSources.add(source);
+        if (source === LiquiditySource.ONEINCH) {
+          throw new Error(
+            'AutoDiscoverConfig.take: allowedLiquiditySources cannot include ONEINCH for factory external takes'
+          );
+        }
+        if (!FACTORY_DYNAMIC_SOURCES.includes(source)) {
+          throw new Error(
+            'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3, SUSHISWAP, and CURVE'
+          );
+        }
+        validateTakeSettings(
+          {
+            ...discoveredTake,
+            liquiditySource: source,
+          },
+          config,
+          chainId
+        );
+      }
+    } else {
+      validateTakeSettings(discoveredTake, config, chainId);
+    }
+
+    const effectiveFactorySources = getEffectiveFactoryRouteSources(
+      discoveredTake,
+      takePolicy.allowedLiquiditySources
+    );
+    const effectiveTakeGasOverrideSources = getEffectiveTakeGasOverrideSources(
+      discoveredTake,
+      takePolicy.allowedLiquiditySources
+    );
+    if (
+      config.universalRouterOverrides?.candidateFeeTiers !== undefined &&
+      !effectiveFactorySources.has(LiquiditySource.UNISWAPV3)
+    ) {
+      logger.warn(
+        'UniversalRouterOverrides: candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
+      );
+    }
+    if (
+      config.sushiswapRouterOverrides?.candidateFeeTiers !== undefined &&
+      !effectiveFactorySources.has(LiquiditySource.SUSHISWAP)
+    ) {
+      logger.warn(
+        'SushiswapRouterOverrides: candidateFeeTiers configured but SUSHISWAP is not an enabled autodiscover factory route source'
+      );
+    }
+
+    if (takePolicy.dexGasOverrides !== undefined) {
+      for (const [source, value] of Object.entries(
+        takePolicy.dexGasOverrides
+      )) {
+        if (value === undefined) {
+          continue;
+        }
+        const liquiditySource = parseLiquiditySourceKey(source);
+        const sourceLabel =
+          liquiditySource !== undefined
+            ? LiquiditySource[liquiditySource]
+            : source;
+        if (liquiditySource === undefined) {
+          throw new Error(
+            `AutoDiscoverConfig.take: dexGasOverrides.${source} is not a valid LiquiditySource`
+          );
+        }
+        if (
+          liquiditySource === LiquiditySource.ONEINCH &&
+          !effectiveTakeGasOverrideSources.has(liquiditySource)
+        ) {
+          throw new Error(
+            'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires discoveredDefaults.take.liquiditySource to be ONEINCH'
+          );
+        }
+        if (!effectiveTakeGasOverrideSources.has(liquiditySource)) {
+          throw new Error(
+            `AutoDiscoverConfig.take: dexGasOverrides.${sourceLabel} is not enabled by the effective take liquidity sources`
+          );
+        }
+        validateDecimalStringBigInt(
+          value,
+          `AutoDiscoverConfig.take: dexGasOverrides.${source}`
+        );
+        const gas = BigInt(value);
+        if (gas < MIN_DEX_GAS_OVERRIDE || gas > MAX_DEX_GAS_OVERRIDE) {
+          throw new Error(
+            `AutoDiscoverConfig.take: dexGasOverrides.${source} must be between 100000 and 2000000`
+          );
+        }
+      }
+    }
 
     if (takePolicy.maxGasCostQuote !== undefined) {
       validateQuoteDenominatedGasPolicy(
@@ -359,13 +648,21 @@ export function validateAutoDiscoverConfig(
         chainId
       );
     }
+    if (takePolicy.minProfitNative !== undefined) {
+      validateQuoteDenominatedGasPolicy(
+        config,
+        'AutoDiscoverConfig.take: minProfitNative',
+        chainId
+      );
+    }
 
     if (
-      takePolicy.minExpectedProfitQuote !== undefined &&
+      (takePolicy.minExpectedProfitQuote !== undefined ||
+        takePolicy.minProfitNative !== undefined) &&
       !hasExternalTakeSettings(discoveredTake)
     ) {
       throw new Error(
-        'AutoDiscoverConfig: minExpectedProfitQuote requires discoveredDefaults.take to configure an external take path'
+        'AutoDiscoverConfig: quote-normalized profit floors require discoveredDefaults.take to configure an external take path'
       );
     }
     if (takePolicy.minExpectedProfitQuote !== undefined) {
@@ -378,38 +675,22 @@ export function validateAutoDiscoverConfig(
   }
 
   if (settlementPolicy) {
-    if (
-      settlementPolicy.maxPoolsPerRun !== undefined &&
-      settlementPolicy.maxPoolsPerRun <= 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.settlement: maxPoolsPerRun must be greater than 0'
-      );
-    }
-    if (
-      settlementPolicy.maxGasPriceGwei !== undefined &&
-      settlementPolicy.maxGasPriceGwei <= 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.settlement: maxGasPriceGwei must be greater than 0'
-      );
-    }
-    if (
-      settlementPolicy.maxGasCostNative !== undefined &&
-      settlementPolicy.maxGasCostNative < 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.settlement: maxGasCostNative cannot be negative'
-      );
-    }
-    if (
-      settlementPolicy.maxGasCostQuote !== undefined &&
-      settlementPolicy.maxGasCostQuote < 0
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.settlement: maxGasCostQuote cannot be negative'
-      );
-    }
+    requireOptionalPositive(
+      settlementPolicy.maxPoolsPerRun,
+      'AutoDiscoverConfig.settlement: maxPoolsPerRun must be greater than 0'
+    );
+    requireOptionalPositive(
+      settlementPolicy.maxGasPriceGwei,
+      'AutoDiscoverConfig.settlement: maxGasPriceGwei must be greater than 0'
+    );
+    requireOptionalNonNegative(
+      settlementPolicy.maxGasCostNative,
+      'AutoDiscoverConfig.settlement: maxGasCostNative cannot be negative'
+    );
+    requireOptionalNonNegative(
+      settlementPolicy.maxGasCostQuote,
+      'AutoDiscoverConfig.settlement: maxGasCostQuote cannot be negative'
+    );
     if (settlementPolicy.maxGasCostQuote !== undefined) {
       validateQuoteDenominatedGasPolicy(
         config,
@@ -457,14 +738,10 @@ export function validateTakeWriteConfig(config: KeeperConfig): void {
 
   switch (config.takeWrite.mode) {
     case TakeWriteTransportMode.PUBLIC_RPC:
-      if (
-        config.takeWrite.receiptTimeoutMs !== undefined &&
-        config.takeWrite.receiptTimeoutMs <= 0
-      ) {
-        throw new Error(
-          'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
-        );
-      }
+      requireOptionalPositive(
+        config.takeWrite.receiptTimeoutMs,
+        'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+      );
       return;
     case TakeWriteTransportMode.PRIVATE_RPC:
       if (!config.takeWrite.rpcUrl) {
@@ -472,14 +749,10 @@ export function validateTakeWriteConfig(config: KeeperConfig): void {
           'KeeperConfig.takeWrite: rpcUrl required when mode is private_rpc'
         );
       }
-      if (
-        config.takeWrite.receiptTimeoutMs !== undefined &&
-        config.takeWrite.receiptTimeoutMs <= 0
-      ) {
-        throw new Error(
-          'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
-        );
-      }
+      requireOptionalPositive(
+        config.takeWrite.receiptTimeoutMs,
+        'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+      );
       return;
     case TakeWriteTransportMode.RELAY:
       if (!config.takeWrite.relay?.url) {
@@ -487,38 +760,22 @@ export function validateTakeWriteConfig(config: KeeperConfig): void {
           'KeeperConfig.takeWrite: relay.url required when mode is relay'
         );
       }
-      if (
-        config.takeWrite.relay.maxBlockNumberOffset !== undefined &&
-        config.takeWrite.relay.maxBlockNumberOffset <= 0
-      ) {
-        throw new Error(
-          'KeeperConfig.takeWrite: relay.maxBlockNumberOffset must be greater than 0 when provided'
-        );
-      }
-      if (
-        config.takeWrite.relay.requestTimeoutMs !== undefined &&
-        config.takeWrite.relay.requestTimeoutMs <= 0
-      ) {
-        throw new Error(
-          'KeeperConfig.takeWrite: relay.requestTimeoutMs must be greater than 0 when provided'
-        );
-      }
-      if (
-        config.takeWrite.receiptTimeoutMs !== undefined &&
-        config.takeWrite.receiptTimeoutMs <= 0
-      ) {
-        throw new Error(
-          'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
-        );
-      }
-      if (
-        config.takeWrite.relay.receiptTimeoutMs !== undefined &&
-        config.takeWrite.relay.receiptTimeoutMs <= 0
-      ) {
-        throw new Error(
-          'KeeperConfig.takeWrite: relay.receiptTimeoutMs must be greater than 0 when provided'
-        );
-      }
+      requireOptionalPositive(
+        config.takeWrite.relay.maxBlockNumberOffset,
+        'KeeperConfig.takeWrite: relay.maxBlockNumberOffset must be greater than 0 when provided'
+      );
+      requireOptionalPositive(
+        config.takeWrite.relay.requestTimeoutMs,
+        'KeeperConfig.takeWrite: relay.requestTimeoutMs must be greater than 0 when provided'
+      );
+      requireOptionalPositive(
+        config.takeWrite.receiptTimeoutMs,
+        'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+      );
+      requireOptionalPositive(
+        config.takeWrite.relay.receiptTimeoutMs,
+        'KeeperConfig.takeWrite: relay.receiptTimeoutMs must be greater than 0 when provided'
+      );
       return;
     default:
       throw new Error(
@@ -531,6 +788,8 @@ export function validateTakeSettingsForChain(
   config: KeeperConfig,
   chainId: number
 ): void {
+  validateRouterFeeTiers(config);
+
   for (const poolConfig of config.pools) {
     if (poolConfig.take) {
       validateTakeSettings(poolConfig.take, config, chainId);

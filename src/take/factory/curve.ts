@@ -1,8 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../../config';
-import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import { ExternalTakeQuoteEvaluation, TakeActionConfig, TakeLiquidationPlan } from '../types';
@@ -12,17 +10,24 @@ import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
-  MARKET_FACTOR_SCALE,
-  ceilDiv,
+  FactoryRouteEvaluationContext,
+  buildFactoryRouteEvaluationContext,
+  buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
-  getMarketPriceFactorUnits,
-  getQuoteAmountDueRaw,
+  formatFactoryExecutionLog,
+  formatFactoryPriceCheckLog,
+  formatFactoryQuoteRequestLog,
+  formatFactoryTakeSubmissionLog,
+  getCurveQuoteProvider,
+  getSlippageFloorQuoteRaw,
   getSwapDeadline,
 } from './shared';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
 } from '../write-transport';
+
+const CURVE_L2_PROPAGATION_DELAY_MS = 2_000;
 
 export async function evaluateCurveFactoryQuote({
   pool,
@@ -32,6 +37,7 @@ export async function evaluateCurveFactoryQuote({
   config,
   signer,
   runtimeCache,
+  routeContext,
 }: {
   pool: FungiblePool;
   auctionPriceWad: BigNumber;
@@ -40,6 +46,7 @@ export async function evaluateCurveFactoryQuote({
   config: Pick<FactoryQuoteConfig, 'curveRouterOverrides' | 'tokenAddresses'>;
   signer: Signer;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  routeContext?: FactoryRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (!config.curveRouterOverrides) {
     logger.debug(`Factory: No curveRouterOverrides configured for pool ${pool.name}`);
@@ -60,21 +67,12 @@ export async function evaluateCurveFactoryQuote({
   }
 
   try {
-    let quoteProvider = runtimeCache?.curve;
-    if (quoteProvider === undefined) {
-      const candidateProvider = new CurveQuoteProvider(signer, {
-        poolConfigs: curveConfig.poolConfigs as any,
-        defaultSlippage: curveConfig.defaultSlippage || 1.0,
-        wethAddress: curveConfig.wethAddress,
-        tokenAddresses: config.tokenAddresses || {},
-      });
-      const initialized = await candidateProvider.initialize();
-      quoteProvider = initialized ? candidateProvider : null;
-      if (runtimeCache) {
-        runtimeCache.curve = quoteProvider;
-      }
-    }
-
+    const quoteProvider = await getCurveQuoteProvider({
+      signer,
+      routerConfig: curveConfig,
+      tokenAddresses: config.tokenAddresses,
+      runtimeCache,
+    });
     if (!quoteProvider) {
       logger.debug(`Factory: Curve quote provider not available for pool ${pool.name}`);
       return {
@@ -83,21 +81,36 @@ export async function evaluateCurveFactoryQuote({
       };
     }
 
-    const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
-    const quoteDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
-    const collateralInTokenDecimals = convertWadToTokenDecimals(collateral, collateralDecimals);
+    const context =
+      routeContext ??
+      (await buildFactoryRouteEvaluationContext({
+        pool,
+        signer,
+        auctionPriceWad,
+        collateral,
+        marketPriceFactor: poolConfig.take.marketPriceFactor!,
+        runtimeCache,
+      }));
 
     logger.debug(
-      `Factory: Getting Curve quote for ${ethers.utils.formatUnits(
-        collateralInTokenDecimals,
-        collateralDecimals
-      )} collateral in pool ${pool.name}`
+      formatFactoryQuoteRequestLog({
+        source: LiquiditySource.CURVE,
+        poolName: pool.name,
+        collateralAmount: ethers.utils.formatUnits(
+          context.collateralInTokenDecimals,
+          context.collateralTokenDecimals
+        ),
+      })
     );
 
     const quoteResult = await quoteProvider.getQuote(
-      collateralInTokenDecimals,
+      context.collateralInTokenDecimals,
       pool.collateralAddress,
-      pool.quoteAddress
+      pool.quoteAddress,
+      {
+        inputDecimals: context.collateralTokenDecimals,
+        outputDecimals: context.quoteTokenDecimals,
+      }
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
@@ -108,11 +121,11 @@ export async function evaluateCurveFactoryQuote({
       };
     }
 
-    const collateralAmount = Number(
-      ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)
-    );
+    const collateralAmount = context.collateralAmount;
     const quoteAmountRaw = quoteResult.dstAmount;
-    const quoteAmount = Number(ethers.utils.formatUnits(quoteAmountRaw, quoteDecimals));
+    const quoteAmount = Number(
+      ethers.utils.formatUnits(quoteAmountRaw, context.quoteTokenDecimals)
+    );
     const auctionPrice = Number(weiToDecimaled(auctionPriceWad));
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
@@ -125,7 +138,6 @@ export async function evaluateCurveFactoryQuote({
       };
     }
 
-    const marketPrice = quoteAmount / collateralAmount;
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
       logger.debug(`Factory: No marketPriceFactor configured for pool ${pool.name}`);
@@ -135,26 +147,37 @@ export async function evaluateCurveFactoryQuote({
       };
     }
 
-    const takeablePrice = marketPrice * marketPriceFactor;
-    const profitabilityFloor = ceilDiv(
-      (await getQuoteAmountDueRaw(pool, auctionPriceWad, collateral)).mul(MARKET_FACTOR_SCALE),
-      BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
-    );
-    const profitable = quoteAmountRaw.gte(profitabilityFloor);
+    const evaluation = await buildFactoryQuoteEvaluation({
+      pool,
+      auctionPriceWad,
+      collateral,
+      marketPriceFactor,
+      quoteAmountRaw,
+      quoteAmount,
+      collateralAmount,
+      selectedLiquiditySource: LiquiditySource.CURVE,
+      existingSlippageFloorQuoteRaw: getSlippageFloorQuoteRaw(
+        quoteAmountRaw,
+        curveConfig.defaultSlippage
+      ),
+      routeContext: context,
+      failureReason: 'quoted output below required Curve profitability floor',
+    });
 
     logger.debug(
-      `Curve price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${marketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`
+      formatFactoryPriceCheckLog({
+        source: LiquiditySource.CURVE,
+        poolName: pool.name,
+        auctionPrice,
+        marketPrice: evaluation.marketPrice,
+        takeablePrice: evaluation.takeablePrice,
+        profitable: evaluation.isTakeable,
+      })
     );
 
     return {
-      isTakeable: profitable,
-      marketPrice,
-      takeablePrice,
-      quoteAmount,
-      quoteAmountRaw,
-      collateralAmount,
+      ...evaluation,
       curvePool: quoteResult.selectedPool,
-      reason: profitable ? undefined : 'quoted output below required Curve profitability floor',
     };
   } catch (error) {
     logger.error(`Factory: Error getting Curve quote for pool ${pool.name}: ${error}`);
@@ -194,32 +217,15 @@ export async function executeCurveFactoryTake({
     logger.error(message);
     throw new Error(message);
   }
+  if (!quoteEvaluation.curvePool) {
+    const message =
+      `Factory: selected Curve pool required for ${pool.collateralAddress}/${pool.quoteAddress}`;
+    logger.error(message);
+    throw new Error(message);
+  }
 
   try {
-    let selectedCurvePool = quoteEvaluation.curvePool;
-
-    if (!selectedCurvePool) {
-      const quoteProvider = new CurveQuoteProvider(signer, {
-        poolConfigs: config.curveRouterOverrides.poolConfigs! as any,
-        defaultSlippage: config.curveRouterOverrides.defaultSlippage || 1.0,
-        wethAddress: config.curveRouterOverrides.wethAddress!,
-        tokenAddresses: config.tokenAddresses || {},
-      });
-
-      selectedCurvePool = await quoteProvider.resolvePoolSelection(
-        pool.collateralAddress,
-        pool.quoteAddress
-      );
-    }
-
-    if (!selectedCurvePool) {
-      const message =
-        `Factory: Could not resolve a Curve pool selection for ${pool.collateralAddress}/${pool.quoteAddress}`;
-      logger.error(message);
-      throw new Error(message);
-    }
-
-    const resolvedCurvePool = selectedCurvePool;
+    const resolvedCurvePool = quoteEvaluation.curvePool;
 
     logger.debug(
       `Factory: Found Curve pool tokens: ${pool.collateralAddress}@${resolvedCurvePool.tokenInIndex}, ${pool.quoteAddress}@${resolvedCurvePool.tokenOutIndex}`
@@ -229,20 +235,23 @@ export async function executeCurveFactoryTake({
       pool,
       liquidation,
       quoteEvaluation,
-      liquiditySource: LiquiditySource.CURVE,
-      config,
       marketPriceFactor: poolConfig.take.marketPriceFactor!,
     });
     const deadline = await getSwapDeadline(signer);
 
     logger.debug(
-      `Factory: Executing Curve take for pool ${pool.name}:\n` +
-        `  Pool Address: ${resolvedCurvePool.address}\n` +
-        `  Pool Type: ${resolvedCurvePool.poolType}\n` +
-        `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
-        `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
-        `  Token Indices: ${resolvedCurvePool.tokenInIndex} -> ${resolvedCurvePool.tokenOutIndex}\n` +
-        `  Minimal Amount Out: ${minimalAmountOut.toString()} (quoted bound)`
+      formatFactoryExecutionLog({
+        source: LiquiditySource.CURVE,
+        poolName: pool.name,
+        collateralWad: liquidation.collateral,
+        auctionPriceWad: liquidation.auctionPrice,
+        minimalAmountOut,
+        extraLines: [
+          `Pool Address: ${resolvedCurvePool.address}`,
+          `Pool Type: ${resolvedCurvePool.poolType}`,
+          `Token Indices: ${resolvedCurvePool.tokenInIndex} -> ${resolvedCurvePool.tokenOutIndex}`,
+        ],
+      })
     );
 
     const encodedSwapDetails = ethers.utils.defaultAbiCoder.encode(
@@ -258,13 +267,19 @@ export async function executeCurveFactoryTake({
     );
 
     logger.debug(
-      `Factory: Sending Curve Take Tx - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
+      formatFactoryTakeSubmissionLog({
+        source: LiquiditySource.CURVE,
+        poolAddress: pool.poolAddress,
+        borrower: liquidation.borrower,
+      })
     );
 
     logger.debug(
-      'Adding 2000ms state propagation delay before factory take (L2 sequencer protection)'
+      `Adding ${CURVE_L2_PROPAGATION_DELAY_MS}ms state propagation delay before factory take (L2 sequencer protection)`
     );
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) =>
+      setTimeout(resolve, CURVE_L2_PROPAGATION_DELAY_MS)
+    );
 
     await NonceTracker.queueTransaction(takeWriteTransport.signer, async (nonce: number) => {
       const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
@@ -273,7 +288,7 @@ export async function executeCurveFactoryTake({
         liquidation.borrower,
         liquidation.auctionPrice,
         liquidation.collateral,
-        Number(poolConfig.take.liquiditySource),
+        Number(LiquiditySource.CURVE),
         resolvedCurvePool.address,
         encodedSwapDetails,
       ] as const;

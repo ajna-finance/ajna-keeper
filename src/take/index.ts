@@ -471,11 +471,14 @@ async function computeLegacyOneInchMinReturnAmount(params: {
         factoryShared.getSlippageBasisPoints(1)
     )
     .div(factoryShared.BASIS_POINTS_DENOMINATOR);
+  const approvedMinOutRaw =
+    params.quoteEvaluation.approvedMinOutRaw ?? BigNumber.from(0);
 
   return factoryShared.maxBigNumber(
     quoteAmountDueRaw,
     profitabilityFloor,
-    slippageFloor
+    slippageFloor,
+    approvedMinOutRaw
   );
 }
 

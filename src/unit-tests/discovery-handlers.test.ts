@@ -6,6 +6,7 @@ import {
   handleDiscoveredTakeTarget,
 } from '../discovery/handlers';
 import * as takeModule from '../take';
+import * as takeFactoryModule from '../take/factory';
 import * as settlementModule from '../settlement';
 import * as arbModule from '../take/arb';
 import { LiquiditySource } from '../config';
@@ -786,7 +787,7 @@ describe('Discovery Handlers', () => {
     expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
   });
 
-  it('reuses the discovered take quote for native gas conversion when collateral is wrapped native', async () => {
+  it('quotes exact native gas cost instead of reusing the discovered take quote', async () => {
     const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
     sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
       isTakeable: true,
@@ -859,6 +860,9 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
         },
+        oneInchRouters: {
+          8453: '0x1111111111111111111111111111111111111111',
+        },
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
@@ -866,7 +870,7 @@ describe('Discovery Handlers', () => {
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
-    expect(oneInchQuoteStub.called).to.be.false;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
   });
 
   it('uses raw quote units for discovered take profit-floor checks', async () => {
@@ -944,6 +948,202 @@ describe('Discovery Handlers', () => {
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
+  });
+
+  it('reuses fresh factory route gas policy during discovered take approval', async () => {
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+      isTakeable: true,
+      quoteAmount: 120,
+      quoteAmountRaw: ethers.utils.parseUnits('120', 6),
+      collateralAmount: 1,
+      marketPrice: 120,
+      takeablePrice: 118.8,
+      approvedMinOutRaw: ethers.utils.parseUnits('118.8', 6),
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier: 500,
+      routeProfitability: {
+        routeExecutionCostQuoteRaw: ethers.utils.parseUnits('1', 6),
+        requiredOutputFloorQuoteRaw: ethers.utils.parseUnits('118.8', 6),
+        expectedNetProfitQuoteRaw: ethers.utils.parseUnits('19', 6),
+        surplusOverFloorQuoteRaw: ethers.utils.parseUnits('1.2', 6),
+        gasPolicyEvaluatedAt: Date.now(),
+      },
+    });
+
+    const getStatusStub = sinon.stub().resolves({
+      collateral: ethers.utils.parseEther('1'),
+      price: ethers.utils.parseEther('100'),
+    });
+    const pool = {
+      name: 'Fresh Factory Gas Policy Pool',
+      poolAddress: '0xfafafafafafafafafafafafafafafafafafafafa',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(999)),
+      },
+      getChainId: sinon.stub().resolves(8453),
+    };
+    const transports = createDiscoveryTransports(
+      ethers.utils.parseUnits('1', 'gwei')
+    );
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerFreshFactoryGas',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostNative: 1,
+          },
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports,
+      rpcCache: {
+        chainId: 8453,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(takeLiquidationFactoryStub.calledOnce).to.be.true;
+    expect(transports.readRpc.getGasPrice.called).to.be.false;
+  });
+
+  it('rechecks stale L1 factory route gas policy during discovered take approval', async () => {
+    const nowMs = 100_000;
+    sinon.stub(Date, 'now').returns(nowMs);
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+      isTakeable: true,
+      quoteAmount: 120,
+      quoteAmountRaw: ethers.utils.parseUnits('120', 6),
+      collateralAmount: 1,
+      marketPrice: 120,
+      takeablePrice: 118.8,
+      approvedMinOutRaw: ethers.utils.parseUnits('118.8', 6),
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier: 500,
+      routeProfitability: {
+        routeExecutionCostQuoteRaw: ethers.utils.parseUnits('1', 6),
+        requiredOutputFloorQuoteRaw: ethers.utils.parseUnits('118.8', 6),
+        expectedNetProfitQuoteRaw: ethers.utils.parseUnits('19', 6),
+        surplusOverFloorQuoteRaw: ethers.utils.parseUnits('1.2', 6),
+        gasPolicyEvaluatedAt: nowMs - 6_000,
+      },
+    });
+
+    const getStatusStub = sinon.stub().resolves({
+      collateral: ethers.utils.parseEther('1'),
+      price: ethers.utils.parseEther('100'),
+    });
+    const pool = {
+      name: 'Stale L1 Factory Gas Policy Pool',
+      poolAddress: '0xfafafafafafafafafafafafafafafafafafafafa',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+    };
+    const signer = {
+      provider: {
+        getGasPrice: sinon.stub().resolves(BigNumber.from(999)),
+      },
+      getChainId: sinon.stub().resolves(1),
+    };
+    const transports = createDiscoveryTransports(
+      ethers.utils.parseUnits('2', 'gwei')
+    );
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: signer as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerStaleFactoryGas',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostNative: 1,
+          },
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports,
+      rpcCache: {
+        chainId: 1,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: nowMs - 6_000,
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(takeLiquidationFactoryStub.calledOnce).to.be.true;
+    expect(transports.readRpc.getGasPrice.calledOnce).to.be.true;
   });
 
   it('logs a discovered take summary with skip counters', async () => {

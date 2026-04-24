@@ -64,8 +64,9 @@ yarn compile
 **For production deployments**, see the **[Production Setup Guide](production_setup_guide.md)**.
 
 The production guide covers the recommended approach using hosted services:
+
 - Hosted RPC setup (Alchemy/QuickNode) vs local nodes
-- Hosted subgraph deployment (BuiltByMom fork + Goldsky) vs local Graph Node  
+- Hosted subgraph deployment (BuiltByMom fork + Goldsky) vs local Graph Node
 - Verified contract addresses for major chains (Avalanche, Hemi, Base, Arbitrum)
 - Multiple DEX integration options (1inch, Uniswap V3, SushiSwap, Curve)
 - API rate limits and service tier recommendations
@@ -73,7 +74,7 @@ The production guide covers the recommended approach using hosted services:
 - Production monitoring and troubleshooting
 - See `examples/example-avalanche-config.ts` and `examples/example-hemi-config.ts` for chain-specific examples.
 
-*The production approach is more reliable and easier to maintain than running everything locally.*
+_The production approach is more reliable and easier to maintain than running everything locally._
 
 ### Setup Environment Variables
 
@@ -88,18 +89,21 @@ Then edit `.env` to add your API keys:
 #### Required API Keys
 
 **1. Alchemy API Key** (Required for RPC and price fallback)
+
 - Go to [Alchemy](https://alchemy.com) and create an account
 - Create an app with your desired network enabled (Base, Ethereum, Avalanche, etc.)
 - Copy your API key from the Apps > Networks tab
 - Add to `.env`: `ALCHEMY_API_KEY="your_key_here"`
 
 **2. The Graph API Key** (Required for subgraph queries)
+
 - Go to [The Graph Studio](https://thegraph.com/studio/)
 - Create a free account
 - Generate an API key from your dashboard
 - Add to `.env`: `GRAPH_API_KEY="your_key_here"`
 
 **3. CoinGecko API Key** (Optional but recommended)
+
 - Create an account at [CoinGecko](https://www.coingecko.com/en/developers/dashboard)
 - Click "Add New Key" to generate a new API key
 - Add to `.env`: `COINGECKO_API_KEY="CG-your_key_here"`
@@ -108,10 +112,12 @@ Then edit `.env` to add your API keys:
 #### Optional API Keys
 
 **4. 1inch API Key** (Optional - for DEX integration)
+
 - Get from [1inch Developer Portal](https://portal.1inch.dev/)
 - Add to `.env`: `ONEINCH_API_KEY="your_key_here"`
 
 Your `.env` file should look like:
+
 ```env
 ALCHEMY_API_KEY="????????????????????????????????"
 GRAPH_API_KEY="????????????????????????????????????"
@@ -138,6 +144,7 @@ If you add `multicallAddress`, then you will also need to add `multicallBlock` w
 ### Subgraph Setup
 
 **Recommended**: Use The Graph's hosted gateway (already configured in example configs)
+
 - The keeper uses The Graph's hosted subgraph gateway
 - Your `GRAPH_API_KEY` from `.env` is automatically used
 - No local subgraph setup needed
@@ -152,6 +159,7 @@ git checkout develop
 ```
 
 Update `ajna-subgraph/.env`:
+
 ```env
 ETH_RPC_URL=https://avax-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 ETH_NETWORK=avalanche:https://avax-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
@@ -298,7 +306,7 @@ const config: KeeperConfig = {
 
 **Keeper signer must not also be a lender in the same pools.** The redemption step is bounded by the signer's on-chain `lpBalance` in each bucket. That bound is safe when every LP the signer holds came from being a taker or kicker — which is exactly what this module redeems. Sharing one signer across the take keeper, the kick keeper, and this LP-reward keeper is fine; they're all writing reward LP that we're collecting back.
 
-The conflict is with a signer that *also* deposits quote as a lender. After a restart the keeper replays history from cursor `0`, and the on-chain `lpBalance` includes both unredeemed reward LP and principal LP — the code can't tell them apart, so it may burn principal to satisfy a stale reward entry. If the operator both runs a keeper and provides liquidity to the same pools, use **separate keys** for the two roles. If the keeper signer never calls `addQuoteToken` directly, one key is fine.
+The conflict is with a signer that _also_ deposits quote as a lender. After a restart the keeper replays history from cursor `0`, and the on-chain `lpBalance` includes both unredeemed reward LP and principal LP — the code can't tell them apart, so it may burn principal to satisfy a stale reward entry. If the operator both runs a keeper and provides liquidity to the same pools, use **separate keys** for the two roles. If the keeper signer never calls `addQuoteToken` directly, one key is fine.
 
 **ERC20 only.** The redemption path uses the Ajna `FungiblePoolFactory` to materialize pool handles, which only supports ERC20 pools. If your signer ever takes on an ERC721 pool, the event is skipped and the LP sits on-chain (same outcome as if the keeper were off for that pool).
 
@@ -320,12 +328,14 @@ Automatically settles completed auctions to unlock kicker bonds and handle bad d
 Settlement processes auctions in multiple iterations if needed, settling debt against available buckets in the pool. The keeper can be configured to only settle auctions where the bot has bond rewards to claim, ensuring profitability.
 
 **Key Benefits:**
+
 - **Automated bond recovery**: Unlocks kicker bonds automatically when auctions complete
 - **Bad debt handling**: Processes auctions with remaining debt that need settlement
 - **Reactive operation**: Triggers settlement when bond collection or LP collection fails due to locked bonds
 - **Configurable timing**: Respects minimum auction age before attempting settlement
 
 **Settlement Configuration:**
+
 - `enabled` - Enable/disable settlement for this pool
 - `minAuctionAge` - Minimum time (seconds) to wait before settling an auction
 - `maxBucketDepth` - Number of buckets to process per settlement transaction
@@ -343,10 +353,6 @@ V1 autodiscovery can discover chain-wide `take` and `settlement` opportunities w
 - `dryRunNewPools` keeps newly discovered pools in dry-run until you explicitly trust them.
 - `kick` autodiscovery is intentionally not part of V1.
 
-
-
-
-
 ## Configuration
 
 ### Configuration file
@@ -359,10 +365,12 @@ See `examples/example-config.ts` for reference.
 The keeper supports multiple price sources with automatic fallback:
 
 - **[CoinGecko](https://www.coingecko.com/)** - Primary source using their [simple price](https://docs.coingecko.com/v3.0.1/reference/simple-price) API
+
   - Recommended for all tokens
   - Requires `COINGECKO_API_KEY` in `.env`
 
 - **[Alchemy Prices API](https://www.alchemy.com/docs/data/prices-api)** - Automatic fallback
+
   - Used automatically if CoinGecko API key is missing or CoinGecko request fails
   - Supports a wide range of tokens (WETH, USDC, USDT, WBTC, and more)
   - No additional API key needed (uses your existing `ALCHEMY_API_KEY`)
@@ -376,25 +384,26 @@ The keeper supports multiple price sources with automatic fallback:
 If the price source only has quote token priced in collateral, you may add `"invert": true` to `price` config to invert the configured price.
 
 **Example**: For a pool using CoinGecko price source:
+
 ```typescript
 price: {
   source: PriceOriginSource.COINGECKO,
   query: 'price?ids=ethereum&vs_currencies=usd',
 }
 ```
+
 The keeper will try CoinGecko first, then automatically fallback to Alchemy if needed.
 
 ### DEX Integration
 
 The keeper supports four DEX integration approaches for external takes and LP reward swapping:
 
-| DEX Integration | External Takes | LP Rewards | Contract Required | Best For |
-|-----------------|----------------|------------|-------------------|----------|
-| **1inch** | ✅ | ✅ | Yes (Single) | Major chains (Ethereum, Avalanche, Base, Arbitrum) |
-| **Uniswap V3** | ✅ | ✅ | Yes (Factory) | All chains with Uniswap V3 |
-| **SushiSwap** | ✅ | ✅ | Yes (Factory) | Chains with SushiSwap V3 |
-| **Curve** | ✅ | ✅ | Yes (Factory) | Chains with Curve pools (stablecoin/crypto pairs) |
-
+| DEX Integration | External Takes | LP Rewards | Contract Required | Best For                                           |
+| --------------- | -------------- | ---------- | ----------------- | -------------------------------------------------- |
+| **1inch**       | ✅             | ✅         | Yes (Single)      | Major chains (Ethereum, Avalanche, Base, Arbitrum) |
+| **Uniswap V3**  | ✅             | ✅         | Yes (Factory)     | All chains with Uniswap V3                         |
+| **SushiSwap**   | ✅             | ✅         | Yes (Factory)     | Chains with SushiSwap V3                           |
+| **Curve**       | ✅             | ✅         | Yes (Factory)     | Chains with Curve pools (stablecoin/crypto pairs)  |
 
 #### Configuring for 1inch
 
@@ -448,9 +457,12 @@ A 1inch API key may be obtained from their [developer portal](https://portal.1in
 
 ### Critical Fee Tier Configuration for External Takes
 
-For Uniswap V3 and SushiSwap external takes, the keeper currently chooses one runtime `defaultFeeTier` per DEX per keeper instance. That value is passed into quote evaluation and execution for each external take. It is not baked into deployed bytecode, so changing it is a config-and-restart decision, not a redeploy.
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and can optionally probe additional `candidateFeeTiers` per DEX during quote evaluation. The selected fee tier is then carried into execution. These values are not baked into deployed bytecode, so changing them is a config-and-restart decision, not a redeploy.
 
 **Fee Tier Value → Percentage → Common Use:**
+
+- `100` = 0.01% = 1 basis point (where deployed)
+- `200`, `300`, `400` = newer low-fee tiers on supported deployments
 - `500` = 0.05% = 5 basis points (stablecoins)
 - `3000` = 0.3% = 30 basis points (most common)
 - `10000` = 1.0% = 100 basis points (exotic pairs)
@@ -458,16 +470,22 @@ For Uniswap V3 and SushiSwap external takes, the keeper currently chooses one ru
 **External Takes vs Post-Auction Swaps:**
 
 **For External Takes (Time-Sensitive):**
-- Uses `universalRouterOverrides.defaultFeeTier` or `sushiswapRouterOverrides.defaultFeeTier`
-- One global default per DEX per keeper instance
-- Applies to both quote evaluation and execution
+
+- Uses `universalRouterOverrides.defaultFeeTier` or `sushiswapRouterOverrides.defaultFeeTier` as the preferred route
+- Can add `candidateFeeTiers` to probe other deployed pools for the same token pair
+- Applies the selected quote route to execution, including the selected fee tier
+- Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
+- Treats `allowedLiquiditySources`, when set, as the complete factory route allowlist. Include the default source in that list if it should remain eligible.
+- A low `takeRouteQuoteBudgetPerCandidate` reduces quote latency but can miss a more profitable route that was not probed.
 - No per-pool external-take fee override today
 - Change requires updating config and restarting the keeper
 
 **For Post-Auction LP Rewards (Flexible):**
+
 - Can override per pool using `fee: FeeAmount.MEDIUM` in `rewardAction`
 - Falls back to the same global default if no override is specified
 - Flexible and changeable without redeploying contracts
+- Not affected by dynamic external-take route selection
 
 ### Pre-Deployment Fee Tier Research (REQUIRED)
 
@@ -476,10 +494,11 @@ Before enabling Uniswap V3 or SushiSwap external takes:
 **Step 1: List all token pairs from your pools**
 **Step 2: Check Uniswap Info or SushiSwap Analytics for each pair's fee-tier liquidity**
 **Step 3: Weight by expected liquidation value and frequency, not just TVL**
-**Step 4: Set `defaultFeeTier` in config**
+**Step 4: Set `defaultFeeTier` and, when useful, `candidateFeeTiers` in config**
 **Step 5: Revisit periodically as liquidity shifts**
 
 Example research process:
+
 ```
 Pools: USDC/WETH (high value), DAI/USDC (medium), RARE/WETH (low)
 
@@ -488,14 +507,15 @@ Research Results:
 - DAI/USDC: 500 tier has $100M TVL, 3000 tier has $30M TVL
 - RARE/WETH: Only exists in 10000 tier
 
-Decision: Use defaultFeeTier: 3000
-Rationale: Optimizes highest-value pair (USDC/WETH)
-Plan: LP rewards can override per pool, while uncommon pairs may be better handled with 1inch, arbTake, or a separate keeper config
+Decision: Use defaultFeeTier: 3000 and candidateFeeTiers: [500, 10000]
+Rationale: Prefer the highest-value pair (USDC/WETH), but probe the other deployed tiers when auctions appear
+Plan: Keep the candidate list small enough for quote latency; LP rewards can still override per pool
 ```
 
 ### Choose Your Deployment Approach
 
 **Option A: 1inch Integration (Major Chains)**
+
 - For chains with 1inch support (Ethereum, Avalanche, Base, Arbitrum)
 - Single contract deployment
 - Uses 1inch aggregator for best pricing
@@ -511,13 +531,14 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 # keeperTaker: '0x[deployed-address]'
 ```
 
-**Option B: Factory System (Multi-DEX Chains)**  
+**Option B: Factory System (Multi-DEX Chains)**
+
 - For chains with Uniswap V3 and/or SushiSwap V3 and/or Curve
 - Multi-DEX factory pattern supporting multiple DEXs
 - Direct DEX integration via router contracts
 
 ```bash
-# Compile contracts first  
+# Compile contracts first
 yarn compile
 
 # Deploy factory system
@@ -529,6 +550,7 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 ```
 
 **Option C: No External Takes**
+
 - Skip contract deployment
 - Use arbTake and settlement only
 - Still supports LP reward swapping (no contracts needed for LP rewards)
@@ -547,6 +569,10 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
+- Dynamic `allowedLiquiditySources` is factory-only in this PR. Use it only when `discoveredDefaults.take.liquiditySource` is `UNISWAPV3`, `SUSHISWAP`, or `CURVE`; when set, it is the complete factory route allowlist. 1inch remains a single-source aggregator path and is not compared against factory DEX routes by this selector.
+- `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
+- On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token.
+- `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.
 
 For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).
 
@@ -570,9 +596,7 @@ const config: KeeperConfig = {
     },
     dryRunNewPools: true,
     logSkips: true,
-    denyPools: [
-      '0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
-    ],
+    denyPools: ['0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
   },
   discoveredDefaults: {
     take: {
@@ -632,28 +656,32 @@ External takes require contract deployment and specific configuration:
 **IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
 
 **Contract Deployment:**
+
 ```bash
 yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 ```
 
 **Config.ts Setup:**
+
 ```typescript
 const config: KeeperConfig = {
   // Required for 1inch external takes; only needed for LP rewards when they also use PostAuctionDex.ONEINCH
   keeperTaker: '0x[deployed-address]',
   oneInchRouters: {
-    1: '0x1111111254EEB25477B68fb85Ed929f73A960582',    // Ethereum
-    43114: '0x111111125421ca6dc452d289314280a0f8842a65', // Avalanche  
-    8453: '0x1111111254EEB25477B68fb85Ed929f73A960582',  // Base
+    1: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Ethereum
+    43114: '0x111111125421ca6dc452d289314280a0f8842a65', // Avalanche
+    8453: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Base
   },
-  
-  pools: [{
-    take: {
-      liquiditySource: LiquiditySource.ONEINCH,
-      marketPriceFactor: 0.98, // Take when auction < market * 0.98
-    }
-  }]
-}
+
+  pools: [
+    {
+      take: {
+        liquiditySource: LiquiditySource.ONEINCH,
+        marketPriceFactor: 0.98, // Take when auction < market * 0.98
+      },
+    },
+  ],
+};
 ```
 
 **Important: 1inch Fee Tier Considerations**
@@ -662,17 +690,19 @@ const config: KeeperConfig = {
 #### Uniswap V3 Integration (Factory System)
 
 **Contract Deployment:**
-```bash  
+
+```bash
 yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 ```
 
 **Config.ts Setup:**
+
 ```typescript
 const config: KeeperConfig = {
   // Required for Uniswap V3 external takes
   keeperTakerFactory: '0x[factory-address]',
   takerContracts: {
-    'UniswapV3': '0x[taker-address]'
+    UniswapV3: '0x[taker-address]',
   },
   universalRouterOverrides: {
     universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
@@ -680,28 +710,32 @@ const config: KeeperConfig = {
     permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-    defaultFeeTier: 3000, // Global default for Uniswap external takes
+    defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
+    candidateFeeTiers: [500, 10000], // Optional additional tiers to probe per take
     defaultSlippage: 0.5,
   },
-  
-  pools: [{
-    take: {
-      liquiditySource: LiquiditySource.UNISWAPV3,
-      marketPriceFactor: 0.99, // Take when auction < market * 0.99
-    }
-  }]
-}
+
+  pools: [
+    {
+      take: {
+        liquiditySource: LiquiditySource.UNISWAPV3,
+        marketPriceFactor: 0.99, // Take when auction < market * 0.99
+      },
+    },
+  ],
+};
 ```
 
-**⚠️ Important: Uniswap V3 Pool Selection and Fee Tier Configuration**
+**Important: Uniswap V3 Pool Selection and Fee Tier Configuration**
 
-Uniswap external takes currently quote and execute against the configured `defaultFeeTier` only (`500` = 0.05%, `3000` = 0.3%, `10000` = 1%). The keeper does not dynamically probe alternative fee tiers per take, so choose the default that best matches your highest-value pairs.
+Uniswap external takes use `defaultFeeTier` as the preferred route and can probe `candidateFeeTiers` for the same token pair. The keeper checks whether a pool exists before spending quote budget, then quotes viable routes and executes with the selected fee tier.
 
 To check liquidity:
+
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) for your network
 2. Search for your token pair (e.g., USDC/WETH)
 3. Compare TVL across different fee tiers
-4. Set `defaultFeeTier` to the most liquid option for your most important pairs
+4. Set `defaultFeeTier` to your preferred/common route and add only useful alternatives to `candidateFeeTiers`
 5. Monitor and update as liquidity shifts over time
 
 Low-liquidity pools can cause swap failures or poor pricing that impacts liquidation profitability.
@@ -709,44 +743,50 @@ Low-liquidity pools can cause swap failures or poor pricing that impacts liquida
 #### SushiSwap Integration (Factory System)
 
 **Contract Deployment:**
-```bash  
+
+```bash
 yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 ```
 
 **Config.ts Setup:**
+
 ```typescript
 const config: KeeperConfig = {
   // Required for SushiSwap external takes
   keeperTakerFactory: '0x[factory-address]',
   takerContracts: {
-    'SushiSwap': '0x[taker-address]'
+    SushiSwap: '0x[taker-address]',
   },
   sushiswapRouterOverrides: {
-    swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD',  //addresses for Hemi Chain
+    swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD', //addresses for Hemi Chain
     quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
-    defaultFeeTier: 500, // Global default for SushiSwap external takes
+    defaultFeeTier: 500, // Preferred/default SushiSwap external-take route
+    candidateFeeTiers: [3000], // Optional additional tiers to probe per take
     defaultSlippage: 10.0,
   },
-  
-  pools: [{
-    take: {
-      liquiditySource: LiquiditySource.SUSHISWAP,
-      marketPriceFactor: 0.99, // Take when auction < market * 0.99
-    }
-  }]
-}
+
+  pools: [
+    {
+      take: {
+        liquiditySource: LiquiditySource.SUSHISWAP,
+        marketPriceFactor: 0.99, // Take when auction < market * 0.99
+      },
+    },
+  ],
+};
 ```
 
-**⚠️ Important: SushiSwap Pool Selection and Fee Tier Configuration**
+**Important: SushiSwap Pool Selection and Fee Tier Configuration**
 
-SushiSwap external takes currently quote and execute against the configured `defaultFeeTier` only (typically `500` = 0.05% or `3000` = 0.3%). The keeper does not dynamically probe alternative fee tiers per take, so choose the default that best matches your highest-value pairs.
+SushiSwap external takes use `defaultFeeTier` as the preferred route and can probe `candidateFeeTiers` for deployed pools. Missing pools are skipped before quote-budgeting; viable routes are ranked by profitability and executed with the selected fee tier.
 
 To verify optimal pools:
+
 1. Check [SushiSwap Analytics](https://sushi.com/pool) for your network
 2. Compare liquidity across fee tiers for your token pairs
-3. Set `defaultFeeTier` to the highest-liquidity option for your most important pairs
+3. Set `defaultFeeTier` to your preferred/common route and add useful alternatives to `candidateFeeTiers`
 4. Test with small amounts before production deployment
 5. Revisit the setting as market conditions change
 
@@ -755,30 +795,32 @@ Using low-liquidity pools may result in failed swaps or unfavorable pricing.
 #### Curve Integration (Factory System)
 
 **Contract Deployment:**
-```bash  
+
+```bash
 yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 ```
 
 **Config.ts Setup:**
+
 ```typescript
 const config: KeeperConfig = {
   // Required for Curve external takes
   keeperTakerFactory: '0x[factory-address]',
   takerContracts: {
-    'Curve': '0x[curve-taker-address]'
+    Curve: '0x[curve-taker-address]',
   },
   curveRouterOverrides: {
     poolConfigs: {
       // Stablecoin pools (use STABLE pool type)
       'usdc-usdt': {
         address: '0x[CURVE_STABLE_POOL_ADDRESS]',
-        poolType: CurvePoolType.STABLE
+        poolType: CurvePoolType.STABLE,
       },
       // Crypto pools (use CRYPTO pool type)
       'weth-wbtc': {
-        address: '0x[CURVE_CRYPTO_POOL_ADDRESS]', 
-        poolType: CurvePoolType.CRYPTO
-      }
+        address: '0x[CURVE_CRYPTO_POOL_ADDRESS]',
+        poolType: CurvePoolType.CRYPTO,
+      },
     },
     defaultSlippage: 1.0,
     wethAddress: '0x4200000000000000000000000000000000000006',
@@ -790,29 +832,34 @@ const config: KeeperConfig = {
     usdt: '0x[USDT_ADDRESS]',
     wbtc: '0x[WBTC_ADDRESS]',
   },
-  
-  pools: [{
-    take: {
-      liquiditySource: LiquiditySource.CURVE,
-      marketPriceFactor: 0.99, // Take when auction < market * 0.99
-    }
-  }]
-}
+
+  pools: [
+    {
+      take: {
+        liquiditySource: LiquiditySource.CURVE,
+        marketPriceFactor: 0.99, // Take when auction < market * 0.99
+      },
+    },
+  ],
+};
 ```
 
 #### Curve Configuration Guide
 
 **Step 1: Find Curve Pool Addresses**
+
 - Visit [Curve.fi](https://curve.finance) or use block explorers to find pool addresses for your network
 - Look for pools containing your desired token pairs (e.g., 3Pool for USDC/USDT/DAI)
 - Note: One pool address can serve multiple token pairs
 
 **Step 2: Determine Pool Type**
+
 - **STABLE pools**: Stablecoin pools (USDC/DAI/USDT) - use `CurvePoolType.STABLE`
 - **CRYPTO pools**: Volatile asset pools (ETH/BTC/tricrypto) - use `CurvePoolType.CRYPTO`
 - Check pool contract on block explorer: STABLE pools use `int128` indices, CRYPTO pools use `uint256`
 
 **Step 3: Configure Token Address Mapping**
+
 ```typescript
 tokenAddresses: {
   usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // Must match exact addresses
@@ -823,6 +870,7 @@ tokenAddresses: {
 ```
 
 **Step 4: Set Up Pool Configurations**
+
 ```typescript
 curveRouterOverrides: {
   poolConfigs: {
@@ -833,7 +881,7 @@ curveRouterOverrides: {
     },
     'usdc-usdt': {
       address: '0x[3POOL_ADDRESS]', // Same address if tokens are in same pool
-      poolType: CurvePoolType.STABLE  
+      poolType: CurvePoolType.STABLE
     }
   },
   defaultSlippage: 1.0, // 1% for stable, 2-4% for crypto pairs
@@ -844,8 +892,9 @@ curveRouterOverrides: {
 ### Automatic Detection
 
 The keeper automatically detects your configuration:
+
 - **Single**: Uses existing 1inch integration (`src/take/index.ts`)
-- **Factory**: Uses multi-DEX system (`src/take/factory/index.ts`) 
+- **Factory**: Uses multi-DEX system (`src/take/factory/index.ts`)
 - **None**: ArbTake and settlement only
 
 No manual selection needed - the bot chooses based on your config.
@@ -853,46 +902,54 @@ No manual selection needed - the bot chooses based on your config.
 ### Enhanced Configuration Examples
 
 **Major Chain Example (1inch):**
+
 ```typescript
 // examples/example-avalanche-config.ts shows 1inch external takes
 const config: KeeperConfig = {
   keeperTaker: '0x[deployed-1inch-contract]',
   oneInchRouters: { 43114: '0x111111125421ca6dc452d289314280a0f8842a65' },
-  
-  pools: [{
-    take: {
-      liquiditySource: LiquiditySource.ONEINCH,
-      marketPriceFactor: 0.98
-    }
-  }]
-}
+
+  pools: [
+    {
+      take: {
+        liquiditySource: LiquiditySource.ONEINCH,
+        marketPriceFactor: 0.98,
+      },
+    },
+  ],
+};
 ```
 
-**Multi-DEX Chain Example (Factory):**  
+**Multi-DEX Chain Example (Factory):**
+
 ```typescript
 // examples/example-hemi-config.ts shows factory external takes
 const config: KeeperConfig = {
   keeperTakerFactory: '0x[factory-address]',
-  takerContracts: { 
-    'UniswapV3': '0x[taker-address]',
-    'SushiSwap': '0x[taker-address]'
+  takerContracts: {
+    UniswapV3: '0x[taker-address]',
+    SushiSwap: '0x[taker-address]',
   },
-  universalRouterOverrides: { 
-    defaultFeeTier: 3000, // Global default for Uniswap external takes
-    /* other addresses */ 
+  universalRouterOverrides: {
+    defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
+    candidateFeeTiers: [500, 10000], // Optional extra tiers to probe
+    /* other addresses */
   },
-  sushiswapRouterOverrides: { 
-    defaultFeeTier: 3000, // Global default for SushiSwap external takes  
-    /* other addresses */ 
+  sushiswapRouterOverrides: {
+    defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
+    candidateFeeTiers: [500], // Optional extra tiers to probe
+    /* other addresses */
   },
-  
-  pools: [{
-    take: {
-      liquiditySource: LiquiditySource.SUSHISWAP, // or UNISWAPV3
-      marketPriceFactor: 0.99
-    }
-  }]
-}
+
+  pools: [
+    {
+      take: {
+        liquiditySource: LiquiditySource.SUSHISWAP, // or UNISWAPV3
+        marketPriceFactor: 0.99,
+      },
+    },
+  ],
+};
 ```
 
 **See `examples/example-avalanche-config.ts`, `examples/example-hemi-config.ts`, for complete examples.**
@@ -1194,11 +1251,13 @@ COINGECKO_API_KEY="your_coingecko_key"
 #### Unit tests
 
 Using Makefile:
+
 ```bash
 make test-unit
 ```
 
 Or using yarn:
+
 ```bash
 yarn unit-tests
 ```
