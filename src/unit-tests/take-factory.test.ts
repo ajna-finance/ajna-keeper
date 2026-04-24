@@ -622,6 +622,109 @@ describe('Take Factory', () => {
     });
   });
 
+  describe('Dynamic factory route selection', () => {
+    it('ranks viable Uni/Sushi routes by gas-adjusted net profit and keeps the selected fee tier', async () => {
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'isAvailable')
+        .returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      const uniswapQuoteStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+        .callsFake(async (_amountIn, _tokenIn, _tokenOut, feeTier?: number) => ({
+          success: true,
+          dstAmount:
+            feeTier === 500
+              ? ethers.utils.parseUnits('119', 6)
+              : ethers.utils.parseUnits('112', 6),
+        }) as any);
+      sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'initialize')
+        .resolves(true);
+      const sushiQuoteStub = sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+        .resolves({
+          success: true,
+          dstAmount: ethers.utils.parseUnits('120', 6),
+        } as any);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const pool = {
+        name: 'Dynamic Route Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'Dynamic Route Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        universalRouterOverrides: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [500],
+          wethAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+        },
+        sushiswapRouterOverrides: {
+          swapRouterAddress: '0x8888888888888888888888888888888888888888',
+          quoterV2Address: '0x9999999999999999999999999999999999999999',
+          factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          defaultFeeTier: 500,
+          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      };
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        {
+          allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+          routeProfitabilityContext: {
+            routeExecutionCostQuoteRawBySource: {
+              [LiquiditySource.UNISWAPV3]: ethers.utils.parseUnits('1', 6),
+              [LiquiditySource.SUSHISWAP]: ethers.utils.parseUnits('5', 6),
+            },
+            configuredProfitFloorQuoteRaw: ethers.utils.parseUnits('2', 6),
+          },
+        }
+      );
+
+      expect(evaluation.isTakeable).to.be.true;
+      expect(evaluation.selectedLiquiditySource).to.equal(
+        LiquiditySource.UNISWAPV3
+      );
+      expect(evaluation.selectedFeeTier).to.equal(500);
+      expect(
+        evaluation.approvedMinOutRaw?.eq(ethers.utils.parseUnits('103', 6))
+      ).to.be.true;
+      expect(
+        evaluation.routeProfitability?.surplusOverFloorQuoteRaw?.eq(
+          ethers.utils.parseUnits('16', 6)
+        )
+      ).to.be.true;
+      expect(uniswapQuoteStub.calledTwice).to.be.true;
+      expect(sushiQuoteStub.calledOnce).to.be.true;
+    });
+  });
+
   describe('ArbTake Configuration Validation', () => {
     it('should validate arbTake settings independently from external takes', () => {
       const arbTakeOnlyConfig = {

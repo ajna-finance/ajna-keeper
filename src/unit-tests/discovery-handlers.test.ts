@@ -786,7 +786,7 @@ describe('Discovery Handlers', () => {
     expect(handleCandidateAuctionsStub.calledOnce).to.be.true;
   });
 
-  it('reuses the discovered take quote for native gas conversion when collateral is wrapped native', async () => {
+  it('quotes exact native gas cost instead of reusing the discovered take quote', async () => {
     const takeLiquidationStub = sinon.stub(takeModule, 'takeLiquidation').resolves();
     sinon.stub(takeModule, 'getOneInchTakeQuoteEvaluation').resolves({
       isTakeable: true,
@@ -859,6 +859,9 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
         },
+        oneInchRouters: {
+          8453: '0x1111111111111111111111111111111111111111',
+        },
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
@@ -866,7 +869,7 @@ describe('Discovery Handlers', () => {
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
-    expect(oneInchQuoteStub.called).to.be.false;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
   });
 
   it('uses raw quote units for discovered take profit-floor checks', async () => {

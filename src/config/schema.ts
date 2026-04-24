@@ -166,7 +166,11 @@ export interface AutoDiscoverActionPolicy {
 
 export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   minExpectedProfitQuote?: number;
+  minProfitNative?: string;
   takeQuoteBudgetPerRun?: number;
+  takeRouteQuoteBudgetPerCandidate?: number;
+  allowedLiquiditySources?: LiquiditySource[];
+  dexGasOverrides?: Partial<Record<LiquiditySource, string>>;
 }
 
 export interface AutoDiscoverSettlementPolicy
@@ -262,6 +266,7 @@ export interface UniversalRouterOverrides {
   permit2Address?: string;
   poolFactoryAddress?: string;
   defaultFeeTier?: number;
+  candidateFeeTiers?: number[];
   defaultSlippage?: number;
   quoterV2Address?: string;
   wethAddress?: string;
@@ -272,6 +277,7 @@ export interface SushiswapRouterOverrides {
   quoterV2Address?: string;
   factoryAddress?: string;
   defaultFeeTier?: number;
+  candidateFeeTiers?: number[];
   defaultSlippage?: number;
   wethAddress?: string;
 }

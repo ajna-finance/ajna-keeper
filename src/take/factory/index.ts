@@ -18,11 +18,15 @@ import {
 import { resolveSubgraphConfig } from '../../read-transports';
 import {
   FactoryExecutionConfig,
-  FactoryTakeConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
+  FactoryRouteCandidate,
+  FactoryRouteSelectionOptions,
+  FactoryTakeConfig,
   FactoryTakeParams,
+  applyFactoryRouteProfitabilityPolicy,
   createFactoryQuoteProviderRuntimeCache,
+  getFactoryRouteCandidates,
 } from './shared';
 import {
   evaluateCurveFactoryQuote,
@@ -43,6 +47,8 @@ export type {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
+  FactoryRouteProfitabilityContext,
+  FactoryRouteSelectionOptions,
   FactoryTakeParams,
 } from './shared';
 export {
@@ -126,6 +132,7 @@ export async function handleFactoryTakes({
 export function createFactoryTakeAdapter(params: {
   quoteConfig: FactoryQuoteConfig;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  routeSelection?: FactoryRouteSelectionOptions;
 }): ExternalTakeAdapter<TakeActionConfig, FactoryExecutionConfig> {
   return {
     kind: 'factory',
@@ -143,7 +150,8 @@ export function createFactoryTakeAdapter(params: {
         poolConfig,
         params.quoteConfig,
         signer,
-        params.runtimeCache
+        params.runtimeCache,
+        params.routeSelection
       ),
     executeExternalTake: async ({
       pool,
@@ -172,7 +180,8 @@ export async function getFactoryTakeQuoteEvaluation(
     'universalRouterOverrides' | 'sushiswapRouterOverrides' | 'curveRouterOverrides' | 'tokenAddresses'
   >,
   signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache
+  runtimeCache?: FactoryQuoteProviderRuntimeCache,
+  routeSelection?: FactoryRouteSelectionOptions
 ): Promise<ExternalTakeQuoteEvaluation> {
   if (!poolConfig.take.marketPriceFactor) {
     return {
@@ -190,28 +199,111 @@ export async function getFactoryTakeQuoteEvaluation(
   }
 
   try {
-    if (poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3) {
-      return await checkUniswapV3Quote(
-        pool,
-        auctionPriceWad,
-        collateral,
-        poolConfig,
+    if (
+      poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3 ||
+      poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP
+    ) {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: poolConfig.take.liquiditySource,
         config,
-        signer,
-        runtimeCache
+        selection: routeSelection,
+      });
+      const evaluations: Array<{
+        route: FactoryRouteCandidate;
+        evaluation: ExternalTakeQuoteEvaluation;
+      }> = [];
+
+      for (const route of routes) {
+        const rejectionReason =
+          routeSelection?.routeProfitabilityContext
+            ?.routeRejectionReasonsBySource?.[route.liquiditySource];
+        const rawEvaluation =
+          rejectionReason !== undefined
+            ? {
+                isTakeable: false,
+                reason: rejectionReason,
+                selectedLiquiditySource: route.liquiditySource,
+                selectedFeeTier: route.feeTier,
+              }
+            : route.liquiditySource === LiquiditySource.UNISWAPV3
+              ? await checkUniswapV3Quote(
+                  pool,
+                  auctionPriceWad,
+                  collateral,
+                  poolConfig,
+                  config,
+                  signer,
+                  runtimeCache,
+                  route.feeTier
+                )
+              : await checkSushiSwapQuote(
+                  pool,
+                  auctionPriceWad,
+                  collateral,
+                  poolConfig,
+                  config,
+                  signer,
+                  runtimeCache,
+                  route.feeTier
+                );
+        const evaluation = applyFactoryRouteProfitabilityPolicy({
+          evaluation: rawEvaluation,
+          liquiditySource: route.liquiditySource,
+          context: routeSelection?.routeProfitabilityContext,
+        });
+        evaluations.push({ route, evaluation });
+      }
+
+      const takeableEvaluations = evaluations.filter(
+        ({ evaluation }) => evaluation.isTakeable && evaluation.quoteAmountRaw
       );
+      if (takeableEvaluations.length > 0) {
+        takeableEvaluations.sort((left, right) => {
+          const leftProfit =
+            left.evaluation.routeProfitability?.expectedNetProfitQuoteRaw ??
+            left.evaluation.quoteAmountRaw!;
+          const rightProfit =
+            right.evaluation.routeProfitability?.expectedNetProfitQuoteRaw ??
+            right.evaluation.quoteAmountRaw!;
+          if (!leftProfit.eq(rightProfit)) {
+            return leftProfit.gt(rightProfit) ? -1 : 1;
+          }
+          if (
+            left.route.liquiditySource === poolConfig.take.liquiditySource &&
+            right.route.liquiditySource !== poolConfig.take.liquiditySource
+          ) {
+            return -1;
+          }
+          if (
+            left.route.liquiditySource !== poolConfig.take.liquiditySource &&
+            right.route.liquiditySource === poolConfig.take.liquiditySource
+          ) {
+            return 1;
+          }
+          return 0;
+        });
+
+        const selected = takeableEvaluations[0].evaluation;
+        logger.debug(
+          `Factory: selected route source=${selected.selectedLiquiditySource} feeTier=${selected.selectedFeeTier ?? 'n/a'} for pool ${pool.name}`
+        );
+        return selected;
+      }
+
+      const reason = evaluations
+        .map(
+          ({ route, evaluation }) =>
+            `${LiquiditySource[route.liquiditySource]}:${route.feeTier ?? 'default'}=${evaluation.reason ?? 'not takeable'}`
+        )
+        .join('; ');
+      return {
+        isTakeable: false,
+        reason: reason
+          ? `no viable factory route: ${reason}`
+          : 'no factory routes configured',
+      };
     }
-    if (poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP) {
-      return await checkSushiSwapQuote(
-        pool,
-        auctionPriceWad,
-        collateral,
-        poolConfig,
-        config,
-        signer,
-        runtimeCache
-      );
-    }
+
     if (poolConfig.take.liquiditySource === LiquiditySource.CURVE) {
       return await checkCurveQuote(
         pool,
@@ -249,7 +341,8 @@ async function checkUniswapV3Quote(
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'universalRouterOverrides'>,
   signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache
+  runtimeCache?: FactoryQuoteProviderRuntimeCache,
+  feeTier?: number
 ): Promise<ExternalTakeQuoteEvaluation> {
   return evaluateUniswapV3FactoryQuote({
     pool,
@@ -259,6 +352,7 @@ async function checkUniswapV3Quote(
     config,
     signer,
     runtimeCache,
+    feeTier,
   });
 }
 
@@ -273,7 +367,8 @@ async function checkSushiSwapQuote(
   poolConfig: TakeActionConfig,
   config: Pick<FactoryTakeParams['config'], 'sushiswapRouterOverrides'>,
   signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache
+  runtimeCache?: FactoryQuoteProviderRuntimeCache,
+  feeTier?: number
 ): Promise<ExternalTakeQuoteEvaluation> {
   return evaluateSushiSwapFactoryQuote({
     pool,
@@ -283,6 +378,7 @@ async function checkSushiSwapQuote(
     config,
     signer,
     runtimeCache,
+    feeTier,
   });
 }
 
@@ -373,8 +469,12 @@ export async function takeLiquidationFactory({
     );
   }
 
+  const selectedLiquiditySource =
+    externalTakeQuoteEvaluation.selectedLiquiditySource ??
+    poolConfig.take.liquiditySource;
+
   try {
-    if (poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3) {
+    if (selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
       await takeWithUniswapV3Factory({
         pool,
         poolConfig,
@@ -386,7 +486,7 @@ export async function takeLiquidationFactory({
       return true;
     }
 
-    if (poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP) {
+    if (selectedLiquiditySource === LiquiditySource.SUSHISWAP) {
       await takeWithSushiSwapFactory({
         pool,
         poolConfig,
@@ -398,7 +498,7 @@ export async function takeLiquidationFactory({
       return true;
     }
 
-    if (poolConfig.take.liquiditySource === LiquiditySource.CURVE) {
+    if (selectedLiquiditySource === LiquiditySource.CURVE) {
       await takeWithCurveFactory({
         pool,
         poolConfig,
@@ -411,7 +511,7 @@ export async function takeLiquidationFactory({
     }
 
     return failFactoryTakeExecution(
-      `Factory: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`
+      `Factory: Unsupported liquidity source: ${selectedLiquiditySource}`
     );
   } catch (error) {
     logger.error(

@@ -29,14 +29,10 @@ export interface GasPolicyResult {
   gasCostNative: number;
   gasCostQuote: number;
   gasCostQuoteRaw?: BigNumber;
+  minProfitNativeQuoteRaw?: BigNumber;
   gasPriceGwei: number;
   quoteTokenDecimals?: number;
   reason?: string;
-}
-
-export interface NativeToQuoteConversion {
-  amountInNative: BigNumber;
-  amountOutQuoteRaw: BigNumber;
 }
 
 export function createDiscoveryTransportsForConfig(
@@ -203,20 +199,6 @@ async function quoteTokensByLiquiditySource(params: {
   return undefined;
 }
 
-function gasQuoteConversionCacheKey(params: {
-  liquiditySource: LiquiditySource;
-  amountIn: BigNumber;
-  tokenIn: string;
-  tokenOut: string;
-}): string {
-  return [
-    params.liquiditySource,
-    params.amountIn.toString(),
-    params.tokenIn.toLowerCase(),
-    params.tokenOut.toLowerCase(),
-  ].join('|');
-}
-
 export async function evaluateGasPolicy(params: {
   signer: Signer;
   config: DiscoveryExecutionConfig;
@@ -225,13 +207,12 @@ export async function evaluateGasPolicy(params: {
     AutoDiscoverActionPolicy,
     'maxGasCostNative' | 'maxGasCostQuote' | 'maxGasPriceGwei'
   > &
-    Pick<AutoDiscoverTakePolicy, 'minExpectedProfitQuote'>;
+    Pick<AutoDiscoverTakePolicy, 'minExpectedProfitQuote' | 'minProfitNative'>;
   gasLimit: BigNumber;
   quoteTokenAddress: string;
   preferredLiquiditySource?: LiquiditySource;
   useProfitFloor?: boolean;
   gasPrice?: BigNumber;
-  nativeToQuoteConversion?: NativeToQuoteConversion;
   rpcCache?: DiscoveryRpcCache;
   chainId?: number;
 }): Promise<GasPolicyResult> {
@@ -276,7 +257,8 @@ export async function evaluateGasPolicy(params: {
   const requiresGasCostQuote =
     params.policy?.maxGasCostQuote !== undefined ||
     (params.useProfitFloor &&
-      params.policy?.minExpectedProfitQuote !== undefined);
+      (params.policy?.minExpectedProfitQuote !== undefined ||
+        params.policy?.minProfitNative !== undefined));
   if (!requiresGasCostQuote) {
     return {
       approved: true,
@@ -299,6 +281,25 @@ export async function evaluateGasPolicy(params: {
       ? params.preferredLiquiditySource
       : resolvedGasQuoteSource;
 
+  const quoteDecimals = await getDecimalsErc20(
+    params.signer,
+    params.quoteTokenAddress
+  );
+
+  if (
+    gasCostNativeRaw.isZero() &&
+    params.policy?.minProfitNative === undefined
+  ) {
+    return {
+      approved: true,
+      gasCostNative,
+      gasCostQuote: 0,
+      gasCostQuoteRaw: BigNumber.from(0),
+      gasPriceGwei,
+      quoteTokenDecimals: quoteDecimals,
+    };
+  }
+
   const wrappedNativeAddress =
     resolveWrappedNativeAddress(
       params.config,
@@ -314,26 +315,10 @@ export async function evaluateGasPolicy(params: {
     };
   }
 
-  const quoteDecimals = await getDecimalsErc20(
-    params.signer,
-    params.quoteTokenAddress
-  );
-
   let gasCostQuote: number;
   let gasCostQuoteRaw: BigNumber;
   if (wrappedNativeAddress.toLowerCase() === params.quoteTokenAddress.toLowerCase()) {
     gasCostQuoteRaw = gasCostNativeRaw;
-    gasCostQuote = Number(
-      ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals)
-    );
-  } else if (
-    params.nativeToQuoteConversion &&
-    params.nativeToQuoteConversion.amountInNative.gt(0)
-  ) {
-    gasCostQuoteRaw = gasCostNativeRaw
-      .mul(params.nativeToQuoteConversion.amountOutQuoteRaw)
-      .add(params.nativeToQuoteConversion.amountInNative.sub(1))
-      .div(params.nativeToQuoteConversion.amountInNative);
     gasCostQuote = Number(
       ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals)
     );
@@ -349,27 +334,15 @@ export async function evaluateGasPolicy(params: {
       };
     }
 
-    const cacheKey = gasQuoteConversionCacheKey({
+    const quotedAmount = await quoteTokensByLiquiditySource({
+      signer: params.signer,
+      config: params.config,
       liquiditySource,
       amountIn: gasCostNativeRaw,
       tokenIn: wrappedNativeAddress,
       tokenOut: params.quoteTokenAddress,
+      chainId,
     });
-    const quoteCache = params.rpcCache?.gasQuoteConversions;
-    let quotedAmount = quoteCache?.get(cacheKey);
-    if (quotedAmount === undefined) {
-      quotedAmount =
-        (await quoteTokensByLiquiditySource({
-          signer: params.signer,
-          config: params.config,
-          liquiditySource,
-          amountIn: gasCostNativeRaw,
-          tokenIn: wrappedNativeAddress,
-          tokenOut: params.quoteTokenAddress,
-          chainId,
-        })) ?? null;
-      quoteCache?.set(cacheKey, quotedAmount);
-    }
     if (!quotedAmount) {
       return {
         approved: false,
@@ -396,12 +369,69 @@ export async function evaluateGasPolicy(params: {
     };
   }
 
+  let minProfitNativeQuoteRaw: BigNumber | undefined;
+  if (params.policy?.minProfitNative !== undefined) {
+    minProfitNativeQuoteRaw = await quoteExactNativeAmountToQuote({
+      signer: params.signer,
+      config: params.config,
+      liquiditySource: preferredLiquiditySource,
+      amountInNative: BigNumber.from(params.policy.minProfitNative),
+      wrappedNativeAddress,
+      quoteTokenAddress: params.quoteTokenAddress,
+      chainId,
+    });
+    if (minProfitNativeQuoteRaw === undefined) {
+      return {
+        approved: false,
+        gasCostNative,
+        gasCostQuote,
+        gasCostQuoteRaw,
+        gasPriceGwei,
+        quoteTokenDecimals: quoteDecimals,
+        reason: 'failed to quote minProfitNative into quote token',
+      };
+    }
+  }
+
   return {
     approved: true,
     gasCostNative,
     gasCostQuote,
     gasCostQuoteRaw,
+    minProfitNativeQuoteRaw,
     gasPriceGwei,
     quoteTokenDecimals: quoteDecimals,
   };
+}
+
+async function quoteExactNativeAmountToQuote(params: {
+  signer: Signer;
+  config: DiscoveryExecutionConfig;
+  liquiditySource?: LiquiditySource;
+  amountInNative: BigNumber;
+  wrappedNativeAddress: string;
+  quoteTokenAddress: string;
+  chainId?: number;
+}): Promise<BigNumber | undefined> {
+  if (params.amountInNative.isZero()) {
+    return BigNumber.from(0);
+  }
+  if (
+    params.wrappedNativeAddress.toLowerCase() ===
+    params.quoteTokenAddress.toLowerCase()
+  ) {
+    return params.amountInNative;
+  }
+  if (params.liquiditySource === undefined) {
+    return undefined;
+  }
+  return await quoteTokensByLiquiditySource({
+    signer: params.signer,
+    config: params.config,
+    liquiditySource: params.liquiditySource,
+    amountIn: params.amountInNative,
+    tokenIn: params.wrappedNativeAddress,
+    tokenOut: params.quoteTokenAddress,
+    chainId: params.chainId,
+  });
 }

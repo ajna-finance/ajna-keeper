@@ -12,11 +12,8 @@ import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
-  MARKET_FACTOR_SCALE,
-  ceilDiv,
+  buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
-  getMarketPriceFactorUnits,
-  getQuoteAmountDueRaw,
   getSwapDeadline,
 } from './shared';
 import {
@@ -32,6 +29,7 @@ export async function evaluateSushiSwapFactoryQuote({
   config,
   signer,
   runtimeCache,
+  feeTier,
 }: {
   pool: FungiblePool;
   auctionPriceWad: BigNumber;
@@ -40,6 +38,7 @@ export async function evaluateSushiSwapFactoryQuote({
   config: Pick<FactoryQuoteConfig, 'sushiswapRouterOverrides'>;
   signer: Signer;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  feeTier?: number;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (!config.sushiswapRouterOverrides) {
     logger.debug(`Factory: No sushiswapRouterOverrides configured for pool ${pool.name}`);
@@ -99,11 +98,12 @@ export async function evaluateSushiSwapFactoryQuote({
       )} collateral in pool ${pool.name}`
     );
 
+    const selectedFeeTier = feeTier ?? sushiConfig.defaultFeeTier ?? 500;
     const quoteResult = await quoteProvider.getQuote(
       collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
-      sushiConfig.defaultFeeTier
+      selectedFeeTier
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
@@ -131,7 +131,6 @@ export async function evaluateSushiSwapFactoryQuote({
       };
     }
 
-    const marketPrice = quoteAmount / collateralAmount;
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
       logger.debug(`Factory: No marketPriceFactor configured for pool ${pool.name}`);
@@ -141,28 +140,25 @@ export async function evaluateSushiSwapFactoryQuote({
       };
     }
 
-    const takeablePrice = marketPrice * marketPriceFactor;
-    const profitabilityFloor = ceilDiv(
-      (await getQuoteAmountDueRaw(pool, auctionPriceWad, collateral)).mul(MARKET_FACTOR_SCALE),
-      BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
-    );
-    const profitable = quoteAmountRaw.gte(profitabilityFloor);
+    const evaluation = await buildFactoryQuoteEvaluation({
+      pool,
+      auctionPriceWad,
+      collateral,
+      marketPriceFactor,
+      quoteAmountRaw,
+      quoteAmount,
+      collateralAmount,
+      selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+      selectedFeeTier,
+      failureReason:
+        'quoted output below required SushiSwap profitability floor',
+    });
 
     logger.debug(
-      `SushiSwap price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${marketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`
+      `SushiSwap price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${(evaluation.marketPrice ?? 0).toFixed(4)}, takeable=${(evaluation.takeablePrice ?? 0).toFixed(4)}, feeTier=${selectedFeeTier}, profitable=${evaluation.isTakeable}`
     );
 
-    return {
-      isTakeable: profitable,
-      marketPrice,
-      takeablePrice,
-      quoteAmount,
-      quoteAmountRaw,
-      collateralAmount,
-      reason: profitable
-        ? undefined
-        : 'quoted output below required SushiSwap profitability floor',
-    };
+    return evaluation;
   } catch (error) {
     logger.error(`Factory: Error getting SushiSwap quote for pool ${pool.name}: ${error}`);
     return {
@@ -222,7 +218,10 @@ export async function executeSushiSwapFactoryTake({
   const swapDetails = {
     swapRouter: config.sushiswapRouterOverrides.swapRouterAddress!,
     targetToken: pool.quoteAddress,
-    feeTier: config.sushiswapRouterOverrides.defaultFeeTier || 500,
+    feeTier:
+      quoteEvaluation.selectedFeeTier ??
+      config.sushiswapRouterOverrides.defaultFeeTier ??
+      500,
     amountOutMinimum: minimalAmountOut,
     deadline,
   };
@@ -244,7 +243,7 @@ export async function executeSushiSwapFactoryTake({
         liquidation.borrower,
         liquidation.auctionPrice,
         liquidation.collateral,
-        Number(poolConfig.take.liquiditySource),
+        Number(LiquiditySource.SUSHISWAP),
         swapDetails.swapRouter,
         encodedSwapDetails,
       ] as const;

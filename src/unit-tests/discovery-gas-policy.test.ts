@@ -12,7 +12,7 @@ describe('Discovery Gas Policy', () => {
     sinon.restore();
   });
 
-  it('reuses cached native-to-quote gas conversions within a discovery cycle', async () => {
+  it('quotes native-to-quote gas conversions fresh within a discovery cycle', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const oneInchQuoteStub = sinon
       .stub(DexRouter.prototype, 'getQuoteFromOneInch')
@@ -68,8 +68,8 @@ describe('Discovery Gas Policy', () => {
     expect(secondResult.approved).to.be.true;
     expect(firstResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to.be.true;
     expect(firstResult.quoteTokenDecimals).to.equal(6);
-    expect(oneInchQuoteStub.calledOnce).to.be.true;
-    expect(rpcCache.gasQuoteConversions.size).to.equal(1);
+    expect(oneInchQuoteStub.calledTwice).to.be.true;
+    expect(rpcCache.gasQuoteConversions.size).to.equal(0);
   });
 
   it('uses the cached discovery chainId instead of calling signer.getChainId per evaluation', async () => {
@@ -280,5 +280,65 @@ describe('Discovery Gas Policy', () => {
     expect(oneInchQuoteStub.called).to.be.false;
     expect(uniswapAvailabilityStub.calledOnce).to.be.true;
     expect(uniswapQuoteStub.calledOnce).to.be.true;
+  });
+
+  it('quotes minProfitNative as a fresh exact native amount separate from gas cost', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const gasCostNativeRaw = ethers.utils.parseUnits('1', 'gwei').mul(900000);
+    const minProfitNative = ethers.utils.parseEther('0.01');
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .callsFake(async (_chainId, amountIn: BigNumber) => ({
+        success: true,
+        dstAmount: amountIn.eq(gasCostNativeRaw)
+          ? ethers.utils.parseUnits('1', 6).toString()
+          : ethers.utils.parseUnits('20', 6).toString(),
+      }));
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(8453),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+          },
+        },
+        oneInchRouters: {
+          8453: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        minProfitNative: minProfitNative.toString(),
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      useProfitFloor: true,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 8453,
+        gasQuoteConversions: new Map<string, BigNumber | null>(),
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to.be.true;
+    expect(
+      result.minProfitNativeQuoteRaw?.eq(ethers.utils.parseUnits('20', 6))
+    ).to.be.true;
+    expect(oneInchQuoteStub.calledTwice).to.be.true;
   });
 });

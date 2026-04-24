@@ -21,13 +21,14 @@ This plan combines:
 
 - Evaluation and execution must use the same approved route.
 - Execution must not silently switch DEXs or fee tiers.
-- `amountOutMinimum` continues to come from the approved quote and profitability floor.
+- `amountOutMinimum` must come from the approved route quote and the exact execution floor approved during evaluation.
 - Route-specific gas cost must be included before route ranking.
 - Route ranking must optimize expected net profit after gas and slippage/risk buffers, after filtering routes that fail configured floors.
 - New route selection applies only to factory external takes, not the legacy 1inch path.
 - No keeper-level ERC20 pre-approvals to taker contracts are needed for this work.
 - Curve is Phase 2 because current Curve support is config-driven, not registry-driven.
 - Candidate-level context should be computed once and passed through the selector and DEX adapters.
+- Native-to-quote conversion rates should not be cached in v1. Quote fresh for each candidate/source where conversion is needed.
 
 ## Recommended Implementation Order
 
@@ -40,16 +41,16 @@ Changes:
 - Add `AutoDiscoverTakePolicy.minProfitNative?: string` in wei.
 - Extend validation for decimal-string BigInt parsing and non-negativity.
 - Extend [src/discovery/gas-policy.ts](/home/mike/Projects-2026/ajna-keeper/src/discovery/gas-policy.ts) so native-to-quote conversion is requested when `minProfitNative` is set.
-- Add a shared helper that converts native wei to quote-token raw units from `NativeToQuoteConversion`.
-- Reuse the same conversion for gas cost and native profit floor.
+- Add a shared helper that quotes an exact native wei amount into quote-token raw units.
+- Do not reuse a native-to-quote conversion ratio across different native input amounts.
 - Reject a candidate if `minProfitNative` is set and conversion fails.
 - Extend existing arb-take gating so arb takes remain disabled when any quote-denominated profit floor is active.
 
 RPC impact:
 
 - No new RPC infrastructure.
-- If gas policy already needed native-to-quote conversion, this adds only integer math.
-- If no existing policy needed conversion, this adds one existing conversion quote per candidate.
+- If gas policy and `minProfitNative` both require conversion, quote each exact native input amount fresh.
+- This may add a small number of liquidation-gated quote calls, but avoids stale or size-mismatched conversion risk.
 
 ### Phase 2: Dynamic Fee Tier Selection
 
@@ -107,8 +108,8 @@ Execution invariant:
 RPC impact:
 
 - With UniV3 and SushiSwap and three tiers each, cold path is up to six existence checks plus six route quote calls.
-- Native-to-quote conversion can be up to one per source when route-specific gas/profit floors are active.
-- Cache native-to-quote conversion by `(chain, quoteToken, liquiditySource, block-or-loop-id)` where possible.
+- Native-to-quote conversion can be up to two fresh conversion quotes per source when both route execution cost and `minProfitNative` are active.
+- Do not cache native-to-quote conversion rates in v1. The call volume is liquidation-gated, and fresh conversion is safer for profitability.
 
 ### Phase 4: Curve Dynamic Source Selection
 
@@ -139,6 +140,14 @@ type FactoryRouteCandidate = {
 };
 ```
 
+Unit rules:
+
+- Use `ethers.BigNumber` for current-code compatibility unless the implementation migrates a whole module to `bigint`.
+- `collateralAmountRaw` is collateral token raw units.
+- `auctionPriceWad` and market prices are WAD-scaled unless explicitly named otherwise.
+- Quote-token amounts with `Raw` suffix are quote token raw units.
+- Human-readable `number` values are only for logs and operator messages, not route ranking.
+
 Suggested per-candidate context:
 
 ```ts
@@ -150,18 +159,22 @@ type RouteEvaluationContext = {
   collateralToken: Address;
   quoteTokenDecimals: number;
   collateralTokenDecimals: number;
-  collateralAmount: bigint;
-  auctionRepayRequirementRaw: bigint;
-  marketPriceRaw: bigint;
-  currentGasPrice: bigint;
-  minExpectedProfitQuoteRaw?: bigint;
-  minProfitNativeWei?: bigint;
+  collateralAmountRaw: BigNumber;
+  auctionPriceWad: BigNumber;
+  auctionRepayRequirementQuoteRaw: BigNumber;
+  referenceMarketPriceWad?: BigNumber;
+  effectiveMarketPriceFactor: number;
+  currentGasPriceWei: BigNumber;
+  minExpectedProfitQuoteRaw?: BigNumber;
+  minProfitNativeWei?: BigNumber;
   defaultLiquiditySource: LiquiditySource;
   defaultFeeTierBySource: Partial<Record<LiquiditySource, number>>;
 };
 ```
 
 Build this once per candidate. DEX adapters should not re-fetch token decimals, default tiers, market price, auction repay requirements, or gas inputs.
+
+`referenceMarketPriceWad` is optional context for logs, defensive thresholds, and future non-route price checks. It must not replace route-specific quote output in profitability scoring. Route profitability is determined from the actual route quote because that is what determines execution proceeds.
 
 Suggested selected quote fields:
 
@@ -172,6 +185,22 @@ type ExternalTakeQuoteEvaluation = {
   // existing quote, collateral, market price, and reason fields
 };
 ```
+
+Suggested approved route object:
+
+```ts
+type ApprovedFactoryRouteQuote = ExternalTakeQuoteEvaluation & {
+  selectedLiquiditySource: LiquiditySource;
+  selectedFeeTier?: number;
+  quoteAmountRaw: BigNumber;
+  approvedMinOutRaw: BigNumber;
+  profitability: RouteProfitability;
+};
+```
+
+`ApprovedFactoryRouteQuote` is the object execution should consume. It makes the selected route and execution floor explicit instead of requiring execution to recompute policy from loosely related fields.
+
+`quoteAmountRaw` is required on `ApprovedFactoryRouteQuote`. Do not add a second route-output field such as `expectedQuoteOutRaw`; that creates two sources of truth.
 
 Rules:
 
@@ -188,21 +217,24 @@ Create one shared profitability helper instead of duplicating floor math in Unis
 
 ```ts
 type RouteProfitability = {
-  routeGasCostQuoteRaw: bigint;
-  nativeProfitFloorQuoteRaw: bigint;
-  configuredProfitFloorQuoteRaw: bigint;
-  slippageRiskBufferQuoteRaw: bigint;
-  requiredProfitFloorQuoteRaw: bigint;
-  expectedNetProfitQuoteRaw: bigint;
-  surplusOverFloorQuoteRaw: bigint;
+  routeExecutionCostQuoteRaw: BigNumber;
+  nativeProfitFloorQuoteRaw: BigNumber;
+  configuredProfitFloorQuoteRaw: BigNumber;
+  slippageRiskBufferQuoteRaw: BigNumber;
+  marketFactorFloorQuoteRaw: BigNumber;
+  requiredProfitFloorQuoteRaw: BigNumber;
+  requiredOutputFloorQuoteRaw: BigNumber;
+  expectedNetProfitQuoteRaw: BigNumber;
+  surplusOverFloorQuoteRaw: BigNumber;
   isProfitable: boolean;
 };
 ```
 
 Responsibilities:
 
-- convert native gas and native profit floor to quote-token raw units
+- quote exact native gas and native profit floor amounts into quote-token raw units
 - apply `minExpectedProfitQuote`
+- preserve the existing `marketPriceFactor` floor
 - apply route-specific gas estimates
 - apply any configured slippage or risk buffer
 - return both expected net profit and surplus over the required floor
@@ -218,7 +250,12 @@ type FactoryRouteAdapter = {
   liquiditySource: LiquiditySource;
   exists(route: FactoryRouteCandidate, context: RouteEvaluationContext): Promise<boolean>;
   quote(route: FactoryRouteCandidate, context: RouteEvaluationContext): Promise<RouteQuote | null>;
-  buildTakeArgs(route: FactoryRouteCandidate, quote: ExternalTakeQuoteEvaluation): TakeArgs;
+  buildTakeArgs(args: {
+    route: FactoryRouteCandidate;
+    approvedQuote: ApprovedFactoryRouteQuote;
+    context: RouteEvaluationContext;
+    config: FactoryExecutionConfig;
+  }): TakeArgs;
 };
 ```
 
@@ -251,11 +288,14 @@ Flow:
 7. Reject routes with non-positive `surplusOverFloorQuoteRaw`.
 8. Rank profitable routes by highest `expectedNetProfitQuoteRaw`.
 9. Break ties by configured default source, then default fee tier.
-10. Return the approved quote with selected route metadata and profitability details.
+10. Compute `approvedMinOutRaw` from the selected route quote and approved execution floor.
+11. Return `ApprovedFactoryRouteQuote` with selected route metadata and profitability details.
 
 This avoids duplicating profitability rules in Uniswap and Sushi adapters.
 
-Probe ordering is a latency optimization, not a correctness shortcut. When budget allows, the selector should still evaluate every viable route before choosing. If a quote budget is exhausted, logs must show which routes were skipped.
+Probe ordering is a latency optimization, not a correctness shortcut. When budget allows, the selector should still evaluate every viable route before choosing. If a quote budget is exhausted, the selector returns the best probed route, not the globally best route. Logs must say that the decision was budget-limited and list the skipped routes.
+
+Use a per-candidate route quote budget for this selector. Any existing per-run autodiscover quote budget remains an outer limiter that can stop candidate processing before route selection starts.
 
 ## Gas And Profit Floor Handling
 
@@ -263,17 +303,41 @@ Route ranking must use route-specific gas cost before choosing the winner:
 
 ```text
 routeGasCostNative = gasUsed[route.liquiditySource] * currentGasPrice
-routeGasCostQuoteRaw = nativeToQuote(routeGasCostNative, route.liquiditySource)
+routeExecutionCostNative = routeGasCostNative + routeL1DataFeeNative + routeOtherNativeFees
+routeExecutionCostQuoteRaw = nativeToQuote(routeExecutionCostNative, route.liquiditySource)
 nativeProfitFloorQuoteRaw = nativeToQuote(minProfitNative, route.liquiditySource)
-grossProfitQuoteRaw = expectedQuoteOutRaw - auctionRepayRequirementRaw
-expectedNetProfitQuoteRaw = grossProfitQuoteRaw - routeGasCostQuoteRaw - slippageRiskBufferQuoteRaw
-requiredProfitFloorQuoteRaw = max(nativeProfitFloorQuoteRaw, minExpectedProfitQuoteRaw)
-surplusOverFloorQuoteRaw = expectedNetProfitQuoteRaw - requiredProfitFloorQuoteRaw
+grossProfitQuoteRaw = quoteAmountRaw - auctionRepayRequirementQuoteRaw
+expectedNetProfitQuoteRaw = grossProfitQuoteRaw - routeExecutionCostQuoteRaw - slippageRiskBufferQuoteRaw
+marketFactorFloorQuoteRaw = auctionRepayRequirementQuoteRaw / effectiveMarketPriceFactor
+requiredProfitFloorQuoteRaw = max(nativeProfitFloorQuoteRaw, configuredProfitFloorQuoteRaw)
+requiredOutputFloorQuoteRaw = max(
+  marketFactorFloorQuoteRaw,
+  auctionRepayRequirementQuoteRaw
+    + routeExecutionCostQuoteRaw
+    + requiredProfitFloorQuoteRaw
+    + slippageRiskBufferQuoteRaw
+)
+surplusOverFloorQuoteRaw = quoteAmountRaw - requiredOutputFloorQuoteRaw
 ```
 
 The selector should not choose the highest gross quote and then apply gas afterward. That can choose the wrong route when a DEX has materially higher execution gas. First reject routes below the required floor, then select the viable route with the highest `expectedNetProfitQuoteRaw`; use gross quote only as a final tie-breaker if net profit is equal.
 
-`amountOutMinimum` remains execution protection, not the route-ranking score. It should continue to be derived from the approved quote and required floor after the route has been selected.
+`marketFactorFloorQuoteRaw` must preserve the current factory invariant from `computeFactoryAmountOutMinimum`: roughly `auctionRepayRequirementQuoteRaw / marketPriceFactor`, with the same integer ceiling behavior as the current helper.
+
+On Base, Optimism, Arbitrum, and other L2s, `routeExecutionCostNative` must include L1 data fee or any equivalent additional execution fee if the chain exposes it. If that fee is not available in v1, use a conservative configured buffer and log that the estimate excludes live L1 data fee.
+
+`amountOutMinimum` remains execution protection, not the route-ranking score. It must be derived from the approved quote and approved route floor after route selection:
+
+```text
+approvedExecutionFloorQuoteRaw =
+  requiredOutputFloorQuoteRaw
+
+approvedMinOutRaw = max(existingSlippageFloorRaw, approvedExecutionFloorQuoteRaw)
+```
+
+Execution should consume `approvedMinOutRaw` from `ApprovedFactoryRouteQuote`. It should not recompute a weaker floor from only market factor and slippage.
+
+`slippageRiskBufferQuoteRaw` is an explicit profitability/risk buffer. Do not also derive it from the same configured execution slippage used for `existingSlippageFloorRaw`, or the plan will double-count slippage.
 
 ## Caching And Reuse
 
@@ -282,13 +346,14 @@ Runtime caches that improve profitability and efficacy without changing behavior
 - Token decimals by `(chain, token)`.
 - Quote providers, router helpers, and taker contract instances by `(chain, liquiditySource)`.
 - Pool-existence checks by `(chain, liquiditySource, tokenA, tokenB, feeTier)`.
-- Native-to-quote conversion by `(chain, quoteToken, liquiditySource, block-or-loop-id)`.
 - Recent route success metadata by `(chain, liquiditySource, tokenA, tokenB, feeTier)` for probe ordering.
 
 Cache rules:
 
 - Existence cache can use a short TTL because pool existence rarely changes.
-- Native conversion cache should be scoped to one loop or block-height window.
+- Existence means the pool contract exists, not that it has viable liquidity.
+- Quote failures should mark a route unusable only for the current candidate or a very short TTL. Do not permanently cache quote failure as pool absence.
+- Native-to-quote conversions should be quoted fresh per candidate/source in v1. Do not cache conversion rates; stale or size-mismatched conversion can directly hurt route profitability.
 - Recent-success cache is only for ordering; it must not skip a route that is still inside the quote budget.
 - Provider and decimals caches can live for the process lifetime.
 
@@ -313,7 +378,7 @@ Keep v1 conservative:
 - UniV3 and SushiSwap only for dynamic source selection
 - no same-cycle retry
 - no parallel route fanout
-- no cross-candidate quote cache beyond small existence and native-conversion caches
+- no cross-candidate quote cache beyond low-risk existence and metadata caches
 - shared candidate context so adapters do not recompute decimals, market price, gas inputs, or floors
 - default/recent-success routes probed first, with full evaluation when quote budget allows
 
@@ -325,6 +390,7 @@ Telemetry to add:
 - route-specific gas estimate used in the floor
 - expected net profit, surplus over floor, and each floor component used for scoring
 - routes skipped because quote budget was exhausted
+- approved minimum output used for execution
 - execution revert reason and selected route metadata
 - observed gas divergence from configured route gas estimate
 
@@ -341,6 +407,8 @@ Unit tests:
 - selector filters by `surplusOverFloorQuoteRaw` and ranks by `expectedNetProfitQuoteRaw`, not gross `quoteAmountRaw`.
 - adapters receive shared `RouteEvaluationContext` and do not recompute token decimals or floor inputs.
 - recent-success probe ordering changes probe order but not selected route when budget allows all routes.
+- quote-budget exhaustion returns best probed route and logs skipped routes.
+- `approvedMinOutRaw` preserves the market-factor floor and includes auction repayment, route execution cost, required profit floor, and slippage/risk buffer.
 - 1inch and Curve are rejected from v1 `allowedLiquiditySources`.
 
 Integration tests:
@@ -351,7 +419,7 @@ Integration tests:
 - autodiscover candidate where SushiSwap wins.
 - stale selected route reverts safely under `amountOutMinimum` rather than reselecting.
 - warm pool-existence cache reduces repeated missing-route checks.
-- native-to-quote conversion is reused across fee tiers for the same source in one candidate evaluation.
+- native-to-quote conversion is quoted fresh per candidate/source and is not reused as a cached conversion rate.
 
 Phase 4 integration tests:
 

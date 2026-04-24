@@ -12,11 +12,8 @@ import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
-  MARKET_FACTOR_SCALE,
-  ceilDiv,
+  buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
-  getMarketPriceFactorUnits,
-  getQuoteAmountDueRaw,
   getSwapDeadline,
 } from './shared';
 import {
@@ -32,6 +29,7 @@ export async function evaluateUniswapV3FactoryQuote({
   config,
   signer,
   runtimeCache,
+  feeTier,
 }: {
   pool: FungiblePool;
   auctionPriceWad: BigNumber;
@@ -40,6 +38,7 @@ export async function evaluateUniswapV3FactoryQuote({
   config: Pick<FactoryQuoteConfig, 'universalRouterOverrides'>;
   signer: Signer;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  feeTier?: number;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (!config.universalRouterOverrides) {
     logger.debug(`Factory: No universalRouterOverrides configured for pool ${pool.name}`);
@@ -100,11 +99,12 @@ export async function evaluateUniswapV3FactoryQuote({
       )} collateral in pool ${pool.name}`
     );
 
+    const selectedFeeTier = feeTier ?? routerConfig.defaultFeeTier ?? 3000;
     const quoteResult = await quoteProvider.getQuote(
       collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
-      routerConfig.defaultFeeTier
+      selectedFeeTier
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
@@ -134,7 +134,6 @@ export async function evaluateUniswapV3FactoryQuote({
       };
     }
 
-    const officialMarketPrice = quoteAmount / collateralAmount;
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
       logger.debug(`Factory: No marketPriceFactor configured for pool ${pool.name}`);
@@ -144,28 +143,24 @@ export async function evaluateUniswapV3FactoryQuote({
       };
     }
 
-    const takeablePrice = officialMarketPrice * marketPriceFactor;
-    const profitabilityFloor = ceilDiv(
-      (await getQuoteAmountDueRaw(pool, auctionPriceWad, collateral)).mul(MARKET_FACTOR_SCALE),
-      BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
-    );
-    const profitable = quoteAmountRaw.gte(profitabilityFloor);
+    const evaluation = await buildFactoryQuoteEvaluation({
+      pool,
+      auctionPriceWad,
+      collateral,
+      marketPriceFactor,
+      quoteAmountRaw,
+      quoteAmount,
+      collateralAmount,
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier,
+      failureReason: 'quoted output below required Uniswap V3 profitability floor',
+    });
 
     logger.debug(
-      `Price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${officialMarketPrice.toFixed(4)}, takeable=${takeablePrice.toFixed(4)}, profitable=${profitable}`
+      `Price check: pool=${pool.name}, auction=${auctionPrice.toFixed(4)}, market=${(evaluation.marketPrice ?? 0).toFixed(4)}, takeable=${(evaluation.takeablePrice ?? 0).toFixed(4)}, source=UNISWAPV3 feeTier=${selectedFeeTier}, profitable=${evaluation.isTakeable}`
     );
 
-    return {
-      isTakeable: profitable,
-      marketPrice: officialMarketPrice,
-      takeablePrice,
-      quoteAmount,
-      quoteAmountRaw,
-      collateralAmount,
-      reason: profitable
-        ? undefined
-        : 'quoted output below required Uniswap V3 profitability floor',
-    };
+    return evaluation;
   } catch (error) {
     logger.error(`Factory: Error getting official Uniswap V3 quote for pool ${pool.name}: ${error}`);
     return {
@@ -226,7 +221,10 @@ export async function executeUniswapV3FactoryTake({
     universalRouter: config.universalRouterOverrides.universalRouterAddress!,
     permit2: config.universalRouterOverrides.permit2Address!,
     targetToken: pool.quoteAddress,
-    feeTier: config.universalRouterOverrides.defaultFeeTier || 3000,
+    feeTier:
+      quoteEvaluation.selectedFeeTier ??
+      config.universalRouterOverrides.defaultFeeTier ??
+      3000,
     amountOutMinimum: minimalAmountOut,
     deadline,
   };
@@ -255,7 +253,7 @@ export async function executeUniswapV3FactoryTake({
         liquidation.borrower,
         liquidation.auctionPrice,
         liquidation.collateral,
-        Number(poolConfig.take.liquiditySource),
+        Number(LiquiditySource.UNISWAPV3),
         swapDetails.universalRouter,
         encodedSwapDetails,
       ] as const;

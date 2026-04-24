@@ -69,4 +69,38 @@ describe('Factory amountOutMinimum', () => {
 
     expect(amountOutMinimum.eq(ethers.utils.parseEther('100'))).to.be.true;
   });
+
+  it('preserves the approved route floor when it is stricter than slippage and market-factor floors', async () => {
+    const pool = {
+      contract: {
+        quoteTokenScale: async () => BigNumber.from(1),
+      },
+    };
+
+    const liquidation = {
+      collateral: ethers.utils.parseEther('100'),
+      auctionPrice: ethers.utils.parseEther('1'),
+    };
+
+    const quoteEvaluation = {
+      isTakeable: true,
+      quoteAmountRaw: ethers.utils.parseEther('126'),
+      approvedMinOutRaw: ethers.utils.parseEther('125'),
+    };
+
+    const amountOutMinimum = await computeFactoryAmountOutMinimum({
+      pool: pool as any,
+      liquidation,
+      quoteEvaluation,
+      liquiditySource: LiquiditySource.UNISWAPV3,
+      config: {
+        universalRouterOverrides: {
+          defaultSlippage: 1.0,
+        },
+      },
+      marketPriceFactor: 0.99,
+    });
+
+    expect(amountOutMinimum.eq(ethers.utils.parseEther('125'))).to.be.true;
+  });
 });
