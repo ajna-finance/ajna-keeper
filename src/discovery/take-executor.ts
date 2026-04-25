@@ -48,6 +48,10 @@ const DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS = 2_000;
 const DEFAULT_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS = 30_000;
 const DEFAULT_ONEINCH_QUOTE_FAILURE_THRESHOLD = 2;
 
+type AutoDiscoverTakePolicyRuntime = ReturnType<
+  typeof getAutoDiscoverTakePolicy
+>;
+
 function isDynamicFactorySource(
   source: LiquiditySource | undefined
 ): source is
@@ -631,6 +635,39 @@ interface DiscoveredTakeTargetStats {
   executedArbTakes: number;
 }
 
+interface ExternalTakeApprovalInput {
+  price: number;
+  auctionPrice: BigNumber;
+  collateral: BigNumber;
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  countStats?: boolean;
+  forceGasRefresh?: boolean;
+}
+
+interface FactoryPathQuoteInput {
+  pool: FungiblePool;
+  signer: Signer;
+  poolConfig: ResolvedTakeTarget;
+  auctionPrice: BigNumber;
+  collateral: BigNumber;
+}
+
+interface OneInchPathQuoteInput extends FactoryPathQuoteInput {
+  price: number;
+}
+
+type DiscoveryExternalTakeApprover = (
+  approvalParams: ExternalTakeApprovalInput
+) => Promise<{ approved: boolean; reason?: string }>;
+
+type FactoryPathQuoteFn = (
+  quoteParams: FactoryPathQuoteInput
+) => Promise<ExternalTakeQuoteEvaluation>;
+
+type OneInchPathQuoteFn = (
+  quoteParams: OneInchPathQuoteInput
+) => Promise<ExternalTakeQuoteEvaluation>;
+
 interface HandleDiscoveredTakeTargetParamsBase {
   pool: FungiblePool;
   signer: Signer;
@@ -729,6 +766,794 @@ function enforceExternalTakeTransportPolicy(params: {
   return true;
 }
 
+async function approveExternalTakeForDiscovery(params: {
+  pool: FungiblePool;
+  signer: Signer;
+  config: DiscoveryExecutionConfig;
+  transports: DiscoveryReadTransports;
+  target: ResolvedTakeTarget;
+  rpcCache?: DiscoveryRpcCache;
+  takePolicy: AutoDiscoverTakePolicyRuntime;
+  takeWriteTransport?: TakeWriteTransport;
+  stats: Pick<
+    DiscoveredTakeTargetStats,
+    'gasPolicyRejects' | 'profitFloorRejects'
+  >;
+} & ExternalTakeApprovalInput): Promise<{ approved: boolean; reason?: string }> {
+  const {
+    pool,
+    signer,
+    config,
+    transports,
+    target,
+    rpcCache,
+    takePolicy,
+    takeWriteTransport,
+    stats,
+    price,
+    auctionPrice,
+    collateral,
+    quoteEvaluation,
+  } = params;
+  const countStats = params.countStats ?? true;
+
+  let selectedLiquiditySource = quoteEvaluation.selectedLiquiditySource;
+  if (selectedLiquiditySource === undefined) {
+    const configuredLiquiditySource = target.take.liquiditySource;
+    if (
+      configuredLiquiditySource !== LiquiditySource.ONEINCH &&
+      isDynamicFactorySource(configuredLiquiditySource)
+    ) {
+      return {
+        approved: false,
+        reason: 'factory route approval missing selected liquidity source',
+      };
+    }
+    selectedLiquiditySource = configuredLiquiditySource;
+  }
+  const selectedFactoryLiquiditySource =
+    selectedLiquiditySource !== undefined &&
+    isDynamicFactorySource(selectedLiquiditySource)
+      ? selectedLiquiditySource
+      : undefined;
+  if (selectedLiquiditySource !== undefined && !params.forceGasRefresh) {
+    const freshness = hasFreshFactoryRouteGasPolicy({
+      quoteEvaluation,
+      currentGasPrice: rpcCache?.gasPrice,
+      chainId: rpcCache?.chainId,
+      takePolicy,
+    });
+    if (freshness.fresh) {
+      logger.debug(
+        `Discovered external take using fresh gas policy: ${formatExternalTakeGasTelemetry(
+          {
+            poolAddress: target.poolAddress,
+            path: quoteEvaluation.externalTakePath,
+            source: selectedLiquiditySource,
+            routeProfitability: quoteEvaluation.routeProfitability,
+            rpcCache,
+            takePolicy,
+            writeTransport: takeWriteTransport,
+          }
+        )}`
+      );
+      return { approved: true };
+    }
+  }
+
+  await refreshDiscoveryGasPriceIfStale({
+    rpcCache,
+    transports,
+    maxAgeMs: getDiscoveryGasPriceFreshnessTtlMs(
+      takePolicy,
+      rpcCache?.chainId
+    ),
+    force: params.forceGasRefresh,
+  });
+
+  if (selectedLiquiditySource !== undefined) {
+    const refreshedFreshness = hasFreshFactoryRouteGasPolicy({
+      quoteEvaluation,
+      currentGasPrice: rpcCache?.gasPrice,
+      chainId: rpcCache?.chainId,
+      takePolicy,
+    });
+    if (refreshedFreshness.fresh) {
+      logger.debug(
+        `Discovered external take gas drift check passed: ${formatExternalTakeGasTelemetry(
+          {
+            poolAddress: target.poolAddress,
+            path: quoteEvaluation.externalTakePath,
+            source: selectedLiquiditySource,
+            routeProfitability: quoteEvaluation.routeProfitability,
+            rpcCache,
+            takePolicy,
+            writeTransport: takeWriteTransport,
+          }
+        )}`
+      );
+      return { approved: true };
+    }
+    if (refreshedFreshness.reason) {
+      logger.debug(
+        `Refreshing discovered external take gas policy because ${refreshedFreshness.reason}: ${formatExternalTakeGasTelemetry(
+          {
+            poolAddress: target.poolAddress,
+            path: quoteEvaluation.externalTakePath,
+            source: selectedLiquiditySource,
+            routeProfitability: quoteEvaluation.routeProfitability,
+            rpcCache,
+            takePolicy,
+            writeTransport: takeWriteTransport,
+          }
+        )}`
+      );
+    }
+  }
+
+  const routeGasLimit =
+    selectedLiquiditySource !== undefined
+      ? getExternalTakeGasLimit(takePolicy, selectedLiquiditySource)
+      : EXTERNAL_TAKE_GAS_LIMIT;
+  const gasPolicy = await evaluateGasPolicy({
+    signer,
+    config,
+    transports,
+    policy: takePolicy,
+    gasLimit: routeGasLimit,
+    quoteTokenAddress: pool.quoteAddress,
+    preferredLiquiditySource: selectedLiquiditySource,
+    useProfitFloor: true,
+    gasPrice: rpcCache?.gasPrice,
+    chainId: rpcCache?.chainId,
+    rpcCache,
+  });
+  if (!gasPolicy.approved) {
+    if (countStats) {
+      stats.gasPolicyRejects += 1;
+    }
+    logger.warn(
+      `Discovered external take gas policy rejected: ${gasPolicy.reason ?? 'unknown reason'} ${formatExternalTakeGasTelemetry(
+        {
+          poolAddress: target.poolAddress,
+          path: quoteEvaluation.externalTakePath,
+          source: selectedLiquiditySource,
+          routeProfitability: quoteEvaluation.routeProfitability,
+          rpcCache,
+          takePolicy,
+          writeTransport: takeWriteTransport,
+        }
+      )}`
+    );
+    return {
+      approved: false,
+      reason: gasPolicy.reason,
+    };
+  }
+
+  const quoteAmountRaw = quoteEvaluation.quoteAmountRaw;
+  const gasCostQuoteRaw = gasPolicy.gasCostQuoteRaw;
+  const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
+  const hasQuoteProfitFloor =
+    minExpectedProfitQuote !== undefined ||
+    takePolicy?.minProfitNative !== undefined;
+  const needsSimpleProfitability =
+    quoteAmountRaw !== undefined &&
+    (takePolicy?.allowedExternalTakePaths !== undefined ||
+      hasQuoteProfitFloor ||
+      gasCostQuoteRaw !== undefined);
+  let quoteTokenDecimals = gasPolicy.quoteTokenDecimals;
+  if (quoteTokenDecimals === undefined && needsSimpleProfitability) {
+    quoteTokenDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
+  }
+  const auctionCostQuoteRaw =
+    quoteTokenDecimals !== undefined
+      ? getAuctionCostQuoteRaw({
+          price: auctionPrice,
+          collateral,
+          quoteTokenDecimals,
+        })
+      : undefined;
+  if (quoteAmountRaw && auctionCostQuoteRaw) {
+    applySimpleQuoteProfitability({
+      quoteEvaluation,
+      auctionCostQuoteRaw,
+      routeGasLimit,
+      gasCostQuoteRaw,
+      gasPriceRaw: gasPolicy.gasPriceRaw,
+      gasPriceGwei: gasPolicy.gasPriceGwei,
+      gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
+      gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
+        takePolicy,
+        rpcCache?.chainId
+      ),
+      l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
+    });
+  } else if (quoteAmountRaw) {
+    quoteEvaluation.routeProfitability = {
+      ...quoteEvaluation.routeProfitability,
+      routeGasLimit,
+      gasPriceWei: gasPolicy.gasPriceRaw,
+      gasPriceGwei: gasPolicy.gasPriceGwei,
+      gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
+      gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
+        takePolicy,
+        rpcCache?.chainId
+      ),
+      l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
+      gasPolicyEvaluatedAt: Date.now(),
+    };
+  }
+
+  if (hasQuoteProfitFloor) {
+    const minExpectedProfitQuoteRaw =
+      quoteTokenDecimals !== undefined && minExpectedProfitQuote !== undefined
+        ? decimaledToWei(minExpectedProfitQuote, quoteTokenDecimals)
+        : ZERO;
+    const canApplyFactoryProfitability =
+      selectedFactoryLiquiditySource !== undefined &&
+      quoteAmountRaw !== undefined &&
+      gasCostQuoteRaw !== undefined &&
+      quoteTokenDecimals !== undefined;
+
+    if (canApplyFactoryProfitability) {
+      const refreshedEvaluation = applyFactoryRouteProfitabilityPolicy({
+        evaluation: quoteEvaluation,
+        liquiditySource: selectedFactoryLiquiditySource,
+        context: {
+          routeExecutionCostQuoteRawBySource: {
+            [selectedFactoryLiquiditySource]: gasCostQuoteRaw,
+          },
+          nativeProfitFloorQuoteRawBySource: {
+            [selectedFactoryLiquiditySource]:
+              gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
+          },
+          configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
+          routeGasLimitBySource: {
+            [selectedFactoryLiquiditySource]: routeGasLimit,
+          },
+          gasPriceWei: gasPolicy.gasPriceRaw,
+          gasPriceGwei: gasPolicy.gasPriceGwei,
+          gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
+          gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
+            takePolicy,
+            rpcCache?.chainId
+          ),
+          l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
+          gasPolicyEvaluatedAt: Date.now(),
+        },
+      });
+      Object.assign(quoteEvaluation, refreshedEvaluation);
+      if (!refreshedEvaluation.isTakeable) {
+        if (countStats) {
+          stats.profitFloorRejects += 1;
+        }
+        return {
+          approved: false,
+          reason:
+            refreshedEvaluation.reason ??
+            'route quote below required output floor',
+        };
+      }
+    } else {
+      if (
+        quoteAmountRaw &&
+        gasCostQuoteRaw &&
+        quoteTokenDecimals !== undefined &&
+        auctionCostQuoteRaw
+      ) {
+        const breakEvenQuoteAmountRaw = auctionCostQuoteRaw.add(
+          gasCostQuoteRaw
+        );
+        const minProfitNativeQuoteRaw =
+          gasPolicy.minProfitNativeQuoteRaw ?? ZERO;
+        const requiredProfitFloorRaw = maxBigNumber(
+          minExpectedProfitQuoteRaw,
+          minProfitNativeQuoteRaw
+        );
+        const requiredQuoteAmountRaw = breakEvenQuoteAmountRaw.add(
+          requiredProfitFloorRaw
+        );
+        quoteEvaluation.approvedMinOutRaw = quoteEvaluation.approvedMinOutRaw
+          ? maxBigNumber(
+              quoteEvaluation.approvedMinOutRaw,
+              requiredQuoteAmountRaw
+            )
+          : requiredQuoteAmountRaw;
+        quoteEvaluation.routeProfitability = {
+          ...quoteEvaluation.routeProfitability,
+          routeExecutionCostQuoteRaw: gasCostQuoteRaw,
+          configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
+          nativeProfitFloorQuoteRaw: minProfitNativeQuoteRaw,
+          requiredProfitFloorQuoteRaw: requiredProfitFloorRaw,
+          requiredOutputFloorQuoteRaw: requiredQuoteAmountRaw,
+          expectedNetProfitQuoteRaw: quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
+            ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
+            : ZERO,
+          surplusOverFloorQuoteRaw: quoteAmountRaw.gte(requiredQuoteAmountRaw)
+            ? quoteAmountRaw.sub(requiredQuoteAmountRaw)
+            : ZERO,
+          routeGasLimit,
+          gasPriceWei: gasPolicy.gasPriceRaw,
+          gasPriceGwei: gasPolicy.gasPriceGwei,
+          gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
+          gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
+            takePolicy,
+            rpcCache?.chainId
+          ),
+          l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
+          gasPolicyEvaluatedAt: Date.now(),
+        };
+        if (quoteAmountRaw.lt(requiredQuoteAmountRaw)) {
+          const expectedProfitRaw = quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
+            ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
+            : breakEvenQuoteAmountRaw.sub(quoteAmountRaw);
+          if (countStats) {
+            stats.profitFloorRejects += 1;
+          }
+          return {
+            approved: false,
+            reason: `expected take profit ${formatSignedQuoteAmount({
+              rawAmount: expectedProfitRaw,
+              quoteTokenDecimals,
+              negative: quoteAmountRaw.lt(breakEvenQuoteAmountRaw),
+            })} below required profit floor`,
+          };
+        }
+      } else {
+        if (takePolicy?.minProfitNative !== undefined) {
+          if (countStats) {
+            stats.profitFloorRejects += 1;
+          }
+          return {
+            approved: false,
+            reason: 'quote-normalized minProfitNative floor is not available',
+          };
+        }
+        const auctionCostQuote = price * (quoteEvaluation.collateralAmount ?? 0);
+        const expectedProfit =
+          (quoteEvaluation.quoteAmount ?? 0) -
+          auctionCostQuote -
+          gasPolicy.gasCostQuote;
+        if (
+          minExpectedProfitQuote !== undefined &&
+          expectedProfit < minExpectedProfitQuote
+        ) {
+          if (countStats) {
+            stats.profitFloorRejects += 1;
+          }
+          return {
+            approved: false,
+            reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
+          };
+        }
+      }
+    }
+  }
+
+  logger.debug(
+    `Discovered external take approved after gas/profit policy: ${formatExternalTakeGasTelemetry(
+      {
+        poolAddress: target.poolAddress,
+        path: quoteEvaluation.externalTakePath,
+        source: selectedLiquiditySource,
+        routeProfitability: quoteEvaluation.routeProfitability,
+        rpcCache,
+        takePolicy,
+        writeTransport: takeWriteTransport,
+      }
+    )}`
+  );
+  return { approved: true };
+}
+
+async function quoteFactoryPathForDiscovery(params: {
+  config: DiscoveryExecutionConfig;
+  transports: DiscoveryReadTransports;
+  rpcCache?: DiscoveryRpcCache;
+  takePolicy: AutoDiscoverTakePolicyRuntime;
+  defaultFactoryLiquiditySource: LiquiditySource | undefined;
+  factoryQuoteConfig: {
+    universalRouterOverrides: DiscoveryExecutionConfig['universalRouterOverrides'];
+    sushiswapRouterOverrides: DiscoveryExecutionConfig['sushiswapRouterOverrides'];
+    curveRouterOverrides: DiscoveryExecutionConfig['curveRouterOverrides'];
+    tokenAddresses: DiscoveryExecutionConfig['tokenAddresses'];
+  };
+} & FactoryPathQuoteInput): Promise<ExternalTakeQuoteEvaluation> {
+  if (params.defaultFactoryLiquiditySource === undefined) {
+    return {
+      isTakeable: false,
+      externalTakePath: 'factory',
+      reason: 'factory external take path is not configured',
+    };
+  }
+  const factoryPoolConfig = withTakeLiquiditySource(
+    params.poolConfig,
+    params.defaultFactoryLiquiditySource
+  );
+  const routeProfitabilityContext =
+    await buildFactoryRouteProfitabilityContext({
+      pool: params.pool,
+      signer: params.signer,
+      config: params.config,
+      transports: params.transports,
+      rpcCache: params.rpcCache,
+      defaultLiquiditySource: params.defaultFactoryLiquiditySource,
+      takePolicy: params.takePolicy,
+    });
+
+  const evaluation = await takeFactoryModule.getFactoryTakeQuoteEvaluation(
+    params.pool,
+    params.auctionPrice,
+    params.collateral,
+    factoryPoolConfig,
+    params.factoryQuoteConfig,
+    params.signer,
+    params.rpcCache?.factoryQuoteProviders,
+    {
+      allowedLiquiditySources: params.takePolicy?.allowedLiquiditySources,
+      routeQuoteBudgetPerCandidate:
+        params.takePolicy?.takeRouteQuoteBudgetPerCandidate,
+      routeProfitabilityContext,
+    }
+  );
+  return {
+    ...evaluation,
+    externalTakePath: 'factory',
+    quotedAuctionPriceWad:
+      evaluation.quotedAuctionPriceWad ?? params.auctionPrice,
+    quotedCollateralWad: evaluation.quotedCollateralWad ?? params.collateral,
+  };
+}
+
+async function quoteOneInchPathForDiscovery(params: {
+  config: DiscoveryExecutionConfig;
+  rpcCache?: DiscoveryRpcCache;
+  takePolicy: AutoDiscoverTakePolicyRuntime;
+} & OneInchPathQuoteInput): Promise<ExternalTakeQuoteEvaluation> {
+  const circuitOpenReason = getOneInchCircuitOpenReason({
+    rpcCache: params.rpcCache,
+    takePolicy: params.takePolicy,
+  });
+  if (circuitOpenReason) {
+    return {
+      isTakeable: false,
+      externalTakePath: 'oneinch',
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      quotedAuctionPriceWad: params.auctionPrice,
+      quotedCollateralWad: params.collateral,
+      reason: circuitOpenReason,
+    };
+  }
+
+  let evaluation: ExternalTakeQuoteEvaluation;
+  try {
+    evaluation = await withOneInchQuoteTimeout(
+      takeModule.getOneInchPathQuoteEvaluation(
+        params.pool,
+        params.price,
+        params.collateral,
+        params.poolConfig,
+        { delayBetweenActions: params.config.delayBetweenActions },
+        params.signer,
+        params.config.oneInchRouters,
+        params.config.connectorTokens
+      ),
+      getOneInchQuoteTimeoutMs(params.takePolicy)
+    );
+  } catch (error) {
+    recordOneInchQuoteFailure({
+      rpcCache: params.rpcCache,
+      takePolicy: params.takePolicy,
+    });
+    return {
+      isTakeable: false,
+      externalTakePath: 'oneinch',
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      quotedAuctionPriceWad: params.auctionPrice,
+      quotedCollateralWad: params.collateral,
+      reason: error instanceof Error ? error.message : String(error),
+      quoteFailureRetryable: true,
+      quoteFailureCode:
+        error instanceof OneInchQuoteTimeoutError ? 'timeout' : 'exception',
+    };
+  }
+
+  if (evaluation.quoteFailureRetryable) {
+    recordOneInchQuoteFailure({
+      rpcCache: params.rpcCache,
+      takePolicy: params.takePolicy,
+    });
+  } else {
+    recordOneInchQuoteSuccess(params.rpcCache);
+  }
+
+  return {
+    ...evaluation,
+    externalTakePath: 'oneinch',
+    selectedLiquiditySource:
+      evaluation.selectedLiquiditySource ?? LiquiditySource.ONEINCH,
+    quotedAuctionPriceWad: params.auctionPrice,
+    quotedCollateralWad: params.collateral,
+  };
+}
+
+async function evaluateHybridExternalTakeForDiscovery(params: {
+  pool: FungiblePool;
+  signer: Signer;
+  poolConfig: ResolvedTakeTarget;
+  externalTakePaths: ExternalTakePathKind[];
+  price: number;
+  auctionPrice: BigNumber;
+  collateral: BigNumber;
+  quoteOneInchPath: OneInchPathQuoteFn;
+  quoteFactoryPath: FactoryPathQuoteFn;
+  approveExternalTake: DiscoveryExternalTakeApprover;
+}): Promise<ExternalTakeQuoteEvaluation> {
+  const pathOrder = new Map<ExternalTakePathKind, number>(
+    params.externalTakePaths.map((path, index) => [path, index])
+  );
+  const probeExternalTakePath = async (
+    path: ExternalTakePathKind
+  ): Promise<{
+    path: ExternalTakePathKind;
+    durationMs: number;
+    evaluation?: ExternalTakeQuoteEvaluation;
+    reason?: string;
+  }> => {
+    const startedAt = Date.now();
+    try {
+      const evaluation =
+        path === 'oneinch'
+          ? await params.quoteOneInchPath({
+              pool: params.pool,
+              signer: params.signer,
+              poolConfig: params.poolConfig,
+              price: params.price,
+              auctionPrice: params.auctionPrice,
+              collateral: params.collateral,
+            })
+          : await params.quoteFactoryPath({
+              pool: params.pool,
+              signer: params.signer,
+              poolConfig: params.poolConfig,
+              auctionPrice: params.auctionPrice,
+              collateral: params.collateral,
+            });
+      if (!evaluation.isTakeable) {
+        return {
+          path,
+          durationMs: Date.now() - startedAt,
+          reason: evaluation.reason ?? 'not takeable',
+        };
+      }
+
+      const approval = await params.approveExternalTake({
+        price: params.price,
+        auctionPrice: params.auctionPrice,
+        collateral: params.collateral,
+        quoteEvaluation: evaluation,
+        countStats: false,
+      });
+      if (!approval.approved) {
+        return {
+          path,
+          durationMs: Date.now() - startedAt,
+          reason: approval.reason ?? 'policy rejected path',
+        };
+      }
+      return {
+        path,
+        durationMs: Date.now() - startedAt,
+        evaluation,
+      };
+    } catch (error) {
+      return {
+        path,
+        durationMs: Date.now() - startedAt,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+
+  const probeResults = await Promise.all(
+    params.externalTakePaths.map(probeExternalTakePath)
+  );
+  const approvedEvaluations = probeResults
+    .map((result) => result.evaluation)
+    .filter(
+      (evaluation): evaluation is ExternalTakeQuoteEvaluation =>
+        evaluation !== undefined
+    );
+  const rejectedReasons = probeResults
+    .filter((result) => !result.evaluation)
+    .map(
+      (result) =>
+        `${result.path}=${result.reason ?? 'not takeable'} (${result.durationMs}ms)`
+    );
+
+  const selected = approvedEvaluations.sort((left, right) => {
+    const profitCompare = compareBigNumberDescending(
+      rankExternalTakeQuote(left),
+      rankExternalTakeQuote(right)
+    );
+    if (profitCompare !== 0) {
+      return profitCompare;
+    }
+
+    const orderCompare =
+      (pathOrder.get(left.externalTakePath ?? 'factory') ??
+        Number.MAX_SAFE_INTEGER) -
+      (pathOrder.get(right.externalTakePath ?? 'factory') ??
+        Number.MAX_SAFE_INTEGER);
+    if (orderCompare !== 0) {
+      return orderCompare;
+    }
+
+    return compareBigNumberDescending(left.quoteAmountRaw, right.quoteAmountRaw);
+  })[0];
+  if (selected) {
+    logger.debug(
+      `Hybrid external take selected path=${selected.externalTakePath} source=${formatLiquiditySource(selected.selectedLiquiditySource)} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${selected.approvedMinOutRaw?.toString() ?? 'n/a'} rejectedPaths=${rejectedReasons.join(', ') || 'none'} for pool ${params.pool.name}`
+    );
+    return selected;
+  }
+
+  return {
+    isTakeable: false,
+    reason: rejectedReasons.length
+      ? `no viable external take path: ${rejectedReasons.join('; ')}`
+      : 'no external take paths configured',
+  };
+}
+
+function createExternalTakeAdapterForDiscovery(params: {
+  target: ResolvedTakeTarget;
+  takePolicy: AutoDiscoverTakePolicyRuntime;
+  externalTakePaths: ExternalTakePathKind[];
+  quoteOneInchPath: OneInchPathQuoteFn;
+  quoteFactoryPath: FactoryPathQuoteFn;
+  approveExternalTake: DiscoveryExternalTakeApprover;
+  config: DiscoveryExecutionConfig;
+}): ExternalTakeAdapter<any, any> {
+  if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
+    return {
+      kind: 'hybrid',
+      evaluateExternalTake: async ({
+        pool,
+        signer,
+        poolConfig,
+        price,
+        auctionPrice,
+        collateral,
+      }) =>
+        evaluateHybridExternalTakeForDiscovery({
+          pool,
+          signer,
+          poolConfig,
+          externalTakePaths: params.externalTakePaths,
+          price,
+          auctionPrice,
+          collateral,
+          quoteOneInchPath: params.quoteOneInchPath,
+          quoteFactoryPath: params.quoteFactoryPath,
+          approveExternalTake: params.approveExternalTake,
+        }),
+      executeExternalTake: async ({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config,
+      }) => {
+        const selectedPath =
+          liquidation.externalTakeQuoteEvaluation?.externalTakePath;
+        if (
+          selectedPath === 'oneinch' ||
+          liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource ===
+            LiquiditySource.ONEINCH
+        ) {
+          return takeModule.takeLiquidation({
+            pool,
+            signer,
+            poolConfig,
+            liquidation,
+            config,
+          });
+        }
+
+        const selectedFactorySource =
+          liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource;
+        const factoryPoolConfig =
+          selectedFactorySource !== undefined &&
+          isDynamicFactorySource(selectedFactorySource)
+            ? withTakeLiquiditySource(poolConfig, selectedFactorySource)
+            : poolConfig;
+        return takeFactoryModule.takeLiquidationFactory({
+          pool,
+          signer,
+          poolConfig: factoryPoolConfig,
+          liquidation,
+          config,
+        });
+      },
+    };
+  }
+
+  if (params.target.take.liquiditySource === LiquiditySource.ONEINCH) {
+    return {
+      kind: 'oneinch',
+      evaluateExternalTake: async ({
+        pool,
+        signer,
+        poolConfig,
+        price,
+        collateral,
+      }) =>
+        takeModule.getOneInchTakeQuoteEvaluation(
+          pool,
+          price,
+          collateral,
+          poolConfig,
+          { delayBetweenActions: params.config.delayBetweenActions },
+          signer,
+          params.config.oneInchRouters,
+          params.config.connectorTokens
+        ),
+      executeExternalTake: async ({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config,
+      }) =>
+        takeModule.takeLiquidation({
+          pool,
+          signer,
+          poolConfig,
+          liquidation,
+          config,
+        }),
+    };
+  }
+
+  if (params.target.take.liquiditySource !== undefined) {
+    return {
+      kind: 'factory',
+      evaluateExternalTake: async ({
+        pool,
+        signer,
+        poolConfig,
+        auctionPrice,
+        collateral,
+      }) =>
+        params.quoteFactoryPath({
+          pool,
+          signer,
+          poolConfig,
+          auctionPrice,
+          collateral,
+        }),
+      executeExternalTake: async ({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config,
+      }) =>
+        takeFactoryModule.takeLiquidationFactory({
+          pool,
+          signer,
+          poolConfig,
+          liquidation,
+          config,
+        }),
+    };
+  }
+
+  return takeModule.createNoExternalTakeAdapter();
+}
+
 export async function handleDiscoveredTakeTarget(
   params: HandleDiscoveredTakeTargetParams
 ): Promise<void> {
@@ -776,377 +1601,31 @@ export async function handleDiscoveredTakeTarget(
     });
     return;
   }
-  const approveExternalTakeForDiscovery = async ({
+  const approveExternalTake: DiscoveryExternalTakeApprover = async ({
     price,
     auctionPrice,
     collateral,
     quoteEvaluation,
     countStats = true,
     forceGasRefresh = false,
-  }: {
-    price: number;
-    auctionPrice: BigNumber;
-    collateral: BigNumber;
-    quoteEvaluation: ExternalTakeQuoteEvaluation;
-    countStats?: boolean;
-    forceGasRefresh?: boolean;
-  }): Promise<{ approved: boolean; reason?: string }> => {
-    let selectedLiquiditySource = quoteEvaluation.selectedLiquiditySource;
-    if (selectedLiquiditySource === undefined) {
-      const configuredLiquiditySource = params.target.take.liquiditySource;
-      if (
-        configuredLiquiditySource !== LiquiditySource.ONEINCH &&
-        isDynamicFactorySource(configuredLiquiditySource)
-      ) {
-        return {
-          approved: false,
-          reason: 'factory route approval missing selected liquidity source',
-        };
-      }
-      selectedLiquiditySource = configuredLiquiditySource;
-    }
-    const selectedFactoryLiquiditySource =
-      selectedLiquiditySource !== undefined &&
-      isDynamicFactorySource(selectedLiquiditySource)
-        ? selectedLiquiditySource
-        : undefined;
-    if (selectedLiquiditySource !== undefined && !forceGasRefresh) {
-      const freshness = hasFreshFactoryRouteGasPolicy({
-        quoteEvaluation,
-        currentGasPrice: rpcCache?.gasPrice,
-        chainId: rpcCache?.chainId,
-        takePolicy,
-      });
-      if (freshness.fresh) {
-        logger.debug(
-          `Discovered external take using fresh gas policy: ${formatExternalTakeGasTelemetry(
-            {
-              poolAddress: params.target.poolAddress,
-              path: quoteEvaluation.externalTakePath,
-              source: selectedLiquiditySource,
-              routeProfitability: quoteEvaluation.routeProfitability,
-              rpcCache,
-              takePolicy,
-              writeTransport: params.takeWriteTransport,
-            }
-          )}`
-        );
-        return { approved: true };
-      }
-    }
-
-    await refreshDiscoveryGasPriceIfStale({
-      rpcCache,
-      transports,
-      maxAgeMs: getDiscoveryGasPriceFreshnessTtlMs(
-        takePolicy,
-        rpcCache?.chainId
-      ),
-      force: forceGasRefresh,
-    });
-
-    if (selectedLiquiditySource !== undefined) {
-      const refreshedFreshness = hasFreshFactoryRouteGasPolicy({
-        quoteEvaluation,
-        currentGasPrice: rpcCache?.gasPrice,
-        chainId: rpcCache?.chainId,
-        takePolicy,
-      });
-      if (refreshedFreshness.fresh) {
-        logger.debug(
-          `Discovered external take gas drift check passed: ${formatExternalTakeGasTelemetry(
-            {
-              poolAddress: params.target.poolAddress,
-              path: quoteEvaluation.externalTakePath,
-              source: selectedLiquiditySource,
-              routeProfitability: quoteEvaluation.routeProfitability,
-              rpcCache,
-              takePolicy,
-              writeTransport: params.takeWriteTransport,
-            }
-          )}`
-        );
-        return { approved: true };
-      }
-      if (refreshedFreshness.reason) {
-        logger.debug(
-          `Refreshing discovered external take gas policy because ${refreshedFreshness.reason}: ${formatExternalTakeGasTelemetry(
-            {
-              poolAddress: params.target.poolAddress,
-              path: quoteEvaluation.externalTakePath,
-              source: selectedLiquiditySource,
-              routeProfitability: quoteEvaluation.routeProfitability,
-              rpcCache,
-              takePolicy,
-              writeTransport: params.takeWriteTransport,
-            }
-          )}`
-        );
-      }
-    }
-
-    const routeGasLimit =
-      selectedLiquiditySource !== undefined
-        ? getExternalTakeGasLimit(takePolicy, selectedLiquiditySource)
-        : EXTERNAL_TAKE_GAS_LIMIT;
-    const gasPolicy = await evaluateGasPolicy({
+  }) =>
+    approveExternalTakeForDiscovery({
+      pool: params.pool,
       signer: params.signer,
       config: params.config,
       transports,
-      policy: takePolicy,
-      gasLimit: routeGasLimit,
-      quoteTokenAddress: params.pool.quoteAddress,
-      preferredLiquiditySource: selectedLiquiditySource,
-      useProfitFloor: true,
-      gasPrice: rpcCache?.gasPrice,
-      chainId: rpcCache?.chainId,
+      target: params.target,
       rpcCache,
+      takePolicy,
+      takeWriteTransport: params.takeWriteTransport,
+      stats,
+      price,
+      auctionPrice,
+      collateral,
+      quoteEvaluation,
+      countStats,
+      forceGasRefresh,
     });
-    if (!gasPolicy.approved) {
-      if (countStats) {
-        stats.gasPolicyRejects += 1;
-      }
-      logger.warn(
-        `Discovered external take gas policy rejected: ${gasPolicy.reason ?? 'unknown reason'} ${formatExternalTakeGasTelemetry(
-          {
-            poolAddress: params.target.poolAddress,
-            path: quoteEvaluation.externalTakePath,
-            source: selectedLiquiditySource,
-            routeProfitability: quoteEvaluation.routeProfitability,
-            rpcCache,
-            takePolicy,
-            writeTransport: params.takeWriteTransport,
-          }
-        )}`
-      );
-      return {
-        approved: false,
-        reason: gasPolicy.reason,
-      };
-    }
-
-    const quoteAmountRaw = quoteEvaluation.quoteAmountRaw;
-    const gasCostQuoteRaw = gasPolicy.gasCostQuoteRaw;
-    const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
-    const hasQuoteProfitFloor =
-      minExpectedProfitQuote !== undefined ||
-      takePolicy?.minProfitNative !== undefined;
-    const needsSimpleProfitability =
-      quoteAmountRaw !== undefined &&
-      (takePolicy?.allowedExternalTakePaths !== undefined ||
-        hasQuoteProfitFloor ||
-        gasCostQuoteRaw !== undefined);
-    let quoteTokenDecimals = gasPolicy.quoteTokenDecimals;
-    if (quoteTokenDecimals === undefined && needsSimpleProfitability) {
-      quoteTokenDecimals = await getDecimalsErc20(
-        params.signer,
-        params.pool.quoteAddress
-      );
-    }
-    const auctionCostQuoteRaw =
-      quoteTokenDecimals !== undefined
-        ? getAuctionCostQuoteRaw({
-            price: auctionPrice,
-            collateral,
-            quoteTokenDecimals,
-          })
-        : undefined;
-    if (quoteAmountRaw && auctionCostQuoteRaw) {
-      applySimpleQuoteProfitability({
-        quoteEvaluation,
-        auctionCostQuoteRaw,
-        routeGasLimit,
-        gasCostQuoteRaw,
-        gasPriceRaw: gasPolicy.gasPriceRaw,
-        gasPriceGwei: gasPolicy.gasPriceGwei,
-        gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
-        gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
-          takePolicy,
-          rpcCache?.chainId
-        ),
-        l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
-      });
-    } else if (quoteAmountRaw) {
-      quoteEvaluation.routeProfitability = {
-        ...quoteEvaluation.routeProfitability,
-        routeGasLimit,
-        gasPriceWei: gasPolicy.gasPriceRaw,
-        gasPriceGwei: gasPolicy.gasPriceGwei,
-        gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
-        gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
-          takePolicy,
-          rpcCache?.chainId
-        ),
-        l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
-        gasPolicyEvaluatedAt: Date.now(),
-      };
-    }
-
-    if (hasQuoteProfitFloor) {
-      const minExpectedProfitQuoteRaw =
-        quoteTokenDecimals !== undefined && minExpectedProfitQuote !== undefined
-          ? decimaledToWei(minExpectedProfitQuote, quoteTokenDecimals)
-          : ZERO;
-      const canApplyFactoryProfitability =
-        selectedFactoryLiquiditySource !== undefined &&
-        quoteAmountRaw !== undefined &&
-        gasCostQuoteRaw !== undefined &&
-        quoteTokenDecimals !== undefined;
-
-      if (canApplyFactoryProfitability) {
-        const refreshedEvaluation = applyFactoryRouteProfitabilityPolicy({
-          evaluation: quoteEvaluation,
-          liquiditySource: selectedFactoryLiquiditySource,
-          context: {
-            routeExecutionCostQuoteRawBySource: {
-              [selectedFactoryLiquiditySource]: gasCostQuoteRaw,
-            },
-            nativeProfitFloorQuoteRawBySource: {
-              [selectedFactoryLiquiditySource]:
-                gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
-            },
-            configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
-            routeGasLimitBySource: {
-              [selectedFactoryLiquiditySource]: routeGasLimit,
-            },
-            gasPriceWei: gasPolicy.gasPriceRaw,
-            gasPriceGwei: gasPolicy.gasPriceGwei,
-            gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
-            gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
-              takePolicy,
-              rpcCache?.chainId
-            ),
-            l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
-            gasPolicyEvaluatedAt: Date.now(),
-          },
-        });
-        Object.assign(quoteEvaluation, refreshedEvaluation);
-        if (!refreshedEvaluation.isTakeable) {
-          if (countStats) {
-            stats.profitFloorRejects += 1;
-          }
-          return {
-            approved: false,
-            reason:
-              refreshedEvaluation.reason ??
-              'route quote below required output floor',
-          };
-        }
-      } else {
-        if (
-          quoteAmountRaw &&
-          gasCostQuoteRaw &&
-          quoteTokenDecimals !== undefined &&
-          auctionCostQuoteRaw
-        ) {
-          const breakEvenQuoteAmountRaw =
-            auctionCostQuoteRaw.add(gasCostQuoteRaw);
-          const minProfitNativeQuoteRaw =
-            gasPolicy.minProfitNativeQuoteRaw ?? ZERO;
-          const requiredProfitFloorRaw = maxBigNumber(
-            minExpectedProfitQuoteRaw,
-            minProfitNativeQuoteRaw
-          );
-          const requiredQuoteAmountRaw = breakEvenQuoteAmountRaw.add(
-            requiredProfitFloorRaw
-          );
-          quoteEvaluation.approvedMinOutRaw = quoteEvaluation.approvedMinOutRaw
-            ? maxBigNumber(
-                quoteEvaluation.approvedMinOutRaw,
-                requiredQuoteAmountRaw
-              )
-            : requiredQuoteAmountRaw;
-          quoteEvaluation.routeProfitability = {
-            ...quoteEvaluation.routeProfitability,
-            routeExecutionCostQuoteRaw: gasCostQuoteRaw,
-            configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
-            nativeProfitFloorQuoteRaw: minProfitNativeQuoteRaw,
-            requiredProfitFloorQuoteRaw: requiredProfitFloorRaw,
-            requiredOutputFloorQuoteRaw: requiredQuoteAmountRaw,
-            expectedNetProfitQuoteRaw: quoteAmountRaw.gte(
-              breakEvenQuoteAmountRaw
-            )
-              ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
-              : ZERO,
-            surplusOverFloorQuoteRaw: quoteAmountRaw.gte(requiredQuoteAmountRaw)
-              ? quoteAmountRaw.sub(requiredQuoteAmountRaw)
-              : ZERO,
-            routeGasLimit,
-            gasPriceWei: gasPolicy.gasPriceRaw,
-            gasPriceGwei: gasPolicy.gasPriceGwei,
-            gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
-            gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
-              takePolicy,
-              rpcCache?.chainId
-            ),
-            l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
-            gasPolicyEvaluatedAt: Date.now(),
-          };
-          if (quoteAmountRaw.lt(requiredQuoteAmountRaw)) {
-            const expectedProfitRaw = quoteAmountRaw.gte(
-              breakEvenQuoteAmountRaw
-            )
-              ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
-              : breakEvenQuoteAmountRaw.sub(quoteAmountRaw);
-            if (countStats) {
-              stats.profitFloorRejects += 1;
-            }
-            return {
-              approved: false,
-              reason: `expected take profit ${formatSignedQuoteAmount({
-                rawAmount: expectedProfitRaw,
-                quoteTokenDecimals,
-                negative: quoteAmountRaw.lt(breakEvenQuoteAmountRaw),
-              })} below required profit floor`,
-            };
-          }
-        } else {
-          if (takePolicy?.minProfitNative !== undefined) {
-            if (countStats) {
-              stats.profitFloorRejects += 1;
-            }
-            return {
-              approved: false,
-              reason: 'quote-normalized minProfitNative floor is not available',
-            };
-          }
-          const auctionCostQuote =
-            price * (quoteEvaluation.collateralAmount ?? 0);
-          const expectedProfit =
-            (quoteEvaluation.quoteAmount ?? 0) -
-            auctionCostQuote -
-            gasPolicy.gasCostQuote;
-          if (
-            minExpectedProfitQuote !== undefined &&
-            expectedProfit < minExpectedProfitQuote
-          ) {
-            if (countStats) {
-              stats.profitFloorRejects += 1;
-            }
-            return {
-              approved: false,
-              reason: `expected take profit ${expectedProfit.toFixed(6)} below minExpectedProfitQuote ${minExpectedProfitQuote}`,
-            };
-          }
-        }
-      }
-    }
-
-    logger.debug(
-      `Discovered external take approved after gas/profit policy: ${formatExternalTakeGasTelemetry(
-        {
-          poolAddress: params.target.poolAddress,
-          path: quoteEvaluation.externalTakePath,
-          source: selectedLiquiditySource,
-          routeProfitability: quoteEvaluation.routeProfitability,
-          rpcCache,
-          takePolicy,
-          writeTransport: params.takeWriteTransport,
-        }
-      )}`
-    );
-    return { approved: true };
-  };
   const externalTakePaths = getExternalTakePaths({
     defaultLiquiditySource: params.target.take.liquiditySource,
     allowedExternalTakePaths: takePolicy?.allowedExternalTakePaths,
@@ -1162,377 +1641,32 @@ export async function handleDiscoveredTakeTarget(
     curveRouterOverrides: params.config.curveRouterOverrides,
     tokenAddresses: params.config.tokenAddresses,
   };
-  const quoteFactoryPath = async ({
-    pool,
-    signer,
-    poolConfig,
-    auctionPrice,
-    collateral,
-  }: {
-    pool: FungiblePool;
-    signer: Signer;
-    poolConfig: ResolvedTakeTarget;
-    auctionPrice: BigNumber;
-    collateral: BigNumber;
-  }): Promise<ExternalTakeQuoteEvaluation> => {
-    if (defaultFactoryLiquiditySource === undefined) {
-      return {
-        isTakeable: false,
-        externalTakePath: 'factory',
-        reason: 'factory external take path is not configured',
-      };
-    }
-    const factoryPoolConfig = withTakeLiquiditySource(
-      poolConfig,
-      defaultFactoryLiquiditySource
-    );
-    const routeProfitabilityContext =
-      await buildFactoryRouteProfitabilityContext({
-        pool,
-        signer,
-        config: params.config as DiscoveryExecutionConfig,
-        transports,
-        rpcCache,
-        defaultLiquiditySource: defaultFactoryLiquiditySource,
-        takePolicy,
-      });
-
-    const evaluation = await takeFactoryModule.getFactoryTakeQuoteEvaluation(
-      pool,
-      auctionPrice,
-      collateral,
-      factoryPoolConfig,
+  const quoteFactoryPath: FactoryPathQuoteFn = (quoteParams) =>
+    quoteFactoryPathForDiscovery({
+      ...quoteParams,
+      config: params.config,
+      transports,
+      rpcCache,
+      takePolicy,
+      defaultFactoryLiquiditySource,
       factoryQuoteConfig,
-      signer,
-      rpcCache?.factoryQuoteProviders,
-      {
-        allowedLiquiditySources: takePolicy?.allowedLiquiditySources,
-        routeQuoteBudgetPerCandidate:
-          takePolicy?.takeRouteQuoteBudgetPerCandidate,
-        routeProfitabilityContext,
-      }
-    );
-    return {
-      ...evaluation,
-      externalTakePath: 'factory',
-      quotedAuctionPriceWad: evaluation.quotedAuctionPriceWad ?? auctionPrice,
-      quotedCollateralWad: evaluation.quotedCollateralWad ?? collateral,
-    };
-  };
-  const quoteOneInchPath = async ({
-    pool,
-    signer,
-    poolConfig,
-    price,
-    auctionPrice,
-    collateral,
-  }: {
-    pool: FungiblePool;
-    signer: Signer;
-    poolConfig: ResolvedTakeTarget;
-    price: number;
-    auctionPrice: BigNumber;
-    collateral: BigNumber;
-  }): Promise<ExternalTakeQuoteEvaluation> => {
-    const circuitOpenReason = getOneInchCircuitOpenReason({
+    });
+  const quoteOneInchPath: OneInchPathQuoteFn = (quoteParams) =>
+    quoteOneInchPathForDiscovery({
+      ...quoteParams,
+      config: params.config,
       rpcCache,
       takePolicy,
     });
-    if (circuitOpenReason) {
-      return {
-        isTakeable: false,
-        externalTakePath: 'oneinch',
-        selectedLiquiditySource: LiquiditySource.ONEINCH,
-        quotedAuctionPriceWad: auctionPrice,
-        quotedCollateralWad: collateral,
-        reason: circuitOpenReason,
-      };
-    }
-
-    let evaluation: ExternalTakeQuoteEvaluation;
-    try {
-      evaluation = await withOneInchQuoteTimeout(
-        takeModule.getOneInchPathQuoteEvaluation(
-          pool,
-          price,
-          collateral,
-          poolConfig,
-          { delayBetweenActions: params.config.delayBetweenActions },
-          signer,
-          params.config.oneInchRouters,
-          params.config.connectorTokens
-        ),
-        getOneInchQuoteTimeoutMs(takePolicy)
-      );
-    } catch (error) {
-      recordOneInchQuoteFailure({ rpcCache, takePolicy });
-      return {
-        isTakeable: false,
-        externalTakePath: 'oneinch',
-        selectedLiquiditySource: LiquiditySource.ONEINCH,
-        quotedAuctionPriceWad: auctionPrice,
-        quotedCollateralWad: collateral,
-        reason: error instanceof Error ? error.message : String(error),
-        quoteFailureRetryable: true,
-        quoteFailureCode:
-          error instanceof OneInchQuoteTimeoutError ? 'timeout' : 'exception',
-      };
-    }
-
-    if (evaluation.quoteFailureRetryable) {
-      recordOneInchQuoteFailure({ rpcCache, takePolicy });
-    } else {
-      recordOneInchQuoteSuccess(rpcCache);
-    }
-
-    return {
-      ...evaluation,
-      externalTakePath: 'oneinch',
-      selectedLiquiditySource:
-        evaluation.selectedLiquiditySource ?? LiquiditySource.ONEINCH,
-      quotedAuctionPriceWad: auctionPrice,
-      quotedCollateralWad: collateral,
-    };
-  };
-  const externalTakeAdapter: ExternalTakeAdapter<any, any> =
-    takePolicy?.allowedExternalTakePaths !== undefined
-      ? {
-          kind: 'hybrid',
-          evaluateExternalTake: async ({
-            pool,
-            signer,
-            poolConfig,
-            price,
-            auctionPrice,
-            collateral,
-          }) => {
-            const pathOrder = new Map<ExternalTakePathKind, number>(
-              externalTakePaths.map((path, index) => [path, index])
-            );
-            const probeExternalTakePath = async (
-              path: ExternalTakePathKind
-            ): Promise<{
-              path: ExternalTakePathKind;
-              durationMs: number;
-              evaluation?: ExternalTakeQuoteEvaluation;
-              reason?: string;
-            }> => {
-              const startedAt = Date.now();
-              try {
-                const evaluation =
-                  path === 'oneinch'
-                    ? await quoteOneInchPath({
-                        pool,
-                        signer,
-                        poolConfig,
-                        price,
-                        auctionPrice,
-                        collateral,
-                      })
-                    : await quoteFactoryPath({
-                        pool,
-                        signer,
-                        poolConfig,
-                        auctionPrice,
-                        collateral,
-                      });
-                if (!evaluation.isTakeable) {
-                  return {
-                    path,
-                    durationMs: Date.now() - startedAt,
-                    reason: evaluation.reason ?? 'not takeable',
-                  };
-                }
-
-                const approval = await approveExternalTakeForDiscovery({
-                  price,
-                  auctionPrice,
-                  collateral,
-                  quoteEvaluation: evaluation,
-                  countStats: false,
-                });
-                if (!approval.approved) {
-                  return {
-                    path,
-                    durationMs: Date.now() - startedAt,
-                    reason: approval.reason ?? 'policy rejected path',
-                  };
-                }
-                return {
-                  path,
-                  durationMs: Date.now() - startedAt,
-                  evaluation,
-                };
-              } catch (error) {
-                return {
-                  path,
-                  durationMs: Date.now() - startedAt,
-                  reason:
-                    error instanceof Error ? error.message : String(error),
-                };
-              }
-            };
-
-            const probeResults = await Promise.all(
-              externalTakePaths.map(probeExternalTakePath)
-            );
-            const approvedEvaluations = probeResults
-              .map((result) => result.evaluation)
-              .filter(
-                (evaluation): evaluation is ExternalTakeQuoteEvaluation =>
-                  evaluation !== undefined
-              );
-            const rejectedReasons = probeResults
-              .filter((result) => !result.evaluation)
-              .map(
-                (result) =>
-                  `${result.path}=${result.reason ?? 'not takeable'} (${result.durationMs}ms)`
-              );
-
-            const selected = approvedEvaluations.sort((left, right) => {
-              const profitCompare = compareBigNumberDescending(
-                rankExternalTakeQuote(left),
-                rankExternalTakeQuote(right)
-              );
-              if (profitCompare !== 0) {
-                return profitCompare;
-              }
-
-              const orderCompare =
-                (pathOrder.get(left.externalTakePath ?? 'factory') ??
-                  Number.MAX_SAFE_INTEGER) -
-                (pathOrder.get(right.externalTakePath ?? 'factory') ??
-                  Number.MAX_SAFE_INTEGER);
-              if (orderCompare !== 0) {
-                return orderCompare;
-              }
-
-              return compareBigNumberDescending(
-                left.quoteAmountRaw,
-                right.quoteAmountRaw
-              );
-            })[0];
-            if (selected) {
-              logger.debug(
-                `Hybrid external take selected path=${selected.externalTakePath} source=${formatLiquiditySource(selected.selectedLiquiditySource)} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${selected.approvedMinOutRaw?.toString() ?? 'n/a'} rejectedPaths=${rejectedReasons.join(', ') || 'none'} for pool ${pool.name}`
-              );
-              return selected;
-            }
-
-            return {
-              isTakeable: false,
-              reason: rejectedReasons.length
-                ? `no viable external take path: ${rejectedReasons.join('; ')}`
-                : 'no external take paths configured',
-            };
-          },
-          executeExternalTake: async ({
-            pool,
-            signer,
-            poolConfig,
-            liquidation,
-            config,
-          }) => {
-            const selectedPath =
-              liquidation.externalTakeQuoteEvaluation?.externalTakePath;
-            if (
-              selectedPath === 'oneinch' ||
-              liquidation.externalTakeQuoteEvaluation
-                ?.selectedLiquiditySource === LiquiditySource.ONEINCH
-            ) {
-              return takeModule.takeLiquidation({
-                pool,
-                signer,
-                poolConfig,
-                liquidation,
-                config,
-              });
-            }
-
-            const selectedFactorySource =
-              liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource;
-            const factoryPoolConfig =
-              selectedFactorySource !== undefined &&
-              isDynamicFactorySource(selectedFactorySource)
-                ? withTakeLiquiditySource(poolConfig, selectedFactorySource)
-                : poolConfig;
-            return takeFactoryModule.takeLiquidationFactory({
-              pool,
-              signer,
-              poolConfig: factoryPoolConfig,
-              liquidation,
-              config,
-            });
-          },
-        }
-      : params.target.take.liquiditySource === LiquiditySource.ONEINCH
-        ? {
-            kind: 'oneinch',
-            evaluateExternalTake: async ({
-              pool,
-              signer,
-              poolConfig,
-              price,
-              collateral,
-            }) =>
-              takeModule.getOneInchTakeQuoteEvaluation(
-                pool,
-                price,
-                collateral,
-                poolConfig,
-                { delayBetweenActions: params.config.delayBetweenActions },
-                signer,
-                params.config.oneInchRouters,
-                params.config.connectorTokens
-              ),
-            executeExternalTake: async ({
-              pool,
-              signer,
-              poolConfig,
-              liquidation,
-              config,
-            }) =>
-              takeModule.takeLiquidation({
-                pool,
-                signer,
-                poolConfig,
-                liquidation,
-                config,
-              }),
-          }
-        : params.target.take.liquiditySource !== undefined
-          ? {
-              kind: 'factory',
-              evaluateExternalTake: async ({
-                pool,
-                signer,
-                poolConfig,
-                auctionPrice,
-                collateral,
-              }) =>
-                quoteFactoryPath({
-                  pool,
-                  signer,
-                  poolConfig,
-                  auctionPrice,
-                  collateral,
-                }),
-              executeExternalTake: async ({
-                pool,
-                signer,
-                poolConfig,
-                liquidation,
-                config,
-              }) =>
-                takeFactoryModule.takeLiquidationFactory({
-                  pool,
-                  signer,
-                  poolConfig,
-                  liquidation,
-                  config,
-                }),
-            }
-          : takeModule.createNoExternalTakeAdapter();
+  const externalTakeAdapter = createExternalTakeAdapterForDiscovery({
+    target: params.target,
+    takePolicy,
+    externalTakePaths,
+    quoteOneInchPath,
+    quoteFactoryPath,
+    approveExternalTake,
+    config: params.config,
+  });
 
   const externalExecutionConfig = {
     dryRun: params.target.dryRun,
@@ -1570,7 +1704,7 @@ export async function handleDiscoveredTakeTarget(
         collateral,
         quoteEvaluation,
       }) =>
-        approveExternalTakeForDiscovery({
+        approveExternalTake({
           price,
           auctionPrice,
           collateral,
@@ -1582,7 +1716,7 @@ export async function handleDiscoveredTakeTarget(
         collateral,
         quoteEvaluation,
       }) =>
-        approveExternalTakeForDiscovery({
+        approveExternalTake({
           price,
           auctionPrice,
           collateral,
