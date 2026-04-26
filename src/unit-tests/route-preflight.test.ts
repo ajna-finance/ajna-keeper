@@ -227,4 +227,45 @@ describe('route deployment preflight', () => {
       'skipping registry preflight'
     );
   });
+
+  it('warns instead of failing startup on transient bytecode read errors', async () => {
+    const clock = sinon.useFakeTimers();
+    const config = baseConfig();
+    const warnStub = sinon.stub(logger, 'warn');
+    try {
+      const provider = {
+        _isProvider: true,
+        resolveName: sinon.stub().callsFake(async (name: string) => name),
+        getCode: sinon.stub().rejects(
+          Object.assign(new Error('ETIMEDOUT'), {
+            code: 'ETIMEDOUT',
+          })
+        ),
+        call: sinon
+          .stub()
+          .resolves(
+            ethers.utils.defaultAbiCoder.encode(
+              ['address'],
+              [config.takerContracts!.UniswapV3]
+            )
+          ),
+      };
+
+      const validationPromise = validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      await clock.runAllAsync();
+      await validationPromise;
+
+      expect(provider.getCode.callCount).to.equal(21);
+      expect(warnStub.callCount).to.equal(7);
+      expect(String(warnStub.firstCall.args[0])).to.include(
+        'skipping bytecode preflight'
+      );
+    } finally {
+      clock.restore();
+    }
+  });
 });

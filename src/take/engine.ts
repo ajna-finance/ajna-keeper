@@ -40,6 +40,7 @@ export interface ExternalTakeAdapter<
 interface TakeApprovalResult {
   approved: boolean;
   reason?: string;
+  quoteEvaluation?: ExternalTakeQuoteEvaluation;
 }
 
 interface EvaluateTakeDecisionParams<
@@ -305,8 +306,8 @@ export async function evaluateTakeDecision<
 
       if (approval.approved) {
         approvedTake = true;
-        takeablePrice = quoteEvaluation.takeablePrice;
-        selectedQuoteEvaluation = quoteEvaluation;
+        selectedQuoteEvaluation = approval.quoteEvaluation ?? quoteEvaluation;
+        takeablePrice = selectedQuoteEvaluation.takeablePrice;
       } else {
         reason = approval.reason ?? reason;
       }
@@ -483,6 +484,9 @@ export async function executeTakeDecision<
           decision,
         });
         return;
+      }
+      if (approval.quoteEvaluation) {
+        decision.quoteEvaluation = approval.quoteEvaluation;
       }
     }
   }

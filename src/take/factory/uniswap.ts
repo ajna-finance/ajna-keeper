@@ -8,7 +8,7 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
-import { estimateGasWithBuffer, weiToDecimaled } from '../../utils';
+import { estimateGasWithBuffer, weiToDecimaled, withTimeout } from '../../utils';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types';
 import {
   FactoryExecutionConfig,
@@ -18,6 +18,7 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
   formatFactoryExecutionLog,
   formatFactoryPriceCheckLog,
   formatFactoryQuoteRequestLog,
@@ -127,15 +128,19 @@ export async function evaluateUniswapV3FactoryQuote({
       })
     );
 
-    const quoteResult = await quoteProvider.getQuote(
-      context.collateralInTokenDecimals,
-      pool.collateralAddress,
-      pool.quoteAddress,
-      selectedFeeTier,
-      {
-        inputDecimals: context.collateralTokenDecimals,
-        outputDecimals: context.quoteTokenDecimals,
-      }
+    const quoteResult = await withTimeout(
+      quoteProvider.getQuote(
+        context.collateralInTokenDecimals,
+        pool.collateralAddress,
+        pool.quoteAddress,
+        selectedFeeTier,
+        {
+          inputDecimals: context.collateralTokenDecimals,
+          outputDecimals: context.quoteTokenDecimals,
+        }
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'Uniswap V3 quote'
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {

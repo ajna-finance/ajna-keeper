@@ -8,7 +8,7 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
-import { estimateGasWithBuffer, weiToDecimaled } from '../../utils';
+import { estimateGasWithBuffer, weiToDecimaled, withTimeout } from '../../utils';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types';
 import {
   FactoryExecutionConfig,
@@ -18,6 +18,7 @@ import {
   buildFactoryRouteEvaluationContext,
   buildFactoryQuoteEvaluation,
   computeFactoryAmountOutMinimum,
+  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
   formatFactoryExecutionLog,
   formatFactoryPriceCheckLog,
   formatFactoryQuoteRequestLog,
@@ -31,8 +32,6 @@ import {
   submitTakeTransaction,
 } from '../write-transport';
 import { logTakeExecutionTelemetry } from '../execution-telemetry';
-
-const CURVE_L2_PROPAGATION_DELAY_MS = 2_000;
 
 export async function evaluateCurveFactoryQuote({
   pool,
@@ -114,14 +113,18 @@ export async function evaluateCurveFactoryQuote({
       })
     );
 
-    const quoteResult = await quoteProvider.getQuote(
-      context.collateralInTokenDecimals,
-      pool.collateralAddress,
-      pool.quoteAddress,
-      {
-        inputDecimals: context.collateralTokenDecimals,
-        outputDecimals: context.quoteTokenDecimals,
-      }
+    const quoteResult = await withTimeout(
+      quoteProvider.getQuote(
+        context.collateralInTokenDecimals,
+        pool.collateralAddress,
+        pool.quoteAddress,
+        {
+          inputDecimals: context.collateralTokenDecimals,
+          outputDecimals: context.quoteTokenDecimals,
+        }
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'Curve quote'
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
@@ -293,12 +296,13 @@ export async function executeCurveFactoryTake({
       })
     );
 
-    logger.debug(
-      `Adding ${CURVE_L2_PROPAGATION_DELAY_MS}ms state propagation delay before factory take (L2 sequencer protection)`
-    );
-    await new Promise((resolve) =>
-      setTimeout(resolve, CURVE_L2_PROPAGATION_DELAY_MS)
-    );
+    const executionDelayMs = config.curveRouterOverrides.executionDelayMs ?? 0;
+    if (executionDelayMs > 0) {
+      logger.debug(
+        `Adding ${executionDelayMs}ms Curve execution delay before factory take`
+      );
+      await new Promise((resolve) => setTimeout(resolve, executionDelayMs));
+    }
 
     const receipt = await NonceTracker.queueTransaction(
       takeWriteTransport.signer,

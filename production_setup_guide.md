@@ -563,7 +563,7 @@ Recommended rollout order:
 7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
 8. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
 9. Use `externalTakeProbeTimeoutMs` to bound each hybrid 1inch/factory probe. The default follows `oneInchQuoteTimeoutMs`, or 2000ms when unset.
-10. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing 1inch API calls is worth potentially skipping a better 1inch route; it tries factory first and stops once factory is approved.
+10. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing 1inch API calls is worth potentially skipping a better 1inch route; it tries factory first and stops once factory is approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
 11. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
 12. Use `autoDiscover.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `takeWrite` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
 13. If `discoveredDefaults.take.liquiditySource` is `ONEINCH` and `allowedExternalTakePaths` also includes `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the taker path.
@@ -617,7 +617,7 @@ Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets a
 - Treat `allowedLiquiditySources` as an explicit allowlist, not an additive list
 - Can compare 1inch against the factory selector when `allowedExternalTakePaths` includes both paths
 - Bound each hybrid path with `externalTakeProbeTimeoutMs` so one slow provider cannot block another viable path
-- Can reduce 1inch API usage with `externalTakeRouteSelectionMode: 'factory_first'` by trying factory before 1inch
+- Can reduce 1inch API usage with `externalTakeRouteSelectionMode: 'factory_first'` by trying factory before 1inch; `cost_aware` remains a deprecated migration alias
 - Cannot be customized per pool in the current config schema
 - Can be changed by updating config and restarting the keeper
 

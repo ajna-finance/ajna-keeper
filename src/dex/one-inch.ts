@@ -10,6 +10,8 @@ import {
 } from '../../typechain-types/contracts/AjnaKeeperTaker';
 import { logger } from '../logging';
 
+const ONE_INCH_ATOMIC_TAKE_ALLOWED_FLAGS = BigNumber.from(0);
+
 export interface SwapCalldata {
   aggregationExecutor: string;
   swapDescription: SwapDescriptionStructOutput;
@@ -61,11 +63,20 @@ export function validateOneInchSwapDetailsForAtomicTake(
   expected: {
     srcToken: string;
     dstToken: string;
+    srcReceiver: string;
     dstReceiver: string;
     amount: BigNumber;
   }
 ): string | undefined {
   const desc = details.swapDescription;
+  const aggregationExecutor = normalizeAddress(details.aggregationExecutor);
+  if (!aggregationExecutor) {
+    return '1inch aggregationExecutor is not a valid address';
+  }
+  if (aggregationExecutor === ethers.constants.AddressZero.toLowerCase()) {
+    return '1inch aggregationExecutor cannot be the zero address';
+  }
+
   const expectedSrcToken = normalizeAddress(expected.srcToken);
   const actualSrcToken = normalizeAddress(desc.srcToken);
   if (!expectedSrcToken || !actualSrcToken) {
@@ -82,6 +93,15 @@ export function validateOneInchSwapDetailsForAtomicTake(
   }
   if (actualDstToken !== expectedDstToken) {
     return `1inch swap description dstToken ${desc.dstToken} does not match expected quote ${expected.dstToken}`;
+  }
+
+  const expectedSrcReceiver = normalizeAddress(expected.srcReceiver);
+  const actualSrcReceiver = normalizeAddress(desc.srcReceiver);
+  if (!expectedSrcReceiver || !actualSrcReceiver) {
+    return formatAddressValidationError('srcReceiver');
+  }
+  if (actualSrcReceiver !== expectedSrcReceiver) {
+    return `1inch swap description srcReceiver ${desc.srcReceiver} does not match configured router ${expected.srcReceiver}`;
   }
 
   const expectedDstReceiver = normalizeAddress(expected.dstReceiver);
@@ -104,6 +124,26 @@ export function validateOneInchSwapDetailsForAtomicTake(
   }
   if (!swapAmount.eq(expected.amount)) {
     return `1inch swap description amount ${swapAmount.toString()} does not match requested collateral amount ${expected.amount.toString()}`;
+  }
+
+  let minReturnAmount: BigNumber;
+  try {
+    minReturnAmount = BigNumber.from(desc.minReturnAmount);
+  } catch (error) {
+    return `1inch swap description minReturnAmount is invalid: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (minReturnAmount.lte(0)) {
+    return '1inch swap description minReturnAmount must be greater than 0';
+  }
+
+  let flags: BigNumber;
+  try {
+    flags = BigNumber.from(desc.flags);
+  } catch (error) {
+    return `1inch swap description flags are invalid: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (!flags.eq(ONE_INCH_ATOMIC_TAKE_ALLOWED_FLAGS)) {
+    return `1inch swap description flags ${flags.toString()} are not supported for atomic takes`;
   }
 
   return undefined;
@@ -132,10 +172,4 @@ export function encodeOneInchSwapDetailsBytes(
       ],
     ]
   );
-}
-
-export function convertSwapApiResponseToDetailsBytes(apiResponse: any): string {
-  const details = convertSwapApiResponseToDetails(apiResponse);
-  logger.debug('1inch swap details encoded');
-  return encodeOneInchSwapDetailsBytes(details);
 }

@@ -36,7 +36,11 @@ const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'require_private_or_relay',
 ]);
 const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
-  new Set<ExternalTakeRouteSelectionMode>(['maximize_profit', 'factory_first']);
+  new Set<ExternalTakeRouteSelectionMode>([
+    'maximize_profit',
+    'factory_first',
+    'cost_aware',
+  ]);
 const MAX_UINT24_FEE_TIER = 16_777_215;
 const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
@@ -183,6 +187,10 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
     config.universalRouterOverrides;
   const sushiConfig: SushiswapRouterOverrides | undefined =
     config.sushiswapRouterOverrides;
+  requireOptionalNonNegative(
+    config.curveRouterOverrides?.executionDelayMs,
+    'CurveRouterOverrides: executionDelayMs cannot be negative'
+  );
   validateCandidateFeeTiers(
     uniswapConfig?.candidateFeeTiers,
     uniswapConfig?.defaultFeeTier,
@@ -312,7 +320,12 @@ function validateExternalTakeRouteSelectionMode(
   }
   if (!EXTERNAL_TAKE_ROUTE_SELECTION_MODES.has(mode)) {
     throw new Error(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit, factory_first, or deprecated cost_aware'
+    );
+  }
+  if (mode === 'cost_aware') {
+    logger.warn(
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode=cost_aware is deprecated; treating it as factory_first'
     );
   }
 }
@@ -713,6 +726,16 @@ export function validateAutoDiscoverConfig(
           `AutoDiscoverConfig.take: minProfitNative must not exceed ${MAX_MIN_PROFIT_NATIVE_WEI.toString()} wei`
         );
       }
+    }
+    if (
+      (takePolicy.externalTakeRouteSelectionMode === 'factory_first' ||
+        takePolicy.externalTakeRouteSelectionMode === 'cost_aware') &&
+      (takePolicy.minExpectedProfitQuote !== undefined ||
+        takePolicy.minProfitNative !== undefined)
+    ) {
+      logger.warn(
+        `AutoDiscoverConfig.take: externalTakeRouteSelectionMode=${takePolicy.externalTakeRouteSelectionMode} stops after the first approved path; quote-normalized gas-cost ranking is skipped to reduce 1inch/API use`
+      );
     }
     requireOptionalPositive(
       takePolicy.maxGasPriceGwei,

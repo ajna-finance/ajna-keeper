@@ -92,7 +92,7 @@ function validateZeroOneInchTxValue(value: unknown): string | undefined {
   if (parsed.error) {
     return parsed.error;
   }
-  if (parsed.value && parsed.value.gt(0)) {
+  if (parsed.value && !parsed.value.eq(0)) {
     return `unexpected non-zero 1inch tx.value ${parsed.value.toString()} for ERC20 swap`;
   }
   return undefined;
@@ -303,8 +303,25 @@ export class DexRouter {
           error: valueValidationError,
         };
       }
+      const normalizedDstAmount =
+        response.data.dstAmount !== undefined
+          ? normalizeOneInchUintAmount(response.data.dstAmount, 'dstAmount')
+          : {};
+      if (
+        response.data.dstAmount !== undefined &&
+        !normalizedDstAmount.value
+      ) {
+        return {
+          success: false,
+          error: normalizedDstAmount.error,
+        };
+      }
 
-      return { success: true, data: response.data.tx };
+      return {
+        success: true,
+        data: response.data.tx,
+        dstAmount: normalizedDstAmount.value,
+      };
     } catch (error: Error | any) {
       const errorMsg = getOneInchErrorMessage(error);
       return {
@@ -396,9 +413,6 @@ export class DexRouter {
           value: txFrom1inch.value || '0',
           gasLimit: txFrom1inch.gas
             ? BigNumber.from(txFrom1inch.gas)
-            : undefined,
-          gasPrice: txFrom1inch.gasPrice
-            ? BigNumber.from(txFrom1inch.gasPrice)
             : undefined,
         };
 

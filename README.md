@@ -479,7 +479,7 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 - Treats `allowedLiquiditySources`, when set, as the complete factory route allowlist. Include the default source in that list if it should remain eligible.
 - Can compare the best factory route against 1inch when `autoDiscover.take.allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`.
 - In hybrid mode, `externalTakeProbeTimeoutMs` bounds each 1inch/factory path probe so one slow route cannot block another viable route.
-- Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` to probe factory first and skip 1inch when the factory path is already approved.
+- Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` to probe factory first and skip 1inch when the factory path is already approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
 - A low `takeRouteQuoteBudgetPerCandidate` reduces quote latency but can miss a more profitable route that was not probed.
 - No per-pool external-take fee override today
 - Change requires updating config and restarting the keeper
@@ -577,7 +577,7 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - `allowedLiquiditySources` remains factory-only. Use it to restrict factory route selection to `UNISWAPV3`, `SUSHISWAP`, and/or `CURVE`; when set, it is the complete factory route allowlist and cannot include `ONEINCH`.
 - If `discoveredDefaults.take.liquiditySource` is `ONEINCH` and `allowedExternalTakePaths` also includes `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the factory taker path before hot loops begin.
 - Hybrid 1inch-plus-factory ranking requires a configured native-to-quote gas conversion path and wrapped native token address, because the keeper compares route net profit instead of gross quote output.
-- `externalTakeProbeTimeoutMs` bounds each hybrid path probe. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a factory path is approved.
+- `externalTakeProbeTimeoutMs` bounds each hybrid path probe. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a factory path is approved. `'cost_aware'` is still accepted for migration but should be replaced with `'factory_first'`.
 - `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
 - Once an auction has appeared in subgraph discovery, the keeper keeps it in a short-lived hot-auction cache so fast take loops can keep probing it even if a later subgraph refresh temporarily omits it. Tune with `autoDiscover.take.hotAuctionCandidateTtlMs` and `autoDiscover.take.maxHotAuctionCandidates`; set the TTL to `0` to disable the cache.
 - On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token. Override with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed gas costs.
@@ -837,6 +837,9 @@ const config: KeeperConfig = {
     },
     defaultSlippage: 1.0,
     wethAddress: '0x4200000000000000000000000000000000000006',
+    // Optional: leave unset/0 for lowest-latency execution.
+    // Set only if a chain/provider needs extra Curve state propagation time.
+    executionDelayMs: 0,
   },
   // Required: Token symbol to address mapping
   tokenAddresses: {
@@ -899,6 +902,7 @@ curveRouterOverrides: {
   },
   defaultSlippage: 1.0, // 1% for stable, 2-4% for crypto pairs
   wethAddress: '0x4200000000000000000000000000000000000006',
+  executionDelayMs: 0, // Optional; keep 0 unless production testing shows a Curve propagation delay is needed
 }
 ```
 

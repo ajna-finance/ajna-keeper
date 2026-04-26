@@ -54,6 +54,10 @@ const ZERO = BigNumber.from(0);
 const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
 const DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE: ExternalTakeRouteSelectionMode =
   'maximize_profit';
+type ActiveExternalTakeRouteSelectionMode = Exclude<
+  ExternalTakeRouteSelectionMode,
+  'cost_aware'
+>;
 
 type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy
@@ -187,6 +191,65 @@ function formatLiquiditySource(source: LiquiditySource | undefined): string {
     : 'n/a';
 }
 
+export function resolveHybridExternalTakeExecutionSelection(params: {
+  quoteEvaluation?: ExternalTakeQuoteEvaluation;
+  allowedExternalTakePaths: ExternalTakePathKind[];
+}): {
+  approved: boolean;
+  effectiveSelectedPath?: ExternalTakePathKind;
+  selectedSource?: LiquiditySource;
+  reason?: string;
+} {
+  const selectedPath = params.quoteEvaluation?.externalTakePath;
+  const selectedSource = params.quoteEvaluation?.selectedLiquiditySource;
+  const sourceSelectedPath =
+    selectedSource === LiquiditySource.ONEINCH
+      ? 'oneinch'
+      : selectedSource !== undefined && isDynamicFactorySource(selectedSource)
+        ? 'factory'
+        : undefined;
+  if (
+    selectedPath !== undefined &&
+    sourceSelectedPath !== undefined &&
+    selectedPath !== sourceSelectedPath
+  ) {
+    return {
+      approved: false,
+      reason: `selected inconsistent path=${selectedPath} source=${formatLiquiditySource(selectedSource)}`,
+    };
+  }
+
+  const effectiveSelectedPath = selectedPath ?? sourceSelectedPath;
+  if (
+    effectiveSelectedPath !== undefined &&
+    !params.allowedExternalTakePaths.includes(effectiveSelectedPath)
+  ) {
+    return {
+      approved: false,
+      effectiveSelectedPath,
+      selectedSource,
+      reason: `selected disabled path=${effectiveSelectedPath}`,
+    };
+  }
+  if (
+    effectiveSelectedPath === 'factory' &&
+    (selectedSource === undefined || !isDynamicFactorySource(selectedSource))
+  ) {
+    return {
+      approved: false,
+      effectiveSelectedPath,
+      selectedSource,
+      reason: 'selected factory path without a concrete factory source',
+    };
+  }
+
+  return {
+    approved: true,
+    effectiveSelectedPath,
+    selectedSource,
+  };
+}
+
 function formatExternalTakeGasTelemetry(params: {
   poolAddress: string;
   borrower?: string;
@@ -294,11 +357,21 @@ function getExternalTakeProbeTimeoutMs(
 
 function getExternalTakeRouteSelectionMode(
   takePolicy: AutoDiscoverTakePolicyRuntime
-): ExternalTakeRouteSelectionMode {
-  return (
+): ActiveExternalTakeRouteSelectionMode {
+  const mode =
     takePolicy?.externalTakeRouteSelectionMode ??
-    DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE
-  );
+    DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE;
+  return mode === 'cost_aware' ? 'factory_first' : mode;
+}
+
+function getDiscoveryTokenDecimalsCache(
+  rpcCache?: DiscoveryRpcCache
+): Map<string, number> | undefined {
+  if (!rpcCache?.factoryQuoteProviders) {
+    return undefined;
+  }
+  rpcCache.factoryQuoteProviders.tokenDecimals ??= new Map();
+  return rpcCache.factoryQuoteProviders.tokenDecimals;
 }
 
 function applySimpleQuoteProfitability(params: {
@@ -603,6 +676,7 @@ interface ExternalTakeApprovalResult {
   approved: boolean;
   reason?: string;
   rejectCategory?: ExternalTakeApprovalRejectCategory;
+  quoteEvaluation?: ExternalTakeQuoteEvaluation;
 }
 
 interface FactoryPathQuoteInput {
@@ -628,6 +702,21 @@ type FactoryPathQuoteFn = (
 type OneInchPathQuoteFn = (
   quoteParams: OneInchPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
+
+function recordOneInchCircuitOutcomeForDiscovery(params: {
+  rpcCache?: DiscoveryRpcCache;
+  takePolicy: AutoDiscoverTakePolicyRuntime;
+  outcome: OneInchCircuitOutcome;
+}): void {
+  if (params.outcome === 'failure') {
+    recordOneInchQuoteFailure({
+      rpcCache: params.rpcCache,
+      takePolicy: params.takePolicy,
+    });
+    return;
+  }
+  recordOneInchQuoteSuccess(params.rpcCache);
+}
 
 interface HandleDiscoveredTakeTargetParamsBase {
   pool: FungiblePool;
@@ -668,6 +757,14 @@ type DiscoveryExternalExecutionConfig = Pick<
   runtimeCache?: DiscoveryRpcCache['factoryQuoteProviders'];
   oneInchRequestTimeoutMs?: number;
   skipOneInchRateLimitDelay?: boolean;
+  chainId?: number;
+  tokenDecimalsCache?: Map<string, number>;
+  onOneInchSwapDataResult?: (result: {
+    success: boolean;
+    retryable?: boolean;
+    errorCode?: number | string;
+    error?: string;
+  }) => void;
 };
 
 function hasDiscoveryTransportConfig(
@@ -782,8 +879,14 @@ async function approveExternalTakeForDiscovery(
     quoteEvaluation,
   } = params;
   const countStats = params.countStats ?? true;
+  let approvedQuoteEvaluation: ExternalTakeQuoteEvaluation = {
+    ...quoteEvaluation,
+    routeProfitability: quoteEvaluation.routeProfitability
+      ? { ...quoteEvaluation.routeProfitability }
+      : undefined,
+  };
 
-  let selectedLiquiditySource = quoteEvaluation.selectedLiquiditySource;
+  let selectedLiquiditySource = approvedQuoteEvaluation.selectedLiquiditySource;
   if (selectedLiquiditySource === undefined) {
     const configuredLiquiditySource = target.take.liquiditySource;
     if (
@@ -804,7 +907,7 @@ async function approveExternalTakeForDiscovery(
       : undefined;
   if (selectedLiquiditySource !== undefined && !params.forceGasRefresh) {
     const freshness = hasFreshFactoryRouteGasPolicy({
-      quoteEvaluation,
+      quoteEvaluation: approvedQuoteEvaluation,
       currentGasPrice: rpcCache?.gasPrice,
       chainId: rpcCache?.chainId,
       takePolicy,
@@ -814,16 +917,16 @@ async function approveExternalTakeForDiscovery(
         `Discovered external take using fresh gas policy: ${formatExternalTakeGasTelemetry(
           {
             poolAddress: target.poolAddress,
-            path: quoteEvaluation.externalTakePath,
+            path: approvedQuoteEvaluation.externalTakePath,
             source: selectedLiquiditySource,
-            routeProfitability: quoteEvaluation.routeProfitability,
+            routeProfitability: approvedQuoteEvaluation.routeProfitability,
             rpcCache,
             takePolicy,
             writeTransport: takeWriteTransport,
           }
         )}`
       );
-      return { approved: true };
+      return { approved: true, quoteEvaluation: approvedQuoteEvaluation };
     }
   }
 
@@ -836,7 +939,7 @@ async function approveExternalTakeForDiscovery(
 
   if (selectedLiquiditySource !== undefined && !params.forceGasRefresh) {
     const refreshedFreshness = hasFreshFactoryRouteGasPolicy({
-      quoteEvaluation,
+      quoteEvaluation: approvedQuoteEvaluation,
       currentGasPrice: rpcCache?.gasPrice,
       chainId: rpcCache?.chainId,
       takePolicy,
@@ -846,25 +949,25 @@ async function approveExternalTakeForDiscovery(
         `Discovered external take gas drift check passed: ${formatExternalTakeGasTelemetry(
           {
             poolAddress: target.poolAddress,
-            path: quoteEvaluation.externalTakePath,
+            path: approvedQuoteEvaluation.externalTakePath,
             source: selectedLiquiditySource,
-            routeProfitability: quoteEvaluation.routeProfitability,
+            routeProfitability: approvedQuoteEvaluation.routeProfitability,
             rpcCache,
             takePolicy,
             writeTransport: takeWriteTransport,
           }
         )}`
       );
-      return { approved: true };
+      return { approved: true, quoteEvaluation: approvedQuoteEvaluation };
     }
     if (refreshedFreshness.reason) {
       logger.debug(
         `Refreshing discovered external take gas policy because ${refreshedFreshness.reason}: ${formatExternalTakeGasTelemetry(
           {
             poolAddress: target.poolAddress,
-            path: quoteEvaluation.externalTakePath,
+            path: approvedQuoteEvaluation.externalTakePath,
             source: selectedLiquiditySource,
-            routeProfitability: quoteEvaluation.routeProfitability,
+            routeProfitability: approvedQuoteEvaluation.routeProfitability,
             rpcCache,
             takePolicy,
             writeTransport: takeWriteTransport,
@@ -900,9 +1003,9 @@ async function approveExternalTakeForDiscovery(
       `Discovered external take gas policy rejected: ${gasPolicy.reason ?? 'unknown reason'} ${formatExternalTakeGasTelemetry(
         {
           poolAddress: target.poolAddress,
-          path: quoteEvaluation.externalTakePath,
+          path: approvedQuoteEvaluation.externalTakePath,
           source: selectedLiquiditySource,
-          routeProfitability: quoteEvaluation.routeProfitability,
+          routeProfitability: approvedQuoteEvaluation.routeProfitability,
           rpcCache,
           takePolicy,
           writeTransport: takeWriteTransport,
@@ -916,7 +1019,7 @@ async function approveExternalTakeForDiscovery(
     };
   }
 
-  const quoteAmountRaw = quoteEvaluation.quoteAmountRaw;
+  const quoteAmountRaw = approvedQuoteEvaluation.quoteAmountRaw;
   const gasCostQuoteRaw = gasPolicy.gasCostQuoteRaw;
   const minExpectedProfitQuote = takePolicy?.minExpectedProfitQuote;
   const hasQuoteProfitFloor =
@@ -941,7 +1044,7 @@ async function approveExternalTakeForDiscovery(
       : undefined;
   if (quoteAmountRaw && auctionCostQuoteRaw) {
     applySimpleQuoteProfitability({
-      quoteEvaluation,
+      quoteEvaluation: approvedQuoteEvaluation,
       auctionCostQuoteRaw,
       routeGasLimit,
       gasCostQuoteRaw,
@@ -955,8 +1058,8 @@ async function approveExternalTakeForDiscovery(
       l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
     });
   } else if (quoteAmountRaw) {
-    quoteEvaluation.routeProfitability = {
-      ...quoteEvaluation.routeProfitability,
+    approvedQuoteEvaluation.routeProfitability = {
+      ...approvedQuoteEvaluation.routeProfitability,
       routeGasLimit,
       gasPriceWei: gasPolicy.gasPriceRaw,
       gasPriceGwei: gasPolicy.gasPriceGwei,
@@ -983,7 +1086,7 @@ async function approveExternalTakeForDiscovery(
 
     if (canApplyFactoryProfitability) {
       const refreshedEvaluation = applyFactoryRouteProfitabilityPolicy({
-        evaluation: quoteEvaluation,
+        evaluation: approvedQuoteEvaluation,
         liquiditySource: selectedFactoryLiquiditySource,
         context: {
           routeExecutionCostQuoteRawBySource: {
@@ -1008,7 +1111,7 @@ async function approveExternalTakeForDiscovery(
           gasPolicyEvaluatedAt: Date.now(),
         },
       });
-      Object.assign(quoteEvaluation, refreshedEvaluation);
+      approvedQuoteEvaluation = refreshedEvaluation;
       if (!refreshedEvaluation.isTakeable) {
         if (countStats) {
           stats.profitFloorRejects += 1;
@@ -1040,19 +1143,19 @@ async function approveExternalTakeForDiscovery(
           requiredProfitFloorRaw
         );
         const routeMinOutRaw =
-          quoteEvaluation.routeMinOutRaw ??
-          (quoteEvaluation.profitMinOutRaw
+          approvedQuoteEvaluation.routeMinOutRaw ??
+          (approvedQuoteEvaluation.profitMinOutRaw
             ? undefined
-            : quoteEvaluation.approvedMinOutRaw);
-        quoteEvaluation.routeMinOutRaw = routeMinOutRaw;
-        quoteEvaluation.profitMinOutRaw = requiredQuoteAmountRaw;
-        quoteEvaluation.approvedMinOutRaw =
+            : approvedQuoteEvaluation.approvedMinOutRaw);
+        approvedQuoteEvaluation.routeMinOutRaw = routeMinOutRaw;
+        approvedQuoteEvaluation.profitMinOutRaw = requiredQuoteAmountRaw;
+        approvedQuoteEvaluation.approvedMinOutRaw =
           deriveApprovedMinOutRaw({
             routeMinOutRaw,
             profitMinOutRaw: requiredQuoteAmountRaw,
           }) ?? requiredQuoteAmountRaw;
-        quoteEvaluation.routeProfitability = {
-          ...quoteEvaluation.routeProfitability,
+        approvedQuoteEvaluation.routeProfitability = {
+          ...approvedQuoteEvaluation.routeProfitability,
           routeExecutionCostQuoteRaw: gasCostQuoteRaw,
           configuredProfitFloorQuoteRaw: minExpectedProfitQuoteRaw,
           nativeProfitFloorQuoteRaw: minProfitNativeQuoteRaw,
@@ -1104,9 +1207,9 @@ async function approveExternalTakeForDiscovery(
           };
         }
         const auctionCostQuote =
-          price * (quoteEvaluation.collateralAmount ?? 0);
+          price * (approvedQuoteEvaluation.collateralAmount ?? 0);
         const expectedProfit =
-          (quoteEvaluation.quoteAmount ?? 0) -
+          (approvedQuoteEvaluation.quoteAmount ?? 0) -
           auctionCostQuote -
           gasPolicy.gasCostQuote;
         if (
@@ -1130,16 +1233,16 @@ async function approveExternalTakeForDiscovery(
     `Discovered external take approved after gas/profit policy: ${formatExternalTakeGasTelemetry(
       {
         poolAddress: target.poolAddress,
-        path: quoteEvaluation.externalTakePath,
+        path: approvedQuoteEvaluation.externalTakePath,
         source: selectedLiquiditySource,
-        routeProfitability: quoteEvaluation.routeProfitability,
+        routeProfitability: approvedQuoteEvaluation.routeProfitability,
         rpcCache,
         takePolicy,
         writeTransport: takeWriteTransport,
       }
     )}`
   );
-  return { approved: true };
+  return { approved: true, quoteEvaluation: approvedQuoteEvaluation };
 }
 
 async function quoteFactoryPathForDiscovery(
@@ -1240,6 +1343,8 @@ async function quoteOneInchPathForDiscovery(
           delayBetweenActions: params.config.delayBetweenActions,
           oneInchRequestTimeoutMs,
           skipOneInchRateLimitDelay: true,
+          chainId: params.rpcCache?.chainId,
+          tokenDecimalsCache: getDiscoveryTokenDecimalsCache(params.rpcCache),
         },
         params.signer,
         params.config.oneInchRouters,
@@ -1250,9 +1355,10 @@ async function quoteOneInchPathForDiscovery(
     );
   } catch (error) {
     if (params.recordCircuitOutcome !== false) {
-      recordOneInchQuoteFailure({
+      recordOneInchCircuitOutcomeForDiscovery({
         rpcCache: params.rpcCache,
         takePolicy: params.takePolicy,
+        outcome: 'failure',
       });
     }
     return {
@@ -1268,14 +1374,11 @@ async function quoteOneInchPathForDiscovery(
   }
 
   if (params.recordCircuitOutcome !== false) {
-    if (evaluation.quoteFailureRetryable) {
-      recordOneInchQuoteFailure({
-        rpcCache: params.rpcCache,
-        takePolicy: params.takePolicy,
-      });
-    } else {
-      recordOneInchQuoteSuccess(params.rpcCache);
-    }
+    recordOneInchCircuitOutcomeForDiscovery({
+      rpcCache: params.rpcCache,
+      takePolicy: params.takePolicy,
+      outcome: evaluation.quoteFailureRetryable ? 'failure' : 'success',
+    });
   }
 
   return {
@@ -1323,6 +1426,8 @@ async function quoteLegacyOneInchTakeForDiscovery(
           delayBetweenActions: params.config.delayBetweenActions,
           oneInchRequestTimeoutMs,
           skipOneInchRateLimitDelay: true,
+          chainId: params.rpcCache?.chainId,
+          tokenDecimalsCache: getDiscoveryTokenDecimalsCache(params.rpcCache),
         },
         params.signer,
         params.config.oneInchRouters,
@@ -1332,9 +1437,10 @@ async function quoteLegacyOneInchTakeForDiscovery(
       '1inch external take quote'
     );
   } catch (error) {
-    recordOneInchQuoteFailure({
+    recordOneInchCircuitOutcomeForDiscovery({
       rpcCache: params.rpcCache,
       takePolicy: params.takePolicy,
+      outcome: 'failure',
     });
     return {
       isTakeable: false,
@@ -1348,14 +1454,11 @@ async function quoteLegacyOneInchTakeForDiscovery(
     };
   }
 
-  if (evaluation.quoteFailureRetryable) {
-    recordOneInchQuoteFailure({
-      rpcCache: params.rpcCache,
-      takePolicy: params.takePolicy,
-    });
-  } else {
-    recordOneInchQuoteSuccess(params.rpcCache);
-  }
+  recordOneInchCircuitOutcomeForDiscovery({
+    rpcCache: params.rpcCache,
+    takePolicy: params.takePolicy,
+    outcome: evaluation.quoteFailureRetryable ? 'failure' : 'success',
+  });
 
   return {
     ...evaluation,
@@ -1372,7 +1475,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
   signer: Signer;
   poolConfig: ResolvedTakeTarget;
   externalTakePaths: ExternalTakePathKind[];
-  routeSelectionMode: ExternalTakeRouteSelectionMode;
+  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   probeTimeoutMs: number;
   price: number;
   auctionPrice: BigNumber;
@@ -1391,7 +1494,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
   );
   const getProbeOrder = (): ExternalTakePathKind[] => {
     if (params.routeSelectionMode !== 'factory_first') {
-      return params.externalTakePaths;
+      return [...params.externalTakePaths];
     }
     return [...params.externalTakePaths].sort((left, right) => {
       if (left === right) {
@@ -1414,6 +1517,9 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     rejectCategory?: ExternalTakeApprovalRejectCategory;
     oneInchCircuitOutcome?: OneInchCircuitOutcome;
   };
+  type ProbeControl = {
+    abandoned: boolean;
+  };
   const getOneInchCircuitOutcome = (
     evaluation: ExternalTakeQuoteEvaluation
   ): OneInchCircuitOutcome | undefined => {
@@ -1423,7 +1529,8 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     return evaluation.quoteFailureRetryable ? 'failure' : 'success';
   };
   const probeExternalTakePath = async (
-    path: ExternalTakePathKind
+    path: ExternalTakePathKind,
+    control?: ProbeControl
   ): Promise<ProbeResult> => {
     const startedAt = Date.now();
     let oneInchCircuitOutcome: OneInchCircuitOutcome | undefined;
@@ -1445,6 +1552,13 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
               auctionPrice: params.auctionPrice,
               collateral: params.collateral,
             });
+      if (control?.abandoned) {
+        return {
+          path,
+          durationMs: Date.now() - startedAt,
+          reason: 'probe abandoned after timeout',
+        };
+      }
       oneInchCircuitOutcome =
         path === 'oneinch' ? getOneInchCircuitOutcome(evaluation) : undefined;
       if (!evaluation.isTakeable) {
@@ -1475,7 +1589,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
       return {
         path,
         durationMs: Date.now() - startedAt,
-        evaluation,
+        evaluation: approval.quoteEvaluation ?? evaluation,
         oneInchCircuitOutcome,
       };
     } catch (error) {
@@ -1498,11 +1612,15 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     path: ExternalTakePathKind
   ): Promise<ProbeResult> => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    const control: ProbeControl = { abandoned: false };
+    const probe = probeExternalTakePath(path, control);
+    probe.catch(() => undefined);
     try {
       return await Promise.race([
-        probeExternalTakePath(path),
+        probe,
         new Promise<ProbeResult>((resolve) => {
           timeout = setTimeout(() => {
+            control.abandoned = true;
             resolve({
               path,
               durationMs: params.probeTimeoutMs,
@@ -1616,7 +1734,7 @@ function createExternalTakeAdapterForDiscovery(params: {
   target: ResolvedTakeTarget;
   takePolicy: AutoDiscoverTakePolicyRuntime;
   externalTakePaths: ExternalTakePathKind[];
-  routeSelectionMode: ExternalTakeRouteSelectionMode;
+  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   probeTimeoutMs: number;
   quoteOneInchPath: OneInchPathQuoteFn;
   quoteOneInchTake: OneInchPathQuoteFn;
@@ -1663,37 +1781,18 @@ function createExternalTakeAdapterForDiscovery(params: {
         liquidation,
         config,
       }) => {
-        const selectedPath =
-          liquidation.externalTakeQuoteEvaluation?.externalTakePath;
-        const selectedSource =
-          liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource;
-        const sourceSelectedPath =
-          selectedSource === LiquiditySource.ONEINCH
-            ? 'oneinch'
-            : selectedSource !== undefined &&
-                isDynamicFactorySource(selectedSource)
-              ? 'factory'
-              : undefined;
-        if (
-          selectedPath !== undefined &&
-          sourceSelectedPath !== undefined &&
-          selectedPath !== sourceSelectedPath
-        ) {
+        const selection = resolveHybridExternalTakeExecutionSelection({
+          quoteEvaluation: liquidation.externalTakeQuoteEvaluation,
+          allowedExternalTakePaths: params.externalTakePaths,
+        });
+        if (!selection.approved) {
           logger.error(
-            `Hybrid external take selected inconsistent path=${selectedPath} source=${formatLiquiditySource(selectedSource)}; refusing execution for ${pool.name}/${liquidation.borrower}`
+            `Hybrid external take ${selection.reason}; refusing execution for ${pool.name}/${liquidation.borrower}`
           );
           return false;
         }
-        const effectiveSelectedPath = selectedPath ?? sourceSelectedPath;
-        if (
-          effectiveSelectedPath !== undefined &&
-          !params.externalTakePaths.includes(effectiveSelectedPath)
-        ) {
-          logger.error(
-            `Hybrid external take selected disabled path=${effectiveSelectedPath}; refusing execution for ${pool.name}/${liquidation.borrower}`
-          );
-          return false;
-        }
+        const selectedPath = selection.effectiveSelectedPath;
+        const selectedSource = selection.selectedSource;
         if (
           selectedPath === 'oneinch' ||
           selectedSource === LiquiditySource.ONEINCH
@@ -1909,6 +2008,13 @@ export async function handleDiscoveredTakeTarget(
       rpcCache,
       takePolicy,
     });
+  const recordOneInchCircuitOutcome = (outcome: OneInchCircuitOutcome): void => {
+    recordOneInchCircuitOutcomeForDiscovery({
+      rpcCache,
+      takePolicy,
+      outcome,
+    });
+  };
   const externalTakeAdapter = createExternalTakeAdapterForDiscovery({
     target: params.target,
     takePolicy,
@@ -1919,16 +2025,7 @@ export async function handleDiscoveredTakeTarget(
     quoteOneInchTake,
     quoteFactoryPath,
     approveExternalTake,
-    recordOneInchCircuitOutcome: (outcome) => {
-      if (outcome === 'failure') {
-        recordOneInchQuoteFailure({
-          rpcCache,
-          takePolicy,
-        });
-        return;
-      }
-      recordOneInchQuoteSuccess(rpcCache);
-    },
+    recordOneInchCircuitOutcome,
     stats,
     config: params.config,
   });
@@ -1948,6 +2045,22 @@ export async function handleDiscoveredTakeTarget(
     runtimeCache: rpcCache?.factoryQuoteProviders,
     oneInchRequestTimeoutMs: getOneInchQuoteTimeoutMs(takePolicy),
     skipOneInchRateLimitDelay: true,
+    chainId: rpcCache?.chainId,
+    tokenDecimalsCache: getDiscoveryTokenDecimalsCache(rpcCache),
+    onOneInchSwapDataResult: (result: {
+      success: boolean;
+      retryable?: boolean;
+      errorCode?: number | string;
+      error?: string;
+    }) => {
+      if (result.success) {
+        recordOneInchCircuitOutcome('success');
+        return;
+      }
+      if (result.retryable !== false) {
+        recordOneInchCircuitOutcome('failure');
+      }
+    },
   };
 
   try {

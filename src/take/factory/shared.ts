@@ -10,7 +10,7 @@ import {
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
-import { RequireFields } from '../../utils';
+import { RequireFields, withTimeout } from '../../utils';
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
@@ -125,6 +125,7 @@ const MAX_RECENT_ROUTE_SUCCESSES = 512;
 const MAX_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 const MAX_QUOTE_TOKEN_SCALE_CACHE_ENTRIES = 512;
 const FACTORY_ROUTE_AVAILABILITY_CONCURRENCY = 3;
+export const DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS = 2_000;
 
 function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
   while (map.size > maxSize) {
@@ -607,10 +608,14 @@ async function checkUniswapV3RouteAvailability(
     DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3];
   let exists: boolean;
   try {
-    exists = await quoteProvider.poolExists(
-      params.pool.collateralAddress,
-      params.pool.quoteAddress,
-      feeTier
+    exists = await withTimeout(
+      quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress,
+        feeTier
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'Uniswap V3 pool existence check'
     );
   } catch (error) {
     return unavailableFactoryRoute(
@@ -648,10 +653,14 @@ async function checkSushiSwapRouteAvailability(
     DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP];
   let exists: boolean;
   try {
-    exists = await quoteProvider.poolExists(
-      params.pool.collateralAddress,
-      params.pool.quoteAddress,
-      feeTier
+    exists = await withTimeout(
+      quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress,
+        feeTier
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'SushiSwap pool existence check'
     );
   } catch (error) {
     return unavailableFactoryRoute(
@@ -681,10 +690,24 @@ async function checkCurveRouteAvailability(
     return unavailableFactoryRoute(route, 'Curve quote provider unavailable');
   }
 
-  const exists = await quoteProvider.poolExists(
-    params.pool.collateralAddress,
-    params.pool.quoteAddress
-  );
+  let exists: boolean;
+  try {
+    exists = await withTimeout(
+      quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'Curve pool existence check'
+    );
+  } catch (error) {
+    return unavailableFactoryRoute(
+      route,
+      `Curve pool existence check failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
   return exists
     ? availableFactoryRoute(route)
     : unavailableFactoryRoute(

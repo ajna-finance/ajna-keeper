@@ -131,6 +131,9 @@ describe('auto-discover validation', () => {
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
 
+    config.autoDiscover!.take.externalTakeRouteSelectionMode = 'cost_aware';
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+
     (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 0;
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be greater than 0'
@@ -140,7 +143,7 @@ describe('auto-discover validation', () => {
     (config.autoDiscover!.take as any).externalTakeRouteSelectionMode =
       'fastest';
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit, factory_first, or deprecated cost_aware'
     );
   });
 

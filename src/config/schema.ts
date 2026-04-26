@@ -75,7 +75,8 @@ export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
 export type ExternalTakePathKind = 'oneinch' | 'factory';
 export type ExternalTakeRouteSelectionMode =
   | 'maximize_profit'
-  | 'factory_first';
+  | 'factory_first'
+  | 'cost_aware';
 export type ExternalTakeTransportPolicy =
   | 'allow_public'
   | 'prefer_private_or_relay'
@@ -252,6 +253,7 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    * Hybrid route selection mode. maximize_profit probes all enabled paths and
    * picks the best net-profit route. factory_first probes factory before
    * 1inch and stops at the first approved path to reduce 1inch API use.
+   * cost_aware is a deprecated alias for factory_first.
    */
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
   /**
@@ -395,6 +397,12 @@ export interface CurveRouterOverrides {
   };
   wethAddress?: string;
   defaultSlippage?: number;
+  /**
+   * Optional millisecond delay before submitting Curve factory takes. Leave unset
+   * or 0 for the lowest-latency path; set only if a target chain/provider needs
+   * extra state propagation time.
+   */
+  executionDelayMs?: number;
 }
 
 export enum TakeWriteTransportMode {

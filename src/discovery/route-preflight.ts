@@ -147,7 +147,39 @@ async function requireContractCode(params: {
     return;
   }
 
-  const code = await params.provider.getCode(params.address);
+  let code: string | undefined;
+  let lastError: unknown;
+  for (
+    let attempt = 0;
+    attempt <= FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
+    try {
+      code = await params.provider.getCode(params.address);
+      break;
+    } catch (error) {
+      lastError = error;
+      if (
+        !isRetryableRpcReadError(error) ||
+        attempt === FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length
+      ) {
+        break;
+      }
+      await sleepMs(FACTORY_REGISTRY_READ_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  if (code === undefined) {
+    if (isRetryableRpcReadError(lastError)) {
+      logger.warn(
+        `${params.label} code could not be read after retries; skipping bytecode preflight for this address: ${getErrorMessage(lastError)}`
+      );
+      return;
+    }
+    params.errors.push(
+      `${params.label} code could not be read at ${params.address}: ${getErrorMessage(lastError)}`
+    );
+    return;
+  }
   if (code === '0x') {
     params.errors.push(
       `${params.label} has no contract code at ${params.address}`

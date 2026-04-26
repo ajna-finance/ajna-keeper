@@ -803,7 +803,7 @@ describe('Discovery Gas Policy', () => {
     expect(sushiQuoteStub.firstCall.args[3]).to.equal(100);
   });
 
-  it('quotes minProfitNative as a fresh exact native amount separate from gas cost', async () => {
+  it('quotes gas cost and minProfitNative together when no quote gas cap is configured', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const gasCostNativeRaw = ethers.utils.parseUnits('1', 'gwei').mul(900000);
     const bufferedGasCostNativeRaw = gasCostNativeRaw
@@ -811,13 +811,15 @@ describe('Discovery Gas Policy', () => {
       .add(9999)
       .div(10000);
     const minProfitNative = ethers.utils.parseEther('0.01');
+    const combinedNativeRaw = bufferedGasCostNativeRaw.add(minProfitNative);
+    const combinedQuoteRaw = ethers.utils.parseUnits('21', 6);
     const oneInchQuoteStub = sinon
       .stub(DexRouter.prototype, 'getQuoteFromOneInch')
       .callsFake(async (_chainId, amountIn: BigNumber) => ({
         success: true,
-        dstAmount: amountIn.eq(bufferedGasCostNativeRaw)
-          ? ethers.utils.parseUnits('1', 6).toString()
-          : ethers.utils.parseUnits('20', 6).toString(),
+        dstAmount: amountIn.eq(combinedNativeRaw)
+          ? combinedQuoteRaw.toString()
+          : ethers.utils.parseUnits('999', 6).toString(),
       }));
 
     const result = await evaluateGasPolicy({
@@ -861,10 +863,12 @@ describe('Discovery Gas Policy', () => {
     });
 
     expect(result.approved).to.be.true;
-    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to.be
-      .true;
-    expect(result.minProfitNativeQuoteRaw?.eq(ethers.utils.parseUnits('20', 6)))
-      .to.be.true;
-    expect(oneInchQuoteStub.calledTwice).to.be.true;
+    expect(
+      result.gasCostQuoteRaw
+        ?.add(result.minProfitNativeQuoteRaw ?? BigNumber.from(0))
+        .eq(combinedQuoteRaw)
+    ).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(oneInchQuoteStub.firstCall.args[1].eq(combinedNativeRaw)).to.be.true;
   });
 });

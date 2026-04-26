@@ -82,6 +82,14 @@ type OneInchExecutionConfig = Pick<
   TakeWriteTransportConfig & {
     oneInchRequestTimeoutMs?: number;
     skipOneInchRateLimitDelay?: boolean;
+    chainId?: number;
+    tokenDecimalsCache?: Map<string, number>;
+    onOneInchSwapDataResult?: (result: {
+      success: boolean;
+      retryable?: boolean;
+      errorCode?: number | string;
+      error?: string;
+    }) => void;
   };
 
 type OneInchQuoteConfig = Pick<
@@ -90,6 +98,8 @@ type OneInchQuoteConfig = Pick<
 > & {
   oneInchRequestTimeoutMs?: number;
   skipOneInchRateLimitDelay?: boolean;
+  chainId?: number;
+  tokenDecimalsCache?: Map<string, number>;
 };
 
 function stripExternalTakeSettings(
@@ -103,6 +113,21 @@ function stripExternalTakeSettings(
       marketPriceFactor: undefined,
     },
   };
+}
+
+async function getOneInchTokenDecimals(params: {
+  signer: Signer;
+  tokenAddress: string;
+  cache?: Map<string, number>;
+}): Promise<number> {
+  const cacheKey = params.tokenAddress.toLowerCase();
+  const cached = params.cache?.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const decimals = await getDecimalsErc20(params.signer, params.tokenAddress);
+  params.cache?.set(cacheKey, decimals);
+  return decimals;
 }
 
 export async function handleTakes({
@@ -368,7 +393,7 @@ export async function getOneInchPathQuoteEvaluation(
   }
 
   try {
-    const chainId = await signer.getChainId();
+    const chainId = config.chainId ?? (await signer.getChainId());
     if (!oneInchRouters || !oneInchRouters[chainId]) {
       logger.debug(
         `No 1inch router configured for chainId ${chainId} in pool ${pool.name}`
@@ -390,10 +415,11 @@ export async function getOneInchPathQuoteEvaluation(
     });
 
     // In checkIfTakeable function, before the dexRouter quote call:
-    const collateralDecimals = await getDecimalsErc20(
+    const collateralDecimals = await getOneInchTokenDecimals({
       signer,
-      pool.collateralAddress
-    );
+      tokenAddress: pool.collateralAddress,
+      cache: config.tokenDecimalsCache,
+    });
     const collateralInTokenDecimals = convertWadToTokenDecimals(
       collateral,
       collateralDecimals
@@ -430,7 +456,11 @@ export async function getOneInchPathQuoteEvaluation(
       };
     }
 
-    const quoteDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
+    const quoteDecimals = await getOneInchTokenDecimals({
+      signer,
+      tokenAddress: pool.quoteAddress,
+      cache: config.tokenDecimalsCache,
+    });
 
     //collateralAmount is the human readable amount
     const collateralAmount = Number(
@@ -679,6 +709,8 @@ export async function takeLiquidation({
           delayBetweenActions: config.delayBetweenActions,
           oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
           skipOneInchRateLimitDelay: config.skipOneInchRateLimitDelay,
+          chainId: config.chainId,
+          tokenDecimalsCache: config.tokenDecimalsCache,
         },
         signer,
         config.oneInchRouters,
@@ -715,15 +747,16 @@ export async function takeLiquidation({
     });
 
     // Convert collateral from WAD to token decimals for 1inch API consistency
-    const collateralDecimals = await getDecimalsErc20(
+    const collateralDecimals = await getOneInchTokenDecimals({
       signer,
-      pool.collateralAddress
-    );
+      tokenAddress: pool.collateralAddress,
+      cache: config.tokenDecimalsCache,
+    });
     const collateralInTokenDecimals = convertWadToTokenDecimals(
       liquidation.collateral,
       collateralDecimals
     );
-    const chainId = await signer.getChainId();
+    const chainId = config.chainId ?? (await signer.getChainId());
 
     const swapData = await dexRouter.getSwapDataFromOneInch(
       chainId,
@@ -736,6 +769,12 @@ export async function takeLiquidation({
       { timeoutMs: config.oneInchRequestTimeoutMs }
     );
     if (!swapData.success || !swapData.data) {
+      config.onOneInchSwapDataResult?.({
+        success: false,
+        retryable: swapData.retryable,
+        errorCode: swapData.errorCode,
+        error: swapData.error,
+      });
       logger.error(
         `Legacy 1inch swap data request failed for ${pool.name}/${borrower}: ${swapData.error ?? 'unknown error'}`
       );
@@ -747,11 +786,17 @@ export async function takeLiquidation({
       {
         srcToken: pool.collateralAddress,
         dstToken: pool.quoteAddress,
+        srcReceiver: dexRouter.getRouter(chainId)!,
         dstReceiver: keeperTaker.address,
         amount: collateralInTokenDecimals,
       }
     );
     if (swapDetailsValidationError) {
+      config.onOneInchSwapDataResult?.({
+        success: false,
+        retryable: true,
+        error: swapDetailsValidationError,
+      });
       logger.error(
         `Legacy 1inch swap data validation failed for ${pool.name}/${borrower}: ${swapDetailsValidationError}`
       );
@@ -773,6 +818,16 @@ export async function takeLiquidation({
     )
       ? requiredMinReturnAmount
       : routeMinReturnAmount;
+    config.onOneInchSwapDataResult?.({ success: true });
+    if (swapData.dstAmount !== undefined) {
+      const freshSwapDstAmount = BigNumber.from(swapData.dstAmount);
+      if (freshSwapDstAmount.lt(executionMinReturnAmount)) {
+        logger.warn(
+          `Legacy 1inch swap data expected output ${freshSwapDstAmount.toString()} is below execution floor ${executionMinReturnAmount.toString()} for ${pool.name}/${borrower}; refusing to estimate or submit`
+        );
+        return false;
+      }
+    }
     if (routeMinReturnAmount.lt(executionMinReturnAmount)) {
       swapDetails.swapDescription = {
         ...swapDetails.swapDescription,
