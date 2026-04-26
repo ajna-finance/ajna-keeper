@@ -528,7 +528,11 @@ async function computeLegacyOneInchMinReturnAmount(params: {
     )
     .div(factoryShared.BASIS_POINTS_DENOMINATOR);
   const approvedMinOutRaw =
-    params.quoteEvaluation.approvedMinOutRaw ?? BigNumber.from(0);
+    factoryShared.deriveApprovedMinOutRaw({
+      routeMinOutRaw: params.quoteEvaluation.routeMinOutRaw,
+      profitMinOutRaw: params.quoteEvaluation.profitMinOutRaw,
+      fallbackMinOutRaw: params.quoteEvaluation.approvedMinOutRaw,
+    }) ?? BigNumber.from(0);
 
   return factoryShared.maxBigNumber(
     quoteAmountDueRaw,

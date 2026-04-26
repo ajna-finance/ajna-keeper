@@ -148,6 +148,20 @@ export function maxBigNumber(...values: BigNumber[]): BigNumber {
   );
 }
 
+export function deriveApprovedMinOutRaw(params: {
+  routeMinOutRaw?: BigNumber;
+  profitMinOutRaw?: BigNumber;
+  fallbackMinOutRaw?: BigNumber;
+}): BigNumber | undefined {
+  const splitFloors = [params.routeMinOutRaw, params.profitMinOutRaw].filter(
+    (value): value is BigNumber => value !== undefined
+  );
+  if (splitFloors.length) {
+    return maxBigNumber(...splitFloors);
+  }
+  return params.fallbackMinOutRaw;
+}
+
 export async function getSwapDeadline(
   signer: Signer,
   ttlSeconds: number = 1800
@@ -1063,7 +1077,12 @@ export async function computeFactoryAmountOutMinimum({
   if (!quoteEvaluation.quoteAmountRaw) {
     throw new Error('Factory: quoteAmountRaw missing from evaluation');
   }
-  if (!quoteEvaluation.approvedMinOutRaw) {
+  const approvedMinOutRaw = deriveApprovedMinOutRaw({
+    routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
+    profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
+    fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
+  });
+  if (!approvedMinOutRaw) {
     throw new Error('Factory: approvedMinOutRaw missing from evaluation');
   }
 
@@ -1080,13 +1099,13 @@ export async function computeFactoryAmountOutMinimum({
     quoteAmountDueRaw,
     profitabilityFloor
   );
-  if (quoteEvaluation.approvedMinOutRaw.lt(minimumSanityFloor)) {
+  if (approvedMinOutRaw.lt(minimumSanityFloor)) {
     throw new Error(
       'Factory: approvedMinOutRaw below auction repayment/market-factor floor'
     );
   }
 
-  return quoteEvaluation.approvedMinOutRaw;
+  return approvedMinOutRaw;
 }
 
 export async function buildFactoryQuoteEvaluation(params: {
@@ -1128,12 +1147,11 @@ export async function buildFactoryQuoteEvaluation(params: {
   )
     ? params.quoteAmountRaw.sub(marketFactorFloorQuoteRaw)
     : ZERO;
-  const approvedMinOutRaw = params.existingSlippageFloorQuoteRaw
-    ? maxBigNumber(
-        marketFactorFloorQuoteRaw,
-        params.existingSlippageFloorQuoteRaw
-      )
-    : marketFactorFloorQuoteRaw;
+  const routeMinOutRaw = params.existingSlippageFloorQuoteRaw;
+  const profitMinOutRaw = marketFactorFloorQuoteRaw;
+  const approvedMinOutRaw =
+    deriveApprovedMinOutRaw({ routeMinOutRaw, profitMinOutRaw }) ??
+    profitMinOutRaw;
 
   return {
     isTakeable: isProfitable,
@@ -1144,6 +1162,8 @@ export async function buildFactoryQuoteEvaluation(params: {
     quoteAmountRaw: params.quoteAmountRaw,
     selectedLiquiditySource: params.selectedLiquiditySource,
     selectedFeeTier: params.selectedFeeTier,
+    routeMinOutRaw,
+    profitMinOutRaw,
     approvedMinOutRaw,
     collateralAmount,
     quotedAuctionPriceWad: params.auctionPriceWad,
@@ -1235,12 +1255,15 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
   )
     ? quoteAmountRaw.sub(requiredOutputFloorQuoteRaw)
     : ZERO;
-  const approvedMinOutRaw = params.evaluation.approvedMinOutRaw
-    ? maxBigNumber(
-        params.evaluation.approvedMinOutRaw,
-        requiredOutputFloorQuoteRaw
-      )
-    : requiredOutputFloorQuoteRaw;
+  const routeMinOutRaw =
+    params.evaluation.routeMinOutRaw ??
+    (params.evaluation.profitMinOutRaw
+      ? undefined
+      : params.evaluation.approvedMinOutRaw);
+  const profitMinOutRaw = requiredOutputFloorQuoteRaw;
+  const approvedMinOutRaw =
+    deriveApprovedMinOutRaw({ routeMinOutRaw, profitMinOutRaw }) ??
+    profitMinOutRaw;
   const isTakeable =
     params.evaluation.isTakeable &&
     quoteAmountRaw.gte(requiredOutputFloorQuoteRaw);
@@ -1251,6 +1274,8 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
     reason: isTakeable
       ? params.evaluation.reason
       : 'route quote below required output floor',
+    routeMinOutRaw,
+    profitMinOutRaw,
     approvedMinOutRaw,
     routeProfitability: {
       ...routeProfitability,

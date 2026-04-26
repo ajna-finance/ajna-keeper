@@ -31,6 +31,7 @@ import { TakeWriteTransport } from '../take/write-transport';
 import { FactoryRouteProfitabilityContext } from '../take/factory';
 import {
   applyFactoryRouteProfitabilityPolicy,
+  deriveApprovedMinOutRaw,
   maxBigNumber,
 } from '../take/factory/shared';
 import { decimaledToWei, withTimeout } from '../utils';
@@ -1018,12 +1019,18 @@ async function approveExternalTakeForDiscovery(
         const requiredQuoteAmountRaw = breakEvenQuoteAmountRaw.add(
           requiredProfitFloorRaw
         );
-        quoteEvaluation.approvedMinOutRaw = quoteEvaluation.approvedMinOutRaw
-          ? maxBigNumber(
-              quoteEvaluation.approvedMinOutRaw,
-              requiredQuoteAmountRaw
-            )
-          : requiredQuoteAmountRaw;
+        const routeMinOutRaw =
+          quoteEvaluation.routeMinOutRaw ??
+          (quoteEvaluation.profitMinOutRaw
+            ? undefined
+            : quoteEvaluation.approvedMinOutRaw);
+        quoteEvaluation.routeMinOutRaw = routeMinOutRaw;
+        quoteEvaluation.profitMinOutRaw = requiredQuoteAmountRaw;
+        quoteEvaluation.approvedMinOutRaw =
+          deriveApprovedMinOutRaw({
+            routeMinOutRaw,
+            profitMinOutRaw: requiredQuoteAmountRaw,
+          }) ?? requiredQuoteAmountRaw;
         quoteEvaluation.routeProfitability = {
           ...quoteEvaluation.routeProfitability,
           routeExecutionCostQuoteRaw: gasCostQuoteRaw,

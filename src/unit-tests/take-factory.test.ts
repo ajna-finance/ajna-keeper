@@ -9,6 +9,7 @@ import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider'
 import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
 import * as erc20 from '../erc20';
 import {
+  applyFactoryRouteProfitabilityPolicy,
   filterFactoryRouteCandidatesByAvailability,
   getFactoryRouteCandidates,
   recordFactoryRouteSuccess,
@@ -692,6 +693,79 @@ describe('Take Factory', () => {
       ).to.throw(
         'Factory: takeable route missing expected net profit metadata'
       );
+    });
+
+    it('recomputes approved min-out from split route and profit floors during reapproval', () => {
+      const routeMinOutRaw = ethers.utils.parseUnits('120', 6);
+      const staleProfitMinOutRaw = ethers.utils.parseUnits('140', 6);
+      const refreshedProfitMinOutRaw = ethers.utils.parseUnits('106', 6);
+
+      const evaluation = applyFactoryRouteProfitabilityPolicy({
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: ethers.utils.parseUnits('150', 6),
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+          selectedFeeTier: 3000,
+          routeMinOutRaw,
+          profitMinOutRaw: staleProfitMinOutRaw,
+          approvedMinOutRaw: staleProfitMinOutRaw,
+          routeProfitability: {
+            auctionRepayRequirementQuoteRaw: ethers.utils.parseUnits('100', 6),
+            marketFactorFloorQuoteRaw: ethers.utils.parseUnits('100', 6),
+          },
+        },
+        liquiditySource: LiquiditySource.UNISWAPV3,
+        context: {
+          routeExecutionCostQuoteRawBySource: {
+            [LiquiditySource.UNISWAPV3]: ethers.utils.parseUnits('5', 6),
+          },
+          configuredProfitFloorQuoteRaw: ethers.utils.parseUnits('1', 6),
+        },
+      });
+
+      expect(evaluation.routeMinOutRaw?.eq(routeMinOutRaw)).to.be.true;
+      expect(evaluation.profitMinOutRaw?.eq(refreshedProfitMinOutRaw)).to.be
+        .true;
+      expect(evaluation.approvedMinOutRaw?.eq(routeMinOutRaw)).to.be.true;
+      expect(
+        evaluation.routeProfitability?.requiredOutputFloorQuoteRaw?.eq(
+          refreshedProfitMinOutRaw
+        )
+      ).to.be.true;
+    });
+
+    it('raises approved min-out when the refreshed profit floor is stricter than the route floor', () => {
+      const routeMinOutRaw = ethers.utils.parseUnits('120', 6);
+      const refreshedProfitMinOutRaw = ethers.utils.parseUnits('126', 6);
+
+      const evaluation = applyFactoryRouteProfitabilityPolicy({
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: ethers.utils.parseUnits('150', 6),
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+          selectedFeeTier: 3000,
+          routeMinOutRaw,
+          profitMinOutRaw: ethers.utils.parseUnits('110', 6),
+          approvedMinOutRaw: routeMinOutRaw,
+          routeProfitability: {
+            auctionRepayRequirementQuoteRaw: ethers.utils.parseUnits('100', 6),
+            marketFactorFloorQuoteRaw: ethers.utils.parseUnits('100', 6),
+          },
+        },
+        liquiditySource: LiquiditySource.UNISWAPV3,
+        context: {
+          routeExecutionCostQuoteRawBySource: {
+            [LiquiditySource.UNISWAPV3]: ethers.utils.parseUnits('25', 6),
+          },
+          configuredProfitFloorQuoteRaw: ethers.utils.parseUnits('1', 6),
+        },
+      });
+
+      expect(evaluation.routeMinOutRaw?.eq(routeMinOutRaw)).to.be.true;
+      expect(evaluation.profitMinOutRaw?.eq(refreshedProfitMinOutRaw)).to.be
+        .true;
+      expect(evaluation.approvedMinOutRaw?.eq(refreshedProfitMinOutRaw)).to.be
+        .true;
     });
 
     it('ranks viable Uni/Sushi routes by gas-adjusted net profit and keeps the selected fee tier', async () => {

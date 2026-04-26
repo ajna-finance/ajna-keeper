@@ -52,6 +52,8 @@ export interface ExternalTakeQuoteEvaluation {
   quoteFailureCode?: number | string;
   selectedLiquiditySource?: LiquiditySource;
   selectedFeeTier?: number;
+  routeMinOutRaw?: BigNumber;
+  profitMinOutRaw?: BigNumber;
   approvedMinOutRaw?: BigNumber;
   routeProfitability?: RouteProfitabilityBreakdown;
   collateralAmount?: number;

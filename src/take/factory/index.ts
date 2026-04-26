@@ -28,6 +28,7 @@ import {
   applyFactoryRouteProfitabilityPolicy,
   buildFactoryRouteEvaluationContext,
   createFactoryQuoteProviderRuntimeCache,
+  deriveApprovedMinOutRaw,
   filterFactoryRouteCandidatesByAvailability,
   formatFactoryRouteCandidate,
   getFactoryRouteCandidates,
@@ -623,11 +624,17 @@ export async function takeLiquidationFactory({
       `Factory: Missing selected liquidity source for ${pool.name}/${borrower}; refusing to execute an unbound route`
     );
   }
-  if (!externalTakeQuoteEvaluation.approvedMinOutRaw) {
+  const approvedMinOutRaw = deriveApprovedMinOutRaw({
+    routeMinOutRaw: externalTakeQuoteEvaluation.routeMinOutRaw,
+    profitMinOutRaw: externalTakeQuoteEvaluation.profitMinOutRaw,
+    fallbackMinOutRaw: externalTakeQuoteEvaluation.approvedMinOutRaw,
+  });
+  if (!approvedMinOutRaw) {
     return failFactoryTakeExecution(
       `Factory: Missing approved min-out floor for ${pool.name}/${borrower}; refusing to execute an unbound swap`
     );
   }
+  externalTakeQuoteEvaluation.approvedMinOutRaw = approvedMinOutRaw;
   if (
     (selectedLiquiditySource === LiquiditySource.UNISWAPV3 ||
       selectedLiquiditySource === LiquiditySource.SUSHISWAP) &&
