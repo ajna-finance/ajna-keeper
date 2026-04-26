@@ -702,7 +702,7 @@ export async function takeLiquidation({
 
     if (!config.skipOneInchRateLimitDelay) {
       // Legacy/manual 1inch mode still honors operator pacing.
-      await delay(config.delayBetweenActions);
+      await delay(config.delayBetweenActions ?? 0);
     }
     const dexRouter = new DexRouter(signer, {
       oneInchRouters: config.oneInchRouters ?? {},

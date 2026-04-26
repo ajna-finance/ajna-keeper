@@ -3,6 +3,7 @@ import sinon from 'sinon';
 import { ethers } from 'ethers';
 import { LiquiditySource, KeeperConfig } from '../config';
 import { validateAutoDiscoverRouteDeployments } from '../discovery/route-preflight';
+import { logger } from '../logging';
 
 describe('route deployment preflight', () => {
   afterEach(() => {
@@ -145,6 +146,37 @@ describe('route deployment preflight', () => {
     }
   });
 
+  it('fails startup preflight when the factory registry has no registered taker', async () => {
+    const config = baseConfig();
+    const provider = {
+      _isProvider: true,
+      resolveName: sinon.stub().callsFake(async (name: string) => name),
+      getCode: sinon.stub().resolves('0x6000'),
+      call: sinon
+        .stub()
+        .resolves(
+          ethers.utils.defaultAbiCoder.encode(
+            ['address'],
+            [ethers.constants.AddressZero]
+          )
+        ),
+    };
+
+    try {
+      await validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      expect.fail('expected preflight to fail');
+    } catch (error) {
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        'keeperTakerFactory registry has no taker for UNISWAPV3'
+      );
+    }
+  });
+
   it('fails startup preflight when the factory registry cannot be read', async () => {
     const config = baseConfig();
     const provider = {
@@ -167,5 +199,32 @@ describe('route deployment preflight', () => {
         'keeperTakerFactory registry for UNISWAPV3 could not be read'
       );
     }
+  });
+
+  it('warns instead of failing startup on transient factory registry read errors', async () => {
+    const config = baseConfig();
+    const warnStub = sinon.stub(logger, 'warn');
+    const provider = {
+      _isProvider: true,
+      resolveName: sinon.stub().callsFake(async (name: string) => name),
+      getCode: sinon.stub().resolves('0x6000'),
+      call: sinon.stub().rejects(
+        Object.assign(new Error('ECONNRESET'), {
+          code: 'ECONNRESET',
+        })
+      ),
+    };
+
+    await validateAutoDiscoverRouteDeployments({
+      config,
+      provider: provider as any,
+      chainId: 1,
+    });
+
+    expect(provider.call.callCount).to.equal(3);
+    expect(warnStub.calledOnce).to.be.true;
+    expect(String(warnStub.firstCall.args[0])).to.include(
+      'skipping registry preflight'
+    );
   });
 });

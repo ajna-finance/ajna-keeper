@@ -109,6 +109,41 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
+  it('validates hybrid probe timeout and route selection mode', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+      validateRouteDeployments: true,
+      externalTakeProbeTimeoutMs: 1500,
+      externalTakeRouteSelectionMode: 'cost_aware',
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+
+    (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 0;
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be greater than 0'
+    );
+
+    (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 1500;
+    (config.autoDiscover!.take as any).externalTakeRouteSelectionMode =
+      'fastest';
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or cost_aware'
+    );
+  });
+
   it('requires quote-denominated gas conversion config for hybrid route ranking', () => {
     const config = baseConfig();
     config.autoDiscover!.take = {

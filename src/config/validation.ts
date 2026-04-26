@@ -1,4 +1,5 @@
 import {
+  ExternalTakeRouteSelectionMode,
   ExternalTakeTransportPolicy,
   ExternalTakePathKind,
   KeeperConfig,
@@ -34,6 +35,8 @@ const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'prefer_private_or_relay',
   'require_private_or_relay',
 ]);
+const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
+  new Set<ExternalTakeRouteSelectionMode>(['maximize_profit', 'cost_aware']);
 const MAX_UINT24_FEE_TIER = 16_777_215;
 const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
@@ -297,6 +300,19 @@ function validateExternalTakeTransportPolicy(
   if (!EXTERNAL_TAKE_TRANSPORT_POLICIES.has(policy)) {
     throw new Error(
       'AutoDiscoverConfig.take: externalTakeTransportPolicy must be allow_public, prefer_private_or_relay, or require_private_or_relay'
+    );
+  }
+}
+
+function validateExternalTakeRouteSelectionMode(
+  mode: ExternalTakeRouteSelectionMode | undefined
+): void {
+  if (mode === undefined) {
+    return;
+  }
+  if (!EXTERNAL_TAKE_ROUTE_SELECTION_MODES.has(mode)) {
+    throw new Error(
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or cost_aware'
     );
   }
 }
@@ -644,6 +660,13 @@ export function validateAutoDiscoverConfig(
       1,
       100,
       'AutoDiscoverConfig.take: oneInchQuoteFailureThreshold must be an integer between 1 and 100'
+    );
+    requireOptionalPositive(
+      takePolicy.externalTakeProbeTimeoutMs,
+      'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be greater than 0'
+    );
+    validateExternalTakeRouteSelectionMode(
+      takePolicy.externalTakeRouteSelectionMode
     );
     requireOptionalBoolean(
       takePolicy.validateRouteDeployments,

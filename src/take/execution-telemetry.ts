@@ -33,7 +33,7 @@ function formatBorrowerTelemetryId(borrower: string): string {
     ? utils.getAddress(borrower).toLowerCase()
     : borrower.toLowerCase();
   const hash = utils.keccak256(utils.toUtf8Bytes(normalized));
-  return hash.slice(0, 10);
+  return hash.slice(0, 18);
 }
 
 export function logTakeExecutionTelemetry(params: {

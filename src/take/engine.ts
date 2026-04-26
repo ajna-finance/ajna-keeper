@@ -44,13 +44,14 @@ interface TakeApprovalResult {
 
 interface EvaluateTakeDecisionParams<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
+  TExecutionConfig = unknown,
 > {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: TPoolConfig;
   candidate: TakeBorrowerCandidate;
   subgraph: SubgraphReader;
-  externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, unknown>;
+  externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
   approveExternalTake?: (params: {
     pool: FungiblePool;
     signer: Signer;
@@ -87,7 +88,10 @@ interface ExecuteTakeDecisionParams<
   dryRun: boolean;
   delayBetweenActions: number;
   revalidateBeforeExecution?: boolean;
-  reapproveExternalTakeBeforeExecution?: EvaluateTakeDecisionParams<TPoolConfig>['approveExternalTake'];
+  reapproveExternalTakeBeforeExecution?: EvaluateTakeDecisionParams<
+    TPoolConfig,
+    TExecutionConfig
+  >['approveExternalTake'];
   onSkip?: (params: {
     candidate: TakeBorrowerCandidate;
     stage: 'evaluation' | 'revalidation' | 'execution';
@@ -108,8 +112,11 @@ interface ProcessTakeCandidatesParams<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
 > extends Omit<
-      EvaluateTakeDecisionParams<TPoolConfig>,
-      'candidate' | 'approveExternalTake' | 'approveArbTake'
+      EvaluateTakeDecisionParams<TPoolConfig, TExecutionConfig>,
+      | 'candidate'
+      | 'approveExternalTake'
+      | 'approveArbTake'
+      | 'externalTakeAdapter'
     >,
     Pick<
       ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>,
@@ -124,9 +131,19 @@ interface ProcessTakeCandidatesParams<
       | 'takeWriteTransport'
     > {
   candidates: TakeBorrowerCandidate[];
-  approveExternalTake?: EvaluateTakeDecisionParams<TPoolConfig>['approveExternalTake'];
-  approveArbTake?: EvaluateTakeDecisionParams<TPoolConfig>['approveArbTake'];
-  reapproveExternalTakeBeforeExecution?: ExecuteTakeDecisionParams<TPoolConfig>['reapproveExternalTakeBeforeExecution'];
+  externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
+  approveExternalTake?: EvaluateTakeDecisionParams<
+    TPoolConfig,
+    TExecutionConfig
+  >['approveExternalTake'];
+  approveArbTake?: EvaluateTakeDecisionParams<
+    TPoolConfig,
+    TExecutionConfig
+  >['approveArbTake'];
+  reapproveExternalTakeBeforeExecution?: ExecuteTakeDecisionParams<
+    TPoolConfig,
+    TExecutionConfig
+  >['reapproveExternalTakeBeforeExecution'];
   onFound?: (decision: TakeDecision) => void;
 }
 
@@ -216,6 +233,7 @@ export async function revalidateTakeDecision(params: {
 
 export async function evaluateTakeDecision<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
+  TExecutionConfig = unknown,
 >({
   pool,
   signer,
@@ -225,7 +243,10 @@ export async function evaluateTakeDecision<
   externalTakeAdapter,
   approveExternalTake,
   approveArbTake,
-}: EvaluateTakeDecisionParams<TPoolConfig>): Promise<TakeDecision> {
+}: EvaluateTakeDecisionParams<
+  TPoolConfig,
+  TExecutionConfig
+>): Promise<TakeDecision> {
   const liquidationStatus = await pool
     .getLiquidation(candidate.borrower)
     .getStatus();

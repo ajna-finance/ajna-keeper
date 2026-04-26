@@ -10,6 +10,7 @@ import { logger } from '../logging';
 const FACTORY_TAKER_REGISTRY_ABI = [
   'function takerContracts(uint8 source) view returns (address)',
 ];
+const FACTORY_REGISTRY_READ_RETRY_DELAYS_MS = [100, 250];
 
 const FACTORY_SOURCES = [
   LiquiditySource.UNISWAPV3,
@@ -55,6 +56,44 @@ function getEffectiveExternalTakePaths(
     return new Set<ExternalTakePathKind>(['factory']);
   }
   return new Set<ExternalTakePathKind>();
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRetryableRpcReadError(error: unknown): boolean {
+  const maybeError = error as { code?: unknown; reason?: unknown };
+  const code =
+    typeof maybeError.code === 'string' ? maybeError.code.toLowerCase() : '';
+  const reason =
+    typeof maybeError.reason === 'string'
+      ? maybeError.reason.toLowerCase()
+      : '';
+  const message = getErrorMessage(error).toLowerCase();
+  return [
+    'timeout',
+    'timed out',
+    'econnreset',
+    'econnrefused',
+    'etimedout',
+    'network',
+    '429',
+    '502',
+    '503',
+    '504',
+    'server error',
+    'bad gateway',
+  ].some(
+    (needle) =>
+      code.includes(needle) ||
+      reason.includes(needle) ||
+      message.includes(needle)
+  );
 }
 
 function getEffectiveFactorySources(config: KeeperConfig): LiquiditySource[] {
@@ -133,19 +172,57 @@ async function validateFactoryRegistry(params: {
       FACTORY_TAKER_REGISTRY_ABI,
       params.provider
     );
-    const registeredTaker = await factory.takerContracts(params.source);
-    if (
-      ethers.utils.isAddress(registeredTaker) &&
-      registeredTaker !== ethers.constants.AddressZero &&
-      registeredTaker.toLowerCase() !== params.expectedTaker.toLowerCase()
+    let registeredTaker: string | undefined;
+    let lastError: unknown;
+    for (
+      let attempt = 0;
+      attempt <= FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length;
+      attempt += 1
     ) {
+      try {
+        registeredTaker = await factory.takerContracts(params.source);
+        break;
+      } catch (error) {
+        lastError = error;
+        if (
+          !isRetryableRpcReadError(error) ||
+          attempt === FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length
+        ) {
+          break;
+        }
+        await sleepMs(FACTORY_REGISTRY_READ_RETRY_DELAYS_MS[attempt]);
+      }
+    }
+    if (registeredTaker === undefined) {
+      if (isRetryableRpcReadError(lastError)) {
+        logger.warn(
+          `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read after retries; skipping registry preflight for this source: ${getErrorMessage(lastError)}`
+        );
+        return;
+      }
+      params.errors.push(
+        `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read: ${getErrorMessage(lastError)}`
+      );
+      return;
+    }
+    if (
+      !ethers.utils.isAddress(registeredTaker) ||
+      registeredTaker.toLowerCase() ===
+        ethers.constants.AddressZero.toLowerCase()
+    ) {
+      params.errors.push(
+        `keeperTakerFactory registry has no taker for ${LiquiditySource[params.source]}, expected ${params.expectedTaker}`
+      );
+      return;
+    }
+    if (registeredTaker.toLowerCase() !== params.expectedTaker.toLowerCase()) {
       params.errors.push(
         `keeperTakerFactory registry maps ${LiquiditySource[params.source]} to ${registeredTaker}, expected ${params.expectedTaker}`
       );
     }
   } catch (error) {
     params.errors.push(
-      `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read: ${error instanceof Error ? error.message : String(error)}`
+      `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read: ${getErrorMessage(error)}`
     );
   }
 }

@@ -73,6 +73,7 @@ export enum LiquiditySource {
 
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
 export type ExternalTakePathKind = 'oneinch' | 'factory';
+export type ExternalTakeRouteSelectionMode = 'maximize_profit' | 'cost_aware';
 export type ExternalTakeTransportPolicy =
   | 'allow_public'
   | 'prefer_private_or_relay'
@@ -240,6 +241,17 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    * Retryable 1inch quote failures before cooldown opens. Defaults to 2.
    */
   oneInchQuoteFailureThreshold?: number;
+  /**
+   * Maximum time to wait for each external-take path probe in hybrid mode.
+   * Defaults to oneInchQuoteTimeoutMs, or 2000ms when unset.
+   */
+  externalTakeProbeTimeoutMs?: number;
+  /**
+   * Hybrid route selection mode. maximize_profit probes all enabled paths and
+   * picks the best net-profit route. cost_aware probes factory before 1inch and
+   * stops at the first approved path to reduce 1inch API use.
+   */
+  externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
   /**
    * Controls whether discovered external takes may fall back to public RPC
    * submission, or must use private RPC / relay write transport.
