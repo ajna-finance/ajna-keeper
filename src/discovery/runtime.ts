@@ -24,6 +24,7 @@ import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from './handlers';
+import { OneInchQuoteCircuitState } from './types';
 import { logger } from '../logging';
 import {
   createDiscoveryReadTransports,
@@ -40,6 +41,10 @@ import {
 } from '../take/write-transport';
 import { delay } from '../utils';
 import { createDiscoveryRpcCache } from './rpc-cache';
+import {
+  FactoryQuoteProviderRuntimeCache,
+  createFactoryQuoteProviderRuntimeCache,
+} from '../take/factory';
 
 export interface DiscoverySnapshotState {
   latestLiquidationAuctions?: ChainwideLiquidationAuction[];
@@ -67,6 +72,8 @@ type BoundDiscoveryRuntimeState = DiscoveryRuntimeState & {
   readTransports: DiscoveryReadTransports;
   chainId?: number;
   hotAuctionCandidateCache?: HotAuctionCandidateCache;
+  factoryQuoteProviders: FactoryQuoteProviderRuntimeCache;
+  oneInchQuoteCircuit: OneInchQuoteCircuitState;
   lastDiscoveredSettlementCycleStartedAtMs?: number;
   lastDiscoveredSettlementFailureAtMs?: number;
 };
@@ -393,6 +400,12 @@ async function createDiscoveryCycleRpcCache(params: {
     signer: params.state.signer,
     readRpc: params.state.readTransports.readRpc,
     includeFactoryQuoteProviders: params.includeFactoryQuoteProviders,
+    factoryQuoteProviders: params.includeFactoryQuoteProviders
+      ? params.state.factoryQuoteProviders
+      : undefined,
+    oneInchQuoteCircuit: params.includeFactoryQuoteProviders
+      ? params.state.oneInchQuoteCircuit
+      : undefined,
   });
 }
 
@@ -943,6 +956,8 @@ export function createDiscoveryRuntime(
     hotAuctionCandidateCache: createHotAuctionCandidateCacheForConfig(
       params.config
     ),
+    factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
+    oneInchQuoteCircuit: { failures: 0 },
     readTransports: createDiscoveryReadTransports(
       params.config,
       params.signer.provider,

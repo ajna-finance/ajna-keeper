@@ -1,12 +1,17 @@
 import { Signer } from '@ajna-finance/sdk';
 import { ReadRpc } from '../read-transports';
-import { createFactoryQuoteProviderRuntimeCache } from '../take/factory';
-import { DiscoveryRpcCache } from './types';
+import {
+  FactoryQuoteProviderRuntimeCache,
+  createFactoryQuoteProviderRuntimeCache,
+} from '../take/factory';
+import { DiscoveryRpcCache, OneInchQuoteCircuitState } from './types';
 
 export async function createDiscoveryRpcCache(params: {
   signer: Signer;
   readRpc: ReadRpc;
   includeFactoryQuoteProviders?: boolean;
+  factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
+  oneInchQuoteCircuit?: OneInchQuoteCircuitState;
 }): Promise<DiscoveryRpcCache | undefined> {
   if (!params.signer.provider) {
     return undefined;
@@ -21,7 +26,14 @@ export async function createDiscoveryRpcCache(params: {
     gasPriceFetchedAt: Date.now(),
     ...(params.includeFactoryQuoteProviders
       ? {
-          factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
+          factoryQuoteProviders:
+            params.factoryQuoteProviders ??
+            createFactoryQuoteProviderRuntimeCache(),
+        }
+      : {}),
+    ...(params.oneInchQuoteCircuit
+      ? {
+          oneInchQuoteCircuit: params.oneInchQuoteCircuit,
         }
       : {}),
   };

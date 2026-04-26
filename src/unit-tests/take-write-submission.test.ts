@@ -59,7 +59,7 @@ describe('take write submission', () => {
     sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
     sinon
       .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
-      .resolves({ data: '0xdeadbeef' } as any);
+      .resolves({ success: true, data: '0xdeadbeef' } as any);
     sinon
       .stub(DexRouter.prototype, 'getRouter')
       .returns('0x00000000000000000000000000000000000000cc');
@@ -172,7 +172,7 @@ describe('take write submission', () => {
     sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
     sinon
       .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
-      .resolves({ data: '0xdeadbeef' } as any);
+      .resolves({ success: true, data: '0xdeadbeef' } as any);
     sinon
       .stub(DexRouter.prototype, 'getRouter')
       .returns('0x00000000000000000000000000000000000000cc');

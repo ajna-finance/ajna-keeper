@@ -73,6 +73,64 @@ describe('Discovery Gas Policy', () => {
     expect(oneInchQuoteStub.calledTwice).to.be.true;
   });
 
+  it('passes the configured 1inch timeout to gas quote conversions', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('1', 6).toString(),
+      });
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+            oneInchQuoteTimeoutMs: 750,
+          },
+        },
+        oneInchRouters: {
+          1: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+        oneInchQuoteTimeoutMs: 750,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 1,
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(oneInchQuoteStub.firstCall.args[4]).to.deep.equal({
+      timeoutMs: 750,
+    });
+  });
+
   it('uses the cached discovery chainId instead of calling signer.getChainId per evaluation', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const oneInchQuoteStub = sinon

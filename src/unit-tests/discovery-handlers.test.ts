@@ -902,7 +902,7 @@ describe('Discovery Handlers', () => {
     sinon.stub(takeModule, 'takeLiquidation').resolves(true);
     sinon
       .stub(takeModule, 'getOneInchPathQuoteEvaluation')
-      .returns(new Promise(() => undefined) as any);
+      .rejects(new Error('timeout of 5ms exceeded'));
     sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'factory',

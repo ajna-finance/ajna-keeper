@@ -78,12 +78,18 @@ type OneInchExecutionConfig = Pick<
   | 'oneInchRouters'
   | 'keeperTaker'
 > &
-  TakeWriteTransportConfig;
+  TakeWriteTransportConfig & {
+    oneInchRequestTimeoutMs?: number;
+    skipOneInchRateLimitDelay?: boolean;
+  };
 
 type OneInchQuoteConfig = Pick<
   KeeperConfig,
   'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'
->;
+> & {
+  oneInchRequestTimeoutMs?: number;
+  skipOneInchRateLimitDelay?: boolean;
+};
 
 function stripExternalTakeSettings(
   poolConfig: RequireFields<PoolConfig, 'take'>
@@ -267,7 +273,11 @@ export function createOneInchTakeAdapter(
         price,
         collateral,
         poolConfig,
-        { delayBetweenActions: quoteConfig.delayBetweenActions },
+        {
+          delayBetweenActions: quoteConfig.delayBetweenActions,
+          oneInchRequestTimeoutMs: quoteConfig.oneInchRequestTimeoutMs,
+          skipOneInchRateLimitDelay: quoteConfig.skipOneInchRateLimitDelay,
+        },
         signer,
         quoteConfig.oneInchRouters,
         quoteConfig.connectorTokens
@@ -302,7 +312,7 @@ export async function getOneInchTakeQuoteEvaluation(
   price: number,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
-  config: Partial<Pick<KeeperConfig, 'delayBetweenActions'>>,
+  config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
   connectorTokens: string[] | undefined
@@ -334,7 +344,7 @@ export async function getOneInchPathQuoteEvaluation(
   price: number,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
-  config: Partial<Pick<KeeperConfig, 'delayBetweenActions'>>,
+  config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
   connectorTokens: string[] | undefined
@@ -368,8 +378,10 @@ export async function getOneInchPathQuoteEvaluation(
       };
     }
 
-    // Pause between getting a quote for each liquidation to avoid 1inch rate limit
-    await delay(config.delayBetweenActions ?? 0);
+    if (!config.skipOneInchRateLimitDelay) {
+      // Legacy/manual 1inch mode still honors operator pacing.
+      await delay(config.delayBetweenActions ?? 0);
+    }
 
     const dexRouter = new DexRouter(signer, {
       oneInchRouters: oneInchRouters ?? {},
@@ -390,7 +402,8 @@ export async function getOneInchPathQuoteEvaluation(
       chainId,
       collateralInTokenDecimals,
       pool.collateralAddress,
-      pool.quoteAddress
+      pool.quoteAddress,
+      { timeoutMs: config.oneInchRequestTimeoutMs }
     );
 
     if (!quoteResult.success) {
@@ -464,7 +477,7 @@ async function checkIfTakeable(
   price: number,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
-  config: Partial<Pick<KeeperConfig, 'delayBetweenActions'>>,
+  config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
   connectorTokens: string[] | undefined
@@ -613,15 +626,7 @@ interface TakeLiquidationParams
   extends Pick<HandleTakeParams, 'pool' | 'signer'> {
   poolConfig: TakeActionConfig;
   liquidation: LiquidationToTake;
-  config: Pick<
-    KeeperConfig,
-    | 'dryRun'
-    | 'delayBetweenActions'
-    | 'connectorTokens'
-    | 'oneInchRouters'
-    | 'keeperTaker'
-  > &
-    TakeWriteTransportConfig;
+  config: OneInchExecutionConfig;
 }
 
 export async function takeLiquidation({
@@ -665,7 +670,11 @@ export async function takeLiquidation({
         Number(weiToDecimaled(liquidation.auctionPrice)),
         liquidation.collateral,
         poolConfig,
-        { delayBetweenActions: config.delayBetweenActions },
+        {
+          delayBetweenActions: config.delayBetweenActions,
+          oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
+          skipOneInchRateLimitDelay: config.skipOneInchRateLimitDelay,
+        },
         signer,
         config.oneInchRouters,
         config.connectorTokens
@@ -691,8 +700,10 @@ export async function takeLiquidation({
       signer
     );
 
-    // pause between getting the 1inch quote and requesting the swap to avoid 1inch rate limit
-    await delay(config.delayBetweenActions);
+    if (!config.skipOneInchRateLimitDelay) {
+      // Legacy/manual 1inch mode still honors operator pacing.
+      await delay(config.delayBetweenActions);
+    }
     const dexRouter = new DexRouter(signer, {
       oneInchRouters: config.oneInchRouters ?? {},
       connectorTokens: config.connectorTokens ?? [],
@@ -716,8 +727,15 @@ export async function takeLiquidation({
       pool.quoteAddress,
       1,
       keeperTaker.address,
-      true
+      true,
+      { timeoutMs: config.oneInchRequestTimeoutMs }
     );
+    if (!swapData.success || !swapData.data) {
+      logger.error(
+        `Legacy 1inch swap data request failed for ${pool.name}/${borrower}: ${swapData.error ?? 'unknown error'}`
+      );
+      return false;
+    }
     const swapDetails = convertSwapApiResponseToDetails(swapData.data);
     const requiredMinReturnAmount = await computeLegacyOneInchMinReturnAmount({
       pool,

@@ -453,6 +453,7 @@ describe('DexRouter', () => {
                 toTokenAddress: tokenOut,
                 amount: '100000000',
               },
+              timeout: undefined,
               headers: {
                 Accept: 'application/json',
                 Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -471,6 +472,7 @@ describe('DexRouter', () => {
                 fromAddress,
                 slippage,
               },
+              timeout: undefined,
               headers: {
                 Accept: 'application/json',
                 Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -546,6 +548,7 @@ describe('DexRouter', () => {
               toTokenAddress: tokenOut,
               amount: '100000000',
             },
+            timeout: undefined,
             headers: {
               Accept: 'application/json',
               Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -564,6 +567,7 @@ describe('DexRouter', () => {
               fromAddress,
               slippage,
             },
+            timeout: undefined,
             headers: {
               Accept: 'application/json',
               Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -584,6 +588,27 @@ describe('DexRouter', () => {
       );
 
       expect(result).to.deep.equal({ success: false, error: 'API error' });
+    });
+
+    it('classifies timed-out 1inch quote requests as retryable', async () => {
+      const timeoutError = new Error('timeout of 2000ms exceeded') as Error & {
+        code: string;
+      };
+      timeoutError.code = 'ECONNABORTED';
+      axiosGetStub.rejects(timeoutError);
+
+      const result = await dexRouter.getQuoteFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        { timeoutMs: 2000 }
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.retryable).to.be.true;
+      expect(result.errorCode).to.equal('ECONNABORTED');
+      expect(axiosGetStub.firstCall.args[1].timeout).to.equal(2000);
     });
 
     it('retries retryable 1inch swap-data failures before succeeding', async () => {

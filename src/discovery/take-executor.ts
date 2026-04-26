@@ -20,6 +20,7 @@ import {
   DiscoveryExecutionConfig,
   DiscoveryExecutionTransportConfig,
   DiscoveryRpcCache,
+  OneInchQuoteCircuitState,
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
 import * as takeModule from '../take';
@@ -231,6 +232,13 @@ function getExternalTakeGasLimit(
     : EXTERNAL_TAKE_GAS_LIMIT;
 }
 
+function requiresHybridNetProfitRanking(
+  takePolicy: AutoDiscoverTakePolicyRuntime
+): boolean {
+  const paths = takePolicy?.allowedExternalTakePaths;
+  return !!(paths?.includes('oneinch') && paths.includes('factory'));
+}
+
 function getQuoteTokenScaleFromDecimals(
   quoteTokenDecimals: number
 ): BigNumber | undefined {
@@ -270,13 +278,6 @@ function formatSignedQuoteAmount(params: {
   return params.negative ? `-${formatted}` : formatted;
 }
 
-class OneInchQuoteTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`1inch quote timed out after ${timeoutMs}ms`);
-    this.name = 'OneInchQuoteTimeoutError';
-  }
-}
-
 function getOneInchQuoteTimeoutMs(
   takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>
 ): number {
@@ -303,32 +304,9 @@ function getOneInchQuoteFailureThreshold(
   );
 }
 
-async function withOneInchQuoteTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number
-): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new OneInchQuoteTimeoutError(timeoutMs)),
-          timeoutMs
-        );
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
-function getOneInchCircuitState(rpcCache?: DiscoveryRpcCache): {
-  failures: number;
-  cooldownUntilMs?: number;
-} {
+function getOneInchCircuitState(
+  rpcCache?: DiscoveryRpcCache
+): OneInchQuoteCircuitState {
   if (!rpcCache) {
     return { failures: 0 };
   }
@@ -895,11 +873,17 @@ async function approveExternalTakeForDiscovery(params: {
     selectedLiquiditySource !== undefined
       ? getExternalTakeGasLimit(takePolicy, selectedLiquiditySource)
       : EXTERNAL_TAKE_GAS_LIMIT;
+  const gasPolicyInput = requiresHybridNetProfitRanking(takePolicy)
+    ? {
+        ...(takePolicy ?? {}),
+        minExpectedProfitQuote: takePolicy?.minExpectedProfitQuote ?? 0,
+      }
+    : takePolicy;
   const gasPolicy = await evaluateGasPolicy({
     signer,
     config,
     transports,
-    policy: takePolicy,
+    policy: gasPolicyInput,
     gasLimit: routeGasLimit,
     quoteTokenAddress: pool.quoteAddress,
     preferredLiquiditySource: selectedLiquiditySource,
@@ -1228,18 +1212,19 @@ async function quoteOneInchPathForDiscovery(params: {
 
   let evaluation: ExternalTakeQuoteEvaluation;
   try {
-    evaluation = await withOneInchQuoteTimeout(
-      takeModule.getOneInchPathQuoteEvaluation(
-        params.pool,
-        params.price,
-        params.collateral,
-        params.poolConfig,
-        { delayBetweenActions: params.config.delayBetweenActions },
-        params.signer,
-        params.config.oneInchRouters,
-        params.config.connectorTokens
-      ),
-      getOneInchQuoteTimeoutMs(params.takePolicy)
+    evaluation = await takeModule.getOneInchPathQuoteEvaluation(
+      params.pool,
+      params.price,
+      params.collateral,
+      params.poolConfig,
+      {
+        delayBetweenActions: params.config.delayBetweenActions,
+        oneInchRequestTimeoutMs: getOneInchQuoteTimeoutMs(params.takePolicy),
+        skipOneInchRateLimitDelay: true,
+      },
+      params.signer,
+      params.config.oneInchRouters,
+      params.config.connectorTokens
     );
   } catch (error) {
     recordOneInchQuoteFailure({
@@ -1254,8 +1239,7 @@ async function quoteOneInchPathForDiscovery(params: {
       quotedCollateralWad: params.collateral,
       reason: error instanceof Error ? error.message : String(error),
       quoteFailureRetryable: true,
-      quoteFailureCode:
-        error instanceof OneInchQuoteTimeoutError ? 'timeout' : 'exception',
+      quoteFailureCode: 'exception',
     };
   }
 
@@ -1495,7 +1479,13 @@ function createExternalTakeAdapterForDiscovery(params: {
           price,
           collateral,
           poolConfig,
-          { delayBetweenActions: params.config.delayBetweenActions },
+          {
+            delayBetweenActions: params.config.delayBetweenActions,
+            oneInchRequestTimeoutMs: getOneInchQuoteTimeoutMs(
+              params.takePolicy
+            ),
+            skipOneInchRateLimitDelay: true,
+          },
           signer,
           params.config.oneInchRouters,
           params.config.connectorTokens
@@ -1681,6 +1671,8 @@ export async function handleDiscoveredTakeTarget(
     tokenAddresses: params.config.tokenAddresses,
     takeWriteTransport: params.takeWriteTransport,
     runtimeCache: rpcCache?.factoryQuoteProviders,
+    oneInchRequestTimeoutMs: getOneInchQuoteTimeoutMs(takePolicy),
+    skipOneInchRateLimitDelay: true,
   };
 
   try {

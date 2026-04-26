@@ -496,6 +496,87 @@ describe('Run Loop Discovery Integration', () => {
     expect(secondRpcCache.gasPrice!.toString()).to.equal('123');
   });
 
+  it('persists discovered take route caches across cycles without reusing stale gas snapshots', async () => {
+    const observedRpcCaches: any[] = [];
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
+      .callsFake(async (params: any) => {
+        observedRpcCaches.push(params.rpcCache);
+      });
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '2',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '2',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+
+    const discoveredPool = {
+      name: 'Discovered Pool',
+      poolAddress: '0x4444444444444444444444444444444444444444',
+      quoteAddress: '0x5555555555555555555555555555555555555555',
+      collateralAddress: '0x6666666666666666666666666666666666666666',
+    };
+    const ajna = {
+      fungiblePoolFactory: {
+        getPoolByAddress: sinon.stub().resolves(discoveredPool),
+      },
+    };
+    const gasPriceStub = sinon.stub();
+    gasPriceStub.onCall(0).resolves(BigNumber.from(123));
+    gasPriceStub.onCall(1).resolves(BigNumber.from(456));
+    const signer = {
+      provider: {
+        getGasPrice: gasPriceStub,
+      },
+    };
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      autoDiscover: {
+        enabled: true,
+        take: true,
+      },
+      discoveredDefaults: {
+        take: {
+          minCollateral: 0.1,
+          hpbPriceFactor: 0.98,
+        },
+      },
+    };
+
+    const runtime = createTestDiscoveryRuntime({
+      ajna: ajna as any,
+      config,
+      signer: signer as any,
+      discoverySnapshotState: {},
+    });
+    await runtime.runTakeCycle();
+    observedRpcCaches[0].oneInchQuoteCircuit.failures = 2;
+    observedRpcCaches[0].oneInchQuoteCircuit.cooldownUntilMs = 999;
+    clearSharedDiscoveryScans();
+    await runtime.runTakeCycle();
+
+    expect(handleDiscoveredTakeTargetStub.calledTwice).to.be.true;
+    expect(gasPriceStub.calledTwice).to.be.true;
+    expect(observedRpcCaches[0]).to.not.equal(observedRpcCaches[1]);
+    expect(observedRpcCaches[0].gasPrice.toString()).to.equal('123');
+    expect(observedRpcCaches[1].gasPrice.toString()).to.equal('456');
+    expect(observedRpcCaches[1].oneInchQuoteCircuit).to.equal(
+      observedRpcCaches[0].oneInchQuoteCircuit
+    );
+    expect(observedRpcCaches[1].oneInchQuoteCircuit.failures).to.equal(2);
+    expect(observedRpcCaches[1].factoryQuoteProviders).to.equal(
+      observedRpcCaches[0].factoryQuoteProviders
+    );
+  });
+
   it('refreshes the discovered take gas price when the per-cycle cache becomes stale', async () => {
     let nowMs = 1_000;
     sinon.stub(Date, 'now').callsFake(() => nowMs);

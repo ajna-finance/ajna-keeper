@@ -228,7 +228,8 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   gasPriceDriftToleranceBasisPoints?: number;
   /**
    * Maximum time to wait for a 1inch quote while probing hybrid external-take
-   * paths. Defaults to 2000ms.
+   * paths and for the matching 1inch swap-data request before submission.
+   * Defaults to 2000ms.
    */
   oneInchQuoteTimeoutMs?: number;
   /**

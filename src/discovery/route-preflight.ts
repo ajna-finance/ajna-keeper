@@ -144,8 +144,8 @@ async function validateFactoryRegistry(params: {
       );
     }
   } catch (error) {
-    logger.warn(
-      `Route deployment preflight could not read keeperTakerFactory registry for ${LiquiditySource[params.source]}: ${error instanceof Error ? error.message : String(error)}`
+    params.errors.push(
+      `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }

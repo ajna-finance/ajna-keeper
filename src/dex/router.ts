@@ -18,6 +18,42 @@ import {
   PostAuctionDex,
 } from '../config';
 
+export interface OneInchRequestOptions {
+  timeoutMs?: number;
+}
+
+export interface OneInchApiResult {
+  success: boolean;
+  data?: any;
+  dstAmount?: string;
+  error?: string;
+  retryable?: boolean;
+  errorCode?: number | string;
+}
+
+function getOneInchErrorMessage(error: Error | any): string {
+  return error.response?.data?.description || error.message;
+}
+
+function getOneInchErrorCode(error: Error | any): number | string | undefined {
+  if (error.response?.status !== undefined) {
+    return error.response.status;
+  }
+  return error.code;
+}
+
+function isRetryableOneInchError(error: Error | any): boolean {
+  const status = error.response?.status;
+  const code = error.code;
+  return (
+    status === 429 ||
+    status === undefined ||
+    status >= 500 ||
+    code === 'ECONNABORTED' ||
+    code === 'ETIMEDOUT'
+  );
+}
+
 export class DexRouter {
   private signer: Signer;
   private oneInchRouters: { [chainId: number]: string };
@@ -51,14 +87,9 @@ export class DexRouter {
     chainId: number,
     amount: BigNumber,
     tokenIn: string,
-    tokenOut: string
-  ): Promise<{
-    success: boolean;
-    dstAmount?: string;
-    error?: string;
-    retryable?: boolean;
-    errorCode?: number;
-  }> {
+    tokenOut: string,
+    options: OneInchRequestOptions = {}
+  ): Promise<OneInchApiResult> {
     const url = `${process.env.ONEINCH_API}/${chainId}/quote`;
 
     const params: {
@@ -83,6 +114,7 @@ export class DexRouter {
     try {
       const response = await axios.get(url, {
         params,
+        timeout: options.timeoutMs,
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -92,14 +124,13 @@ export class DexRouter {
 
       return { success: true, dstAmount: response.data.dstAmount };
     } catch (error: Error | any) {
-      const errorMsg = error.response?.data?.description || error.message;
-      const status = error.response?.status;
+      const errorMsg = getOneInchErrorMessage(error);
       logger.error(`Failed to get quote from 1inch: ${errorMsg}`);
       return {
         success: false,
         error: errorMsg,
-        retryable: status === 429 || status === undefined || status >= 500,
-        errorCode: status,
+        retryable: isRetryableOneInchError(error),
+        errorCode: getOneInchErrorCode(error),
       };
     }
   }
@@ -112,7 +143,8 @@ export class DexRouter {
     slippage: number,
     fromAddress: string,
     usePatching: boolean = false,
-  ) : Promise<{ success: boolean; data?: any; error?: string; retryable?: boolean }> {
+    options: OneInchRequestOptions = {}
+  ) : Promise<OneInchApiResult> {
     const url = `${process.env.ONEINCH_API}/${chainId}/swap`;
     const params: {
       fromTokenAddress: string;
@@ -146,6 +178,7 @@ export class DexRouter {
     try {
       const response = await axios.get(url, {
         params,
+        timeout: options.timeoutMs,
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -166,12 +199,12 @@ export class DexRouter {
 
       return { success: true, data: response.data.tx };
     } catch (error: Error | any) {
-      const errorMsg = error.response?.data?.description || error.message;
-      const status = error.response?.status;
+      const errorMsg = getOneInchErrorMessage(error);
       return {
         success: false,
         error: errorMsg,
-        retryable: status === 429 || status === undefined || status >= 500,
+        retryable: isRetryableOneInchError(error),
+        errorCode: getOneInchErrorCode(error),
       };
     }
   }

@@ -109,6 +109,33 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
+  it('requires quote-denominated gas conversion config for hybrid route ranking', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+      validateRouteDeployments: true,
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+    config.universalRouterOverrides = {
+      ...config.universalRouterOverrides!,
+      wethAddress: undefined as unknown as string,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: hybrid external take route ranking requires a configured wrapped native token address'
+    );
+  });
+
   it('requires deployment preflight for hybrid oneinch plus factory defaults', () => {
     const config = baseConfig();
     config.autoDiscover!.take = {

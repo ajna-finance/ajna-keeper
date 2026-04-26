@@ -529,12 +529,12 @@ The keeper is configured with conservative timing to respect rate limits:
 
 ```typescript
 {
-  delayBetweenRuns: 15,        // 15 seconds between bot cycles
-  delayBetweenActions: 61,     // 61 seconds between individual actions (for 1inch)
+  delayBetweenRuns: 10,        // 10 seconds between hot take cycles
+  delayBetweenActions: 0,      // do not add intentional delay inside hot discovered take execution
 }
 ```
 
-**For faster operation:** Upgrade to paid API tiers. The bot timing can be reduced with higher-tier service plans.
+For discovered external takes, use `autoDiscover.take.oneInchQuoteTimeoutMs` and the 1inch failure cooldown instead of a long `delayBetweenActions`. A 31-61 second action delay is appropriate only for slow legacy/manual 1inch operation; it is too slow for the short window where liquidation auctions are below market. Upgrade API tiers when you need lower timeout/cooldown values without hitting provider limits.
 
 ### Auto-Discovery Rollout (V1)
 
@@ -564,9 +564,9 @@ Recommended rollout order:
 8. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
 9. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
 10. Use `autoDiscover.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `takeWrite` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
-11. If `discoveredDefaults.take.liquiditySource` is `ONEINCH` and `allowedExternalTakePaths` also includes `'factory'`, set `defaultFactoryLiquiditySource` so the factory selector has a default source and tie-breaker.
+11. If `discoveredDefaults.take.liquiditySource` is `ONEINCH` and `allowedExternalTakePaths` also includes `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the taker path.
 12. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
-13. Use `autoDiscover.take.validateRouteDeployments: true` for production startup preflight when startup latency is acceptable.
+13. Use `autoDiscover.take.validateRouteDeployments: true` for production startup preflight. It is required for 1inch-default hybrid routing and recommended for every live factory route.
 
 Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; override it with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed execution costs. `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion. Gas-price freshness defaults are 5 seconds on L1 and 15 seconds on common L2s; use `l1GasPriceFreshnessTtlMs` / `l2GasPriceFreshnessTtlMs` only if your RPC latency profile requires a different window. `gasPriceDriftToleranceBasisPoints` optionally forces final pre-submission reapproval when current gas differs materially from the evaluation snapshot.
 
@@ -1115,7 +1115,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 ```bash
 # Log: "No valid quote data"
 # Cause: API rate limiting or misconfigured DEX addresses
-# Solution: Increase delayBetweenActions, verify router addresses
+# Solution: verify router addresses; for discovered takes tune oneInchQuoteTimeoutMs/failure cooldown instead of adding long action delays
 
 # Log: "Wrong DEX for this contract"
 # Cause: Contract/config mismatch
@@ -1127,7 +1127,8 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 **1inch Rate Limiting:**
 
 - Free tier: 1 req/sec, 100K/month
-- Increase `delayBetweenActions` to 61+ seconds
+- For hot discovered takes, keep `delayBetweenActions` low and rely on bounded 1inch request timeouts plus cooldowns
+- For slow legacy/manual 1inch-only operation, increase `delayBetweenActions` if your API tier requires it
 - Consider paid tier for faster operation
 
 **Uniswap V3 Gas Optimization:**

@@ -144,4 +144,28 @@ describe('route deployment preflight', () => {
       );
     }
   });
+
+  it('fails startup preflight when the factory registry cannot be read', async () => {
+    const config = baseConfig();
+    const provider = {
+      _isProvider: true,
+      resolveName: sinon.stub().callsFake(async (name: string) => name),
+      getCode: sinon.stub().resolves('0x6000'),
+      call: sinon.stub().rejects(new Error('registry rpc unavailable')),
+    };
+
+    try {
+      await validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      expect.fail('expected preflight to fail');
+    } catch (error) {
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        'keeperTakerFactory registry for UNISWAPV3 could not be read'
+      );
+    }
+  });
 });

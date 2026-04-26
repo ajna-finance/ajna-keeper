@@ -23,14 +23,16 @@ export type DiscoveryExecutionConfig = Pick<
 export type DiscoveryExecutionTransportConfig = DiscoveryExecutionConfig &
   DiscoveryReadTransportConfig;
 
+export interface OneInchQuoteCircuitState {
+  failures: number;
+  cooldownUntilMs?: number;
+}
+
 export interface DiscoveryRpcCache {
   chainId?: number;
   gasPrice?: BigNumber;
   gasPriceFetchedAt?: number;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
   gasQuoteFallbackWarningKeys?: Set<string>;
-  oneInchQuoteCircuit?: {
-    failures: number;
-    cooldownUntilMs?: number;
-  };
+  oneInchQuoteCircuit?: OneInchQuoteCircuitState;
 }

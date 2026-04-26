@@ -747,6 +747,13 @@ export function validateAutoDiscoverConfig(
         'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory while discoveredDefaults.take.liquiditySource is ONEINCH'
       );
     }
+    if (externalTakePaths.has('factory') && externalTakePaths.has('oneinch')) {
+      validateQuoteDenominatedGasPolicy(
+        config,
+        'AutoDiscoverConfig.take: hybrid external take route ranking',
+        chainId
+      );
+    }
     if (
       takePolicy.takeRouteQuoteBudgetPerCandidate !== undefined &&
       !externalTakePaths.has('factory')
