@@ -58,6 +58,7 @@ const DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE: ExternalTakeRouteSelectionMode
 type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy
 >;
+type OneInchCircuitOutcome = 'success' | 'failure';
 
 function isDynamicFactorySource(
   source: LiquiditySource | undefined
@@ -242,7 +243,11 @@ function requiresHybridNetProfitRanking(
   takePolicy: AutoDiscoverTakePolicyRuntime
 ): boolean {
   const paths = takePolicy?.allowedExternalTakePaths;
-  return !!(paths?.includes('oneinch') && paths.includes('factory'));
+  return !!(
+    paths?.includes('oneinch') &&
+    paths.includes('factory') &&
+    getExternalTakeRouteSelectionMode(takePolicy) === 'maximize_profit'
+  );
 }
 
 function getAuctionCostQuoteRaw(params: {
@@ -394,7 +399,7 @@ function hasFreshFactoryRouteGasPolicy(params: {
   return { fresh: true };
 }
 
-async function refreshDiscoveryGasPriceIfStale(params: {
+export async function refreshDiscoveryGasPriceIfStale(params: {
   rpcCache?: DiscoveryRpcCache;
   transports: DiscoveryReadTransports;
   maxAgeMs?: number;
@@ -418,8 +423,15 @@ async function refreshDiscoveryGasPriceIfStale(params: {
   }
 
   if (rpcCache.gasPriceInflight) {
-    rpcCache.gasPrice = await rpcCache.gasPriceInflight;
-    rpcCache.gasPriceFetchedAt = Date.now();
+    try {
+      rpcCache.gasPrice = await rpcCache.gasPriceInflight;
+      rpcCache.gasPriceFetchedAt = Date.now();
+    } catch (error) {
+      logger.warn(
+        `Shared discovery gas price fetch failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+      throw error;
+    }
     return;
   }
 
@@ -428,6 +440,11 @@ async function refreshDiscoveryGasPriceIfStale(params: {
   try {
     rpcCache.gasPrice = await gasPriceInflight;
     rpcCache.gasPriceFetchedAt = Date.now();
+  } catch (error) {
+    logger.warn(
+      `Discovery gas price fetch failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    throw error;
   } finally {
     if (rpcCache.gasPriceInflight === gasPriceInflight) {
       rpcCache.gasPriceInflight = undefined;
@@ -442,12 +459,15 @@ async function buildFactoryRouteProfitabilityContext(params: {
   transports: DiscoveryReadTransports;
   rpcCache?: DiscoveryRpcCache;
   defaultLiquiditySource: LiquiditySource | undefined;
+  sources?: LiquiditySource[];
   takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>;
 }): Promise<FactoryRouteProfitabilityContext | undefined> {
-  const sources = getFactoryRouteSelectionSources(
-    params.defaultLiquiditySource,
-    params.takePolicy?.allowedLiquiditySources
-  );
+  const sources =
+    params.sources ??
+    getFactoryRouteSelectionSources(
+      params.defaultLiquiditySource,
+      params.takePolicy?.allowedLiquiditySources
+    );
   const requiresRouteGasRanking = sources.length > 1;
   const requiresQuoteProfitability =
     params.takePolicy?.minExpectedProfitQuote !== undefined ||
@@ -1148,17 +1168,17 @@ async function quoteFactoryPathForDiscovery(
     params.poolConfig,
     params.defaultFactoryLiquiditySource
   );
-  const routeProfitabilityContext = await buildFactoryRouteProfitabilityContext(
-    {
+  const routeProfitabilityContextFactory = async (sources: LiquiditySource[]) =>
+    await buildFactoryRouteProfitabilityContext({
       pool: params.pool,
       signer: params.signer,
       config: params.config,
       transports: params.transports,
       rpcCache: params.rpcCache,
       defaultLiquiditySource: params.defaultFactoryLiquiditySource,
+      sources,
       takePolicy: params.takePolicy,
-    }
-  );
+    });
 
   const evaluation = await takeFactoryModule.getFactoryTakeQuoteEvaluation(
     params.pool,
@@ -1172,7 +1192,7 @@ async function quoteFactoryPathForDiscovery(
       allowedLiquiditySources: params.takePolicy?.allowedLiquiditySources,
       routeQuoteBudgetPerCandidate:
         params.takePolicy?.takeRouteQuoteBudgetPerCandidate,
-      routeProfitabilityContext,
+      routeProfitabilityContextFactory,
     }
   );
   return {
@@ -1189,6 +1209,7 @@ async function quoteOneInchPathForDiscovery(
     config: DiscoveryExecutionConfig;
     rpcCache?: DiscoveryRpcCache;
     takePolicy: AutoDiscoverTakePolicyRuntime;
+    recordCircuitOutcome?: boolean;
   } & OneInchPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   const circuitOpenReason = getOneInchCircuitOpenReason({
@@ -1228,10 +1249,12 @@ async function quoteOneInchPathForDiscovery(
       '1inch external take quote'
     );
   } catch (error) {
-    recordOneInchQuoteFailure({
-      rpcCache: params.rpcCache,
-      takePolicy: params.takePolicy,
-    });
+    if (params.recordCircuitOutcome !== false) {
+      recordOneInchQuoteFailure({
+        rpcCache: params.rpcCache,
+        takePolicy: params.takePolicy,
+      });
+    }
     return {
       isTakeable: false,
       externalTakePath: 'oneinch',
@@ -1244,13 +1267,15 @@ async function quoteOneInchPathForDiscovery(
     };
   }
 
-  if (evaluation.quoteFailureRetryable) {
-    recordOneInchQuoteFailure({
-      rpcCache: params.rpcCache,
-      takePolicy: params.takePolicy,
-    });
-  } else {
-    recordOneInchQuoteSuccess(params.rpcCache);
+  if (params.recordCircuitOutcome !== false) {
+    if (evaluation.quoteFailureRetryable) {
+      recordOneInchQuoteFailure({
+        rpcCache: params.rpcCache,
+        takePolicy: params.takePolicy,
+      });
+    } else {
+      recordOneInchQuoteSuccess(params.rpcCache);
+    }
   }
 
   return {
@@ -1355,6 +1380,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
   quoteOneInchPath: OneInchPathQuoteFn;
   quoteFactoryPath: FactoryPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
+  recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
   stats: Pick<
     DiscoveredTakeTargetStats,
     'gasPolicyRejects' | 'profitFloorRejects'
@@ -1364,7 +1390,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     params.externalTakePaths.map((path, index) => [path, index])
   );
   const getProbeOrder = (): ExternalTakePathKind[] => {
-    if (params.routeSelectionMode !== 'cost_aware') {
+    if (params.routeSelectionMode !== 'factory_first') {
       return params.externalTakePaths;
     }
     return [...params.externalTakePaths].sort((left, right) => {
@@ -1386,11 +1412,21 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     evaluation?: ExternalTakeQuoteEvaluation;
     reason?: string;
     rejectCategory?: ExternalTakeApprovalRejectCategory;
+    oneInchCircuitOutcome?: OneInchCircuitOutcome;
+  };
+  const getOneInchCircuitOutcome = (
+    evaluation: ExternalTakeQuoteEvaluation
+  ): OneInchCircuitOutcome | undefined => {
+    if (evaluation.reason?.startsWith('1inch quote circuit open')) {
+      return undefined;
+    }
+    return evaluation.quoteFailureRetryable ? 'failure' : 'success';
   };
   const probeExternalTakePath = async (
     path: ExternalTakePathKind
   ): Promise<ProbeResult> => {
     const startedAt = Date.now();
+    let oneInchCircuitOutcome: OneInchCircuitOutcome | undefined;
     try {
       const evaluation =
         path === 'oneinch'
@@ -1409,11 +1445,14 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
               auctionPrice: params.auctionPrice,
               collateral: params.collateral,
             });
+      oneInchCircuitOutcome =
+        path === 'oneinch' ? getOneInchCircuitOutcome(evaluation) : undefined;
       if (!evaluation.isTakeable) {
         return {
           path,
           durationMs: Date.now() - startedAt,
           reason: evaluation.reason ?? 'not takeable',
+          oneInchCircuitOutcome,
         };
       }
 
@@ -1430,19 +1469,28 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
           durationMs: Date.now() - startedAt,
           reason: approval.reason ?? 'policy rejected path',
           rejectCategory: approval.rejectCategory,
+          oneInchCircuitOutcome,
         };
       }
       return {
         path,
         durationMs: Date.now() - startedAt,
         evaluation,
+        oneInchCircuitOutcome,
       };
     } catch (error) {
       return {
         path,
         durationMs: Date.now() - startedAt,
         reason: error instanceof Error ? error.message : String(error),
+        oneInchCircuitOutcome:
+          path === 'oneinch' ? (oneInchCircuitOutcome ?? 'failure') : undefined,
       };
+    }
+  };
+  const recordProbeCircuitOutcome = (result: ProbeResult): void => {
+    if (result.oneInchCircuitOutcome) {
+      params.recordOneInchCircuitOutcome(result.oneInchCircuitOutcome);
     }
   };
 
@@ -1459,6 +1507,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
               path,
               durationMs: params.probeTimeoutMs,
               reason: `probe timed out after ${params.probeTimeoutMs}ms`,
+              oneInchCircuitOutcome: path === 'oneinch' ? 'failure' : undefined,
             });
           }, params.probeTimeoutMs);
         }),
@@ -1472,16 +1521,20 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
 
   const probeOrder = getProbeOrder();
   const probeResults: ProbeResult[] =
-    params.routeSelectionMode === 'cost_aware'
+    params.routeSelectionMode === 'factory_first'
       ? []
       : await Promise.all(probeOrder.map(withProbeTimeout));
-  if (params.routeSelectionMode === 'cost_aware') {
+  if (params.routeSelectionMode !== 'factory_first') {
+    probeResults.forEach(recordProbeCircuitOutcome);
+  }
+  if (params.routeSelectionMode === 'factory_first') {
     for (const path of probeOrder) {
       const result = await withProbeTimeout(path);
       probeResults.push(result);
+      recordProbeCircuitOutcome(result);
       if (result.evaluation) {
         logger.debug(
-          `Hybrid external take cost-aware selected path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${result.evaluation.approvedMinOutRaw?.toString() ?? 'n/a'} priorRejectedPaths=${
+          `Hybrid external take factory-first selected path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${result.evaluation.approvedMinOutRaw?.toString() ?? 'n/a'} priorRejectedPaths=${
             probeResults
               .filter((probeResult) => !probeResult.evaluation)
               .map(
@@ -1569,6 +1622,7 @@ function createExternalTakeAdapterForDiscovery(params: {
   quoteOneInchTake: OneInchPathQuoteFn;
   quoteFactoryPath: FactoryPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
+  recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
   stats: Pick<
     DiscoveredTakeTargetStats,
     'gasPolicyRejects' | 'profitFloorRejects'
@@ -1599,6 +1653,7 @@ function createExternalTakeAdapterForDiscovery(params: {
           quoteOneInchPath: params.quoteOneInchPath,
           quoteFactoryPath: params.quoteFactoryPath,
           approveExternalTake: params.approveExternalTake,
+          recordOneInchCircuitOutcome: params.recordOneInchCircuitOutcome,
           stats: params.stats,
         }),
       executeExternalTake: async ({
@@ -1612,14 +1667,24 @@ function createExternalTakeAdapterForDiscovery(params: {
           liquidation.externalTakeQuoteEvaluation?.externalTakePath;
         const selectedSource =
           liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource;
-        const effectiveSelectedPath =
-          selectedPath ??
-          (selectedSource === LiquiditySource.ONEINCH
+        const sourceSelectedPath =
+          selectedSource === LiquiditySource.ONEINCH
             ? 'oneinch'
             : selectedSource !== undefined &&
                 isDynamicFactorySource(selectedSource)
               ? 'factory'
-              : undefined);
+              : undefined;
+        if (
+          selectedPath !== undefined &&
+          sourceSelectedPath !== undefined &&
+          selectedPath !== sourceSelectedPath
+        ) {
+          logger.error(
+            `Hybrid external take selected inconsistent path=${selectedPath} source=${formatLiquiditySource(selectedSource)}; refusing execution for ${pool.name}/${liquidation.borrower}`
+          );
+          return false;
+        }
+        const effectiveSelectedPath = selectedPath ?? sourceSelectedPath;
         if (
           effectiveSelectedPath !== undefined &&
           !params.externalTakePaths.includes(effectiveSelectedPath)
@@ -1835,6 +1900,7 @@ export async function handleDiscoveredTakeTarget(
       config: params.config,
       rpcCache,
       takePolicy,
+      recordCircuitOutcome: false,
     });
   const quoteOneInchTake: OneInchPathQuoteFn = (quoteParams) =>
     quoteLegacyOneInchTakeForDiscovery({
@@ -1853,6 +1919,16 @@ export async function handleDiscoveredTakeTarget(
     quoteOneInchTake,
     quoteFactoryPath,
     approveExternalTake,
+    recordOneInchCircuitOutcome: (outcome) => {
+      if (outcome === 'failure') {
+        recordOneInchQuoteFailure({
+          rpcCache,
+          takePolicy,
+        });
+        return;
+      }
+      recordOneInchQuoteSuccess(rpcCache);
+    },
     stats,
     config: params.config,
   });

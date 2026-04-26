@@ -36,7 +36,7 @@ const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'require_private_or_relay',
 ]);
 const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
-  new Set<ExternalTakeRouteSelectionMode>(['maximize_profit', 'cost_aware']);
+  new Set<ExternalTakeRouteSelectionMode>(['maximize_profit', 'factory_first']);
 const MAX_UINT24_FEE_TIER = 16_777_215;
 const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
@@ -312,7 +312,7 @@ function validateExternalTakeRouteSelectionMode(
   }
   if (!EXTERNAL_TAKE_ROUTE_SELECTION_MODES.has(mode)) {
     throw new Error(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or cost_aware'
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
     );
   }
 }
@@ -651,9 +651,9 @@ export function validateAutoDiscoverConfig(
       takePolicy.oneInchQuoteTimeoutMs,
       'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be greater than 0'
     );
-    requireOptionalNonNegative(
+    requireOptionalPositive(
       takePolicy.oneInchQuoteFailureCooldownMs,
-      'AutoDiscoverConfig.take: oneInchQuoteFailureCooldownMs cannot be negative'
+      'AutoDiscoverConfig.take: oneInchQuoteFailureCooldownMs must be greater than 0'
     );
     requireOptionalIntegerRange(
       takePolicy.oneInchQuoteFailureThreshold,

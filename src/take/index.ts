@@ -12,6 +12,7 @@ import { BigNumber, ethers } from 'ethers';
 import {
   convertSwapApiResponseToDetails,
   encodeOneInchSwapDetailsBytes,
+  validateOneInchSwapDetailsForAtomicTake,
 } from '../dex/one-inch';
 import { AjnaKeeperTaker__factory } from '../../typechain-types';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
@@ -741,6 +742,22 @@ export async function takeLiquidation({
       return false;
     }
     const swapDetails = convertSwapApiResponseToDetails(swapData.data);
+    const swapDetailsValidationError = validateOneInchSwapDetailsForAtomicTake(
+      swapDetails,
+      {
+        srcToken: pool.collateralAddress,
+        dstToken: pool.quoteAddress,
+        dstReceiver: keeperTaker.address,
+        amount: collateralInTokenDecimals,
+      }
+    );
+    if (swapDetailsValidationError) {
+      logger.error(
+        `Legacy 1inch swap data validation failed for ${pool.name}/${borrower}: ${swapDetailsValidationError}`
+      );
+      return false;
+    }
+
     const requiredMinReturnAmount = await computeLegacyOneInchMinReturnAmount({
       pool,
       poolConfig,
@@ -751,10 +768,15 @@ export async function takeLiquidation({
     const routeMinReturnAmount = BigNumber.from(
       swapDetails.swapDescription.minReturnAmount
     );
-    if (routeMinReturnAmount.lt(requiredMinReturnAmount)) {
+    const executionMinReturnAmount = routeMinReturnAmount.lt(
+      requiredMinReturnAmount
+    )
+      ? requiredMinReturnAmount
+      : routeMinReturnAmount;
+    if (routeMinReturnAmount.lt(executionMinReturnAmount)) {
       swapDetails.swapDescription = {
         ...swapDetails.swapDescription,
-        minReturnAmount: requiredMinReturnAmount,
+        minReturnAmount: executionMinReturnAmount,
       };
     }
     const swapDetailsBytes = encodeOneInchSwapDetailsBytes(swapDetails);
@@ -768,7 +790,7 @@ export async function takeLiquidation({
         `  Collateral (Token Decimals): ${collateralInTokenDecimals.toString()}\n` +
         `  Liquidity Source: ${LiquiditySource.ONEINCH}\n` +
         `  1inch Router: ${dexRouter.getRouter(chainId)}\n` +
-        `  Required Min Return: ${requiredMinReturnAmount.toString()}\n` +
+        `  Required Min Return: ${executionMinReturnAmount.toString()}\n` +
         `  Swap Data Length: ${swapData.data.length} chars`
     );
 
@@ -810,7 +832,7 @@ export async function takeLiquidation({
           borrower,
           receipt,
           routeProfitability: approvedQuoteEvaluation.routeProfitability,
-          approvedMinOutRaw: approvedQuoteEvaluation.approvedMinOutRaw,
+          approvedMinOutRaw: executionMinReturnAmount,
           takeWriteTransport,
         });
         logger.info(

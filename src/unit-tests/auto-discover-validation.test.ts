@@ -118,7 +118,7 @@ describe('auto-discover validation', () => {
       allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
       validateRouteDeployments: true,
       externalTakeProbeTimeoutMs: 1500,
-      externalTakeRouteSelectionMode: 'cost_aware',
+      externalTakeRouteSelectionMode: 'factory_first',
     };
     config.discoveredDefaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
@@ -140,7 +140,7 @@ describe('auto-discover validation', () => {
     (config.autoDiscover!.take as any).externalTakeRouteSelectionMode =
       'fastest';
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or cost_aware'
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
     );
   });
 
@@ -347,6 +347,15 @@ describe('auto-discover validation', () => {
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be greater than 0'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      oneInchQuoteFailureCooldownMs: 0,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: oneInchQuoteFailureCooldownMs must be greater than 0'
     );
 
     config.autoDiscover!.take = {

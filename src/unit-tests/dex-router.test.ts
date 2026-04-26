@@ -654,6 +654,31 @@ describe('DexRouter', () => {
       expect(result.error).to.include('does not match configured router');
     });
 
+    it('rejects 1inch swap data with non-zero native tx.value', async () => {
+      axiosGetStub.resolves({
+        data: {
+          tx: {
+            to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+            data: '0xdata',
+            value: '1',
+            gas: '100000',
+          },
+        },
+      });
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.error).to.include('unexpected non-zero 1inch tx.value');
+    });
+
     it('retries retryable 1inch swap-data failures before succeeding', async () => {
       const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
       try {

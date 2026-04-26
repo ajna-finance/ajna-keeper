@@ -23,6 +23,56 @@ describe('take write submission', () => {
     sinon.restore();
   });
 
+  it('validates legacy 1inch swap details against the atomic take invariants', () => {
+    const validDetails = {
+      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
+      swapDescription: {
+        srcToken: '0x0000000000000000000000000000000000000002',
+        dstToken: '0x0000000000000000000000000000000000000003',
+        srcReceiver: '0x0000000000000000000000000000000000000000',
+        dstReceiver: '0x00000000000000000000000000000000000000bb',
+        amount: ethers.utils.parseEther('1'),
+        minReturnAmount: BigNumber.from(1),
+        flags: BigNumber.from(0),
+      },
+      opaqueData: '0x1234',
+    } as any;
+    const expected = {
+      srcToken: '0x0000000000000000000000000000000000000002',
+      dstToken: '0x0000000000000000000000000000000000000003',
+      dstReceiver: '0x00000000000000000000000000000000000000bb',
+      amount: ethers.utils.parseEther('1'),
+    };
+
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, expected)
+    ).to.be.undefined;
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            dstReceiver: '0x00000000000000000000000000000000000000cc',
+          },
+        },
+        expected
+      )
+    ).to.include('dstReceiver');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            amount: ethers.utils.parseEther('2'),
+          },
+        },
+        expected
+      )
+    ).to.include('does not match requested collateral amount');
+  });
+
   it('uses the configured take write transport for legacy 1inch take submission', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),

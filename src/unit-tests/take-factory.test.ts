@@ -978,6 +978,92 @@ describe('Take Factory', () => {
       expect(sushiQuoteStub.calledOnce).to.be.true;
     });
 
+    it('builds lazy route profitability only for available factory sources', async () => {
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+        .resolves({
+          success: true,
+          dstAmount: ethers.utils.parseUnits('120', 6),
+        } as any);
+      sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
+      sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(false);
+      const sushiQuoteStub = sinon.stub(
+        SushiSwapQuoteProvider.prototype,
+        'getQuote'
+      );
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const contextFactory = sinon.stub().resolves({
+        routeExecutionCostQuoteRawBySource: {
+          [LiquiditySource.UNISWAPV3]: ethers.utils.parseUnits('1', 6),
+        },
+        configuredProfitFloorQuoteRaw: ethers.utils.parseUnits('0', 6),
+      });
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        {
+          name: 'Lazy Context Pool',
+          collateralAddress: '0x1111111111111111111111111111111111111111',
+          quoteAddress: '0x2222222222222222222222222222222222222222',
+          contract: {
+            quoteTokenScale: sinon
+              .stub()
+              .resolves(BigNumber.from('1000000000000')),
+          },
+        } as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        {
+          name: 'Lazy Context Pool',
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.99,
+          },
+        } as any,
+        {
+          universalRouterOverrides: {
+            universalRouterAddress:
+              '0x3333333333333333333333333333333333333333',
+            poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+            defaultFeeTier: 3000,
+            wethAddress: '0x5555555555555555555555555555555555555555',
+            quoterV2Address: '0x6666666666666666666666666666666666666666',
+          },
+          sushiswapRouterOverrides: {
+            swapRouterAddress: '0x8888888888888888888888888888888888888888',
+            quoterV2Address: '0x9999999999999999999999999999999999999999',
+            factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            defaultFeeTier: 500,
+            wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          },
+        } as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        {
+          allowedLiquiditySources: [
+            LiquiditySource.UNISWAPV3,
+            LiquiditySource.SUSHISWAP,
+          ],
+          routeProfitabilityContextFactory: contextFactory,
+        }
+      );
+
+      expect(evaluation.isTakeable).to.be.true;
+      expect(evaluation.selectedLiquiditySource).to.equal(
+        LiquiditySource.UNISWAPV3
+      );
+      expect(contextFactory.calledOnceWithExactly([LiquiditySource.UNISWAPV3]))
+        .to.be.true;
+      expect(sushiQuoteStub.called).to.be.false;
+    });
+
     it('checks route availability with bounded parallelism while preserving route order', async () => {
       sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
       let inFlight = 0;

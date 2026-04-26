@@ -71,6 +71,33 @@ function normalizeAddressForComparison(value: string): string | undefined {
   }
 }
 
+function parseOneInchTxValue(value: unknown): {
+  value?: BigNumber;
+  error?: string;
+} {
+  if (value === undefined || value === null || value === '') {
+    return { value: constants.Zero };
+  }
+  try {
+    return { value: BigNumber.from(value) };
+  } catch (error) {
+    return {
+      error: `1inch tx.value is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function validateZeroOneInchTxValue(value: unknown): string | undefined {
+  const parsed = parseOneInchTxValue(value);
+  if (parsed.error) {
+    return parsed.error;
+  }
+  if (parsed.value && parsed.value.gt(0)) {
+    return `unexpected non-zero 1inch tx.value ${parsed.value.toString()} for ERC20 swap`;
+  }
+  return undefined;
+}
+
 function getOneInchErrorMessage(error: Error | any): string {
   return error.response?.data?.description || error.message;
 }
@@ -267,6 +294,15 @@ export class DexRouter {
           error: `1inch tx target ${response.data.tx.to} does not match configured router ${expectedRouter}`,
         };
       }
+      const valueValidationError = validateZeroOneInchTxValue(
+        response.data.tx.value
+      );
+      if (valueValidationError) {
+        return {
+          success: false,
+          error: valueValidationError,
+        };
+      }
 
       return { success: true, data: response.data.tx };
     } catch (error: Error | any) {
@@ -344,6 +380,15 @@ export class DexRouter {
         }
         const txFrom1inch = swapDataResult.data!;
         logger.debug(`Transaction from 1inch: ${JSON.stringify(txFrom1inch)}`);
+        const valueValidationError = validateZeroOneInchTxValue(
+          txFrom1inch.value
+        );
+        if (valueValidationError) {
+          return {
+            success: false,
+            error: valueValidationError,
+          };
+        }
 
         const tx = {
           to: txFrom1inch.to,

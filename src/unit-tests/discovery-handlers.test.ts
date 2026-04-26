@@ -5,6 +5,7 @@ import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from '../discovery/handlers';
+import { refreshDiscoveryGasPriceIfStale } from '../discovery/take-executor';
 import * as takeModule from '../take';
 import * as takeFactoryModule from '../take/factory';
 import * as settlementModule from '../settlement';
@@ -1116,7 +1117,7 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationFactoryStub.called).to.be.false;
   });
 
-  it('uses cost-aware hybrid mode to avoid 1inch calls when factory approves first', async () => {
+  it('uses factory-first hybrid mode to avoid 1inch calls when factory approves first', async () => {
     const takeLiquidationFactoryStub = sinon
       .stub(takeFactoryModule, 'takeLiquidationFactory')
       .resolves(true);
@@ -1124,6 +1125,11 @@ describe('Discovery Handlers', () => {
       takeModule,
       'getOneInchPathQuoteEvaluation'
     );
+    const oneInchGasQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .rejects(
+        new Error('factory-first mode should not require gas conversion')
+      );
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon.stub(takeModule, 'takeLiquidation').resolves(true);
     sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
@@ -1141,13 +1147,11 @@ describe('Discovery Handlers', () => {
       quotedCollateralWad: ethers.utils.parseEther('1'),
       routeProfitability: {
         expectedNetProfitQuoteRaw: ethers.utils.parseUnits('25', 6),
-        gasPriceWei: ethers.utils.parseUnits('1', 'gwei'),
-        gasPolicyEvaluatedAt: Date.now(),
       },
     });
 
     const pool = {
-      name: 'Hybrid Cost Aware Pool',
+      name: 'Hybrid Factory First Pool',
       poolAddress: '0x7777777777777777777777777777777777777782',
       quoteAddress: '0x2222222222222222222222222222222222222222',
       collateralAddress: '0x3333333333333333333333333333333333333333',
@@ -1199,11 +1203,14 @@ describe('Discovery Handlers', () => {
             enabled: true,
             allowedExternalTakePaths: ['oneinch', 'factory'],
             defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-            externalTakeRouteSelectionMode: 'cost_aware',
+            externalTakeRouteSelectionMode: 'factory_first',
           },
         },
         tokenAddresses: {
-          weth: pool.quoteAddress,
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+        oneInchRouters: {
+          1: '0x1111111111111111111111111111111111111111',
         },
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
@@ -1221,6 +1228,7 @@ describe('Discovery Handlers', () => {
     });
 
     expect(oneInchQuoteStub.called).to.be.false;
+    expect(oneInchGasQuoteStub.called).to.be.false;
     expect(takeLiquidationFactoryStub.calledOnce).to.be.true;
   });
 
@@ -1320,6 +1328,261 @@ describe('Discovery Handlers', () => {
           String(call.args[0]).includes('no viable external take path')
         )
     ).to.be.true;
+  });
+
+  it('refuses execution when a hybrid quote resolves to an inconsistent path and source', async () => {
+    const errorStub = sinon.stub(logger, 'error');
+    const takeLiquidationStub = sinon
+      .stub(takeModule, 'takeLiquidation')
+      .resolves(true);
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+      isTakeable: true,
+      externalTakePath: 'oneinch',
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      quoteAmount: 125,
+      quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+      collateralAmount: 1,
+      marketPrice: 125,
+      takeablePrice: 123.75,
+      approvedMinOutRaw: ethers.utils.parseUnits('123', 6),
+      quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+      quotedCollateralWad: ethers.utils.parseEther('1'),
+      routeProfitability: {
+        gasPolicyEvaluatedAt: Date.now(),
+      },
+    });
+
+    const pool = {
+      name: 'Hybrid Disabled Path Pool',
+      poolAddress: '0x7777777777777777777777777777777777781',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('100'),
+        }),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerHybridDisabledPath',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            allowedExternalTakePaths: ['factory'],
+            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+          },
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
+      rpcCache: {
+        chainId: 1,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(takeLiquidationStub.called).to.be.false;
+    expect(takeLiquidationFactoryStub.called).to.be.false;
+    expect(
+      errorStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('selected inconsistent path=factory')
+        )
+    ).to.be.true;
+  });
+
+  it('shares and logs a failing in-flight gas price refresh', async () => {
+    const warnStub = sinon.stub(logger, 'warn');
+    const gasPriceDeferred = createDeferred<BigNumber>();
+    const getGasPriceStub = sinon.stub().returns(gasPriceDeferred.promise);
+    const rpcCache: any = { chainId: 1 };
+    const transports = {
+      readRpc: {
+        getGasPrice: getGasPriceStub,
+      },
+    } as any;
+    const firstRefresh = refreshDiscoveryGasPriceIfStale({
+      rpcCache,
+      transports,
+    });
+    const secondRefresh = refreshDiscoveryGasPriceIfStale({
+      rpcCache,
+      transports,
+    });
+    await Promise.resolve();
+
+    expect(getGasPriceStub.calledOnce).to.be.true;
+    gasPriceDeferred.reject(new Error('rpc gas price down'));
+    const results = await Promise.allSettled([firstRefresh, secondRefresh]);
+
+    expect(results.map((result) => result.status)).to.deep.equal([
+      'rejected',
+      'rejected',
+    ]);
+    expect(rpcCache.gasPriceInflight).to.be.undefined;
+    expect(
+      warnStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0])
+            .toLowerCase()
+            .includes('discovery gas price fetch failed')
+        )
+    ).to.be.true;
+  });
+
+  it('does not let an abandoned 1inch probe overwrite circuit state after timeout', async () => {
+    const clock = sinon.useFakeTimers();
+    try {
+      const oneInchDeferred = createDeferred<any>();
+      sinon
+        .stub(takeModule, 'getOneInchPathQuoteEvaluation')
+        .returns(oneInchDeferred.promise);
+      const takeLiquidationStub = sinon
+        .stub(takeModule, 'takeLiquidation')
+        .resolves(true);
+      const rpcCache: any = {
+        chainId: 1,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      };
+      const pool = {
+        name: 'Hybrid Timeout Pool',
+        poolAddress: '0x7777777777777777777777777777777777783',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        collateralAddress: '0x3333333333333333333333333333333333333333',
+        getLiquidation: sinon.stub().returns({
+          getStatus: sinon.stub().resolves({
+            collateral: ethers.utils.parseEther('1'),
+            price: ethers.utils.parseEther('100'),
+          }),
+        }),
+      };
+
+      const handlePromise = handleDiscoveredTakeTarget({
+        pool: pool as any,
+        signer: {
+          provider: {
+            getGasPrice: sinon
+              .stub()
+              .resolves(ethers.utils.parseUnits('1', 'gwei')),
+          },
+          getChainId: sinon.stub().resolves(1),
+        } as any,
+        target: {
+          source: 'discovered',
+          poolAddress: pool.poolAddress,
+          name: pool.name,
+          dryRun: false,
+          take: {
+            liquiditySource: LiquiditySource.ONEINCH,
+            marketPriceFactor: 0.99,
+          },
+          candidates: [
+            {
+              poolAddress: pool.poolAddress,
+              borrower: '0xBorrowerHybridTimeout',
+              kickTime: Date.now(),
+              debtRemaining: '1',
+              collateralRemaining: '1',
+              neutralPrice: '1',
+              debt: '1',
+              collateral: '1',
+              heuristicScore: 1,
+            },
+          ],
+        },
+        config: {
+          autoDiscover: {
+            enabled: true,
+            take: {
+              enabled: true,
+              allowedExternalTakePaths: ['oneinch'],
+              externalTakeRouteSelectionMode: 'factory_first',
+              externalTakeProbeTimeoutMs: 50,
+              oneInchQuoteFailureThreshold: 2,
+            },
+          },
+          delayBetweenActions: 0,
+          subgraphUrl: 'http://example-subgraph',
+        } as any,
+        transports: createDiscoveryTransports(
+          ethers.utils.parseUnits('1', 'gwei')
+        ),
+        rpcCache,
+      });
+
+      await clock.tickAsync(50);
+      await handlePromise;
+      expect(rpcCache.oneInchQuoteCircuit?.failures).to.equal(1);
+      expect(takeLiquidationStub.called).to.be.false;
+
+      oneInchDeferred.resolve({
+        isTakeable: true,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+        approvedMinOutRaw: ethers.utils.parseUnits('123', 6),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+      });
+      await clock.tickAsync(0);
+      expect(rpcCache.oneInchQuoteCircuit?.failures).to.equal(1);
+    } finally {
+      clock.restore();
+    }
   });
 
   it('rechecks gas before discovered external take submission and skips when drift breaches policy', async () => {

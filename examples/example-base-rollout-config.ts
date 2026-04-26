@@ -86,7 +86,7 @@ const config: KeeperConfig = {
       // allowedExternalTakePaths: ['oneinch', 'factory'],
       // defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
       // externalTakeProbeTimeoutMs: 2_000,
-      // externalTakeRouteSelectionMode: 'cost_aware', // lower 1inch API use, can skip a better 1inch route
+      // externalTakeRouteSelectionMode: 'factory_first', // lower 1inch API use, can skip a better 1inch route
       // takeRouteQuoteBudgetPerCandidate: 2,
       // minProfitNative: '1000000000000000', // 0.001 ETH minimum net profit
       // dexGasOverrides: { [LiquiditySource.SUSHISWAP]: '700000' },

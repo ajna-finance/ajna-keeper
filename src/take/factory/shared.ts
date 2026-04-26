@@ -39,6 +39,9 @@ export interface FactoryRouteSelectionOptions {
   allowedLiquiditySources?: LiquiditySource[];
   routeQuoteBudgetPerCandidate?: number;
   routeProfitabilityContext?: FactoryRouteProfitabilityContext;
+  routeProfitabilityContextFactory?: (
+    sources: LiquiditySource[]
+  ) => Promise<FactoryRouteProfitabilityContext | undefined>;
 }
 
 export interface FactoryRouteProfitabilityContext {

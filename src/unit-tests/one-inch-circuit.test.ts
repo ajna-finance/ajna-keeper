@@ -71,4 +71,60 @@ describe('1inch quote circuit', () => {
     ).to.include('1inch quote circuit open');
     expect(infoStub.calledOnce).to.be.true;
   });
+
+  it('re-arms heartbeat logging after cooldown expiry and retrip', () => {
+    const infoStub = sinon.stub(logger, 'info');
+    const cache = {
+      oneInchQuoteCircuit: {
+        failures: 0,
+      },
+    } as DiscoveryRpcCache;
+    const policy = {
+      oneInchQuoteFailureThreshold: 1,
+      oneInchQuoteFailureCooldownMs: 1_000,
+    };
+
+    recordOneInchQuoteFailure({
+      rpcCache: cache,
+      takePolicy: policy,
+      nowMs: 10_000,
+    });
+    expect(
+      getOneInchCircuitOpenReason({
+        rpcCache: cache,
+        takePolicy: policy,
+        nowMs: 10_100,
+      })
+    ).to.include('1inch quote circuit open');
+    expect(
+      getOneInchCircuitOpenReason({
+        rpcCache: cache,
+        takePolicy: policy,
+        nowMs: 10_200,
+      })
+    ).to.include('1inch quote circuit open');
+    expect(infoStub.calledOnce).to.be.true;
+
+    expect(
+      getOneInchCircuitOpenReason({
+        rpcCache: cache,
+        takePolicy: policy,
+        nowMs: 11_001,
+      })
+    ).to.be.undefined;
+
+    recordOneInchQuoteFailure({
+      rpcCache: cache,
+      takePolicy: policy,
+      nowMs: 11_002,
+    });
+    expect(
+      getOneInchCircuitOpenReason({
+        rpcCache: cache,
+        takePolicy: policy,
+        nowMs: 11_003,
+      })
+    ).to.include('1inch quote circuit open');
+    expect(infoStub.calledTwice).to.be.true;
+  });
 });

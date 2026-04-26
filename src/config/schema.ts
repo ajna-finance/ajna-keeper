@@ -73,7 +73,9 @@ export enum LiquiditySource {
 
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
 export type ExternalTakePathKind = 'oneinch' | 'factory';
-export type ExternalTakeRouteSelectionMode = 'maximize_profit' | 'cost_aware';
+export type ExternalTakeRouteSelectionMode =
+  | 'maximize_profit'
+  | 'factory_first';
 export type ExternalTakeTransportPolicy =
   | 'allow_public'
   | 'prefer_private_or_relay'
@@ -248,8 +250,8 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   externalTakeProbeTimeoutMs?: number;
   /**
    * Hybrid route selection mode. maximize_profit probes all enabled paths and
-   * picks the best net-profit route. cost_aware probes factory before 1inch and
-   * stops at the first approved path to reduce 1inch API use.
+   * picks the best net-profit route. factory_first probes factory before
+   * 1inch and stops at the first approved path to reduce 1inch API use.
    */
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
   /**

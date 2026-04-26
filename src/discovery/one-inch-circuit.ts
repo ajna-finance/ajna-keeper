@@ -26,9 +26,13 @@ export function getOneInchQuoteTimeoutMs(
 function getOneInchQuoteFailureCooldownMs(
   takePolicy: OneInchCircuitPolicy
 ): number {
-  return Math.min(
+  const configuredCooldownMs =
     takePolicy?.oneInchQuoteFailureCooldownMs ??
-      DEFAULT_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS,
+    DEFAULT_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS;
+  return Math.min(
+    configuredCooldownMs > 0
+      ? configuredCooldownMs
+      : DEFAULT_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS,
     MAX_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS
   );
 }

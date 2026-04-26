@@ -243,9 +243,10 @@ export async function getFactoryTakeQuoteEvaluation(
         runtimeCache,
       });
       const routeQuoteBudget = routeSelection?.routeQuoteBudgetPerCandidate;
+      let routeProfitabilityContext =
+        routeSelection?.routeProfitabilityContext;
       const routeRejectionReasons =
-        routeSelection?.routeProfitabilityContext
-          ?.routeRejectionReasonsBySource;
+        routeProfitabilityContext?.routeRejectionReasonsBySource;
       const evaluations: Array<{
         route: FactoryRouteCandidate;
         evaluation: ExternalTakeQuoteEvaluation;
@@ -288,13 +289,47 @@ export async function getFactoryTakeQuoteEvaluation(
         );
       }
 
-      const availableSourceCount = new Set(
-        availableRoutes.map((route) => route.liquiditySource)
-      ).size;
       if (
-        availableSourceCount > 1 &&
-        !routeSelection?.routeProfitabilityContext
+        !routeProfitabilityContext &&
+        routeSelection?.routeProfitabilityContextFactory
       ) {
+        const availableSources = Array.from(
+          new Set(availableRoutes.map((route) => route.liquiditySource))
+        );
+        if (availableSources.length > 0) {
+          routeProfitabilityContext =
+            await routeSelection.routeProfitabilityContextFactory(
+              availableSources
+            );
+        }
+      }
+
+      const gasRejectedRoutes: FactoryRouteCandidate[] = [];
+      const gasApprovedRoutes = availableRoutes.filter((route) => {
+        const rejectionReason =
+          routeProfitabilityContext?.routeRejectionReasonsBySource?.[
+            route.liquiditySource
+          ];
+        if (!rejectionReason) {
+          return true;
+        }
+        gasRejectedRoutes.push(route);
+        evaluations.push({
+          route,
+          evaluation: {
+            isTakeable: false,
+            reason: rejectionReason,
+            selectedLiquiditySource: route.liquiditySource,
+            selectedFeeTier: route.feeTier,
+          },
+        });
+        return false;
+      });
+
+      const availableSourceCount = new Set(
+        gasApprovedRoutes.map((route) => route.liquiditySource)
+      ).size;
+      if (availableSourceCount > 1 && !routeProfitabilityContext) {
         return {
           isTakeable: false,
           reason:
@@ -304,13 +339,23 @@ export async function getFactoryTakeQuoteEvaluation(
 
       const routesToEvaluate =
         routeQuoteBudget !== undefined
-          ? availableRoutes.slice(0, routeQuoteBudget)
-          : availableRoutes;
+          ? gasApprovedRoutes.slice(0, routeQuoteBudget)
+          : gasApprovedRoutes;
       const skippedRoutes =
         routeQuoteBudget !== undefined &&
-        availableRoutes.length > routeQuoteBudget
-          ? availableRoutes.slice(routeQuoteBudget)
+        gasApprovedRoutes.length > routeQuoteBudget
+          ? gasApprovedRoutes.slice(routeQuoteBudget)
           : [];
+      if (gasRejectedRoutes.length > 0) {
+        logger.debug(
+          `Factory: skipped gas-policy-rejected routes for pool ${pool.name}: ${gasRejectedRoutes
+            .map(
+              (route) =>
+                `${formatFactoryRouteCandidate(route)}=${routeProfitabilityContext?.routeRejectionReasonsBySource?.[route.liquiditySource] ?? 'route gas policy rejected source'}`
+            )
+            .join(', ')}`
+        );
+      }
       if (skippedRoutes.length > 0) {
         logger.debug(
           `Factory: route quote budget exhausted for pool ${pool.name}; skipped routes=${skippedRoutes
@@ -369,7 +414,7 @@ export async function getFactoryTakeQuoteEvaluation(
         const evaluation = applyFactoryRouteProfitabilityPolicy({
           evaluation: rawEvaluation,
           liquiditySource: route.liquiditySource,
-          context: routeSelection?.routeProfitabilityContext,
+          context: routeProfitabilityContext,
         });
         return { route, evaluation };
       };

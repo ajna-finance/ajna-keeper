@@ -244,6 +244,12 @@ async function quoteFactoryV3GasConversion(params: {
     );
     if (quoteResult.success && quoteResult.dstAmount) {
       const quote = BigNumber.from(quoteResult.dstAmount);
+      if (quote.isZero()) {
+        logger.debug(
+          `Gas quote conversion returned zero output for ${params.tokenIn}/${params.tokenOut} fee=${feeTier}`
+        );
+        continue;
+      }
       // Use the highest output to conservatively price gas in quote-token terms.
       bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
     }
@@ -356,8 +362,13 @@ async function quoteTokensByLiquiditySource(params: {
       }
       return undefined;
     }
+    const dstAmount = BigNumber.from(quoteResult.dstAmount);
+    if (dstAmount.isZero()) {
+      logger.debug('1inch gas quote conversion returned zero output');
+      return undefined;
+    }
     recordOneInchQuoteSuccess(params.rpcCache);
-    return BigNumber.from(quoteResult.dstAmount);
+    return dstAmount;
   }
 
   if (params.liquiditySource === LiquiditySource.UNISWAPV3) {
