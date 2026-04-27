@@ -622,7 +622,10 @@ describe('Take Factory', () => {
 
       expect(recoveredProvider).to.not.equal(undefined);
       expect(initializeStub.calledTwice).to.be.true;
-      expect(warnStub.calledOnce).to.be.true;
+      expect(warnStub.calledTwice).to.be.true;
+      expect(warnStub.secondCall.args[0]).to.contain(
+        'SushiSwap quote provider unavailable; retrying initialization'
+      );
     });
 
     it('reuses a shared Curve quote provider cache across quote evaluations', async () => {
@@ -753,7 +756,10 @@ describe('Take Factory', () => {
 
       expect(recoveredProvider).to.not.equal(undefined);
       expect(initializeStub.calledTwice).to.be.true;
-      expect(warnStub.calledOnce).to.be.true;
+      expect(warnStub.calledTwice).to.be.true;
+      expect(warnStub.secondCall.args[0]).to.contain(
+        'Curve quote provider unavailable; retrying initialization'
+      );
     });
   });
 

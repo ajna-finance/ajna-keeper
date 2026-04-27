@@ -91,70 +91,21 @@ export class CurveQuoteProvider {
       return true;
     }
 
-    try {
-      // Test that we have pool configurations
-      if (
-        !this.config.poolConfigs ||
-        Object.keys(this.config.poolConfigs).length === 0
-      ) {
-        logger.warn(`Curve quote provider has no pool configurations`);
-        return false;
-      }
-
-      // Validate each pool configuration
-      let validPools = 0;
-      for (const [tokenPair, poolConfig] of Object.entries(
-        this.config.poolConfigs
-      )) {
-        try {
-          const poolCode = await this.signer.provider!.getCode(
-            poolConfig.address
-          );
-          if (poolCode === '0x') {
-            logger.warn(
-              `Curve pool not found at ${poolConfig.address} for pair ${tokenPair}`
-            );
-            continue;
-          }
-
-          // Test pool interaction with correct ABI
-          const poolAbi =
-            poolConfig.poolType === CurvePoolType.STABLE
-              ? STABLESWAP_ABI
-              : CRYPTOSWAP_ABI;
-          const poolContract = new ethers.Contract(
-            poolConfig.address,
-            poolAbi,
-            this.signer
-          );
-
-          // Test coins() function to verify pool is working
-          const token0 = await poolContract.coins(0);
-          logger.debug(
-            `Curve pool ${tokenPair} initialized successfully at ${poolConfig.address}, first token: ${token0}`
-          );
-          validPools++;
-        } catch (error) {
-          logger.warn(
-            `Failed to validate Curve pool ${tokenPair} at ${poolConfig.address}: ${error}`
-          );
-        }
-      }
-
-      if (validPools === 0) {
-        logger.warn(`No valid Curve pools found`);
-        return false;
-      }
-
-      logger.debug(
-        `Curve quote provider initialized with ${validPools} valid pools`
-      );
-      this.isInitialized = true;
-      return true;
-    } catch (error) {
-      logger.error(`Failed to initialize Curve quote provider: ${error}`);
+    if (
+      !this.config.poolConfigs ||
+      Object.keys(this.config.poolConfigs).length === 0
+    ) {
+      logger.warn(`Curve quote provider has no pool configurations`);
       return false;
     }
+
+    // Keep initialization cheap for hot liquidation loops; per-pool RPC
+    // validation is deferred to poolExists/quote calls for the selected pair.
+    this.isInitialized = true;
+    logger.debug(
+      `Curve quote provider initialized with ${Object.keys(this.config.poolConfigs).length} configured pools`
+    );
+    return true;
   }
 
   /**
@@ -297,6 +248,17 @@ export class CurveQuoteProvider {
     );
 
     if (tokenInIndex === undefined || tokenOutIndex === undefined) {
+      return undefined;
+    }
+    if (
+      tokenInIndex < 0 ||
+      tokenOutIndex < 0 ||
+      tokenInIndex >= MAX_CURVE_TOKEN_INDEX_PROBES ||
+      tokenOutIndex >= MAX_CURVE_TOKEN_INDEX_PROBES
+    ) {
+      logger.warn(
+        `Curve pool ${poolConfig.address} returned out-of-range token indices ${tokenInIndex}/${tokenOutIndex}`
+      );
       return undefined;
     }
 

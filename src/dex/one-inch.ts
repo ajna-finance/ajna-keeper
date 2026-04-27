@@ -117,6 +117,8 @@ export function validateOneInchSwapDetailsForAtomicTake(
     srcReceiver: string;
     dstReceiver: string;
     amount: BigNumber;
+    // undefined means permissive monitoring mode; [] is an explicit deny-all
+    // and returns a clear validation error if programmatic config bypasses schema validation.
     aggregationExecutors?: string[];
   }
 ): string | undefined {

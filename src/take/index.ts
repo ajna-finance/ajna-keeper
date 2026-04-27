@@ -46,11 +46,9 @@ import {
 import { logTakeExecutionTelemetry } from './execution-telemetry';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
-const ONEINCH_CHAIN_ID_CHECK_TTL_MS = 60_000;
 interface VerifiedOneInchChainCheck {
   provider?: object;
-  checkedAtMs?: number;
-  pending?: Promise<void>;
+  pending: Promise<void>;
 }
 const verifiedOneInchChainIds = new WeakMap<
   object,
@@ -102,6 +100,10 @@ type OneInchExecutionConfig = Pick<
       success: boolean;
       retryable?: boolean;
       errorCode?: number | string;
+      error?: string;
+    }) => void;
+    onOneInchExecutionFailure?: (result: {
+      preBroadcast: boolean;
       error?: string;
     }) => void;
   };
@@ -166,43 +168,36 @@ async function assertConfiguredChainIdMatchesSigner(
     return;
   }
   const provider = (signer as { provider?: object }).provider;
-  const now = Date.now();
   let signerChecks = verifiedOneInchChainIds.get(signer);
   if (!signerChecks) {
     signerChecks = new Map();
     verifiedOneInchChainIds.set(signer, signerChecks);
   }
   const cached = signerChecks.get(configuredChainId);
-  if (
-    cached?.checkedAtMs !== undefined &&
-    cached.provider === provider &&
-    now - cached.checkedAtMs <= ONEINCH_CHAIN_ID_CHECK_TTL_MS
-  ) {
-    return;
-  }
-  if (cached?.pending && cached.provider === provider) {
+  if (cached !== undefined && cached.provider === provider) {
     await cached.pending;
     return;
   }
 
-  const check: VerifiedOneInchChainCheck = { provider };
-  check.pending = (async () => {
-    try {
+  const check: VerifiedOneInchChainCheck = {
+    provider,
+    pending: (async () => {
       const signerChainId = await signer.getChainId();
       if (signerChainId !== configuredChainId) {
         throw new Error(
           `configured 1inch chainId ${configuredChainId} does not match signer chainId ${signerChainId}`
         );
       }
-      check.checkedAtMs = Date.now();
-      check.pending = undefined;
-    } catch (error) {
-      signerChecks.delete(configuredChainId);
-      throw error;
-    }
-  })();
+    })(),
+  };
   signerChecks.set(configuredChainId, check);
-  await check.pending;
+  try {
+    await check.pending;
+  } finally {
+    if (signerChecks.get(configuredChainId) === check) {
+      signerChecks.delete(configuredChainId);
+    }
+  }
 }
 
 async function resolveOneInchChainId(
@@ -785,6 +780,7 @@ export async function takeLiquidation({
     return false;
   }
 
+  let attemptedSubmission = false;
   try {
     const approvedQuoteEvaluation =
       suppliedQuoteEvaluation ??
@@ -989,6 +985,7 @@ export async function takeLiquidation({
             gasLimit,
             nonce: nonce.toString(),
           });
+        attemptedSubmission = true;
         const receipt = await submitTakeTransaction(
           takeWriteTransport,
           txRequest
@@ -1012,6 +1009,10 @@ export async function takeLiquidation({
     );
     return true;
   } catch (error) {
+    config.onOneInchExecutionFailure?.({
+      preBroadcast: !attemptedSubmission,
+      error: error instanceof Error ? error.message : String(error),
+    });
     logger.error(
       `Failed to Take. pool: ${pool.name}, borrower: ${borrower}`,
       error

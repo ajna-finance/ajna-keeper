@@ -729,6 +729,10 @@ type DiscoveryExternalExecutionConfig = Pick<
     errorCode?: number | string;
     error?: string;
   }) => void;
+  onOneInchExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
 };
 
 function hasDiscoveryTransportConfig(
@@ -819,6 +823,10 @@ function cloneExternalTakeQuoteEvaluation(
     routeProfitability: quoteEvaluation.routeProfitability
       ? { ...quoteEvaluation.routeProfitability }
       : undefined,
+    fallbackExternalTakeQuoteEvaluations:
+      quoteEvaluation.fallbackExternalTakeQuoteEvaluations?.map(
+        cloneExternalTakeQuoteEvaluation
+      ),
     curvePool: quoteEvaluation.curvePool
       ? { ...quoteEvaluation.curvePool }
       : undefined,
@@ -1796,11 +1804,30 @@ function createExternalTakeAdapterForDiscovery(params: {
           }
 
           let approvedEvaluation = candidateEvaluation;
+          let executionLiquidation = liquidation;
           if (index > 0) {
+            let refreshedStatus;
+            try {
+              refreshedStatus = await pool
+                .getLiquidation(liquidation.borrower)
+                .getStatus();
+            } catch (error) {
+              logger.warn(
+                `Hybrid fallback path could not refresh auction state for ${pool.name}/${liquidation.borrower}: ${error instanceof Error ? error.message : String(error)}`
+              );
+              continue;
+            }
+            executionLiquidation = {
+              ...liquidation,
+              auctionPrice: refreshedStatus.price,
+              collateral: refreshedStatus.collateral,
+            };
             const fallbackApproval = await params.approveExternalTake({
-              price: Number(ethers.utils.formatEther(liquidation.auctionPrice)),
-              auctionPrice: liquidation.auctionPrice,
-              collateral: liquidation.collateral,
+              price: Number(
+                ethers.utils.formatEther(executionLiquidation.auctionPrice)
+              ),
+              auctionPrice: executionLiquidation.auctionPrice,
+              collateral: executionLiquidation.collateral,
               quoteEvaluation: candidateEvaluation,
               countStats: false,
               forceGasRefresh: true,
@@ -1820,7 +1847,7 @@ function createExternalTakeAdapterForDiscovery(params: {
           const selectedPath = selection.effectiveSelectedPath;
           const selectedSource = selection.selectedSource;
           const liquidationForCandidate = {
-            ...liquidation,
+            ...executionLiquidation,
             externalTakeQuoteEvaluation: approvedEvaluation,
           };
 
@@ -1830,7 +1857,9 @@ function createExternalTakeAdapterForDiscovery(params: {
           ) {
             let oneInchPreSubmitRejected = false;
             let oneInchSwapDataSucceeded = false;
+            let oneInchPreBroadcastFailed = false;
             const originalSwapDataResult = config.onOneInchSwapDataResult;
+            const originalExecutionFailure = config.onOneInchExecutionFailure;
             const oneInchConfig = {
               ...config,
               onOneInchSwapDataResult: (result: {
@@ -1846,6 +1875,15 @@ function createExternalTakeAdapterForDiscovery(params: {
                   oneInchPreSubmitRejected = true;
                 }
               },
+              onOneInchExecutionFailure: (result: {
+                preBroadcast: boolean;
+                error?: string;
+              }) => {
+                originalExecutionFailure?.(result);
+                if (result.preBroadcast) {
+                  oneInchPreBroadcastFailed = true;
+                }
+              },
             };
             const oneInchSucceeded = await takeModule.takeLiquidation({
               pool,
@@ -1858,8 +1896,8 @@ function createExternalTakeAdapterForDiscovery(params: {
               return true;
             }
             if (
-              oneInchPreSubmitRejected &&
-              !oneInchSwapDataSucceeded &&
+              ((oneInchPreSubmitRejected && !oneInchSwapDataSucceeded) ||
+                oneInchPreBroadcastFailed) &&
               index < executionCandidates.length - 1
             ) {
               logger.warn(

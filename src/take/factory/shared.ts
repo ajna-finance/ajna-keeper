@@ -135,7 +135,20 @@ const MAX_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 const MAX_QUOTE_TOKEN_SCALE_CACHE_ENTRIES = 512;
 const FACTORY_ROUTE_AVAILABILITY_CONCURRENCY = 3;
 const PROVIDER_INIT_FAILURE_RETRY_MS = 30_000;
+const PROVIDER_INIT_FAILURE_RETRY_JITTER_BPS = 2_000;
 export const DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS = 2_000;
+
+function getProviderInitFailureRetryMs(): number {
+  const jitterRangeMs = Math.floor(
+    (PROVIDER_INIT_FAILURE_RETRY_MS * PROVIDER_INIT_FAILURE_RETRY_JITTER_BPS) /
+      BASIS_POINTS_DENOMINATOR
+  );
+  return (
+    PROVIDER_INIT_FAILURE_RETRY_MS -
+    jitterRangeMs +
+    Math.floor(Math.random() * (jitterRangeMs * 2 + 1))
+  );
+}
 
 function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
   while (map.size > maxSize) {
@@ -522,6 +535,12 @@ export async function getSushiSwapQuoteProvider(params: {
     params.runtimeCache?.sushiswapUnavailableUntilMs !== undefined &&
     params.runtimeCache.sushiswapUnavailableUntilMs > Date.now()
   ) {
+    logger.debug(
+      `SushiSwap quote provider initialization cooldown active for ${Math.max(
+        0,
+        params.runtimeCache.sushiswapUnavailableUntilMs - Date.now()
+      )}ms`
+    );
     return undefined;
   }
   if (quoteProvider === undefined) {
@@ -549,11 +568,18 @@ export async function getSushiSwapQuoteProvider(params: {
     quoteProvider = initialized ? candidateProvider : null;
     if (params.runtimeCache) {
       if (quoteProvider) {
+        if (params.runtimeCache.sushiswapUnavailableUntilMs !== undefined) {
+          logger.info(`SushiSwap quote provider initialization recovered`);
+        }
         params.runtimeCache.sushiswap = quoteProvider;
         params.runtimeCache.sushiswapUnavailableUntilMs = undefined;
       } else {
+        const retryMs = getProviderInitFailureRetryMs();
         params.runtimeCache.sushiswapUnavailableUntilMs =
-          Date.now() + PROVIDER_INIT_FAILURE_RETRY_MS;
+          Date.now() + retryMs;
+        logger.warn(
+          `SushiSwap quote provider unavailable; retrying initialization in ${retryMs}ms`
+        );
       }
     }
   }
@@ -578,6 +604,12 @@ export async function getCurveQuoteProvider(params: {
     params.runtimeCache?.curveUnavailableUntilMs !== undefined &&
     params.runtimeCache.curveUnavailableUntilMs > Date.now()
   ) {
+    logger.debug(
+      `Curve quote provider initialization cooldown active for ${Math.max(
+        0,
+        params.runtimeCache.curveUnavailableUntilMs - Date.now()
+      )}ms`
+    );
     return undefined;
   }
   if (quoteProvider === undefined) {
@@ -602,11 +634,18 @@ export async function getCurveQuoteProvider(params: {
     quoteProvider = initialized ? candidateProvider : null;
     if (params.runtimeCache) {
       if (quoteProvider) {
+        if (params.runtimeCache.curveUnavailableUntilMs !== undefined) {
+          logger.info(`Curve quote provider initialization recovered`);
+        }
         params.runtimeCache.curve = quoteProvider;
         params.runtimeCache.curveUnavailableUntilMs = undefined;
       } else {
+        const retryMs = getProviderInitFailureRetryMs();
         params.runtimeCache.curveUnavailableUntilMs =
-          Date.now() + PROVIDER_INIT_FAILURE_RETRY_MS;
+          Date.now() + retryMs;
+        logger.warn(
+          `Curve quote provider unavailable; retrying initialization in ${retryMs}ms`
+        );
       }
     }
   }
