@@ -286,12 +286,14 @@ export async function evaluateTakeDecision<
   let takeablePrice: number | undefined;
   let maxArbTakePrice: number | undefined;
   let selectedQuoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
-
-  if (
+  const evaluateExternalTake = externalTakeAdapter.evaluateExternalTake;
+  const externalTakeConfigured =
     poolConfig.take.marketPriceFactor !== undefined &&
-    externalTakeAdapter.evaluateExternalTake
-  ) {
-    const quoteEvaluation = await externalTakeAdapter.evaluateExternalTake({
+    evaluateExternalTake !== undefined;
+  const arbTakeConfigured = arbTakeStrategy.isEnabled(poolConfig);
+
+  if (externalTakeConfigured) {
+    const quoteEvaluation = await evaluateExternalTake({
       pool,
       signer,
       poolConfig,
@@ -326,7 +328,7 @@ export async function evaluateTakeDecision<
     }
   }
 
-  if (arbTakeStrategy.isEnabled(poolConfig)) {
+  if (arbTakeConfigured) {
     const arbEvaluation = await arbTakeStrategy.evaluateArbTake({
       pool,
       signer,
@@ -363,6 +365,12 @@ export async function evaluateTakeDecision<
         reason = approval.reason ?? reason;
       }
     }
+  }
+  if (!approvedTake && !approvedArbTake && reason === undefined) {
+    reason =
+      externalTakeConfigured || arbTakeConfigured
+        ? `auction price ${price} did not satisfy configured take policies`
+        : 'no external take or arbTake strategy is configured';
   }
 
   return {
@@ -621,7 +629,11 @@ export async function processTakeCandidates<
         onSkip?.({
           candidate,
           stage: 'evaluation',
-          reason: decision.reason ?? 'policy rejected candidate',
+          reason:
+            decision.reason ??
+            `auction price ${Number(
+              weiToDecimaled(decision.auctionPrice)
+            ).toFixed(6)} did not satisfy configured take policies`,
           decision,
         });
         continue;

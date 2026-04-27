@@ -122,7 +122,7 @@ export async function handleTakes({
       break;
   }
 
-  await processResolvedManualTakeCandidates({
+  await runResolvedManualTakeCandidates({
     signer,
     takeWriteTransport,
     pool,
@@ -134,22 +134,23 @@ export async function handleTakes({
 export async function processManualTakeCandidates(
   params: HandleTakeParams
 ): Promise<void> {
-  await processResolvedManualTakeCandidates({
+  // Lower-level entrypoint for tests and direct callers; SmartDex deployment
+  // detection is intentionally handled by handleTakes().
+  await runResolvedManualTakeCandidates({
     ...params,
     config: resolveSubgraphConfig(params.config),
   });
 }
 
-async function processResolvedManualTakeCandidates({
+async function runResolvedManualTakeCandidates({
   signer,
   takeWriteTransport,
   pool,
   poolConfig,
   config,
 }: ResolvedHandleTakeParams): Promise<void> {
-  const resolvedConfig = config;
   const candidates = await getTakeBorrowerCandidates({
-    subgraph: resolvedConfig.subgraph,
+    subgraph: config.subgraph,
     poolAddress: pool.poolAddress,
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
@@ -159,7 +160,7 @@ async function processResolvedManualTakeCandidates({
       `Manual factory external take context starting for pool: ${pool.name}`
     );
     const context = createManualFactoryTakeContext({
-      config: resolvedConfig,
+      config,
       takeWriteTransport,
     });
     await runManualTakeCandidateEngine({
@@ -167,19 +168,21 @@ async function processResolvedManualTakeCandidates({
       signer,
       poolConfig,
       candidates,
-      subgraph: resolvedConfig.subgraph,
-      delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
-      dryRun: resolvedConfig.dryRun ?? false,
+      subgraph: config.subgraph,
+      delayBetweenActions: config.delayBetweenActions ?? 0,
+      dryRun: config.dryRun ?? false,
       takeWriteTransport,
       context,
     });
     return;
   }
 
-  logger.debug(`Manual 1inch take context starting for pool: ${pool.name}`);
+  logger.debug(
+    `${poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ? 'Manual 1inch take context' : 'Manual arbTake context'} starting for pool: ${pool.name}`
+  );
   const context = createManualOneInchTakeContext({
     poolConfig,
-    config: resolvedConfig,
+    config,
     takeWriteTransport,
   });
   await runManualTakeCandidateEngine({
@@ -187,9 +190,9 @@ async function processResolvedManualTakeCandidates({
     signer,
     poolConfig,
     candidates,
-    subgraph: resolvedConfig.subgraph,
-    delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
-    dryRun: resolvedConfig.dryRun ?? false,
+    subgraph: config.subgraph,
+    delayBetweenActions: config.delayBetweenActions ?? 0,
+    dryRun: config.dryRun ?? false,
     takeWriteTransport,
     context,
   });
@@ -308,7 +311,9 @@ export async function* getLiquidationsToTake({
     }
 
     logger.debug(
-      `Not taking liquidation - pool: ${pool.name}, borrower: ${decision.borrower}, reason: ${decision.reason ?? 'policy rejected candidate'}`
+      `Not taking liquidation - pool: ${pool.name}, borrower: ${decision.borrower}, auctionPrice: ${Number(
+        weiToDecimaled(decision.auctionPrice)
+      ).toFixed(6)}, reason: ${decision.reason}`
     );
   }
 }

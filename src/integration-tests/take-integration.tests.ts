@@ -139,6 +139,7 @@ describe('Take Integration Tests', () => {
   });
 
   it('routes arb-only pools through the shared take candidate path', async () => {
+    const debugSpy = sinon.spy(logger, 'debug');
     const config: Partial<KeeperConfig> = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
@@ -160,6 +161,14 @@ describe('Take Integration Tests', () => {
         { fallbackUrls: undefined }
       )
     ).to.be.true;
+    expect(
+      debugSpy.calledWithMatch(sinon.match('Manual arbTake context starting'))
+    ).to.be.true;
+    expect(
+      debugSpy.calledWithMatch(
+        sinon.match('Manual 1inch take context starting')
+      )
+    ).to.be.false;
   });
 
   it('routes mixed configs by pool source instead of globally preferring factory', async () => {
