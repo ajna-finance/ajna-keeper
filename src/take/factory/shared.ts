@@ -9,8 +9,13 @@ import {
   PoolConfig,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
+import { logger } from '../../logging';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
-import { RequireFields } from '../../utils';
+import {
+  RequireFields,
+  mapWithConcurrencyPreservingOrder,
+  withTimeout,
+} from '../../utils';
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
@@ -39,14 +44,23 @@ export interface FactoryRouteSelectionOptions {
   allowedLiquiditySources?: LiquiditySource[];
   routeQuoteBudgetPerCandidate?: number;
   routeProfitabilityContext?: FactoryRouteProfitabilityContext;
+  routeProfitabilityContextFactory?: (
+    sources: LiquiditySource[]
+  ) => Promise<FactoryRouteProfitabilityContext | undefined>;
 }
 
 export interface FactoryRouteProfitabilityContext {
   routeExecutionCostQuoteRawBySource?: LiquiditySourceMap<BigNumber>;
+  routeGasLimitBySource?: LiquiditySourceMap<BigNumber>;
   nativeProfitFloorQuoteRawBySource?: LiquiditySourceMap<BigNumber>;
   configuredProfitFloorQuoteRaw?: BigNumber;
   slippageRiskBufferQuoteRaw?: BigNumber;
   routeRejectionReasonsBySource?: LiquiditySourceMap<string>;
+  gasPriceWei?: BigNumber;
+  gasPriceGwei?: number;
+  gasPriceAgeMs?: number;
+  gasPriceFreshnessTtlMs?: number;
+  l2GasCostBufferBasisPoints?: number;
   gasPolicyEvaluatedAt?: number;
 }
 
@@ -95,9 +109,13 @@ export type FactoryQuoteConfig = Pick<
 >;
 
 export interface FactoryQuoteProviderRuntimeCache {
+  chainId?: number;
+  chainIdInflight?: Promise<number | undefined>;
   uniswapV3?: UniswapV3QuoteProvider | null;
   sushiswap?: SushiSwapQuoteProvider | null;
+  sushiswapUnavailableUntilMs?: number;
   curve?: CurveQuoteProvider | null;
+  curveUnavailableUntilMs?: number;
   tokenDecimals?: Map<string, number>;
   quoteTokenScales?: Map<string, BigNumber>;
   recentRouteSuccesses?: Map<string, number>;
@@ -116,6 +134,21 @@ const MAX_RECENT_ROUTE_SUCCESSES = 512;
 const MAX_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 const MAX_QUOTE_TOKEN_SCALE_CACHE_ENTRIES = 512;
 const FACTORY_ROUTE_AVAILABILITY_CONCURRENCY = 3;
+const PROVIDER_INIT_FAILURE_RETRY_MS = 30_000;
+const PROVIDER_INIT_FAILURE_RETRY_JITTER_BPS = 2_000;
+export const DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS = 2_000;
+
+function getProviderInitFailureRetryMs(): number {
+  const jitterRangeMs = Math.floor(
+    (PROVIDER_INIT_FAILURE_RETRY_MS * PROVIDER_INIT_FAILURE_RETRY_JITTER_BPS) /
+      BASIS_POINTS_DENOMINATOR
+  );
+  return (
+    PROVIDER_INIT_FAILURE_RETRY_MS -
+    jitterRangeMs +
+    Math.floor(Math.random() * (jitterRangeMs * 2 + 1))
+  );
+}
 
 function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
   while (map.size > maxSize) {
@@ -140,6 +173,20 @@ export function maxBigNumber(...values: BigNumber[]): BigNumber {
     (max, value) => (value.gt(max) ? value : max),
     values[0]
   );
+}
+
+export function deriveApprovedMinOutRaw(params: {
+  routeMinOutRaw?: BigNumber;
+  profitMinOutRaw?: BigNumber;
+  fallbackMinOutRaw?: BigNumber;
+}): BigNumber | undefined {
+  const splitFloors = [params.routeMinOutRaw, params.profitMinOutRaw].filter(
+    (value): value is BigNumber => value !== undefined
+  );
+  if (splitFloors.length) {
+    return maxBigNumber(...splitFloors);
+  }
+  return params.fallbackMinOutRaw;
 }
 
 export async function getSwapDeadline(
@@ -483,6 +530,19 @@ export async function getSushiSwapQuoteProvider(params: {
   }
 
   let quoteProvider = params.runtimeCache?.sushiswap;
+  if (
+    quoteProvider === undefined &&
+    params.runtimeCache?.sushiswapUnavailableUntilMs !== undefined &&
+    params.runtimeCache.sushiswapUnavailableUntilMs > Date.now()
+  ) {
+    logger.debug(
+      `SushiSwap quote provider initialization cooldown active for ${Math.max(
+        0,
+        params.runtimeCache.sushiswapUnavailableUntilMs - Date.now()
+      )}ms`
+    );
+    return undefined;
+  }
   if (quoteProvider === undefined) {
     const candidateProvider = new SushiSwapQuoteProvider(params.signer, {
       swapRouterAddress: routerConfig.swapRouterAddress,
@@ -493,10 +553,34 @@ export async function getSushiSwapQuoteProvider(params: {
         DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
       wethAddress: routerConfig.wethAddress,
     });
-    const initialized = await candidateProvider.initialize();
+    const initialized = await withTimeout(
+      candidateProvider.initialize(),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'SushiSwap quote provider initialization'
+    ).catch((error) => {
+      logger.warn(
+        `SushiSwap quote provider initialization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    });
     quoteProvider = initialized ? candidateProvider : null;
     if (params.runtimeCache) {
-      params.runtimeCache.sushiswap = quoteProvider;
+      if (quoteProvider) {
+        if (params.runtimeCache.sushiswapUnavailableUntilMs !== undefined) {
+          logger.info(`SushiSwap quote provider initialization recovered`);
+        }
+        params.runtimeCache.sushiswap = quoteProvider;
+        params.runtimeCache.sushiswapUnavailableUntilMs = undefined;
+      } else {
+        const retryMs = getProviderInitFailureRetryMs();
+        params.runtimeCache.sushiswapUnavailableUntilMs =
+          Date.now() + retryMs;
+        logger.warn(
+          `SushiSwap quote provider unavailable; retrying initialization in ${retryMs}ms`
+        );
+      }
     }
   }
 
@@ -515,6 +599,19 @@ export async function getCurveQuoteProvider(params: {
   }
 
   let quoteProvider = params.runtimeCache?.curve;
+  if (
+    quoteProvider === undefined &&
+    params.runtimeCache?.curveUnavailableUntilMs !== undefined &&
+    params.runtimeCache.curveUnavailableUntilMs > Date.now()
+  ) {
+    logger.debug(
+      `Curve quote provider initialization cooldown active for ${Math.max(
+        0,
+        params.runtimeCache.curveUnavailableUntilMs - Date.now()
+      )}ms`
+    );
+    return undefined;
+  }
   if (quoteProvider === undefined) {
     const candidateProvider = new CurveQuoteProvider(params.signer, {
       poolConfigs: routerConfig.poolConfigs as any,
@@ -522,10 +619,34 @@ export async function getCurveQuoteProvider(params: {
       wethAddress: routerConfig.wethAddress,
       tokenAddresses: params.tokenAddresses ?? {},
     });
-    const initialized = await candidateProvider.initialize();
+    const initialized = await withTimeout(
+      candidateProvider.initialize(),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'Curve quote provider initialization'
+    ).catch((error) => {
+      logger.warn(
+        `Curve quote provider initialization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    });
     quoteProvider = initialized ? candidateProvider : null;
     if (params.runtimeCache) {
-      params.runtimeCache.curve = quoteProvider;
+      if (quoteProvider) {
+        if (params.runtimeCache.curveUnavailableUntilMs !== undefined) {
+          logger.info(`Curve quote provider initialization recovered`);
+        }
+        params.runtimeCache.curve = quoteProvider;
+        params.runtimeCache.curveUnavailableUntilMs = undefined;
+      } else {
+        const retryMs = getProviderInitFailureRetryMs();
+        params.runtimeCache.curveUnavailableUntilMs =
+          Date.now() + retryMs;
+        logger.warn(
+          `Curve quote provider unavailable; retrying initialization in ${retryMs}ms`
+        );
+      }
     }
   }
 
@@ -549,6 +670,10 @@ interface FactoryRouteAvailabilityCheckParams {
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
 }
 
+interface V3StylePoolExistenceProvider {
+  poolExists(tokenA: string, tokenB: string, feeTier: number): Promise<boolean>;
+}
+
 function availableFactoryRoute(
   route: FactoryRouteCandidate
 ): FactoryRouteAvailabilityResult {
@@ -562,86 +687,81 @@ function unavailableFactoryRoute(
   return { route, available: false, reason };
 }
 
+async function checkV3StyleRouteAvailability(
+  params: FactoryRouteAvailabilityCheckParams & {
+    label: string;
+    quoteProvider: V3StylePoolExistenceProvider | undefined;
+    configuredFeeTier?: number;
+    defaultFeeTier: number;
+  }
+): Promise<FactoryRouteAvailabilityResult> {
+  const { route } = params;
+  if (!params.quoteProvider) {
+    return unavailableFactoryRoute(
+      route,
+      `${params.label} quote provider unavailable`
+    );
+  }
+
+  const feeTier =
+    route.feeTier ?? params.configuredFeeTier ?? params.defaultFeeTier;
+  let exists: boolean;
+  try {
+    exists = await withTimeout(
+      params.quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress,
+        feeTier
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      `${params.label} pool existence check`
+    );
+  } catch (error) {
+    return unavailableFactoryRoute(
+      route,
+      `${params.label} pool existence check failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  return exists
+    ? availableFactoryRoute(route)
+    : unavailableFactoryRoute(route, `${params.label} pool not found`);
+}
+
 async function checkUniswapV3RouteAvailability(
   params: FactoryRouteAvailabilityCheckParams
 ): Promise<FactoryRouteAvailabilityResult> {
-  const { route } = params;
   const quoteProvider = getUniswapV3QuoteProvider({
     signer: params.signer,
     routerConfig: params.config.universalRouterOverrides,
     runtimeCache: params.runtimeCache,
   });
-  if (!quoteProvider) {
-    return unavailableFactoryRoute(
-      route,
-      'Uniswap V3 quote provider unavailable'
-    );
-  }
-
-  const feeTier =
-    route.feeTier ??
-    params.config.universalRouterOverrides?.defaultFeeTier ??
-    DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3];
-  let exists: boolean;
-  try {
-    exists = await quoteProvider.poolExists(
-      params.pool.collateralAddress,
-      params.pool.quoteAddress,
-      feeTier
-    );
-  } catch (error) {
-    return unavailableFactoryRoute(
-      route,
-      `Uniswap V3 pool existence check failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-
-  return exists
-    ? availableFactoryRoute(route)
-    : unavailableFactoryRoute(route, 'Uniswap V3 pool not found');
+  return await checkV3StyleRouteAvailability({
+    ...params,
+    label: 'Uniswap V3',
+    quoteProvider,
+    configuredFeeTier: params.config.universalRouterOverrides?.defaultFeeTier,
+    defaultFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+  });
 }
 
 async function checkSushiSwapRouteAvailability(
   params: FactoryRouteAvailabilityCheckParams
 ): Promise<FactoryRouteAvailabilityResult> {
-  const { route } = params;
   const quoteProvider = await getSushiSwapQuoteProvider({
     signer: params.signer,
     routerConfig: params.config.sushiswapRouterOverrides,
     runtimeCache: params.runtimeCache,
   });
-  if (!quoteProvider) {
-    return unavailableFactoryRoute(
-      route,
-      'SushiSwap quote provider unavailable'
-    );
-  }
-
-  const feeTier =
-    route.feeTier ??
-    params.config.sushiswapRouterOverrides?.defaultFeeTier ??
-    DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP];
-  let exists: boolean;
-  try {
-    exists = await quoteProvider.poolExists(
-      params.pool.collateralAddress,
-      params.pool.quoteAddress,
-      feeTier
-    );
-  } catch (error) {
-    return unavailableFactoryRoute(
-      route,
-      `SushiSwap pool existence check failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-
-  return exists
-    ? availableFactoryRoute(route)
-    : unavailableFactoryRoute(route, 'SushiSwap pool not found');
+  return await checkV3StyleRouteAvailability({
+    ...params,
+    label: 'SushiSwap',
+    quoteProvider,
+    configuredFeeTier: params.config.sushiswapRouterOverrides?.defaultFeeTier,
+    defaultFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
+  });
 }
 
 async function checkCurveRouteAvailability(
@@ -658,10 +778,24 @@ async function checkCurveRouteAvailability(
     return unavailableFactoryRoute(route, 'Curve quote provider unavailable');
   }
 
-  const exists = await quoteProvider.poolExists(
-    params.pool.collateralAddress,
-    params.pool.quoteAddress
-  );
+  let exists: boolean;
+  try {
+    exists = await withTimeout(
+      quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'Curve pool existence check'
+    );
+  } catch (error) {
+    return unavailableFactoryRoute(
+      route,
+      `Curve pool existence check failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
   return exists
     ? availableFactoryRoute(route)
     : unavailableFactoryRoute(
@@ -700,27 +834,14 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
 }> {
   const availableRoutes: FactoryRouteCandidate[] = [];
   const unavailableRoutes: FactoryRouteAvailabilitySkip[] = [];
-  const availabilityResults: FactoryRouteAvailabilityResult[] = new Array(
-    params.routes.length
-  );
-  let nextRouteIndex = 0;
-  const workerCount = Math.min(
+  const availabilityResults = await mapWithConcurrencyPreservingOrder(
+    params.routes,
     FACTORY_ROUTE_AVAILABILITY_CONCURRENCY,
-    params.routes.length
-  );
-
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextRouteIndex < params.routes.length) {
-        const routeIndex = nextRouteIndex;
-        nextRouteIndex += 1;
-        availabilityResults[routeIndex] =
-          await checkFactoryRouteCandidateAvailability({
-            ...params,
-            route: params.routes[routeIndex],
-          });
-      }
-    })
+    async (route) =>
+      await checkFactoryRouteCandidateAvailability({
+        ...params,
+        route,
+      })
   );
 
   for (const availability of availabilityResults) {
@@ -860,10 +981,9 @@ export function getFactoryRouteCandidates(params: {
   >;
   selection?: FactoryRouteSelectionOptions;
 }): FactoryRouteCandidate[] {
-  const sources =
-    params.selection?.allowedLiquiditySources?.length
-      ? params.selection.allowedLiquiditySources
-      : [params.defaultLiquiditySource];
+  const sources = params.selection?.allowedLiquiditySources?.length
+    ? params.selection.allowedLiquiditySources
+    : [params.defaultLiquiditySource];
 
   const uniqueSources = Array.from(new Set(sources)).filter(
     isDynamicFactorySource
@@ -933,13 +1053,35 @@ export async function getCachedFactoryTokenDecimals(
   tokenAddress: string,
   runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<number> {
-  const cacheKey = tokenAddress.toLowerCase();
+  let chainId = runtimeCache?.chainId;
+  if (
+    runtimeCache &&
+    chainId === undefined &&
+    typeof signer.getChainId === 'function'
+  ) {
+    try {
+      runtimeCache.chainIdInflight ??= signer.getChainId().catch((error) => {
+        logger.debug(
+          `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${error instanceof Error ? error.message : String(error)}`
+        );
+        return undefined;
+      });
+      const resolvedChainId = await runtimeCache.chainIdInflight;
+      if (resolvedChainId !== undefined) {
+        chainId = resolvedChainId;
+        runtimeCache.chainId = resolvedChainId;
+      }
+    } finally {
+      runtimeCache.chainIdInflight = undefined;
+    }
+  }
+  const cacheKey = `${chainId ?? 'unknown'}:${tokenAddress.toLowerCase()}`;
   const cached = runtimeCache?.tokenDecimals?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
 
-  const decimals = await getDecimalsErc20(signer, tokenAddress);
+  const decimals = await getDecimalsErc20(signer, tokenAddress, chainId);
   if (runtimeCache) {
     if (!runtimeCache.tokenDecimals) {
       runtimeCache.tokenDecimals = new Map();
@@ -1058,7 +1200,12 @@ export async function computeFactoryAmountOutMinimum({
   if (!quoteEvaluation.quoteAmountRaw) {
     throw new Error('Factory: quoteAmountRaw missing from evaluation');
   }
-  if (!quoteEvaluation.approvedMinOutRaw) {
+  const approvedMinOutRaw = deriveApprovedMinOutRaw({
+    routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
+    profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
+    fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
+  });
+  if (!approvedMinOutRaw) {
     throw new Error('Factory: approvedMinOutRaw missing from evaluation');
   }
 
@@ -1075,13 +1222,13 @@ export async function computeFactoryAmountOutMinimum({
     quoteAmountDueRaw,
     profitabilityFloor
   );
-  if (quoteEvaluation.approvedMinOutRaw.lt(minimumSanityFloor)) {
+  if (approvedMinOutRaw.lt(minimumSanityFloor)) {
     throw new Error(
       'Factory: approvedMinOutRaw below auction repayment/market-factor floor'
     );
   }
 
-  return quoteEvaluation.approvedMinOutRaw;
+  return approvedMinOutRaw;
 }
 
 export async function buildFactoryQuoteEvaluation(params: {
@@ -1123,23 +1270,27 @@ export async function buildFactoryQuoteEvaluation(params: {
   )
     ? params.quoteAmountRaw.sub(marketFactorFloorQuoteRaw)
     : ZERO;
-  const approvedMinOutRaw = params.existingSlippageFloorQuoteRaw
-    ? maxBigNumber(
-        marketFactorFloorQuoteRaw,
-        params.existingSlippageFloorQuoteRaw
-      )
-    : marketFactorFloorQuoteRaw;
+  const routeMinOutRaw = params.existingSlippageFloorQuoteRaw;
+  const profitMinOutRaw = marketFactorFloorQuoteRaw;
+  const approvedMinOutRaw =
+    deriveApprovedMinOutRaw({ routeMinOutRaw, profitMinOutRaw }) ??
+    profitMinOutRaw;
 
   return {
     isTakeable: isProfitable,
+    externalTakePath: 'factory',
     marketPrice: params.quoteAmount / collateralAmount,
     takeablePrice: (params.quoteAmount / collateralAmount) * marketPriceFactor,
     quoteAmount: params.quoteAmount,
     quoteAmountRaw: params.quoteAmountRaw,
     selectedLiquiditySource: params.selectedLiquiditySource,
     selectedFeeTier: params.selectedFeeTier,
+    routeMinOutRaw,
+    profitMinOutRaw,
     approvedMinOutRaw,
     collateralAmount,
+    quotedAuctionPriceWad: params.auctionPriceWad,
+    quotedCollateralWad: params.collateral,
     routeProfitability: {
       auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
       routeExecutionCostQuoteRaw: ZERO,
@@ -1151,6 +1302,7 @@ export async function buildFactoryQuoteEvaluation(params: {
       requiredOutputFloorQuoteRaw: marketFactorFloorQuoteRaw,
       expectedNetProfitQuoteRaw: grossProfitQuoteRaw,
       surplusOverFloorQuoteRaw,
+      routeGasLimit: undefined,
     },
     reason: isProfitable ? params.successReason : params.failureReason,
   };
@@ -1190,6 +1342,8 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
     params.context.routeExecutionCostQuoteRawBySource?.[
       params.liquiditySource
     ] ?? ZERO;
+  const routeGasLimit =
+    params.context.routeGasLimitBySource?.[params.liquiditySource];
   const nativeProfitFloorQuoteRaw =
     params.context.nativeProfitFloorQuoteRawBySource?.[
       params.liquiditySource
@@ -1224,12 +1378,15 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
   )
     ? quoteAmountRaw.sub(requiredOutputFloorQuoteRaw)
     : ZERO;
-  const approvedMinOutRaw = params.evaluation.approvedMinOutRaw
-    ? maxBigNumber(
-        params.evaluation.approvedMinOutRaw,
-        requiredOutputFloorQuoteRaw
-      )
-    : requiredOutputFloorQuoteRaw;
+  const routeMinOutRaw =
+    params.evaluation.routeMinOutRaw ??
+    (params.evaluation.profitMinOutRaw
+      ? undefined
+      : params.evaluation.approvedMinOutRaw);
+  const profitMinOutRaw = requiredOutputFloorQuoteRaw;
+  const approvedMinOutRaw =
+    deriveApprovedMinOutRaw({ routeMinOutRaw, profitMinOutRaw }) ??
+    profitMinOutRaw;
   const isTakeable =
     params.evaluation.isTakeable &&
     quoteAmountRaw.gte(requiredOutputFloorQuoteRaw);
@@ -1240,6 +1397,8 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
     reason: isTakeable
       ? params.evaluation.reason
       : 'route quote below required output floor',
+    routeMinOutRaw,
+    profitMinOutRaw,
     approvedMinOutRaw,
     routeProfitability: {
       ...routeProfitability,
@@ -1253,6 +1412,12 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       requiredOutputFloorQuoteRaw,
       expectedNetProfitQuoteRaw,
       surplusOverFloorQuoteRaw,
+      routeGasLimit,
+      gasPriceWei: params.context.gasPriceWei,
+      gasPriceGwei: params.context.gasPriceGwei,
+      gasPriceAgeMs: params.context.gasPriceAgeMs,
+      gasPriceFreshnessTtlMs: params.context.gasPriceFreshnessTtlMs,
+      l2GasCostBufferBasisPoints: params.context.l2GasCostBufferBasisPoints,
       gasPolicyEvaluatedAt: params.context.gasPolicyEvaluatedAt,
     },
   };

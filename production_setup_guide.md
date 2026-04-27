@@ -77,7 +77,9 @@ Implications:
 
 - External takes prefer the configured default, then quote viable candidate tiers when configured
 - Missing Uni/Sushi pools are skipped before `takeRouteQuoteBudgetPerCandidate` is applied
+- Budget-approved factory routes are quoted with bounded parallelism, then ranked deterministically by expected net profit
 - `allowedLiquiditySources`, when set, is the complete factory route allowlist; include the default source explicitly if it should remain eligible
+- `allowedExternalTakePaths: ['oneinch', 'factory']` can compare the 1inch aggregator path against the best factory route
 - Low `takeRouteQuoteBudgetPerCandidate` values reduce quote latency but can skip a more profitable route that was not probed
 - Changing fee-tier policy is a config-and-restart change, not a contract redeploy
 - There is no per-pool external-take fee override in the current config schema
@@ -175,6 +177,8 @@ This makes fee tier selection a **strategic runtime configuration decision**. It
 **Best for:** Established chains with 1inch aggregator support
 
 **IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
+
+Atomic 1inch external takes validate decoded swap calldata before submission. Supported payloads must swap pool collateral to pool quote, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured router or decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `oneInchAggregationExecutorAllowlist` per chain to hard-restrict executors. If a route starts requiring non-zero 1inch flags, route that pool through factory DEXes until the keeper explicitly supports that payload shape.
 
 **Prerequisites:**
 
@@ -527,12 +531,12 @@ The keeper is configured with conservative timing to respect rate limits:
 
 ```typescript
 {
-  delayBetweenRuns: 15,        // 15 seconds between bot cycles
-  delayBetweenActions: 61,     // 61 seconds between individual actions (for 1inch)
+  delayBetweenRuns: 10,        // 10 seconds between hot take cycles
+  delayBetweenActions: 0,      // do not add intentional delay inside hot discovered take execution
 }
 ```
 
-**For faster operation:** Upgrade to paid API tiers. The bot timing can be reduced with higher-tier service plans.
+For discovered external takes, use `autoDiscover.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, and the 1inch failure cooldown instead of a long `delayBetweenActions`. A 31-61 second action delay is appropriate only for slow legacy/manual 1inch operation; it is too slow for the short window where liquidation auctions are below market. Upgrade API tiers when you need lower timeout/cooldown values without hitting provider limits.
 
 ### Auto-Discovery Rollout (V1)
 
@@ -555,13 +559,20 @@ Recommended rollout order:
 1. Keep `dryRunNewPools: true` and inspect discovered skip/action logs first.
 2. Enable discovered `settlement` before discovered external `take` if you want the lower-risk path first.
 3. Prefer `autoDiscover.take.maxGasCostNative` and `autoDiscover.settlement.maxGasCostNative` before quote-denominated gas caps. Native gas caps use the RPC gas price directly and avoid extra native-to-quote conversion fetches.
-4. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` only when `discoveredDefaults.take.liquiditySource` is a factory route (`UNISWAPV3`, `SUSHISWAP`, or `CURVE`). When set, `allowedLiquiditySources` is the complete route allowlist; 1inch is still a single-source aggregator path and is not compared against factory DEX routes by the current selector.
+4. Use `allowedExternalTakePaths: ['oneinch', 'factory']` when you want discovered external takes to compare 1inch against the best factory route. If omitted, autodiscover preserves the legacy single-path behavior from `discoveredDefaults.take.liquiditySource`.
 5. Prefer `autoDiscover.take.minProfitNative` over `minExpectedProfitQuote` when you want one profit floor across mixed quote tokens. It is a wei-denominated native-token floor, not a USD field.
 6. To approximate a USD target, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18`. Example: a $3 floor at ETH=$3,000 is `0.001 ETH`, or `1000000000000000` wei. Recalibrate periodically because the USD value drifts with native token price.
 7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
-8. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
+8. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
+9. Use `externalTakeProbeTimeoutMs` to bound each hybrid 1inch/factory probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values above 5000ms are supported for slow infrastructure, but they directly increase the worst-case time spent on each hot auction candidate.
+10. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing 1inch API calls is worth potentially skipping a better 1inch route; it tries factory first and stops once factory is approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
+11. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
+12. Use `autoDiscover.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `takeWrite` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
+13. If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the taker path.
+14. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
+15. Use `autoDiscover.take.validateRouteDeployments: true` for production startup preflight. It is required for hybrid 1inch/factory routing and recommended for every live factory route.
 
-Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion.
+Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; override it with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed execution costs. `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion. Gas-price freshness defaults are 5 seconds on L1 and 15 seconds on common L2s; use `l1GasPriceFreshnessTtlMs` / `l2GasPriceFreshnessTtlMs` only if your RPC latency profile requires a different window. `gasPriceDriftToleranceBasisPoints` optionally forces final pre-submission reapproval when current gas differs materially from the evaluation snapshot.
 
 ## Step 6: DEX Configuration Best Practices
 
@@ -604,7 +615,11 @@ Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets a
 - Use the runtime `defaultFeeTier` as the preferred route
 - Can compare `candidateFeeTiers` and execute with the selected tier
 - Apply `takeRouteQuoteBudgetPerCandidate` after unavailable pools are filtered out
+- Quote the remaining budget-approved routes with bounded parallelism
 - Treat `allowedLiquiditySources` as an explicit allowlist, not an additive list
+- Can compare 1inch against the factory selector when `allowedExternalTakePaths` includes both paths
+- Bound each hybrid path with `externalTakeProbeTimeoutMs` so one slow provider cannot block another viable path; avoid values above 5000ms unless provider false-negatives are more damaging than slower hot-loop execution
+- Can reduce 1inch API usage with `externalTakeRouteSelectionMode: 'factory_first'` by trying factory before 1inch; `cost_aware` remains a deprecated migration alias
 - Cannot be customized per pool in the current config schema
 - Can be changed by updating config and restarting the keeper
 
@@ -1106,7 +1121,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 ```bash
 # Log: "No valid quote data"
 # Cause: API rate limiting or misconfigured DEX addresses
-# Solution: Increase delayBetweenActions, verify router addresses
+# Solution: verify router addresses; for discovered takes tune oneInchQuoteTimeoutMs/failure cooldown instead of adding long action delays
 
 # Log: "Wrong DEX for this contract"
 # Cause: Contract/config mismatch
@@ -1118,7 +1133,8 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 **1inch Rate Limiting:**
 
 - Free tier: 1 req/sec, 100K/month
-- Increase `delayBetweenActions` to 61+ seconds
+- For hot discovered takes, keep `delayBetweenActions` low and rely on bounded 1inch request timeouts plus cooldowns
+- For slow legacy/manual 1inch-only operation, increase `delayBetweenActions` if your API tier requires it
 - Consider paid tier for faster operation
 
 **Uniswap V3 Gas Optimization:**

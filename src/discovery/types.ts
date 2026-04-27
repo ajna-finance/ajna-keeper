@@ -13,6 +13,7 @@ export type DiscoveryExecutionConfig = Pick<
   | 'discoveredDefaults'
   | 'keeperTaker'
   | 'keeperTakerFactory'
+  | 'oneInchAggregationExecutorAllowlist'
   | 'oneInchRouters'
   | 'sushiswapRouterOverrides'
   | 'takerContracts'
@@ -23,10 +24,18 @@ export type DiscoveryExecutionConfig = Pick<
 export type DiscoveryExecutionTransportConfig = DiscoveryExecutionConfig &
   DiscoveryReadTransportConfig;
 
+export interface OneInchQuoteCircuitState {
+  failures: number;
+  cooldownUntilMs?: number;
+  lastOpenLogAtMs?: number;
+}
+
 export interface DiscoveryRpcCache {
   chainId?: number;
   gasPrice?: BigNumber;
   gasPriceFetchedAt?: number;
+  gasPriceInflight?: Promise<BigNumber>;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
   gasQuoteFallbackWarningKeys?: Set<string>;
+  oneInchQuoteCircuit?: OneInchQuoteCircuitState;
 }

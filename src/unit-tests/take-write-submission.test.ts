@@ -23,6 +23,218 @@ describe('take write submission', () => {
     sinon.restore();
   });
 
+  it('validates legacy 1inch swap details against the atomic take invariants', () => {
+    const validDetails = {
+      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
+      swapDescription: {
+        srcToken: '0x0000000000000000000000000000000000000002',
+        dstToken: '0x0000000000000000000000000000000000000003',
+        srcReceiver: '0x00000000000000000000000000000000000000cc',
+        dstReceiver: '0x00000000000000000000000000000000000000bb',
+        amount: ethers.utils.parseEther('1'),
+        minReturnAmount: BigNumber.from(1),
+        flags: BigNumber.from(0),
+      },
+      opaqueData: '0x1234',
+    } as any;
+    const expected = {
+      srcToken: '0x0000000000000000000000000000000000000002',
+      dstToken: '0x0000000000000000000000000000000000000003',
+      srcReceiver: '0x00000000000000000000000000000000000000cc',
+      dstReceiver: '0x00000000000000000000000000000000000000bb',
+      amount: ethers.utils.parseEther('1'),
+    };
+
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, expected)
+    ).to.be.undefined;
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            srcReceiver: validDetails.aggregationExecutor,
+          },
+        },
+        expected
+      )
+    ).to.be.undefined;
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            dstReceiver: '0x00000000000000000000000000000000000000cc',
+          },
+        },
+        expected
+      )
+    ).to.include('dstReceiver');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            amount: ethers.utils.parseEther('2'),
+          },
+        },
+        expected
+      )
+    ).to.include('does not match requested collateral amount');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            srcReceiver: '0x00000000000000000000000000000000000000dd',
+          },
+        },
+        expected
+      )
+    ).to.include('srcReceiver');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            minReturnAmount: BigNumber.from(0),
+          },
+        },
+        expected
+      )
+    ).to.include('minReturnAmount must be greater than 0');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            flags: BigNumber.from(1),
+          },
+        },
+        expected
+      )
+    ).to.include('flags');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          aggregationExecutor: '0x0000000000000000000000000000000000000000',
+        },
+        expected
+      )
+    ).to.include('aggregationExecutor cannot be the zero address');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            flags: undefined,
+          },
+        } as any,
+        expected
+      )
+    ).to.include('flags is invalid');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, {
+        ...expected,
+        aggregationExecutors: [validDetails.aggregationExecutor],
+      })
+    ).to.be.undefined;
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, {
+        ...expected,
+        aggregationExecutors: ['0x00000000000000000000000000000000000000dd'],
+      })
+    ).to.include('is not in the configured allowlist');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, {
+        ...expected,
+        aggregationExecutors: [],
+      })
+    ).to.include('aggregationExecutor allowlist is empty');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            flags: '0x0',
+          },
+        } as any,
+        expected
+      )
+    ).to.be.undefined;
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            minReturnAmount: null,
+          },
+        } as any,
+        expected
+      )
+    ).to.include('minReturnAmount is invalid');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          aggregationExecutor: ' 0x00000000000000000000000000000000000000ce',
+        } as any,
+        expected
+      )
+    ).to.include('aggregationExecutor is not a valid address');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(
+        {
+          ...validDetails,
+          swapDescription: {
+            ...validDetails.swapDescription,
+            srcReceiver: '\u00000x00000000000000000000000000000000000000cc',
+          },
+        } as any,
+        expected
+      )
+    ).to.include('srcReceiver is not a valid address');
+  });
+
+  it('keys factory token decimal cache by chain id', async () => {
+    const runtimeCache: shared.FactoryQuoteProviderRuntimeCache = {
+      chainId: 1,
+    };
+    const tokenAddress = '0x0000000000000000000000000000000000000002';
+    const decimalsStub = sinon
+      .stub(erc20, 'getDecimalsErc20')
+      .onFirstCall()
+      .resolves(6)
+      .onSecondCall()
+      .resolves(18);
+
+    const firstDecimals = await shared.getCachedFactoryTokenDecimals(
+      {} as any,
+      tokenAddress,
+      runtimeCache
+    );
+    runtimeCache.chainId = 2;
+    const secondDecimals = await shared.getCachedFactoryTokenDecimals(
+      {} as any,
+      tokenAddress,
+      runtimeCache
+    );
+
+    expect(firstDecimals).to.equal(6);
+    expect(secondDecimals).to.equal(18);
+    expect(decimalsStub.calledTwice).to.be.true;
+  });
+
   it('uses the configured take write transport for legacy 1inch take submission', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),
@@ -59,7 +271,7 @@ describe('take write submission', () => {
     sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
     sinon
       .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
-      .resolves({ data: '0xdeadbeef' } as any);
+      .resolves({ success: true, data: '0xdeadbeef' } as any);
     sinon
       .stub(DexRouter.prototype, 'getRouter')
       .returns('0x00000000000000000000000000000000000000cc');
@@ -68,7 +280,7 @@ describe('take write submission', () => {
       swapDescription: {
         srcToken: '0x0000000000000000000000000000000000000002',
         dstToken: '0x0000000000000000000000000000000000000003',
-        srcReceiver: '0x0000000000000000000000000000000000000000',
+        srcReceiver: '0x00000000000000000000000000000000000000cc',
         dstReceiver: '0x00000000000000000000000000000000000000bb',
         amount: ethers.utils.parseEther('1'),
         minReturnAmount: BigNumber.from(1),
@@ -136,6 +348,76 @@ describe('take write submission', () => {
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
   });
 
+  it('fails legacy 1inch execution before API calls when the router is not configured', async () => {
+    const readSigner = {
+      getChainId: sinon.stub().resolves(1),
+    };
+    const keeperTaker = {
+      address: '0x00000000000000000000000000000000000000bb',
+    };
+    const onOneInchSwapDataResult = sinon.stub();
+    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
+    const swapDataStub = sinon.stub(
+      DexRouter.prototype,
+      'getSwapDataFromOneInch'
+    );
+    const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20');
+
+    const result = await takeLiquidation({
+      pool: {
+        name: 'Legacy Take Pool',
+        poolAddress: '0x0000000000000000000000000000000000000001',
+        collateralAddress: '0x0000000000000000000000000000000000000002',
+        quoteAddress: '0x0000000000000000000000000000000000000003',
+      } as any,
+      poolConfig: {
+        name: 'Legacy Take Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.95,
+        },
+      },
+      signer: readSigner as any,
+      liquidation: {
+        borrower: '0xBorrower',
+        hpbIndex: 0,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+        isTakeable: true,
+        isArbTakeable: false,
+        externalTakeQuoteEvaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(11),
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+        },
+      },
+      config: {
+        dryRun: false,
+        delayBetweenActions: 0,
+        skipOneInchRateLimitDelay: true,
+        connectorTokens: [],
+        oneInchRouters: {},
+        keeperTaker: '0x00000000000000000000000000000000000000dd',
+        takeWriteTransport: {
+          mode: 'private_rpc',
+          signer: {},
+          submitTransaction: sinon.stub(),
+        } as any,
+        onOneInchSwapDataResult,
+      },
+    });
+
+    expect(result).to.be.false;
+    expect(swapDataStub.notCalled).to.be.true;
+    expect(decimalsStub.notCalled).to.be.true;
+    expect(onOneInchSwapDataResult.calledOnce).to.be.true;
+    expect(onOneInchSwapDataResult.firstCall.args[0]).to.include({
+      success: false,
+      retryable: false,
+    });
+  });
+
   it('raises the legacy 1inch minReturnAmount to the approved execution floor', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),
@@ -172,7 +454,7 @@ describe('take write submission', () => {
     sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
     sinon
       .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
-      .resolves({ data: '0xdeadbeef' } as any);
+      .resolves({ success: true, data: '0xdeadbeef' } as any);
     sinon
       .stub(DexRouter.prototype, 'getRouter')
       .returns('0x00000000000000000000000000000000000000cc');
@@ -181,7 +463,7 @@ describe('take write submission', () => {
       swapDescription: {
         srcToken: '0x0000000000000000000000000000000000000002',
         dstToken: '0x0000000000000000000000000000000000000003',
-        srcReceiver: '0x0000000000000000000000000000000000000000',
+        srcReceiver: '0x00000000000000000000000000000000000000cc',
         dstReceiver: '0x00000000000000000000000000000000000000bb',
         amount: ethers.utils.parseEther('1'),
         minReturnAmount: BigNumber.from(900),
@@ -248,8 +530,181 @@ describe('take write submission', () => {
     expect(decoded[0][1][5].toString()).to.equal('1100');
   });
 
+  it('rejects legacy 1inch swap data before gas estimation when fresh dstAmount is below the execution floor', async () => {
+    const readSigner = {
+      getChainId: sinon.stub().resolves(1),
+    };
+    const keeperTaker = {
+      address: '0x00000000000000000000000000000000000000bb',
+      estimateGas: {
+        takeWithAtomicSwap: sinon.stub(),
+      },
+      populateTransaction: {
+        takeWithAtomicSwap: sinon.stub(),
+      },
+    };
+
+    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
+    sinon.stub(DexRouter.prototype, 'getSwapDataFromOneInch').resolves({
+      success: true,
+      data: '0xdeadbeef',
+      dstAmount: '1000',
+    } as any);
+    sinon
+      .stub(DexRouter.prototype, 'getRouter')
+      .returns('0x00000000000000000000000000000000000000cc');
+    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').returns({
+      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
+      swapDescription: {
+        srcToken: '0x0000000000000000000000000000000000000002',
+        dstToken: '0x0000000000000000000000000000000000000003',
+        srcReceiver: '0x00000000000000000000000000000000000000cc',
+        dstReceiver: '0x00000000000000000000000000000000000000bb',
+        amount: ethers.utils.parseEther('1'),
+        minReturnAmount: BigNumber.from(900),
+        flags: BigNumber.from(0),
+      },
+      opaqueData: '0x1234',
+    } as any);
+    sinon.stub(shared, 'getQuoteAmountDueRaw').resolves(BigNumber.from(950));
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+    const queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction');
+
+    const result = await takeLiquidation({
+      pool: {
+        name: 'Legacy Take Pool',
+        poolAddress: '0x0000000000000000000000000000000000000001',
+        collateralAddress: '0x0000000000000000000000000000000000000002',
+        quoteAddress: '0x0000000000000000000000000000000000000003',
+      } as any,
+      poolConfig: {
+        name: 'Legacy Take Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.95,
+        },
+      },
+      signer: readSigner as any,
+      liquidation: {
+        borrower: '0xBorrower',
+        hpbIndex: 0,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+        isTakeable: true,
+        isArbTakeable: false,
+        externalTakeQuoteEvaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(1000),
+          approvedMinOutRaw: BigNumber.from(1100),
+        },
+      },
+      config: {
+        dryRun: false,
+        delayBetweenActions: 0,
+        connectorTokens: [],
+        oneInchRouters: {
+          1: '0x00000000000000000000000000000000000000cc',
+        },
+        keeperTaker: '0x00000000000000000000000000000000000000dd',
+      },
+    });
+
+    expect(result).to.equal(false);
+    expect(queueTransactionStub.called).to.be.false;
+    expect(keeperTaker.estimateGas.takeWithAtomicSwap.called).to.be.false;
+  });
+
+  it('records legacy 1inch swap-data validation failures before clearing the circuit', async () => {
+    const readSigner = {
+      getChainId: sinon.stub().resolves(1),
+    };
+    const keeperTaker = {
+      address: '0x00000000000000000000000000000000000000bb',
+      estimateGas: {
+        takeWithAtomicSwap: sinon.stub(),
+      },
+      populateTransaction: {
+        takeWithAtomicSwap: sinon.stub(),
+      },
+    };
+
+    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
+    sinon.stub(DexRouter.prototype, 'getSwapDataFromOneInch').resolves({
+      success: true,
+      data: '0xdeadbeef',
+      dstAmount: '1200',
+    } as any);
+    sinon
+      .stub(DexRouter.prototype, 'getRouter')
+      .returns('0x00000000000000000000000000000000000000cc');
+    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').returns({
+      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
+      swapDescription: {
+        srcToken: '0x0000000000000000000000000000000000000002',
+        dstToken: '0x0000000000000000000000000000000000000003',
+        srcReceiver: '0x00000000000000000000000000000000000000cc',
+        dstReceiver: '0x00000000000000000000000000000000000000ff',
+        amount: ethers.utils.parseEther('1'),
+        minReturnAmount: BigNumber.from(900),
+        flags: BigNumber.from(0),
+      },
+      opaqueData: '0x1234',
+    } as any);
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+    const queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction');
+    const onOneInchSwapDataResult = sinon.stub();
+
+    const result = await takeLiquidation({
+      pool: {
+        name: 'Legacy Take Pool',
+        poolAddress: '0x0000000000000000000000000000000000000001',
+        collateralAddress: '0x0000000000000000000000000000000000000002',
+        quoteAddress: '0x0000000000000000000000000000000000000003',
+      } as any,
+      poolConfig: {
+        name: 'Legacy Take Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.95,
+        },
+      },
+      signer: readSigner as any,
+      liquidation: {
+        borrower: '0xBorrower',
+        hpbIndex: 0,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+        isTakeable: true,
+        isArbTakeable: false,
+        externalTakeQuoteEvaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(1000),
+          approvedMinOutRaw: BigNumber.from(900),
+        },
+      },
+      config: {
+        dryRun: false,
+        delayBetweenActions: 0,
+        connectorTokens: [],
+        oneInchRouters: {
+          1: '0x00000000000000000000000000000000000000cc',
+        },
+        keeperTaker: '0x00000000000000000000000000000000000000dd',
+        onOneInchSwapDataResult,
+      },
+    });
+
+    expect(result).to.equal(false);
+    expect(onOneInchSwapDataResult.calledOnce).to.be.true;
+    expect(onOneInchSwapDataResult.firstCall.args[0]).to.include({
+      success: false,
+      retryable: false,
+    });
+    expect(queueTransactionStub.called).to.be.false;
+    expect(keeperTaker.estimateGas.takeWithAtomicSwap.called).to.be.false;
+  });
+
   it('uses the configured take write transport for Curve factory take submission without reselecting the pool', async () => {
-    const clock = sinon.useFakeTimers();
     const readSigner = {};
     const writeSigner = {
       getAddress: sinon
@@ -307,7 +762,7 @@ describe('take write submission', () => {
       'resolvePoolSelection'
     );
 
-    const curveTakePromise = executeCurveFactoryTake({
+    await executeCurveFactoryTake({
       pool: {
         name: 'Factory Curve Pool',
         poolAddress: '0x0000000000000000000000000000000000000011',
@@ -357,9 +812,6 @@ describe('take write submission', () => {
         takeWriteTransport: takeWriteTransport as any,
       },
     });
-    await clock.tickAsync(2000);
-    await curveTakePromise;
-    clock.restore();
 
     expect(initializeStub.called).to.be.false;
     expect(resolvePoolSelectionStub.called).to.be.false;

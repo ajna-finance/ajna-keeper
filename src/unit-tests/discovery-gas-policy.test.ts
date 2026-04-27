@@ -73,6 +73,181 @@ describe('Discovery Gas Policy', () => {
     expect(oneInchQuoteStub.calledTwice).to.be.true;
   });
 
+  it('passes the configured 1inch timeout to gas quote conversions', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('1', 6).toString(),
+      });
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+            oneInchQuoteTimeoutMs: 750,
+          },
+        },
+        oneInchRouters: {
+          1: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+        oneInchQuoteTimeoutMs: 750,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 1,
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(oneInchQuoteStub.firstCall.args[4]).to.deep.equal({
+      timeoutMs: 750,
+    });
+  });
+
+  it('ceil-rounds gas quote apportionment and quotes gas plus native profit in one request', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const gasPrice = BigNumber.from(1);
+    const gasLimit = BigNumber.from(100000);
+    const gasCostNativeRaw = gasPrice.mul(gasLimit);
+    const minProfitNativeRaw = ethers.utils.parseEther('1');
+    const combinedNativeRaw = gasCostNativeRaw.add(minProfitNativeRaw);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .callsFake(async (_chainId, amountIn: BigNumber) => {
+        expect(amountIn.eq(combinedNativeRaw)).to.be.true;
+        return {
+          success: true,
+          dstAmount: '1',
+        };
+      });
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 1,
+            minProfitNative: minProfitNativeRaw.toString(),
+          },
+        },
+        oneInchRouters: {
+          1: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(gasPrice),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 1,
+        minProfitNative: minProfitNativeRaw.toString(),
+      },
+      gasLimit,
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice,
+      rpcCache: {
+        chainId: 1,
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(1)).to.be.true;
+    expect(result.minProfitNativeQuoteRaw?.eq(0)).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+  });
+
+  it('rejects zero-output 1inch gas quote conversions', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .resolves({
+        success: true,
+        dstAmount: '0',
+      });
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        oneInchRouters: {
+          1: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 1,
+      },
+    });
+
+    expect(result.approved).to.be.false;
+    expect(result.reason).to.equal('failed to quote gas cost into quote token');
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+  });
+
   it('uses the cached discovery chainId instead of calling signer.getChainId per evaluation', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const oneInchQuoteStub = sinon
@@ -183,6 +358,66 @@ describe('Discovery Gas Policy', () => {
 
     expect(result.approved).to.be.true;
     expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1.3', 6))).to.be
+      .true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+  });
+
+  it('uses configured L2 gas buffer basis points', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const gasPrice = ethers.utils.parseUnits('1', 'gwei');
+    const gasLimit = BigNumber.from(900000);
+    const bufferedGasCostNativeRaw = gasPrice
+      .mul(gasLimit)
+      .mul(20000)
+      .add(9999)
+      .div(10000);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .callsFake(async (_chainId, amountIn: BigNumber) => ({
+        success: true,
+        dstAmount: amountIn.eq(bufferedGasCostNativeRaw)
+          ? ethers.utils.parseUnits('2', 6).toString()
+          : ethers.utils.parseUnits('1', 6).toString(),
+      }));
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(8453),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 3,
+          },
+        },
+        oneInchRouters: {
+          8453: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(gasPrice),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 3,
+        l2GasCostBufferBasisPoints: 20_000,
+      },
+      gasLimit,
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice,
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('2', 6))).to.be
       .true;
     expect(oneInchQuoteStub.calledOnce).to.be.true;
   });
@@ -350,6 +585,79 @@ describe('Discovery Gas Policy', () => {
     expect(oneInchQuoteStub.called).to.be.false;
     expect(uniswapAvailabilityStub.called).to.be.true;
     expect(uniswapPoolExistsStub.calledOnce).to.be.true;
+    expect(uniswapQuoteStub.calledOnce).to.be.true;
+  });
+
+  it('skips 1inch gas quote conversion while the quote circuit is open', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const oneInchQuoteStub = sinon.stub(
+      DexRouter.prototype,
+      'getQuoteFromOneInch'
+    );
+    sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+    sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
+    const uniswapQuoteStub = sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('2', 6).toString(),
+      } as any);
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(8453),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+            oneInchQuoteFailureCooldownMs: 30_000,
+            oneInchQuoteFailureThreshold: 2,
+          },
+        },
+        oneInchRouters: {
+          8453: '0x1111111111111111111111111111111111111111',
+        },
+        universalRouterOverrides: {
+          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+          poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+        oneInchQuoteFailureCooldownMs: 30_000,
+        oneInchQuoteFailureThreshold: 2,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 8453,
+        oneInchQuoteCircuit: {
+          failures: 2,
+          cooldownUntilMs: Date.now() + 30_000,
+        },
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(oneInchQuoteStub.called).to.be.false;
     expect(uniswapQuoteStub.calledOnce).to.be.true;
   });
 
@@ -558,7 +866,7 @@ describe('Discovery Gas Policy', () => {
     expect(sushiQuoteStub.firstCall.args[3]).to.equal(100);
   });
 
-  it('quotes minProfitNative as a fresh exact native amount separate from gas cost', async () => {
+  it('quotes gas cost and minProfitNative together when no quote gas cap is configured', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const gasCostNativeRaw = ethers.utils.parseUnits('1', 'gwei').mul(900000);
     const bufferedGasCostNativeRaw = gasCostNativeRaw
@@ -566,13 +874,15 @@ describe('Discovery Gas Policy', () => {
       .add(9999)
       .div(10000);
     const minProfitNative = ethers.utils.parseEther('0.01');
+    const combinedNativeRaw = bufferedGasCostNativeRaw.add(minProfitNative);
+    const combinedQuoteRaw = ethers.utils.parseUnits('21', 6);
     const oneInchQuoteStub = sinon
       .stub(DexRouter.prototype, 'getQuoteFromOneInch')
       .callsFake(async (_chainId, amountIn: BigNumber) => ({
         success: true,
-        dstAmount: amountIn.eq(bufferedGasCostNativeRaw)
-          ? ethers.utils.parseUnits('1', 6).toString()
-          : ethers.utils.parseUnits('20', 6).toString(),
+        dstAmount: amountIn.eq(combinedNativeRaw)
+          ? combinedQuoteRaw.toString()
+          : ethers.utils.parseUnits('999', 6).toString(),
       }));
 
     const result = await evaluateGasPolicy({
@@ -616,10 +926,12 @@ describe('Discovery Gas Policy', () => {
     });
 
     expect(result.approved).to.be.true;
-    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to.be
-      .true;
-    expect(result.minProfitNativeQuoteRaw?.eq(ethers.utils.parseUnits('20', 6)))
-      .to.be.true;
-    expect(oneInchQuoteStub.calledTwice).to.be.true;
+    expect(
+      result.gasCostQuoteRaw
+        ?.add(result.minProfitNativeQuoteRaw ?? BigNumber.from(0))
+        .eq(combinedQuoteRaw)
+    ).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(oneInchQuoteStub.firstCall.args[1].eq(combinedNativeRaw)).to.be.true;
   });
 });

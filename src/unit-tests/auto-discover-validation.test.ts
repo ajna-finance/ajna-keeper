@@ -60,7 +60,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires discoveredDefaults.take.liquiditySource to be ONEINCH'
+      'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires an enabled 1inch external take path'
     );
   });
 
@@ -82,6 +82,195 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('accepts hybrid 1inch plus factory autodiscover take paths', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+      validateRouteDeployments: true,
+      dexGasOverrides: {
+        [LiquiditySource.ONEINCH]: '900000',
+        [LiquiditySource.UNISWAPV3]: '900000',
+      },
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('validates optional 1inch aggregation executor allowlists', () => {
+    const config = baseConfig();
+    config.oneInchAggregationExecutorAllowlist = {
+      1: ['0x1111111111111111111111111111111111111111'],
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+
+    config.oneInchAggregationExecutorAllowlist = {
+      1: [
+        '0x1111111111111111111111111111111111111111',
+        '0x1111111111111111111111111111111111111111',
+      ],
+    };
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'oneInchAggregationExecutorAllowlist.1 cannot contain duplicate addresses'
+    );
+
+    config.oneInchAggregationExecutorAllowlist = {
+      1: ['not-an-address'],
+    };
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'oneInchAggregationExecutorAllowlist.1 contains invalid address not-an-address'
+    );
+
+    config.oneInchAggregationExecutorAllowlist = {
+      '01': ['0x1111111111111111111111111111111111111111'],
+    } as any;
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'oneInchAggregationExecutorAllowlist entries must use canonical positive integer chain ID keys'
+    );
+
+    config.oneInchAggregationExecutorAllowlist = {
+      1: Array.from(
+        { length: 65 },
+        (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`
+      ),
+    };
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'oneInchAggregationExecutorAllowlist.1 cannot contain more than 64 addresses'
+    );
+  });
+
+  it('validates hybrid probe timeout and route selection mode', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+      validateRouteDeployments: true,
+      externalTakeProbeTimeoutMs: 1500,
+      externalTakeRouteSelectionMode: 'factory_first',
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+
+    config.autoDiscover!.take.externalTakeRouteSelectionMode = 'cost_aware';
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+
+    (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 0;
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be an integer between 1 and 10000'
+    );
+
+    (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 1500;
+    (config.autoDiscover!.take as any).externalTakeRouteSelectionMode =
+      'fastest';
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit, factory_first, or deprecated cost_aware'
+    );
+  });
+
+  it('requires quote-denominated gas conversion config for hybrid route ranking', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+      validateRouteDeployments: true,
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+    config.universalRouterOverrides = {
+      ...config.universalRouterOverrides!,
+      wethAddress: undefined as unknown as string,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: hybrid external take route ranking requires a configured wrapped native token address'
+    );
+  });
+
+  it('requires deployment preflight for hybrid oneinch plus factory defaults', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
+    );
+  });
+
+  it('requires the factory allowlist to include the default hybrid factory source', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+      validateRouteDeployments: true,
+    };
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.keeperTaker = '0x1234567890123456789012345678901234567890';
+    config.oneInchRouters = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+    config.takerContracts = {
+      UniswapV3: '0x3333333333333333333333333333333333333333',
+      SushiSwap: '0x4444444444444444444444444444444444444444',
+    };
+    config.sushiswapRouterOverrides = {
+      swapRouterAddress: '0x5555555555555555555555555555555555555555',
+      factoryAddress: '0x7777777777777777777777777777777777777777',
+      quoterV2Address: '0x1212121212121212121212121212121212121212',
+      wethAddress: '0x4200000000000000000000000000000000000006',
+      defaultFeeTier: 500,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: allowedLiquiditySources must include the effective default factory liquidity source'
+    );
   });
 
   it('rejects non-finite and non-number take thresholds', () => {
@@ -124,7 +313,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: maxPoolsPerRun must be greater than 0'
+      'AutoDiscoverConfig.take: maxPoolsPerRun must be a positive integer'
     );
 
     config.autoDiscover!.take = false;
@@ -138,6 +327,198 @@ describe('auto-discover validation', () => {
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.settlement: maxGasCostNative cannot be negative'
+    );
+  });
+
+  it('validates hot-auction cache and gas control policy values', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      hotAuctionCandidateTtlMs: -1,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: hotAuctionCandidateTtlMs cannot be negative'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      maxHotAuctionCandidates: 0,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxHotAuctionCandidates must be a positive integer'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      l1GasPriceFreshnessTtlMs: -1,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: l1GasPriceFreshnessTtlMs cannot be negative'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      l2GasCostBufferBasisPoints: 9_999,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: l2GasCostBufferBasisPoints must be an integer between 10000 and 30000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      gasPriceDriftToleranceBasisPoints: -1,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 5000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      gasPriceDriftToleranceBasisPoints: 5_001,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 5000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      oneInchQuoteTimeoutMs: 0,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be an integer between 1 and 10000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      oneInchQuoteTimeoutMs: 10_001,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be an integer between 1 and 10000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      externalTakeProbeTimeoutMs: 10_001,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be an integer between 1 and 10000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      oneInchQuoteFailureCooldownMs: 0,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: oneInchQuoteFailureCooldownMs must be greater than 0'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      oneInchQuoteFailureThreshold: 1.5,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: oneInchQuoteFailureThreshold must be an integer between 1 and 100'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      validateRouteDeployments: 'yes' as unknown as boolean,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: validateRouteDeployments must be a boolean'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      takeQuoteBudgetPerRun: 1.5,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be a positive integer'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      takeRouteQuoteBudgetPerCandidate: 0.5,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be a positive integer'
+    );
+  });
+
+  it('validates external take write transport policy', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      externalTakeTransportPolicy: 'strict' as any,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeTransportPolicy must be allow_public, prefer_private_or_relay, or require_private_or_relay'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      externalTakeTransportPolicy: 'require_private_or_relay',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeTransportPolicy=require_private_or_relay requires takeWrite private_rpc, relay, or takeWriteRpcUrl'
+    );
+
+    config.takeWrite = {
+      mode: TakeWriteTransportMode.PRIVATE_RPC,
+      rpcUrl: 'http://private-rpc',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+
+    delete config.takeWrite;
+    config.dryRun = true;
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('validates allowed external take path names, empties, and duplicates', () => {
+    const config = baseConfig();
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: [] as any,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: allowedExternalTakePaths must be non-empty'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'bogus'] as any,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch and factory'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['factory', 'factory'] as any,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: allowedExternalTakePaths cannot contain duplicates'
     );
   });
 

@@ -407,7 +407,9 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 #### Configuring for 1inch
 
-To enable 1inch swaps, you need to set up environment variables and add specific fields to config.ts. Also be sure to set `delayBetweenActions` to 1 second or greater to avoid 1inch API rate limiting.
+To enable 1inch swaps, set up environment variables and add the 1inch router fields to config.ts. For discovered external takes, keep `delayBetweenActions` low and use `autoDiscover.take.oneInchQuoteTimeoutMs` plus the 1inch failure cooldown to bound API latency. Long `delayBetweenActions` values are only appropriate for slow legacy/manual 1inch operation.
+
+Atomic 1inch takes validate the decoded swap payload before submission. The payload must swap the pool collateral token to the pool quote token, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured 1inch router or the decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `oneInchAggregationExecutorAllowlist` per chain to hard-restrict executors. If 1inch starts returning required non-zero flags for a target pair, use factory routing for that pool or open an issue before loosening this guard.
 
 If you want take transactions to go through a dedicated private/write path, set
 `takeWrite` in your keeper config:
@@ -475,7 +477,11 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 - Can add `candidateFeeTiers` to probe other deployed pools for the same token pair
 - Applies the selected quote route to execution, including the selected fee tier
 - Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
+- Quotes budget-approved factory routes with bounded parallelism, then ranks them deterministically by expected net profit
 - Treats `allowedLiquiditySources`, when set, as the complete factory route allowlist. Include the default source in that list if it should remain eligible.
+- Can compare the best factory route against 1inch when `autoDiscover.take.allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`.
+- In hybrid mode, `externalTakeProbeTimeoutMs` bounds each 1inch/factory path probe so one slow route cannot block another viable route. Values above 5000ms are allowed for slow infrastructure, but they directly trade hot-auction latency for provider tolerance.
+- Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` to probe factory first and skip 1inch when the factory path is already approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
 - A low `takeRouteQuoteBudgetPerCandidate` reduces quote latency but can miss a more profitable route that was not probed.
 - No per-pool external-take fee override today
 - Change requires updating config and restarting the keeper
@@ -569,9 +575,18 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
-- Dynamic `allowedLiquiditySources` is factory-only in this PR. Use it only when `discoveredDefaults.take.liquiditySource` is `UNISWAPV3`, `SUSHISWAP`, or `CURVE`; when set, it is the complete factory route allowlist. 1inch remains a single-source aggregator path and is not compared against factory DEX routes by this selector.
+- `allowedExternalTakePaths: ['oneinch', 'factory']` enables top-level comparison between the 1inch aggregator path and the best factory path. If omitted, autodiscover preserves the legacy single-path behavior from `discoveredDefaults.take.liquiditySource`.
+- `allowedLiquiditySources` remains factory-only. Use it to restrict factory route selection to `UNISWAPV3`, `SUSHISWAP`, and/or `CURVE`; when set, it is the complete factory route allowlist and cannot include `ONEINCH`.
+- If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the factory taker path before hot loops begin.
+- Hybrid 1inch-plus-factory ranking requires a configured native-to-quote gas conversion path and wrapped native token address, because the keeper compares route net profit instead of gross quote output.
+- `externalTakeProbeTimeoutMs` bounds each hybrid path probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values above 5000ms are accepted, but should only be used when avoiding provider false-negatives is more important than tight take-loop latency. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a factory path is approved. `'cost_aware'` is still accepted for migration but should be replaced with `'factory_first'`.
 - `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
-- On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token.
+- Once an auction has appeared in subgraph discovery, the keeper keeps it in a short-lived hot-auction cache so fast take loops can keep probing it even if a later subgraph refresh temporarily omits it. Tune with `autoDiscover.take.hotAuctionCandidateTtlMs` and `autoDiscover.take.maxHotAuctionCandidates`; set the TTL to `0` to disable the cache.
+- On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token. Override with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed gas costs.
+- Gas-price freshness defaults are short for take profitability checks: 5 seconds on L1 and 15 seconds on common L2s. Override with `autoDiscover.take.l1GasPriceFreshnessTtlMs` and `autoDiscover.take.l2GasPriceFreshnessTtlMs` if your RPC conditions require it.
+- `autoDiscover.take.gasPriceDriftToleranceBasisPoints` optionally forces final pre-submission reapproval when the current gas price has drifted materially from the evaluation snapshot.
+- For live discovered external takes, `autoDiscover.take.externalTakeTransportPolicy` can be `allow_public`, `prefer_private_or_relay`, or `require_private_or_relay`. Use `require_private_or_relay` only when `takeWrite` is configured for `private_rpc` or `relay`; dry runs skip write submission but still warn if no private/relay transport is configured.
+- `autoDiscover.take.validateRouteDeployments: true` enables startup preflight checks for enabled external-take routers, takers, factory registry entries, and configured Curve pools.
 - `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.
 
 For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).
@@ -824,6 +839,9 @@ const config: KeeperConfig = {
     },
     defaultSlippage: 1.0,
     wethAddress: '0x4200000000000000000000000000000000000006',
+    // Optional: leave unset/0 for lowest-latency execution.
+    // Set only if a chain/provider needs extra Curve state propagation time.
+    executionDelayMs: 0,
   },
   // Required: Token symbol to address mapping
   tokenAddresses: {
@@ -886,6 +904,7 @@ curveRouterOverrides: {
   },
   defaultSlippage: 1.0, // 1% for stable, 2-4% for crypto pairs
   wethAddress: '0x4200000000000000000000000000000000000006',
+  executionDelayMs: 0, // Optional; keep 0 unless production testing shows a Curve propagation delay is needed
 }
 ```
 

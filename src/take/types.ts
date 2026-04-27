@@ -1,5 +1,10 @@
 import { BigNumber } from 'ethers';
-import { CurvePoolType, LiquiditySource, TakeSettings } from '../config';
+import {
+  CurvePoolType,
+  ExternalTakePathKind,
+  LiquiditySource,
+  TakeSettings,
+} from '../config';
 
 export interface RouteProfitabilityBreakdown {
   auctionRepayRequirementQuoteRaw?: BigNumber;
@@ -12,6 +17,12 @@ export interface RouteProfitabilityBreakdown {
   requiredOutputFloorQuoteRaw?: BigNumber;
   expectedNetProfitQuoteRaw?: BigNumber;
   surplusOverFloorQuoteRaw?: BigNumber;
+  routeGasLimit?: BigNumber;
+  gasPriceWei?: BigNumber;
+  gasPriceGwei?: number;
+  gasPriceAgeMs?: number;
+  gasPriceFreshnessTtlMs?: number;
+  l2GasCostBufferBasisPoints?: number;
   gasPolicyEvaluatedAt?: number;
 }
 
@@ -20,7 +31,11 @@ export interface TakeActionConfig {
   take: TakeSettings;
 }
 
-export type ExternalTakeStrategyKind = 'none' | 'oneinch' | 'factory';
+export type ExternalTakeStrategyKind =
+  | 'none'
+  | 'oneinch'
+  | 'factory'
+  | 'hybrid';
 
 export interface TakeBorrowerCandidate {
   borrower: string;
@@ -28,15 +43,24 @@ export interface TakeBorrowerCandidate {
 
 export interface ExternalTakeQuoteEvaluation {
   isTakeable: boolean;
+  externalTakePath?: ExternalTakePathKind;
   marketPrice?: number;
   takeablePrice?: number;
   quoteAmount?: number;
   quoteAmountRaw?: BigNumber;
+  quoteFailureRetryable?: boolean;
+  quoteFailureCode?: number | string;
   selectedLiquiditySource?: LiquiditySource;
   selectedFeeTier?: number;
+  routeMinOutRaw?: BigNumber;
+  profitMinOutRaw?: BigNumber;
   approvedMinOutRaw?: BigNumber;
   routeProfitability?: RouteProfitabilityBreakdown;
   collateralAmount?: number;
+  quotedAuctionPriceWad?: BigNumber;
+  quotedCollateralWad?: BigNumber;
+  auctionIdentity?: string;
+  fallbackExternalTakeQuoteEvaluations?: ExternalTakeQuoteEvaluation[];
   curvePool?: {
     address: string;
     poolType: CurvePoolType;

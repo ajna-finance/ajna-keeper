@@ -82,9 +82,16 @@ const config: KeeperConfig = {
       // If discoveredDefaults.take enables factory external takes later, import
       // LiquiditySource and list every factory route that may execute:
       // allowedLiquiditySources: [LiquiditySource.UNISWAPV3, LiquiditySource.SUSHISWAP],
+      // To compare 1inch against the best factory route for discovered takes:
+      // allowedExternalTakePaths: ['oneinch', 'factory'],
+      // defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      // externalTakeProbeTimeoutMs: 2_000,
+      // externalTakeRouteSelectionMode: 'factory_first', // lower 1inch API use, can skip a better 1inch route
       // takeRouteQuoteBudgetPerCandidate: 2,
       // minProfitNative: '1000000000000000', // 0.001 ETH minimum net profit
       // dexGasOverrides: { [LiquiditySource.SUSHISWAP]: '700000' },
+      // validateRouteDeployments: true,
+      // gasPriceDriftToleranceBasisPoints: 2_000,
     },
     settlement: {
       enabled: true,

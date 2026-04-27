@@ -206,9 +206,7 @@ export class SushiSwapQuoteProvider {
         tokenB,
         fee,
         exists,
-        exists || poolAddress === ethers.constants.AddressZero
-          ? POOL_EXISTS_CACHE_TTL_MS
-          : UNINITIALIZED_POOL_CACHE_TTL_MS
+        exists ? POOL_EXISTS_CACHE_TTL_MS : UNINITIALIZED_POOL_CACHE_TTL_MS
       );
 
       if (exists) {

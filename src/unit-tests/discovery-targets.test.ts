@@ -5,6 +5,7 @@ import {
   buildDiscoveredTakeTargets,
   clearSharedDiscoveryScans,
   ensurePoolLoaded,
+  HotAuctionCandidateCache,
   validateResolvedSettlementTarget,
   validateResolvedTakeTarget,
 } from '../discovery/targets';
@@ -94,10 +95,9 @@ describe('Discovery Target Resolution', () => {
 
     expect(targets).to.have.length(1);
     expect(targets[0].candidates).to.have.length(2);
-    expect(targets[0].candidates.map((candidate) => candidate.borrower)).to.deep.equal([
-      '0xBorrowerB',
-      '0xBorrowerA',
-    ]);
+    expect(
+      targets[0].candidates.map((candidate) => candidate.borrower)
+    ).to.deep.equal(['0xBorrowerB', '0xBorrowerA']);
   });
 
   it('respects per-action manual overrides while allowing missing actions to fall back to discovered defaults', async () => {
@@ -244,16 +244,20 @@ describe('Discovery Target Resolution', () => {
     const settlementTargets = await buildDiscoveredSettlementTargets(config);
 
     const configuredTakeTarget = takeTargets.find(
-      (target) => target.poolAddress === '0x2222222222222222222222222222222222222222'
+      (target) =>
+        target.poolAddress === '0x2222222222222222222222222222222222222222'
     );
     const newTakeTarget = takeTargets.find(
-      (target) => target.poolAddress === '0x4444444444444444444444444444444444444444'
+      (target) =>
+        target.poolAddress === '0x4444444444444444444444444444444444444444'
     );
     const configuredSettlementTarget = settlementTargets.find(
-      (target) => target.poolAddress === '0x2222222222222222222222222222222222222222'
+      (target) =>
+        target.poolAddress === '0x2222222222222222222222222222222222222222'
     );
     const newSettlementTarget = settlementTargets.find(
-      (target) => target.poolAddress === '0x4444444444444444444444444444444444444444'
+      (target) =>
+        target.poolAddress === '0x4444444444444444444444444444444444444444'
     );
 
     expect(configuredTakeTarget?.dryRun).to.equal(false);
@@ -292,9 +296,9 @@ describe('Discovery Target Resolution', () => {
     expect(
       hydrationCooldowns.has('0x1111111111111111111111111111111111111111')
     ).to.equal(true);
-    expect(
-      loggerErrorStub.firstCall.args[0]
-    ).to.include('Failed to hydrate discovered pool 0x1111111111111111111111111111111111111111');
+    expect(loggerErrorStub.firstCall.args[0]).to.include(
+      'Failed to hydrate discovered pool 0x1111111111111111111111111111111111111111'
+    );
   });
 
   it('returns no discovered targets when the chain-wide query is empty', async () => {
@@ -303,10 +307,133 @@ describe('Discovery Target Resolution', () => {
     });
 
     const takeTargets = await buildDiscoveredTakeTargets(BASE_CONFIG);
-    const settlementTargets = await buildDiscoveredSettlementTargets(BASE_CONFIG);
+    const settlementTargets =
+      await buildDiscoveredSettlementTargets(BASE_CONFIG);
 
     expect(takeTargets).to.deep.equal([]);
     expect(settlementTargets).to.deep.equal([]);
+  });
+
+  it('keeps hot take candidates eligible across an empty subgraph refresh until ttl expiry', async () => {
+    const cache = new HotAuctionCandidateCache({
+      ttlMs: 1_000,
+      maxCandidates: 10,
+    });
+    const liquidationAuctions = [
+      {
+        borrower: '0xBorrowerHot',
+        kickTime: '1',
+        debtRemaining: '2',
+        collateralRemaining: '3',
+        neutralPrice: '4',
+        debt: '2',
+        collateral: '3',
+        pool: { id: '0x1111111111111111111111111111111111111111' },
+      },
+    ];
+
+    const firstTargets = await buildDiscoveredTakeTargets(
+      BASE_CONFIG,
+      liquidationAuctions,
+      undefined,
+      {
+        hotAuctionCandidateCache: cache,
+        chainId: 8453,
+        nowMs: 1_000,
+      }
+    );
+    const hotTargets = await buildDiscoveredTakeTargets(
+      BASE_CONFIG,
+      [],
+      undefined,
+      {
+        hotAuctionCandidateCache: cache,
+        chainId: 8453,
+        nowMs: 1_500,
+      }
+    );
+    const expiredTargets = await buildDiscoveredTakeTargets(
+      BASE_CONFIG,
+      [],
+      undefined,
+      {
+        hotAuctionCandidateCache: cache,
+        chainId: 8453,
+        nowMs: 2_001,
+      }
+    );
+
+    expect(firstTargets).to.have.length(1);
+    expect(hotTargets).to.have.length(1);
+    expect(hotTargets[0].candidates[0].borrower).to.equal('0xBorrowerHot');
+    expect(expiredTargets).to.deep.equal([]);
+  });
+
+  it('bounds hot take candidate cache retention by last write', async () => {
+    const cache = new HotAuctionCandidateCache({
+      ttlMs: 10_000,
+      maxCandidates: 1,
+    });
+
+    await buildDiscoveredTakeTargets(
+      BASE_CONFIG,
+      [
+        {
+          borrower: '0xBorrowerOld',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '3',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '3',
+          pool: { id: '0x1111111111111111111111111111111111111111' },
+        },
+      ],
+      undefined,
+      {
+        hotAuctionCandidateCache: cache,
+        chainId: 8453,
+        nowMs: 1_000,
+      }
+    );
+    await buildDiscoveredTakeTargets(
+      BASE_CONFIG,
+      [
+        {
+          borrower: '0xBorrowerNew',
+          kickTime: '2',
+          debtRemaining: '2',
+          collateralRemaining: '3',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '3',
+          pool: { id: '0x2222222222222222222222222222222222222222' },
+        },
+      ],
+      undefined,
+      {
+        hotAuctionCandidateCache: cache,
+        chainId: 8453,
+        nowMs: 2_000,
+      }
+    );
+
+    const hotTargets = await buildDiscoveredTakeTargets(
+      BASE_CONFIG,
+      [],
+      undefined,
+      {
+        hotAuctionCandidateCache: cache,
+        chainId: 8453,
+        nowMs: 2_500,
+      }
+    );
+
+    expect(hotTargets).to.have.length(1);
+    expect(hotTargets[0].poolAddress).to.equal(
+      '0x2222222222222222222222222222222222222222'
+    );
+    expect(hotTargets[0].candidates[0].borrower).to.equal('0xBorrowerNew');
   });
 
   it('reuses the same chain-wide discovery scan across take and settlement builders', async () => {
@@ -441,9 +568,9 @@ describe('Discovery Target Resolution', () => {
     expect(targets[0].poolAddress).to.equal(
       '0x1111111111111111111111111111111111111111'
     );
-    expect(targets[0].candidates.map((candidate) => candidate.borrower)).to.deep.equal([
-      '0xBorrowerValid',
-    ]);
+    expect(
+      targets[0].candidates.map((candidate) => candidate.borrower)
+    ).to.deep.equal(['0xBorrowerValid']);
   });
 
   it('preserves negative signs when ranking discovered take candidates', async () => {

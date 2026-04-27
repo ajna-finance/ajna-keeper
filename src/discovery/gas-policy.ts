@@ -23,10 +23,18 @@ import {
   DiscoveryRpcCache,
 } from './types';
 import {
+  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
   getCurveQuoteProvider,
   getSushiSwapQuoteProvider,
   getUniswapV3QuoteProvider,
 } from '../take/factory/shared';
+import {
+  DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS,
+  getOneInchCircuitOpenReason,
+  recordOneInchQuoteFailure,
+  recordOneInchQuoteSuccess,
+} from './one-inch-circuit';
+import { withTimeout } from '../utils';
 
 export interface GasPolicyResult {
   approved: boolean;
@@ -34,20 +42,46 @@ export interface GasPolicyResult {
   gasCostQuote: number;
   gasCostQuoteRaw?: BigNumber;
   minProfitNativeQuoteRaw?: BigNumber;
+  gasPriceRaw?: BigNumber;
   gasPriceGwei: number;
+  gasLimit?: BigNumber;
+  l2GasCostBufferBasisPoints?: number;
   quoteTokenDecimals?: number;
   reason?: string;
 }
 
 const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
-const L2_GAS_COST_BUFFER_BASIS_POINTS = BigNumber.from(13_000);
+export const DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS = 13_000;
+export const DEFAULT_L1_DISCOVERY_GAS_PRICE_TTL_MS = 5 * 1000;
+export const DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS = 15 * 1000;
 const L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER = new Set([
   10, 8453, 42161, 11155420, 84532, 421614,
 ]);
+const L2_CHAIN_IDS_WITH_STABLE_GAS = new Set([
+  10, 8453, 42161, 11155420, 84532, 421614,
+]);
+
+export function getDiscoveryGasPriceFreshnessTtlMs(
+  policy?: Pick<
+    AutoDiscoverTakePolicy,
+    'l1GasPriceFreshnessTtlMs' | 'l2GasPriceFreshnessTtlMs'
+  >,
+  chainId?: number
+): number {
+  if (chainId !== undefined && L2_CHAIN_IDS_WITH_STABLE_GAS.has(chainId)) {
+    return (
+      policy?.l2GasPriceFreshnessTtlMs ?? DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS
+    );
+  }
+  return (
+    policy?.l1GasPriceFreshnessTtlMs ?? DEFAULT_L1_DISCOVERY_GAS_PRICE_TTL_MS
+  );
+}
 
 function applyL2GasCostBuffer(
   gasCostNativeRaw: BigNumber,
-  chainId?: number
+  chainId?: number,
+  bufferBasisPoints: number = DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS
 ): BigNumber {
   if (
     chainId === undefined ||
@@ -56,9 +90,62 @@ function applyL2GasCostBuffer(
     return gasCostNativeRaw;
   }
   return gasCostNativeRaw
-    .mul(L2_GAS_COST_BUFFER_BASIS_POINTS)
+    .mul(BigNumber.from(bufferBasisPoints))
     .add(BASIS_POINTS_DENOMINATOR.sub(1))
     .div(BASIS_POINTS_DENOMINATOR);
+}
+
+function ceilDivBigNumber(
+  numerator: BigNumber,
+  denominator: BigNumber
+): BigNumber {
+  return numerator.isZero()
+    ? BigNumber.from(0)
+    : numerator.add(denominator).sub(1).div(denominator);
+}
+
+function apportionCombinedNativeQuote(params: {
+  gasCostNativeRaw: BigNumber;
+  combinedNativeRaw: BigNumber;
+  combinedQuoteRaw: BigNumber;
+}): {
+  gasCostQuoteRaw: BigNumber;
+  minProfitNativeQuoteRaw: BigNumber;
+} {
+  if (params.combinedNativeRaw.isZero()) {
+    return {
+      gasCostQuoteRaw: BigNumber.from(0),
+      minProfitNativeQuoteRaw: BigNumber.from(0),
+    };
+  }
+
+  const rawGasCostQuote = ceilDivBigNumber(
+    params.combinedQuoteRaw.mul(params.gasCostNativeRaw),
+    params.combinedNativeRaw
+  );
+  const gasCostQuoteRaw = rawGasCostQuote.gt(params.combinedQuoteRaw)
+    ? params.combinedQuoteRaw
+    : rawGasCostQuote;
+  return {
+    gasCostQuoteRaw,
+    minProfitNativeQuoteRaw: params.combinedQuoteRaw.sub(gasCostQuoteRaw),
+  };
+}
+
+export function getEffectiveL2GasCostBufferBasisPoints(
+  policy?: Pick<AutoDiscoverTakePolicy, 'l2GasCostBufferBasisPoints'>,
+  chainId?: number
+): number | undefined {
+  if (
+    chainId === undefined ||
+    !L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER.has(chainId)
+  ) {
+    return undefined;
+  }
+  return (
+    policy?.l2GasCostBufferBasisPoints ??
+    DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS
+  );
 }
 
 export function createDiscoveryTransportsForConfig(
@@ -180,22 +267,32 @@ async function quoteFactoryV3GasConversion(params: {
     params.candidateFeeTiers,
     params.fallbackFeeTier
   )) {
-    const poolExists = await params.quoteProvider.poolExists(
-      params.tokenIn,
-      params.tokenOut,
-      feeTier
+    const poolExists = await withTimeout(
+      params.quoteProvider.poolExists(params.tokenIn, params.tokenOut, feeTier),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'factory gas quote pool existence check'
     );
     if (!poolExists) {
       continue;
     }
-    const quoteResult = await params.quoteProvider.getQuote(
-      params.amountIn,
-      params.tokenIn,
-      params.tokenOut,
-      feeTier
+    const quoteResult = await withTimeout(
+      params.quoteProvider.getQuote(
+        params.amountIn,
+        params.tokenIn,
+        params.tokenOut,
+        feeTier
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'factory gas quote'
     );
     if (quoteResult.success && quoteResult.dstAmount) {
       const quote = BigNumber.from(quoteResult.dstAmount);
+      if (quote.isZero()) {
+        logger.debug(
+          `Gas quote conversion returned zero output for ${params.tokenIn}/${params.tokenOut} fee=${feeTier}`
+        );
+        continue;
+      }
       // Use the highest output to conservatively price gas in quote-token terms.
       bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
     }
@@ -260,6 +357,11 @@ async function quoteTokensByLiquiditySource(params: {
   tokenOut: string;
   chainId?: number;
   rpcCache?: DiscoveryRpcCache;
+  oneInchQuoteTimeoutMs?: number;
+  takePolicy?: Pick<
+    AutoDiscoverTakePolicy,
+    'oneInchQuoteFailureCooldownMs' | 'oneInchQuoteFailureThreshold'
+  >;
 }): Promise<BigNumber | undefined> {
   if (params.tokenIn.toLowerCase() === params.tokenOut.toLowerCase()) {
     return params.amountIn;
@@ -274,6 +376,14 @@ async function quoteTokensByLiquiditySource(params: {
     if (!params.config.oneInchRouters?.[chainId]) {
       return undefined;
     }
+    const circuitOpenReason = getOneInchCircuitOpenReason({
+      rpcCache: params.rpcCache,
+      takePolicy: params.takePolicy,
+    });
+    if (circuitOpenReason) {
+      logger.debug(`Skipping 1inch gas quote conversion: ${circuitOpenReason}`);
+      return undefined;
+    }
 
     const dexRouter = new DexRouter(params.signer, {
       oneInchRouters: params.config.oneInchRouters,
@@ -283,12 +393,25 @@ async function quoteTokensByLiquiditySource(params: {
       chainId,
       params.amountIn,
       params.tokenIn,
-      params.tokenOut
+      params.tokenOut,
+      { timeoutMs: params.oneInchQuoteTimeoutMs }
     );
     if (!quoteResult.success || !quoteResult.dstAmount) {
+      if (quoteResult.retryable) {
+        recordOneInchQuoteFailure({
+          rpcCache: params.rpcCache,
+          takePolicy: params.takePolicy,
+        });
+      }
       return undefined;
     }
-    return BigNumber.from(quoteResult.dstAmount);
+    const dstAmount = BigNumber.from(quoteResult.dstAmount);
+    if (dstAmount.isZero()) {
+      logger.debug('1inch gas quote conversion returned zero output');
+      return undefined;
+    }
+    recordOneInchQuoteSuccess(params.rpcCache);
+    return dstAmount;
   }
 
   if (params.liquiditySource === LiquiditySource.UNISWAPV3) {
@@ -364,10 +487,10 @@ async function quoteTokensByLiquiditySource(params: {
     if (!quoteProvider) {
       return undefined;
     }
-    const quoteResult = await quoteProvider.getQuote(
-      params.amountIn,
-      params.tokenIn,
-      params.tokenOut
+    const quoteResult = await withTimeout(
+      quoteProvider.getQuote(params.amountIn, params.tokenIn, params.tokenOut),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'Curve gas quote'
     );
     return quoteResult.success && quoteResult.dstAmount
       ? BigNumber.from(quoteResult.dstAmount)
@@ -388,6 +511,11 @@ async function quoteTokensByGasQuoteSources(params: {
   preferredLiquiditySource?: LiquiditySource;
   rpcCache?: DiscoveryRpcCache;
   gasQuoteCacheKey?: string;
+  oneInchQuoteTimeoutMs?: number;
+  takePolicy?: Pick<
+    AutoDiscoverTakePolicy,
+    'oneInchQuoteFailureCooldownMs' | 'oneInchQuoteFailureThreshold'
+  >;
 }): Promise<
   { amountOut: BigNumber; liquiditySource: LiquiditySource } | undefined
 > {
@@ -402,6 +530,8 @@ async function quoteTokensByGasQuoteSources(params: {
         tokenOut: params.tokenOut,
         chainId: params.chainId,
         rpcCache: params.rpcCache,
+        oneInchQuoteTimeoutMs: params.oneInchQuoteTimeoutMs,
+        takePolicy: params.takePolicy,
       });
       if (amountOut) {
         logGasQuoteFallback({
@@ -430,11 +560,20 @@ export async function evaluateGasPolicy(params: {
     AutoDiscoverActionPolicy,
     'maxGasCostNative' | 'maxGasCostQuote' | 'maxGasPriceGwei'
   > &
-    Pick<AutoDiscoverTakePolicy, 'minExpectedProfitQuote' | 'minProfitNative'>;
+    Pick<
+      AutoDiscoverTakePolicy,
+      | 'minExpectedProfitQuote'
+      | 'minProfitNative'
+      | 'l2GasCostBufferBasisPoints'
+      | 'oneInchQuoteTimeoutMs'
+      | 'oneInchQuoteFailureCooldownMs'
+      | 'oneInchQuoteFailureThreshold'
+    >;
   gasLimit: BigNumber;
   quoteTokenAddress: string;
   preferredLiquiditySource?: LiquiditySource;
   useProfitFloor?: boolean;
+  requireGasCostQuote?: boolean;
   gasPrice?: BigNumber;
   rpcCache?: DiscoveryRpcCache;
   chainId?: number;
@@ -453,13 +592,18 @@ export async function evaluateGasPolicy(params: {
   const gasPrice =
     params.gasPrice ?? (await params.transports.readRpc.getGasPrice());
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
+  const gasResultMetadata = {
+    gasPriceRaw: gasPrice,
+    gasPriceGwei,
+    gasLimit: params.gasLimit,
+  };
   const maxGasPriceGwei = params.policy?.maxGasPriceGwei;
   if (maxGasPriceGwei !== undefined && gasPriceGwei > maxGasPriceGwei) {
     return {
       approved: false,
       gasCostNative: 0,
       gasCostQuote: 0,
-      gasPriceGwei,
+      ...gasResultMetadata,
       reason: `gas price ${gasPriceGwei.toFixed(2)} gwei exceeds maxGasPriceGwei ${maxGasPriceGwei}`,
     };
   }
@@ -468,10 +612,15 @@ export async function evaluateGasPolicy(params: {
     params.chainId ??
     params.rpcCache?.chainId ??
     (await tryResolveSignerChainId(params.signer));
+  const l2GasCostBufferBasisPoints = getEffectiveL2GasCostBufferBasisPoints(
+    params.policy,
+    chainId
+  );
   const unbufferedGasCostNativeRaw = gasPrice.mul(params.gasLimit);
   const gasCostNativeRaw = applyL2GasCostBuffer(
     unbufferedGasCostNativeRaw,
-    chainId
+    chainId,
+    params.policy?.l2GasCostBufferBasisPoints
   );
   if (!gasCostNativeRaw.eq(unbufferedGasCostNativeRaw)) {
     logger.debug(
@@ -485,12 +634,14 @@ export async function evaluateGasPolicy(params: {
       approved: false,
       gasCostNative,
       gasCostQuote: 0,
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
       reason: `estimated gas cost ${gasCostNative.toFixed(6)} exceeds maxGasCostNative ${maxGasCostNative}`,
     };
   }
 
   const requiresGasCostQuote =
+    params.requireGasCostQuote ||
     params.policy?.maxGasCostQuote !== undefined ||
     (params.useProfitFloor &&
       (params.policy?.minExpectedProfitQuote !== undefined ||
@@ -500,7 +651,8 @@ export async function evaluateGasPolicy(params: {
       approved: true,
       gasCostNative,
       gasCostQuote: 0,
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
     };
   }
 
@@ -520,10 +672,13 @@ export async function evaluateGasPolicy(params: {
     preferredLiquiditySource,
     resolvedLiquiditySource: resolvedGasQuoteSource,
   });
+  const oneInchQuoteTimeoutMs =
+    params.policy?.oneInchQuoteTimeoutMs ?? DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS;
 
   const quoteDecimals = await getDecimalsErc20(
     params.signer,
-    params.quoteTokenAddress
+    params.quoteTokenAddress,
+    chainId
   );
 
   if (
@@ -535,7 +690,8 @@ export async function evaluateGasPolicy(params: {
       gasCostNative,
       gasCostQuote: 0,
       gasCostQuoteRaw: BigNumber.from(0),
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
       quoteTokenDecimals: quoteDecimals,
     };
   }
@@ -548,7 +704,8 @@ export async function evaluateGasPolicy(params: {
       approved: false,
       gasCostNative,
       gasCostQuote: 0,
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
       reason: 'no wrapped native token configured for gas cost conversion',
     };
   }
@@ -558,13 +715,20 @@ export async function evaluateGasPolicy(params: {
     tokenOut: params.quoteTokenAddress,
   });
 
+  const maxGasCostQuote = params.policy?.maxGasCostQuote;
+  const minProfitNativeRaw =
+    params.policy?.minProfitNative !== undefined
+      ? BigNumber.from(params.policy.minProfitNative)
+      : undefined;
   let gasCostQuote: number;
   let gasCostQuoteRaw: BigNumber;
+  let minProfitNativeQuoteRaw: BigNumber | undefined;
   if (
     wrappedNativeAddress.toLowerCase() ===
     params.quoteTokenAddress.toLowerCase()
   ) {
     gasCostQuoteRaw = gasCostNativeRaw;
+    minProfitNativeQuoteRaw = minProfitNativeRaw;
     gasCostQuote = Number(
       ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals)
     );
@@ -574,76 +738,87 @@ export async function evaluateGasPolicy(params: {
         approved: false,
         gasCostNative,
         gasCostQuote: 0,
-        gasPriceGwei,
+        ...gasResultMetadata,
+        l2GasCostBufferBasisPoints,
         reason: 'no liquidity source available for gas cost conversion',
       };
     }
 
-    const quotedAmount = await quoteTokensByGasQuoteSources({
-      signer: params.signer,
-      config: params.config,
-      liquiditySources: gasQuoteSourceCandidates,
-      amountIn: gasCostNativeRaw,
-      tokenIn: wrappedNativeAddress,
-      tokenOut: params.quoteTokenAddress,
-      chainId,
-      preferredLiquiditySource,
-      rpcCache: params.rpcCache,
-      gasQuoteCacheKey,
-    });
-    if (!quotedAmount) {
+    const quoteNativeRequirement = async (
+      amountInNative: BigNumber,
+      failureReason: string
+    ): Promise<BigNumber | GasPolicyResult> => {
+      const quotedAmount = await quoteExactNativeAmountToQuote({
+        signer: params.signer,
+        config: params.config,
+        liquiditySources: gasQuoteSourceCandidates,
+        amountInNative,
+        wrappedNativeAddress,
+        quoteTokenAddress: params.quoteTokenAddress,
+        chainId,
+        preferredLiquiditySource,
+        rpcCache: params.rpcCache,
+        gasQuoteCacheKey,
+        oneInchQuoteTimeoutMs,
+        takePolicy: params.policy,
+      });
+      if (quotedAmount !== undefined) {
+        return quotedAmount;
+      }
       return {
         approved: false,
         gasCostNative,
         gasCostQuote: 0,
-        gasPriceGwei,
-        reason: 'failed to quote gas cost into quote token',
+        ...gasResultMetadata,
+        l2GasCostBufferBasisPoints,
+        quoteTokenDecimals: quoteDecimals,
+        reason: failureReason,
       };
+    };
+
+    if (minProfitNativeRaw !== undefined) {
+      const combinedNativeRaw = gasCostNativeRaw.add(minProfitNativeRaw);
+      const combinedQuoteRaw = await quoteNativeRequirement(
+        combinedNativeRaw,
+        'failed to quote gas cost and minProfitNative into quote token'
+      );
+      if (!BigNumber.isBigNumber(combinedQuoteRaw)) {
+        return combinedQuoteRaw;
+      }
+      const apportionedQuote = apportionCombinedNativeQuote({
+        gasCostNativeRaw,
+        combinedNativeRaw,
+        combinedQuoteRaw,
+      });
+      gasCostQuoteRaw = apportionedQuote.gasCostQuoteRaw;
+      minProfitNativeQuoteRaw = apportionedQuote.minProfitNativeQuoteRaw;
+    } else {
+      const quotedGasCostRaw = await quoteNativeRequirement(
+        gasCostNativeRaw,
+        'failed to quote gas cost into quote token'
+      );
+      if (!BigNumber.isBigNumber(quotedGasCostRaw)) {
+        return quotedGasCostRaw;
+      }
+      gasCostQuoteRaw = quotedGasCostRaw;
     }
-    gasCostQuoteRaw = quotedAmount.amountOut;
+
     gasCostQuote = Number(
       ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals)
     );
   }
 
-  const maxGasCostQuote = params.policy?.maxGasCostQuote;
   if (maxGasCostQuote !== undefined && gasCostQuote > maxGasCostQuote) {
     return {
       approved: false,
       gasCostNative,
       gasCostQuote,
       gasCostQuoteRaw,
-      gasPriceGwei,
+      ...gasResultMetadata,
+      l2GasCostBufferBasisPoints,
       quoteTokenDecimals: quoteDecimals,
       reason: `estimated gas cost ${gasCostQuote.toFixed(6)} exceeds maxGasCostQuote ${maxGasCostQuote}`,
     };
-  }
-
-  let minProfitNativeQuoteRaw: BigNumber | undefined;
-  if (params.policy?.minProfitNative !== undefined) {
-    minProfitNativeQuoteRaw = await quoteExactNativeAmountToQuote({
-      signer: params.signer,
-      config: params.config,
-      liquiditySources: gasQuoteSourceCandidates,
-      amountInNative: BigNumber.from(params.policy.minProfitNative),
-      wrappedNativeAddress,
-      quoteTokenAddress: params.quoteTokenAddress,
-      chainId,
-      preferredLiquiditySource,
-      rpcCache: params.rpcCache,
-      gasQuoteCacheKey,
-    });
-    if (minProfitNativeQuoteRaw === undefined) {
-      return {
-        approved: false,
-        gasCostNative,
-        gasCostQuote,
-        gasCostQuoteRaw,
-        gasPriceGwei,
-        quoteTokenDecimals: quoteDecimals,
-        reason: 'failed to quote minProfitNative into quote token',
-      };
-    }
   }
 
   return {
@@ -652,7 +827,8 @@ export async function evaluateGasPolicy(params: {
     gasCostQuote,
     gasCostQuoteRaw,
     minProfitNativeQuoteRaw,
-    gasPriceGwei,
+    ...gasResultMetadata,
+    l2GasCostBufferBasisPoints,
     quoteTokenDecimals: quoteDecimals,
   };
 }
@@ -668,6 +844,11 @@ async function quoteExactNativeAmountToQuote(params: {
   preferredLiquiditySource?: LiquiditySource;
   rpcCache?: DiscoveryRpcCache;
   gasQuoteCacheKey?: string;
+  oneInchQuoteTimeoutMs?: number;
+  takePolicy?: Pick<
+    AutoDiscoverTakePolicy,
+    'oneInchQuoteFailureCooldownMs' | 'oneInchQuoteFailureThreshold'
+  >;
 }): Promise<BigNumber | undefined> {
   if (params.amountInNative.isZero()) {
     return BigNumber.from(0);
@@ -692,6 +873,8 @@ async function quoteExactNativeAmountToQuote(params: {
     preferredLiquiditySource: params.preferredLiquiditySource,
     rpcCache: params.rpcCache,
     gasQuoteCacheKey: params.gasQuoteCacheKey,
+    oneInchQuoteTimeoutMs: params.oneInchQuoteTimeoutMs,
+    takePolicy: params.takePolicy,
   });
   return quotedAmount?.amountOut;
 }

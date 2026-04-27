@@ -12,6 +12,7 @@ import { BigNumber, ethers } from 'ethers';
 import {
   convertSwapApiResponseToDetails,
   encodeOneInchSwapDetailsBytes,
+  validateOneInchSwapDetailsForAtomicTake,
 } from '../dex/one-inch';
 import { AjnaKeeperTaker__factory } from '../../typechain-types';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
@@ -24,10 +25,7 @@ import {
 } from '../read-transports';
 import { handleFactoryTakes } from './factory';
 import * as factoryShared from './factory/shared';
-import {
-  arbTakeLiquidation,
-  checkIfArbTakeable,
-} from './arb';
+import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
@@ -45,6 +43,17 @@ import {
   logSkippedTakeCandidate,
   processTakeCandidates,
 } from './engine';
+import { logTakeExecutionTelemetry } from './execution-telemetry';
+
+const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
+interface VerifiedOneInchChainCheck {
+  provider?: object;
+  pending: Promise<void>;
+}
+const verifiedOneInchChainIds = new WeakMap<
+  object,
+  Map<number, VerifiedOneInchChainCheck>
+>();
 
 type HandleTakeConfigBase = Pick<
   KeeperConfig,
@@ -52,6 +61,7 @@ type HandleTakeConfigBase = Pick<
   | 'delayBetweenActions'
   | 'connectorTokens'
   | 'oneInchRouters'
+  | 'oneInchAggregationExecutorAllowlist'
   | 'keeperTaker'
   | 'keeperTakerFactory'
   | 'takerContracts'
@@ -78,14 +88,35 @@ type OneInchExecutionConfig = Pick<
   | 'delayBetweenActions'
   | 'connectorTokens'
   | 'oneInchRouters'
+  | 'oneInchAggregationExecutorAllowlist'
   | 'keeperTaker'
 > &
-  TakeWriteTransportConfig;
+  TakeWriteTransportConfig & {
+    oneInchRequestTimeoutMs?: number;
+    skipOneInchRateLimitDelay?: boolean;
+    chainId?: number;
+    tokenDecimalsCache?: Map<string, number>;
+    onOneInchSwapDataResult?: (result: {
+      success: boolean;
+      retryable?: boolean;
+      errorCode?: number | string;
+      error?: string;
+    }) => void;
+    onOneInchExecutionFailure?: (result: {
+      preBroadcast: boolean;
+      error?: string;
+    }) => void;
+  };
 
 type OneInchQuoteConfig = Pick<
   KeeperConfig,
   'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'
->;
+> & {
+  oneInchRequestTimeoutMs?: number;
+  skipOneInchRateLimitDelay?: boolean;
+  chainId?: number;
+  tokenDecimalsCache?: Map<string, number>;
+};
 
 function stripExternalTakeSettings(
   poolConfig: RequireFields<PoolConfig, 'take'>
@@ -100,6 +131,86 @@ function stripExternalTakeSettings(
   };
 }
 
+async function getOneInchTokenDecimals(params: {
+  signer: Signer;
+  tokenAddress: string;
+  chainId?: number;
+  cache?: Map<string, number>;
+}): Promise<number> {
+  const cacheKey = `${params.chainId ?? 'unknown'}:${params.tokenAddress.toLowerCase()}`;
+  const cached = params.cache?.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const decimals = await getDecimalsErc20(
+    params.signer,
+    params.tokenAddress,
+    params.chainId
+  );
+  if (params.cache) {
+    params.cache.set(cacheKey, decimals);
+    while (params.cache.size > MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES) {
+      const oldestKey = params.cache.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      params.cache.delete(oldestKey);
+    }
+  }
+  return decimals;
+}
+
+async function assertConfiguredChainIdMatchesSigner(
+  signer: Signer,
+  configuredChainId: number
+): Promise<void> {
+  if (typeof signer !== 'object' || signer === null) {
+    return;
+  }
+  const provider = (signer as { provider?: object }).provider;
+  let signerChecks = verifiedOneInchChainIds.get(signer);
+  if (!signerChecks) {
+    signerChecks = new Map();
+    verifiedOneInchChainIds.set(signer, signerChecks);
+  }
+  const cached = signerChecks.get(configuredChainId);
+  if (cached !== undefined && cached.provider === provider) {
+    await cached.pending;
+    return;
+  }
+
+  const check: VerifiedOneInchChainCheck = {
+    provider,
+    pending: (async () => {
+      const signerChainId = await signer.getChainId();
+      if (signerChainId !== configuredChainId) {
+        throw new Error(
+          `configured 1inch chainId ${configuredChainId} does not match signer chainId ${signerChainId}`
+        );
+      }
+    })(),
+  };
+  signerChecks.set(configuredChainId, check);
+  try {
+    await check.pending;
+  } finally {
+    if (signerChecks.get(configuredChainId) === check) {
+      signerChecks.delete(configuredChainId);
+    }
+  }
+}
+
+async function resolveOneInchChainId(
+  config: Partial<Pick<OneInchQuoteConfig, 'chainId'>>,
+  signer: Signer
+): Promise<number> {
+  if (config.chainId === undefined) {
+    return await signer.getChainId();
+  }
+  await assertConfiguredChainIdMatchesSigner(signer, config.chainId);
+  return config.chainId;
+}
+
 export async function handleTakes({
   signer,
   takeWriteTransport,
@@ -110,7 +221,8 @@ export async function handleTakes({
   const resolvedConfig: HandleTakeConfig = resolveSubgraphConfig(config);
   const dexManager = new SmartDexManager(signer, resolvedConfig);
   const requestedLiquiditySource = poolConfig.take.liquiditySource;
-  const deploymentType = await dexManager.detectDeploymentTypeForPool(poolConfig);
+  const deploymentType =
+    await dexManager.detectDeploymentTypeForPool(poolConfig);
   const validation = await dexManager.validateDeploymentForPool(poolConfig);
 
   logger.debug(
@@ -122,7 +234,9 @@ export async function handleTakes({
 
   switch (deploymentType) {
     case 'single':
-      logger.debug(`Using single contract (1inch) take handler for pool: ${pool.name}`);
+      logger.debug(
+        `Using single contract (1inch) take handler for pool: ${pool.name}`
+      );
       await handleLegacyOrArbTakes({
         signer,
         takeWriteTransport,
@@ -133,7 +247,9 @@ export async function handleTakes({
       break;
 
     case 'factory':
-      logger.debug(`Using factory (multi-DEX) take handler for pool: ${pool.name}`);
+      logger.debug(
+        `Using factory (multi-DEX) take handler for pool: ${pool.name}`
+      );
       await handleFactoryTakes({
         signer,
         takeWriteTransport,
@@ -167,7 +283,6 @@ export async function handleTakes({
       break;
   }
 }
-
 
 /**
  * Handle the non-factory take path:
@@ -265,7 +380,11 @@ export function createOneInchTakeAdapter(
         price,
         collateral,
         poolConfig,
-        { delayBetweenActions: quoteConfig.delayBetweenActions },
+        {
+          delayBetweenActions: quoteConfig.delayBetweenActions,
+          oneInchRequestTimeoutMs: quoteConfig.oneInchRequestTimeoutMs,
+          skipOneInchRateLimitDelay: quoteConfig.skipOneInchRateLimitDelay,
+        },
         signer,
         quoteConfig.oneInchRouters,
         quoteConfig.connectorTokens
@@ -300,7 +419,7 @@ export async function getOneInchTakeQuoteEvaluation(
   price: number,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
-  config: Partial<Pick<KeeperConfig, 'delayBetweenActions'>>,
+  config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
   connectorTokens: string[] | undefined
@@ -315,6 +434,35 @@ export async function getOneInchTakeQuoteEvaluation(
     };
   }
 
+  return getOneInchPathQuoteEvaluation(
+    pool,
+    price,
+    collateral,
+    poolConfig,
+    config,
+    signer,
+    oneInchRouters,
+    connectorTokens
+  );
+}
+
+export async function getOneInchPathQuoteEvaluation(
+  pool: FungiblePool,
+  price: number,
+  collateral: BigNumber,
+  poolConfig: TakeActionConfig,
+  config: Partial<OneInchQuoteConfig>,
+  signer: Signer,
+  oneInchRouters: { [chainId: number]: string } | undefined,
+  connectorTokens: string[] | undefined
+): Promise<ExternalTakeQuoteEvaluation> {
+  if (!poolConfig.take.marketPriceFactor) {
+    return {
+      isTakeable: false,
+      reason: '1inch marketPriceFactor is not configured',
+    };
+  }
+
   if (!collateral.gt(0)) {
     logger.debug(
       `Invalid collateral amount: ${collateral.toString()} for pool ${pool.name}`
@@ -326,7 +474,7 @@ export async function getOneInchTakeQuoteEvaluation(
   }
 
   try {
-    const chainId = await signer.getChainId();
+    const chainId = await resolveOneInchChainId(config, signer);
     if (!oneInchRouters || !oneInchRouters[chainId]) {
       logger.debug(
         `No 1inch router configured for chainId ${chainId} in pool ${pool.name}`
@@ -337,40 +485,52 @@ export async function getOneInchTakeQuoteEvaluation(
       };
     }
 
-    // Pause between getting a quote for each liquidation to avoid 1inch rate limit
-    await delay(config.delayBetweenActions ?? 0);
+    if (!config.skipOneInchRateLimitDelay) {
+      // Legacy/manual 1inch mode still honors operator pacing.
+      await delay(config.delayBetweenActions ?? 0);
+    }
 
     const dexRouter = new DexRouter(signer, {
       oneInchRouters: oneInchRouters ?? {},
       connectorTokens: connectorTokens ?? [],
     });
-    
-    // In checkIfTakeable function, before the dexRouter quote call:
-    const collateralDecimals = await getDecimalsErc20(signer, pool.collateralAddress);
-    const collateralInTokenDecimals = convertWadToTokenDecimals(collateral, collateralDecimals);
 
+    // In checkIfTakeable function, before the dexRouter quote call:
+    const collateralDecimals = await getOneInchTokenDecimals({
+      signer,
+      tokenAddress: pool.collateralAddress,
+      chainId,
+      cache: config.tokenDecimalsCache,
+    });
+    const collateralInTokenDecimals = convertWadToTokenDecimals(
+      collateral,
+      collateralDecimals
+    );
 
     const quoteResult = await dexRouter.getQuoteFromOneInch(
       chainId,
       collateralInTokenDecimals,
       pool.collateralAddress,
-      pool.quoteAddress
+      pool.quoteAddress,
+      { timeoutMs: config.oneInchRequestTimeoutMs }
     );
 
     if (!quoteResult.success) {
       logger.debug(
-        `No valid quote data for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}: ${quoteResult.error}`	      
+        `No valid quote data for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}: ${quoteResult.error}`
       );
       return {
         isTakeable: false,
         reason: quoteResult.error ?? '1inch quote failed',
+        quoteFailureRetryable: quoteResult.retryable,
+        quoteFailureCode: quoteResult.errorCode,
       };
     }
 
     const amountOut = ethers.BigNumber.from(quoteResult.dstAmount);
     if (amountOut.isZero()) {
       logger.debug(
-	`Zero amountOut for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}`      
+        `Zero amountOut for collateral ${ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)} in pool ${pool.name}`
       );
       return {
         isTakeable: false,
@@ -378,11 +538,16 @@ export async function getOneInchTakeQuoteEvaluation(
       };
     }
 
-    const quoteDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
+    const quoteDecimals = await getOneInchTokenDecimals({
+      signer,
+      tokenAddress: pool.quoteAddress,
+      chainId,
+      cache: config.tokenDecimalsCache,
+    });
 
     //collateralAmount is the human readable amount
     const collateralAmount = Number(
-     ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)  // ← Use converted amount
+      ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals) // ← Use converted amount
     );
 
     //quoteAmount is supposed to be the human readable amount
@@ -400,12 +565,17 @@ export async function getOneInchTakeQuoteEvaluation(
 
     return {
       isTakeable: takeable,
+      externalTakePath: 'oneinch',
       marketPrice,
       takeablePrice,
       quoteAmount,
       quoteAmountRaw: amountOut,
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
       collateralAmount,
-      reason: takeable ? undefined : 'auction price above external take threshold',
+      quotedCollateralWad: collateral,
+      reason: takeable
+        ? undefined
+        : 'auction price above external take threshold',
     };
   } catch (error) {
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);
@@ -421,7 +591,7 @@ async function checkIfTakeable(
   price: number,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
-  config: Partial<Pick<KeeperConfig, 'delayBetweenActions'>>,
+  config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
   connectorTokens: string[] | undefined
@@ -472,7 +642,11 @@ async function computeLegacyOneInchMinReturnAmount(params: {
     )
     .div(factoryShared.BASIS_POINTS_DENOMINATOR);
   const approvedMinOutRaw =
-    params.quoteEvaluation.approvedMinOutRaw ?? BigNumber.from(0);
+    factoryShared.deriveApprovedMinOutRaw({
+      routeMinOutRaw: params.quoteEvaluation.routeMinOutRaw,
+      profitMinOutRaw: params.quoteEvaluation.profitMinOutRaw,
+      fallbackMinOutRaw: params.quoteEvaluation.approvedMinOutRaw,
+    }) ?? BigNumber.from(0);
 
   return factoryShared.maxBigNumber(
     quoteAmountDueRaw,
@@ -507,16 +681,18 @@ export async function* getLiquidationsToTake({
     let arbHpbIndex = 0;
 
     if (poolConfig.take.marketPriceFactor && poolConfig.take.liquiditySource) {
-      isTakeable = (await checkIfTakeable(
-        pool,
-        price,
-        collateral,
-        poolConfig,
-        resolvedConfig,
-        signer,
-        oneInchRouters,
-        connectorTokens
-      )).isTakeable;
+      isTakeable = (
+        await checkIfTakeable(
+          pool,
+          price,
+          collateral,
+          poolConfig,
+          resolvedConfig,
+          signer,
+          oneInchRouters,
+          connectorTokens
+        )
+      ).isTakeable;
     }
 
     if (poolConfig.take.minCollateral && poolConfig.take.hpbPriceFactor) {
@@ -535,11 +711,17 @@ export async function* getLiquidationsToTake({
     }
 
     if (isTakeable || isArbTakeable) {
-      const strategyLog = isTakeable && !isArbTakeable ? 'take'
-        : !isTakeable && isArbTakeable ? 'arbTake'
-        : isTakeable && isArbTakeable ? 'take and arbTake'
-        : 'none';
-      logger.info(`Found liquidation to ${strategyLog} - pool: ${pool.name}, borrower: ${borrower}, auctionPrice: ${price.toFixed(6)}, collateral: ${weiToDecimaled(collateral)}`);
+      const strategyLog =
+        isTakeable && !isArbTakeable
+          ? 'take'
+          : !isTakeable && isArbTakeable
+            ? 'arbTake'
+            : isTakeable && isArbTakeable
+              ? 'take and arbTake'
+              : 'none';
+      logger.info(
+        `Found liquidation to ${strategyLog} - pool: ${pool.name}, borrower: ${borrower}, auctionPrice: ${price.toFixed(6)}, collateral: ${weiToDecimaled(collateral)}`
+      );
 
       yield {
         borrower,
@@ -550,7 +732,6 @@ export async function* getLiquidationsToTake({
         isArbTakeable,
       };
       continue;
-
     } else {
       logger.debug(
         `Not taking liquidation since price ${price} is too high - pool: ${pool.name}, borrower: ${borrower}`
@@ -563,11 +744,7 @@ interface TakeLiquidationParams
   extends Pick<HandleTakeParams, 'pool' | 'signer'> {
   poolConfig: TakeActionConfig;
   liquidation: LiquidationToTake;
-  config: Pick<
-    KeeperConfig,
-    'dryRun' | 'delayBetweenActions' | 'connectorTokens' | 'oneInchRouters' | 'keeperTaker'
-  > &
-    TakeWriteTransportConfig;
+  config: OneInchExecutionConfig;
 }
 
 export async function takeLiquidation({
@@ -581,28 +758,44 @@ export async function takeLiquidation({
   const { dryRun } = config;
 
   if (dryRun) {
+    const selectedLiquiditySource =
+      liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource ??
+      poolConfig.take.liquiditySource;
     logger.info(
-      `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${poolConfig.take.liquiditySource}`
+      `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${selectedLiquiditySource}`
     );
     return true;
   }
 
-  if (poolConfig.take.liquiditySource !== LiquiditySource.ONEINCH) {
+  const suppliedQuoteEvaluation = liquidation.externalTakeQuoteEvaluation;
+  const usesOneInchExecutionPath =
+    poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ||
+    suppliedQuoteEvaluation?.externalTakePath === 'oneinch' ||
+    suppliedQuoteEvaluation?.selectedLiquiditySource ===
+      LiquiditySource.ONEINCH;
+  if (!usesOneInchExecutionPath) {
     logger.error(
       `Valid liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
     );
     return false;
   }
 
+  let attemptedSubmission = false;
   try {
     const approvedQuoteEvaluation =
-      liquidation.externalTakeQuoteEvaluation ??
+      suppliedQuoteEvaluation ??
       (await getOneInchTakeQuoteEvaluation(
         pool,
         Number(weiToDecimaled(liquidation.auctionPrice)),
         liquidation.collateral,
         poolConfig,
-        { delayBetweenActions: config.delayBetweenActions },
+        {
+          delayBetweenActions: config.delayBetweenActions,
+          oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
+          skipOneInchRateLimitDelay: config.skipOneInchRateLimitDelay,
+          chainId: config.chainId,
+          tokenDecimalsCache: config.tokenDecimalsCache,
+        },
         signer,
         config.oneInchRouters,
         config.connectorTokens
@@ -628,23 +821,41 @@ export async function takeLiquidation({
       signer
     );
 
-    // pause between getting the 1inch quote and requesting the swap to avoid 1inch rate limit
-    await delay(config.delayBetweenActions);
     const dexRouter = new DexRouter(signer, {
       oneInchRouters: config.oneInchRouters ?? {},
       connectorTokens: config.connectorTokens ?? [],
     });
+    const chainId = await resolveOneInchChainId(config, signer);
+    const configuredOneInchRouter = dexRouter.getRouter(chainId);
+    if (!configuredOneInchRouter) {
+      const error = `missing 1inch router for chain ${chainId}`;
+      config.onOneInchSwapDataResult?.({
+        success: false,
+        retryable: false,
+        error,
+      });
+      logger.error(
+        `Legacy 1inch take cannot request swap data for ${pool.name}/${borrower}: ${error}`
+      );
+      return false;
+    }
+
+    if (!config.skipOneInchRateLimitDelay) {
+      // Legacy/manual 1inch mode still honors operator pacing.
+      await delay(config.delayBetweenActions ?? 0);
+    }
 
     // Convert collateral from WAD to token decimals for 1inch API consistency
-    const collateralDecimals = await getDecimalsErc20(
+    const collateralDecimals = await getOneInchTokenDecimals({
       signer,
-      pool.collateralAddress
-    );
+      tokenAddress: pool.collateralAddress,
+      chainId,
+      cache: config.tokenDecimalsCache,
+    });
     const collateralInTokenDecimals = convertWadToTokenDecimals(
       liquidation.collateral,
       collateralDecimals
     );
-    const chainId = await signer.getChainId();
 
     const swapData = await dexRouter.getSwapDataFromOneInch(
       chainId,
@@ -653,9 +864,50 @@ export async function takeLiquidation({
       pool.quoteAddress,
       1,
       keeperTaker.address,
-      true
+      true,
+      { timeoutMs: config.oneInchRequestTimeoutMs }
     );
+    if (!swapData.success || !swapData.data) {
+      config.onOneInchSwapDataResult?.({
+        success: false,
+        retryable: swapData.retryable,
+        errorCode: swapData.errorCode,
+        error: swapData.error,
+      });
+      logger.error(
+        `Legacy 1inch swap data request failed for ${pool.name}/${borrower}: ${swapData.error ?? 'unknown error'}`
+      );
+      return false;
+    }
     const swapDetails = convertSwapApiResponseToDetails(swapData.data);
+    const allowedAggregationExecutors =
+      config.oneInchAggregationExecutorAllowlist?.[chainId];
+    const swapDetailsValidationError = validateOneInchSwapDetailsForAtomicTake(
+      swapDetails,
+      {
+        srcToken: pool.collateralAddress,
+        dstToken: pool.quoteAddress,
+        srcReceiver: configuredOneInchRouter,
+        dstReceiver: keeperTaker.address,
+        amount: collateralInTokenDecimals,
+        aggregationExecutors: allowedAggregationExecutors,
+      }
+    );
+    if (swapDetailsValidationError) {
+      config.onOneInchSwapDataResult?.({
+        success: false,
+        retryable: false,
+        error: swapDetailsValidationError,
+      });
+      logger.error(
+        `Legacy 1inch swap data validation failed for ${pool.name}/${borrower}: ${swapDetailsValidationError}`
+      );
+      return false;
+    }
+    logger.info(
+      `1inch atomic take swap validated - pool: ${pool.name}, borrower: ${borrower}, executor: ${swapDetails.aggregationExecutor}, srcReceiver: ${swapDetails.swapDescription.srcReceiver}, allowlist: ${allowedAggregationExecutors ? 'configured' : 'not_configured'}`
+    );
+
     const requiredMinReturnAmount = await computeLegacyOneInchMinReturnAmount({
       pool,
       poolConfig,
@@ -666,10 +918,30 @@ export async function takeLiquidation({
     const routeMinReturnAmount = BigNumber.from(
       swapDetails.swapDescription.minReturnAmount
     );
-    if (routeMinReturnAmount.lt(requiredMinReturnAmount)) {
+    const executionMinReturnAmount = routeMinReturnAmount.lt(
+      requiredMinReturnAmount
+    )
+      ? requiredMinReturnAmount
+      : routeMinReturnAmount;
+    if (swapData.dstAmount !== undefined) {
+      const freshSwapDstAmount = BigNumber.from(swapData.dstAmount);
+      if (freshSwapDstAmount.lt(executionMinReturnAmount)) {
+        config.onOneInchSwapDataResult?.({
+          success: false,
+          retryable: false,
+          error: '1inch swap data expected output below execution floor',
+        });
+        logger.warn(
+          `Legacy 1inch swap data expected output ${freshSwapDstAmount.toString()} is below execution floor ${executionMinReturnAmount.toString()} for ${pool.name}/${borrower}; refusing to estimate or submit`
+        );
+        return false;
+      }
+    }
+    config.onOneInchSwapDataResult?.({ success: true });
+    if (routeMinReturnAmount.lt(executionMinReturnAmount)) {
       swapDetails.swapDescription = {
         ...swapDetails.swapDescription,
-        minReturnAmount: requiredMinReturnAmount,
+        minReturnAmount: executionMinReturnAmount,
       };
     }
     const swapDetailsBytes = encodeOneInchSwapDetailsBytes(swapDetails);
@@ -681,9 +953,9 @@ export async function takeLiquidation({
         `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
         `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
         `  Collateral (Token Decimals): ${collateralInTokenDecimals.toString()}\n` +
-        `  Liquidity Source: ${poolConfig.take.liquiditySource}\n` +
-        `  1inch Router: ${dexRouter.getRouter(chainId)}\n` +
-        `  Required Min Return: ${requiredMinReturnAmount.toString()}\n` +
+        `  Liquidity Source: ${LiquiditySource.ONEINCH}\n` +
+        `  1inch Router: ${configuredOneInchRouter}\n` +
+        `  Required Min Return: ${executionMinReturnAmount.toString()}\n` +
         `  Swap Data Length: ${swapData.data.length} chars`
     );
 
@@ -699,8 +971,8 @@ export async function takeLiquidation({
           liquidation.borrower,
           liquidation.auctionPrice,
           liquidation.collateral,
-          Number(poolConfig.take.liquiditySource),
-          dexRouter.getRouter(chainId)!,
+          Number(LiquiditySource.ONEINCH),
+          configuredOneInchRouter,
           swapDetailsBytes,
         ] as const;
         const gasLimit = await estimateGasWithBuffer(
@@ -713,7 +985,22 @@ export async function takeLiquidation({
             gasLimit,
             nonce: nonce.toString(),
           });
-        const receipt = await submitTakeTransaction(takeWriteTransport, txRequest);
+        attemptedSubmission = true;
+        const receipt = await submitTakeTransaction(
+          takeWriteTransport,
+          txRequest
+        );
+        logTakeExecutionTelemetry({
+          path: 'oneinch',
+          source: LiquiditySource.ONEINCH,
+          poolName: pool.name,
+          poolAddress: pool.poolAddress,
+          borrower,
+          receipt,
+          routeProfitability: approvedQuoteEvaluation.routeProfitability,
+          approvedMinOutRaw: executionMinReturnAmount,
+          takeWriteTransport,
+        });
         logger.info(
           `Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
         );
@@ -722,6 +1009,10 @@ export async function takeLiquidation({
     );
     return true;
   } catch (error) {
+    config.onOneInchExecutionFailure?.({
+      preBroadcast: !attemptedSubmission,
+      error: error instanceof Error ? error.message : String(error),
+    });
     logger.error(
       `Failed to Take. pool: ${pool.name}, borrower: ${borrower}`,
       error

@@ -94,6 +94,36 @@ describe('Factory amountOutMinimum', () => {
     expect(amountOutMinimum.eq(ethers.utils.parseEther('125'))).to.be.true;
   });
 
+  it('derives the execution floor from split route/profit floors instead of stale approvedMinOutRaw', async () => {
+    const pool = {
+      contract: {
+        quoteTokenScale: async () => BigNumber.from(1),
+      },
+    };
+
+    const liquidation = {
+      collateral: ethers.utils.parseEther('100'),
+      auctionPrice: ethers.utils.parseEther('1'),
+    };
+
+    const quoteEvaluation = {
+      isTakeable: true,
+      quoteAmountRaw: ethers.utils.parseEther('150'),
+      routeMinOutRaw: ethers.utils.parseEther('125'),
+      profitMinOutRaw: ethers.utils.parseEther('105'),
+      approvedMinOutRaw: ethers.utils.parseEther('140'),
+    };
+
+    const amountOutMinimum = await computeFactoryAmountOutMinimum({
+      pool: pool as any,
+      liquidation,
+      quoteEvaluation,
+      marketPriceFactor: 0.99,
+    });
+
+    expect(amountOutMinimum.eq(ethers.utils.parseEther('125'))).to.be.true;
+  });
+
   it('rejects a missing approved route floor', async () => {
     const pool = {
       contract: {

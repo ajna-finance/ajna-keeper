@@ -26,4 +26,30 @@ describe('erc20 decimals cache', () => {
     expect(second).to.equal(6);
     expect(decimalsCallStub.calledOnce).to.be.true;
   });
+
+  it('separates decimals cache entries by chain id for identical token addresses', async () => {
+    const provider = new providers.JsonRpcProvider();
+    const decimalsCallStub = sinon
+      .stub(provider, 'call')
+      .onFirstCall()
+      .resolves(ethers.utils.defaultAbiCoder.encode(['uint8'], [6]))
+      .onSecondCall()
+      .resolves(ethers.utils.defaultAbiCoder.encode(['uint8'], [18]));
+    const tokenAddress = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+
+    const mainnetDecimals = await getDecimalsErc20(
+      provider as any,
+      tokenAddress,
+      1
+    );
+    const baseDecimals = await getDecimalsErc20(
+      provider as any,
+      tokenAddress,
+      8453
+    );
+
+    expect(mainnetDecimals).to.equal(6);
+    expect(baseDecimals).to.equal(18);
+    expect(decimalsCallStub.calledTwice).to.be.true;
+  });
 });

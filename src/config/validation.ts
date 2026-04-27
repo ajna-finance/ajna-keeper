@@ -1,4 +1,7 @@
 import {
+  ExternalTakeRouteSelectionMode,
+  ExternalTakeTransportPolicy,
+  ExternalTakePathKind,
   KeeperConfig,
   LiquiditySource,
   PostAuctionDex,
@@ -13,22 +16,41 @@ import {
   hasNonEmptyObject,
 } from './schema';
 import {
+  EXTERNAL_TAKE_PATHS,
+  EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
+  FACTORY_DYNAMIC_SOURCES,
+  isFactoryDynamicSource,
+  resolveExternalTakePaths,
+  resolveFactoryRouteSelectionSources,
+} from './route-policy';
+import {
   hasConfiguredWrappedNativeAddress,
   resolveConfiguredGasQuoteLiquiditySource,
 } from './liquidity-source';
 import { logger } from '../logging';
+import { ethers } from 'ethers';
 
-const FACTORY_DYNAMIC_SOURCES = [
-  LiquiditySource.UNISWAPV3,
-  LiquiditySource.SUSHISWAP,
-  LiquiditySource.CURVE,
-];
+const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
+  'allow_public',
+  'prefer_private_or_relay',
+  'require_private_or_relay',
+]);
 const MAX_UINT24_FEE_TIER = 16_777_215;
 const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
 const MAX_DEX_GAS_OVERRIDE = BigInt(2_000_000);
 const MAX_MIN_PROFIT_NATIVE_WEI = BigInt('1000000000000000000000000000');
 const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
+const VALIDATION_BOUNDS = {
+  minL2GasCostBufferBps: 10_000,
+  maxL2GasCostBufferBps: 30_000,
+  // Keep drift tolerance bounded to operationally sane values; 5000 = 50%.
+  maxGasPriceDriftToleranceBps: 5_000,
+  maxCurveExecutionDelayMs: 60_000,
+  maxOneInchQuoteTimeoutMs: 10_000,
+  maxExternalTakeProbeTimeoutMs: 10_000,
+  maxOneInchAggregationExecutorAllowlistEntries: 64,
+};
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,
@@ -77,9 +99,43 @@ function requireOptionalPositive(value: unknown, message: string): void {
   }
 }
 
+function requireOptionalPositiveInteger(value: unknown, message: string): void {
+  if (
+    value !== undefined &&
+    (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)
+  ) {
+    throw new Error(message);
+  }
+}
+
 function requireOptionalNonNegative(value: unknown, message: string): void {
   if (value !== undefined) {
     requireNonNegative(value, message);
+  }
+}
+
+function requireOptionalBoolean(value: unknown, message: string): void {
+  if (value !== undefined && typeof value !== 'boolean') {
+    throw new Error(message);
+  }
+}
+
+function requireOptionalIntegerRange(
+  value: unknown,
+  min: number,
+  max: number,
+  message: string
+): void {
+  if (value === undefined) {
+    return;
+  }
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < min ||
+    value > max
+  ) {
+    throw new Error(message);
   }
 }
 
@@ -138,6 +194,12 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
     config.universalRouterOverrides;
   const sushiConfig: SushiswapRouterOverrides | undefined =
     config.sushiswapRouterOverrides;
+  requireOptionalIntegerRange(
+    config.curveRouterOverrides?.executionDelayMs,
+    0,
+    VALIDATION_BOUNDS.maxCurveExecutionDelayMs,
+    `CurveRouterOverrides: executionDelayMs must be an integer between 0 and ${VALIDATION_BOUNDS.maxCurveExecutionDelayMs}`
+  );
   validateCandidateFeeTiers(
     uniswapConfig?.candidateFeeTiers,
     uniswapConfig?.defaultFeeTier,
@@ -162,48 +224,184 @@ function parseLiquiditySourceKey(source: string): LiquiditySource | undefined {
 
 function getEffectiveFactoryRouteSources(
   discoveredTake: TakeSettings,
-  allowedLiquiditySources: LiquiditySource[] | undefined
+  allowedLiquiditySources: LiquiditySource[] | undefined,
+  defaultFactoryLiquiditySource?: LiquiditySource
 ): Set<LiquiditySource> {
-  const sources = new Set<LiquiditySource>();
-  const configuredSources =
-    allowedLiquiditySources !== undefined
-      ? allowedLiquiditySources
-      : discoveredTake.liquiditySource !== undefined
-        ? [discoveredTake.liquiditySource]
-        : [];
-
-  for (const source of configuredSources) {
-    if (FACTORY_DYNAMIC_SOURCES.includes(source)) {
-      sources.add(source);
-    }
-  }
-  return sources;
+  return new Set(
+    resolveFactoryRouteSelectionSources({
+      defaultLiquiditySource: discoveredTake.liquiditySource,
+      allowedLiquiditySources,
+      configuredDefaultFactoryLiquiditySource: defaultFactoryLiquiditySource,
+    })
+  );
 }
 
 function getEffectiveTakeGasOverrideSources(
   discoveredTake: TakeSettings,
-  allowedLiquiditySources: LiquiditySource[] | undefined
+  allowedLiquiditySources: LiquiditySource[] | undefined,
+  defaultFactoryLiquiditySource: LiquiditySource | undefined,
+  externalTakePaths: Set<ExternalTakePathKind>
 ): Set<LiquiditySource> {
   const sources = getEffectiveFactoryRouteSources(
     discoveredTake,
-    allowedLiquiditySources
+    allowedLiquiditySources,
+    defaultFactoryLiquiditySource
   );
-  if (
-    allowedLiquiditySources === undefined &&
-    discoveredTake.liquiditySource === LiquiditySource.ONEINCH
-  ) {
+  if (externalTakePaths.has('oneinch')) {
     sources.add(LiquiditySource.ONEINCH);
   }
   return sources;
 }
 
-function isFactoryDynamicSource(
-  source: LiquiditySource | undefined
-): source is
-  | LiquiditySource.UNISWAPV3
-  | LiquiditySource.SUSHISWAP
-  | LiquiditySource.CURVE {
-  return source !== undefined && FACTORY_DYNAMIC_SOURCES.includes(source);
+function getEffectiveExternalTakePaths(
+  discoveredTake: TakeSettings,
+  allowedExternalTakePaths: ExternalTakePathKind[] | undefined
+): Set<ExternalTakePathKind> {
+  return new Set(
+    resolveExternalTakePaths({
+      defaultLiquiditySource: discoveredTake.liquiditySource,
+      allowedExternalTakePaths,
+    })
+  );
+}
+
+function validateAllowedExternalTakePaths(
+  paths: ExternalTakePathKind[] | undefined
+): void {
+  if (paths === undefined) {
+    return;
+  }
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new Error(
+      'AutoDiscoverConfig.take: allowedExternalTakePaths must be non-empty'
+    );
+  }
+  const seen = new Set<ExternalTakePathKind>();
+  for (const path of paths) {
+    if (!EXTERNAL_TAKE_PATHS.has(path)) {
+      throw new Error(
+        'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch and factory'
+      );
+    }
+    if (seen.has(path)) {
+      throw new Error(
+        'AutoDiscoverConfig.take: allowedExternalTakePaths cannot contain duplicates'
+      );
+    }
+    seen.add(path);
+  }
+}
+
+function validateExternalTakeTransportPolicy(
+  policy: ExternalTakeTransportPolicy | undefined
+): void {
+  if (policy === undefined) {
+    return;
+  }
+  if (!EXTERNAL_TAKE_TRANSPORT_POLICIES.has(policy)) {
+    throw new Error(
+      'AutoDiscoverConfig.take: externalTakeTransportPolicy must be allow_public, prefer_private_or_relay, or require_private_or_relay'
+    );
+  }
+}
+
+function validateExternalTakeRouteSelectionMode(
+  mode: ExternalTakeRouteSelectionMode | undefined
+): void {
+  if (mode === undefined) {
+    return;
+  }
+  if (!EXTERNAL_TAKE_ROUTE_SELECTION_MODES.has(mode)) {
+    throw new Error(
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit, factory_first, or deprecated cost_aware'
+    );
+  }
+  if (mode === 'cost_aware') {
+    logger.warn(
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode=cost_aware is deprecated; treating it as factory_first'
+    );
+  }
+}
+
+function validateOneInchAggregationExecutorAllowlist(
+  config: KeeperConfig
+): void {
+  const allowlist = config.oneInchAggregationExecutorAllowlist;
+  if (allowlist === undefined) {
+    return;
+  }
+  if (
+    typeof allowlist !== 'object' ||
+    allowlist === null ||
+    Array.isArray(allowlist)
+  ) {
+    throw new Error(
+      'KeeperConfig: oneInchAggregationExecutorAllowlist must be an object keyed by chainId'
+    );
+  }
+
+  for (const [chainId, executors] of Object.entries(allowlist)) {
+    const parsedChainId = Number(chainId);
+    if (
+      !/^[1-9]\d*$/.test(chainId) ||
+      !Number.isInteger(parsedChainId) ||
+      parsedChainId <= 0 ||
+      String(parsedChainId) !== chainId ||
+      !Array.isArray(executors) ||
+      executors.length === 0
+    ) {
+      throw new Error(
+        'KeeperConfig: oneInchAggregationExecutorAllowlist entries must use canonical positive integer chain ID keys and non-empty address arrays'
+      );
+    }
+    if (
+      executors.length >
+      VALIDATION_BOUNDS.maxOneInchAggregationExecutorAllowlistEntries
+    ) {
+      throw new Error(
+        `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} cannot contain more than ${VALIDATION_BOUNDS.maxOneInchAggregationExecutorAllowlistEntries} addresses`
+      );
+    }
+
+    const seenExecutors = new Set<string>();
+    for (const executor of executors) {
+      if (typeof executor !== 'string' || !ethers.utils.isAddress(executor)) {
+        throw new Error(
+          `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} contains invalid address ${String(executor)}`
+        );
+      }
+      const normalizedExecutor = ethers.utils
+        .getAddress(executor)
+        .toLowerCase();
+      if (seenExecutors.has(normalizedExecutor)) {
+        throw new Error(
+          `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} cannot contain duplicate addresses`
+        );
+      }
+      seenExecutors.add(normalizedExecutor);
+    }
+  }
+}
+
+function getConfiguredTakeWriteMode(
+  config: KeeperConfig
+): TakeWriteTransportMode | undefined {
+  if (config.takeWrite) {
+    return config.takeWrite.mode;
+  }
+  const hasTakeWriteRpcUrl =
+    Object.prototype.hasOwnProperty.call(config, 'takeWriteRpcUrl') &&
+    (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl !== undefined;
+  return hasTakeWriteRpcUrl ? TakeWriteTransportMode.PRIVATE_RPC : undefined;
+}
+
+function isPrivateOrRelayTakeWriteMode(
+  mode: TakeWriteTransportMode | undefined
+): boolean {
+  return (
+    mode === TakeWriteTransportMode.PRIVATE_RPC ||
+    mode === TakeWriteTransportMode.RELAY
+  );
 }
 
 export function validatePostAuctionDex(
@@ -442,6 +640,7 @@ export function validateAutoDiscoverConfig(
   chainId?: number
 ): void {
   validateRouterFeeTiers(config);
+  validateOneInchAggregationExecutorAllowlist(config);
 
   const autoDiscover = config.autoDiscover;
   if (!autoDiscover?.enabled) {
@@ -466,18 +665,96 @@ export function validateAutoDiscoverConfig(
   );
 
   if (takePolicy) {
-    requireOptionalPositive(
+    requireOptionalPositiveInteger(
       takePolicy.maxPoolsPerRun,
-      'AutoDiscoverConfig.take: maxPoolsPerRun must be greater than 0'
+      'AutoDiscoverConfig.take: maxPoolsPerRun must be a positive integer'
     );
-    requireOptionalPositive(
+    requireOptionalPositiveInteger(
       takePolicy.takeQuoteBudgetPerRun,
-      'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be greater than 0'
+      'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be a positive integer'
+    );
+    requireOptionalNonNegative(
+      takePolicy.hotAuctionCandidateTtlMs,
+      'AutoDiscoverConfig.take: hotAuctionCandidateTtlMs cannot be negative'
+    );
+    requireOptionalPositiveInteger(
+      takePolicy.maxHotAuctionCandidates,
+      'AutoDiscoverConfig.take: maxHotAuctionCandidates must be a positive integer'
+    );
+    requireOptionalPositiveInteger(
+      takePolicy.takeRouteQuoteBudgetPerCandidate,
+      'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be a positive integer'
+    );
+    requireOptionalNonNegative(
+      takePolicy.l1GasPriceFreshnessTtlMs,
+      'AutoDiscoverConfig.take: l1GasPriceFreshnessTtlMs cannot be negative'
+    );
+    requireOptionalNonNegative(
+      takePolicy.l2GasPriceFreshnessTtlMs,
+      'AutoDiscoverConfig.take: l2GasPriceFreshnessTtlMs cannot be negative'
+    );
+    requireOptionalIntegerRange(
+      takePolicy.l2GasCostBufferBasisPoints,
+      VALIDATION_BOUNDS.minL2GasCostBufferBps,
+      VALIDATION_BOUNDS.maxL2GasCostBufferBps,
+      'AutoDiscoverConfig.take: l2GasCostBufferBasisPoints must be an integer between 10000 and 30000'
+    );
+    requireOptionalIntegerRange(
+      takePolicy.gasPriceDriftToleranceBasisPoints,
+      0,
+      VALIDATION_BOUNDS.maxGasPriceDriftToleranceBps,
+      'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 5000'
+    );
+    requireOptionalIntegerRange(
+      takePolicy.oneInchQuoteTimeoutMs,
+      1,
+      VALIDATION_BOUNDS.maxOneInchQuoteTimeoutMs,
+      `AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be an integer between 1 and ${VALIDATION_BOUNDS.maxOneInchQuoteTimeoutMs}`
     );
     requireOptionalPositive(
-      takePolicy.takeRouteQuoteBudgetPerCandidate,
-      'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be greater than 0'
+      takePolicy.oneInchQuoteFailureCooldownMs,
+      'AutoDiscoverConfig.take: oneInchQuoteFailureCooldownMs must be greater than 0'
     );
+    requireOptionalIntegerRange(
+      takePolicy.oneInchQuoteFailureThreshold,
+      1,
+      100,
+      'AutoDiscoverConfig.take: oneInchQuoteFailureThreshold must be an integer between 1 and 100'
+    );
+    requireOptionalIntegerRange(
+      takePolicy.externalTakeProbeTimeoutMs,
+      1,
+      VALIDATION_BOUNDS.maxExternalTakeProbeTimeoutMs,
+      `AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be an integer between 1 and ${VALIDATION_BOUNDS.maxExternalTakeProbeTimeoutMs}`
+    );
+    validateExternalTakeRouteSelectionMode(
+      takePolicy.externalTakeRouteSelectionMode
+    );
+    requireOptionalBoolean(
+      takePolicy.validateRouteDeployments,
+      'AutoDiscoverConfig.take: validateRouteDeployments must be a boolean'
+    );
+    validateExternalTakeTransportPolicy(takePolicy.externalTakeTransportPolicy);
+    if (
+      takePolicy.externalTakeTransportPolicy === 'require_private_or_relay' &&
+      !isPrivateOrRelayTakeWriteMode(getConfiguredTakeWriteMode(config)) &&
+      !config.dryRun
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: externalTakeTransportPolicy=require_private_or_relay requires takeWrite private_rpc, relay, or takeWriteRpcUrl'
+      );
+    }
+    if (
+      (takePolicy.externalTakeTransportPolicy === 'prefer_private_or_relay' ||
+        (takePolicy.externalTakeTransportPolicy ===
+          'require_private_or_relay' &&
+          config.dryRun)) &&
+      !isPrivateOrRelayTakeWriteMode(getConfiguredTakeWriteMode(config))
+    ) {
+      logger.warn(
+        `AutoDiscoverConfig.take: externalTakeTransportPolicy=${takePolicy.externalTakeTransportPolicy} is set but no private_rpc/relay take write transport is configured; discovered external takes may use public RPC fallback`
+      );
+    }
     requireOptionalNonNegative(
       takePolicy.minExpectedProfitQuote,
       'AutoDiscoverConfig.take: minExpectedProfitQuote cannot be negative'
@@ -499,6 +776,16 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
+    if (
+      (takePolicy.externalTakeRouteSelectionMode === 'factory_first' ||
+        takePolicy.externalTakeRouteSelectionMode === 'cost_aware') &&
+      (takePolicy.minExpectedProfitQuote !== undefined ||
+        takePolicy.minProfitNative !== undefined)
+    ) {
+      logger.warn(
+        `AutoDiscoverConfig.take: externalTakeRouteSelectionMode=${takePolicy.externalTakeRouteSelectionMode} stops after the first approved path; quote-normalized gas-cost ranking is skipped to reduce 1inch/API use`
+      );
+    }
     requireOptionalPositive(
       takePolicy.maxGasPriceGwei,
       'AutoDiscoverConfig.take: maxGasPriceGwei must be greater than 0'
@@ -519,22 +806,78 @@ export function validateAutoDiscoverConfig(
       );
     }
 
-    const discoveredTakeUsesFactory = isFactoryDynamicSource(
-      discoveredTake.liquiditySource
+    validateAllowedExternalTakePaths(takePolicy.allowedExternalTakePaths);
+    const externalTakePaths = getEffectiveExternalTakePaths(
+      discoveredTake,
+      takePolicy.allowedExternalTakePaths
     );
     if (
-      takePolicy.takeRouteQuoteBudgetPerCandidate !== undefined &&
-      !discoveredTakeUsesFactory
+      takePolicy.defaultFactoryLiquiditySource !== undefined &&
+      !isFactoryDynamicSource(takePolicy.defaultFactoryLiquiditySource)
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
+        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource must be UNISWAPV3, SUSHISWAP, or CURVE'
+      );
+    }
+    const effectiveDefaultFactoryLiquiditySource = isFactoryDynamicSource(
+      discoveredTake.liquiditySource
+    )
+      ? discoveredTake.liquiditySource
+      : takePolicy.defaultFactoryLiquiditySource;
+    if (
+      externalTakePaths.has('factory') &&
+      effectiveDefaultFactoryLiquiditySource === undefined
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource required when allowedExternalTakePaths includes factory and discoveredDefaults.take.liquiditySource is not a factory source'
+      );
+    }
+    if (
+      externalTakePaths.has('factory') &&
+      externalTakePaths.has('oneinch') &&
+      takePolicy.validateRouteDeployments !== true
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
+      );
+    }
+    if (externalTakePaths.has('oneinch')) {
+      if (
+        !config.oneInchAggregationExecutorAllowlist ||
+        Object.keys(config.oneInchAggregationExecutorAllowlist).length === 0
+      ) {
+        logger.warn(
+          'AutoDiscoverConfig.take: oneInchAggregationExecutorAllowlist is not configured; decoded 1inch aggregationExecutor addresses will be logged but not hard-restricted'
+        );
+      } else if (
+        chainId !== undefined &&
+        !config.oneInchAggregationExecutorAllowlist[chainId]
+      ) {
+        logger.warn(
+          `AutoDiscoverConfig.take: oneInchAggregationExecutorAllowlist has no entry for chain ${chainId}; decoded 1inch aggregationExecutor addresses will be logged but not hard-restricted`
+        );
+      }
+    }
+    if (externalTakePaths.has('factory') && externalTakePaths.has('oneinch')) {
+      validateQuoteDenominatedGasPolicy(
+        config,
+        'AutoDiscoverConfig.take: hybrid external take route ranking',
+        chainId
+      );
+    }
+    if (
+      takePolicy.takeRouteQuoteBudgetPerCandidate !== undefined &&
+      !externalTakePaths.has('factory')
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires an enabled factory external take path'
       );
     }
 
     if (takePolicy.allowedLiquiditySources !== undefined) {
-      if (!discoveredTakeUsesFactory) {
+      if (!externalTakePaths.has('factory')) {
         throw new Error(
-          'AutoDiscoverConfig.take: allowedLiquiditySources requires discoveredDefaults.take.liquiditySource to be UNISWAPV3, SUSHISWAP, or CURVE'
+          'AutoDiscoverConfig.take: allowedLiquiditySources requires a factory external take path'
         );
       }
       if (takePolicy.allowedLiquiditySources.length === 0) {
@@ -555,7 +898,7 @@ export function validateAutoDiscoverConfig(
             'AutoDiscoverConfig.take: allowedLiquiditySources cannot include ONEINCH for factory external takes'
           );
         }
-        if (!FACTORY_DYNAMIC_SOURCES.includes(source)) {
+        if (!isFactoryDynamicSource(source)) {
           throw new Error(
             'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3, SUSHISWAP, and CURVE'
           );
@@ -569,17 +912,55 @@ export function validateAutoDiscoverConfig(
           chainId
         );
       }
+      if (
+        takePolicy.defaultFactoryLiquiditySource !== undefined &&
+        effectiveDefaultFactoryLiquiditySource !== undefined &&
+        !takePolicy.allowedLiquiditySources.includes(
+          effectiveDefaultFactoryLiquiditySource
+        )
+      ) {
+        throw new Error(
+          'AutoDiscoverConfig.take: allowedLiquiditySources must include the effective default factory liquidity source'
+        );
+      }
     } else {
+      if (externalTakePaths.has('factory')) {
+        validateTakeSettings(
+          {
+            ...discoveredTake,
+            liquiditySource: effectiveDefaultFactoryLiquiditySource,
+          },
+          config,
+          chainId
+        );
+      }
+    }
+
+    if (externalTakePaths.has('oneinch')) {
+      validateTakeSettings(
+        {
+          ...discoveredTake,
+          liquiditySource: LiquiditySource.ONEINCH,
+        },
+        config,
+        chainId
+      );
+    }
+
+    if (!externalTakePaths.size) {
       validateTakeSettings(discoveredTake, config, chainId);
     }
 
     const effectiveFactorySources = getEffectiveFactoryRouteSources(
       discoveredTake,
-      takePolicy.allowedLiquiditySources
+      takePolicy.allowedLiquiditySources,
+      effectiveDefaultFactoryLiquiditySource
     );
     const effectiveTakeGasOverrideSources = getEffectiveTakeGasOverrideSources(
       discoveredTake,
-      takePolicy.allowedLiquiditySources
+      takePolicy.allowedLiquiditySources,
+      effectiveDefaultFactoryLiquiditySource,
+      externalTakePaths
     );
     if (
       config.universalRouterOverrides?.candidateFeeTiers !== undefined &&
@@ -620,7 +1001,7 @@ export function validateAutoDiscoverConfig(
           !effectiveTakeGasOverrideSources.has(liquiditySource)
         ) {
           throw new Error(
-            'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires discoveredDefaults.take.liquiditySource to be ONEINCH'
+            'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires an enabled 1inch external take path'
           );
         }
         if (!effectiveTakeGasOverrideSources.has(liquiditySource)) {
@@ -659,7 +1040,8 @@ export function validateAutoDiscoverConfig(
     if (
       (takePolicy.minExpectedProfitQuote !== undefined ||
         takePolicy.minProfitNative !== undefined) &&
-      !hasExternalTakeSettings(discoveredTake)
+      (!externalTakePaths.size ||
+        discoveredTake.marketPriceFactor === undefined)
     ) {
       throw new Error(
         'AutoDiscoverConfig: quote-normalized profit floors require discoveredDefaults.take to configure an external take path'
@@ -789,6 +1171,7 @@ export function validateTakeSettingsForChain(
   chainId: number
 ): void {
   validateRouterFeeTiers(config);
+  validateOneInchAggregationExecutorAllowlist(config);
 
   for (const poolConfig of config.pools) {
     if (poolConfig.take) {

@@ -7,6 +7,7 @@ import {
   EffectiveTakeTarget,
   ensurePoolLoaded,
   getChainwideLiquidationAuctionsShared,
+  HotAuctionCandidateCache,
   getManualSettlementTargets,
   getManualTakeTargets,
   PoolHydrationCooldowns,
@@ -23,6 +24,7 @@ import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from './handlers';
+import { OneInchQuoteCircuitState } from './types';
 import { logger } from '../logging';
 import {
   createDiscoveryReadTransports,
@@ -31,6 +33,7 @@ import {
 import { handleSettlements } from '../settlement';
 import { ChainwideLiquidationAuction } from '../subgraph';
 import { handleTakes } from '../take';
+import { getDiscoveryGasPriceFreshnessTtlMs } from './gas-policy';
 import {
   createTakeWriteTransport,
   resolveTakeWriteConfig,
@@ -38,6 +41,10 @@ import {
 } from '../take/write-transport';
 import { delay } from '../utils';
 import { createDiscoveryRpcCache } from './rpc-cache';
+import {
+  FactoryQuoteProviderRuntimeCache,
+  createFactoryQuoteProviderRuntimeCache,
+} from '../take/factory';
 
 export interface DiscoverySnapshotState {
   latestLiquidationAuctions?: ChainwideLiquidationAuction[];
@@ -63,6 +70,10 @@ export interface DiscoveryRuntime {
 type DiscoveryRuntimeState = CreateDiscoveryRuntimeParams;
 type BoundDiscoveryRuntimeState = DiscoveryRuntimeState & {
   readTransports: DiscoveryReadTransports;
+  chainId?: number;
+  hotAuctionCandidateCache?: HotAuctionCandidateCache;
+  factoryQuoteProviders: FactoryQuoteProviderRuntimeCache;
+  oneInchQuoteCircuit: OneInchQuoteCircuitState;
   lastDiscoveredSettlementCycleStartedAtMs?: number;
   lastDiscoveredSettlementFailureAtMs?: number;
 };
@@ -92,14 +103,56 @@ interface DiscoveryRpcCacheState {
   cache?: DiscoveryRpcCache;
 }
 
-const DISCOVERY_GAS_PRICE_TTL_MS = 30_000;
+const DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS = 10 * 60_000;
+const DEFAULT_MAX_HOT_AUCTION_CANDIDATES = 1000;
 
 function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
 
-function shouldRefreshDiscoverySnapshotOnTakeCycle(config: KeeperConfig): boolean {
-  return !!config.autoDiscover?.enabled && !!getAutoDiscoverTakePolicy(config.autoDiscover);
+function createHotAuctionCandidateCacheForConfig(
+  config: KeeperConfig
+): HotAuctionCandidateCache | undefined {
+  const takePolicy = getAutoDiscoverTakePolicy(config.autoDiscover);
+  if (!config.autoDiscover?.enabled || !takePolicy) {
+    return undefined;
+  }
+  const ttlMs =
+    takePolicy.hotAuctionCandidateTtlMs ?? DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS;
+  if (ttlMs <= 0) {
+    return undefined;
+  }
+  return new HotAuctionCandidateCache({
+    ttlMs,
+    maxCandidates:
+      takePolicy.maxHotAuctionCandidates ?? DEFAULT_MAX_HOT_AUCTION_CANDIDATES,
+  });
+}
+
+async function getRuntimeChainId(
+  state: BoundDiscoveryRuntimeState
+): Promise<number | undefined> {
+  if (state.chainId !== undefined) {
+    return state.chainId;
+  }
+  try {
+    state.chainId = await state.signer.getChainId();
+    return state.chainId;
+  } catch (error) {
+    logger.warn(
+      `Discovery runtime could not resolve chainId; hot auction cache will be skipped this cycle: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return undefined;
+  }
+}
+
+function shouldRefreshDiscoverySnapshotOnTakeCycle(
+  config: KeeperConfig
+): boolean {
+  return (
+    !!config.autoDiscover?.enabled &&
+    !!getAutoDiscoverTakePolicy(config.autoDiscover)
+  );
 }
 
 function shouldRefreshDiscoverySnapshotOnSettlementCycle(
@@ -134,7 +187,8 @@ async function refreshDiscoverySnapshot(
     state.readTransports.subgraph
   );
   if (state.discoverySnapshotState) {
-    state.discoverySnapshotState.latestLiquidationAuctions = liquidationAuctions;
+    state.discoverySnapshotState.latestLiquidationAuctions =
+      liquidationAuctions;
     state.discoverySnapshotState.fetchedAt = Date.now();
   }
   return liquidationAuctions;
@@ -156,7 +210,8 @@ function getCachedDiscoverySnapshotForFallback(
   state: BoundDiscoveryRuntimeState,
   cycleType: 'take' | 'settlement'
 ): ChainwideLiquidationAuction[] | undefined {
-  const cachedAuctions = state.discoverySnapshotState?.latestLiquidationAuctions;
+  const cachedAuctions =
+    state.discoverySnapshotState?.latestLiquidationAuctions;
   if (!cachedAuctions) {
     return undefined;
   }
@@ -306,12 +361,19 @@ async function resolveTakeCycleTargets(
   state: BoundDiscoveryRuntimeState,
   liquidationAuctions?: ChainwideLiquidationAuction[]
 ): Promise<EffectiveTakeTarget[]> {
+  const chainId = state.hotAuctionCandidateCache
+    ? await getRuntimeChainId(state)
+    : undefined;
   return [
     ...getManualTakeTargets(state.config),
     ...(await buildDiscoveredTakeTargets(
       state.config,
       liquidationAuctions,
-      state.readTransports.subgraph
+      state.readTransports.subgraph,
+      {
+        hotAuctionCandidateCache: state.hotAuctionCandidateCache,
+        chainId,
+      }
     )),
   ];
 }
@@ -338,6 +400,12 @@ async function createDiscoveryCycleRpcCache(params: {
     signer: params.state.signer,
     readRpc: params.state.readTransports.readRpc,
     includeFactoryQuoteProviders: params.includeFactoryQuoteProviders,
+    factoryQuoteProviders: params.includeFactoryQuoteProviders
+      ? params.state.factoryQuoteProviders
+      : undefined,
+    oneInchQuoteCircuit: params.includeFactoryQuoteProviders
+      ? params.state.oneInchQuoteCircuit
+      : undefined,
   });
 }
 
@@ -356,12 +424,17 @@ async function ensureFreshDiscoveryGasPrice(params: {
   if (
     params.cache.gasPrice !== undefined &&
     gasPriceAgeMs !== undefined &&
-    gasPriceAgeMs < DISCOVERY_GAS_PRICE_TTL_MS
+    gasPriceAgeMs <
+      getDiscoveryGasPriceFreshnessTtlMs(
+        getAutoDiscoverTakePolicy(params.state.config.autoDiscover),
+        params.cache.chainId ?? params.state.chainId
+      )
   ) {
     return;
   }
 
-  params.cache.gasPrice = await params.state.readTransports.readRpc.getGasPrice();
+  params.cache.gasPrice =
+    await params.state.readTransports.readRpc.getGasPrice();
   params.cache.gasPriceFetchedAt = Date.now();
 }
 
@@ -460,11 +533,35 @@ async function resolveEffectiveTargetPool(
         });
 
   if (!pool) {
-    logger.warn(`Skipping target ${target.name} because the pool is unavailable`);
+    logger.warn(
+      `Skipping target ${target.name} because the pool is unavailable`
+    );
     return undefined;
   }
 
   return pool;
+}
+
+function createHotAuctionCandidateRemover(
+  state: BoundDiscoveryRuntimeState
+):
+  | ((candidate: { poolAddress: string; borrower: string }) => void)
+  | undefined {
+  if (!state.hotAuctionCandidateCache || state.chainId === undefined) {
+    return undefined;
+  }
+  return (candidate) => {
+    const removed = state.hotAuctionCandidateCache?.removeCandidate({
+      chainId: state.chainId!,
+      poolAddress: candidate.poolAddress,
+      borrower: candidate.borrower,
+    });
+    if (removed) {
+      logger.debug(
+        `Removed inactive hot take candidate ${candidate.poolAddress}/${candidate.borrower} from cache`
+      );
+    }
+  };
 }
 
 async function executeEffectiveTakeTarget(params: {
@@ -507,6 +604,7 @@ async function executeEffectiveTakeTarget(params: {
     config: state.config,
     transports: state.readTransports,
     rpcCache,
+    onCandidateInactive: createHotAuctionCandidateRemover(state),
   });
 }
 
@@ -543,7 +641,10 @@ async function executeEffectiveSettlementTarget(params: {
 
 function summarizeCycleTargets(
   targets: EffectiveTakeTarget[] | EffectiveSettlementTarget[]
-): Pick<DiscoveryCycleStats, 'targets' | 'manualTargets' | 'discoveredTargets'> {
+): Pick<
+  DiscoveryCycleStats,
+  'targets' | 'manualTargets' | 'discoveredTargets'
+> {
   let manualTargets = 0;
   for (const target of targets) {
     if (target.source === 'manual') {
@@ -582,7 +683,9 @@ function logDiscoveryCycleFailure(params: {
   );
 }
 
-async function runTakeDiscoveryCycle(state: BoundDiscoveryRuntimeState): Promise<void> {
+async function runTakeDiscoveryCycle(
+  state: BoundDiscoveryRuntimeState
+): Promise<void> {
   const startedAt = Date.now();
   let phase = 'snapshot';
   let snapshotInfo: DiscoveryCycleSnapshotInfo = {
@@ -699,7 +802,8 @@ async function runSettlementDiscoveryCycle(
       snapshotInfo = await getSettlementCycleLiquidationAuctions(state);
     } else {
       snapshotInfo = {
-        liquidationAuctions: state.discoverySnapshotState?.latestLiquidationAuctions,
+        liquidationAuctions:
+          state.discoverySnapshotState?.latestLiquidationAuctions,
         snapshotRefreshed: false,
         snapshotAgeMs:
           state.discoverySnapshotState?.fetchedAt !== undefined
@@ -745,16 +849,26 @@ async function runSettlementDiscoveryCycle(
         await delay(state.config.delayBetweenActions);
       } catch (error) {
         stats.targetFailures += 1;
-        logger.error(`Failed to handle settlements for pool: ${pool.name}`, error);
+        logger.error(
+          `Failed to handle settlements for pool: ${pool.name}`,
+          error
+        );
       }
     }
 
     if (includeDiscoveredTargets) {
       const completedWithUsableDiscoveryData =
-        !snapshotInfo.snapshotRefreshFailed || snapshotInfo.snapshotFallbackUsed;
-      if (!completedWithUsableDiscoveryData && snapshotInfo.snapshotRefreshFailed) {
+        !snapshotInfo.snapshotRefreshFailed ||
+        snapshotInfo.snapshotFallbackUsed;
+      if (
+        !completedWithUsableDiscoveryData &&
+        snapshotInfo.snapshotRefreshFailed
+      ) {
         state.lastDiscoveredSettlementFailureAtMs = Date.now();
-      } else if (stats.discoveredTargets === 0 || discoveredTargetSuccesses > 0) {
+      } else if (
+        stats.discoveredTargets === 0 ||
+        discoveredTargetSuccesses > 0
+      ) {
         state.lastDiscoveredSettlementCycleStartedAtMs = Date.now();
         state.lastDiscoveredSettlementFailureAtMs = undefined;
       } else {
@@ -839,6 +953,11 @@ export function createDiscoveryRuntime(
 ): DiscoveryRuntime {
   const state: BoundDiscoveryRuntimeState = {
     ...params,
+    hotAuctionCandidateCache: createHotAuctionCandidateCacheForConfig(
+      params.config
+    ),
+    factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
+    oneInchQuoteCircuit: { failures: 0 },
     readTransports: createDiscoveryReadTransports(
       params.config,
       params.signer.provider,

@@ -1,6 +1,13 @@
 import axios from 'axios';
 import 'dotenv/config';
-import { BigNumber, Contract, Signer, providers } from 'ethers';
+import {
+  BigNumber,
+  Contract,
+  Signer,
+  constants,
+  providers,
+  utils,
+} from 'ethers';
 import ERC20_ABI from '../abis/erc20.abi.json';
 import { approveErc20, getAllowanceOfErc20, getDecimalsErc20 } from '../erc20';
 import { logger } from '../logging';
@@ -17,6 +24,144 @@ import {
   LiquiditySource,
   PostAuctionDex,
 } from '../config';
+
+export interface OneInchRequestOptions {
+  timeoutMs?: number;
+}
+
+export interface OneInchApiResult {
+  success: boolean;
+  data?: any;
+  dstAmount?: string;
+  error?: string;
+  retryable?: boolean;
+  errorCode?: number | string;
+}
+
+function validateOneInchApiEnv(): { baseUrl?: string; error?: string } {
+  if (!process.env.ONEINCH_API) {
+    return { error: 'ONEINCH_API is not configured' };
+  }
+  if (!process.env.ONEINCH_API_KEY) {
+    return { error: 'ONEINCH_API_KEY is not configured' };
+  }
+  return { baseUrl: process.env.ONEINCH_API };
+}
+
+function normalizeOneInchUintAmount(
+  value: unknown,
+  fieldName: string
+): { value?: string; error?: string } {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+    return {
+      error: `1inch ${fieldName} is not a decimal uint string`,
+    };
+  }
+
+  try {
+    const parsed = BigNumber.from(value);
+    if (parsed.gt(constants.MaxUint256)) {
+      return {
+        error: `1inch ${fieldName} exceeds uint256`,
+      };
+    }
+    return { value: parsed.toString() };
+  } catch (error) {
+    return {
+      error: `1inch ${fieldName} is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function normalizeAddressForComparison(value: string): string | undefined {
+  try {
+    return utils.getAddress(value).toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function parseOneInchTxValue(value: unknown): {
+  value?: BigNumber;
+  error?: string;
+} {
+  if (value === undefined || value === null || value === '') {
+    return { value: constants.Zero };
+  }
+  if (BigNumber.isBigNumber(value)) {
+    if (value.lt(0)) {
+      return {
+        error: '1inch tx.value must be a non-negative uint',
+      };
+    }
+    if (value.gt(constants.MaxUint256)) {
+      return {
+        error: '1inch tx.value exceeds uint256',
+      };
+    }
+    return { value };
+  }
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      return {
+        error: '1inch tx.value must be a non-negative safe integer',
+      };
+    }
+    return { value: BigNumber.from(value) };
+  }
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
+    return {
+      error: '1inch tx.value must be a decimal uint string',
+    };
+  }
+  try {
+    const parsed = BigNumber.from(value);
+    if (parsed.gt(constants.MaxUint256)) {
+      return {
+        error: '1inch tx.value exceeds uint256',
+      };
+    }
+    return { value: parsed };
+  } catch (error) {
+    return {
+      error: `1inch tx.value is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function validateZeroOneInchTxValue(value: unknown): string | undefined {
+  const parsed = parseOneInchTxValue(value);
+  if (parsed.error) {
+    return parsed.error;
+  }
+  if (parsed.value && !parsed.value.eq(0)) {
+    return `unexpected non-zero 1inch tx.value ${parsed.value.toString()} for ERC20 swap`;
+  }
+  return undefined;
+}
+
+function getOneInchErrorMessage(error: Error | any): string {
+  return error.response?.data?.description || error.message;
+}
+
+function getOneInchErrorCode(error: Error | any): number | string | undefined {
+  if (error.response?.status !== undefined) {
+    return error.response.status;
+  }
+  return error.code;
+}
+
+function isRetryableOneInchError(error: Error | any): boolean {
+  const status = error.response?.status;
+  const code = error.code;
+  return (
+    status === 429 ||
+    status === undefined ||
+    status >= 500 ||
+    code === 'ECONNABORTED' ||
+    code === 'ETIMEDOUT'
+  );
+}
 
 export class DexRouter {
   private signer: Signer;
@@ -51,9 +196,19 @@ export class DexRouter {
     chainId: number,
     amount: BigNumber,
     tokenIn: string,
-    tokenOut: string
-  ): Promise<{ success: boolean; dstAmount?: string; error?: string }> {
-    const url = `${process.env.ONEINCH_API}/${chainId}/quote`;
+    tokenOut: string,
+    options: OneInchRequestOptions = {}
+  ): Promise<OneInchApiResult> {
+    const apiEnv = validateOneInchApiEnv();
+    if (!apiEnv.baseUrl) {
+      return {
+        success: false,
+        error: apiEnv.error,
+        retryable: false,
+        errorCode: 'missing_oneinch_env',
+      };
+    }
+    const url = `${apiEnv.baseUrl}/${chainId}/quote`;
 
     const params: {
       fromTokenAddress: string;
@@ -77,18 +232,40 @@ export class DexRouter {
     try {
       const response = await axios.get(url, {
         params,
+        timeout: options.timeoutMs,
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
         },
       });
-      logger.debug(`1inch quote: ${amount} ${tokenIn} → ${response.data.dstAmount} ${tokenOut}`);
+      const normalizedDstAmount = normalizeOneInchUintAmount(
+        response.data.dstAmount,
+        'dstAmount'
+      );
+      if (!normalizedDstAmount.value) {
+        logger.error(normalizedDstAmount.error);
+        return {
+          success: false,
+          error: normalizedDstAmount.error,
+          retryable: true,
+          errorCode: 'invalid_response',
+        };
+      }
 
-      return { success: true, dstAmount: response.data.dstAmount };
+      logger.debug(
+        `1inch quote: ${amount} ${tokenIn} → ${normalizedDstAmount.value} ${tokenOut}`
+      );
+
+      return { success: true, dstAmount: normalizedDstAmount.value };
     } catch (error: Error | any) {
-      const errorMsg = error.response?.data?.description || error.message;
+      const errorMsg = getOneInchErrorMessage(error);
       logger.error(`Failed to get quote from 1inch: ${errorMsg}`);
-      return { success: false, error: errorMsg };
+      return {
+        success: false,
+        error: errorMsg,
+        retryable: isRetryableOneInchError(error),
+        errorCode: getOneInchErrorCode(error),
+      };
     }
   }
 
@@ -100,8 +277,18 @@ export class DexRouter {
     slippage: number,
     fromAddress: string,
     usePatching: boolean = false,
-  ) : Promise<{ success: boolean; data?: any; error?: string; retryable?: boolean }> {
-    const url = `${process.env.ONEINCH_API}/${chainId}/swap`;
+    options: OneInchRequestOptions = {}
+  ): Promise<OneInchApiResult> {
+    const apiEnv = validateOneInchApiEnv();
+    if (!apiEnv.baseUrl) {
+      return {
+        success: false,
+        error: apiEnv.error,
+        retryable: false,
+        errorCode: 'missing_oneinch_env',
+      };
+    }
+    const url = `${apiEnv.baseUrl}/${chainId}/swap`;
     const params: {
       fromTokenAddress: string;
       toTokenAddress: string;
@@ -123,7 +310,7 @@ export class DexRouter {
       params['connectorTokens'] = this.connectorTokens;
     }
     if (usePatching) {
-      params['usePatching'] = true;     // allow mutations to the swap data
+      params['usePatching'] = true; // allow mutations to the swap data
       params['disableEstimate'] = true; // skip API balance check (collateral will come mid-transaction)
     }
 
@@ -134,32 +321,83 @@ export class DexRouter {
     try {
       const response = await axios.get(url, {
         params,
+        timeout: options.timeoutMs,
         headers: {
           Accept: 'application/json',
           Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
         },
       });
 
-      if (
-        !response.data.tx ||
-        !response.data.tx.to ||
-        !response.data.tx.data
-      ) {
+      if (!response.data.tx || !response.data.tx.to || !response.data.tx.data) {
         logger.error('No valid transaction received from 1inch');
         return {
           success: false,
           error: 'No valid transaction received from 1inch',
+          retryable: true,
+          errorCode: 'invalid_response',
         };
       }
 
-      return { success: true, data: response.data.tx };
+      const expectedRouter = this.oneInchRouters[chainId];
+      const normalizedExpectedRouter =
+        expectedRouter !== undefined
+          ? normalizeAddressForComparison(expectedRouter)
+          : undefined;
+      const normalizedTxTarget = normalizeAddressForComparison(
+        response.data.tx.to
+      );
+      if (!normalizedExpectedRouter || !normalizedTxTarget) {
+        return {
+          success: false,
+          error: `1inch router validation failed for chain ${chainId}`,
+          retryable: false,
+          errorCode: 'router_validation',
+        };
+      }
+      if (normalizedTxTarget !== normalizedExpectedRouter) {
+        return {
+          success: false,
+          error: `1inch tx target ${response.data.tx.to} does not match configured router ${expectedRouter}`,
+          retryable: true,
+          errorCode: 'invalid_response',
+        };
+      }
+      const valueValidationError = validateZeroOneInchTxValue(
+        response.data.tx.value
+      );
+      if (valueValidationError) {
+        return {
+          success: false,
+          error: valueValidationError,
+          retryable: true,
+          errorCode: 'invalid_response',
+        };
+      }
+      const normalizedDstAmount =
+        response.data.dstAmount !== undefined
+          ? normalizeOneInchUintAmount(response.data.dstAmount, 'dstAmount')
+          : {};
+      if (response.data.dstAmount !== undefined && !normalizedDstAmount.value) {
+        return {
+          success: false,
+          error: normalizedDstAmount.error,
+          retryable: true,
+          errorCode: 'invalid_response',
+        };
+      }
+
+      return {
+        success: true,
+        data: response.data.tx,
+        dstAmount: normalizedDstAmount.value,
+      };
     } catch (error: Error | any) {
-      const errorMsg = error.response?.data?.description || error.message;
-      const status = error.response?.status;
+      const errorMsg = getOneInchErrorMessage(error);
       return {
         success: false,
         error: errorMsg,
-        retryable: status === 429 || status === undefined || status >= 500,
+        retryable: isRetryableOneInchError(error),
+        errorCode: getOneInchErrorCode(error),
       };
     }
   }
@@ -169,7 +407,7 @@ export class DexRouter {
     amount: BigNumber,
     tokenIn: string,
     tokenOut: string,
-    slippage: number,
+    slippage: number
   ): Promise<{ success: boolean; receipt?: any; error?: string }> {
     if (!process.env.ONEINCH_API) {
       logger.error(
@@ -228,6 +466,15 @@ export class DexRouter {
         }
         const txFrom1inch = swapDataResult.data!;
         logger.debug(`Transaction from 1inch: ${JSON.stringify(txFrom1inch)}`);
+        const valueValidationError = validateZeroOneInchTxValue(
+          txFrom1inch.value
+        );
+        if (valueValidationError) {
+          return {
+            success: false,
+            error: valueValidationError,
+          };
+        }
 
         const tx = {
           to: txFrom1inch.to,
@@ -235,9 +482,6 @@ export class DexRouter {
           value: txFrom1inch.value || '0',
           gasLimit: txFrom1inch.gas
             ? BigNumber.from(txFrom1inch.gas)
-            : undefined,
-          gasPrice: txFrom1inch.gasPrice
-            ? BigNumber.from(txFrom1inch.gasPrice)
             : undefined,
         };
 
@@ -259,15 +503,18 @@ export class DexRouter {
           };
         }
 
-        const receipt = await NonceTracker.queueTransaction(this.signer, async (nonce: number) => {
-          const txWithNonce = {
-            ...tx,
-            nonce
-          };
-          const txResponse = await this.signer.sendTransaction(txWithNonce);
-          return await txResponse.wait();
-        });
-	
+        const receipt = await NonceTracker.queueTransaction(
+          this.signer,
+          async (nonce: number) => {
+            const txWithNonce = {
+              ...tx,
+              nonce,
+            };
+            const txResponse = await this.signer.sendTransaction(txWithNonce);
+            return await txResponse.wait();
+          }
+        );
+
         logger.info(
           `1inch swap successful: ${amount.toString()} ${tokenIn} -> ${tokenOut} | Tx Hash: ${receipt.transactionHash}`
         );
@@ -296,17 +543,16 @@ export class DexRouter {
     to: string,
     slippage: number,
     feeAmount?: number,
-    sushiswapSettings?: any,
+    sushiswapSettings?: any
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      
       if (!sushiswapSettings) {
         return {
           success: false,
-          error: 'SushiSwap configuration not found'
+          error: 'SushiSwap configuration not found',
         };
       }
-      
+
       const result = await swapWithSushiswapRouter(
         this.signer,
         tokenIn,
@@ -318,46 +564,51 @@ export class DexRouter {
         feeAmount ||
           sushiswapSettings.defaultFeeTier ||
           DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
-        sushiswapSettings.factoryAddress,
+        sushiswapSettings.factoryAddress
       );
-      
+
       return result;
     } catch (error) {
       return {
         success: false,
-        error: `SushiSwap swap failed: ${error}`
+        error: `SushiSwap swap failed: ${error}`,
       };
     }
   }
 
   // CURVE INTEGRATION: Simplified helper to find pool config by token pair
   public getCurvePoolForTokenPair(
-    tokenIn: string, 
-    tokenOut: string, 
+    tokenIn: string,
+    tokenOut: string,
     poolConfigs: any
   ): { address: string; poolType: CurvePoolType } | undefined {
-    
-    // Convert addresses to symbol names for lookup  
+    // Convert addresses to symbol names for lookup
     const tokenInSymbol = this.getTokenSymbolFromAddress(tokenIn);
     const tokenOutSymbol = this.getTokenSymbolFromAddress(tokenOut);
-    
+
     if (!tokenInSymbol || !tokenOutSymbol) {
-      logger.debug(`Could not resolve token symbols for ${tokenIn}/${tokenOut}`);
+      logger.debug(
+        `Could not resolve token symbols for ${tokenIn}/${tokenOut}`
+      );
       return undefined;
     }
-    
+
     // Try both directions for the token pair
     const key1 = `${tokenInSymbol}-${tokenOutSymbol}`;
     const key2 = `${tokenOutSymbol}-${tokenInSymbol}`;
-    
+
     const poolConfig = poolConfigs[key1] || poolConfigs[key2];
-    
+
     if (poolConfig) {
-      logger.debug(`Found Curve pool for ${tokenInSymbol}/${tokenOutSymbol}: ${poolConfig.address}`);
+      logger.debug(
+        `Found Curve pool for ${tokenInSymbol}/${tokenOutSymbol}: ${poolConfig.address}`
+      );
       return poolConfig;
     }
-    
-    logger.debug(`No Curve pool configured for ${tokenInSymbol}/${tokenOutSymbol}`);
+
+    logger.debug(
+      `No Curve pool configured for ${tokenInSymbol}/${tokenOutSymbol}`
+    );
     return undefined;
   }
 
@@ -380,38 +631,37 @@ export class DexRouter {
     to: string,
     slippage: number,
     feeAmount?: number,
-    curveSettings?: any,
+    curveSettings?: any
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      
       if (!curveSettings) {
         return {
           success: false,
-          error: 'Curve configuration not found'
+          error: 'Curve configuration not found',
         };
       }
-      
+
       if (!curveSettings.poolConfigs) {
         return {
           success: false,
-          error: 'Curve pool configurations not found'
+          error: 'Curve pool configurations not found',
         };
       }
-      
+
       // SIMPLIFIED: Use the new token pair lookup
       const poolConfig = this.getCurvePoolForTokenPair(
-        tokenIn, 
-        tokenOut, 
+        tokenIn,
+        tokenOut,
         curveSettings.poolConfigs
       );
-      
+
       if (!poolConfig) {
         return {
           success: false,
-          error: `No Curve pool configured for ${tokenIn}/${tokenOut}`
+          error: `No Curve pool configured for ${tokenIn}/${tokenOut}`,
         };
       }
-      
+
       const result = await swapWithCurveRouter(
         this.signer,
         tokenIn,
@@ -422,12 +672,12 @@ export class DexRouter {
         poolConfig.poolType,
         curveSettings.defaultSlippage
       );
-      
+
       return result;
     } catch (error) {
       return {
         success: false,
-        error: `Curve swap failed: ${error}`
+        error: `Curve swap failed: ${error}`,
       };
     }
   }
@@ -440,12 +690,10 @@ export class DexRouter {
     to: string,
     dexProvider: PostAuctionDex,
     slippage: number = 1,
-    feeAmount: number = DEFAULT_FEE_TIER_BY_SOURCE[
-      LiquiditySource.UNISWAPV3
-    ],
-    combinedSettings?: { 
+    feeAmount: number = DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+    combinedSettings?: {
       uniswap?: {
-        wethAddress?: string; 
+        wethAddress?: string;
         uniswapV3Router?: string;
         universalRouterAddress?: string;
         permit2Address?: string;
@@ -477,8 +725,13 @@ export class DexRouter {
     );
 
     if (adjustedAmount.isZero()) {
-      logger.debug(`Skipping swap: dust amount rounds to zero in ${decimals}-decimal token ${tokenIn}`);
-      return { success: false, error: `Amount too small for ${tokenIn} (rounds to zero)` };
+      logger.debug(
+        `Skipping swap: dust amount rounds to zero in ${decimals}-decimal token ${tokenIn}`
+      );
+      return {
+        success: false,
+        error: `Amount too small for ${tokenIn} (rounds to zero)`,
+      };
     }
 
     const erc20 = new Contract(tokenIn, ERC20_ABI, provider);
@@ -540,7 +793,11 @@ export class DexRouter {
         return result;
 
       case PostAuctionDex.UNISWAP_V3:
-        if (combinedSettings?.uniswap?.universalRouterAddress && combinedSettings?.uniswap?.permit2Address && combinedSettings?.uniswap?.poolFactoryAddress) {
+        if (
+          combinedSettings?.uniswap?.universalRouterAddress &&
+          combinedSettings?.uniswap?.permit2Address &&
+          combinedSettings?.uniswap?.poolFactoryAddress
+        ) {
           try {
             logger.info(`Using Universal Router for swap`);
             await swapWithUniversalRouter(
@@ -559,8 +816,13 @@ export class DexRouter {
             );
             return { success: true };
           } catch (error) {
-            logger.error(`Universal Router swap failed for token: ${tokenIn}: ${error}`);
-            return { success: false, error: `Universal Router swap failed: ${error}` };
+            logger.error(
+              `Universal Router swap failed for token: ${tokenIn}: ${error}`
+            );
+            return {
+              success: false,
+              error: `Universal Router swap failed: ${error}`,
+            };
           }
         } else {
           try {
@@ -576,7 +838,9 @@ export class DexRouter {
             );
             return { success: true };
           } catch (error) {
-            logger.error(`Uniswap V3 swap failed for token: ${tokenIn}: ${error}`);
+            logger.error(
+              `Uniswap V3 swap failed for token: ${tokenIn}: ${error}`
+            );
             return { success: false, error: `Uniswap swap failed: ${error}` };
           }
         }
@@ -609,7 +873,7 @@ export class DexRouter {
       default:
         return {
           success: false,
-          error: `Unsupported DEX provider: ${dexProvider}`
+          error: `Unsupported DEX provider: ${dexProvider}`,
         };
     }
   }

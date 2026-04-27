@@ -5,9 +5,11 @@ import path from 'path';
 import { readConfigFile } from '../config';
 import { assertIsValidConfig } from '../config/load';
 import {
+  KeeperConfig,
   PostAuctionDex,
   RewardActionLabel,
   TokenToCollect,
+  validateTakeSettingsForChain,
 } from '../config';
 
 const BASE_CONFIG = {
@@ -64,7 +66,10 @@ describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
 
   it('rejects NaN and Infinity', () => {
     expect(() =>
-      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: Number.NaN })
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        lpRewardLookbackSeconds: Number.NaN,
+      })
     ).to.throw(/non-negative integer/);
     expect(() =>
       assertIsValidConfig({
@@ -242,10 +247,43 @@ describe('assertIsValidConfig rewardAction shape', () => {
         ...BASE_CONFIG,
         defaultLpReward: {
           ...validDefault,
-          rewardActionQuote: { action: 'unknown', to: '0x1234567890123456789012345678901234567890' } as any,
+          rewardActionQuote: {
+            action: 'unknown',
+            to: '0x1234567890123456789012345678901234567890',
+          } as any,
         },
       })
     ).to.throw(/action must be/);
+  });
+});
+
+describe('validateTakeSettingsForChain Curve execution delay', () => {
+  it('accepts low bounded Curve execution delay overrides', () => {
+    expect(() =>
+      validateTakeSettingsForChain(
+        {
+          ...BASE_CONFIG,
+          curveRouterOverrides: {
+            executionDelayMs: 60_000,
+          },
+        } as KeeperConfig,
+        1
+      )
+    ).to.not.throw();
+  });
+
+  it('rejects Curve execution delay overrides that can stall hot take loops', () => {
+    expect(() =>
+      validateTakeSettingsForChain(
+        {
+          ...BASE_CONFIG,
+          curveRouterOverrides: {
+            executionDelayMs: 60_001,
+          },
+        } as KeeperConfig,
+        1
+      )
+    ).to.throw(/executionDelayMs must be an integer between 0 and 60000/);
   });
 });
 

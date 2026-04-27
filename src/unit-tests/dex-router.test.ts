@@ -91,12 +91,12 @@ describe('DexRouter', () => {
       return contractStub;
     });
 
-    sinon.stub(NonceTracker, 'queueTransaction').callsFake(
-     async (signer, txFunc) => {
-      // Simply execute the transaction function with a dummy nonce
-      return await txFunc(10);
-     }
-    );
+    sinon
+      .stub(NonceTracker, 'queueTransaction')
+      .callsFake(async (signer, txFunc) => {
+        // Simply execute the transaction function with a dummy nonce
+        return await txFunc(10);
+      });
 
     dexRouter = new DexRouter(signer, {
       oneInchRouters: {
@@ -113,7 +113,7 @@ describe('DexRouter', () => {
     axiosGetStub = sinon.stub(axios, 'get').resolves({
       data: {
         tx: {
-          to: '0x1inchRouter',
+          to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
           data: '0xdata',
           value: '0',
           gas: '100000',
@@ -273,7 +273,7 @@ describe('DexRouter', () => {
         axiosGetStub.onCall(1).resolves({
           data: {
             tx: {
-              to: '0x1inchRouter',
+              to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
               data: '0xdata',
               value: '0',
               gas: '100000',
@@ -294,9 +294,8 @@ describe('DexRouter', () => {
 
         console.log('Result (approve insufficient):', result);
         if (!result.success) {
-        console.log('Error details (approve insufficient):', result.error);
+          console.log('Error details (approve insufficient):', result.error);
         }
-
 
         expect(result.success).to.be.true;
         expect(getDecimalsStub.calledOnce).to.be.true;
@@ -328,7 +327,7 @@ describe('DexRouter', () => {
         axiosGetStub.onCall(1).resolves({
           data: {
             tx: {
-              to: '0x1inchRouter',
+              to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
               data: '0xdata',
               value: '0',
               gas: '100000',
@@ -346,10 +345,10 @@ describe('DexRouter', () => {
           slippage,
           feeAmount
         );
-        
+
         console.log('Result (skip approval):', result);
         if (!result.success) {
-        console.log('Error details (skip approval):', result.error);
+          console.log('Error details (skip approval):', result.error);
         }
 
         expect(result.success).to.be.true;
@@ -416,7 +415,7 @@ describe('DexRouter', () => {
         axiosGetStub.onCall(1).resolves({
           data: {
             tx: {
-              to: '0x1inchRouter',
+              to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
               data: '0xdata',
               value: '0',
               gas: '100000',
@@ -434,10 +433,10 @@ describe('DexRouter', () => {
           slippage,
           feeAmount
         );
-        
+
         console.log('Result (execute transaction):', result);
         if (!result.success) {
-        console.log('Error details (execute transaction):', result.error);
+          console.log('Error details (execute transaction):', result.error);
         }
 
         expect(result.success).to.be.true;
@@ -453,6 +452,7 @@ describe('DexRouter', () => {
                 toTokenAddress: tokenOut,
                 amount: '100000000',
               },
+              timeout: undefined,
               headers: {
                 Accept: 'application/json',
                 Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -471,6 +471,7 @@ describe('DexRouter', () => {
                 fromAddress,
                 slippage,
               },
+              timeout: undefined,
               headers: {
                 Accept: 'application/json',
                 Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -506,6 +507,7 @@ describe('DexRouter', () => {
     it('should execute swap with 1inch successfully', async () => {
       axiosGetStub.onCall(0).resolves({
         data: {
+          dstAmount: '900000000000000000',
           toTokenAmount: '900000000000000000',
           protocols: [],
         },
@@ -513,7 +515,7 @@ describe('DexRouter', () => {
       axiosGetStub.onCall(1).resolves({
         data: {
           tx: {
-            to: '0x1inchRouter',
+            to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
             data: '0xdata',
             value: '0',
             gas: '100000',
@@ -528,11 +530,11 @@ describe('DexRouter', () => {
         tokenOut,
         slippage
       );
-      
+
       console.log('Result (1inch swap):', result);
       if (!result.success) {
-      console.log('Error details (1inch swap):', result.error);
-      }   
+        console.log('Error details (1inch swap):', result.error);
+      }
 
       expect(result.success).to.be.true;
       expect(axiosGetStub.calledTwice).to.be.true;
@@ -546,6 +548,7 @@ describe('DexRouter', () => {
               toTokenAddress: tokenOut,
               amount: '100000000',
             },
+            timeout: undefined,
             headers: {
               Accept: 'application/json',
               Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
@@ -564,12 +567,47 @@ describe('DexRouter', () => {
               fromAddress,
               slippage,
             },
+            timeout: undefined,
             headers: {
               Accept: 'application/json',
               Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
             },
           })
       ).to.be.true;
+    });
+
+    it('ignores gasPrice supplied by 1inch swap data', async () => {
+      axiosGetStub.onCall(0).resolves({
+        data: {
+          dstAmount: '900000000000000000',
+          toTokenAmount: '900000000000000000',
+          protocols: [],
+        },
+      });
+      axiosGetStub.onCall(1).resolves({
+        data: {
+          tx: {
+            to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+            data: '0xdata',
+            value: '0',
+            gas: '100000',
+            gasPrice: '1000000000000',
+          },
+        },
+      });
+
+      const result = await dexRouter['swapWithOneInch'](
+        chainId,
+        BigNumber.from('100000000'),
+        tokenIn,
+        tokenOut,
+        slippage
+      );
+
+      expect(result.success).to.be.true;
+      const sentTx = (signer.sendTransaction as sinon.SinonStub).firstCall
+        .args[0];
+      expect(sentTx.gasPrice).to.be.undefined;
     });
 
     it('should log error if axios fails', async () => {
@@ -586,6 +624,242 @@ describe('DexRouter', () => {
       expect(result).to.deep.equal({ success: false, error: 'API error' });
     });
 
+    it('classifies timed-out 1inch quote requests as retryable', async () => {
+      const timeoutError = new Error('timeout of 2000ms exceeded') as Error & {
+        code: string;
+      };
+      timeoutError.code = 'ECONNABORTED';
+      axiosGetStub.rejects(timeoutError);
+
+      const result = await dexRouter.getQuoteFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        { timeoutMs: 2000 }
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.retryable).to.be.true;
+      expect(result.errorCode).to.equal('ECONNABORTED');
+      expect(axiosGetStub.firstCall.args[1].timeout).to.equal(2000);
+    });
+
+    it('fails 1inch quote requests before calling the API when env is missing', async () => {
+      delete process.env.ONEINCH_API_KEY;
+
+      const result = await dexRouter.getQuoteFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut
+      );
+
+      expect(result).to.deep.include({
+        success: false,
+        retryable: false,
+        errorCode: 'missing_oneinch_env',
+      });
+      expect(axiosGetStub.called).to.be.false;
+    });
+
+    it('fails 1inch swap-data requests before calling the API when env is missing', async () => {
+      delete process.env.ONEINCH_API;
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result).to.deep.include({
+        success: false,
+        retryable: false,
+        errorCode: 'missing_oneinch_env',
+      });
+      expect(axiosGetStub.called).to.be.false;
+    });
+
+    it('rejects malformed 1inch quote amounts before callers parse them', async () => {
+      axiosGetStub.resolves({
+        data: {
+          dstAmount: '1e18',
+        },
+      });
+
+      const result = await dexRouter.getQuoteFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.error).to.include('dstAmount is not a decimal uint string');
+    });
+
+    it('rejects 1inch swap data when tx.to is not the configured router', async () => {
+      axiosGetStub.resolves({
+        data: {
+          tx: {
+            to: '0x9999999999999999999999999999999999999999',
+            data: '0xdata',
+            value: '0',
+            gas: '100000',
+          },
+        },
+      });
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.error).to.include('does not match configured router');
+    });
+
+    it('rejects 1inch swap data with non-zero native tx.value', async () => {
+      axiosGetStub.resolves({
+        data: {
+          tx: {
+            to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+            data: '0xdata',
+            value: '1',
+            gas: '100000',
+          },
+        },
+      });
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.error).to.include('unexpected non-zero 1inch tx.value');
+    });
+
+    it('rejects 1inch swap data with negative native tx.value', async () => {
+      axiosGetStub.resolves({
+        data: {
+          tx: {
+            to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+            data: '0xdata',
+            value: '-1',
+            gas: '100000',
+          },
+        },
+      });
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.error).to.include('1inch tx.value must be');
+    });
+
+    for (const malformedValue of [
+      '0x',
+      '0x0',
+      '1.5',
+      ethers.constants.MaxUint256.add(1).toString(),
+    ]) {
+      it(`rejects malformed 1inch native tx.value ${malformedValue}`, async () => {
+        axiosGetStub.resolves({
+          data: {
+            tx: {
+              to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+              data: '0xdata',
+              value: malformedValue,
+              gas: '100000',
+            },
+          },
+        });
+
+        const result = await dexRouter.getSwapDataFromOneInch(
+          chainId,
+          amount,
+          tokenIn,
+          tokenOut,
+          slippage,
+          fromAddress
+        );
+
+        expect(result.success).to.be.false;
+        expect(result.error).to.include('1inch tx.value');
+      });
+    }
+
+    it('returns validated dstAmount from 1inch swap data', async () => {
+      axiosGetStub.resolves({
+        data: {
+          dstAmount: '900000000000000000',
+          tx: {
+            to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+            data: '0xdata',
+            value: '0',
+            gas: '100000',
+          },
+        },
+      });
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result.success).to.be.true;
+      expect(result.dstAmount).to.equal('900000000000000000');
+    });
+
+    it('rejects malformed dstAmount from 1inch swap data', async () => {
+      axiosGetStub.resolves({
+        data: {
+          dstAmount: '1e18',
+          tx: {
+            to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+            data: '0xdata',
+            value: '0',
+            gas: '100000',
+          },
+        },
+      });
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.error).to.include('dstAmount is not a decimal uint string');
+    });
+
     it('retries retryable 1inch swap-data failures before succeeding', async () => {
       const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
       try {
@@ -593,20 +867,21 @@ describe('DexRouter', () => {
           success: true,
           dstAmount: '900000000000000000',
         });
-        const getSwapDataStub = sinon.stub(
-          dexRouter,
-          'getSwapDataFromOneInch'
-        );
-        getSwapDataStub
-          .onCall(0)
-          .resolves({ success: false, error: 'network error', retryable: true });
-        getSwapDataStub
-          .onCall(1)
-          .resolves({ success: false, error: 'network error', retryable: true });
+        const getSwapDataStub = sinon.stub(dexRouter, 'getSwapDataFromOneInch');
+        getSwapDataStub.onCall(0).resolves({
+          success: false,
+          error: 'network error',
+          retryable: true,
+        });
+        getSwapDataStub.onCall(1).resolves({
+          success: false,
+          error: 'network error',
+          retryable: true,
+        });
         getSwapDataStub.onCall(2).resolves({
           success: true,
           data: {
-            to: '0x1inchRouter',
+            to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
             data: '0xdata',
             value: '0',
             gas: '100000',

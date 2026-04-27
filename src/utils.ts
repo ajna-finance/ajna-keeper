@@ -7,6 +7,45 @@ import { logger } from './logging';
 import { JsonRpcProvider } from './provider';
 
 export type RequireFields<T, K extends keyof T> = T & Required<Pick<T, K>>;
+
+export async function mapWithConcurrencyPreservingOrder<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  if (!Number.isFinite(concurrency) || concurrency < 1) {
+    throw new Error('mapWithConcurrencyPreservingOrder requires concurrency >= 1');
+  }
+
+  const workerCount = Math.min(
+    Math.max(1, Math.floor(concurrency)),
+    items.length
+  );
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  let failed = false;
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (!failed && nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        try {
+          results[index] = await mapper(items[index], index);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
+      }
+    })
+  );
+
+  return results;
+}
+
 interface UtilsType {
   addAccountFromKeystore: (
     keystorePath: string,
@@ -46,7 +85,8 @@ let Utils: UtilsType;
 export async function askPassword() {
   const rawFilePath = process.env.KEYSTORE_PASSWORD_FILE;
   const rawEnvPassword = process.env.KEYSTORE_PASSWORD;
-  const filePath = rawFilePath && rawFilePath.length > 0 ? rawFilePath : undefined;
+  const filePath =
+    rawFilePath && rawFilePath.length > 0 ? rawFilePath : undefined;
   const envPassword =
     rawEnvPassword && rawEnvPassword.length > 0 ? rawEnvPassword : undefined;
 

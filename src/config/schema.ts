@@ -72,6 +72,15 @@ export enum LiquiditySource {
 }
 
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
+export type ExternalTakePathKind = 'oneinch' | 'factory';
+export type ExternalTakeRouteSelectionMode =
+  | 'maximize_profit'
+  | 'factory_first'
+  | 'cost_aware';
+export type ExternalTakeTransportPolicy =
+  | 'allow_public'
+  | 'prefer_private_or_relay'
+  | 'require_private_or_relay';
 
 export enum CurvePoolType {
   STABLE = 'stable',
@@ -183,6 +192,81 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    */
   minProfitNative?: string;
   takeQuoteBudgetPerRun?: number;
+  /**
+   * Milliseconds to keep already-seen liquidation candidates eligible for
+   * probing even if the next subgraph refresh omits them. Set to 0 to disable.
+   */
+  hotAuctionCandidateTtlMs?: number;
+  /**
+   * Maximum hot-auction candidates retained in memory across take cycles.
+   */
+  maxHotAuctionCandidates?: number;
+  /**
+   * External take execution paths eligible for discovered liquidation takes.
+   * When omitted, autodiscover preserves the legacy single-path behavior from
+   * discoveredDefaults.take.liquiditySource.
+   */
+  allowedExternalTakePaths?: ExternalTakePathKind[];
+  /**
+   * Factory path to use when discoveredDefaults.take.liquiditySource is 1inch
+   * but allowedExternalTakePaths also enables the factory execution path.
+   */
+  defaultFactoryLiquiditySource?: LiquiditySource;
+  /**
+   * Freshness windows for gas prices used in discovered external-take
+   * profitability checks. L2 defaults are intentionally longer than L1.
+   */
+  l1GasPriceFreshnessTtlMs?: number;
+  l2GasPriceFreshnessTtlMs?: number;
+  /**
+   * Basis-point multiplier applied to estimated L2 gas costs to cover L1 data
+   * fees and sequencer-specific cost drift. 13000 means 1.3x.
+   */
+  l2GasCostBufferBasisPoints?: number;
+  /**
+   * Optional maximum allowed absolute gas-price drift between quote evaluation
+   * and final pre-submission approval. Only upward drift rejects; lower gas is
+   * favorable. 2000 means 20%. When omitted, freshness TTLs still apply but
+   * drift does not reject otherwise-fresh quotes.
+   */
+  gasPriceDriftToleranceBasisPoints?: number;
+  /**
+   * Maximum time to wait for a 1inch quote while probing hybrid external-take
+   * paths and for the matching 1inch swap-data request before submission.
+   * Defaults to 2000ms. Must be between 1ms and 10000ms.
+   */
+  oneInchQuoteTimeoutMs?: number;
+  /**
+   * Cooldown after repeated retryable 1inch quote failures. Defaults to 30000ms.
+   */
+  oneInchQuoteFailureCooldownMs?: number;
+  /**
+   * Retryable 1inch quote failures before cooldown opens. Defaults to 2.
+   */
+  oneInchQuoteFailureThreshold?: number;
+  /**
+   * Maximum time to wait for each external-take path probe in hybrid mode.
+   * Defaults to oneInchQuoteTimeoutMs plus a 1000ms RPC preflight budget,
+   * capped at 5000ms. Must be between 1ms and 10000ms when configured.
+   */
+  externalTakeProbeTimeoutMs?: number;
+  /**
+   * Hybrid route selection mode. maximize_profit probes all enabled paths and
+   * picks the best net-profit route. factory_first probes factory before
+   * 1inch and stops at the first approved path to reduce 1inch API use.
+   * cost_aware is a deprecated alias for factory_first.
+   */
+  externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
+  /**
+   * Controls whether discovered external takes may fall back to public RPC
+   * submission, or must use private RPC / relay write transport.
+   */
+  externalTakeTransportPolicy?: ExternalTakeTransportPolicy;
+  /**
+   * Optional startup preflight that checks enabled route contracts have code
+   * and factory taker registry entries match configured taker addresses.
+   */
+  validateRouteDeployments?: boolean;
   /**
    * Maximum factory-route quote probes per liquidation candidate. Only applies
    * when discoveredDefaults.take.liquiditySource is a factory route source.
@@ -314,6 +398,13 @@ export interface CurveRouterOverrides {
   };
   wethAddress?: string;
   defaultSlippage?: number;
+  /**
+   * Optional millisecond delay before submitting Curve factory takes. Leave unset
+   * or 0 for the lowest-latency path; set only if a target chain/provider needs
+   * extra state propagation time. Values above 60,000ms are rejected because
+   * they can stall hot take loops.
+   */
+  executionDelayMs?: number;
 }
 
 export enum TakeWriteTransportMode {
@@ -364,6 +455,12 @@ export interface KeeperConfig {
   delayBetweenActions: number;
   delayBetweenRuns: number;
   oneInchRouters?: { [chainId: number]: string };
+  /**
+   * Optional per-chain allowlist for decoded 1inch aggregationExecutor
+   * addresses. When omitted, executors are logged but not hard-rejected.
+   * Each chain may list up to 64 executor addresses.
+   */
+  oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   tokenAddresses?: { [tokenSymbol: string]: string };
   connectorTokens?: Array<string>;
   universalRouterOverrides?: UniversalRouterOverrides;

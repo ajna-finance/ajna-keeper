@@ -138,6 +138,35 @@ describe('UniswapV3QuoteProvider', () => {
     });
   });
 
+  describe('poolExists()', () => {
+    it('uses a short TTL for missing pools so newly seeded liquidity is discovered quickly', async () => {
+      const clock = sinon.useFakeTimers();
+      const getPoolStub = sinon.stub().resolves(ethers.constants.AddressZero);
+      const provider = new UniswapV3QuoteProvider(mockSigner, {
+        universalRouterAddress: '0xUniversalRouter123',
+        poolFactoryAddress: '0xFactory123',
+        defaultFeeTier: 3000,
+        wethAddress: '0xWeth123',
+        quoterV2Address: '0xQuoter123',
+      });
+      (provider as any).factoryContract = {
+        getPool: getPoolStub,
+      };
+
+      const tokenA = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const tokenB = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+      expect(await provider.poolExists(tokenA, tokenB, 3000)).to.equal(false);
+      clock.tick(29_999);
+      expect(await provider.poolExists(tokenA, tokenB, 3000)).to.equal(false);
+      expect(getPoolStub.calledOnce).to.be.true;
+
+      clock.tick(1);
+      expect(await provider.poolExists(tokenA, tokenB, 3000)).to.equal(false);
+      expect(getPoolStub.calledTwice).to.be.true;
+    });
+  });
+
   describe('getQuote() - early validation', () => {
     it('should return failure when QuoterV2 address is not configured', async () => {
       const config = {
