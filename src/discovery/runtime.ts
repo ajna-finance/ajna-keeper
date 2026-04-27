@@ -39,7 +39,11 @@ import {
   resolveTakeWriteConfig,
   TakeWriteTransport,
 } from '../take/write-transport';
-import { delay, getErrorMessage } from '../utils';
+import {
+  delay,
+  getAddressInsensitiveMapValue,
+  getErrorMessage,
+} from '../utils';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import {
   FactoryQuoteProviderRuntimeCache,
@@ -105,10 +109,6 @@ interface DiscoveryCycleStats {
 interface DiscoveryRpcCacheState {
   initialized: boolean;
   cache?: DiscoveryRpcCache;
-}
-
-function getPoolFromMap(poolMap: PoolMap, address: string) {
-  return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
 
 function createHotAuctionCandidateCacheForConfig(
@@ -524,7 +524,7 @@ async function resolveEffectiveTargetPool(
 ): Promise<FungiblePool | undefined> {
   const pool =
     target.source === 'manual'
-      ? getPoolFromMap(state.poolMap, target.poolAddress)
+      ? getAddressInsensitiveMapValue(state.poolMap, target.poolAddress)
       : await ensurePoolLoaded({
           ajna: state.ajna,
           poolMap: state.poolMap,

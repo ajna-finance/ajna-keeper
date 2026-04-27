@@ -18,7 +18,12 @@ import {
   SubgraphTransportConfig,
 } from '../read-transports';
 import { ChainwideLiquidationAuction } from '../subgraph';
-import { getErrorMessage, overrideMulticall, RequireFields } from '../utils';
+import {
+  getAddressInsensitiveMapValue,
+  getErrorMessage,
+  overrideMulticall,
+  RequireFields,
+} from '../utils';
 import {
   DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS,
   DEFAULT_MAX_HOT_AUCTION_CANDIDATES,
@@ -122,13 +127,6 @@ const sharedDiscoveryScans = new Map<string, SharedDiscoveryScan>();
 
 export function normalizeAddress(address: string): string {
   return address.toLowerCase();
-}
-
-function getCachedPool(
-  poolMap: PoolMap,
-  address: string
-): FungiblePool | undefined {
-  return poolMap.get(address) ?? poolMap.get(normalizeAddress(address));
 }
 
 function cachePool(
@@ -1065,7 +1063,10 @@ export async function ensurePoolLoaded(params: {
   const normalizedPool = normalizeAddress(params.poolAddress);
   const nowMs = Date.now();
   pruneExpiredHydrationCooldowns(params.hydrationCooldowns, nowMs);
-  const cachedPool = getCachedPool(params.poolMap, params.poolAddress);
+  const cachedPool = getAddressInsensitiveMapValue(
+    params.poolMap,
+    params.poolAddress
+  );
   if (cachedPool) {
     params.hydrationCooldowns.delete(normalizedPool);
     return cachedPool;

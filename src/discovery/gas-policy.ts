@@ -5,6 +5,7 @@ import {
   AutoDiscoverTakePolicy,
   DEFAULT_FEE_TIER_BY_SOURCE,
   LiquiditySource,
+  formatLiquiditySource,
   hasConfiguredGasQuoteLiquiditySource,
   resolveConfiguredGasQuoteLiquiditySource,
   resolveConfiguredWrappedNativeAddress,
@@ -333,12 +334,11 @@ function logGasQuoteFallback(params: {
     return;
   }
 
-  const message = `Gas quote conversion used ${
-    LiquiditySource[params.usedLiquiditySource] ?? params.usedLiquiditySource
-  } after preferred source ${
-    LiquiditySource[params.preferredLiquiditySource] ??
+  const message = `Gas quote conversion used ${formatLiquiditySource(
+    params.usedLiquiditySource
+  )} after preferred source ${formatLiquiditySource(
     params.preferredLiquiditySource
-  } was unavailable`;
+  )} was unavailable`;
   if (!params.rpcCache || params.gasQuoteCacheKey === undefined) {
     logger.warn(message);
     return;
@@ -553,7 +553,7 @@ async function quoteTokensByGasQuoteSources(params: {
       }
     } catch (error) {
       logger.debug(
-        `Gas quote conversion failed with ${LiquiditySource[liquiditySource] ?? liquiditySource}: ${getErrorMessage(error)}`
+        `Gas quote conversion failed with ${formatLiquiditySource(liquiditySource)}: ${getErrorMessage(error)}`
       );
     }
   }

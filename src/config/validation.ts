@@ -24,6 +24,7 @@ import {
   resolveFactoryRouteSelectionSources,
 } from './route-policy';
 import {
+  formatLiquiditySource,
   hasConfiguredWrappedNativeAddress,
   resolveConfiguredGasQuoteLiquiditySource,
 } from './liquidity-source';
@@ -989,7 +990,7 @@ export function validateAutoDiscoverConfig(
         const liquiditySource = parseLiquiditySourceKey(source);
         const sourceLabel =
           liquiditySource !== undefined
-            ? LiquiditySource[liquiditySource]
+            ? formatLiquiditySource(liquiditySource)
             : source;
         if (liquiditySource === undefined) {
           throw new Error(

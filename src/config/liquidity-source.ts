@@ -36,6 +36,14 @@ export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
   [LiquiditySource.SUSHISWAP]: 500,
 };
 
+export function formatLiquiditySource(
+  source: LiquiditySource | undefined
+): string {
+  return source !== undefined
+    ? (LiquiditySource[source] ?? String(source))
+    : 'n/a';
+}
+
 export function getTokenAddressCaseInsensitive(
   addresses: { [tokenSymbol: string]: string } | undefined,
   symbol: string

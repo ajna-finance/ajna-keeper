@@ -7,6 +7,7 @@ import {
   LiquiditySource,
   LiquiditySourceMap,
   PoolConfig,
+  formatLiquiditySource,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
@@ -155,6 +156,73 @@ function getProviderInitFailureRetryMs(): number {
   );
 }
 
+interface InitializableQuoteProvider {
+  initialize(): Promise<boolean>;
+}
+
+async function initializeQuoteProviderWithCooldown<
+  TProvider extends InitializableQuoteProvider,
+>(params: {
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  label: string;
+  getCachedProvider: () => TProvider | null | undefined;
+  setCachedProvider: (provider: TProvider | null) => void;
+  getUnavailableUntilMs: () => number | undefined;
+  setUnavailableUntilMs: (untilMs: number | undefined) => void;
+  createProvider: () => TProvider;
+}): Promise<TProvider | undefined> {
+  let quoteProvider = params.getCachedProvider();
+  const unavailableUntilMs = params.getUnavailableUntilMs();
+  if (
+    quoteProvider === undefined &&
+    params.runtimeCache &&
+    unavailableUntilMs !== undefined &&
+    unavailableUntilMs > Date.now()
+  ) {
+    logger.debug(
+      `${params.label} quote provider initialization cooldown active for ${Math.max(
+        0,
+        unavailableUntilMs - Date.now()
+      )}ms`
+    );
+    return undefined;
+  }
+
+  if (quoteProvider === undefined) {
+    const candidateProvider = params.createProvider();
+    const initialized = await withTimeout(
+      candidateProvider.initialize(),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      `${params.label} quote provider initialization`
+    ).catch((error) => {
+      logger.warn(
+        `${params.label} quote provider initialization failed: ${getErrorMessage(error)}`
+      );
+      return false;
+    });
+    quoteProvider = initialized ? candidateProvider : null;
+    if (params.runtimeCache) {
+      if (quoteProvider) {
+        if (unavailableUntilMs !== undefined) {
+          logger.info(
+            `${params.label} quote provider initialization recovered`
+          );
+        }
+        params.setCachedProvider(quoteProvider);
+        params.setUnavailableUntilMs(undefined);
+      } else {
+        const retryMs = getProviderInitFailureRetryMs();
+        params.setUnavailableUntilMs(Date.now() + retryMs);
+        logger.warn(
+          `${params.label} quote provider unavailable; retrying initialization in ${retryMs}ms`
+        );
+      }
+    }
+  }
+
+  return quoteProvider ?? undefined;
+}
+
 function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
   while (map.size > maxSize) {
     const oldestKey = map.keys().next().value;
@@ -277,8 +345,7 @@ export function getDefaultFactoryFeeTierForSource(
 export function formatFactoryRouteCandidate(
   route: FactoryRouteCandidate
 ): string {
-  const source =
-    LiquiditySource[route.liquiditySource] ?? route.liquiditySource;
+  const source = formatLiquiditySource(route.liquiditySource);
   return route.feeTier !== undefined
     ? `${source}:${route.feeTier}`
     : `${source}:configured`;
@@ -295,7 +362,7 @@ function getFactoryRouteSourceLabel(source: LiquiditySource): string {
     case LiquiditySource.CURVE:
       return 'Curve';
     default:
-      return LiquiditySource[source] ?? String(source);
+      return formatLiquiditySource(source);
   }
 }
 
@@ -533,60 +600,38 @@ export async function getSushiSwapQuoteProvider(params: {
   ) {
     return undefined;
   }
+  const swapRouterAddress = routerConfig.swapRouterAddress;
+  const factoryAddress = routerConfig.factoryAddress;
+  const wethAddress = routerConfig.wethAddress;
+  const quoterV2Address = routerConfig.quoterV2Address;
 
-  let quoteProvider = params.runtimeCache?.sushiswap;
-  if (
-    quoteProvider === undefined &&
-    params.runtimeCache?.sushiswapUnavailableUntilMs !== undefined &&
-    params.runtimeCache.sushiswapUnavailableUntilMs > Date.now()
-  ) {
-    logger.debug(
-      `SushiSwap quote provider initialization cooldown active for ${Math.max(
-        0,
-        params.runtimeCache.sushiswapUnavailableUntilMs - Date.now()
-      )}ms`
-    );
-    return undefined;
-  }
-  if (quoteProvider === undefined) {
-    const candidateProvider = new SushiSwapQuoteProvider(params.signer, {
-      swapRouterAddress: routerConfig.swapRouterAddress,
-      quoterV2Address: routerConfig.quoterV2Address,
-      factoryAddress: routerConfig.factoryAddress,
-      defaultFeeTier:
-        routerConfig.defaultFeeTier ??
-        DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
-      wethAddress: routerConfig.wethAddress,
-    });
-    const initialized = await withTimeout(
-      candidateProvider.initialize(),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'SushiSwap quote provider initialization'
-    ).catch((error) => {
-      logger.warn(
-        `SushiSwap quote provider initialization failed: ${getErrorMessage(error)}`
-      );
-      return false;
-    });
-    quoteProvider = initialized ? candidateProvider : null;
-    if (params.runtimeCache) {
-      if (quoteProvider) {
-        if (params.runtimeCache.sushiswapUnavailableUntilMs !== undefined) {
-          logger.info(`SushiSwap quote provider initialization recovered`);
-        }
-        params.runtimeCache.sushiswap = quoteProvider;
-        params.runtimeCache.sushiswapUnavailableUntilMs = undefined;
-      } else {
-        const retryMs = getProviderInitFailureRetryMs();
-        params.runtimeCache.sushiswapUnavailableUntilMs = Date.now() + retryMs;
-        logger.warn(
-          `SushiSwap quote provider unavailable; retrying initialization in ${retryMs}ms`
-        );
+  return initializeQuoteProviderWithCooldown({
+    runtimeCache: params.runtimeCache,
+    label: 'SushiSwap',
+    getCachedProvider: () => params.runtimeCache?.sushiswap,
+    setCachedProvider: (provider) => {
+      if (params.runtimeCache) {
+        params.runtimeCache.sushiswap = provider;
       }
-    }
-  }
-
-  return quoteProvider ?? undefined;
+    },
+    getUnavailableUntilMs: () =>
+      params.runtimeCache?.sushiswapUnavailableUntilMs,
+    setUnavailableUntilMs: (untilMs) => {
+      if (params.runtimeCache) {
+        params.runtimeCache.sushiswapUnavailableUntilMs = untilMs;
+      }
+    },
+    createProvider: () =>
+      new SushiSwapQuoteProvider(params.signer, {
+        swapRouterAddress,
+        quoterV2Address,
+        factoryAddress,
+        defaultFeeTier:
+          routerConfig.defaultFeeTier ??
+          DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
+        wethAddress,
+      }),
+  });
 }
 
 export async function getCurveQuoteProvider(params: {
@@ -599,57 +644,32 @@ export async function getCurveQuoteProvider(params: {
   if (!routerConfig?.poolConfigs || !routerConfig.wethAddress) {
     return undefined;
   }
+  const poolConfigs = routerConfig.poolConfigs;
+  const wethAddress = routerConfig.wethAddress;
 
-  let quoteProvider = params.runtimeCache?.curve;
-  if (
-    quoteProvider === undefined &&
-    params.runtimeCache?.curveUnavailableUntilMs !== undefined &&
-    params.runtimeCache.curveUnavailableUntilMs > Date.now()
-  ) {
-    logger.debug(
-      `Curve quote provider initialization cooldown active for ${Math.max(
-        0,
-        params.runtimeCache.curveUnavailableUntilMs - Date.now()
-      )}ms`
-    );
-    return undefined;
-  }
-  if (quoteProvider === undefined) {
-    const candidateProvider = new CurveQuoteProvider(params.signer, {
-      poolConfigs: routerConfig.poolConfigs as any,
-      defaultSlippage: routerConfig.defaultSlippage ?? 1.0,
-      wethAddress: routerConfig.wethAddress,
-      tokenAddresses: params.tokenAddresses ?? {},
-    });
-    const initialized = await withTimeout(
-      candidateProvider.initialize(),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'Curve quote provider initialization'
-    ).catch((error) => {
-      logger.warn(
-        `Curve quote provider initialization failed: ${getErrorMessage(error)}`
-      );
-      return false;
-    });
-    quoteProvider = initialized ? candidateProvider : null;
-    if (params.runtimeCache) {
-      if (quoteProvider) {
-        if (params.runtimeCache.curveUnavailableUntilMs !== undefined) {
-          logger.info(`Curve quote provider initialization recovered`);
-        }
-        params.runtimeCache.curve = quoteProvider;
-        params.runtimeCache.curveUnavailableUntilMs = undefined;
-      } else {
-        const retryMs = getProviderInitFailureRetryMs();
-        params.runtimeCache.curveUnavailableUntilMs = Date.now() + retryMs;
-        logger.warn(
-          `Curve quote provider unavailable; retrying initialization in ${retryMs}ms`
-        );
+  return initializeQuoteProviderWithCooldown({
+    runtimeCache: params.runtimeCache,
+    label: 'Curve',
+    getCachedProvider: () => params.runtimeCache?.curve,
+    setCachedProvider: (provider) => {
+      if (params.runtimeCache) {
+        params.runtimeCache.curve = provider;
       }
-    }
-  }
-
-  return quoteProvider ?? undefined;
+    },
+    getUnavailableUntilMs: () => params.runtimeCache?.curveUnavailableUntilMs,
+    setUnavailableUntilMs: (untilMs) => {
+      if (params.runtimeCache) {
+        params.runtimeCache.curveUnavailableUntilMs = untilMs;
+      }
+    },
+    createProvider: () =>
+      new CurveQuoteProvider(params.signer, {
+        poolConfigs: poolConfigs as any,
+        defaultSlippage: routerConfig.defaultSlippage ?? 1.0,
+        wethAddress,
+        tokenAddresses: params.tokenAddresses ?? {},
+      }),
+  });
 }
 
 export interface FactoryRouteAvailabilitySkip {

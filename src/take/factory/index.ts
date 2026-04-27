@@ -3,7 +3,7 @@ import {
   getErrorMessage,
   mapWithConcurrencyPreservingOrder,
 } from '../../utils';
-import { LiquiditySource } from '../../config';
+import { LiquiditySource, formatLiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
 import {
@@ -675,7 +675,7 @@ export async function takeLiquidationFactory({
   }
 
   const routeMetadata =
-    `source=${LiquiditySource[selectedLiquiditySource] ?? selectedLiquiditySource}` +
+    `source=${formatLiquiditySource(selectedLiquiditySource)}` +
     ` feeTier=${externalTakeQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
     ` approvedMinOutRaw=${externalTakeQuoteEvaluation.approvedMinOutRaw.toString()}` +
     ` curvePool=${externalTakeQuoteEvaluation.curvePool?.address ?? 'n/a'}`;

@@ -12,6 +12,7 @@ import {
 } from './config';
 import {
   delay,
+  getAddressInsensitiveMapValue,
   getErrorMessage,
   getProviderAndSigner,
   overrideMulticall,
@@ -311,10 +312,6 @@ async function getPoolsFromConfig(
   return pools;
 }
 
-function getPoolFromMap(poolMap: PoolMap, address: string) {
-  return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
-}
-
 async function kickPoolsLoop({
   poolMap,
   config,
@@ -337,7 +334,7 @@ export async function processKickCycle({
 }: KickLoopParams): Promise<void> {
   const poolsWithKickSettings = config.pools.filter(hasKickSettings);
   for (const poolConfig of poolsWithKickSettings) {
-    const pool = getPoolFromMap(poolMap, poolConfig.address)!;
+    const pool = getAddressInsensitiveMapValue(poolMap, poolConfig.address)!;
     try {
       await handleKicks({
         pool,
@@ -405,7 +402,7 @@ async function collectBondLoop({
   );
   while (true) {
     for (const poolConfig of poolsWithCollectBondSettings) {
-      const pool = getPoolFromMap(poolMap, poolConfig.address)!;
+      const pool = getAddressInsensitiveMapValue(poolMap, poolConfig.address)!;
       try {
         await collectBondFromPool({
           pool,

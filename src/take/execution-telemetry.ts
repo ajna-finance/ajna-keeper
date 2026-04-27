@@ -1,5 +1,5 @@
 import { BigNumber, providers, utils } from 'ethers';
-import { LiquiditySource } from '../config';
+import { LiquiditySource, formatLiquiditySource } from '../config';
 import { logger } from '../logging';
 import { RouteProfitabilityBreakdown } from './types';
 import { TakeWriteTransport } from './write-transport';
@@ -8,12 +8,6 @@ import { BASIS_POINTS_DENOMINATOR_BN } from '../constants';
 export const TAKE_EXECUTION_TELEMETRY_VERSION = 1;
 // Warn when observed execution gas diverges materially from route policy input.
 const OBSERVED_GAS_DIVERGENCE_WARNING_BPS = 2_000;
-
-function formatLiquiditySource(source: LiquiditySource | undefined): string {
-  return source !== undefined
-    ? (LiquiditySource[source] ?? String(source))
-    : 'n/a';
-}
 
 function computeDivergenceBasisPoints(params: {
   expected: BigNumber;

@@ -6,6 +6,7 @@ import {
   LiquiditySourceMap,
   TakeWriteTransportMode,
   ActiveExternalTakeRouteSelectionMode,
+  formatLiquiditySource,
   getAutoDiscoverTakePolicy,
   isFactoryDynamicSource,
   normalizeExternalTakeRouteSelectionMode,
@@ -135,12 +136,6 @@ function getWriteTransportMode(
   takeWriteTransport?: TakeWriteTransport
 ): string {
   return takeWriteTransport?.mode ?? TakeWriteTransportMode.PUBLIC_RPC;
-}
-
-function formatLiquiditySource(source: LiquiditySource | undefined): string {
-  return source !== undefined
-    ? (LiquiditySource[source] ?? String(source))
-    : 'n/a';
 }
 
 export function resolveHybridExternalTakeExecutionSelection(params: {
@@ -564,7 +559,7 @@ async function buildFactoryRouteProfitabilityContext(params: {
     if (!gasPolicy.approved) {
       if (requiresRouteGasRanking) {
         logger.warn(
-          `Rejecting route source ${LiquiditySource[source] ?? source} because quote-denominated gas conversion failed: ${gasPolicy.reason ?? 'route gas policy rejected source'}`
+          `Rejecting route source ${formatLiquiditySource(source)} because quote-denominated gas conversion failed: ${gasPolicy.reason ?? 'route gas policy rejected source'}`
         );
       }
       routeRejectionReasonsBySource[source] =

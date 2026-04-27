@@ -12,6 +12,13 @@ export function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function getAddressInsensitiveMapValue<T>(
+  map: Map<string, T>,
+  address: string
+): T | undefined {
+  return map.get(address) ?? map.get(address.toLowerCase());
+}
+
 export async function mapWithConcurrencyPreservingOrder<T, R>(
   items: readonly T[],
   concurrency: number,
