@@ -30,6 +30,7 @@ describe('take execution telemetry', () => {
       routeProfitability: {
         routeGasLimit: BigNumber.from(100),
         expectedNetProfitQuoteRaw: BigNumber.from(50),
+        expectedShortfallQuoteRaw: BigNumber.from(0),
       },
       approvedMinOutRaw: BigNumber.from(90),
       selectedFeeTier: 3000,
@@ -47,6 +48,7 @@ describe('take execution telemetry', () => {
     expect(message).to.not.include('borrower=0x2222222222222222222222222222222222222222');
     expect(message).to.include('gasDivergenceBps=2000');
     expect(message).to.include('approvedMinOutRaw=90');
+    expect(message).to.include('expectedShortfallRaw=0');
   });
 
   it('warns when observed gas divergence exceeds the threshold', () => {
@@ -66,6 +68,7 @@ describe('take execution telemetry', () => {
       routeProfitability: {
         routeGasLimit: BigNumber.from(100),
         expectedNetProfitQuoteRaw: BigNumber.from(50),
+        expectedShortfallQuoteRaw: BigNumber.from(5),
       },
       approvedMinOutRaw: BigNumber.from(90),
     });
@@ -74,6 +77,9 @@ describe('take execution telemetry', () => {
     expect(warnStub.calledOnce).to.be.true;
     expect(String(warnStub.firstCall.args[0])).to.include(
       'gasDivergenceBps=2100'
+    );
+    expect(String(warnStub.firstCall.args[0])).to.include(
+      'expectedShortfallRaw=5'
     );
   });
 });

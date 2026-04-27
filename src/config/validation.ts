@@ -27,10 +27,11 @@ import {
   formatLiquiditySource,
   hasConfiguredWrappedNativeAddress,
   resolveConfiguredGasQuoteLiquiditySource,
+  STANDARD_V3_FEE_TIERS,
 } from './liquidity-source';
 import { logger } from '../logging';
 import { ethers } from 'ethers';
-import { MAX_UINT24_FEE_TIER } from '../constants';
+import { MARKET_FACTOR_SCALE, MAX_UINT24_FEE_TIER } from '../constants';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -41,10 +42,14 @@ const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
 const MAX_DEX_GAS_OVERRIDE = BigInt(2_000_000);
 const MAX_MIN_PROFIT_NATIVE_WEI = BigInt('1000000000000000000000000000');
-const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
+const STANDARD_V3_FEE_TIER_SET: ReadonlySet<number> = new Set(
+  STANDARD_V3_FEE_TIERS
+);
 const VALIDATION_BOUNDS = {
   minL2GasCostBufferBps: 10_000,
   maxL2GasCostBufferBps: 30_000,
+  minMarketPriceFactor: 1 / MARKET_FACTOR_SCALE,
+  maxMarketPriceFactor: 2,
   // Keep drift tolerance bounded to operationally sane values; 5000 = 50%.
   maxGasPriceDriftToleranceBps: 5_000,
   maxCurveExecutionDelayMs: 60_000,
@@ -115,6 +120,15 @@ function requireOptionalNonNegative(value: unknown, message: string): void {
   }
 }
 
+function requireOptionalPercentage(value: unknown, message: string): void {
+  if (
+    value !== undefined &&
+    (!isFiniteNumber(value) || value < 0 || value > 100)
+  ) {
+    throw new Error(message);
+  }
+}
+
 function requireOptionalBoolean(value: unknown, message: string): void {
   if (value !== undefined && typeof value !== 'boolean') {
     throw new Error(message);
@@ -177,7 +191,7 @@ function validateCandidateFeeTiers(
         `${fieldName}: candidateFeeTiers cannot contain duplicates`
       );
     }
-    if (!STANDARD_V3_FEE_TIERS.has(tier)) {
+    if (!STANDARD_V3_FEE_TIER_SET.has(tier)) {
       logger.warn(
         `${fieldName}: candidateFeeTiers includes non-standard fee tier ${tier}; verify this tier is deployed on the target DEX before production use`
       );
@@ -195,6 +209,10 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
     config.universalRouterOverrides;
   const sushiConfig: SushiswapRouterOverrides | undefined =
     config.sushiswapRouterOverrides;
+  requireOptionalPercentage(
+    config.oneInchDefaultSlippage,
+    'KeeperConfig: oneInchDefaultSlippage must be a number between 0 and 100'
+  );
   requireOptionalIntegerRange(
     config.curveRouterOverrides?.executionDelayMs,
     0,
@@ -477,6 +495,26 @@ export function validateTakeSettings(
     requirePositive(
       config.marketPriceFactor,
       'TakeSettings: marketPriceFactor must be positive'
+    );
+    if (
+      config.marketPriceFactor !== undefined &&
+      config.marketPriceFactor < VALIDATION_BOUNDS.minMarketPriceFactor
+    ) {
+      throw new Error(
+        `TakeSettings: marketPriceFactor ${config.marketPriceFactor} is below the minimum supported precision ${VALIDATION_BOUNDS.minMarketPriceFactor.toFixed(6)}`
+      );
+    }
+    if (
+      config.marketPriceFactor !== undefined &&
+      config.marketPriceFactor > VALIDATION_BOUNDS.maxMarketPriceFactor
+    ) {
+      throw new Error(
+        `TakeSettings: marketPriceFactor ${config.marketPriceFactor} is unreasonable; values above ${VALIDATION_BOUNDS.maxMarketPriceFactor} are rejected because values above 1 weaken market-factor protection. Did you mean ${config.marketPriceFactor / 100}?`
+      );
+    }
+    requireOptionalBoolean(
+      config.allowSubsidy,
+      'TakeSettings: allowSubsidy must be a boolean'
     );
 
     if (config.liquiditySource === LiquiditySource.ONEINCH) {
@@ -784,7 +822,7 @@ export function validateAutoDiscoverConfig(
         takePolicy.minProfitNative !== undefined)
     ) {
       logger.warn(
-        `AutoDiscoverConfig.take: externalTakeRouteSelectionMode=${takePolicy.externalTakeRouteSelectionMode} stops after the first approved path; quote-normalized gas-cost ranking is skipped to reduce 1inch/API use`
+        `AutoDiscoverConfig.take: externalTakeRouteSelectionMode=${takePolicy.externalTakeRouteSelectionMode} stops after the first non-subsidized approved path; subsidized paths continue probing, but quote-normalized gas-cost ranking is skipped to reduce 1inch/API use`
       );
     }
     requireOptionalPositive(
@@ -805,6 +843,19 @@ export function validateAutoDiscoverConfig(
       throw new Error(
         'AutoDiscoverConfig: discoveredDefaults.take required when autoDiscover.take is enabled'
       );
+    }
+    if (discoveredTake.allowSubsidy === true) {
+      logger.warn(
+        'AutoDiscoverConfig: discoveredDefaults.take.allowSubsidy=true can subsidize external takes on every discovered pool that matches this policy; prefer enabling it only on manually reviewed defensive pools'
+      );
+      if (
+        takePolicy.minExpectedProfitQuote === undefined &&
+        takePolicy.minProfitNative === undefined
+      ) {
+        logger.warn(
+          'AutoDiscoverConfig: allowSubsidy=true is configured without minExpectedProfitQuote or minProfitNative; gas/profit shortfall protection is intentionally bypassable for discovered external takes'
+        );
+      }
     }
 
     validateAllowedExternalTakePaths(takePolicy.allowedExternalTakePaths);
@@ -1176,6 +1227,11 @@ export function validateTakeSettingsForChain(
 
   for (const poolConfig of config.pools) {
     if (poolConfig.take) {
+      if (poolConfig.take.allowSubsidy === true) {
+        logger.warn(
+          `Pool ${poolConfig.name ?? poolConfig.address} has take.allowSubsidy=true; this can intentionally execute external takes that repay the auction while bypassing gas/profit shortfall protection`
+        );
+      }
       validateTakeSettings(poolConfig.take, config, chainId);
     }
   }

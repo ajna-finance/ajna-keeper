@@ -4,8 +4,8 @@ import {
   RewardActionLabel,
   PriceOriginSource,
   TokenToCollect,
-  LiquiditySource,  // Import for external takes
-  PostAuctionDex    // Import for LP reward swaps
+  LiquiditySource, // Import for external takes
+  PostAuctionDex, // Import for LP reward swaps
 } from '../src/config';
 import { FeeAmount } from '@uniswap/v3-sdk';
 
@@ -31,10 +31,10 @@ const config: KeeperConfig = {
   // },
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',
   multicallBlock: 484490,
-  delayBetweenRuns: 2,  // IN SECONDS
+  delayBetweenRuns: 2, // IN SECONDS
   delayBetweenActions: 31, // VERY CONSERVATIVE 31 SECONDS BETWEEN ACTIONS
   logLevel: 'debug',
-  
+
   tokenAddresses: {
     weth: '0x4200000000000000000000000000000000000006', // Wrapped ETH on HEMI
     usd_t1: '0x1f0d51a052aa79527fffaf3108fb4440d3f53ce6', // Your USD_T1 token
@@ -42,14 +42,14 @@ const config: KeeperConfig = {
     usd_t3: '0x9f60ec2c81308c753e84467e2526c7d8fc05cd0d', // Your USD_T3 token
     usd_t4: '0x00b2fee99fe3fc9aab91d1b249c99c9ffbb1ccde', // Your USD_T4 token
   },
-  
+
   // Factory System Setup for External Takes (deploy with scripts/deploy-factory-system.ts)
   keeperTakerFactory: '0x[DEPLOY_WITH_deploy-factory-system.ts]', // Factory contract address
   takerContracts: {
-    'UniswapV3': '0x[DEPLOYED_UNISWAP_TAKER_ADDRESS]',  // Individual taker contract addresses
-    'SushiSwap': '0x[DEPLOYED_SUSHISWAP_TAKER_ADDRESS]' // SushiSwap taker contract
-  }, 
-  
+    UniswapV3: '0x[DEPLOYED_UNISWAP_TAKER_ADDRESS]', // Individual taker contract addresses
+    SushiSwap: '0x[DEPLOYED_SUSHISWAP_TAKER_ADDRESS]', // SushiSwap taker contract
+  },
+
   // Universal Router configuration for Uniswap V3 with QuoterV2 address
   universalRouterOverrides: {
     universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B', // HEMI UniversalRouter based on gov proposal
@@ -65,12 +65,12 @@ const config: KeeperConfig = {
   // SushiSwap configuration for both external takes and LP reward swaps
   sushiswapRouterOverrides: {
     swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD', // From production test
-    quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',   // From production test  
-    factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',   // From production test
-    wethAddress: '0x4200000000000000000000000000000000000006',      // WETH on Hemi
-    defaultFeeTier: 500,    // Preferred/default 0.05% fee tier
+    quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C', // From production test
+    factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959', // From production test
+    wethAddress: '0x4200000000000000000000000000000000000006', // WETH on Hemi
+    defaultFeeTier: 500, // Preferred/default 0.05% fee tier
     candidateFeeTiers: [3000], // Optional extra deployed tiers to probe per external take
-    defaultSlippage: 10.0,  // 10% conservative slippage (from production test)
+    defaultSlippage: 10.0, // 10% conservative slippage (from production test)
   },
 
   // HEMI-specific Ajna contract addresses
@@ -85,9 +85,8 @@ const config: KeeperConfig = {
     lenderHelper: '',
   },
   coinGeckoApiKey: process.env.COINGECKO_API_KEY, // Get a free key from https://www.coingecko.com/en/developers/dashboard
-  pools: 
-  [
-    {   
+  pools: [
+    {
       name: 'USD_T1 / USD_T2',
       address: '0x600ca6e0b5cf41e3e4b4242a5b170f3b02ce3da7',
       price: {
@@ -101,11 +100,12 @@ const config: KeeperConfig = {
       take: {
         minCollateral: 0.1, // Enable arbTake when collateral >= 0.1
         hpbPriceFactor: 0.98, // ArbTake when price < hpb * 0.98
-        
+
         // External Takes via Uniswap V3 (requires factory deployment)
         liquiditySource: LiquiditySource.UNISWAPV3, // Use Uniswap V3 for external takes
         // liquiditySource: LiquiditySource.SUSHISWAP, // Alternative: Use SushiSwap for external takes
         marketPriceFactor: 0.99, // Take when auction price < market * 0.99
+        allowSubsidy: false,
       },
       collectBond: true, // Collect liquidation bonds
       collectLpReward: {
@@ -124,11 +124,11 @@ const config: KeeperConfig = {
       },
       // Settlement configuration for test tokens - aggressive settings for faster testing
       settlement: {
-        enabled: true,                    // Enable settlement
-        minAuctionAge: 18000,             // Wait 5 hours before settling (good for testing)
-        maxBucketDepth: 50,              // Process 50 buckets per settlement call
-        maxIterations: 10,               // Max 10 settlement iterations
-        checkBotIncentive: false,         // set to false to help pool altruistically
+        enabled: true, // Enable settlement
+        minAuctionAge: 18000, // Wait 5 hours before settling (good for testing)
+        maxBucketDepth: 50, // Process 50 buckets per settlement call
+        maxIterations: 10, // Max 10 settlement iterations
+        checkBotIncentive: false, // set to false to help pool altruistically
       },
     },
     {
@@ -145,11 +145,12 @@ const config: KeeperConfig = {
       take: {
         minCollateral: 0.1, // Enable arbTake when collateral >= 0.1
         hpbPriceFactor: 0.98, // ArbTake when price < hpb * 0.98
-        
+
         // External Takes via SushiSwap (requires factory deployment)
         liquiditySource: LiquiditySource.SUSHISWAP, // Use SushiSwap for external takes
         // liquiditySource: LiquiditySource.UNISWAPV3, // Alternative: Use Uniswap V3 for external takes
         marketPriceFactor: 0.99, // Take when auction price < market * 0.99
+        allowSubsidy: false,
       },
       collectBond: true, // Collect liquidation bonds
       collectLpReward: {
@@ -168,11 +169,11 @@ const config: KeeperConfig = {
       },
       // Settlement configuration - similar to first pool
       settlement: {
-        enabled: true,                    // Enable settlement
-        minAuctionAge: 18000,             // Wait 5 hours before settling
-        maxBucketDepth: 50,              // Process 50 buckets per settlement call
-        maxIterations: 10,               // Max 10 settlement iterations
-        checkBotIncentive: true,         // Only settle if bot address has rewards to claim
+        enabled: true, // Enable settlement
+        minAuctionAge: 18000, // Wait 5 hours before settling
+        maxBucketDepth: 50, // Process 50 buckets per settlement call
+        maxIterations: 10, // Max 10 settlement iterations
+        checkBotIncentive: true, // Only settle if bot address has rewards to claim
       },
     },
     {
@@ -189,10 +190,11 @@ const config: KeeperConfig = {
       take: {
         minCollateral: 0.1,
         hpbPriceFactor: 0.97,
-        
+
         // Example: Use Uniswap V3 for external takes (typically lower slippage)
         liquiditySource: LiquiditySource.UNISWAPV3,
         marketPriceFactor: 0.99,
+        allowSubsidy: false,
       },
       collectBond: true,
       collectLpReward: {
@@ -224,7 +226,7 @@ const config: KeeperConfig = {
         checkBotIncentive: true,
       },
     },
-  ]
+  ],
 };
 
 export default config;

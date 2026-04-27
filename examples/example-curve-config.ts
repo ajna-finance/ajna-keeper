@@ -6,7 +6,7 @@ import {
   TokenToCollect,
   LiquiditySource,
   PostAuctionDex,
-  CurvePoolType
+  CurvePoolType,
 } from '../src/config';
 
 const config: KeeperConfig = {
@@ -34,11 +34,11 @@ const config: KeeperConfig = {
   delayBetweenRuns: 15,
   delayBetweenActions: 35,
   logLevel: 'debug',
-  
+
   // Factory system for Curve integration (requires deployment)
   keeperTakerFactory: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
   takerContracts: {
-    'Curve': '0x[DEPLOYED_CURVE_TAKER_ADDRESS]',
+    Curve: '0x[DEPLOYED_CURVE_TAKER_ADDRESS]',
   },
 
   // Curve-specific configuration
@@ -50,25 +50,25 @@ const config: KeeperConfig = {
       // Both pairs below might use the same 3-pool address containing USDC/USDT/DAI
       'usdc-usdt': {
         address: '0x[YOUR_STABLECOIN_POOL_ADDRESS]', // Replace with actual 3-pool address
-        poolType: CurvePoolType.STABLE
+        poolType: CurvePoolType.STABLE,
       },
       'usdc-dai': {
         address: '0x[YOUR_STABLECOIN_POOL_ADDRESS]', // Same pool as above if it's a 3-pool
-        poolType: CurvePoolType.STABLE
+        poolType: CurvePoolType.STABLE,
       },
-      // CRYPTO pools (tricrypto example)  
+      // CRYPTO pools (tricrypto example)
       // Both pairs below might use the same tricrypto pool containing ETH/BTC/USDT
       'weth-wbtc': {
         address: '0x[YOUR_CRYPTO_POOL_ADDRESS]', // Replace with actual tricrypto address
-        poolType: CurvePoolType.CRYPTO
+        poolType: CurvePoolType.CRYPTO,
       },
       'weth-usdc': {
         address: '0x[YOUR_CRYPTO_POOL_ADDRESS]', // Same pool if it contains all 3 tokens
-        poolType: CurvePoolType.CRYPTO
-      }
+        poolType: CurvePoolType.CRYPTO,
+      },
     },
     defaultSlippage: 1.0, // 1% slippage tolerance
-    wethAddress: '0x4200000000000000000000000000000000000006' // Replace with your network's WETH
+    wethAddress: '0x4200000000000000000000000000000000000006', // Replace with your network's WETH
   },
 
   // Token addresses for symbol lookup (required for Curve)
@@ -76,10 +76,10 @@ const config: KeeperConfig = {
     weth: '0x4200000000000000000000000000000000000006', // Replace with your WETH
     usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // Replace with your USDC
     usdt: '0x[YOUR_USDT_ADDRESS]', // Replace with your USDT
-    dai: '0x[YOUR_DAI_ADDRESS]', // Replace with your DAI  
+    dai: '0x[YOUR_DAI_ADDRESS]', // Replace with your DAI
     wbtc: '0x[YOUR_WBTC_ADDRESS]', // Replace with your WBTC
   },
-  
+
   // Network-specific addresses (replace with your network's addresses)
   ajna: {
     erc20PoolFactory: '0x[YOUR_AJNA_FACTORY]', // Replace with actual address
@@ -91,9 +91,9 @@ const config: KeeperConfig = {
     burnWrapper: '',
     lenderHelper: '',
   },
-  
+
   coinGeckoApiKey: process.env.COINGECKO_API_KEY, // Get a free key from https://www.coingecko.com/en/developers/dashboard
-  
+
   pools: [
     // Stablecoin pool example using Curve
     {
@@ -101,7 +101,7 @@ const config: KeeperConfig = {
       address: '0x[YOUR_AJNA_POOL_ADDRESS]', // Replace with actual Ajna pool address
       price: {
         source: PriceOriginSource.FIXED,
-        value: 1.00, // USDC to USDT approximately 1:1
+        value: 1.0, // USDC to USDT approximately 1:1
       },
       kick: {
         minDebt: 0.07,
@@ -111,6 +111,7 @@ const config: KeeperConfig = {
         minCollateral: 0.01, // Enable external takes when collateral >= 0.01
         liquiditySource: LiquiditySource.CURVE, // Use Curve for external takes
         marketPriceFactor: 0.99, // Take when auction < market * 0.99
+        allowSubsidy: false,
         // ArbTake backup configuration
         hpbPriceFactor: 0.98, // ArbTake when price < hpb * 0.98
       },
@@ -121,8 +122,8 @@ const config: KeeperConfig = {
         minAmountCollateral: 0.001,
         rewardActionCollateral: {
           action: RewardActionLabel.EXCHANGE,
-          address: "0x[YOUR_COLLATERAL_TOKEN]", // Replace with collateral token address
-          targetToken: "usdc", // Target token symbol (must match tokenAddresses)
+          address: '0x[YOUR_COLLATERAL_TOKEN]', // Replace with collateral token address
+          targetToken: 'usdc', // Target token symbol (must match tokenAddresses)
           slippage: 1,
           dexProvider: PostAuctionDex.CURVE, // Use Curve for LP reward swaps
         },
@@ -135,7 +136,7 @@ const config: KeeperConfig = {
         checkBotIncentive: false,
       },
     },
-    
+
     // Crypto pair example using Curve
     {
       name: 'WETH/WBTC',
@@ -152,6 +153,7 @@ const config: KeeperConfig = {
         minCollateral: 0.0001, // Lower threshold for crypto
         liquiditySource: LiquiditySource.CURVE, // Use Curve for external takes
         marketPriceFactor: 0.97, // More conservative for volatile pairs
+        allowSubsidy: false,
         hpbPriceFactor: 0.95, // ArbTake backup
       },
       collectBond: true,
@@ -161,8 +163,8 @@ const config: KeeperConfig = {
         minAmountCollateral: 0.0001, // Lower for crypto
         rewardActionCollateral: {
           action: RewardActionLabel.EXCHANGE,
-          address: "0x[YOUR_CRYPTO_COLLATERAL]", // Replace with crypto token address
-          targetToken: "weth", // Target WETH
+          address: '0x[YOUR_CRYPTO_COLLATERAL]', // Replace with crypto token address
+          targetToken: 'weth', // Target WETH
           slippage: 3, // Higher slippage for crypto pairs
           dexProvider: PostAuctionDex.CURVE, // Use Curve
         },
@@ -175,7 +177,7 @@ const config: KeeperConfig = {
         checkBotIncentive: true,
       },
     },
-  ]
+  ],
 };
 
 export default config;

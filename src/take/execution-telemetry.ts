@@ -67,7 +67,8 @@ export function logTakeExecutionTelemetry(params: {
     ` feeTier=${params.selectedFeeTier ?? 'n/a'}` +
     ` curvePool=${params.curvePoolAddress ?? 'n/a'}` +
     ` approvedMinOutRaw=${params.approvedMinOutRaw?.toString() ?? 'n/a'}` +
-    ` expectedNetProfitRaw=${params.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'}`;
+    ` expectedNetProfitRaw=${params.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'}` +
+    ` expectedShortfallRaw=${params.routeProfitability?.expectedShortfallQuoteRaw?.toString() ?? 'n/a'}`;
 
   if (
     divergenceBps !== undefined &&

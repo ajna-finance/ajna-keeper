@@ -559,6 +559,8 @@ describe('Discovery Gas Policy', () => {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [3000],
         },
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
@@ -626,6 +628,8 @@ describe('Discovery Gas Policy', () => {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [3000],
         },
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
@@ -696,6 +700,8 @@ describe('Discovery Gas Policy', () => {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [3000],
         },
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
@@ -864,6 +870,150 @@ describe('Discovery Gas Policy', () => {
     expect(poolExistsStub.calledTwice).to.be.true;
     expect(sushiQuoteStub.calledOnce).to.be.true;
     expect(sushiQuoteStub.firstCall.args[3]).to.equal(100);
+  });
+
+  it('auto-probes standard SushiSwap fee tiers for gas quote conversion', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
+    const poolExistsStub = sinon
+      .stub(SushiSwapQuoteProvider.prototype, 'poolExists')
+      .callsFake(
+        async (_tokenIn, _tokenOut, feeTier?: number) => feeTier === 3000
+      );
+    const sushiQuoteStub = sinon
+      .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('4', 6),
+      } as any);
+
+    const result = await evaluateGasPolicy({
+      signer: ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      ) as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        sushiswapRouterOverrides: {
+          swapRouterAddress: '0x2222222222222222222222222222222222222222',
+          factoryAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 500,
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.SUSHISWAP,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 8453,
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('4', 6))).to.be
+      .true;
+    expect(poolExistsStub.callCount).to.equal(4);
+    expect(poolExistsStub.getCall(0).args[2]).to.equal(500);
+    expect(poolExistsStub.getCall(1).args[2]).to.equal(100);
+    expect(poolExistsStub.getCall(2).args[2]).to.equal(3000);
+    expect(poolExistsStub.getCall(3).args[2]).to.equal(10000);
+    expect(sushiQuoteStub.calledOnce).to.be.true;
+    expect(sushiQuoteStub.firstCall.args[3]).to.equal(3000);
+  });
+
+  it('keeps the best V3 gas quote when a later fee tier fails', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+    const poolExistsStub = sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'poolExists')
+      .callsFake(async (_tokenIn, _tokenOut, feeTier?: number) => {
+        if (feeTier === 3000) {
+          throw new Error('rpc timeout');
+        }
+        return feeTier === 500 || feeTier === 3000;
+      });
+    const uniswapQuoteStub = sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+      .callsFake(
+        async (_amountIn, _tokenIn, _tokenOut, feeTier?: number) =>
+          ({
+            success: feeTier === 500,
+            dstAmount:
+              feeTier === 500
+                ? ethers.utils.parseUnits('3', 6).toString()
+                : undefined,
+          }) as any
+      );
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(8453),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        universalRouterOverrides: {
+          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+          poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 500,
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.UNISWAPV3,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 8453,
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('3', 6))).to.be
+      .true;
+    expect(poolExistsStub.callCount).to.equal(4);
+    expect(uniswapQuoteStub.calledOnce).to.be.true;
+    expect(uniswapQuoteStub.firstCall.args[3]).to.equal(500);
   });
 
   it('quotes gas cost and minProfitNative together when no quote gas cap is configured', async () => {

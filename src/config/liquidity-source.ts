@@ -36,6 +36,8 @@ export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
   [LiquiditySource.SUSHISWAP]: 500,
 };
 
+export const STANDARD_V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
+
 export function formatLiquiditySource(
   source: LiquiditySource | undefined
 ): string {

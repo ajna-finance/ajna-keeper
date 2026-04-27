@@ -116,6 +116,8 @@ const config: KeeperConfig = {
     take: {
       // First rollout: arb-take only for discovered pools.
       // Add liquiditySource + marketPriceFactor later if you want discovered external takes.
+      // Keep allowSubsidy false unless you intentionally want defensive subsidized takes.
+      // allowSubsidy: false,
       minCollateral: 0.01,
       hpbPriceFactor: 0.9,
     },

@@ -235,6 +235,29 @@ export function convertWadToTokenDecimals(
 }
 
 /**
+ * Convert from WAD (18 decimals) to token's native decimals, rounding up.
+ * Use when the converted value is a repayment, gas, or min-out floor.
+ */
+export function convertWadToTokenDecimalsCeil(
+  wadAmount: BigNumber,
+  tokenDecimals: number
+): BigNumber {
+  if (tokenDecimals === 18) {
+    return wadAmount;
+  }
+
+  if (tokenDecimals < 18) {
+    const divisor = ethers.BigNumber.from(10).pow(18 - tokenDecimals);
+    return wadAmount.isZero()
+      ? ethers.BigNumber.from(0)
+      : wadAmount.add(divisor).sub(1).div(divisor);
+  }
+
+  const multiplier = ethers.BigNumber.from(10).pow(tokenDecimals - 18);
+  return wadAmount.mul(multiplier);
+}
+
+/**
  * Convert from token's native decimals to WAD (18 decimals)
  * Use: When passing DEX results back to Ajna
  */

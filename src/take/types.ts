@@ -12,11 +12,18 @@ export interface RouteProfitabilityBreakdown {
   nativeProfitFloorQuoteRaw?: BigNumber;
   configuredProfitFloorQuoteRaw?: BigNumber;
   slippageRiskBufferQuoteRaw?: BigNumber;
+  configuredMarketPriceFactor?: number;
   marketFactorFloorQuoteRaw?: BigNumber;
   requiredProfitFloorQuoteRaw?: BigNumber;
+  requiredNonSubsidizedOutputRaw?: BigNumber;
   requiredOutputFloorQuoteRaw?: BigNumber;
   expectedNetProfitQuoteRaw?: BigNumber;
+  expectedShortfallQuoteRaw?: BigNumber;
   surplusOverFloorQuoteRaw?: BigNumber;
+  routeBreakEvenMarketPriceFactor?: number;
+  effectiveMarketPriceFactor?: number;
+  subsidyAllowed?: boolean;
+  expectedSubsidyQuoteRaw?: BigNumber;
   routeGasLimit?: BigNumber;
   gasPriceWei?: BigNumber;
   gasPriceGwei?: number;
@@ -61,14 +68,56 @@ export interface ExternalTakeQuoteEvaluation {
   quotedCollateralWad?: BigNumber;
   auctionIdentity?: string;
   fallbackExternalTakeQuoteEvaluations?: ExternalTakeQuoteEvaluation[];
-  curvePool?: {
-    address: string;
-    poolType: CurvePoolType;
-    tokenInIndex: number;
-    tokenOutIndex: number;
-  };
+  curvePool?: CurvePoolSelection;
   reason?: string;
 }
+
+export interface CurvePoolSelection {
+  address: string;
+  poolType: CurvePoolType;
+  tokenInIndex: number;
+  tokenOutIndex: number;
+}
+
+interface ApprovedExternalTakeQuoteBase<TSource extends LiquiditySource>
+  extends ExternalTakeQuoteEvaluation {
+  isTakeable: true;
+  quoteAmountRaw: BigNumber;
+  selectedLiquiditySource: TSource;
+  approvedMinOutRaw: BigNumber;
+}
+
+export interface ApprovedOneInchQuoteEvaluation
+  extends ApprovedExternalTakeQuoteBase<LiquiditySource.ONEINCH> {
+  externalTakePath: 'oneinch';
+}
+
+export interface ApprovedUniswapV3FactoryQuoteEvaluation
+  extends ApprovedExternalTakeQuoteBase<LiquiditySource.UNISWAPV3> {
+  externalTakePath: 'factory';
+  selectedFeeTier: number;
+}
+
+export interface ApprovedSushiSwapFactoryQuoteEvaluation
+  extends ApprovedExternalTakeQuoteBase<LiquiditySource.SUSHISWAP> {
+  externalTakePath: 'factory';
+  selectedFeeTier: number;
+}
+
+export interface ApprovedCurveFactoryQuoteEvaluation
+  extends ApprovedExternalTakeQuoteBase<LiquiditySource.CURVE> {
+  externalTakePath: 'factory';
+  curvePool: CurvePoolSelection;
+}
+
+export type ApprovedFactoryQuoteEvaluation =
+  | ApprovedUniswapV3FactoryQuoteEvaluation
+  | ApprovedSushiSwapFactoryQuoteEvaluation
+  | ApprovedCurveFactoryQuoteEvaluation;
+
+export type ApprovedExternalTakeQuoteEvaluation =
+  | ApprovedOneInchQuoteEvaluation
+  | ApprovedFactoryQuoteEvaluation;
 
 export interface ArbTakeEvaluation {
   isArbTakeable: boolean;

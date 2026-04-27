@@ -165,6 +165,7 @@ describe('Factory slippage bound', function () {
       quoteScale
     );
     const quotedAmountRaw = quoteAmountDueRaw.mul(120).div(100);
+    const approvedMinOutRaw = quotedAmountRaw.mul(99).div(100);
     const manipulatedOutputRaw = quoteAmountDueRaw.mul(110).div(100);
 
     const mockRouter = await new MockSushiSwapRouter__factory(signer).deploy(
@@ -192,9 +193,10 @@ describe('Factory slippage bound', function () {
       quoteEvaluation: {
         isTakeable: true,
         quoteAmountRaw: quotedAmountRaw,
-        approvedMinOutRaw: quotedAmountRaw.mul(99).div(100),
+        approvedMinOutRaw,
+        selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+        selectedFeeTier: 3000,
       },
-      marketPriceFactor: 0.95,
     });
 
     expect(manipulatedOutputRaw.gt(quoteAmountDueRaw)).to.be.true;
@@ -222,8 +224,13 @@ describe('Factory slippage bound', function () {
         externalTakeQuoteEvaluation: {
           isTakeable: true,
           quoteAmountRaw: quotedAmountRaw,
+          approvedMinOutRaw,
+          selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+          selectedFeeTier: 3000,
           quoteAmount: Number(utils.formatEther(quotedAmountRaw)),
-          collateralAmount: Number(utils.formatEther(liquidationStatus.collateral)),
+          collateralAmount: Number(
+            utils.formatEther(liquidationStatus.collateral)
+          ),
         },
       },
       config: {
@@ -241,7 +248,8 @@ describe('Factory slippage bound', function () {
     const finalLiquidation = await pool.getLiquidation(borrower).getStatus();
 
     expect(finalQuoteBalance.eq(initialQuoteBalance)).to.be.true;
-    expect(finalLiquidation.collateral.eq(liquidationStatus.collateral)).to.be.true;
+    expect(finalLiquidation.collateral.eq(liquidationStatus.collateral)).to.be
+      .true;
   });
 
   it('would still clear with the legacy weak minimum of one wei', async () => {
@@ -293,6 +301,7 @@ describe('Factory slippage bound', function () {
     const finalLiquidation = await pool.getLiquidation(borrower).getStatus();
 
     expect(finalQuoteBalance.gt(initialQuoteBalance)).to.be.true;
-    expect(finalLiquidation.collateral.lt(liquidationStatus.collateral)).to.be.true;
+    expect(finalLiquidation.collateral.lt(liquidationStatus.collateral)).to.be
+      .true;
   });
 });

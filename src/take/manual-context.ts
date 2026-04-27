@@ -24,6 +24,7 @@ export type ManualOneInchContextConfig = ManualTakeCommonContextConfig &
   Pick<
     KeeperConfig,
     | 'connectorTokens'
+    | 'oneInchDefaultSlippage'
     | 'oneInchRouters'
     | 'oneInchAggregationExecutorAllowlist'
     | 'keeperTaker'
@@ -80,6 +81,7 @@ export function createManualOneInchTakeContext(params: {
       params.poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
         ? createOneInchTakeAdapter({
             delayBetweenActions: params.config.delayBetweenActions ?? 0,
+            oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
             oneInchRouters: params.config.oneInchRouters,
             connectorTokens: params.config.connectorTokens,
           })
@@ -89,6 +91,7 @@ export function createManualOneInchTakeContext(params: {
       dryRun: params.config.dryRun,
       delayBetweenActions: params.config.delayBetweenActions ?? 0,
       connectorTokens: params.config.connectorTokens,
+      oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
       oneInchRouters: params.config.oneInchRouters,
       oneInchAggregationExecutorAllowlist:
         params.config.oneInchAggregationExecutorAllowlist,

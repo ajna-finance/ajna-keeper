@@ -11,12 +11,15 @@ import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
 import * as erc20 from '../erc20';
 import {
   applyFactoryRouteProfitabilityPolicy,
+  ceilDiv,
   filterFactoryRouteCandidatesByAvailability,
   getCurveQuoteProvider,
   getFactoryRouteCandidates,
+  getMarketPriceFactorUnits,
   getSushiSwapQuoteProvider,
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
+  MARKET_FACTOR_SCALE,
 } from '../take/factory/shared';
 
 describe('Take Factory', () => {
@@ -471,6 +474,7 @@ describe('Take Factory', () => {
           universalRouterAddress: '0x3333333333333333333333333333333333333333',
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
+          candidateFeeTiers: [3000],
           wethAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
         },
@@ -479,6 +483,7 @@ describe('Take Factory', () => {
         new ethers.providers.JsonRpcProvider()
       );
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -542,6 +547,7 @@ describe('Take Factory', () => {
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           factoryAddress: '0x5555555555555555555555555555555555555555',
           defaultFeeTier: 500,
+          candidateFeeTiers: [500],
           wethAddress: '0x6666666666666666666666666666666666666666',
         },
       };
@@ -549,6 +555,7 @@ describe('Take Factory', () => {
         new ethers.providers.JsonRpcProvider()
       );
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -630,6 +637,60 @@ describe('Take Factory', () => {
       );
     });
 
+    it('coalesces concurrent SushiSwap provider initialization', async () => {
+      let resolveInitialization: ((value: boolean) => void) | undefined;
+      const initializeStub = sinon.stub(
+        SushiSwapQuoteProvider.prototype,
+        'initialize'
+      );
+      const initializationStarted = new Promise<void>((resolveStarted) => {
+        initializeStub.callsFake(
+          () =>
+            new Promise<boolean>((resolve) => {
+              resolveInitialization = resolve;
+              resolveStarted();
+            })
+        );
+      });
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      const routerConfig = {
+        swapRouterAddress: '0x3333333333333333333333333333333333333333',
+        quoterV2Address: '0x4444444444444444444444444444444444444444',
+        factoryAddress: '0x5555555555555555555555555555555555555555',
+        defaultFeeTier: 500,
+        wethAddress: '0x6666666666666666666666666666666666666666',
+      };
+      const quoteSigner = ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      );
+
+      const firstProviderPromise = getSushiSwapQuoteProvider({
+        signer: quoteSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+      await initializationStarted;
+      expect(runtimeCache.sushiswapInitInflight).to.not.equal(undefined);
+
+      const secondProviderPromise = getSushiSwapQuoteProvider({
+        signer: quoteSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+      expect(initializeStub.calledOnce).to.be.true;
+
+      resolveInitialization?.(true);
+      const [firstProvider, secondProvider] = await Promise.all([
+        firstProviderPromise,
+        secondProviderPromise,
+      ]);
+
+      expect(firstProvider).to.not.equal(undefined);
+      expect(secondProvider).to.equal(firstProvider);
+      expect(runtimeCache.sushiswap).to.equal(firstProvider);
+      expect(runtimeCache.sushiswapInitInflight).to.equal(undefined);
+    });
+
     it('reuses a shared Curve quote provider cache across quote evaluations', async () => {
       const initializeStub = sinon
         .stub(CurveQuoteProvider.prototype, 'initialize')
@@ -678,6 +739,7 @@ describe('Take Factory', () => {
         new ethers.providers.JsonRpcProvider()
       );
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -763,6 +825,66 @@ describe('Take Factory', () => {
         'Curve quote provider unavailable; retrying initialization'
       );
     });
+
+    it('coalesces concurrent Curve provider initialization', async () => {
+      let resolveInitialization: ((value: boolean) => void) | undefined;
+      const initializeStub = sinon.stub(
+        CurveQuoteProvider.prototype,
+        'initialize'
+      );
+      const initializationStarted = new Promise<void>((resolveStarted) => {
+        initializeStub.callsFake(
+          () =>
+            new Promise<boolean>((resolve) => {
+              resolveInitialization = resolve;
+              resolveStarted();
+            })
+        );
+      });
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      const routerConfig = {
+        poolConfigs: {
+          'COLLATERAL-QUOTE': {
+            address: '0x3333333333333333333333333333333333333333',
+            poolType: CurvePoolType.STABLE,
+          },
+        },
+        defaultSlippage: 0.5,
+        wethAddress: '0x4444444444444444444444444444444444444444',
+      };
+      const tokenAddresses = {
+        COLLATERAL: '0x1111111111111111111111111111111111111111',
+        QUOTE: '0x2222222222222222222222222222222222222222',
+      };
+
+      const firstProviderPromise = getCurveQuoteProvider({
+        signer: mockSigner as any,
+        routerConfig,
+        tokenAddresses,
+        runtimeCache,
+      });
+      await initializationStarted;
+      expect(runtimeCache.curveInitInflight).to.not.equal(undefined);
+
+      const secondProviderPromise = getCurveQuoteProvider({
+        signer: mockSigner as any,
+        routerConfig,
+        tokenAddresses,
+        runtimeCache,
+      });
+      expect(initializeStub.calledOnce).to.be.true;
+
+      resolveInitialization?.(true);
+      const [firstProvider, secondProvider] = await Promise.all([
+        firstProviderPromise,
+        secondProviderPromise,
+      ]);
+
+      expect(firstProvider).to.not.equal(undefined);
+      expect(secondProvider).to.equal(firstProvider);
+      expect(runtimeCache.curve).to.equal(firstProvider);
+      expect(runtimeCache.curveInitInflight).to.equal(undefined);
+    });
   });
 
   describe('Dynamic factory route selection', () => {
@@ -771,7 +893,10 @@ describe('Take Factory', () => {
         defaultLiquiditySource: LiquiditySource.UNISWAPV3,
         config: {
           universalRouterOverrides: { defaultFeeTier: 3000 },
-          sushiswapRouterOverrides: { defaultFeeTier: 500 },
+          sushiswapRouterOverrides: {
+            defaultFeeTier: 500,
+            candidateFeeTiers: [500],
+          },
         },
         selection: {
           allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
@@ -783,8 +908,91 @@ describe('Take Factory', () => {
       ]);
     });
 
-    it('rejects takeable route evaluations without net-profit metadata', () => {
-      expect(() =>
+    it('auto-probes standard Uniswap V3 fee tiers when candidates are not configured', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.UNISWAPV3,
+        config: {
+          universalRouterOverrides: { defaultFeeTier: 3000 },
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 3000 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 100 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 500 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 10000 },
+      ]);
+    });
+
+    it('auto-probes standard SushiSwap fee tiers when candidates are not configured', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.SUSHISWAP,
+        config: {
+          sushiswapRouterOverrides: { defaultFeeTier: 500 },
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 100 },
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 3000 },
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 10000 },
+      ]);
+    });
+
+    it('treats configured Uniswap V3 candidate fee tiers as an explicit override', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.UNISWAPV3,
+        config: {
+          universalRouterOverrides: {
+            defaultFeeTier: 3000,
+            candidateFeeTiers: [500],
+          },
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 3000 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 500 },
+      ]);
+    });
+
+    it('treats configured SushiSwap candidate fee tiers as an explicit override', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.SUSHISWAP,
+        config: {
+          sushiswapRouterOverrides: {
+            defaultFeeTier: 500,
+            candidateFeeTiers: [3000],
+          },
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 3000 },
+      ]);
+    });
+
+    it('skips takeable route evaluations without net-profit metadata', () => {
+      const loggerWarnStub = sinon.stub(logger, 'warn');
+      const validRoute = {
+        route: {
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          feeTier: 500,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(125),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(20),
+            expectedSubsidyQuoteRaw: BigNumber.from(0),
+            subsidyAllowed: false,
+          },
+        },
+      };
+
+      expect(
         selectBestFactoryRouteEvaluation({
           evaluations: [
             {
@@ -800,15 +1008,107 @@ describe('Take Factory', () => {
                 approvedMinOutRaw: ethers.utils.parseUnits('118', 6),
               },
             },
+            validRoute,
           ],
           defaultLiquiditySource: LiquiditySource.UNISWAPV3,
           config: {
             universalRouterOverrides: { defaultFeeTier: 3000 },
+            sushiswapRouterOverrides: { defaultFeeTier: 500 },
           },
         })
-      ).to.throw(
-        'Factory: takeable route missing expected net profit metadata'
+      ).to.equal(validRoute);
+      expect(loggerWarnStub.calledOnce).to.equal(true);
+      expect(loggerWarnStub.firstCall.args[0]).to.equal(
+        'Factory: skipping takeable route missing expected net profit metadata'
       );
+    });
+
+    it('prefers non-subsidized factory routes over higher-profit subsidized routes', () => {
+      const nonSubsidizedRoute = {
+        route: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          feeTier: 3000,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(125),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(20),
+            expectedSubsidyQuoteRaw: BigNumber.from(0),
+            subsidyAllowed: false,
+          },
+        },
+      };
+      const subsidizedRoute = {
+        route: {
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          feeTier: 500,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(150),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(40),
+            expectedSubsidyQuoteRaw: BigNumber.from(5),
+            subsidyAllowed: true,
+          },
+        },
+      };
+
+      expect(
+        selectBestFactoryRouteEvaluation({
+          evaluations: [subsidizedRoute, nonSubsidizedRoute],
+          defaultLiquiditySource: LiquiditySource.UNISWAPV3,
+          config: {
+            universalRouterOverrides: { defaultFeeTier: 3000 },
+            sushiswapRouterOverrides: { defaultFeeTier: 500 },
+          },
+        })
+      ).to.equal(nonSubsidizedRoute);
+    });
+
+    it('chooses the smallest subsidy among subsidized factory routes before net profit', () => {
+      const smallerSubsidyRoute = {
+        route: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          feeTier: 3000,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(130),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(15),
+            expectedSubsidyQuoteRaw: BigNumber.from(2),
+            subsidyAllowed: true,
+          },
+        },
+      };
+      const largerSubsidyRoute = {
+        route: {
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          feeTier: 500,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(150),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(40),
+            expectedSubsidyQuoteRaw: BigNumber.from(8),
+            subsidyAllowed: true,
+          },
+        },
+      };
+
+      expect(
+        selectBestFactoryRouteEvaluation({
+          evaluations: [largerSubsidyRoute, smallerSubsidyRoute],
+          defaultLiquiditySource: LiquiditySource.SUSHISWAP,
+          config: {
+            universalRouterOverrides: { defaultFeeTier: 3000 },
+            sushiswapRouterOverrides: { defaultFeeTier: 500 },
+          },
+        })
+      ).to.equal(smallerSubsidyRoute);
     });
 
     it('recomputes approved min-out from split route and profit floors during reapproval', () => {
@@ -819,6 +1119,8 @@ describe('Take Factory', () => {
       const evaluation = applyFactoryRouteProfitabilityPolicy({
         evaluation: {
           isTakeable: true,
+          marketPrice: 200,
+          takeablePrice: 198,
           quoteAmountRaw: ethers.utils.parseUnits('150', 6),
           selectedLiquiditySource: LiquiditySource.UNISWAPV3,
           selectedFeeTier: 3000,
@@ -828,6 +1130,7 @@ describe('Take Factory', () => {
           routeProfitability: {
             auctionRepayRequirementQuoteRaw: ethers.utils.parseUnits('100', 6),
             marketFactorFloorQuoteRaw: ethers.utils.parseUnits('100', 6),
+            configuredMarketPriceFactor: 0.99,
           },
         },
         liquiditySource: LiquiditySource.UNISWAPV3,
@@ -843,6 +1146,7 @@ describe('Take Factory', () => {
       expect(evaluation.profitMinOutRaw?.eq(refreshedProfitMinOutRaw)).to.be
         .true;
       expect(evaluation.approvedMinOutRaw?.eq(routeMinOutRaw)).to.be.true;
+      expect(evaluation.takeablePrice).to.be.closeTo(188.6792, 0.0001);
       expect(
         evaluation.routeProfitability?.requiredOutputFloorQuoteRaw?.eq(
           refreshedProfitMinOutRaw
@@ -866,6 +1170,7 @@ describe('Take Factory', () => {
           routeProfitability: {
             auctionRepayRequirementQuoteRaw: ethers.utils.parseUnits('100', 6),
             marketFactorFloorQuoteRaw: ethers.utils.parseUnits('100', 6),
+            configuredMarketPriceFactor: 0.99,
           },
         },
         liquiditySource: LiquiditySource.UNISWAPV3,
@@ -882,6 +1187,39 @@ describe('Take Factory', () => {
         .true;
       expect(evaluation.approvedMinOutRaw?.eq(refreshedProfitMinOutRaw)).to.be
         .true;
+    });
+
+    it('re-derives the market-factor floor when route metadata is incomplete', () => {
+      const auctionRepayRequirementQuoteRaw = ethers.utils.parseUnits('100', 6);
+      const configuredMarketPriceFactor = 0.99;
+      const expectedMarketFactorFloorQuoteRaw = ceilDiv(
+        auctionRepayRequirementQuoteRaw.mul(MARKET_FACTOR_SCALE),
+        BigNumber.from(getMarketPriceFactorUnits(configuredMarketPriceFactor))
+      );
+
+      const evaluation = applyFactoryRouteProfitabilityPolicy({
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: ethers.utils.parseUnits('150', 6),
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+          selectedFeeTier: 3000,
+          routeProfitability: {
+            auctionRepayRequirementQuoteRaw,
+            configuredMarketPriceFactor,
+          },
+        },
+        liquiditySource: LiquiditySource.UNISWAPV3,
+        context: {
+          configuredProfitFloorQuoteRaw: ethers.utils.parseUnits('1', 6),
+        },
+      });
+
+      expect(
+        evaluation.routeProfitability?.marketFactorFloorQuoteRaw?.eq(
+          expectedMarketFactorFloorQuoteRaw
+        )
+      ).to.be.true;
+      expect(evaluation.isTakeable).to.be.true;
     });
 
     it('ranks viable Uni/Sushi routes by gas-adjusted net profit and keeps the selected fee tier', async () => {
@@ -944,10 +1282,12 @@ describe('Take Factory', () => {
           quoterV2Address: '0x9999999999999999999999999999999999999999',
           factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           defaultFeeTier: 500,
+          candidateFeeTiers: [500],
           wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         },
       };
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -1048,9 +1388,12 @@ describe('Take Factory', () => {
           quoterV2Address: '0x9999999999999999999999999999999999999999',
           factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           defaultFeeTier: 500,
+          candidateFeeTiers: [500],
           wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         },
       };
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -1061,7 +1404,7 @@ describe('Take Factory', () => {
         ethers.Wallet.createRandom().connect(
           new ethers.providers.JsonRpcProvider()
         ) as any,
-        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        runtimeCache,
         {
           allowedLiquiditySources: [
             LiquiditySource.UNISWAPV3,

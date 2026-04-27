@@ -92,6 +92,12 @@ export interface TakeSettings {
   hpbPriceFactor?: number;
   liquiditySource?: LiquiditySource;
   marketPriceFactor?: number;
+  /**
+   * Permit defensive external takes that repay the auction but do not cover the
+   * route-derived gas/profit floor. Keep false unless the operator explicitly
+   * accepts keeper P&L spend to protect a reviewed pool or borrower.
+   */
+  allowSubsidy?: boolean;
 }
 
 export interface CollectSettings {
@@ -253,7 +259,8 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   /**
    * Hybrid route selection mode. maximize_profit probes all enabled paths and
    * picks the best net-profit route. factory_first probes factory before
-   * 1inch and stops at the first approved path to reduce 1inch API use.
+   * 1inch and stops at the first non-subsidized approved path to reduce 1inch
+   * API use; subsidized approvals keep probing remaining paths.
    * cost_aware is a deprecated alias for factory_first.
    */
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
@@ -455,6 +462,8 @@ export interface KeeperConfig {
   delayBetweenActions: number;
   delayBetweenRuns: number;
   oneInchRouters?: { [chainId: number]: string };
+  /** Default 1inch external-take slippage percentage. Defaults to 1.0 when unset. */
+  oneInchDefaultSlippage?: number;
   /**
    * Optional per-chain allowlist for decoded 1inch aggregationExecutor
    * addresses. When omitted, executors are logged but not hard-rejected.

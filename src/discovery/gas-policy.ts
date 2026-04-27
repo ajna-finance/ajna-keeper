@@ -5,6 +5,7 @@ import {
   AutoDiscoverTakePolicy,
   DEFAULT_FEE_TIER_BY_SOURCE,
   LiquiditySource,
+  STANDARD_V3_FEE_TIERS,
   formatLiquiditySource,
   hasConfiguredGasQuoteLiquiditySource,
   resolveConfiguredGasQuoteLiquiditySource,
@@ -17,7 +18,7 @@ import {
 } from '../read-transports';
 import { logger } from '../logging';
 import { DexRouter } from '../dex/router';
-import { getDecimalsErc20 } from '../erc20';
+import { convertWadToTokenDecimalsCeil, getDecimalsErc20 } from '../erc20';
 import {
   DiscoveryExecutionConfig,
   DiscoveryExecutionTransportConfig,
@@ -115,6 +116,13 @@ function ceilDivBigNumber(
   return numerator.isZero()
     ? BigNumber.from(0)
     : numerator.add(denominator).sub(1).div(denominator);
+}
+
+function convertNativeWadToQuoteRaw(
+  nativeWadAmount: BigNumber,
+  quoteDecimals: number
+): BigNumber {
+  return convertWadToTokenDecimalsCeil(nativeWadAmount, quoteDecimals);
 }
 
 function apportionCombinedNativeQuote(params: {
@@ -241,11 +249,14 @@ function getGasQuoteSourceCandidates(params: {
 function getGasQuoteFeeTiers(
   defaultFeeTier: number | undefined,
   candidateFeeTiers: number[] | undefined,
-  fallbackFeeTier: number
+  fallbackFeeTier: number,
+  automaticCandidateFeeTiers?: readonly number[]
 ): number[] {
-  return Array.from(
-    new Set([defaultFeeTier ?? fallbackFeeTier, ...(candidateFeeTiers ?? [])])
-  );
+  const tiers =
+    candidateFeeTiers !== undefined
+      ? candidateFeeTiers
+      : (automaticCandidateFeeTiers ?? []);
+  return Array.from(new Set([defaultFeeTier ?? fallbackFeeTier, ...tiers]));
 }
 
 interface FactoryV3GasQuoteProvider {
@@ -270,41 +281,53 @@ async function quoteFactoryV3GasConversion(params: {
   defaultFeeTier?: number;
   candidateFeeTiers?: number[];
   fallbackFeeTier: number;
+  automaticCandidateFeeTiers?: readonly number[];
 }): Promise<BigNumber | undefined> {
   let bestQuote: BigNumber | undefined;
   for (const feeTier of getGasQuoteFeeTiers(
     params.defaultFeeTier,
     params.candidateFeeTiers,
-    params.fallbackFeeTier
+    params.fallbackFeeTier,
+    params.automaticCandidateFeeTiers
   )) {
-    const poolExists = await withTimeout(
-      params.quoteProvider.poolExists(params.tokenIn, params.tokenOut, feeTier),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'factory gas quote pool existence check'
-    );
-    if (!poolExists) {
-      continue;
-    }
-    const quoteResult = await withTimeout(
-      params.quoteProvider.getQuote(
-        params.amountIn,
-        params.tokenIn,
-        params.tokenOut,
-        feeTier
-      ),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'factory gas quote'
-    );
-    if (quoteResult.success && quoteResult.dstAmount) {
-      const quote = BigNumber.from(quoteResult.dstAmount);
-      if (quote.isZero()) {
-        logger.debug(
-          `Gas quote conversion returned zero output for ${params.tokenIn}/${params.tokenOut} fee=${feeTier}`
-        );
+    try {
+      const poolExists = await withTimeout(
+        params.quoteProvider.poolExists(
+          params.tokenIn,
+          params.tokenOut,
+          feeTier
+        ),
+        DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+        'factory gas quote pool existence check'
+      );
+      if (!poolExists) {
         continue;
       }
-      // Use the highest output to conservatively price gas in quote-token terms.
-      bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
+      const quoteResult = await withTimeout(
+        params.quoteProvider.getQuote(
+          params.amountIn,
+          params.tokenIn,
+          params.tokenOut,
+          feeTier
+        ),
+        DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+        'factory gas quote'
+      );
+      if (quoteResult.success && quoteResult.dstAmount) {
+        const quote = BigNumber.from(quoteResult.dstAmount);
+        if (quote.isZero()) {
+          logger.debug(
+            `Gas quote conversion returned zero output for ${params.tokenIn}/${params.tokenOut} fee=${feeTier}`
+          );
+          continue;
+        }
+        // Use the highest output to conservatively price gas in quote-token terms.
+        bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
+      }
+    } catch (error) {
+      logger.debug(
+        `Factory gas quote conversion skipped fee=${feeTier} for ${params.tokenIn}/${params.tokenOut}: ${getErrorMessage(error)}`
+      );
     }
   }
   return bestQuote;
@@ -450,6 +473,7 @@ async function quoteTokensByLiquiditySource(params: {
       defaultFeeTier: routerConfig.defaultFeeTier,
       candidateFeeTiers: routerConfig.candidateFeeTiers,
       fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+      automaticCandidateFeeTiers: STANDARD_V3_FEE_TIERS,
     });
   }
 
@@ -479,6 +503,7 @@ async function quoteTokensByLiquiditySource(params: {
       defaultFeeTier: sushiConfig.defaultFeeTier,
       candidateFeeTiers: sushiConfig.candidateFeeTiers,
       fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
+      automaticCandidateFeeTiers: STANDARD_V3_FEE_TIERS,
     });
   }
 
@@ -736,8 +761,14 @@ export async function evaluateGasPolicy(params: {
     wrappedNativeAddress.toLowerCase() ===
     params.quoteTokenAddress.toLowerCase()
   ) {
-    gasCostQuoteRaw = gasCostNativeRaw;
-    minProfitNativeQuoteRaw = minProfitNativeRaw;
+    gasCostQuoteRaw = convertNativeWadToQuoteRaw(
+      gasCostNativeRaw,
+      quoteDecimals
+    );
+    minProfitNativeQuoteRaw =
+      minProfitNativeRaw !== undefined
+        ? convertNativeWadToQuoteRaw(minProfitNativeRaw, quoteDecimals)
+        : undefined;
     gasCostQuote = Number(
       ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals)
     );

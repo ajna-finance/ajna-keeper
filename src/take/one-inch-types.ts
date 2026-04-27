@@ -6,6 +6,7 @@ export type OneInchExecutionConfig = Pick<
   | 'dryRun'
   | 'delayBetweenActions'
   | 'connectorTokens'
+  | 'oneInchDefaultSlippage'
   | 'oneInchRouters'
   | 'oneInchAggregationExecutorAllowlist'
   | 'keeperTaker'
@@ -29,7 +30,10 @@ export type OneInchExecutionConfig = Pick<
 
 export type OneInchQuoteConfig = Pick<
   KeeperConfig,
-  'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'
+  | 'delayBetweenActions'
+  | 'oneInchDefaultSlippage'
+  | 'oneInchRouters'
+  | 'connectorTokens'
 > & {
   oneInchRequestTimeoutMs?: number;
   skipOneInchRateLimitDelay?: boolean;

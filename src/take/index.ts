@@ -249,7 +249,10 @@ async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
 interface GetLiquidationsToTakeParams
   extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
   config: SubgraphConfigInput<
-    Pick<KeeperConfig, 'oneInchRouters' | 'connectorTokens'> &
+    Pick<
+      KeeperConfig,
+      'oneInchRouters' | 'oneInchDefaultSlippage' | 'connectorTokens'
+    > &
       Partial<Pick<KeeperConfig, 'delayBetweenActions'>>
   >;
 }
@@ -270,6 +273,7 @@ export async function* getLiquidationsToTake({
     poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
       ? createOneInchTakeAdapter({
           delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
+          oneInchDefaultSlippage: resolvedConfig.oneInchDefaultSlippage,
           oneInchRouters: resolvedConfig.oneInchRouters,
           connectorTokens: resolvedConfig.connectorTokens,
         })

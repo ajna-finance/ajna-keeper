@@ -1,6 +1,8 @@
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
 import { computeFactoryAmountOutMinimum } from '../take/factory';
+import { LiquiditySource } from '../config';
+import { ApprovedUniswapV3FactoryQuoteEvaluation } from '../take/types';
 
 describe('Factory amountOutMinimum', () => {
   it('uses the approved execution floor directly', async () => {
@@ -15,17 +17,19 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
+      externalTakePath: 'factory',
       quoteAmountRaw: ethers.utils.parseEther('120'),
       approvedMinOutRaw: ethers.utils.parseEther('118.8'),
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier: 3000,
     };
 
     const amountOutMinimum = await computeFactoryAmountOutMinimum({
       pool: pool as any,
       liquidation,
       quoteEvaluation,
-      marketPriceFactor: 0.95,
     });
 
     expect(amountOutMinimum.eq(ethers.utils.parseEther('118.8'))).to.be.true;
@@ -43,10 +47,13 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
+      externalTakePath: 'factory',
       quoteAmountRaw: ethers.utils.parseEther('101'),
       approvedMinOutRaw: ethers.utils.parseEther('99'),
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier: 3000,
     };
 
     let thrown: Error | undefined;
@@ -55,14 +62,13 @@ describe('Factory amountOutMinimum', () => {
         pool: pool as any,
         liquidation,
         quoteEvaluation,
-        marketPriceFactor: 1.05,
       });
     } catch (error) {
       thrown = error as Error;
     }
 
     expect(thrown?.message).to.equal(
-      'Factory: approvedMinOutRaw below auction repayment/market-factor floor'
+      'Factory: approvedMinOutRaw below auction repayment floor'
     );
   });
 
@@ -78,17 +84,19 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
+      externalTakePath: 'factory',
       quoteAmountRaw: ethers.utils.parseEther('126'),
       approvedMinOutRaw: ethers.utils.parseEther('125'),
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier: 3000,
     };
 
     const amountOutMinimum = await computeFactoryAmountOutMinimum({
       pool: pool as any,
       liquidation,
       quoteEvaluation,
-      marketPriceFactor: 0.99,
     });
 
     expect(amountOutMinimum.eq(ethers.utils.parseEther('125'))).to.be.true;
@@ -106,19 +114,21 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
+      externalTakePath: 'factory',
       quoteAmountRaw: ethers.utils.parseEther('150'),
       routeMinOutRaw: ethers.utils.parseEther('125'),
       profitMinOutRaw: ethers.utils.parseEther('105'),
       approvedMinOutRaw: ethers.utils.parseEther('140'),
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier: 3000,
     };
 
     const amountOutMinimum = await computeFactoryAmountOutMinimum({
       pool: pool as any,
       liquidation,
       quoteEvaluation,
-      marketPriceFactor: 0.99,
     });
 
     expect(amountOutMinimum.eq(ethers.utils.parseEther('125'))).to.be.true;
@@ -146,8 +156,7 @@ describe('Factory amountOutMinimum', () => {
       await computeFactoryAmountOutMinimum({
         pool: pool as any,
         liquidation,
-        quoteEvaluation,
-        marketPriceFactor: 0.99,
+        quoteEvaluation: quoteEvaluation as any,
       });
     } catch (error) {
       thrown = error as Error;

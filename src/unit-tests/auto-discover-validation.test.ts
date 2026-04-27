@@ -1,12 +1,15 @@
 import { expect } from 'chai';
+import sinon from 'sinon';
 import {
   KeeperConfig,
   LiquiditySource,
   TakeWriteTransportMode,
   validateAutoDiscoverConfig,
   validateTakeSettings,
+  validateTakeSettingsForChain,
   validateTakeWriteConfig,
 } from '../config';
+import { logger } from '../logging';
 
 describe('auto-discover validation', () => {
   const baseConfig = (): KeeperConfig =>
@@ -274,6 +277,29 @@ describe('auto-discover validation', () => {
   });
 
   it('rejects non-finite and non-number take thresholds', () => {
+    const config = baseConfig();
+    expect(() =>
+      validateTakeSettings(
+        {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+          allowSubsidy: 'true' as unknown as boolean,
+        },
+        config
+      )
+    ).to.throw('TakeSettings: allowSubsidy must be a boolean');
+
+    expect(() =>
+      validateTakeSettings(
+        {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+          allowSubsidy: true,
+        },
+        config
+      )
+    ).to.not.throw();
+
     expect(() =>
       validateTakeSettings(
         {
@@ -283,6 +309,30 @@ describe('auto-discover validation', () => {
         {} as KeeperConfig
       )
     ).to.throw('TakeSettings: marketPriceFactor must be positive');
+
+    expect(() =>
+      validateTakeSettings(
+        {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 99,
+        },
+        config
+      )
+    ).to.throw(
+      'TakeSettings: marketPriceFactor 99 is unreasonable; values above 2 are rejected because values above 1 weaken market-factor protection. Did you mean 0.99?'
+    );
+
+    expect(() =>
+      validateTakeSettings(
+        {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.0000001,
+        },
+        config
+      )
+    ).to.throw(
+      'TakeSettings: marketPriceFactor 1e-7 is below the minimum supported precision 0.000001'
+    );
 
     expect(() =>
       validateTakeSettings(
@@ -303,6 +353,63 @@ describe('auto-discover validation', () => {
         {} as KeeperConfig
       )
     ).to.throw('TakeSettings: hpbPriceFactor must be positive');
+  });
+
+  it('warns when per-pool config allows subsidized external takes', () => {
+    const config = baseConfig();
+    config.pools = [
+      {
+        name: 'Reviewed Defensive Pool',
+        address: '0x0000000000000000000000000000000000000001',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+          allowSubsidy: true,
+        },
+      } as any,
+    ];
+    const warnStub = sinon.stub(logger, 'warn');
+
+    try {
+      validateTakeSettingsForChain(config, 1);
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match('Pool Reviewed Defensive Pool has take.allowSubsidy=true')
+        )
+      ).to.equal(true);
+    } finally {
+      warnStub.restore();
+    }
+  });
+
+  it('warns when autodiscovery defaults allow subsidized external takes', () => {
+    const config = baseConfig();
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.UNISWAPV3,
+      marketPriceFactor: 0.99,
+      allowSubsidy: true,
+    };
+    const warnStub = sinon.stub(logger, 'warn');
+
+    try {
+      expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'AutoDiscoverConfig: discoveredDefaults.take.allowSubsidy=true can subsidize external takes'
+          )
+        )
+      ).to.equal(true);
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'AutoDiscoverConfig: allowSubsidy=true is configured without minExpectedProfitQuote or minProfitNative'
+          )
+        )
+      ).to.equal(true);
+    } finally {
+      warnStub.restore();
+    }
   });
 
   it('rejects malformed numeric auto-discover policy values', () => {

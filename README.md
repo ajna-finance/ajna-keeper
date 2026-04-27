@@ -407,7 +407,7 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 #### Configuring for 1inch
 
-To enable 1inch swaps, set up environment variables and add the 1inch router fields to config.ts. For discovered external takes, keep `delayBetweenActions` low and use `autoDiscover.take.oneInchQuoteTimeoutMs` plus the 1inch failure cooldown to bound API latency. Long `delayBetweenActions` values are only appropriate for slow manual 1inch operation.
+To enable 1inch swaps, set up environment variables and add the 1inch router fields to config.ts. `oneInchDefaultSlippage` controls the external-take min-out slippage percentage for 1inch routes and defaults to `1.0` when unset. For discovered external takes, keep `delayBetweenActions` low and use `autoDiscover.take.oneInchQuoteTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound API latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. Long `delayBetweenActions` values are only appropriate for slow manual 1inch operation.
 
 Atomic 1inch takes validate the decoded swap payload before submission. The payload must swap the pool collateral token to the pool quote token, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured 1inch router or the decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `oneInchAggregationExecutorAllowlist` per chain to hard-restrict executors. If 1inch starts returning required non-zero flags for a target pair, use factory routing for that pool or open an issue before loosening this guard.
 
@@ -457,9 +457,9 @@ A 1inch API key may be obtained from their [developer portal](https://portal.1in
 
 **External takes** connect Ajna liquidation auctions to external DEX liquidity with Atomic Swaps. This requires deploying smart contracts to atomically take collateral and swap it.
 
-### Critical Fee Tier Configuration for External Takes
+### Factory Fee-Tier Configuration for External Takes
 
-For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and can optionally probe additional `candidateFeeTiers` per DEX during quote evaluation. The selected fee tier is then carried into execution. These values are not baked into deployed bytecode, so changing them is a config-and-restart decision, not a redeploy.
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route, as a deterministic tie-breaker among otherwise equal routes, and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, both V3 factory sources automatically probe standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set; use `candidateFeeTiers: [defaultFeeTier]` for default-tier-only probing.
 
 **Fee Tier Value → Percentage → Common Use:**
 
@@ -474,14 +474,17 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 **For External Takes (Time-Sensitive):**
 
 - Uses `universalRouterOverrides.defaultFeeTier` or `sushiswapRouterOverrides.defaultFeeTier` as the preferred route
-- Can add `candidateFeeTiers` to probe other deployed pools for the same token pair
+- Auto-probes standard Uniswap V3 and SushiSwap fee tiers when `candidateFeeTiers` is unset
 - Applies the selected quote route to execution, including the selected fee tier
 - Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
 - Quotes budget-approved factory routes with bounded parallelism, then ranks them deterministically by expected net profit
 - Treats `allowedLiquiditySources`, when set, as the complete factory route allowlist. Include the default source in that list if it should remain eligible.
 - Can compare the best factory route against 1inch when `autoDiscover.take.allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`.
-- In hybrid mode, `externalTakeProbeTimeoutMs` bounds each 1inch/factory path probe so one slow route cannot block another viable route. Values above 5000ms are allowed for slow infrastructure, but they directly trade hot-auction latency for provider tolerance.
-- Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` to probe factory first and skip 1inch when the factory path is already approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
+- In hybrid mode, `externalTakeProbeTimeoutMs` bounds each 1inch/factory path probe so one slow route cannot block another viable route. When unset, it defaults to `oneInchQuoteTimeoutMs + 1000ms`, capped at 5000ms. Explicit values from 1ms to 10000ms are allowed for slow infrastructure, but values above 5000ms directly trade hot-auction latency for provider tolerance.
+- Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` to probe factory first and skip 1inch when the factory path is approved without subsidy; subsidized factory approvals keep probing so a self-funding 1inch path can still win. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
+- `marketPriceFactor` remains the operator-facing early-take threshold. Use values below 1 for normal operation, for example `0.99` means take when auction price is below roughly 99% of market. Config validation rejects non-positive values and values above 2; this catches common typos like `99` instead of `0.99`.
+- `allowSubsidy` defaults to `false`. In that mode, an external take must clear the route-derived non-subsidized floor before execution. Set `autoDiscover.take.minExpectedProfitQuote: 0` if you want quote-normalized gas coverage with no extra profit floor.
+- Use `allowSubsidy: true` only for manually reviewed defensive pools where the keeper may intentionally spend P&L to repay an auction earlier. Subsidized takes still enforce auction repayment and swap min-out safety, but they may execute below the gas/profit floor.
 - A low `takeRouteQuoteBudgetPerCandidate` reduces quote latency but can miss a more profitable route that was not probed.
 - No per-pool external-take fee override today
 - Change requires updating config and restarting the keeper
@@ -493,14 +496,14 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 - Flexible and changeable without redeploying contracts
 - Not affected by dynamic external-take route selection
 
-### Pre-Deployment Fee Tier Research (REQUIRED)
+### Factory Route Liquidity Research
 
 Before enabling Uniswap V3 or SushiSwap external takes:
 
 **Step 1: List all token pairs from your pools**
-**Step 2: Check Uniswap Info or SushiSwap Analytics for each pair's fee-tier liquidity**
+**Step 2: Check Uniswap Info or SushiSwap Analytics for each pair's route liquidity**
 **Step 3: Weight by expected liquidation value and frequency, not just TVL**
-**Step 4: Set `defaultFeeTier` and, when useful, `candidateFeeTiers` in config**
+**Step 4: Set `defaultFeeTier`; use `candidateFeeTiers` only to narrow or customize the probed tier set**
 **Step 5: Revisit periodically as liquidity shifts**
 
 Example research process:
@@ -513,8 +516,8 @@ Research Results:
 - DAI/USDC: 500 tier has $100M TVL, 3000 tier has $30M TVL
 - RARE/WETH: Only exists in 10000 tier
 
-Decision: Use defaultFeeTier: 3000 and candidateFeeTiers: [500, 10000]
-Rationale: Prefer the highest-value pair (USDC/WETH), but probe the other deployed tiers when auctions appear
+Decision: Use defaultFeeTier: 3000 and leave candidateFeeTiers unset
+Rationale: Prefer the highest-value pair (USDC/WETH), while letting the keeper probe standard V3 tiers when auctions appear
 Plan: Keep the candidate list small enough for quote latency; LP rewards can still override per pool
 ```
 
@@ -579,15 +582,20 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - `allowedLiquiditySources` remains factory-only. Use it to restrict factory route selection to `UNISWAPV3`, `SUSHISWAP`, and/or `CURVE`; when set, it is the complete factory route allowlist and cannot include `ONEINCH`.
 - If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the factory taker path before hot loops begin.
 - Hybrid 1inch-plus-factory ranking requires a configured native-to-quote gas conversion path and wrapped native token address, because the keeper compares route net profit instead of gross quote output.
-- `externalTakeProbeTimeoutMs` bounds each hybrid path probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values above 5000ms are accepted, but should only be used when avoiding provider false-negatives is more important than tight take-loop latency. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a factory path is approved. `'cost_aware'` is still accepted for migration but should be replaced with `'factory_first'`.
+- `externalTakeProbeTimeoutMs` bounds each hybrid path probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values from 1ms to 10000ms are accepted, but values above 5000ms should only be used when avoiding provider false-negatives is more important than tight take-loop latency. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a non-subsidized factory path is approved. Subsidized factory approvals continue probing remaining paths. `'cost_aware'` is still accepted for migration but should be replaced with `'factory_first'`.
+- `discoveredDefaults.take.allowSubsidy` should normally stay unset or `false`. Setting it to `true` permits subsidized external takes on every discovered pool that matches the defaults; reserve that for intentionally defensive deployments with a known blast radius.
+- Route-derived subsidy policy is evaluated from the actual selected quote. Non-subsidized external takes must clear auction repayment plus route gas/profit floors when quote-normalized gas/profit inputs are configured or available; subsidized takes may skip that economic floor but never the repayment/min-out floor.
+- `marketPriceFactor` must be positive and no greater than 2. Values above 1 weaken market-factor protection and should be intentional; normal defensive settings are usually below 1.
 - `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
 - Once an auction has appeared in subgraph discovery, the keeper keeps it in a short-lived hot-auction cache so fast take loops can keep probing it even if a later subgraph refresh temporarily omits it. Tune with `autoDiscover.take.hotAuctionCandidateTtlMs` and `autoDiscover.take.maxHotAuctionCandidates`; set the TTL to `0` to disable the cache.
 - On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token. Override with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed gas costs.
 - Gas-price freshness defaults are short for take profitability checks: 5 seconds on L1 and 15 seconds on common L2s. Override with `autoDiscover.take.l1GasPriceFreshnessTtlMs` and `autoDiscover.take.l2GasPriceFreshnessTtlMs` if your RPC conditions require it.
-- `autoDiscover.take.gasPriceDriftToleranceBasisPoints` optionally forces final pre-submission reapproval when the current gas price has drifted materially from the evaluation snapshot.
+- `autoDiscover.take.gasPriceDriftToleranceBasisPoints` optionally rejects final pre-submission approval when current gas is higher than the evaluation snapshot by more than the configured tolerance. Lower gas is favorable and does not reject.
+- `autoDiscover.take.oneInchQuoteTimeoutMs` defaults to 2000ms and applies to discovered 1inch quote and swap-data requests. `oneInchQuoteFailureThreshold` defaults to 2 retryable failures before cooldown; `oneInchQuoteFailureCooldownMs` defaults to 30000ms and is capped at 1 hour.
 - For live discovered external takes, `autoDiscover.take.externalTakeTransportPolicy` can be `allow_public`, `prefer_private_or_relay`, or `require_private_or_relay`. Use `require_private_or_relay` only when `takeWrite` is configured for `private_rpc` or `relay`; dry runs skip write submission but still warn if no private/relay transport is configured.
 - `autoDiscover.take.validateRouteDeployments: true` enables startup preflight checks for enabled external-take routers, takers, factory registry entries, and configured Curve pools.
 - `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.
+- Uniswap V3 and SushiSwap automatically probe standard fee tiers when `candidateFeeTiers` is unset. This adds up to three extra pool-existence checks per V3 factory candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`. Set `candidateFeeTiers: [defaultFeeTier]` to opt out of automatic standard-tier probing.
 
 For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).
 
@@ -652,7 +660,7 @@ At runtime, discovered `take` refreshes the shared chain-wide auction snapshot w
 
 Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh. No extra operator action is needed to discover 101 active auctions.
 
-`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. `maxGasCostNative`, `maxGasCostQuote`, and `maxGasPriceGwei` are action-specific under `autoDiscover.take` and `autoDiscover.settlement`.
+`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. Set it to `0` when you want the route-derived policy to require quote-normalized gas coverage without adding an extra profit floor. `maxGasCostNative`, `maxGasCostQuote`, and `maxGasPriceGwei` are action-specific under `autoDiscover.take` and `autoDiscover.settlement`.
 
 Prefer `maxGasCostNative` on L2s and mixed-quote deployments. It uses the RPC gas price directly and does not require an extra native-to-quote conversion fetch. `maxGasCostQuote` remains available as an explicit quote-denominated mode; when it is enabled the keeper may need to convert native gas cost into the pool quote token. If the pool collateral is already wrapped native, the keeper reuses the existing take quote instead of fetching a second conversion quote. All quote-denominated thresholds are per-pool quote token amounts.
 
@@ -693,14 +701,15 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.ONEINCH,
         marketPriceFactor: 0.98, // Take when auction < market * 0.98
+        allowSubsidy: false, // Default: route must cover repayment plus configured gas/profit floors
       },
     },
   ],
 };
 ```
 
-**Important: 1inch Fee Tier Considerations**
-1inch automatically routes through optimal fee tiers, so you don't need to worry about fee tier selection for 1inch integration. The API handles routing optimization.
+**1inch Routing Note**
+1inch routes dynamically through its API, so `defaultFeeTier` and `candidateFeeTiers` do not apply to 1inch external takes. Use the 1inch timeout and cooldown settings above to control hot-loop latency and API cost.
 
 #### Uniswap V3 Integration (Factory System)
 
@@ -726,7 +735,8 @@ const config: KeeperConfig = {
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
     defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    candidateFeeTiers: [500, 10000], // Optional additional tiers to probe per take
+    // Omit candidateFeeTiers to auto-probe standard V3 tiers.
+    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
     defaultSlippage: 0.5,
   },
 
@@ -735,22 +745,23 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.UNISWAPV3,
         marketPriceFactor: 0.99, // Take when auction < market * 0.99
+        allowSubsidy: false, // Set true only for intentionally defensive subsidized takes
       },
     },
   ],
 };
 ```
 
-**Important: Uniswap V3 Pool Selection and Fee Tier Configuration**
+**Uniswap V3 Route Selection**
 
-Uniswap external takes use `defaultFeeTier` as the preferred route and can probe `candidateFeeTiers` for the same token pair. The keeper checks whether a pool exists before spending quote budget, then quotes viable routes and executes with the selected fee tier.
+Uniswap external takes use `defaultFeeTier` as the preferred route and automatically probe standard V3 tiers when `candidateFeeTiers` is unset. The keeper checks whether a pool exists before spending quote budget, then quotes viable routes and executes with the selected fee tier.
 
 To check liquidity:
 
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) for your network
 2. Search for your token pair (e.g., USDC/WETH)
 3. Compare TVL across different fee tiers
-4. Set `defaultFeeTier` to your preferred/common route and add only useful alternatives to `candidateFeeTiers`
+4. Set `defaultFeeTier` to your preferred/common route; add `candidateFeeTiers` only to narrow or customize the automatic standard set
 5. Monitor and update as liquidity shifts over time
 
 Low-liquidity pools can cause swap failures or poor pricing that impacts liquidation profitability.
@@ -778,7 +789,7 @@ const config: KeeperConfig = {
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
     defaultFeeTier: 500, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [3000], // Optional additional tiers to probe per take
+    candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers
     defaultSlippage: 10.0,
   },
 
@@ -787,21 +798,22 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.SUSHISWAP,
         marketPriceFactor: 0.99, // Take when auction < market * 0.99
+        allowSubsidy: false,
       },
     },
   ],
 };
 ```
 
-**Important: SushiSwap Pool Selection and Fee Tier Configuration**
+**SushiSwap Route Selection**
 
-SushiSwap external takes use `defaultFeeTier` as the preferred route and can probe `candidateFeeTiers` for deployed pools. Missing pools are skipped before quote-budgeting; viable routes are ranked by profitability and executed with the selected fee tier.
+SushiSwap external takes use `defaultFeeTier` as the preferred route and automatically probe standard V3 tiers when `candidateFeeTiers` is unset. Missing pools are skipped before quote-budgeting; viable routes are ranked by profitability and executed with the selected fee tier.
 
 To verify optimal pools:
 
 1. Check [SushiSwap Analytics](https://sushi.com/pool) for your network
 2. Compare liquidity across fee tiers for your token pairs
-3. Set `defaultFeeTier` to your preferred/common route and add useful alternatives to `candidateFeeTiers`
+3. Set `defaultFeeTier` to your preferred/common route; add `candidateFeeTiers` only to narrow or customize the automatic standard set
 4. Test with small amounts before production deployment
 5. Revisit the setting as market conditions change
 
@@ -856,6 +868,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.CURVE,
         marketPriceFactor: 0.99, // Take when auction < market * 0.99
+        allowSubsidy: false,
       },
     },
   ],
@@ -912,8 +925,8 @@ curveRouterOverrides: {
 
 The keeper automatically detects your configuration:
 
-- **Single**: Uses existing 1inch integration (`src/take/index.ts`)
-- **Factory**: Uses multi-DEX system (`src/take/factory/index.ts`)
+- **Single-contract 1inch**: Uses the manual 1inch execution path (`src/take/one-inch-execution.ts`)
+- **Factory**: Uses the multi-DEX factory execution path (`src/take/factory/index.ts`)
 - **None**: ArbTake and settlement only
 
 No manual selection needed - the bot chooses based on your config.
@@ -933,6 +946,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.ONEINCH,
         marketPriceFactor: 0.98,
+        allowSubsidy: false,
       },
     },
   ],
@@ -951,12 +965,12 @@ const config: KeeperConfig = {
   },
   universalRouterOverrides: {
     defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    candidateFeeTiers: [500, 10000], // Optional extra tiers to probe
+    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
     /* other addresses */
   },
   sushiswapRouterOverrides: {
     defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [500], // Optional extra tiers to probe
+    candidateFeeTiers: [500], // Optional: narrow/customize probed tiers
     /* other addresses */
   },
 
@@ -965,6 +979,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.SUSHISWAP, // or UNISWAPV3
         marketPriceFactor: 0.99,
+        allowSubsidy: false,
       },
     },
   ],

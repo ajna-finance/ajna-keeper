@@ -8,11 +8,16 @@ import {
   encodeOneInchSwapDetailsBytes,
   validateOneInchSwapDetailsForAtomicTake,
 } from '../dex/one-inch';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
+import {
+  convertWadToTokenDecimals,
+  convertWadToTokenDecimalsCeil,
+  getDecimalsErc20,
+} from '../erc20';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import {
   delay,
+  decimaledToWei,
   estimateGasWithBuffer,
   getErrorMessage,
   weiToDecimaled,
@@ -25,10 +30,15 @@ import {
   submitTakeTransaction,
 } from './write-transport';
 import {
+  ApprovedOneInchQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
 } from './types';
+import {
+  EXTERNAL_TAKE_REJECTION_REASONS,
+  applyExternalTakeRoutePolicy,
+} from './external-take-policy';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 
@@ -104,10 +114,11 @@ async function assertConfiguredChainIdMatchesSigner(
   signerChecks.set(configuredChainId, check);
   try {
     await check.pending;
-  } finally {
+  } catch (error) {
     if (signerChecks.get(configuredChainId) === check) {
       signerChecks.delete(configuredChainId);
     }
+    throw error;
   }
 }
 
@@ -122,6 +133,19 @@ async function resolveOneInchChainId(
   return config.chainId;
 }
 
+function getQuoteAmountDueRawFromDecimals(params: {
+  auctionPriceWad: BigNumber;
+  collateralWad: BigNumber;
+  quoteDecimals: number;
+}): BigNumber {
+  const quoteDueWad = params.collateralWad
+    .mul(params.auctionPriceWad)
+    .add(factoryShared.WAD.sub(1))
+    .div(factoryShared.WAD);
+  // Round repayment up so min-out never underfunds the Ajna take amount.
+  return convertWadToTokenDecimalsCeil(quoteDueWad, params.quoteDecimals);
+}
+
 export async function getOneInchTakeQuoteEvaluation(
   pool: FungiblePool,
   price: number,
@@ -130,7 +154,8 @@ export async function getOneInchTakeQuoteEvaluation(
   config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
-  connectorTokens: string[] | undefined
+  connectorTokens: string[] | undefined,
+  auctionPriceWad?: BigNumber
 ): Promise<ExternalTakeQuoteEvaluation> {
   if (
     poolConfig.take.liquiditySource !== LiquiditySource.ONEINCH ||
@@ -150,7 +175,8 @@ export async function getOneInchTakeQuoteEvaluation(
     config,
     signer,
     oneInchRouters,
-    connectorTokens
+    connectorTokens,
+    auctionPriceWad
   );
 }
 
@@ -162,7 +188,8 @@ export async function getOneInchPathQuoteEvaluation(
   config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
-  connectorTokens: string[] | undefined
+  connectorTokens: string[] | undefined,
+  auctionPriceWad?: BigNumber
 ): Promise<ExternalTakeQuoteEvaluation> {
   if (!poolConfig.take.marketPriceFactor) {
     return {
@@ -261,15 +288,40 @@ export async function getOneInchPathQuoteEvaluation(
     );
 
     const marketPrice = quoteAmount / collateralAmount;
-    const takeablePrice = marketPrice * poolConfig.take.marketPriceFactor;
+    const effectiveAuctionPriceWad = auctionPriceWad ?? decimaledToWei(price);
+    const quoteAmountDueRaw = getQuoteAmountDueRawFromDecimals({
+      auctionPriceWad: effectiveAuctionPriceWad,
+      collateralWad: collateral,
+      quoteDecimals,
+    });
+    const marketFactorFloorQuoteRaw = factoryShared.ceilDiv(
+      quoteAmountDueRaw.mul(factoryShared.MARKET_FACTOR_SCALE),
+      BigNumber.from(
+        factoryShared.getMarketPriceFactorUnits(
+          poolConfig.take.marketPriceFactor
+        )
+      )
+    );
+    const slippageFloor = factoryShared.getSlippageFloorQuoteRaw(
+      amountOut,
+      config.oneInchDefaultSlippage
+    );
+    const policy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
+      allowSubsidy: poolConfig.take.allowSubsidy === true,
+      quoteAmountRaw: amountOut,
+      quoteDueRaw: quoteAmountDueRaw,
+      marketFactorFloorQuoteRaw,
+      routeMinOutRaw: slippageFloor,
+    });
+    const takeablePrice = marketPrice * policy.effectiveMarketPriceFactor;
 
-    const takeable = price <= takeablePrice;
     logger.info(
-      `Take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor} → ${takeable ? 'TAKEABLE' : 'skip'}`
+      `Take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor}, effectiveFactor=${policy.effectiveMarketPriceFactor.toFixed(6)}, subsidy=${policy.expectedSubsidyQuoteRaw.gt(0) ? policy.expectedSubsidyQuoteRaw.toString() : '0'} → ${policy.isEconomicallyExecutable ? 'TAKEABLE' : 'skip'}`
     );
 
     return {
-      isTakeable: takeable,
+      isTakeable: policy.isEconomicallyExecutable,
       externalTakePath: 'oneinch',
       marketPrice,
       takeablePrice,
@@ -277,10 +329,34 @@ export async function getOneInchPathQuoteEvaluation(
       quoteAmountRaw: amountOut,
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       collateralAmount,
+      routeMinOutRaw: policy.routeMinOutRaw,
+      profitMinOutRaw: policy.profitMinOutRaw,
+      approvedMinOutRaw: policy.approvedMinOutRaw,
+      routeProfitability: {
+        auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
+        routeExecutionCostQuoteRaw: policy.routeExecutionCostQuoteRaw,
+        nativeProfitFloorQuoteRaw: policy.nativeProfitFloorQuoteRaw,
+        configuredProfitFloorQuoteRaw: policy.configuredProfitFloorQuoteRaw,
+        slippageRiskBufferQuoteRaw: policy.slippageRiskBufferQuoteRaw,
+        configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
+        marketFactorFloorQuoteRaw,
+        requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
+        requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
+        requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
+        expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+        expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
+        surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
+        routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
+        effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
+        subsidyAllowed: policy.subsidyAllowed,
+        expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
+      },
       quotedCollateralWad: collateral,
-      reason: takeable
+      quotedAuctionPriceWad: effectiveAuctionPriceWad,
+      reason: policy.isEconomicallyExecutable
         ? undefined
-        : 'auction price above external take threshold',
+        : (policy.rejectionReason ??
+          EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold),
     };
   } catch (error) {
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);
@@ -293,49 +369,91 @@ export async function getOneInchPathQuoteEvaluation(
 
 async function computeOneInchAtomicMinReturnAmount(params: {
   pool: FungiblePool;
-  poolConfig: TakeActionConfig;
   liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedOneInchQuoteEvaluation;
 }): Promise<BigNumber> {
-  if (!params.poolConfig.take.marketPriceFactor) {
-    throw new Error('1inch atomic execution requires marketPriceFactor');
-  }
-  if (!params.quoteEvaluation.quoteAmountRaw) {
-    throw new Error('1inch atomic execution requires quoteAmountRaw');
-  }
-
   const quoteAmountDueRaw = await factoryShared.getQuoteAmountDueRaw(
     params.pool,
     params.liquidation.auctionPrice,
     params.liquidation.collateral
   );
-  const profitabilityFloor = factoryShared.ceilDiv(
-    quoteAmountDueRaw.mul(factoryShared.MARKET_FACTOR_SCALE),
-    BigNumber.from(
-      factoryShared.getMarketPriceFactorUnits(
-        params.poolConfig.take.marketPriceFactor
-      )
-    )
-  );
-  const slippageFloor = params.quoteEvaluation.quoteAmountRaw
-    .mul(
-      factoryShared.BASIS_POINTS_DENOMINATOR -
-        factoryShared.getSlippageBasisPoints(1)
-    )
-    .div(factoryShared.BASIS_POINTS_DENOMINATOR);
-  const approvedMinOutRaw =
-    factoryShared.deriveApprovedMinOutRaw({
-      routeMinOutRaw: params.quoteEvaluation.routeMinOutRaw,
-      profitMinOutRaw: params.quoteEvaluation.profitMinOutRaw,
-      fallbackMinOutRaw: params.quoteEvaluation.approvedMinOutRaw,
-    }) ?? BigNumber.from(0);
+  const approvedMinOutRaw = params.quoteEvaluation.approvedMinOutRaw;
 
-  return factoryShared.maxBigNumber(
-    quoteAmountDueRaw,
-    profitabilityFloor,
-    slippageFloor,
-    approvedMinOutRaw
-  );
+  if (approvedMinOutRaw.lt(quoteAmountDueRaw)) {
+    throw new Error('1inch approvedMinOutRaw below auction repayment floor');
+  }
+
+  return approvedMinOutRaw;
+}
+
+type OneInchQuoteApprovalResult =
+  | { approved: true; quoteEvaluation: ApprovedOneInchQuoteEvaluation }
+  | { approved: false; reason: string };
+
+function approveOneInchQuoteForExecution(params: {
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  poolName: string;
+  borrower: string;
+}): OneInchQuoteApprovalResult {
+  const { quoteEvaluation, poolName, borrower } = params;
+
+  if (!quoteEvaluation.isTakeable) {
+    return {
+      approved: false,
+      reason: `1inch atomic take quote no longer satisfies execution policy for ${poolName}/${borrower}: ${quoteEvaluation.reason ?? 'not takeable'}`,
+    };
+  }
+
+  if (!quoteEvaluation.quoteAmountRaw) {
+    return {
+      approved: false,
+      reason: `1inch atomic take is missing raw quote amount for ${poolName}/${borrower}; refusing to send an unbounded swap`,
+    };
+  }
+
+  if (
+    quoteEvaluation.externalTakePath !== undefined &&
+    quoteEvaluation.externalTakePath !== 'oneinch'
+  ) {
+    return {
+      approved: false,
+      reason: `1inch atomic take received non-1inch approved path for ${poolName}/${borrower}`,
+    };
+  }
+
+  if (
+    quoteEvaluation.selectedLiquiditySource !== undefined &&
+    quoteEvaluation.selectedLiquiditySource !== LiquiditySource.ONEINCH
+  ) {
+    return {
+      approved: false,
+      reason: `1inch atomic take received non-1inch approved source for ${poolName}/${borrower}`,
+    };
+  }
+
+  const approvedMinOutRaw = factoryShared.deriveApprovedMinOutRaw({
+    routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
+    profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
+    fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
+  });
+  if (!approvedMinOutRaw) {
+    return {
+      approved: false,
+      reason: `1inch atomic take is missing approved min-out floor for ${poolName}/${borrower}; refusing to execute an unbound swap`,
+    };
+  }
+
+  return {
+    approved: true,
+    quoteEvaluation: {
+      ...quoteEvaluation,
+      isTakeable: true,
+      externalTakePath: 'oneinch',
+      quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      approvedMinOutRaw,
+    },
+  };
 }
 
 interface TakeLiquidationParams {
@@ -356,16 +474,6 @@ export async function takeLiquidation({
   const { borrower } = liquidation;
   const { dryRun } = config;
 
-  if (dryRun) {
-    const selectedLiquiditySource =
-      liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource ??
-      poolConfig.take.liquiditySource;
-    logger.info(
-      `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${selectedLiquiditySource}`
-    );
-    return true;
-  }
-
   const suppliedQuoteEvaluation = liquidation.externalTakeQuoteEvaluation;
   const usesOneInchExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ||
@@ -381,7 +489,7 @@ export async function takeLiquidation({
 
   let attemptedSubmission = false;
   try {
-    const approvedQuoteEvaluation =
+    const quoteEvaluation =
       suppliedQuoteEvaluation ??
       (await getOneInchTakeQuoteEvaluation(
         pool,
@@ -391,27 +499,33 @@ export async function takeLiquidation({
         {
           delayBetweenActions: config.delayBetweenActions,
           oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
+          oneInchDefaultSlippage: config.oneInchDefaultSlippage,
           skipOneInchRateLimitDelay: config.skipOneInchRateLimitDelay,
           chainId: config.chainId,
           tokenDecimalsCache: config.tokenDecimalsCache,
         },
         signer,
         config.oneInchRouters,
-        config.connectorTokens
+        config.connectorTokens,
+        liquidation.auctionPrice
       ));
 
-    if (!approvedQuoteEvaluation.isTakeable) {
-      logger.error(
-        `1inch atomic take quote no longer satisfies execution policy for ${pool.name}/${borrower}: ${approvedQuoteEvaluation.reason ?? 'not takeable'}`
-      );
+    const approval = approveOneInchQuoteForExecution({
+      quoteEvaluation,
+      poolName: pool.name,
+      borrower,
+    });
+    if (!approval.approved) {
+      logger.error(approval.reason);
       return false;
     }
+    const approvedQuoteEvaluation = approval.quoteEvaluation;
 
-    if (!approvedQuoteEvaluation.quoteAmountRaw) {
-      logger.error(
-        `1inch atomic take is missing raw quote amount for ${pool.name}/${borrower}; refusing to send an unbounded swap`
+    if (dryRun) {
+      logger.info(
+        `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${approvedQuoteEvaluation.selectedLiquiditySource}, approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
       );
-      return false;
+      return true;
     }
 
     const takeWriteTransport = resolveTakeWriteTransport(signer, config);
@@ -460,7 +574,7 @@ export async function takeLiquidation({
       collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
-      1,
+      config.oneInchDefaultSlippage ?? 1,
       keeperTaker.address,
       true,
       { timeoutMs: config.oneInchRequestTimeoutMs }
@@ -508,7 +622,6 @@ export async function takeLiquidation({
 
     const requiredMinReturnAmount = await computeOneInchAtomicMinReturnAmount({
       pool,
-      poolConfig,
       liquidation,
       quoteEvaluation: approvedQuoteEvaluation,
     });
