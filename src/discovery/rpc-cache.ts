@@ -17,18 +17,24 @@ export async function createDiscoveryRpcCache(params: {
     return undefined;
   }
 
+  const chainId =
+    typeof params.signer.getChainId === 'function'
+      ? await params.signer.getChainId()
+      : undefined;
+  const factoryQuoteProviders = params.includeFactoryQuoteProviders
+    ? (params.factoryQuoteProviders ?? createFactoryQuoteProviderRuntimeCache())
+    : undefined;
+  if (factoryQuoteProviders && chainId !== undefined) {
+    factoryQuoteProviders.chainId = chainId;
+  }
+
   return {
-    chainId:
-      typeof params.signer.getChainId === 'function'
-        ? await params.signer.getChainId()
-        : undefined,
+    chainId,
     gasPrice: await params.readRpc.getGasPrice(),
     gasPriceFetchedAt: Date.now(),
     ...(params.includeFactoryQuoteProviders
       ? {
-          factoryQuoteProviders:
-            params.factoryQuoteProviders ??
-            createFactoryQuoteProviderRuntimeCache(),
+          factoryQuoteProviders,
         }
       : {}),
     ...(params.oneInchQuoteCircuit

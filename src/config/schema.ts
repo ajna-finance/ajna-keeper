@@ -400,7 +400,8 @@ export interface CurveRouterOverrides {
   /**
    * Optional millisecond delay before submitting Curve factory takes. Leave unset
    * or 0 for the lowest-latency path; set only if a target chain/provider needs
-   * extra state propagation time.
+   * extra state propagation time. Values above 60,000ms are rejected because
+   * they can stall hot take loops.
    */
   executionDelayMs?: number;
 }

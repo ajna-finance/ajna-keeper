@@ -178,6 +178,8 @@ This makes fee tier selection a **strategic runtime configuration decision**. It
 
 **IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
 
+Atomic 1inch external takes validate decoded swap calldata before submission. Supported payloads must swap pool collateral to pool quote, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured router or decoded aggregation executor. If a route starts requiring non-zero 1inch flags, route that pool through factory DEXes until the keeper explicitly supports that payload shape.
+
 **Prerequisites:**
 
 ```bash

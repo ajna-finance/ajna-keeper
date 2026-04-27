@@ -409,6 +409,8 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 To enable 1inch swaps, set up environment variables and add the 1inch router fields to config.ts. For discovered external takes, keep `delayBetweenActions` low and use `autoDiscover.take.oneInchQuoteTimeoutMs` plus the 1inch failure cooldown to bound API latency. Long `delayBetweenActions` values are only appropriate for slow legacy/manual 1inch operation.
 
+Atomic 1inch takes validate the decoded swap payload before submission. The payload must swap the pool collateral token to the pool quote token, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured 1inch router or the decoded aggregation executor. If 1inch starts returning required non-zero flags for a target pair, use factory routing for that pool or open an issue before loosening this guard.
+
 If you want take transactions to go through a dedicated private/write path, set
 `takeWrite` in your keeper config:
 

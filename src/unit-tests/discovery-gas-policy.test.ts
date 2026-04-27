@@ -131,6 +131,69 @@ describe('Discovery Gas Policy', () => {
     });
   });
 
+  it('ceil-rounds gas quote apportionment and quotes gas plus native profit in one request', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const gasPrice = BigNumber.from(1);
+    const gasLimit = BigNumber.from(100000);
+    const gasCostNativeRaw = gasPrice.mul(gasLimit);
+    const minProfitNativeRaw = ethers.utils.parseEther('1');
+    const combinedNativeRaw = gasCostNativeRaw.add(minProfitNativeRaw);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .callsFake(async (_chainId, amountIn: BigNumber) => {
+        expect(amountIn.eq(combinedNativeRaw)).to.be.true;
+        return {
+          success: true,
+          dstAmount: '1',
+        };
+      });
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 1,
+            minProfitNative: minProfitNativeRaw.toString(),
+          },
+        },
+        oneInchRouters: {
+          1: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon.stub().resolves(gasPrice),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 1,
+        minProfitNative: minProfitNativeRaw.toString(),
+      },
+      gasLimit,
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice,
+      rpcCache: {
+        chainId: 1,
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(1)).to.be.true;
+    expect(result.minProfitNativeQuoteRaw?.eq(0)).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+  });
+
   it('rejects zero-output 1inch gas quote conversions', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const oneInchQuoteStub = sinon

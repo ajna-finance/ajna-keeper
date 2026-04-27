@@ -735,8 +735,40 @@ describe('DexRouter', () => {
       );
 
       expect(result.success).to.be.false;
-      expect(result.error).to.include('unexpected non-zero 1inch tx.value');
+      expect(result.error).to.include('1inch tx.value must be');
     });
+
+    for (const malformedValue of [
+      '0x',
+      '0x0',
+      '1.5',
+      ethers.constants.MaxUint256.add(1).toString(),
+    ]) {
+      it(`rejects malformed 1inch native tx.value ${malformedValue}`, async () => {
+        axiosGetStub.resolves({
+          data: {
+            tx: {
+              to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+              data: '0xdata',
+              value: malformedValue,
+              gas: '100000',
+            },
+          },
+        });
+
+        const result = await dexRouter.getSwapDataFromOneInch(
+          chainId,
+          amount,
+          tokenIn,
+          tokenOut,
+          slippage,
+          fromAddress
+        );
+
+        expect(result.success).to.be.false;
+        expect(result.error).to.include('1inch tx.value');
+      });
+    }
 
     it('returns validated dstAmount from 1inch swap data', async () => {
       axiosGetStub.resolves({

@@ -3,7 +3,6 @@ import sinon from 'sinon';
 import { ethers } from 'ethers';
 import { LiquiditySource, KeeperConfig } from '../config';
 import { validateAutoDiscoverRouteDeployments } from '../discovery/route-preflight';
-import { logger } from '../logging';
 
 describe('route deployment preflight', () => {
   afterEach(() => {
@@ -201,37 +200,45 @@ describe('route deployment preflight', () => {
     }
   });
 
-  it('warns instead of failing startup on transient factory registry read errors', async () => {
+  it('fails startup preflight when transient factory registry read errors exhaust retries', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     const config = baseConfig();
-    const warnStub = sinon.stub(logger, 'warn');
-    const provider = {
-      _isProvider: true,
-      resolveName: sinon.stub().callsFake(async (name: string) => name),
-      getCode: sinon.stub().resolves('0x6000'),
-      call: sinon.stub().rejects(
-        Object.assign(new Error('ECONNRESET'), {
-          code: 'ECONNRESET',
-        })
-      ),
-    };
+    try {
+      const provider = {
+        _isProvider: true,
+        resolveName: sinon.stub().callsFake(async (name: string) => name),
+        getCode: sinon.stub().resolves('0x6000'),
+        call: sinon.stub().rejects(
+          Object.assign(new Error('ECONNRESET'), {
+            code: 'ECONNRESET',
+          })
+        ),
+      };
 
-    await validateAutoDiscoverRouteDeployments({
-      config,
-      provider: provider as any,
-      chainId: 1,
-    });
+      const validationPromise = validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      }).then(
+        () => undefined,
+        (error) => error
+      );
+      await clock.runAllAsync();
 
-    expect(provider.call.callCount).to.equal(3);
-    expect(warnStub.calledOnce).to.be.true;
-    expect(String(warnStub.firstCall.args[0])).to.include(
-      'skipping registry preflight'
-    );
+      const error = await validationPromise;
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        'keeperTakerFactory registry for UNISWAPV3 could not be read after retries'
+      );
+      expect(provider.call.callCount).to.equal(4);
+    } finally {
+      clock.restore();
+    }
   });
 
-  it('warns instead of failing startup on transient bytecode read errors', async () => {
-    const clock = sinon.useFakeTimers();
+  it('fails startup preflight when transient bytecode read errors exhaust retries', async () => {
+    const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     const config = baseConfig();
-    const warnStub = sinon.stub(logger, 'warn');
     try {
       const provider = {
         _isProvider: true,
@@ -255,15 +262,18 @@ describe('route deployment preflight', () => {
         config,
         provider: provider as any,
         chainId: 1,
-      });
-      await clock.runAllAsync();
-      await validationPromise;
-
-      expect(provider.getCode.callCount).to.equal(21);
-      expect(warnStub.callCount).to.equal(7);
-      expect(String(warnStub.firstCall.args[0])).to.include(
-        'skipping bytecode preflight'
+      }).then(
+        () => undefined,
+        (error) => error
       );
+      await clock.runAllAsync();
+
+      const error = await validationPromise;
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        'code could not be read after retries'
+      );
+      expect(provider.getCode.callCount).to.equal(28);
     } finally {
       clock.restore();
     }

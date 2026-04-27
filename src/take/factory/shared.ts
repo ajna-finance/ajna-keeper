@@ -9,6 +9,7 @@ import {
   PoolConfig,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
+import { logger } from '../../logging';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
 import {
   RequireFields,
@@ -108,6 +109,7 @@ export type FactoryQuoteConfig = Pick<
 >;
 
 export interface FactoryQuoteProviderRuntimeCache {
+  chainId?: number;
   uniswapV3?: UniswapV3QuoteProvider | null;
   sushiswap?: SushiSwapQuoteProvider | null;
   curve?: CurveQuoteProvider | null;
@@ -960,7 +962,22 @@ export async function getCachedFactoryTokenDecimals(
   tokenAddress: string,
   runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<number> {
-  const cacheKey = tokenAddress.toLowerCase();
+  let chainId = runtimeCache?.chainId;
+  if (
+    runtimeCache &&
+    chainId === undefined &&
+    typeof signer.getChainId === 'function'
+  ) {
+    try {
+      chainId = await signer.getChainId();
+      runtimeCache.chainId = chainId;
+    } catch (error) {
+      logger.debug(
+        `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  const cacheKey = `${chainId ?? 'unknown'}:${tokenAddress.toLowerCase()}`;
   const cached = runtimeCache?.tokenDecimals?.get(cacheKey);
   if (cached !== undefined) {
     return cached;

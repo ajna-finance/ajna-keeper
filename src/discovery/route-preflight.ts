@@ -12,7 +12,7 @@ import { logger } from '../logging';
 const FACTORY_TAKER_REGISTRY_ABI = [
   'function takerContracts(uint8 source) view returns (address)',
 ];
-const FACTORY_REGISTRY_READ_RETRY_DELAYS_MS = [100, 250];
+const FACTORY_REGISTRY_READ_RETRY_DELAYS_MS = [100, 250, 500];
 
 const TAKER_CONTRACT_KEYS: Record<LiquiditySource, string[]> = {
   [LiquiditySource.NONE]: [],
@@ -144,14 +144,8 @@ async function requireContractCode(params: {
     }
   }
   if (code === undefined) {
-    if (isRetryableRpcReadError(lastError)) {
-      logger.warn(
-        `${params.label} code could not be read after retries; skipping bytecode preflight for this address: ${getErrorMessage(lastError)}`
-      );
-      return;
-    }
     params.errors.push(
-      `${params.label} code could not be read at ${params.address}: ${getErrorMessage(lastError)}`
+      `${params.label} code could not be read after retries at ${params.address}: ${getErrorMessage(lastError)}`
     );
     return;
   }
@@ -201,14 +195,8 @@ async function validateFactoryRegistry(params: {
       }
     }
     if (registeredTaker === undefined) {
-      if (isRetryableRpcReadError(lastError)) {
-        logger.warn(
-          `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read after retries; skipping registry preflight for this source: ${getErrorMessage(lastError)}`
-        );
-        return;
-      }
       params.errors.push(
-        `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read: ${getErrorMessage(lastError)}`
+        `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read after retries: ${getErrorMessage(lastError)}`
       );
       return;
     }

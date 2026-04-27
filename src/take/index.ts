@@ -45,6 +45,8 @@ import {
 } from './engine';
 import { logTakeExecutionTelemetry } from './execution-telemetry';
 
+const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
+
 type HandleTakeConfigBase = Pick<
   KeeperConfig,
   | 'dryRun'
@@ -118,15 +120,25 @@ function stripExternalTakeSettings(
 async function getOneInchTokenDecimals(params: {
   signer: Signer;
   tokenAddress: string;
+  chainId?: number;
   cache?: Map<string, number>;
 }): Promise<number> {
-  const cacheKey = params.tokenAddress.toLowerCase();
+  const cacheKey = `${params.chainId ?? 'unknown'}:${params.tokenAddress.toLowerCase()}`;
   const cached = params.cache?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
   const decimals = await getDecimalsErc20(params.signer, params.tokenAddress);
-  params.cache?.set(cacheKey, decimals);
+  if (params.cache) {
+    params.cache.set(cacheKey, decimals);
+    while (params.cache.size > MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES) {
+      const oldestKey = params.cache.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      params.cache.delete(oldestKey);
+    }
+  }
   return decimals;
 }
 
@@ -418,6 +430,7 @@ export async function getOneInchPathQuoteEvaluation(
     const collateralDecimals = await getOneInchTokenDecimals({
       signer,
       tokenAddress: pool.collateralAddress,
+      chainId,
       cache: config.tokenDecimalsCache,
     });
     const collateralInTokenDecimals = convertWadToTokenDecimals(
@@ -459,6 +472,7 @@ export async function getOneInchPathQuoteEvaluation(
     const quoteDecimals = await getOneInchTokenDecimals({
       signer,
       tokenAddress: pool.quoteAddress,
+      chainId,
       cache: config.tokenDecimalsCache,
     });
 
@@ -737,26 +751,41 @@ export async function takeLiquidation({
       signer
     );
 
-    if (!config.skipOneInchRateLimitDelay) {
-      // Legacy/manual 1inch mode still honors operator pacing.
-      await delay(config.delayBetweenActions ?? 0);
-    }
     const dexRouter = new DexRouter(signer, {
       oneInchRouters: config.oneInchRouters ?? {},
       connectorTokens: config.connectorTokens ?? [],
     });
+    const chainId = config.chainId ?? (await signer.getChainId());
+    const configuredOneInchRouter = dexRouter.getRouter(chainId);
+    if (!configuredOneInchRouter) {
+      const error = `missing 1inch router for chain ${chainId}`;
+      config.onOneInchSwapDataResult?.({
+        success: false,
+        retryable: false,
+        error,
+      });
+      logger.error(
+        `Legacy 1inch take cannot request swap data for ${pool.name}/${borrower}: ${error}`
+      );
+      return false;
+    }
+
+    if (!config.skipOneInchRateLimitDelay) {
+      // Legacy/manual 1inch mode still honors operator pacing.
+      await delay(config.delayBetweenActions ?? 0);
+    }
 
     // Convert collateral from WAD to token decimals for 1inch API consistency
     const collateralDecimals = await getOneInchTokenDecimals({
       signer,
       tokenAddress: pool.collateralAddress,
+      chainId,
       cache: config.tokenDecimalsCache,
     });
     const collateralInTokenDecimals = convertWadToTokenDecimals(
       liquidation.collateral,
       collateralDecimals
     );
-    const chainId = config.chainId ?? (await signer.getChainId());
 
     const swapData = await dexRouter.getSwapDataFromOneInch(
       chainId,
@@ -786,7 +815,7 @@ export async function takeLiquidation({
       {
         srcToken: pool.collateralAddress,
         dstToken: pool.quoteAddress,
-        srcReceiver: dexRouter.getRouter(chainId)!,
+        srcReceiver: configuredOneInchRouter,
         dstReceiver: keeperTaker.address,
         amount: collateralInTokenDecimals,
       }
@@ -794,7 +823,7 @@ export async function takeLiquidation({
     if (swapDetailsValidationError) {
       config.onOneInchSwapDataResult?.({
         success: false,
-        retryable: true,
+        retryable: false,
         error: swapDetailsValidationError,
       });
       logger.error(
@@ -844,7 +873,7 @@ export async function takeLiquidation({
         `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
         `  Collateral (Token Decimals): ${collateralInTokenDecimals.toString()}\n` +
         `  Liquidity Source: ${LiquiditySource.ONEINCH}\n` +
-        `  1inch Router: ${dexRouter.getRouter(chainId)}\n` +
+        `  1inch Router: ${configuredOneInchRouter}\n` +
         `  Required Min Return: ${executionMinReturnAmount.toString()}\n` +
         `  Swap Data Length: ${swapData.data.length} chars`
     );
@@ -862,7 +891,7 @@ export async function takeLiquidation({
           liquidation.auctionPrice,
           liquidation.collateral,
           Number(LiquiditySource.ONEINCH),
-          dexRouter.getRouter(chainId)!,
+          configuredOneInchRouter,
           swapDetailsBytes,
         ] as const;
         const gasLimit = await estimateGasWithBuffer(

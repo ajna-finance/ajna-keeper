@@ -58,6 +58,43 @@ function formatAddressValidationError(fieldName: string): string {
   return `1inch swap description ${fieldName} is not a valid address`;
 }
 
+function parseOneInchSwapDescriptionUint(
+  value: unknown,
+  fieldName: string
+): { value?: BigNumber; error?: string } {
+  if (BigNumber.isBigNumber(value)) {
+    if (value.lt(0)) {
+      return {
+        error: `1inch swap description ${fieldName} is invalid: expected non-negative uint`,
+      };
+    }
+    return { value };
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      return {
+        error: `1inch swap description ${fieldName} is invalid: expected non-negative safe integer`,
+      };
+    }
+    return { value: BigNumber.from(value) };
+  }
+
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
+    return {
+      error: `1inch swap description ${fieldName} is invalid: expected decimal uint string`,
+    };
+  }
+
+  try {
+    return { value: BigNumber.from(value) };
+  } catch (error) {
+    return {
+      error: `1inch swap description ${fieldName} is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 export function validateOneInchSwapDetailsForAtomicTake(
   details: AjnaKeeperTaker.OneInchSwapDetailsStruct,
   expected: {
@@ -100,8 +137,11 @@ export function validateOneInchSwapDetailsForAtomicTake(
   if (!expectedSrcReceiver || !actualSrcReceiver) {
     return formatAddressValidationError('srcReceiver');
   }
-  if (actualSrcReceiver !== expectedSrcReceiver) {
-    return `1inch swap description srcReceiver ${desc.srcReceiver} does not match configured router ${expected.srcReceiver}`;
+  if (
+    actualSrcReceiver !== expectedSrcReceiver &&
+    actualSrcReceiver !== aggregationExecutor
+  ) {
+    return `1inch swap description srcReceiver ${desc.srcReceiver} does not match configured router ${expected.srcReceiver} or aggregationExecutor ${details.aggregationExecutor}`;
   }
 
   const expectedDstReceiver = normalizeAddress(expected.dstReceiver);
@@ -113,12 +153,14 @@ export function validateOneInchSwapDetailsForAtomicTake(
     return `1inch swap description dstReceiver ${desc.dstReceiver} does not match keeper taker ${expected.dstReceiver}`;
   }
 
-  let swapAmount: BigNumber;
-  try {
-    swapAmount = BigNumber.from(desc.amount);
-  } catch (error) {
-    return `1inch swap description amount is invalid: ${error instanceof Error ? error.message : String(error)}`;
+  const parsedSwapAmount = parseOneInchSwapDescriptionUint(
+    desc.amount,
+    'amount'
+  );
+  if (!parsedSwapAmount.value) {
+    return parsedSwapAmount.error;
   }
+  const swapAmount = parsedSwapAmount.value;
   if (swapAmount.lte(0)) {
     return '1inch swap description amount must be greater than 0';
   }
@@ -126,22 +168,23 @@ export function validateOneInchSwapDetailsForAtomicTake(
     return `1inch swap description amount ${swapAmount.toString()} does not match requested collateral amount ${expected.amount.toString()}`;
   }
 
-  let minReturnAmount: BigNumber;
-  try {
-    minReturnAmount = BigNumber.from(desc.minReturnAmount);
-  } catch (error) {
-    return `1inch swap description minReturnAmount is invalid: ${error instanceof Error ? error.message : String(error)}`;
+  const parsedMinReturnAmount = parseOneInchSwapDescriptionUint(
+    desc.minReturnAmount,
+    'minReturnAmount'
+  );
+  if (!parsedMinReturnAmount.value) {
+    return parsedMinReturnAmount.error;
   }
+  const minReturnAmount = parsedMinReturnAmount.value;
   if (minReturnAmount.lte(0)) {
     return '1inch swap description minReturnAmount must be greater than 0';
   }
 
-  let flags: BigNumber;
-  try {
-    flags = BigNumber.from(desc.flags);
-  } catch (error) {
-    return `1inch swap description flags are invalid: ${error instanceof Error ? error.message : String(error)}`;
+  const parsedFlags = parseOneInchSwapDescriptionUint(desc.flags, 'flags');
+  if (!parsedFlags.value) {
+    return parsedFlags.error;
   }
+  const flags = parsedFlags.value;
   if (!flags.eq(ONE_INCH_ATOMIC_TAKE_ALLOWED_FLAGS)) {
     return `1inch swap description flags ${flags.toString()} are not supported for atomic takes`;
   }

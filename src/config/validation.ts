@@ -45,6 +45,7 @@ const VALIDATION_BOUNDS = {
   maxL2GasCostBufferBps: 30_000,
   // Keep drift tolerance bounded to operationally sane values; 5000 = 50%.
   maxGasPriceDriftToleranceBps: 5_000,
+  maxCurveExecutionDelayMs: 60_000,
 };
 
 function validateQuoteDenominatedGasPolicy(
@@ -180,9 +181,11 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
     config.universalRouterOverrides;
   const sushiConfig: SushiswapRouterOverrides | undefined =
     config.sushiswapRouterOverrides;
-  requireOptionalNonNegative(
+  requireOptionalIntegerRange(
     config.curveRouterOverrides?.executionDelayMs,
-    'CurveRouterOverrides: executionDelayMs cannot be negative'
+    0,
+    VALIDATION_BOUNDS.maxCurveExecutionDelayMs,
+    `CurveRouterOverrides: executionDelayMs must be an integer between 0 and ${VALIDATION_BOUNDS.maxCurveExecutionDelayMs}`
   );
   validateCandidateFeeTiers(
     uniswapConfig?.candidateFeeTiers,

@@ -78,8 +78,40 @@ function parseOneInchTxValue(value: unknown): {
   if (value === undefined || value === null || value === '') {
     return { value: constants.Zero };
   }
-  try {
+  if (BigNumber.isBigNumber(value)) {
+    if (value.lt(0)) {
+      return {
+        error: '1inch tx.value must be a non-negative uint',
+      };
+    }
+    if (value.gt(constants.MaxUint256)) {
+      return {
+        error: '1inch tx.value exceeds uint256',
+      };
+    }
+    return { value };
+  }
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      return {
+        error: '1inch tx.value must be a non-negative safe integer',
+      };
+    }
     return { value: BigNumber.from(value) };
+  }
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
+    return {
+      error: '1inch tx.value must be a decimal uint string',
+    };
+  }
+  try {
+    const parsed = BigNumber.from(value);
+    if (parsed.gt(constants.MaxUint256)) {
+      return {
+        error: '1inch tx.value exceeds uint256',
+      };
+    }
+    return { value: parsed };
   } catch (error) {
     return {
       error: `1inch tx.value is invalid: ${error instanceof Error ? error.message : String(error)}`,
@@ -307,10 +339,7 @@ export class DexRouter {
         response.data.dstAmount !== undefined
           ? normalizeOneInchUintAmount(response.data.dstAmount, 'dstAmount')
           : {};
-      if (
-        response.data.dstAmount !== undefined &&
-        !normalizedDstAmount.value
-      ) {
+      if (response.data.dstAmount !== undefined && !normalizedDstAmount.value) {
         return {
           success: false,
           error: normalizedDstAmount.error,
