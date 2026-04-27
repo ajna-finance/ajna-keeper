@@ -8,6 +8,10 @@ import { JsonRpcProvider } from './provider';
 
 export type RequireFields<T, K extends keyof T> = T & Required<Pick<T, K>>;
 
+export function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function mapWithConcurrencyPreservingOrder<T, R>(
   items: readonly T[],
   concurrency: number,
@@ -17,7 +21,9 @@ export async function mapWithConcurrencyPreservingOrder<T, R>(
     return [];
   }
   if (!Number.isFinite(concurrency) || concurrency < 1) {
-    throw new Error('mapWithConcurrencyPreservingOrder requires concurrency >= 1');
+    throw new Error(
+      'mapWithConcurrencyPreservingOrder requires concurrency >= 1'
+    );
   }
 
   const workerCount = Math.min(
@@ -104,7 +110,7 @@ export async function askPassword() {
     } catch (error) {
       throw new Error(
         `Failed to read KEYSTORE_PASSWORD_FILE at ${filePath}: ` +
-          `${error instanceof Error ? error.message : String(error)}`
+          `${getErrorMessage(error)}`
       );
     }
     // Defensive: if the file is world-readable, nudge the operator. Not

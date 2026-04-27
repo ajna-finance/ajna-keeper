@@ -8,8 +8,12 @@ import type {
   RewardAction,
 } from './schema';
 import { RewardActionLabel, PostAuctionDex } from './schema';
-import { isValidLookbackSeconds, resolveCollectLpRewardForPool } from './lp-reward';
+import {
+  isValidLookbackSeconds,
+  resolveCollectLpRewardForPool,
+} from './lp-reward';
 import { logger } from '../logging';
+import { getErrorMessage } from '../utils';
 
 export async function readConfigFile(filePath: string): Promise<KeeperConfig> {
   try {
@@ -121,9 +125,7 @@ export function assertIsValidConfig(
         }
       } catch (error) {
         throw new Error(
-          `Invalid LP reward config for pool ${pool.address}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
+          `Invalid LP reward config for pool ${pool.address}: ${getErrorMessage(error)}`
         );
       }
     }
@@ -153,7 +155,10 @@ function validateCollectLpRewardSettings(
     );
   }
   if (settings.rewardActionQuote !== undefined) {
-    validateRewardAction(settings.rewardActionQuote, `${path}.rewardActionQuote`);
+    validateRewardAction(
+      settings.rewardActionQuote,
+      `${path}.rewardActionQuote`
+    );
   }
   if (settings.rewardActionCollateral !== undefined) {
     validateRewardAction(
@@ -209,7 +214,10 @@ function validateRewardAction(action: RewardAction, path: string): void {
       `${path}.address must be a 0x-prefixed 20-byte token address, got: ${JSON.stringify(action.address)}`
     );
   }
-  if (typeof action.targetToken !== 'string' || action.targetToken.length === 0) {
+  if (
+    typeof action.targetToken !== 'string' ||
+    action.targetToken.length === 0
+  ) {
     throw new Error(
       `${path}.targetToken must be a non-empty string, got: ${JSON.stringify(action.targetToken)}`
     );

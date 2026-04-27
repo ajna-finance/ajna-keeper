@@ -1,5 +1,5 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { weiToDecimaled } from '../utils';
+import { getErrorMessage, weiToDecimaled } from '../utils';
 import {
   AuctionToSettle,
   SettlementIncentiveResult,
@@ -182,9 +182,7 @@ export async function checkBotIncentive(params: {
   } catch (error) {
     return {
       hasIncentive: false,
-      reason: `Error checking incentive: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      reason: `Error checking incentive: ${getErrorMessage(error)}`,
     };
   }
 }

@@ -1,5 +1,8 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
-import { mapWithConcurrencyPreservingOrder } from '../../utils';
+import {
+  getErrorMessage,
+  mapWithConcurrencyPreservingOrder,
+} from '../../utils';
 import { LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
@@ -398,7 +401,7 @@ export async function getFactoryTakeQuoteEvaluation(
     );
     return {
       isTakeable: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: getErrorMessage(error),
     };
   }
 }

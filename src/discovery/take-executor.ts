@@ -32,7 +32,11 @@ import * as takeFactoryModule from '../take/factory';
 import * as oneInchAdapterModule from '../take/one-inch-adapter';
 import * as oneInchExecutionModule from '../take/one-inch-execution';
 import { createArbTakeStrategy } from '../take/arb-strategy';
-import { ExternalTakeAdapter, processTakeCandidates } from '../take/engine';
+import {
+  ExternalTakeAdapter,
+  processTakeCandidates,
+  TAKE_SKIP_REASONS,
+} from '../take/engine';
 import { ExternalTakeQuoteEvaluation } from '../take/types';
 import { TakeWriteTransport } from '../take/write-transport';
 import { FactoryRouteProfitabilityContext } from '../take/factory';
@@ -41,7 +45,7 @@ import {
   deriveApprovedMinOutRaw,
   maxBigNumber,
 } from '../take/factory/shared';
-import { decimaledToWei, withTimeout } from '../utils';
+import { decimaledToWei, getErrorMessage, withTimeout } from '../utils';
 import { getDecimalsErc20 } from '../erc20';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import {
@@ -50,15 +54,14 @@ import {
   recordOneInchQuoteFailure,
   recordOneInchQuoteSuccess,
 } from './one-inch-circuit';
+import { BASIS_POINTS_DENOMINATOR_BN, WAD, ZERO_BN } from '../constants';
 
 // Conservative per-route execution limits used for profitability screening.
 // Operators can override these with autoDiscover.take.dexGasOverrides.
 const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const CURVE_EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(1_500_000);
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
-const WAD = ethers.constants.WeiPerEther;
-const ZERO = BigNumber.from(0);
-const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
+const ZERO = ZERO_BN;
 const DEFAULT_EXTERNAL_TAKE_PROBE_RPC_BUDGET_MS = 1_000;
 const MAX_DEFAULT_EXTERNAL_TAKE_PROBE_TIMEOUT_MS = 5_000;
 type AutoDiscoverTakePolicyRuntime = ReturnType<
@@ -116,7 +119,10 @@ function getGasPriceDriftBasisPoints(params: {
     return 0;
   }
   const delta = currentGasPrice.sub(evaluatedGasPrice);
-  return delta.mul(BASIS_POINTS_DENOMINATOR).div(evaluatedGasPrice).toNumber();
+  return delta
+    .mul(BASIS_POINTS_DENOMINATOR_BN)
+    .div(evaluatedGasPrice)
+    .toNumber();
 }
 
 function getGasPriceAgeMs(rpcCache?: DiscoveryRpcCache): number | undefined {
@@ -451,7 +457,7 @@ export async function refreshDiscoveryGasPriceIfStale(params: {
       rpcCache.gasPriceFetchedAt = Date.now();
     } catch (error) {
       logger.warn(
-        `Shared discovery gas price fetch failed: ${error instanceof Error ? error.message : String(error)}`
+        `Shared discovery gas price fetch failed: ${getErrorMessage(error)}`
       );
       throw error;
     }
@@ -464,9 +470,7 @@ export async function refreshDiscoveryGasPriceIfStale(params: {
     rpcCache.gasPrice = await gasPriceInflight;
     rpcCache.gasPriceFetchedAt = Date.now();
   } catch (error) {
-    logger.warn(
-      `Discovery gas price fetch failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    logger.warn(`Discovery gas price fetch failed: ${getErrorMessage(error)}`);
     throw error;
   } finally {
     if (rpcCache.gasPriceInflight === gasPriceInflight) {
@@ -758,17 +762,15 @@ function logDiscoveredTakeTargetSummary(params: {
   );
 }
 
+const INACTIVE_AUCTION_SKIP_REASONS = new Set<string>([
+  TAKE_SKIP_REASONS.auctionInactive,
+  TAKE_SKIP_REASONS.auctionStateChanged,
+  TAKE_SKIP_REASONS.quoteCollateralMismatch,
+  TAKE_SKIP_REASONS.quoteAuctionPriceStale,
+]);
+
 function isInactiveAuctionSkipReason(reason: string): boolean {
-  return (
-    reason.includes('auction no longer has collateral onchain') ||
-    reason.includes(
-      'approved external take quote no longer matches collateral'
-    ) ||
-    reason.includes(
-      'approved external take quote is stale after auction price increased'
-    ) ||
-    reason.includes('onchain revalidation changed the auction state')
-  );
+  return INACTIVE_AUCTION_SKIP_REASONS.has(reason);
 }
 
 function isPrivateOrRelayTakeWriteTransport(
@@ -1376,7 +1378,7 @@ async function quoteOneInchForDiscovery(
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       quotedAuctionPriceWad: params.auctionPrice,
       quotedCollateralWad: params.collateral,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: getErrorMessage(error),
       quoteFailureRetryable: true,
       quoteFailureCode: 'exception',
     };
@@ -1587,7 +1589,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
       return {
         path,
         durationMs: Date.now() - startedAt,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: getErrorMessage(error),
         oneInchCircuitOutcome:
           path === 'oneinch' ? (oneInchCircuitOutcome ?? 'failure') : undefined,
       };
@@ -1815,7 +1817,7 @@ function createExternalTakeAdapterForDiscovery(params: {
                 .getStatus();
             } catch (error) {
               logger.warn(
-                `Hybrid fallback path could not refresh auction state for ${pool.name}/${liquidation.borrower}: ${error instanceof Error ? error.message : String(error)}`
+                `Hybrid fallback path could not refresh auction state for ${pool.name}/${liquidation.borrower}: ${getErrorMessage(error)}`
               );
               continue;
             }

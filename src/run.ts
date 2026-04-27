@@ -12,6 +12,7 @@ import {
 } from './config';
 import {
   delay,
+  getErrorMessage,
   getProviderAndSigner,
   overrideMulticall,
   RequireFields,
@@ -102,7 +103,7 @@ export async function assertSubgraphChainConsistency(params: {
     throw new Error(
       `Subgraph chain-consistency pre-flight failed: could not fetch _meta from subgraph endpoint. ` +
         `Verify subgraphUrl is reachable and the subgraph supports the _meta query. ` +
-        `Underlying error: ${error instanceof Error ? error.message : String(error)}`
+        `Underlying error: ${getErrorMessage(error)}`
     );
   }
 
@@ -127,7 +128,7 @@ export async function assertSubgraphChainConsistency(params: {
     // than "chain mismatch" when the RPC itself is the problem.
     throw new Error(
       `Subgraph chain-consistency pre-flight failed: RPC rejected getBlock(${meta.block.number}). ` +
-        `Verify ethRpcUrl is reachable. Underlying error: ${error instanceof Error ? error.message : String(error)}`
+        `Verify ethRpcUrl is reachable. Underlying error: ${getErrorMessage(error)}`
     );
   }
   if (!rpcBlock) {
@@ -160,7 +161,7 @@ export async function assertSubgraphChainConsistency(params: {
 function isPermanentTakeWriteTransportInitializationError(
   error: unknown
 ): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = getErrorMessage(error);
   return (
     message.includes('does not match keeper chainId') ||
     message.includes(
@@ -571,8 +572,7 @@ async function collectLpRewardsLoop({
         await redeemer.sweep();
         await delay(config.delayBetweenActions);
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
+        const errorMessage = getErrorMessage(error);
 
         if (errorMessage.includes('AuctionNotCleared')) {
           logger.info(

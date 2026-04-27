@@ -14,7 +14,7 @@ import {
   bucketRemoveCollateralToken,
   bucketRemoveQuoteToken,
 } from '../transactions';
-import { decimaledToWei, weiToDecimaled } from '../utils';
+import { decimaledToWei, getErrorMessage, weiToDecimaled } from '../utils';
 import { FungibleBucket } from '@ajna-finance/sdk/dist/classes/FungibleBucket';
 import { SubgraphReader } from '../read-transports';
 import { normalizeAddress } from '../discovery/targets';
@@ -147,7 +147,9 @@ export class LpIngester {
     // somehow arrives non-finite (e.g. a caller that bypassed the schema
     // validator), fall back to the default rather than letting NaN/Infinity
     // propagate into BigNumber arithmetic and silently break cursor math.
-    this.lookbackSeconds = isValidLookbackSeconds(config.lpRewardLookbackSeconds)
+    this.lookbackSeconds = isValidLookbackSeconds(
+      config.lpRewardLookbackSeconds
+    )
       ? config.lpRewardLookbackSeconds
       : LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
   }
@@ -455,7 +457,7 @@ export class LpRedeemer {
         // settlement. Other per-bucket errors stay contained — a
         // persistently-failing bucket should not starve later buckets in
         // the same cycle. The lpMap entry remains so the next cycle retries.
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = getErrorMessage(error);
         if (errorMessage.includes('AuctionNotCleared')) {
           throw error;
         }
@@ -565,7 +567,8 @@ export class LpRedeemer {
     try {
       logger.debug(`Collecting LP reward as quote. pool: ${this.pool.name}`);
 
-      ({ lpBalance: lpBalanceBefore } = await bucket.getPosition(signerAddress));
+      ({ lpBalance: lpBalanceBefore } =
+        await bucket.getPosition(signerAddress));
 
       await bucketRemoveQuoteToken(bucket, this.signer, quoteToWithdraw);
 
@@ -585,9 +588,11 @@ export class LpRedeemer {
       );
     } catch (error) {
       // Pre-tx or tx-level failure — the withdrawal did NOT happen.
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       if (errorMessage.includes('AuctionNotCleared')) {
-        logger.debug(`Re-throwing AuctionNotCleared error from ${this.pool.name} to trigger reactive settlement`);
+        logger.debug(
+          `Re-throwing AuctionNotCleared error from ${this.pool.name} to trigger reactive settlement`
+        );
         throw error;
       }
       logger.error(
@@ -603,10 +608,13 @@ export class LpRedeemer {
     // `sweep` catches it, skips the fallback arm for this bucket so we
     // don't attempt a redundant second tx, and retries next cycle with
     // fresh on-chain state.
-    const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
+    const { lpBalance: lpBalanceAfter } =
+      await bucket.getPosition(signerAddress);
     const lpUsed = lpBalanceBefore.sub(lpBalanceAfter);
     if (lpUsed.lt(0)) {
-      logger.warn(`Negative LP calculation detected in redeemQuote, using zero instead. Pool: ${this.pool.name}, lpBefore: ${lpBalanceBefore.toString()}, lpAfter: ${lpBalanceAfter.toString()}`);
+      logger.warn(
+        `Negative LP calculation detected in redeemQuote, using zero instead. Pool: ${this.pool.name}, lpBefore: ${lpBalanceBefore.toString()}, lpAfter: ${lpBalanceAfter.toString()}`
+      );
       return constants.Zero;
     }
     return lpUsed;
@@ -632,7 +640,8 @@ export class LpRedeemer {
         `Collecting LP reward as collateral. pool ${this.pool.name}`
       );
 
-      ({ lpBalance: lpBalanceBefore } = await bucket.getPosition(signerAddress));
+      ({ lpBalance: lpBalanceBefore } =
+        await bucket.getPosition(signerAddress));
 
       await bucketRemoveCollateralToken(
         bucket,
@@ -655,12 +664,17 @@ export class LpRedeemer {
       );
     } catch (error) {
       // Pre-tx or tx-level failure — the withdrawal did NOT happen.
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       if (errorMessage.includes('AuctionNotCleared')) {
-        logger.debug(`Re-throwing AuctionNotCleared error from ${this.pool.name} to trigger reactive settlement`);
+        logger.debug(
+          `Re-throwing AuctionNotCleared error from ${this.pool.name} to trigger reactive settlement`
+        );
         throw error;
       }
-      logger.error(`Failed to collect LP reward as collateral. pool: ${this.pool.name}`, error);
+      logger.error(
+        `Failed to collect LP reward as collateral. pool: ${this.pool.name}`,
+        error
+      );
       return constants.Zero;
     }
 
@@ -669,10 +683,13 @@ export class LpRedeemer {
     // propagate to the per-bucket try/catch in `sweep` rather than silently
     // returning Zero (which would trigger a redundant fallback withdrawal
     // tx on the other token side).
-    const { lpBalance: lpBalanceAfter } = await bucket.getPosition(signerAddress);
+    const { lpBalance: lpBalanceAfter } =
+      await bucket.getPosition(signerAddress);
     const lpUsed = lpBalanceBefore.sub(lpBalanceAfter);
     if (lpUsed.lt(0)) {
-      logger.warn(`Negative LP calculation detected in redeemCollateral, using zero instead. Pool: ${this.pool.name}, lpBefore: ${lpBalanceBefore.toString()}, lpAfter: ${lpBalanceAfter.toString()}`);
+      logger.warn(
+        `Negative LP calculation detected in redeemCollateral, using zero instead. Pool: ${this.pool.name}, lpBefore: ${lpBalanceBefore.toString()}, lpAfter: ${lpBalanceAfter.toString()}`
+      );
       return constants.Zero;
     }
     return lpUsed;

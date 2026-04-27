@@ -2,7 +2,7 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import { logger } from '../logging';
 import { SubgraphReader } from '../read-transports';
-import { delay, weiToDecimaled } from '../utils';
+import { delay, getErrorMessage, weiToDecimaled } from '../utils';
 import { ArbTakeStrategy } from './arb-strategy';
 import { TakeWriteTransport } from './write-transport';
 import {
@@ -14,6 +14,15 @@ import {
   TakeDecision,
   TakeLiquidationPlan,
 } from './types';
+
+export const TAKE_SKIP_REASONS = {
+  auctionInactive: 'auction no longer has collateral onchain',
+  auctionStateChanged: 'onchain revalidation changed the auction state',
+  quoteCollateralMismatch:
+    'approved external take quote no longer matches collateral',
+  quoteAuctionPriceStale:
+    'approved external take quote is stale after auction price increased',
+} as const;
 
 export interface ExternalTakeAdapter<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
@@ -275,7 +284,7 @@ export async function evaluateTakeDecision<
       hpbIndex: 0,
       collateral,
       auctionPrice,
-      reason: 'auction no longer has collateral onchain',
+      reason: TAKE_SKIP_REASONS.auctionInactive,
     };
   }
 
@@ -441,8 +450,8 @@ export async function executeTakeDecision<
         candidate: { borrower: decision.borrower },
         stage: 'revalidation',
         reason: !collateral.gt(0)
-          ? 'auction no longer has collateral onchain'
-          : 'onchain revalidation changed the auction state',
+          ? TAKE_SKIP_REASONS.auctionInactive
+          : TAKE_SKIP_REASONS.auctionStateChanged,
         decision,
       });
       return;
@@ -454,7 +463,7 @@ export async function executeTakeDecision<
         onSkip?.({
           candidate: { borrower: decision.borrower },
           stage: 'revalidation',
-          reason: 'approved external take quote no longer matches collateral',
+          reason: TAKE_SKIP_REASONS.quoteCollateralMismatch,
           decision,
         });
         return;
@@ -465,8 +474,7 @@ export async function executeTakeDecision<
         onSkip?.({
           candidate: { borrower: decision.borrower },
           stage: 'revalidation',
-          reason:
-            'approved external take quote is stale after auction price increased',
+          reason: TAKE_SKIP_REASONS.quoteAuctionPriceStale,
           decision,
         });
         return;
@@ -553,7 +561,7 @@ export async function executeTakeDecision<
 
         if (!approvedArbTake) {
           logger.debug(
-            `Skipping ${arbActionLabel} after external take for ${pool.name}/${decision.borrower}: onchain revalidation changed the auction state`
+            `Skipping ${arbActionLabel} after external take for ${pool.name}/${decision.borrower}: ${TAKE_SKIP_REASONS.auctionStateChanged}`
           );
         }
       } catch (error) {
@@ -663,7 +671,7 @@ export async function processTakeCandidates<
       onSkip?.({
         candidate,
         stage,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: getErrorMessage(error),
         decision,
       });
     }

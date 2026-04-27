@@ -12,6 +12,7 @@ import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
 import {
+  getErrorMessage,
   RequireFields,
   mapWithConcurrencyPreservingOrder,
   withTimeout,
@@ -21,6 +22,13 @@ import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-prov
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
 import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../types';
 import { TakeWriteTransport } from '../write-transport';
+import {
+  BASIS_POINTS_DENOMINATOR,
+  MAX_UINT24_FEE_TIER,
+  WAD,
+  ZERO_BN,
+} from '../../constants';
+export { BASIS_POINTS_DENOMINATOR, WAD } from '../../constants';
 
 export interface FactoryRouteCandidate {
   liquiditySource: LiquiditySource;
@@ -125,11 +133,8 @@ export function createFactoryQuoteProviderRuntimeCache(): FactoryQuoteProviderRu
   return {};
 }
 
-export const WAD = ethers.constants.WeiPerEther;
-export const BASIS_POINTS_DENOMINATOR = 10_000;
 export const MARKET_FACTOR_SCALE = 1_000_000;
-const MAX_UINT24_FEE_TIER = 16_777_215;
-const ZERO = BigNumber.from(0);
+const ZERO = ZERO_BN;
 const MAX_RECENT_ROUTE_SUCCESSES = 512;
 const MAX_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 const MAX_QUOTE_TOKEN_SCALE_CACHE_ENTRIES = 512;
@@ -559,9 +564,7 @@ export async function getSushiSwapQuoteProvider(params: {
       'SushiSwap quote provider initialization'
     ).catch((error) => {
       logger.warn(
-        `SushiSwap quote provider initialization failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
+        `SushiSwap quote provider initialization failed: ${getErrorMessage(error)}`
       );
       return false;
     });
@@ -575,8 +578,7 @@ export async function getSushiSwapQuoteProvider(params: {
         params.runtimeCache.sushiswapUnavailableUntilMs = undefined;
       } else {
         const retryMs = getProviderInitFailureRetryMs();
-        params.runtimeCache.sushiswapUnavailableUntilMs =
-          Date.now() + retryMs;
+        params.runtimeCache.sushiswapUnavailableUntilMs = Date.now() + retryMs;
         logger.warn(
           `SushiSwap quote provider unavailable; retrying initialization in ${retryMs}ms`
         );
@@ -625,9 +627,7 @@ export async function getCurveQuoteProvider(params: {
       'Curve quote provider initialization'
     ).catch((error) => {
       logger.warn(
-        `Curve quote provider initialization failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
+        `Curve quote provider initialization failed: ${getErrorMessage(error)}`
       );
       return false;
     });
@@ -641,8 +641,7 @@ export async function getCurveQuoteProvider(params: {
         params.runtimeCache.curveUnavailableUntilMs = undefined;
       } else {
         const retryMs = getProviderInitFailureRetryMs();
-        params.runtimeCache.curveUnavailableUntilMs =
-          Date.now() + retryMs;
+        params.runtimeCache.curveUnavailableUntilMs = Date.now() + retryMs;
         logger.warn(
           `Curve quote provider unavailable; retrying initialization in ${retryMs}ms`
         );
@@ -719,9 +718,7 @@ async function checkV3StyleRouteAvailability(
   } catch (error) {
     return unavailableFactoryRoute(
       route,
-      `${params.label} pool existence check failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+      `${params.label} pool existence check failed: ${getErrorMessage(error)}`
     );
   }
 
@@ -791,9 +788,7 @@ async function checkCurveRouteAvailability(
   } catch (error) {
     return unavailableFactoryRoute(
       route,
-      `Curve pool existence check failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
+      `Curve pool existence check failed: ${getErrorMessage(error)}`
     );
   }
   return exists
@@ -1062,7 +1057,7 @@ export async function getCachedFactoryTokenDecimals(
     try {
       runtimeCache.chainIdInflight ??= signer.getChainId().catch((error) => {
         logger.debug(
-          `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${error instanceof Error ? error.message : String(error)}`
+          `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${getErrorMessage(error)}`
         );
         return undefined;
       });

@@ -8,6 +8,7 @@ import {
   resolveFactoryRouteSelectionSources,
 } from '../config';
 import { logger } from '../logging';
+import { getErrorMessage } from '../utils';
 
 const FACTORY_TAKER_REGISTRY_ABI = [
   'function takerContracts(uint8 source) view returns (address)',
@@ -43,10 +44,6 @@ function getEffectiveExternalTakePaths(
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isRetryableRpcReadError(error: unknown): boolean {

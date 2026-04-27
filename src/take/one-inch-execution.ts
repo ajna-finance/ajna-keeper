@@ -11,7 +11,12 @@ import {
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
-import { delay, estimateGasWithBuffer, weiToDecimaled } from '../utils';
+import {
+  delay,
+  estimateGasWithBuffer,
+  getErrorMessage,
+  weiToDecimaled,
+} from '../utils';
 import { logTakeExecutionTelemetry } from './execution-telemetry';
 import * as factoryShared from './factory/shared';
 import { OneInchExecutionConfig, OneInchQuoteConfig } from './one-inch-types';
@@ -281,7 +286,7 @@ export async function getOneInchPathQuoteEvaluation(
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);
     return {
       isTakeable: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: getErrorMessage(error),
     };
   }
 }
@@ -604,7 +609,7 @@ export async function takeLiquidation({
   } catch (error) {
     config.onOneInchExecutionFailure?.({
       preBroadcast: !attemptedSubmission,
-      error: error instanceof Error ? error.message : String(error),
+      error: getErrorMessage(error),
     });
     logger.error(
       `Failed to Take. pool: ${pool.name}, borrower: ${borrower}`,

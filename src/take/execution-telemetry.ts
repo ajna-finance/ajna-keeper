@@ -3,8 +3,8 @@ import { LiquiditySource } from '../config';
 import { logger } from '../logging';
 import { RouteProfitabilityBreakdown } from './types';
 import { TakeWriteTransport } from './write-transport';
+import { BASIS_POINTS_DENOMINATOR_BN } from '../constants';
 
-const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
 export const TAKE_EXECUTION_TELEMETRY_VERSION = 1;
 // Warn when observed execution gas diverges materially from route policy input.
 const OBSERVED_GAS_DIVERGENCE_WARNING_BPS = 2_000;
@@ -25,7 +25,7 @@ function computeDivergenceBasisPoints(params: {
   const delta = params.expected.gt(params.observed)
     ? params.expected.sub(params.observed)
     : params.observed.sub(params.expected);
-  return delta.mul(BASIS_POINTS_DENOMINATOR).div(params.expected).toNumber();
+  return delta.mul(BASIS_POINTS_DENOMINATOR_BN).div(params.expected).toNumber();
 }
 
 function formatBorrowerTelemetryId(borrower: string): string {

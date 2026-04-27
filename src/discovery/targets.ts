@@ -18,15 +18,16 @@ import {
   SubgraphTransportConfig,
 } from '../read-transports';
 import { ChainwideLiquidationAuction } from '../subgraph';
-import { overrideMulticall, RequireFields } from '../utils';
+import { getErrorMessage, overrideMulticall, RequireFields } from '../utils';
+import {
+  DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS,
+  DEFAULT_MAX_HOT_AUCTION_CANDIDATES,
+} from '../constants';
 
 const DISCOVERY_PAGE_SIZE = 100;
 const DISCOVERY_MAX_PAGES = 100;
 const DISCOVERY_SCAN_CACHE_WINDOW_MS = 1000;
 const INVALID_KICK_TIME_MS = Number.MAX_SAFE_INTEGER;
-const DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS = 10 * 60_000;
-const DEFAULT_MAX_HOT_AUCTION_CANDIDATES = 1000;
-
 export type PoolMap = Map<string, FungiblePool>;
 export type PoolHydrationCooldowns = Map<string, number>;
 
@@ -884,7 +885,7 @@ export async function buildDiscoveredTakeTargets(
       targets.push(target);
     } catch (error) {
       logger.warn(
-        `Skipping discovered take target ${poolAddress}: ${error instanceof Error ? error.message : String(error)}`
+        `Skipping discovered take target ${poolAddress}: ${getErrorMessage(error)}`
       );
     }
   }
@@ -977,7 +978,7 @@ export async function buildDiscoveredSettlementTargets(
       targets.push(target);
     } catch (error) {
       logger.warn(
-        `Skipping discovered settlement target ${poolAddress}: ${error instanceof Error ? error.message : String(error)}`
+        `Skipping discovered settlement target ${poolAddress}: ${getErrorMessage(error)}`
       );
     }
   }

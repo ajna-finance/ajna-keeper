@@ -8,7 +8,12 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
-import { estimateGasWithBuffer, weiToDecimaled, withTimeout } from '../../utils';
+import {
+  estimateGasWithBuffer,
+  getErrorMessage,
+  weiToDecimaled,
+  withTimeout,
+} from '../../utils';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types';
 import {
   FactoryExecutionConfig,
@@ -203,7 +208,7 @@ export async function evaluateCurveFactoryQuote({
     );
     return {
       isTakeable: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: getErrorMessage(error),
     };
   }
 }

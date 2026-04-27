@@ -39,12 +39,16 @@ import {
   resolveTakeWriteConfig,
   TakeWriteTransport,
 } from '../take/write-transport';
-import { delay } from '../utils';
+import { delay, getErrorMessage } from '../utils';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import {
   FactoryQuoteProviderRuntimeCache,
   createFactoryQuoteProviderRuntimeCache,
 } from '../take/factory';
+import {
+  DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS,
+  DEFAULT_MAX_HOT_AUCTION_CANDIDATES,
+} from '../constants';
 
 export interface DiscoverySnapshotState {
   latestLiquidationAuctions?: ChainwideLiquidationAuction[];
@@ -103,9 +107,6 @@ interface DiscoveryRpcCacheState {
   cache?: DiscoveryRpcCache;
 }
 
-const DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS = 10 * 60_000;
-const DEFAULT_MAX_HOT_AUCTION_CANDIDATES = 1000;
-
 function getPoolFromMap(poolMap: PoolMap, address: string) {
   return poolMap.get(address) ?? poolMap.get(address.toLowerCase());
 }
@@ -140,7 +141,7 @@ async function getRuntimeChainId(
     return state.chainId;
   } catch (error) {
     logger.warn(
-      `Discovery runtime could not resolve chainId; hot auction cache will be skipped this cycle: ${error instanceof Error ? error.message : String(error)}`
+      `Discovery runtime could not resolve chainId; hot auction cache will be skipped this cycle: ${getErrorMessage(error)}`
     );
     return undefined;
   }
