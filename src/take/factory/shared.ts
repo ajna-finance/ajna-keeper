@@ -10,7 +10,11 @@ import {
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
-import { RequireFields, withTimeout } from '../../utils';
+import {
+  RequireFields,
+  mapWithConcurrencyPreservingOrder,
+  withTimeout,
+} from '../../utils';
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
@@ -573,6 +577,10 @@ interface FactoryRouteAvailabilityCheckParams {
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
 }
 
+interface V3StylePoolExistenceProvider {
+  poolExists(tokenA: string, tokenB: string, feeTier: number): Promise<boolean>;
+}
+
 function availableFactoryRoute(
   route: FactoryRouteCandidate
 ): FactoryRouteAvailabilityResult {
@@ -586,94 +594,81 @@ function unavailableFactoryRoute(
   return { route, available: false, reason };
 }
 
+async function checkV3StyleRouteAvailability(
+  params: FactoryRouteAvailabilityCheckParams & {
+    label: string;
+    quoteProvider: V3StylePoolExistenceProvider | undefined;
+    configuredFeeTier?: number;
+    defaultFeeTier: number;
+  }
+): Promise<FactoryRouteAvailabilityResult> {
+  const { route } = params;
+  if (!params.quoteProvider) {
+    return unavailableFactoryRoute(
+      route,
+      `${params.label} quote provider unavailable`
+    );
+  }
+
+  const feeTier =
+    route.feeTier ?? params.configuredFeeTier ?? params.defaultFeeTier;
+  let exists: boolean;
+  try {
+    exists = await withTimeout(
+      params.quoteProvider.poolExists(
+        params.pool.collateralAddress,
+        params.pool.quoteAddress,
+        feeTier
+      ),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      `${params.label} pool existence check`
+    );
+  } catch (error) {
+    return unavailableFactoryRoute(
+      route,
+      `${params.label} pool existence check failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  return exists
+    ? availableFactoryRoute(route)
+    : unavailableFactoryRoute(route, `${params.label} pool not found`);
+}
+
 async function checkUniswapV3RouteAvailability(
   params: FactoryRouteAvailabilityCheckParams
 ): Promise<FactoryRouteAvailabilityResult> {
-  const { route } = params;
   const quoteProvider = getUniswapV3QuoteProvider({
     signer: params.signer,
     routerConfig: params.config.universalRouterOverrides,
     runtimeCache: params.runtimeCache,
   });
-  if (!quoteProvider) {
-    return unavailableFactoryRoute(
-      route,
-      'Uniswap V3 quote provider unavailable'
-    );
-  }
-
-  const feeTier =
-    route.feeTier ??
-    params.config.universalRouterOverrides?.defaultFeeTier ??
-    DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3];
-  let exists: boolean;
-  try {
-    exists = await withTimeout(
-      quoteProvider.poolExists(
-        params.pool.collateralAddress,
-        params.pool.quoteAddress,
-        feeTier
-      ),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'Uniswap V3 pool existence check'
-    );
-  } catch (error) {
-    return unavailableFactoryRoute(
-      route,
-      `Uniswap V3 pool existence check failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-
-  return exists
-    ? availableFactoryRoute(route)
-    : unavailableFactoryRoute(route, 'Uniswap V3 pool not found');
+  return await checkV3StyleRouteAvailability({
+    ...params,
+    label: 'Uniswap V3',
+    quoteProvider,
+    configuredFeeTier: params.config.universalRouterOverrides?.defaultFeeTier,
+    defaultFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+  });
 }
 
 async function checkSushiSwapRouteAvailability(
   params: FactoryRouteAvailabilityCheckParams
 ): Promise<FactoryRouteAvailabilityResult> {
-  const { route } = params;
   const quoteProvider = await getSushiSwapQuoteProvider({
     signer: params.signer,
     routerConfig: params.config.sushiswapRouterOverrides,
     runtimeCache: params.runtimeCache,
   });
-  if (!quoteProvider) {
-    return unavailableFactoryRoute(
-      route,
-      'SushiSwap quote provider unavailable'
-    );
-  }
-
-  const feeTier =
-    route.feeTier ??
-    params.config.sushiswapRouterOverrides?.defaultFeeTier ??
-    DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP];
-  let exists: boolean;
-  try {
-    exists = await withTimeout(
-      quoteProvider.poolExists(
-        params.pool.collateralAddress,
-        params.pool.quoteAddress,
-        feeTier
-      ),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'SushiSwap pool existence check'
-    );
-  } catch (error) {
-    return unavailableFactoryRoute(
-      route,
-      `SushiSwap pool existence check failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-
-  return exists
-    ? availableFactoryRoute(route)
-    : unavailableFactoryRoute(route, 'SushiSwap pool not found');
+  return await checkV3StyleRouteAvailability({
+    ...params,
+    label: 'SushiSwap',
+    quoteProvider,
+    configuredFeeTier: params.config.sushiswapRouterOverrides?.defaultFeeTier,
+    defaultFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
+  });
 }
 
 async function checkCurveRouteAvailability(
@@ -746,27 +741,14 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
 }> {
   const availableRoutes: FactoryRouteCandidate[] = [];
   const unavailableRoutes: FactoryRouteAvailabilitySkip[] = [];
-  const availabilityResults: FactoryRouteAvailabilityResult[] = new Array(
-    params.routes.length
-  );
-  let nextRouteIndex = 0;
-  const workerCount = Math.min(
+  const availabilityResults = await mapWithConcurrencyPreservingOrder(
+    params.routes,
     FACTORY_ROUTE_AVAILABILITY_CONCURRENCY,
-    params.routes.length
-  );
-
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextRouteIndex < params.routes.length) {
-        const routeIndex = nextRouteIndex;
-        nextRouteIndex += 1;
-        availabilityResults[routeIndex] =
-          await checkFactoryRouteCandidateAvailability({
-            ...params,
-            route: params.routes[routeIndex],
-          });
-      }
-    })
+    async (route) =>
+      await checkFactoryRouteCandidateAvailability({
+        ...params,
+        route,
+      })
   );
 
   for (const availability of availabilityResults) {

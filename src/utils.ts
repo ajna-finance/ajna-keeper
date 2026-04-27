@@ -7,6 +7,36 @@ import { logger } from './logging';
 import { JsonRpcProvider } from './provider';
 
 export type RequireFields<T, K extends keyof T> = T & Required<Pick<T, K>>;
+
+export async function mapWithConcurrencyPreservingOrder<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const workerCount = Math.min(
+    Math.max(1, Math.floor(concurrency)),
+    items.length
+  );
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    })
+  );
+
+  return results;
+}
+
 interface UtilsType {
   addAccountFromKeystore: (
     keystorePath: string,
@@ -46,7 +76,8 @@ let Utils: UtilsType;
 export async function askPassword() {
   const rawFilePath = process.env.KEYSTORE_PASSWORD_FILE;
   const rawEnvPassword = process.env.KEYSTORE_PASSWORD;
-  const filePath = rawFilePath && rawFilePath.length > 0 ? rawFilePath : undefined;
+  const filePath =
+    rawFilePath && rawFilePath.length > 0 ? rawFilePath : undefined;
   const envPassword =
     rawEnvPassword && rawEnvPassword.length > 0 ? rawEnvPassword : undefined;
 

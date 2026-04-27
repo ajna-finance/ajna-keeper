@@ -4,6 +4,8 @@ import {
   KeeperConfig,
   LiquiditySource,
   getAutoDiscoverTakePolicy,
+  resolveExternalTakePaths,
+  resolveFactoryRouteSelectionSources,
 } from '../config';
 import { logger } from '../logging';
 
@@ -11,12 +13,6 @@ const FACTORY_TAKER_REGISTRY_ABI = [
   'function takerContracts(uint8 source) view returns (address)',
 ];
 const FACTORY_REGISTRY_READ_RETRY_DELAYS_MS = [100, 250];
-
-const FACTORY_SOURCES = [
-  LiquiditySource.UNISWAPV3,
-  LiquiditySource.SUSHISWAP,
-  LiquiditySource.CURVE,
-];
 
 const TAKER_CONTRACT_KEYS: Record<LiquiditySource, string[]> = {
   [LiquiditySource.NONE]: [],
@@ -32,30 +28,17 @@ const TAKER_CONTRACT_KEYS: Record<LiquiditySource, string[]> = {
   [LiquiditySource.CURVE]: ['Curve', 'CURVE', 'curve', '4'],
 };
 
-function isFactorySource(
-  source: LiquiditySource | undefined
-): source is
-  | LiquiditySource.UNISWAPV3
-  | LiquiditySource.SUSHISWAP
-  | LiquiditySource.CURVE {
-  return source !== undefined && FACTORY_SOURCES.includes(source);
-}
-
 function getEffectiveExternalTakePaths(
   config: KeeperConfig
 ): Set<ExternalTakePathKind> {
   const takePolicy = getAutoDiscoverTakePolicy(config.autoDiscover);
   const discoveredTake = config.discoveredDefaults?.take;
-  if (takePolicy?.allowedExternalTakePaths?.length) {
-    return new Set(takePolicy.allowedExternalTakePaths);
-  }
-  if (discoveredTake?.liquiditySource === LiquiditySource.ONEINCH) {
-    return new Set<ExternalTakePathKind>(['oneinch']);
-  }
-  if (isFactorySource(discoveredTake?.liquiditySource)) {
-    return new Set<ExternalTakePathKind>(['factory']);
-  }
-  return new Set<ExternalTakePathKind>();
+  return new Set(
+    resolveExternalTakePaths({
+      defaultLiquiditySource: discoveredTake?.liquiditySource,
+      allowedExternalTakePaths: takePolicy?.allowedExternalTakePaths,
+    })
+  );
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -98,20 +81,12 @@ function isRetryableRpcReadError(error: unknown): boolean {
 
 function getEffectiveFactorySources(config: KeeperConfig): LiquiditySource[] {
   const takePolicy = getAutoDiscoverTakePolicy(config.autoDiscover);
-  if (takePolicy?.allowedLiquiditySources?.length) {
-    return takePolicy.allowedLiquiditySources.filter(isFactorySource);
-  }
-
-  const discoveredSource = config.discoveredDefaults?.take?.liquiditySource;
-  if (isFactorySource(discoveredSource)) {
-    return [discoveredSource];
-  }
-  const defaultFactoryLiquiditySource =
-    takePolicy?.defaultFactoryLiquiditySource;
-  if (isFactorySource(defaultFactoryLiquiditySource)) {
-    return [defaultFactoryLiquiditySource];
-  }
-  return [];
+  return resolveFactoryRouteSelectionSources({
+    defaultLiquiditySource: config.discoveredDefaults?.take?.liquiditySource,
+    allowedLiquiditySources: takePolicy?.allowedLiquiditySources,
+    configuredDefaultFactoryLiquiditySource:
+      takePolicy?.defaultFactoryLiquiditySource,
+  });
 }
 
 function getConfiguredTakerAddress(

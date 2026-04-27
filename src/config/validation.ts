@@ -16,31 +16,24 @@ import {
   hasNonEmptyObject,
 } from './schema';
 import {
+  EXTERNAL_TAKE_PATHS,
+  EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
+  FACTORY_DYNAMIC_SOURCES,
+  isFactoryDynamicSource,
+  resolveExternalTakePaths,
+  resolveFactoryRouteSelectionSources,
+} from './route-policy';
+import {
   hasConfiguredWrappedNativeAddress,
   resolveConfiguredGasQuoteLiquiditySource,
 } from './liquidity-source';
 import { logger } from '../logging';
 
-const FACTORY_DYNAMIC_SOURCES = [
-  LiquiditySource.UNISWAPV3,
-  LiquiditySource.SUSHISWAP,
-  LiquiditySource.CURVE,
-];
-const EXTERNAL_TAKE_PATHS = new Set<ExternalTakePathKind>([
-  'oneinch',
-  'factory',
-]);
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
   'prefer_private_or_relay',
   'require_private_or_relay',
 ]);
-const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
-  new Set<ExternalTakeRouteSelectionMode>([
-    'maximize_profit',
-    'factory_first',
-    'cost_aware',
-  ]);
 const MAX_UINT24_FEE_TIER = 16_777_215;
 const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
@@ -218,25 +211,13 @@ function getEffectiveFactoryRouteSources(
   allowedLiquiditySources: LiquiditySource[] | undefined,
   defaultFactoryLiquiditySource?: LiquiditySource
 ): Set<LiquiditySource> {
-  const sources = new Set<LiquiditySource>();
-  const defaultFactorySource = isFactoryDynamicSource(
-    discoveredTake.liquiditySource
-  )
-    ? discoveredTake.liquiditySource
-    : defaultFactoryLiquiditySource;
-  const configuredSources =
-    allowedLiquiditySources !== undefined
-      ? allowedLiquiditySources
-      : defaultFactorySource !== undefined
-        ? [defaultFactorySource]
-        : [];
-
-  for (const source of configuredSources) {
-    if (FACTORY_DYNAMIC_SOURCES.includes(source)) {
-      sources.add(source);
-    }
-  }
-  return sources;
+  return new Set(
+    resolveFactoryRouteSelectionSources({
+      defaultLiquiditySource: discoveredTake.liquiditySource,
+      allowedLiquiditySources,
+      configuredDefaultFactoryLiquiditySource: defaultFactoryLiquiditySource,
+    })
+  );
 }
 
 function getEffectiveTakeGasOverrideSources(
@@ -260,16 +241,12 @@ function getEffectiveExternalTakePaths(
   discoveredTake: TakeSettings,
   allowedExternalTakePaths: ExternalTakePathKind[] | undefined
 ): Set<ExternalTakePathKind> {
-  if (allowedExternalTakePaths !== undefined) {
-    return new Set(allowedExternalTakePaths);
-  }
-  if (discoveredTake.liquiditySource === LiquiditySource.ONEINCH) {
-    return new Set<ExternalTakePathKind>(['oneinch']);
-  }
-  if (isFactoryDynamicSource(discoveredTake.liquiditySource)) {
-    return new Set<ExternalTakePathKind>(['factory']);
-  }
-  return new Set<ExternalTakePathKind>();
+  return new Set(
+    resolveExternalTakePaths({
+      defaultLiquiditySource: discoveredTake.liquiditySource,
+      allowedExternalTakePaths,
+    })
+  );
 }
 
 function validateAllowedExternalTakePaths(
@@ -349,15 +326,6 @@ function isPrivateOrRelayTakeWriteMode(
     mode === TakeWriteTransportMode.PRIVATE_RPC ||
     mode === TakeWriteTransportMode.RELAY
   );
-}
-
-function isFactoryDynamicSource(
-  source: LiquiditySource | undefined
-): source is
-  | LiquiditySource.UNISWAPV3
-  | LiquiditySource.SUSHISWAP
-  | LiquiditySource.CURVE {
-  return source !== undefined && FACTORY_DYNAMIC_SOURCES.includes(source);
 }
 
 export function validatePostAuctionDex(
@@ -833,7 +801,7 @@ export function validateAutoDiscoverConfig(
             'AutoDiscoverConfig.take: allowedLiquiditySources cannot include ONEINCH for factory external takes'
           );
         }
-        if (!FACTORY_DYNAMIC_SOURCES.includes(source)) {
+        if (!isFactoryDynamicSource(source)) {
           throw new Error(
             'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3, SUSHISWAP, and CURVE'
           );
