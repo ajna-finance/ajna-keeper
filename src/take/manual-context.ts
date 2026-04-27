@@ -7,7 +7,11 @@ import {
   FactoryExecutionConfig,
 } from './factory';
 import { ExternalTakeAdapter } from './engine';
-import { OneInchExecutionConfig, OneInchQuoteConfig } from './one-inch-types';
+import {
+  createNoExternalTakeAdapter,
+  createOneInchTakeAdapter,
+} from './one-inch-adapter';
+import { OneInchExecutionConfig } from './one-inch-types';
 import { TakeWriteTransportConfig } from './write-transport';
 import { TakeActionConfig } from './types';
 
@@ -16,7 +20,7 @@ type ManualTakeCommonContextConfig = Pick<
   'dryRun' | 'delayBetweenActions'
 >;
 
-export type ManualSingleContractContextConfig = ManualTakeCommonContextConfig &
+export type ManualOneInchContextConfig = ManualTakeCommonContextConfig &
   Pick<
     KeeperConfig,
     | 'connectorTokens'
@@ -66,29 +70,20 @@ export function isFactoryExternalTakeSource(
   );
 }
 
-export function createManualSingleContractTakeContext(params: {
+export function createManualOneInchTakeContext(params: {
   poolConfig: TakeActionConfig;
-  config: ManualSingleContractContextConfig;
+  config: ManualOneInchContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
-  adapters: {
-    createOneInchTakeAdapter: (
-      quoteConfig: OneInchQuoteConfig
-    ) => ExternalTakeAdapter<TakeActionConfig, OneInchExecutionConfig>;
-    createNoExternalTakeAdapter: () => ExternalTakeAdapter<
-      TakeActionConfig,
-      OneInchExecutionConfig
-    >;
-  };
 }): ManualTakeContext<OneInchExecutionConfig> {
   return {
     externalTakeAdapter:
       params.poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
-        ? params.adapters.createOneInchTakeAdapter({
+        ? createOneInchTakeAdapter({
             delayBetweenActions: params.config.delayBetweenActions ?? 0,
             oneInchRouters: params.config.oneInchRouters,
             connectorTokens: params.config.connectorTokens,
           })
-        : params.adapters.createNoExternalTakeAdapter(),
+        : createNoExternalTakeAdapter(),
     arbTakeStrategy: createArbTakeStrategy(),
     externalExecutionConfig: {
       dryRun: params.config.dryRun,

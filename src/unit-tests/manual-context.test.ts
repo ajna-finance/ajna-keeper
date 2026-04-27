@@ -1,17 +1,12 @@
 import { expect } from 'chai';
-import sinon from 'sinon';
 import { CurvePoolType, LiquiditySource } from '../config';
 import {
   createManualFactoryTakeContext,
-  createManualSingleContractTakeContext,
+  createManualOneInchTakeContext,
   isFactoryExternalTakeSource,
 } from '../take/manual-context';
 
 describe('manual take context helpers', () => {
-  afterEach(() => {
-    sinon.restore();
-  });
-
   it('classifies factory external take sources explicitly', () => {
     expect(isFactoryExternalTakeSource(LiquiditySource.UNISWAPV3)).to.equal(
       true
@@ -26,13 +21,8 @@ describe('manual take context helpers', () => {
     expect(isFactoryExternalTakeSource(undefined)).to.equal(false);
   });
 
-  it('builds the 1inch single-contract adapter only for 1inch pools', () => {
-    const oneInchAdapter = { kind: 'oneinch' } as any;
-    const noExternalAdapter = { kind: 'none' } as any;
-    const createOneInchTakeAdapter = sinon.stub().returns(oneInchAdapter);
-    const createNoExternalTakeAdapter = sinon.stub().returns(noExternalAdapter);
-
-    const oneInchContext = createManualSingleContractTakeContext({
+  it('builds the manual 1inch adapter only for 1inch pools', () => {
+    const oneInchContext = createManualOneInchTakeContext({
       poolConfig: {
         name: '1inch pool',
         take: { liquiditySource: LiquiditySource.ONEINCH },
@@ -44,26 +34,11 @@ describe('manual take context helpers', () => {
         oneInchRouters: { 1: '0xrouter' },
         keeperTaker: '0xkeeper',
       },
-      adapters: {
-        createOneInchTakeAdapter,
-        createNoExternalTakeAdapter,
-      },
     });
 
-    expect(oneInchContext.externalTakeAdapter).to.equal(oneInchAdapter);
-    expect(
-      createOneInchTakeAdapter.calledOnceWithExactly({
-        delayBetweenActions: 123,
-        oneInchRouters: { 1: '0xrouter' },
-        connectorTokens: ['0xconnector'],
-      })
-    ).to.equal(true);
-    expect(createNoExternalTakeAdapter.called).to.equal(false);
+    expect(oneInchContext.externalTakeAdapter.kind).to.equal('oneinch');
 
-    createOneInchTakeAdapter.resetHistory();
-    createNoExternalTakeAdapter.resetHistory();
-
-    const arbOnlyContext = createManualSingleContractTakeContext({
+    const arbOnlyContext = createManualOneInchTakeContext({
       poolConfig: {
         name: 'arb-only pool',
         take: {},
@@ -75,15 +50,9 @@ describe('manual take context helpers', () => {
         oneInchRouters: { 1: '0xrouter' },
         keeperTaker: '0xkeeper',
       },
-      adapters: {
-        createOneInchTakeAdapter,
-        createNoExternalTakeAdapter,
-      },
     });
 
-    expect(arbOnlyContext.externalTakeAdapter).to.equal(noExternalAdapter);
-    expect(createOneInchTakeAdapter.called).to.equal(false);
-    expect(createNoExternalTakeAdapter.calledOnce).to.equal(true);
+    expect(arbOnlyContext.externalTakeAdapter.kind).to.equal('none');
   });
 
   it('builds a factory context without carrying 1inch-only config', () => {

@@ -276,7 +276,7 @@ describe('Take Factory', () => {
         },
       };
 
-      // Business logic: factory doesn't support 1inch (use single contract instead)
+      // Business logic: factory doesn't support 1inch (use keeperTaker instead)
       const isFactorySupported =
         poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3;
       expect(isFactorySupported).to.be.false;

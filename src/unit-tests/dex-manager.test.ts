@@ -17,7 +17,7 @@ describe('SmartDexManager', () => {
   });
 
   describe('detectDeploymentTypeForPool()', () => {
-    it('returns single for a 1inch pool when the single-contract taker is configured', async () => {
+    it('returns oneinch for a 1inch pool when keeperTaker is configured', async () => {
       const manager = new SmartDexManager(mockSigner, {
         keeperTaker: '0xTaker123',
         oneInchRouters: { 43114: '0xRouter123' },
@@ -31,7 +31,7 @@ describe('SmartDexManager', () => {
         },
       } as any);
 
-      expect(result).to.equal('single');
+      expect(result).to.equal('oneinch');
     });
 
     it('returns factory for a factory-backed pool when factory contracts are configured', async () => {
@@ -88,7 +88,7 @@ describe('SmartDexManager', () => {
         },
       } as any);
 
-      expect(oneInchResult).to.equal('single');
+      expect(oneInchResult).to.equal('oneinch');
       expect(uniswapResult).to.equal('factory');
     });
   });
@@ -126,7 +126,9 @@ describe('SmartDexManager', () => {
       } as any);
 
       expect(result.valid).to.be.false;
-      expect(result.errors).to.include('1inch deployment requires oneInchRouters configuration');
+      expect(result.errors).to.include(
+        '1inch deployment requires oneInchRouters configuration'
+      );
     });
 
     it('validates a complete factory-backed pool deployment', async () => {
@@ -181,7 +183,7 @@ describe('SmartDexManager', () => {
   });
 
   describe('canTakeLiquidation()', () => {
-    it('returns true for 1inch external takes when the single-contract deployment is available', async () => {
+    it('returns true for 1inch external takes when the keeperTaker deployment is available', async () => {
       const manager = new SmartDexManager(mockSigner, {
         keeperTaker: '0xTaker123',
         oneInchRouters: { 43114: '0xRouter123' },

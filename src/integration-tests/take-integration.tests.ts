@@ -30,11 +30,9 @@ describe('Take Integration Tests', () => {
   const signer = {} as any;
 
   beforeEach(() => {
-    sinon
-      .stub(subgraph, 'getLiquidations')
-      .resolves({
-        pool: { hpb: 1, hpbIndex: 0, liquidationAuctions: [] },
-      } as any);
+    sinon.stub(subgraph, 'getLiquidations').resolves({
+      pool: { hpb: 1, hpbIndex: 0, liquidationAuctions: [] },
+    } as any);
   });
 
   afterEach(() => {
@@ -85,12 +83,12 @@ describe('Take Integration Tests', () => {
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual single-contract take context starting')
+        sinon.match('Manual 1inch take context starting')
       )
     ).to.be.false;
   });
 
-  it('routes 1inch pools through the single-contract take path', async () => {
+  it('routes 1inch pools through the manual 1inch take path', async () => {
     const debugSpy = sinon.spy(logger, 'debug');
     const config: Partial<KeeperConfig> = {
       dryRun: true,
@@ -130,7 +128,7 @@ describe('Take Integration Tests', () => {
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual single-contract take context starting')
+        sinon.match('Manual 1inch take context starting')
       )
     ).to.be.true;
     expect(
@@ -214,7 +212,7 @@ describe('Take Integration Tests', () => {
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual single-contract take context starting')
+        sinon.match('Manual 1inch take context starting')
       )
     ).to.be.true;
   });

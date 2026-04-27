@@ -28,8 +28,9 @@ import {
   DiscoveryRpcCache,
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
-import * as takeModule from '../take';
 import * as takeFactoryModule from '../take/factory';
+import * as oneInchAdapterModule from '../take/one-inch-adapter';
+import * as oneInchExecutionModule from '../take/one-inch-execution';
 import { createArbTakeStrategy } from '../take/arb-strategy';
 import { ExternalTakeAdapter, processTakeCandidates } from '../take/engine';
 import { ExternalTakeQuoteEvaluation } from '../take/types';
@@ -1415,7 +1416,7 @@ async function quoteOneInchPathForDiscovery(
   return quoteOneInchForDiscovery({
     ...params,
     evaluate: (quoteOptions) =>
-      takeModule.getOneInchPathQuoteEvaluation(
+      oneInchExecutionModule.getOneInchPathQuoteEvaluation(
         params.pool,
         params.price,
         params.collateral,
@@ -1431,7 +1432,7 @@ async function quoteOneInchPathForDiscovery(
   });
 }
 
-async function quoteSingleContractOneInchTakeForDiscovery(
+async function quoteKeeperTakerOneInchTakeForDiscovery(
   params: {
     config: DiscoveryExecutionConfig;
     rpcCache?: DiscoveryRpcCache;
@@ -1441,7 +1442,7 @@ async function quoteSingleContractOneInchTakeForDiscovery(
   return quoteOneInchForDiscovery({
     ...params,
     evaluate: (quoteOptions) =>
-      takeModule.getOneInchTakeQuoteEvaluation(
+      oneInchExecutionModule.getOneInchTakeQuoteEvaluation(
         params.pool,
         params.price,
         params.collateral,
@@ -1735,7 +1736,7 @@ function createExternalTakeAdapterForDiscovery(params: {
   routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   probeTimeoutMs: number;
   quoteOneInchPath: OneInchPathQuoteFn;
-  quoteSingleContractOneInchTake: OneInchPathQuoteFn;
+  quoteKeeperTakerOneInchTake: OneInchPathQuoteFn;
   quoteFactoryPath: FactoryPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
   recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
@@ -1886,13 +1887,14 @@ function createExternalTakeAdapterForDiscovery(params: {
                 }
               },
             };
-            const oneInchSucceeded = await takeModule.takeLiquidation({
-              pool,
-              signer,
-              poolConfig,
-              liquidation: liquidationForCandidate,
-              config: oneInchConfig,
-            });
+            const oneInchSucceeded =
+              await oneInchExecutionModule.takeLiquidation({
+                pool,
+                signer,
+                poolConfig,
+                liquidation: liquidationForCandidate,
+                config: oneInchConfig,
+              });
             if (oneInchSucceeded) {
               return true;
             }
@@ -1943,7 +1945,7 @@ function createExternalTakeAdapterForDiscovery(params: {
         auctionPrice,
         collateral,
       }) =>
-        params.quoteSingleContractOneInchTake({
+        params.quoteKeeperTakerOneInchTake({
           pool,
           signer,
           poolConfig,
@@ -1958,7 +1960,7 @@ function createExternalTakeAdapterForDiscovery(params: {
         liquidation,
         config,
       }) =>
-        takeModule.takeLiquidation({
+        oneInchExecutionModule.takeLiquidation({
           pool,
           signer,
           poolConfig,
@@ -2002,7 +2004,7 @@ function createExternalTakeAdapterForDiscovery(params: {
     };
   }
 
-  return takeModule.createNoExternalTakeAdapter();
+  return oneInchAdapterModule.createNoExternalTakeAdapter();
 }
 
 export async function handleDiscoveredTakeTarget(
@@ -2110,8 +2112,8 @@ export async function handleDiscoveredTakeTarget(
       takePolicy,
       recordCircuitOutcome: false,
     });
-  const quoteSingleContractOneInchTake: OneInchPathQuoteFn = (quoteParams) =>
-    quoteSingleContractOneInchTakeForDiscovery({
+  const quoteKeeperTakerOneInchTake: OneInchPathQuoteFn = (quoteParams) =>
+    quoteKeeperTakerOneInchTakeForDiscovery({
       ...quoteParams,
       config: params.config,
       rpcCache,
@@ -2135,7 +2137,7 @@ export async function handleDiscoveredTakeTarget(
     ),
     probeTimeoutMs: getExternalTakeProbeTimeoutMs(takePolicy),
     quoteOneInchPath,
-    quoteSingleContractOneInchTake,
+    quoteKeeperTakerOneInchTake,
     quoteFactoryPath,
     approveExternalTake,
     recordOneInchCircuitOutcome,

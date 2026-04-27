@@ -1,10 +1,7 @@
 // src/integration-tests/smart-dex-routing.test.ts
 import { expect } from 'chai';
 import { Wallet } from 'ethers';
-import {
-  LiquiditySource,
-  validateTakeSettings,
-} from '../config';
+import { LiquiditySource, validateTakeSettings } from '../config';
 import { SmartDexManager } from '../dex/manager';
 import { USER1_MNEMONIC } from './test-config';
 import { getProvider } from './test-utils';
@@ -18,7 +15,7 @@ describe('Smart DEX Routing Integration Tests', () => {
   });
 
   describe('Per-Pool Detection', () => {
-    it('detects single deployment for 1inch pools', async () => {
+    it('detects the 1inch keeperTaker deployment', async () => {
       const manager = new SmartDexManager(mockSigner, {
         keeperTaker: '0x1234567890123456789012345678901234567890',
         oneInchRouters: {
@@ -34,7 +31,7 @@ describe('Smart DEX Routing Integration Tests', () => {
         },
       } as any);
 
-      expect(deploymentType).to.equal('single');
+      expect(deploymentType).to.equal('oneinch');
     });
 
     it('detects factory deployment for factory-backed pools', async () => {
@@ -61,7 +58,9 @@ describe('Smart DEX Routing Integration Tests', () => {
         keeperTaker: '0x1111111111111111111111111111111111111111',
         oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
         keeperTakerFactory: '0x2222222222222222222222222222222222222222',
-        takerContracts: { UniswapV3: '0x3333333333333333333333333333333333333333' },
+        takerContracts: {
+          UniswapV3: '0x3333333333333333333333333333333333333333',
+        },
       });
 
       const oneInchDeployment = await manager.detectDeploymentTypeForPool({
@@ -79,7 +78,7 @@ describe('Smart DEX Routing Integration Tests', () => {
         },
       } as any);
 
-      expect(oneInchDeployment).to.equal('single');
+      expect(oneInchDeployment).to.equal('oneinch');
       expect(factoryDeployment).to.equal('factory');
     });
   });
@@ -172,8 +171,8 @@ describe('Smart DEX Routing Integration Tests', () => {
       }).to.not.throw();
     });
 
-    it('validates 1inch take settings with single-contract config', async () => {
-      const singleConfig = {
+    it('validates 1inch take settings with keeperTaker config', async () => {
+      const oneInchConfig = {
         keeperTaker: '0x1234567890123456789012345678901234567890',
         oneInchRouters: {
           1: '0x1111111254EEB25477B68fb85Ed929f73A960582',
@@ -188,7 +187,7 @@ describe('Smart DEX Routing Integration Tests', () => {
             marketPriceFactor: 0.95,
             hpbPriceFactor: 0.98,
           },
-          singleConfig as any
+          oneInchConfig as any
         );
       }).to.not.throw();
     });
