@@ -34,7 +34,10 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from './types';
-import { applyExternalTakeRoutePolicy } from './external-take-policy';
+import {
+  EXTERNAL_TAKE_REJECTION_REASONS,
+  applyExternalTakeRoutePolicy,
+} from './external-take-policy';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 
@@ -351,7 +354,7 @@ export async function getOneInchPathQuoteEvaluation(
       reason: policy.isEconomicallyExecutable
         ? undefined
         : (policy.rejectionReason ??
-          'auction price above external take threshold'),
+          EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold),
     };
   } catch (error) {
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);

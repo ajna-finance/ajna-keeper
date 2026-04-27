@@ -1,6 +1,9 @@
 import { expect } from 'chai';
 import { BigNumber } from 'ethers';
-import { applyExternalTakeRoutePolicy } from '../take/external-take-policy';
+import {
+  EXTERNAL_TAKE_REJECTION_REASONS,
+  applyExternalTakeRoutePolicy,
+} from '../take/external-take-policy';
 
 const raw = (value: number): BigNumber => BigNumber.from(value);
 
@@ -36,7 +39,7 @@ describe('External take route policy', () => {
 
     expect(policy.isEconomicallyExecutable).to.equal(false);
     expect(policy.rejectionReason).to.equal(
-      'route quote below required output floor'
+      EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor
     );
     expect(policy.approvedMinOutRaw.eq(raw(115))).to.equal(true);
   });
@@ -69,7 +72,7 @@ describe('External take route policy', () => {
 
     expect(policy.isEconomicallyExecutable).to.equal(false);
     expect(policy.rejectionReason).to.equal(
-      'route quote below repayment floor'
+      EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRepaymentFloor
     );
   });
 

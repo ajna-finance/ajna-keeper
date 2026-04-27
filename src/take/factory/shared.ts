@@ -24,16 +24,22 @@ import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provid
 import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../types';
 import { TakeWriteTransport } from '../write-transport';
 import {
+  EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
-  isSubsidizedExternalTakeQuote,
+  compareExternalTakeBySubsidyThenRank,
 } from '../external-take-policy';
 import {
   BASIS_POINTS_DENOMINATOR,
+  MARKET_FACTOR_SCALE,
   MAX_UINT24_FEE_TIER,
   WAD,
   ZERO_BN,
 } from '../../constants';
-export { BASIS_POINTS_DENOMINATOR, WAD } from '../../constants';
+export {
+  BASIS_POINTS_DENOMINATOR,
+  MARKET_FACTOR_SCALE,
+  WAD,
+} from '../../constants';
 
 export interface FactoryRouteCandidate {
   liquiditySource: LiquiditySource;
@@ -139,7 +145,6 @@ export function createFactoryQuoteProviderRuntimeCache(): FactoryQuoteProviderRu
   return {};
 }
 
-export const MARKET_FACTOR_SCALE = 1_000_000;
 const ZERO = ZERO_BN;
 const MAX_RECENT_ROUTE_SUCCESSES = 512;
 const MAX_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
@@ -883,7 +888,7 @@ export interface FactoryRouteEvaluationResult {
   evaluation: ExternalTakeQuoteEvaluation;
 }
 
-function compareFactoryRouteEvaluations(
+function compareFactoryRouteRank(
   left: FactoryRouteEvaluationResult,
   right: FactoryRouteEvaluationResult,
   params: {
@@ -894,21 +899,6 @@ function compareFactoryRouteEvaluations(
     >;
   }
 ): number {
-  const leftSubsidized = isSubsidizedExternalTakeQuote(left.evaluation);
-  const rightSubsidized = isSubsidizedExternalTakeQuote(right.evaluation);
-  if (leftSubsidized !== rightSubsidized) {
-    return leftSubsidized ? 1 : -1;
-  }
-  if (leftSubsidized && rightSubsidized) {
-    const leftSubsidy =
-      left.evaluation.routeProfitability?.expectedSubsidyQuoteRaw ?? ZERO;
-    const rightSubsidy =
-      right.evaluation.routeProfitability?.expectedSubsidyQuoteRaw ?? ZERO;
-    if (!leftSubsidy.eq(rightSubsidy)) {
-      return leftSubsidy.lt(rightSubsidy) ? -1 : 1;
-    }
-  }
-
   const leftProfit =
     left.evaluation.routeProfitability?.expectedNetProfitQuoteRaw;
   const rightProfit =
@@ -960,6 +950,24 @@ function compareFactoryRouteEvaluations(
   }
 
   return 0;
+}
+
+function compareFactoryRouteEvaluations(
+  left: FactoryRouteEvaluationResult,
+  right: FactoryRouteEvaluationResult,
+  params: {
+    defaultLiquiditySource: LiquiditySource;
+    config: Pick<
+      FactoryQuoteConfig,
+      'universalRouterOverrides' | 'sushiswapRouterOverrides'
+    >;
+  }
+): number {
+  return compareExternalTakeBySubsidyThenRank(left, right, {
+    getQuote: (result) => result.evaluation,
+    compareRank: (leftResult, rightResult) =>
+      compareFactoryRouteRank(leftResult, rightResult, params),
+  });
 }
 
 export function selectBestFactoryRouteEvaluation(params: {
@@ -1385,10 +1393,7 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
     routeProfitability.marketFactorFloorQuoteRaw ??
     auctionRepayRequirementQuoteRaw;
   const configuredMarketPriceFactor =
-    routeProfitability.configuredMarketPriceFactor ??
-    (params.evaluation.marketPrice && params.evaluation.takeablePrice
-      ? params.evaluation.takeablePrice / params.evaluation.marketPrice
-      : undefined);
+    routeProfitability.configuredMarketPriceFactor;
   if (!configuredMarketPriceFactor || configuredMarketPriceFactor <= 0) {
     return {
       ...params.evaluation,
@@ -1426,7 +1431,8 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
     isTakeable,
     reason: isTakeable
       ? params.evaluation.reason
-      : (policy.rejectionReason ?? 'route quote below required output floor'),
+      : (policy.rejectionReason ??
+        EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor),
     routeMinOutRaw: policy.routeMinOutRaw,
     profitMinOutRaw: policy.profitMinOutRaw,
     approvedMinOutRaw: policy.approvedMinOutRaw,

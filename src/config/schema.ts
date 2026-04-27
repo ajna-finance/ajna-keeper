@@ -92,6 +92,11 @@ export interface TakeSettings {
   hpbPriceFactor?: number;
   liquiditySource?: LiquiditySource;
   marketPriceFactor?: number;
+  /**
+   * Permit defensive external takes that repay the auction but do not cover the
+   * route-derived gas/profit floor. Keep false unless the operator explicitly
+   * accepts keeper P&L spend to protect a reviewed pool or borrower.
+   */
   allowSubsidy?: boolean;
 }
 
