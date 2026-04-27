@@ -4,6 +4,10 @@ import { BigNumber, ethers } from 'ethers';
 import * as erc20 from '../erc20';
 import { LiquiditySource } from '../config';
 import { arbTakeLiquidation, checkIfArbTakeable } from '../take/arb';
+import {
+  createArbTakeStrategy,
+  isArbTakeStrategyEnabled,
+} from '../take/arb-strategy';
 import { processTakeCandidates } from '../take/engine';
 import { createNoExternalTakeAdapter } from '../take';
 import * as transactions from '../transactions';
@@ -11,6 +15,54 @@ import * as transactions from '../transactions';
 describe('shared arbTake helpers', () => {
   afterEach(() => {
     sinon.restore();
+  });
+
+  it('enables arbTake only when both manual arb settings are present', () => {
+    expect(
+      isArbTakeStrategyEnabled({
+        name: 'arb disabled',
+        take: {},
+      } as any)
+    ).to.equal(false);
+    expect(
+      isArbTakeStrategyEnabled({
+        name: 'missing hpb factor',
+        take: { minCollateral: 1 },
+      } as any)
+    ).to.equal(false);
+    expect(
+      isArbTakeStrategyEnabled({
+        name: 'arb enabled',
+        take: { minCollateral: 1, hpbPriceFactor: 0.99 },
+      } as any)
+    ).to.equal(true);
+  });
+
+  it('short-circuits arb strategy evaluation when arbTake is disabled', async () => {
+    const strategy = createArbTakeStrategy();
+    const pool = {
+      getPrices: sinon.stub().throws(new Error('should not read prices')),
+    };
+
+    const result = await strategy.evaluateArbTake({
+      pool: pool as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'arb disabled',
+        take: {},
+      } as any,
+      subgraph: {} as any,
+      price: 1,
+      auctionPrice: ethers.utils.parseEther('1'),
+      collateral: ethers.utils.parseEther('1'),
+    });
+
+    expect(result).to.deep.include({
+      isArbTakeable: false,
+      hpbIndex: 0,
+      reason: 'arbTake settings are not configured',
+    });
+    expect(pool.getPrices.called).to.equal(false);
   });
 
   it('returns the expected arbTake evaluation', async () => {
@@ -168,6 +220,7 @@ describe('shared arbTake helpers', () => {
       candidates: [{ borrower: '0xBorrower' }],
       subgraph: {} as any,
       externalTakeAdapter: createNoExternalTakeAdapter() as any,
+      arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
       delayBetweenActions: 0,
@@ -230,6 +283,7 @@ describe('shared arbTake helpers', () => {
       candidates: [{ borrower: '0xBorrower' }],
       subgraph: { cacheKey: 'test-subgraph' } as any,
       externalTakeAdapter: createNoExternalTakeAdapter() as any,
+      arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
       delayBetweenActions: 0,
@@ -291,6 +345,7 @@ describe('shared arbTake helpers', () => {
         }),
         executeExternalTake: executeExternalTakeStub,
       } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
       delayBetweenActions: 0,
@@ -355,6 +410,7 @@ describe('shared arbTake helpers', () => {
         }),
         executeExternalTake: executeExternalTakeStub,
       } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
       delayBetweenActions: 0,
@@ -427,6 +483,7 @@ describe('shared arbTake helpers', () => {
         }),
         executeExternalTake: executeExternalTakeStub,
       } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
       delayBetweenActions: 0,
@@ -488,6 +545,7 @@ describe('shared arbTake helpers', () => {
         }),
         executeExternalTake: executeExternalTakeStub,
       } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
       delayBetweenActions: 0,

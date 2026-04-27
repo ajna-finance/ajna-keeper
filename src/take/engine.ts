@@ -1,9 +1,9 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber, ethers } from 'ethers';
+import { BigNumber } from 'ethers';
 import { logger } from '../logging';
 import { SubgraphReader } from '../read-transports';
 import { delay, weiToDecimaled } from '../utils';
-import { ArbTakeStrategy, createArbTakeStrategy } from './arb-strategy';
+import { ArbTakeStrategy } from './arb-strategy';
 import { TakeWriteTransport } from './write-transport';
 import {
   ArbTakeEvaluation,
@@ -142,7 +142,7 @@ interface ProcessTakeCandidatesParams<
     > {
   candidates: TakeBorrowerCandidate[];
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
-  arbTakeStrategy?: ArbTakeStrategy<TPoolConfig>;
+  arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   approveExternalTake?: EvaluateTakeDecisionParams<
     TPoolConfig,
     TExecutionConfig
@@ -587,7 +587,7 @@ export async function processTakeCandidates<
   candidates,
   subgraph,
   externalTakeAdapter,
-  arbTakeStrategy: configuredArbTakeStrategy,
+  arbTakeStrategy,
   externalExecutionConfig,
   dryRun,
   delayBetweenActions,
@@ -600,9 +600,6 @@ export async function processTakeCandidates<
   onFound,
   takeWriteTransport,
 }: ProcessTakeCandidatesParams<TPoolConfig, TExecutionConfig>): Promise<void> {
-  const arbTakeStrategy =
-    configuredArbTakeStrategy ?? createArbTakeStrategy<TPoolConfig>();
-
   for (const candidate of candidates) {
     let decision: TakeDecision | undefined;
     let stage: 'evaluation' | 'execution' = 'evaluation';

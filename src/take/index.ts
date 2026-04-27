@@ -24,7 +24,6 @@ import {
   WithSubgraph,
 } from '../read-transports';
 import * as factoryShared from './factory/shared';
-import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
@@ -38,6 +37,7 @@ import {
 } from './types';
 import {
   ExternalTakeAdapter,
+  evaluateTakeDecision,
   formatTakeStrategyLog,
   getTakeBorrowerCandidates,
   logSkippedTakeCandidate,
@@ -52,6 +52,7 @@ import {
   stripExternalTakeSettings,
 } from './manual-context';
 import { OneInchExecutionConfig, OneInchQuoteConfig } from './one-inch-types';
+import { createArbTakeStrategy } from './arb-strategy';
 
 export type {
   OneInchExecutionConfig,
@@ -93,6 +94,10 @@ interface HandleTakeParams {
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'take'>;
   config: HandleTakeConfigInput;
+}
+
+interface ResolvedHandleTakeParams extends Omit<HandleTakeParams, 'config'> {
+  config: HandleTakeConfig;
 }
 
 async function getOneInchTokenDecimals(params: {
@@ -218,7 +223,7 @@ export async function handleTakes({
       break;
   }
 
-  await processManualTakeCandidates({
+  await processResolvedManualTakeCandidates({
     signer,
     takeWriteTransport,
     pool,
@@ -227,14 +232,23 @@ export async function handleTakes({
   });
 }
 
-export async function processManualTakeCandidates({
+export async function processManualTakeCandidates(
+  params: HandleTakeParams
+): Promise<void> {
+  await processResolvedManualTakeCandidates({
+    ...params,
+    config: resolveSubgraphConfig(params.config),
+  });
+}
+
+async function processResolvedManualTakeCandidates({
   signer,
   takeWriteTransport,
   pool,
   poolConfig,
   config,
-}: HandleTakeParams) {
-  const resolvedConfig: HandleTakeConfig = resolveSubgraphConfig(config);
+}: ResolvedHandleTakeParams): Promise<void> {
+  const resolvedConfig = config;
   const candidates = await getTakeBorrowerCandidates({
     subgraph: resolvedConfig.subgraph,
     poolAddress: pool.poolAddress,
@@ -263,6 +277,9 @@ export async function processManualTakeCandidates({
     return;
   }
 
+  logger.debug(
+    `Manual single-contract take context starting for pool: ${pool.name}`
+  );
   const context = createManualSingleContractTakeContext({
     poolConfig,
     config: resolvedConfig,
@@ -284,8 +301,6 @@ export async function processManualTakeCandidates({
     context,
   });
 }
-
-type LiquidationToTake = TakeLiquidationPlan;
 
 async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
   pool: FungiblePool;
@@ -476,7 +491,7 @@ export async function getOneInchPathQuoteEvaluation(
       connectorTokens: connectorTokens ?? [],
     });
 
-    // In checkIfTakeable function, before the dexRouter quote call:
+    // 1inch expects collateral amounts in token-native decimals, not WAD.
     const collateralDecimals = await getOneInchTokenDecimals({
       signer,
       tokenAddress: pool.collateralAddress,
@@ -567,29 +582,6 @@ export async function getOneInchPathQuoteEvaluation(
   }
 }
 
-async function checkIfTakeable(
-  pool: FungiblePool,
-  price: number,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  config: Partial<OneInchQuoteConfig>,
-  signer: Signer,
-  oneInchRouters: { [chainId: number]: string } | undefined,
-  connectorTokens: string[] | undefined
-): Promise<{ isTakeable: boolean }> {
-  const evaluation = await getOneInchTakeQuoteEvaluation(
-    pool,
-    price,
-    collateral,
-    poolConfig,
-    config,
-    signer,
-    oneInchRouters,
-    connectorTokens
-  );
-  return { isTakeable: evaluation.isTakeable };
-}
-
 async function computeOneInchAtomicMinReturnAmount(params: {
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
@@ -642,89 +634,67 @@ export async function* getLiquidationsToTake({
   poolConfig,
   signer,
   config,
-}: GetLiquidationsToTakeParams): AsyncGenerator<LiquidationToTake> {
+}: GetLiquidationsToTakeParams): AsyncGenerator<TakeLiquidationPlan> {
   const resolvedConfig = resolveSubgraphConfig(config);
-  const { oneInchRouters, connectorTokens } = resolvedConfig;
-  const {
-    pool: { hpb, hpbIndex, liquidationAuctions },
-  } = await resolvedConfig.subgraph.getLiquidations(
-    pool.poolAddress,
-    poolConfig.take.minCollateral ?? 0
-  );
-  for (const auction of liquidationAuctions) {
-    const { borrower } = auction;
-    const liquidationStatus = await pool.getLiquidation(borrower).getStatus();
-    const price = Number(weiToDecimaled(liquidationStatus.price));
-    const collateral = liquidationStatus.collateral;
+  const candidates = await getTakeBorrowerCandidates({
+    subgraph: resolvedConfig.subgraph,
+    poolAddress: pool.poolAddress,
+    minCollateral: poolConfig.take.minCollateral ?? 0,
+  });
+  const externalTakeAdapter =
+    poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
+      ? createOneInchTakeAdapter({
+          delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
+          oneInchRouters: resolvedConfig.oneInchRouters,
+          connectorTokens: resolvedConfig.connectorTokens,
+        })
+      : createNoExternalTakeAdapter();
+  const arbTakeStrategy = createArbTakeStrategy();
 
-    let isTakeable = false;
-    let isArbTakeable = false;
-    let arbHpbIndex = 0;
+  for (const candidate of candidates) {
+    const decision = await evaluateTakeDecision({
+      pool,
+      signer,
+      poolConfig,
+      candidate,
+      subgraph: resolvedConfig.subgraph,
+      externalTakeAdapter,
+      arbTakeStrategy,
+    });
 
-    if (poolConfig.take.marketPriceFactor && poolConfig.take.liquiditySource) {
-      isTakeable = (
-        await checkIfTakeable(
-          pool,
-          price,
-          collateral,
-          poolConfig,
-          resolvedConfig,
-          signer,
-          oneInchRouters,
-          connectorTokens
-        )
-      ).isTakeable;
-    }
-
-    if (poolConfig.take.minCollateral && poolConfig.take.hpbPriceFactor) {
-      const minDeposit = poolConfig.take.minCollateral / hpb;
-      const arbTakeCheck = await checkIfArbTakeable(
-        pool,
-        price,
-        collateral,
-        poolConfig,
-        resolvedConfig.subgraph,
-        minDeposit.toString(),
-        signer
-      );
-      isArbTakeable = arbTakeCheck.isArbTakeable;
-      arbHpbIndex = arbTakeCheck.hpbIndex;
-    }
-
-    if (isTakeable || isArbTakeable) {
-      const strategyLog =
-        isTakeable && !isArbTakeable
-          ? 'take'
-          : !isTakeable && isArbTakeable
-            ? 'arbTake'
-            : isTakeable && isArbTakeable
-              ? 'take and arbTake'
-              : 'none';
+    if (decision.approvedTake || decision.approvedArbTake) {
       logger.info(
-        `Found liquidation to ${strategyLog} - pool: ${pool.name}, borrower: ${borrower}, auctionPrice: ${price.toFixed(6)}, collateral: ${weiToDecimaled(collateral)}`
+        `Found liquidation to ${formatTakeStrategyLog(
+          externalTakeAdapter.kind,
+          decision.approvedTake,
+          decision.approvedArbTake
+        )} - pool: ${pool.name}, borrower: ${decision.borrower}, auctionPrice: ${Number(
+          weiToDecimaled(decision.auctionPrice)
+        ).toFixed(6)}, collateral: ${weiToDecimaled(decision.collateral)}`
       );
 
       yield {
-        borrower,
-        hpbIndex: arbHpbIndex,
-        collateral,
-        auctionPrice: liquidationStatus.price,
-        isTakeable,
-        isArbTakeable,
+        borrower: decision.borrower,
+        hpbIndex: decision.hpbIndex,
+        collateral: decision.collateral,
+        auctionPrice: decision.auctionPrice,
+        isTakeable: decision.approvedTake,
+        isArbTakeable: decision.approvedArbTake,
+        externalTakeQuoteEvaluation: decision.quoteEvaluation,
       };
       continue;
-    } else {
-      logger.debug(
-        `Not taking liquidation since price ${price} is too high - pool: ${pool.name}, borrower: ${borrower}`
-      );
     }
+
+    logger.debug(
+      `Not taking liquidation - pool: ${pool.name}, borrower: ${decision.borrower}, reason: ${decision.reason ?? 'policy rejected candidate'}`
+    );
   }
 }
 
 interface TakeLiquidationParams
   extends Pick<HandleTakeParams, 'pool' | 'signer'> {
   poolConfig: TakeActionConfig;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   config: OneInchExecutionConfig;
 }
 

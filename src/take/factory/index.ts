@@ -37,8 +37,6 @@ import {
   executeUniswapV3FactoryTake,
 } from './uniswap';
 
-type LiquidationToTake = TakeLiquidationPlan;
-
 const FACTORY_ROUTE_QUOTE_CONCURRENCY = 3;
 
 export type {
@@ -514,7 +512,7 @@ interface FactoryLiquidationExecutionParams {
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   config: Pick<
     FactoryTakeParams['config'],
     | 'dryRun'
@@ -712,7 +710,7 @@ async function takeWithUniswapV3Factory({
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],
@@ -747,7 +745,7 @@ async function takeWithSushiSwapFactory({
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],
@@ -779,7 +777,7 @@ async function takeWithCurveFactory({
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],

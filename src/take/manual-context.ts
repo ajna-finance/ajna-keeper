@@ -11,20 +11,29 @@ import { OneInchExecutionConfig, OneInchQuoteConfig } from './one-inch-types';
 import { TakeWriteTransportConfig } from './write-transport';
 import { TakeActionConfig } from './types';
 
-export type ManualTakeContextConfig = Pick<
+type ManualTakeCommonContextConfig = Pick<
   KeeperConfig,
-  | 'dryRun'
-  | 'delayBetweenActions'
-  | 'connectorTokens'
-  | 'oneInchRouters'
-  | 'oneInchAggregationExecutorAllowlist'
-  | 'keeperTaker'
-  | 'keeperTakerFactory'
-  | 'universalRouterOverrides'
-  | 'sushiswapRouterOverrides'
-  | 'curveRouterOverrides'
-  | 'tokenAddresses'
+  'dryRun' | 'delayBetweenActions'
 >;
+
+export type ManualSingleContractContextConfig = ManualTakeCommonContextConfig &
+  Pick<
+    KeeperConfig,
+    | 'connectorTokens'
+    | 'oneInchRouters'
+    | 'oneInchAggregationExecutorAllowlist'
+    | 'keeperTaker'
+  >;
+
+export type ManualFactoryContextConfig = ManualTakeCommonContextConfig &
+  Pick<
+    KeeperConfig,
+    | 'keeperTakerFactory'
+    | 'universalRouterOverrides'
+    | 'sushiswapRouterOverrides'
+    | 'curveRouterOverrides'
+    | 'tokenAddresses'
+  >;
 
 export interface ManualTakeContext<TExecutionConfig> {
   externalTakeAdapter: ExternalTakeAdapter<TakeActionConfig, TExecutionConfig>;
@@ -59,7 +68,7 @@ export function isFactoryExternalTakeSource(
 
 export function createManualSingleContractTakeContext(params: {
   poolConfig: TakeActionConfig;
-  config: ManualTakeContextConfig;
+  config: ManualSingleContractContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
   adapters: {
     createOneInchTakeAdapter: (
@@ -96,7 +105,7 @@ export function createManualSingleContractTakeContext(params: {
 }
 
 export function createManualFactoryTakeContext(params: {
-  config: ManualTakeContextConfig;
+  config: ManualFactoryContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
 }): ManualTakeContext<FactoryExecutionConfig> {
   const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
