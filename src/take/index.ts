@@ -23,10 +23,14 @@ import {
   SubgraphConfigInput,
   WithSubgraph,
 } from '../read-transports';
-import { handleFactoryTakes } from './factory';
+import {
+  createFactoryQuoteProviderRuntimeCache,
+  createFactoryTakeAdapter,
+  FactoryExecutionConfig,
+} from './factory';
 import * as factoryShared from './factory/shared';
 import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
-import { createArbTakeStrategy } from './arb-strategy';
+import { ArbTakeStrategy, createArbTakeStrategy } from './arb-strategy';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
@@ -35,6 +39,7 @@ import {
 import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
+  TakeBorrowerCandidate,
   TakeLiquidationPlan,
 } from './types';
 import {
@@ -118,6 +123,14 @@ type OneInchQuoteConfig = Pick<
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
 };
+
+interface ManualTakeContext<TExecutionConfig> {
+  externalTakeAdapter: ExternalTakeAdapter<TakeActionConfig, TExecutionConfig>;
+  externalExecutionConfig: TExecutionConfig;
+  arbTakeStrategy: ArbTakeStrategy<TakeActionConfig>;
+  logPrefix?: string;
+  foundLogLevel: 'debug' | 'info';
+}
 
 function stripExternalTakeSettings(
   poolConfig: RequireFields<PoolConfig, 'take'>
@@ -238,7 +251,7 @@ export async function handleTakes({
       logger.debug(
         `Using single-contract external take strategy for pool: ${pool.name}`
       );
-      await handleTakeCandidatesForPool({
+      await processManualTakeCandidates({
         signer,
         takeWriteTransport,
         pool,
@@ -251,22 +264,12 @@ export async function handleTakes({
       logger.debug(
         `Using factory external take strategy for pool: ${pool.name}`
       );
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         takeWriteTransport,
         pool,
         poolConfig,
-        config: {
-          subgraph: resolvedConfig.subgraph,
-          dryRun: resolvedConfig.dryRun,
-          delayBetweenActions: resolvedConfig.delayBetweenActions,
-          keeperTakerFactory: resolvedConfig.keeperTakerFactory,
-          takerContracts: resolvedConfig.takerContracts,
-          universalRouterOverrides: resolvedConfig.universalRouterOverrides,
-          sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
-          curveRouterOverrides: resolvedConfig.curveRouterOverrides,
-          tokenAddresses: resolvedConfig.tokenAddresses,
-        },
+        config: resolvedConfig,
       });
       break;
 
@@ -274,7 +277,7 @@ export async function handleTakes({
       logger.warn(
         `External liquidity source ${requestedLiquiditySource ?? 'none'} unavailable for pool ${pool.name} - checking arbTake only`
       );
-      await handleTakeCandidatesForPool({
+      await processManualTakeCandidates({
         signer,
         takeWriteTransport,
         pool,
@@ -286,15 +289,15 @@ export async function handleTakes({
 }
 
 /**
- * Runs the shared candidate loop for pool-level take strategies.
+ * Manual/configured-pool context builder for the shared take candidate loop.
  *
- * External takes and arbTake are independently configured. The selected
- * external-take adapter handles single-contract 1inch or no external route;
- * processTakeCandidates evaluates arbTake separately and preserves the
- * external-take-first execution priority when both strategies approve.
+ * This selects the configured manual external-take strategy
+ * (single-contract 1inch, factory, or none), pairs it with the manual arbTake
+ * strategy, and delegates actual candidate evaluation/execution to
+ * processTakeCandidates.
  */
 
-export async function handleTakeCandidatesForPool({
+export async function processManualTakeCandidates({
   signer,
   takeWriteTransport,
   pool,
@@ -308,68 +311,168 @@ export async function handleTakeCandidatesForPool({
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
 
-  const externalTakeAdapter = createExternalTakeStrategyForPool({
+  if (isFactoryExternalTakeSource(poolConfig.take.liquiditySource)) {
+    logger.debug(
+      `Manual factory external take context starting for pool: ${pool.name}`
+    );
+    const context = createManualFactoryTakeContext({
+      config: resolvedConfig,
+      takeWriteTransport,
+    });
+    await runManualTakeCandidateEngine({
+      pool,
+      signer,
+      poolConfig,
+      candidates,
+      subgraph: resolvedConfig.subgraph,
+      delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
+      dryRun: resolvedConfig.dryRun ?? false,
+      takeWriteTransport,
+      context,
+    });
+    return;
+  }
+
+  const context = createManualSingleContractTakeContext({
     poolConfig,
     config: resolvedConfig,
+    takeWriteTransport,
   });
-
-  await processTakeCandidates({
+  await runManualTakeCandidateEngine({
     pool,
     signer,
     poolConfig,
     candidates,
     subgraph: resolvedConfig.subgraph,
-    externalTakeAdapter,
-    arbTakeStrategy: createArbTakeStrategy(),
-    externalExecutionConfig: {
-      dryRun: resolvedConfig.dryRun,
-      delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
-      connectorTokens: resolvedConfig.connectorTokens,
-      oneInchRouters: resolvedConfig.oneInchRouters,
-      oneInchAggregationExecutorAllowlist:
-        resolvedConfig.oneInchAggregationExecutorAllowlist,
-      keeperTaker: resolvedConfig.keeperTaker,
-      takeWriteTransport,
-    },
-    dryRun: resolvedConfig.dryRun ?? false,
     delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
+    dryRun: resolvedConfig.dryRun ?? false,
     takeWriteTransport,
-    onFound: (decision) => {
-      logger.info(
-        `Found liquidation to ${formatTakeStrategyLog(
-          externalTakeAdapter.kind,
-          decision.approvedTake,
-          decision.approvedArbTake
-        )} - pool: ${pool.name}, borrower: ${decision.borrower}, auctionPrice: ${Number(
-          weiToDecimaled(decision.auctionPrice)
-        ).toFixed(6)}, collateral: ${weiToDecimaled(decision.collateral)}`
-      );
-    },
-    onSkip: ({ candidate, reason }) => {
-      logSkippedTakeCandidate({
-        pool,
-        borrower: candidate.borrower,
-        reason,
-      });
-    },
+    context,
   });
 }
 
 type LiquidationToTake = TakeLiquidationPlan;
 
-function createExternalTakeStrategyForPool(params: {
+async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
+  pool: FungiblePool;
+  signer: Signer;
+  poolConfig: TakeActionConfig;
+  candidates: TakeBorrowerCandidate[];
+  subgraph: HandleTakeConfig['subgraph'];
+  delayBetweenActions: number;
+  dryRun: boolean;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+  context: ManualTakeContext<TExecutionConfig>;
+}): Promise<void> {
+  await processTakeCandidates({
+    pool: params.pool,
+    signer: params.signer,
+    poolConfig: params.poolConfig,
+    candidates: params.candidates,
+    subgraph: params.subgraph,
+    externalTakeAdapter: params.context.externalTakeAdapter,
+    arbTakeStrategy: params.context.arbTakeStrategy,
+    externalExecutionConfig: params.context.externalExecutionConfig,
+    dryRun: params.dryRun,
+    delayBetweenActions: params.delayBetweenActions,
+    takeWriteTransport: params.takeWriteTransport,
+    onFound: (decision) => {
+      const message =
+        `Found liquidation to ${formatTakeStrategyLog(
+          params.context.externalTakeAdapter.kind,
+          decision.approvedTake,
+          decision.approvedArbTake
+        )} - pool: ${params.pool.name}, borrower: ${decision.borrower}, auctionPrice: ${Number(
+          weiToDecimaled(decision.auctionPrice)
+        ).toFixed(6)}, collateral: ${weiToDecimaled(decision.collateral)}`;
+      if (params.context.foundLogLevel === 'debug') {
+        logger.debug(message);
+        return;
+      }
+      logger.info(message);
+    },
+    onSkip: ({ candidate, reason }) => {
+      logSkippedTakeCandidate({
+        pool: params.pool,
+        borrower: candidate.borrower,
+        reason,
+        prefix: params.context.logPrefix,
+      });
+    },
+  });
+}
+
+function isFactoryExternalTakeSource(
+  liquiditySource: LiquiditySource | undefined
+): boolean {
+  return (
+    liquiditySource === LiquiditySource.UNISWAPV3 ||
+    liquiditySource === LiquiditySource.SUSHISWAP ||
+    liquiditySource === LiquiditySource.CURVE
+  );
+}
+
+function createManualSingleContractTakeContext(params: {
   poolConfig: TakeActionConfig;
   config: HandleTakeConfig;
-}): ExternalTakeAdapter<TakeActionConfig, OneInchExecutionConfig> {
-  if (params.poolConfig.take.liquiditySource === LiquiditySource.ONEINCH) {
-    return createOneInchTakeAdapter({
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}): ManualTakeContext<OneInchExecutionConfig> {
+  return {
+    externalTakeAdapter:
+      params.poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
+        ? createOneInchTakeAdapter({
+            delayBetweenActions: params.config.delayBetweenActions ?? 0,
+            oneInchRouters: params.config.oneInchRouters,
+            connectorTokens: params.config.connectorTokens,
+          })
+        : createNoExternalTakeAdapter(),
+    arbTakeStrategy: createArbTakeStrategy(),
+    externalExecutionConfig: {
+      dryRun: params.config.dryRun,
       delayBetweenActions: params.config.delayBetweenActions ?? 0,
-      oneInchRouters: params.config.oneInchRouters,
       connectorTokens: params.config.connectorTokens,
-    });
-  }
+      oneInchRouters: params.config.oneInchRouters,
+      oneInchAggregationExecutorAllowlist:
+        params.config.oneInchAggregationExecutorAllowlist,
+      keeperTaker: params.config.keeperTaker,
+      takeWriteTransport: params.takeWriteTransport,
+    },
+    foundLogLevel: 'info',
+  };
+}
 
-  return createNoExternalTakeAdapter();
+function createManualFactoryTakeContext(params: {
+  config: HandleTakeConfig;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}): ManualTakeContext<FactoryExecutionConfig> {
+  const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
+  return {
+    externalTakeAdapter: createFactoryTakeAdapter({
+      quoteConfig: {
+        universalRouterOverrides: params.config.universalRouterOverrides,
+        sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
+        curveRouterOverrides: params.config.curveRouterOverrides,
+        tokenAddresses: params.config.tokenAddresses,
+      },
+      runtimeCache: quoteProviderCache,
+    }),
+    arbTakeStrategy: createArbTakeStrategy({
+      actionLabel: 'Factory ArbTake',
+      logPrefix: 'Factory: ',
+    }),
+    externalExecutionConfig: {
+      dryRun: params.config.dryRun,
+      keeperTakerFactory: params.config.keeperTakerFactory,
+      universalRouterOverrides: params.config.universalRouterOverrides,
+      sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
+      curveRouterOverrides: params.config.curveRouterOverrides,
+      tokenAddresses: params.config.tokenAddresses,
+      takeWriteTransport: params.takeWriteTransport,
+      runtimeCache: quoteProviderCache,
+    },
+    logPrefix: 'Factory: ',
+    foundLogLevel: 'debug',
+  };
 }
 
 export function createNoExternalTakeAdapter(): ExternalTakeAdapter<

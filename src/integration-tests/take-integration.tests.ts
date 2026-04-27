@@ -4,7 +4,6 @@ import sinon from 'sinon';
 import { KeeperConfig, LiquiditySource, PoolConfig } from '../config';
 import subgraph from '../subgraph';
 import { handleTakes } from '../take';
-import * as takeFactory from '../take/factory';
 
 describe('Take Integration Tests', () => {
   const basePool = {
@@ -33,14 +32,13 @@ describe('Take Integration Tests', () => {
     sinon
       .stub(subgraph, 'getLiquidations')
       .resolves({ pool: { hpb: 1, hpbIndex: 0, liquidationAuctions: [] } } as any);
-    sinon.stub(takeFactory, 'handleFactoryTakes').resolves();
   });
 
   afterEach(() => {
     sinon.restore();
   });
 
-  it('routes Uniswap V3 pools to the factory take handler', async () => {
+  it('routes Uniswap V3 pools through the manual factory take context', async () => {
     const config: Partial<KeeperConfig> = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
@@ -68,8 +66,12 @@ describe('Take Integration Tests', () => {
       config: config as any,
     });
 
-    expect((takeFactory.handleFactoryTakes as sinon.SinonStub).calledOnce).to.be.true;
-    expect((subgraph.getLiquidations as sinon.SinonStub).called).to.be.false;
+    expect((subgraph.getLiquidations as sinon.SinonStub).calledOnceWithExactly(
+      'http://test-url',
+      basePool.poolAddress,
+      0.1,
+      { fallbackUrls: undefined }
+    )).to.be.true;
   });
 
   it('routes 1inch pools through the single-contract take path', async () => {
@@ -101,7 +103,6 @@ describe('Take Integration Tests', () => {
       config: config as any,
     });
 
-    expect((takeFactory.handleFactoryTakes as sinon.SinonStub).called).to.be.false;
     expect((subgraph.getLiquidations as sinon.SinonStub).calledOnceWithExactly(
       'http://test-url',
       basePool.poolAddress,
@@ -124,7 +125,6 @@ describe('Take Integration Tests', () => {
       config: config as any,
     });
 
-    expect((takeFactory.handleFactoryTakes as sinon.SinonStub).called).to.be.false;
     expect((subgraph.getLiquidations as sinon.SinonStub).calledOnceWithExactly(
       'http://test-url',
       basePool.poolAddress,
@@ -171,8 +171,7 @@ describe('Take Integration Tests', () => {
       config: config as any,
     });
 
-    expect((takeFactory.handleFactoryTakes as sinon.SinonStub).calledOnce).to.be.true;
-    expect((subgraph.getLiquidations as sinon.SinonStub).calledOnce).to.be.true;
+    expect((subgraph.getLiquidations as sinon.SinonStub).calledTwice).to.be.true;
   });
 
   it('falls back to arb-only when a pool requests factory liquidity without factory contracts', async () => {
@@ -200,7 +199,6 @@ describe('Take Integration Tests', () => {
       config: config as any,
     });
 
-    expect((takeFactory.handleFactoryTakes as sinon.SinonStub).called).to.be.false;
     expect((subgraph.getLiquidations as sinon.SinonStub).calledOnceWithExactly(
       'http://test-url',
       basePool.poolAddress,

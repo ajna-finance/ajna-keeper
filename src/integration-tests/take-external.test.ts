@@ -138,6 +138,12 @@ describe('External Take with MockSwapRouter', function () {
     sinon
       .stub(oneInch, 'convertSwapApiResponseToDetails')
       .callsFake(() => {
+        const latestSwapCall = axiosGetStub
+          .getCalls()
+          .reverse()
+          .find((call) => String(call.args[0]).includes('/swap'));
+        const requestedCollateralAmount =
+          latestSwapCall?.args[1]?.params?.amount ?? '14000000000';
         const details = {
           aggregationExecutor: mockRouterAddress, // not used by mock but must be valid address
           swapDescription: {
@@ -145,7 +151,7 @@ describe('External Take with MockSwapRouter', function () {
             dstToken: pool.quoteAddress,           // WETH (quote)
             srcReceiver: mockRouterAddress,         // router receives collateral
             dstReceiver: keeperTakerAddress,        // keeper receives quote tokens
-            amount: BigNumber.from('14000000000000000000'), // will be overridden by actual collateral
+            amount: BigNumber.from(requestedCollateralAmount),
             minReturnAmount: BigNumber.from('500000000000000000'), // 0.5 WETH minimum
             flags: BigNumber.from('0'),
           },

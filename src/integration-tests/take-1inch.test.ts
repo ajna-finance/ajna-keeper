@@ -42,19 +42,6 @@ describe('Take with 1inch Integration', () => {
   let quoteToken: Contract;
   let collateralToken: Contract;
 
-  const ONE_INCH_QUOTE_RESPONSE = {
-    dstAmount: '1000000000000000000',
-  };
-
-  const ONE_INCH_SWAP_RESPONSE = {
-    tx: {
-      to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
-      data: '0x12345678deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
-      value: '0',
-      gas: '200000',
-    },
-  };
-
   before(async () => {
     process.env.ONEINCH_API = 'https://api.1inch.io/v6.0';
     process.env.ONEINCH_API_KEY = 'mock_api_key';
@@ -67,23 +54,49 @@ describe('Take with 1inch Integration', () => {
     axiosGetStub = sinon.stub(axios, 'get');
     axiosGetStub
       .withArgs(sinon.match(/\/quote$/), sinon.match.any)
-      .callsFake(() => Promise.resolve({ data: ONE_INCH_QUOTE_RESPONSE }));
+      .callsFake((_url, options) => {
+        const collateralAmount = BigNumber.from(options.params.amount);
+        const dstAmount = collateralAmount
+          .mul(utils.parseUnits('75', 15))
+          .div(utils.parseUnits('1', 9));
+        return Promise.resolve({ data: { dstAmount: dstAmount.toString() } });
+      });
     axiosGetStub
       .withArgs(sinon.match(/\/swap$/), sinon.match.any)
-      .callsFake(() => Promise.resolve({ data: ONE_INCH_SWAP_RESPONSE }));
+      .callsFake(() =>
+        Promise.resolve({
+          data: {
+            tx: {
+              to: mockRouterAddress,
+              data: '0x12345678deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+              value: '0',
+              gas: '200000',
+            },
+          },
+        })
+      );
 
     sinon
       .stub(oneInch, 'convertSwapApiResponseToDetails')
       .callsFake(() => {
+        const latestSwapCall = axiosGetStub
+          .getCalls()
+          .reverse()
+          .find((call) => String(call.args[0]).includes('/swap'));
+        const requestedCollateralAmount =
+          latestSwapCall?.args[1]?.params?.amount ?? '14000000000';
+        const expectedOutputAmount = BigNumber.from(requestedCollateralAmount)
+          .mul(utils.parseUnits('75', 15))
+          .div(utils.parseUnits('1', 9));
         const details = {
-          aggregationExecutor: '0x6956C0a5DFE1Ea7Bf71422EaCb6e9D85F7607176',
+          aggregationExecutor: mockRouterAddress,
           swapDescription: {
             srcToken: '0xD31a59c85aE9D8edEFeC411D448f90841571b89c',
             dstToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-            srcReceiver: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+            srcReceiver: mockRouterAddress,
             dstReceiver: keeperTakerAddress,
-            amount: BigNumber.from('14000000000000000000'),
-            minReturnAmount: BigNumber.from('1000000000000000000'),
+            amount: BigNumber.from(requestedCollateralAmount),
+            minReturnAmount: expectedOutputAmount.mul(99).div(100),
             flags: BigNumber.from('0'),
           },
           opaqueData:

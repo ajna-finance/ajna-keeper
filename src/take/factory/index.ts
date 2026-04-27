@@ -1,5 +1,5 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
-import { mapWithConcurrencyPreservingOrder, weiToDecimaled } from '../../utils';
+import { mapWithConcurrencyPreservingOrder } from '../../utils';
 import { LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
@@ -8,15 +8,7 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
-import {
-  ExternalTakeAdapter,
-  formatTakeStrategyLog,
-  getTakeBorrowerCandidates,
-  logSkippedTakeCandidate,
-  processTakeCandidates,
-} from '../engine';
-import { createArbTakeStrategy } from '../arb-strategy';
-import { resolveSubgraphConfig } from '../../read-transports';
+import { ExternalTakeAdapter } from '../engine';
 import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
@@ -24,11 +16,9 @@ import {
   FactoryRouteCandidate,
   FactoryRouteEvaluationContext,
   FactoryRouteSelectionOptions,
-  FactoryTakeConfig,
   FactoryTakeParams,
   applyFactoryRouteProfitabilityPolicy,
   buildFactoryRouteEvaluationContext,
-  createFactoryQuoteProviderRuntimeCache,
   deriveApprovedMinOutRaw,
   filterFactoryRouteCandidatesByAvailability,
   formatFactoryRouteCandidate,
@@ -63,82 +53,6 @@ export {
   computeFactoryAmountOutMinimum,
   createFactoryQuoteProviderRuntimeCache,
 } from './shared';
-
-/**
- * Handle external takes using the factory strategy while the shared candidate
- * engine independently evaluates arbTake for the same auction candidates.
- */
-export async function handleFactoryTakes({
-  signer,
-  takeWriteTransport,
-  pool,
-  poolConfig,
-  config,
-}: FactoryTakeParams) {
-  const resolvedConfig: FactoryTakeConfig = resolveSubgraphConfig(config);
-  logger.debug(`Factory external take strategy starting for pool: ${pool.name}`);
-  const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
-  const candidates = await getTakeBorrowerCandidates({
-    subgraph: resolvedConfig.subgraph,
-    poolAddress: pool.poolAddress,
-    minCollateral: poolConfig.take.minCollateral ?? 0,
-  });
-
-  const externalTakeAdapter = createFactoryTakeAdapter({
-    quoteConfig: {
-      universalRouterOverrides: resolvedConfig.universalRouterOverrides,
-      sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
-      curveRouterOverrides: resolvedConfig.curveRouterOverrides,
-      tokenAddresses: resolvedConfig.tokenAddresses,
-    },
-    runtimeCache: quoteProviderCache,
-  });
-
-  await processTakeCandidates({
-    pool,
-    signer,
-    poolConfig,
-    candidates,
-    subgraph: resolvedConfig.subgraph,
-    externalTakeAdapter,
-    arbTakeStrategy: createArbTakeStrategy({
-      actionLabel: 'Factory ArbTake',
-      logPrefix: 'Factory: ',
-    }),
-    externalExecutionConfig: {
-      dryRun: resolvedConfig.dryRun,
-      keeperTakerFactory: resolvedConfig.keeperTakerFactory,
-      universalRouterOverrides: resolvedConfig.universalRouterOverrides,
-      sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
-      curveRouterOverrides: resolvedConfig.curveRouterOverrides,
-      tokenAddresses: resolvedConfig.tokenAddresses,
-      takeWriteTransport,
-      runtimeCache: quoteProviderCache,
-    },
-    dryRun: resolvedConfig.dryRun ?? false,
-    delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
-    takeWriteTransport,
-    onFound: (decision) => {
-      logger.debug(
-        `Found liquidation to ${formatTakeStrategyLog(
-          externalTakeAdapter.kind,
-          decision.approvedTake,
-          decision.approvedArbTake
-        )} - pool: ${pool.name}, borrower: ${decision.borrower}, price: ${Number(
-          weiToDecimaled(decision.auctionPrice)
-        )}`
-      );
-    },
-    onSkip: ({ candidate, reason }) => {
-      logSkippedTakeCandidate({
-        pool,
-        borrower: candidate.borrower,
-        reason,
-        prefix: 'Factory: ',
-      });
-    },
-  });
-}
 
 export function createFactoryTakeAdapter(params: {
   quoteConfig: FactoryQuoteConfig;
