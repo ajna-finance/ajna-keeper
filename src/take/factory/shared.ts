@@ -269,9 +269,6 @@ async function initializeQuoteProviderWithCooldown<
 
 function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
   while (map.size > maxSize) {
-    if (map.size === 0) {
-      return;
-    }
     const oldestKey = map.keys().next().value;
     map.delete(oldestKey);
   }

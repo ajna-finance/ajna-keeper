@@ -1375,18 +1375,21 @@ async function approveExternalTakeForDiscovery(
       };
     }
   } else if (quoteAmountRaw) {
-    approvedQuoteEvaluation.routeProfitability = {
-      ...approvedQuoteEvaluation.routeProfitability,
-      routeGasLimit,
-      gasPriceWei: gasPolicy.gasPriceRaw,
-      gasPriceGwei: gasPolicy.gasPriceGwei,
-      gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
-      gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
-        takePolicy,
-        rpcCache?.chainId
-      ),
-      l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
-      gasPolicyEvaluatedAt: Date.now(),
+    approvedQuoteEvaluation = {
+      ...approvedQuoteEvaluation,
+      routeProfitability: {
+        ...approvedQuoteEvaluation.routeProfitability,
+        routeGasLimit,
+        gasPriceWei: gasPolicy.gasPriceRaw,
+        gasPriceGwei: gasPolicy.gasPriceGwei,
+        gasPriceAgeMs: getGasPriceAgeMs(rpcCache),
+        gasPriceFreshnessTtlMs: getDiscoveryGasPriceFreshnessTtlMs(
+          takePolicy,
+          rpcCache?.chainId
+        ),
+        l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
+        gasPolicyEvaluatedAt: Date.now(),
+      },
     };
   }
 
@@ -1817,7 +1820,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
       if (result.evaluation) {
         if (isSubsidizedExternalTakeQuote(result.evaluation)) {
           logger.debug(
-            `Hybrid external take factory-first approved subsidized path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'}; continuing to probe remaining paths for pool ${params.pool.name}`
+            `Hybrid external take factory-first found subsidized path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'}; deferring it while probing remaining paths for pool ${params.pool.name}`
           );
           continue;
         }

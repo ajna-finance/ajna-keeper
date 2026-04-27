@@ -459,7 +459,7 @@ A 1inch API key may be obtained from their [developer portal](https://portal.1in
 
 ### Factory Fee-Tier Configuration for External Takes
 
-For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, both V3 factory sources automatically probe standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set; use `candidateFeeTiers: [defaultFeeTier]` for default-tier-only probing.
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route, as a deterministic tie-breaker among otherwise equal routes, and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, both V3 factory sources automatically probe standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set; use `candidateFeeTiers: [defaultFeeTier]` for default-tier-only probing.
 
 **Fee Tier Value → Percentage → Common Use:**
 

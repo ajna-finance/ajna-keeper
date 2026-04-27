@@ -501,7 +501,7 @@ export function validateTakeSettings(
       config.marketPriceFactor < VALIDATION_BOUNDS.minMarketPriceFactor
     ) {
       throw new Error(
-        `TakeSettings: marketPriceFactor ${config.marketPriceFactor} is below the minimum supported precision ${VALIDATION_BOUNDS.minMarketPriceFactor}`
+        `TakeSettings: marketPriceFactor ${config.marketPriceFactor} is below the minimum supported precision ${VALIDATION_BOUNDS.minMarketPriceFactor.toFixed(6)}`
       );
     }
     if (
