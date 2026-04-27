@@ -142,6 +142,20 @@ describe('take write submission', () => {
       )
     ).to.include('flags is invalid');
     expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, {
+        ...expected,
+        aggregationExecutors: [validDetails.aggregationExecutor],
+      })
+    ).to.be.undefined;
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, {
+        ...expected,
+        aggregationExecutors: [
+          '0x00000000000000000000000000000000000000dd',
+        ],
+      })
+    ).to.include('is not in the configured allowlist');
+    expect(
       oneInch.validateOneInchSwapDetailsForAtomicTake(
         {
           ...validDetails,
@@ -152,7 +166,7 @@ describe('take write submission', () => {
         } as any,
         expected
       )
-    ).to.include('flags is invalid');
+    ).to.be.undefined;
     expect(
       oneInch.validateOneInchSwapDetailsForAtomicTake(
         {

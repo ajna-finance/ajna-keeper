@@ -46,6 +46,7 @@ import {
 import { logTakeExecutionTelemetry } from './execution-telemetry';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
+const verifiedOneInchChainIds = new WeakMap<object, Map<number, Promise<void>>>();
 
 type HandleTakeConfigBase = Pick<
   KeeperConfig,
@@ -53,6 +54,7 @@ type HandleTakeConfigBase = Pick<
   | 'delayBetweenActions'
   | 'connectorTokens'
   | 'oneInchRouters'
+  | 'oneInchAggregationExecutorAllowlist'
   | 'keeperTaker'
   | 'keeperTakerFactory'
   | 'takerContracts'
@@ -79,6 +81,7 @@ type OneInchExecutionConfig = Pick<
   | 'delayBetweenActions'
   | 'connectorTokens'
   | 'oneInchRouters'
+  | 'oneInchAggregationExecutorAllowlist'
   | 'keeperTaker'
 > &
   TakeWriteTransportConfig & {
@@ -128,7 +131,11 @@ async function getOneInchTokenDecimals(params: {
   if (cached !== undefined) {
     return cached;
   }
-  const decimals = await getDecimalsErc20(params.signer, params.tokenAddress);
+  const decimals = await getDecimalsErc20(
+    params.signer,
+    params.tokenAddress,
+    params.chainId
+  );
   if (params.cache) {
     params.cache.set(cacheKey, decimals);
     while (params.cache.size > MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES) {
@@ -140,6 +147,49 @@ async function getOneInchTokenDecimals(params: {
     }
   }
   return decimals;
+}
+
+async function assertConfiguredChainIdMatchesSigner(
+  signer: Signer,
+  configuredChainId: number
+): Promise<void> {
+  if (typeof signer !== 'object' || signer === null) {
+    return;
+  }
+  let signerChecks = verifiedOneInchChainIds.get(signer);
+  if (!signerChecks) {
+    signerChecks = new Map();
+    verifiedOneInchChainIds.set(signer, signerChecks);
+  }
+  let pending = signerChecks.get(configuredChainId);
+  if (!pending) {
+    pending = (async () => {
+      try {
+        const signerChainId = await signer.getChainId();
+        if (signerChainId !== configuredChainId) {
+          throw new Error(
+            `configured 1inch chainId ${configuredChainId} does not match signer chainId ${signerChainId}`
+          );
+        }
+      } catch (error) {
+        signerChecks.delete(configuredChainId);
+        throw error;
+      }
+    })();
+    signerChecks.set(configuredChainId, pending);
+  }
+  await pending;
+}
+
+async function resolveOneInchChainId(
+  config: Partial<Pick<OneInchQuoteConfig, 'chainId'>>,
+  signer: Signer
+): Promise<number> {
+  if (config.chainId === undefined) {
+    return await signer.getChainId();
+  }
+  await assertConfiguredChainIdMatchesSigner(signer, config.chainId);
+  return config.chainId;
 }
 
 export async function handleTakes({
@@ -405,7 +455,7 @@ export async function getOneInchPathQuoteEvaluation(
   }
 
   try {
-    const chainId = config.chainId ?? (await signer.getChainId());
+    const chainId = await resolveOneInchChainId(config, signer);
     if (!oneInchRouters || !oneInchRouters[chainId]) {
       logger.debug(
         `No 1inch router configured for chainId ${chainId} in pool ${pool.name}`
@@ -755,7 +805,7 @@ export async function takeLiquidation({
       oneInchRouters: config.oneInchRouters ?? {},
       connectorTokens: config.connectorTokens ?? [],
     });
-    const chainId = config.chainId ?? (await signer.getChainId());
+    const chainId = await resolveOneInchChainId(config, signer);
     const configuredOneInchRouter = dexRouter.getRouter(chainId);
     if (!configuredOneInchRouter) {
       const error = `missing 1inch router for chain ${chainId}`;
@@ -810,6 +860,8 @@ export async function takeLiquidation({
       return false;
     }
     const swapDetails = convertSwapApiResponseToDetails(swapData.data);
+    const allowedAggregationExecutors =
+      config.oneInchAggregationExecutorAllowlist?.[chainId];
     const swapDetailsValidationError = validateOneInchSwapDetailsForAtomicTake(
       swapDetails,
       {
@@ -818,6 +870,7 @@ export async function takeLiquidation({
         srcReceiver: configuredOneInchRouter,
         dstReceiver: keeperTaker.address,
         amount: collateralInTokenDecimals,
+        aggregationExecutors: allowedAggregationExecutors,
       }
     );
     if (swapDetailsValidationError) {
@@ -831,6 +884,9 @@ export async function takeLiquidation({
       );
       return false;
     }
+    logger.info(
+      `1inch atomic take swap validated - pool: ${pool.name}, borrower: ${borrower}, executor: ${swapDetails.aggregationExecutor}, srcReceiver: ${swapDetails.swapDescription.srcReceiver}, allowlist: ${allowedAggregationExecutors ? 'configured' : 'not_configured'}`
+    );
 
     const requiredMinReturnAmount = await computeLegacyOneInchMinReturnAmount({
       pool,
@@ -847,16 +903,21 @@ export async function takeLiquidation({
     )
       ? requiredMinReturnAmount
       : routeMinReturnAmount;
-    config.onOneInchSwapDataResult?.({ success: true });
     if (swapData.dstAmount !== undefined) {
       const freshSwapDstAmount = BigNumber.from(swapData.dstAmount);
       if (freshSwapDstAmount.lt(executionMinReturnAmount)) {
+        config.onOneInchSwapDataResult?.({
+          success: false,
+          retryable: false,
+          error: '1inch swap data expected output below execution floor',
+        });
         logger.warn(
           `Legacy 1inch swap data expected output ${freshSwapDstAmount.toString()} is below execution floor ${executionMinReturnAmount.toString()} for ${pool.name}/${borrower}; refusing to estimate or submit`
         );
         return false;
       }
     }
+    config.onOneInchSwapDataResult?.({ success: true });
     if (routeMinReturnAmount.lt(executionMinReturnAmount)) {
       swapDetails.swapDescription = {
         ...swapDetails.swapDescription,

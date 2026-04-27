@@ -57,7 +57,7 @@ export function resolveExternalTakePaths(params: {
   defaultLiquiditySource: LiquiditySource | undefined;
   allowedExternalTakePaths?: readonly ExternalTakePathKind[];
 }): ExternalTakePathKind[] {
-  if (params.allowedExternalTakePaths?.length) {
+  if (params.allowedExternalTakePaths !== undefined) {
     return Array.from(new Set(params.allowedExternalTakePaths));
   }
   if (params.defaultLiquiditySource === LiquiditySource.ONEINCH) {
@@ -86,7 +86,7 @@ export function resolveFactoryRouteSelectionSources(params: {
   allowedLiquiditySources?: readonly LiquiditySource[];
   configuredDefaultFactoryLiquiditySource?: LiquiditySource;
 }): FactoryLiquiditySource[] {
-  if (params.allowedLiquiditySources?.length) {
+  if (params.allowedLiquiditySources !== undefined) {
     return Array.from(new Set(params.allowedLiquiditySources)).filter(
       isFactoryDynamicSource
     );

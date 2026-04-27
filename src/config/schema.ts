@@ -246,7 +246,7 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   oneInchQuoteFailureThreshold?: number;
   /**
    * Maximum time to wait for each external-take path probe in hybrid mode.
-   * Defaults to oneInchQuoteTimeoutMs, or 2000ms when unset.
+   * Defaults to oneInchQuoteTimeoutMs plus a 1000ms RPC preflight budget.
    */
   externalTakeProbeTimeoutMs?: number;
   /**
@@ -454,6 +454,11 @@ export interface KeeperConfig {
   delayBetweenActions: number;
   delayBetweenRuns: number;
   oneInchRouters?: { [chainId: number]: string };
+  /**
+   * Optional per-chain allowlist for decoded 1inch aggregationExecutor
+   * addresses. When omitted, executors are logged but not hard-rejected.
+   */
+  oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   tokenAddresses?: { [tokenSymbol: string]: string };
   connectorTokens?: Array<string>;
   universalRouterOverrides?: UniversalRouterOverrides;

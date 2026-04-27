@@ -13,6 +13,7 @@ export type DiscoveryExecutionConfig = Pick<
   | 'discoveredDefaults'
   | 'keeperTaker'
   | 'keeperTakerFactory'
+  | 'oneInchAggregationExecutorAllowlist'
   | 'oneInchRouters'
   | 'sushiswapRouterOverrides'
   | 'takerContracts'

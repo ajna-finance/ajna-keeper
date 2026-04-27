@@ -68,6 +68,11 @@ function parseOneInchSwapDescriptionUint(
         error: `1inch swap description ${fieldName} is invalid: expected non-negative uint`,
       };
     }
+    if (value.gt(ethers.constants.MaxUint256)) {
+      return {
+        error: `1inch swap description ${fieldName} exceeds uint256`,
+      };
+    }
     return { value };
   }
 
@@ -80,14 +85,23 @@ function parseOneInchSwapDescriptionUint(
     return { value: BigNumber.from(value) };
   }
 
-  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    !/^(0|[1-9]\d*)$|^0x[0-9a-fA-F]+$/.test(value)
+  ) {
     return {
-      error: `1inch swap description ${fieldName} is invalid: expected decimal uint string`,
+      error: `1inch swap description ${fieldName} is invalid: expected decimal or hex uint string`,
     };
   }
 
   try {
-    return { value: BigNumber.from(value) };
+    const parsed = BigNumber.from(value);
+    if (parsed.gt(ethers.constants.MaxUint256)) {
+      return {
+        error: `1inch swap description ${fieldName} exceeds uint256`,
+      };
+    }
+    return { value: parsed };
   } catch (error) {
     return {
       error: `1inch swap description ${fieldName} is invalid: ${error instanceof Error ? error.message : String(error)}`,
@@ -103,6 +117,7 @@ export function validateOneInchSwapDetailsForAtomicTake(
     srcReceiver: string;
     dstReceiver: string;
     amount: BigNumber;
+    aggregationExecutors?: string[];
   }
 ): string | undefined {
   const desc = details.swapDescription;
@@ -112,6 +127,19 @@ export function validateOneInchSwapDetailsForAtomicTake(
   }
   if (aggregationExecutor === ethers.constants.AddressZero.toLowerCase()) {
     return '1inch aggregationExecutor cannot be the zero address';
+  }
+  if (expected.aggregationExecutors !== undefined) {
+    const allowedAggregationExecutors = new Set<string>();
+    for (const executor of expected.aggregationExecutors) {
+      const normalizedExecutor = normalizeAddress(executor);
+      if (!normalizedExecutor) {
+        return `configured 1inch aggregationExecutor allowlist contains invalid address ${executor}`;
+      }
+      allowedAggregationExecutors.add(normalizedExecutor);
+    }
+    if (!allowedAggregationExecutors.has(aggregationExecutor)) {
+      return `1inch aggregationExecutor ${details.aggregationExecutor} is not in the configured allowlist`;
+    }
   }
 
   const expectedSrcToken = normalizeAddress(expected.srcToken);

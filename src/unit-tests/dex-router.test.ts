@@ -645,6 +645,44 @@ describe('DexRouter', () => {
       expect(axiosGetStub.firstCall.args[1].timeout).to.equal(2000);
     });
 
+    it('fails 1inch quote requests before calling the API when env is missing', async () => {
+      delete process.env.ONEINCH_API_KEY;
+
+      const result = await dexRouter.getQuoteFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut
+      );
+
+      expect(result).to.deep.include({
+        success: false,
+        retryable: false,
+        errorCode: 'missing_oneinch_env',
+      });
+      expect(axiosGetStub.called).to.be.false;
+    });
+
+    it('fails 1inch swap-data requests before calling the API when env is missing', async () => {
+      delete process.env.ONEINCH_API;
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result).to.deep.include({
+        success: false,
+        retryable: false,
+        errorCode: 'missing_oneinch_env',
+      });
+      expect(axiosGetStub.called).to.be.false;
+    });
+
     it('rejects malformed 1inch quote amounts before callers parse them', async () => {
       axiosGetStub.resolves({
         data: {

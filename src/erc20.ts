@@ -1,48 +1,121 @@
 import { Signer, SignerOrProvider } from '@ajna-finance/sdk';
-import { BigNumber, Contract, ethers } from 'ethers';
+import { BigNumber, Contract, ethers, providers } from 'ethers';
 import Erc20Abi from './abis/erc20.abi.json';
 import { NonceTracker } from './nonce';
 import { TransactionResponse } from '@ethersproject/abstract-provider';
 import { logger } from './logging';
 
-// Process-wide decimals cache. Normalize addresses so mixed-case config and runtime
-// paths do not trigger duplicate RPC calls.
+// Process-wide decimals cache. Include chainId when available so multi-chain
+// keepers do not reuse same-address token metadata across networks.
 const cachedDecimals: Map<string, number> = new Map();
 const pendingDecimals: Map<string, Promise<number>> = new Map();
+let pendingChainIds: WeakMap<object, Promise<number | undefined>> =
+  new WeakMap();
 
 function normalizeTokenAddress(tokenAddress: string): string {
   return tokenAddress.toLowerCase();
 }
 
+async function resolveChainIdUncached(
+  signerOrProvider: SignerOrProvider
+): Promise<number | undefined> {
+  const candidate = signerOrProvider as SignerOrProvider & {
+    getChainId?: () => Promise<number>;
+    provider?: providers.Provider;
+    network?: { chainId?: number };
+    _network?: { chainId?: number };
+    getNetwork?: () => Promise<{ chainId: number }>;
+  };
+
+  try {
+    if (typeof candidate.getChainId === 'function') {
+      return await candidate.getChainId();
+    }
+    const provider = (candidate.provider ?? candidate) as {
+      network?: { chainId?: number };
+      _network?: { chainId?: number };
+      getNetwork?: () => Promise<{ chainId: number }>;
+    };
+    const cachedNetwork = provider.network ?? provider._network;
+    if (typeof cachedNetwork?.chainId === 'number') {
+      return cachedNetwork.chainId;
+    }
+    if (typeof provider.getNetwork === 'function') {
+      return (await provider.getNetwork()).chainId;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+async function resolveChainId(
+  signerOrProvider: SignerOrProvider,
+  chainId?: number
+): Promise<number | undefined> {
+  if (chainId !== undefined) {
+    return chainId;
+  }
+  if (typeof signerOrProvider !== 'object' || signerOrProvider === null) {
+    return undefined;
+  }
+  const cached = pendingChainIds.get(signerOrProvider);
+  if (cached) {
+    return await cached;
+  }
+  const pending = resolveChainIdUncached(signerOrProvider).then(
+    (resolvedChainId) => {
+      if (resolvedChainId === undefined) {
+        pendingChainIds.delete(signerOrProvider);
+      }
+      return resolvedChainId;
+    }
+  );
+  pendingChainIds.set(signerOrProvider, pending);
+  return await pending;
+}
+
+function getDecimalsCacheKey(params: {
+  chainId?: number;
+  tokenAddress: string;
+}): string {
+  return `${params.chainId ?? 'unknown'}:${normalizeTokenAddress(
+    params.tokenAddress
+  )}`;
+}
+
 export function clearErc20DecimalCache(): void {
   cachedDecimals.clear();
   pendingDecimals.clear();
+  pendingChainIds = new WeakMap();
 }
 
 export async function getDecimalsErc20(
   signer: SignerOrProvider,
-  tokenAddress: string
+  tokenAddress: string,
+  chainId?: number
 ) {
-  const normalizedAddress = normalizeTokenAddress(tokenAddress);
-  if (cachedDecimals.has(normalizedAddress)) {
-    return cachedDecimals.get(normalizedAddress)!;
+  const resolvedChainId = await resolveChainId(signer, chainId);
+  const cacheKey = getDecimalsCacheKey({ chainId: resolvedChainId, tokenAddress });
+  if (cachedDecimals.has(cacheKey)) {
+    return cachedDecimals.get(cacheKey)!;
   }
 
-  if (!pendingDecimals.has(normalizedAddress)) {
+  if (!pendingDecimals.has(cacheKey)) {
     const pending = _getDecimalsErc20(signer, tokenAddress)
       .then((decimals) => {
-        cachedDecimals.set(normalizedAddress, decimals);
-        pendingDecimals.delete(normalizedAddress);
+        cachedDecimals.set(cacheKey, decimals);
+        pendingDecimals.delete(cacheKey);
         return decimals;
       })
       .catch((error) => {
-        pendingDecimals.delete(normalizedAddress);
+        pendingDecimals.delete(cacheKey);
         throw error;
       });
-    pendingDecimals.set(normalizedAddress, pending);
+    pendingDecimals.set(cacheKey, pending);
   }
 
-  return await pendingDecimals.get(normalizedAddress)!;
+  return await pendingDecimals.get(cacheKey)!;
 }
 
 async function _getDecimalsErc20(

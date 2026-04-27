@@ -11,6 +11,7 @@ import {
   askPassword,
   overrideMulticall,
   decimaledToWei,
+  mapWithConcurrencyPreservingOrder,
   weiToDecimaled,
   tokenChangeDecimals,
   waitForConditionToBeTrue,
@@ -387,6 +388,21 @@ describe('waitForConditionToBeTrue', () => {
     );
     expect(waitForFn).to.be.rejectedWith(
       'Timed out before condition became true.'
+    );
+  });
+});
+
+describe('mapWithConcurrencyPreservingOrder', () => {
+  it('rejects invalid concurrency values instead of silently dropping work', async () => {
+    await expect(
+      mapWithConcurrencyPreservingOrder([1], Number.NaN, async (value) => value)
+    ).to.be.rejectedWith(
+      'mapWithConcurrencyPreservingOrder requires concurrency >= 1'
+    );
+    await expect(
+      mapWithConcurrencyPreservingOrder([1], 0, async (value) => value)
+    ).to.be.rejectedWith(
+      'mapWithConcurrencyPreservingOrder requires concurrency >= 1'
     );
   });
 });

@@ -677,7 +677,8 @@ export async function evaluateGasPolicy(params: {
 
   const quoteDecimals = await getDecimalsErc20(
     params.signer,
-    params.quoteTokenAddress
+    params.quoteTokenAddress,
+    chainId
   );
 
   if (

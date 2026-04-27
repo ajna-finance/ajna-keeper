@@ -38,6 +38,16 @@ export interface OneInchApiResult {
   errorCode?: number | string;
 }
 
+function validateOneInchApiEnv(): { baseUrl?: string; error?: string } {
+  if (!process.env.ONEINCH_API) {
+    return { error: 'ONEINCH_API is not configured' };
+  }
+  if (!process.env.ONEINCH_API_KEY) {
+    return { error: 'ONEINCH_API_KEY is not configured' };
+  }
+  return { baseUrl: process.env.ONEINCH_API };
+}
+
 function normalizeOneInchUintAmount(
   value: unknown,
   fieldName: string
@@ -189,7 +199,16 @@ export class DexRouter {
     tokenOut: string,
     options: OneInchRequestOptions = {}
   ): Promise<OneInchApiResult> {
-    const url = `${process.env.ONEINCH_API}/${chainId}/quote`;
+    const apiEnv = validateOneInchApiEnv();
+    if (!apiEnv.baseUrl) {
+      return {
+        success: false,
+        error: apiEnv.error,
+        retryable: false,
+        errorCode: 'missing_oneinch_env',
+      };
+    }
+    const url = `${apiEnv.baseUrl}/${chainId}/quote`;
 
     const params: {
       fromTokenAddress: string;
@@ -228,6 +247,8 @@ export class DexRouter {
         return {
           success: false,
           error: normalizedDstAmount.error,
+          retryable: true,
+          errorCode: 'invalid_response',
         };
       }
 
@@ -258,7 +279,16 @@ export class DexRouter {
     usePatching: boolean = false,
     options: OneInchRequestOptions = {}
   ): Promise<OneInchApiResult> {
-    const url = `${process.env.ONEINCH_API}/${chainId}/swap`;
+    const apiEnv = validateOneInchApiEnv();
+    if (!apiEnv.baseUrl) {
+      return {
+        success: false,
+        error: apiEnv.error,
+        retryable: false,
+        errorCode: 'missing_oneinch_env',
+      };
+    }
+    const url = `${apiEnv.baseUrl}/${chainId}/swap`;
     const params: {
       fromTokenAddress: string;
       toTokenAddress: string;
@@ -303,6 +333,8 @@ export class DexRouter {
         return {
           success: false,
           error: 'No valid transaction received from 1inch',
+          retryable: true,
+          errorCode: 'invalid_response',
         };
       }
 
@@ -318,12 +350,16 @@ export class DexRouter {
         return {
           success: false,
           error: `1inch router validation failed for chain ${chainId}`,
+          retryable: false,
+          errorCode: 'router_validation',
         };
       }
       if (normalizedTxTarget !== normalizedExpectedRouter) {
         return {
           success: false,
           error: `1inch tx target ${response.data.tx.to} does not match configured router ${expectedRouter}`,
+          retryable: true,
+          errorCode: 'invalid_response',
         };
       }
       const valueValidationError = validateZeroOneInchTxValue(
@@ -333,6 +369,8 @@ export class DexRouter {
         return {
           success: false,
           error: valueValidationError,
+          retryable: true,
+          errorCode: 'invalid_response',
         };
       }
       const normalizedDstAmount =
@@ -343,6 +381,8 @@ export class DexRouter {
         return {
           success: false,
           error: normalizedDstAmount.error,
+          retryable: true,
+          errorCode: 'invalid_response',
         };
       }
 

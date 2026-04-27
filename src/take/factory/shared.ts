@@ -110,6 +110,7 @@ export type FactoryQuoteConfig = Pick<
 
 export interface FactoryQuoteProviderRuntimeCache {
   chainId?: number;
+  chainIdInflight?: Promise<number | undefined>;
   uniswapV3?: UniswapV3QuoteProvider | null;
   sushiswap?: SushiSwapQuoteProvider | null;
   curve?: CurveQuoteProvider | null;
@@ -969,12 +970,16 @@ export async function getCachedFactoryTokenDecimals(
     typeof signer.getChainId === 'function'
   ) {
     try {
-      chainId = await signer.getChainId();
+      runtimeCache.chainIdInflight ??= signer.getChainId().catch((error) => {
+        logger.debug(
+          `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${error instanceof Error ? error.message : String(error)}`
+        );
+        return undefined;
+      });
+      chainId = await runtimeCache.chainIdInflight;
       runtimeCache.chainId = chainId;
-    } catch (error) {
-      logger.debug(
-        `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${error instanceof Error ? error.message : String(error)}`
-      );
+    } finally {
+      runtimeCache.chainIdInflight = undefined;
     }
   }
   const cacheKey = `${chainId ?? 'unknown'}:${tokenAddress.toLowerCase()}`;
@@ -983,7 +988,7 @@ export async function getCachedFactoryTokenDecimals(
     return cached;
   }
 
-  const decimals = await getDecimalsErc20(signer, tokenAddress);
+  const decimals = await getDecimalsErc20(signer, tokenAddress, chainId);
   if (runtimeCache) {
     if (!runtimeCache.tokenDecimals) {
       runtimeCache.tokenDecimals = new Map();

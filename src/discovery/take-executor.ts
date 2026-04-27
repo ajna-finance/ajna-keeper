@@ -57,10 +57,11 @@ const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
 const WAD = ethers.constants.WeiPerEther;
 const ZERO = BigNumber.from(0);
 const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
+const DEFAULT_EXTERNAL_TAKE_PROBE_RPC_BUDGET_MS = 1_000;
 type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy
 >;
-type OneInchCircuitOutcome = 'success' | 'failure';
+type OneInchCircuitOutcome = 'success' | 'failure' | 'neutral';
 
 function withTakeLiquiditySource<T extends ResolvedTakeTarget>(
   target: T,
@@ -171,6 +172,13 @@ export function resolveHybridExternalTakeExecutionSelection(params: {
       effectiveSelectedPath,
       selectedSource,
       reason: `selected disabled path=${effectiveSelectedPath}`,
+    };
+  }
+  if (effectiveSelectedPath === undefined) {
+    return {
+      approved: false,
+      selectedSource,
+      reason: 'hybrid external take selection missing selected path',
     };
   }
   if (
@@ -293,9 +301,12 @@ function formatSignedQuoteAmount(params: {
 function getExternalTakeProbeTimeoutMs(
   takePolicy: AutoDiscoverTakePolicyRuntime
 ): number {
+  if (takePolicy?.externalTakeProbeTimeoutMs !== undefined) {
+    return takePolicy.externalTakeProbeTimeoutMs;
+  }
   return (
-    takePolicy?.externalTakeProbeTimeoutMs ??
-    getOneInchQuoteTimeoutMs(takePolicy)
+    getOneInchQuoteTimeoutMs(takePolicy) +
+    DEFAULT_EXTERNAL_TAKE_PROBE_RPC_BUDGET_MS
   );
 }
 
@@ -654,6 +665,9 @@ function recordOneInchCircuitOutcomeForDiscovery(params: {
   takePolicy: AutoDiscoverTakePolicyRuntime;
   outcome: OneInchCircuitOutcome;
 }): void {
+  if (params.outcome === 'neutral') {
+    return;
+  }
   if (params.outcome === 'failure') {
     recordOneInchQuoteFailure({
       rpcCache: params.rpcCache,
@@ -800,6 +814,9 @@ function cloneExternalTakeQuoteEvaluation(
     ...quoteEvaluation,
     routeProfitability: quoteEvaluation.routeProfitability
       ? { ...quoteEvaluation.routeProfitability }
+      : undefined,
+    curvePool: quoteEvaluation.curvePool
+      ? { ...quoteEvaluation.curvePool }
       : undefined,
   };
 }
@@ -1351,7 +1368,12 @@ async function quoteOneInchForDiscovery(
     recordOneInchCircuitOutcomeForDiscovery({
       rpcCache: params.rpcCache,
       takePolicy: params.takePolicy,
-      outcome: evaluation.quoteFailureRetryable ? 'failure' : 'success',
+      outcome:
+        evaluation.quoteFailureRetryable === true
+          ? 'failure'
+          : evaluation.quoteAmountRaw !== undefined
+            ? 'success'
+            : 'neutral',
     });
   }
 
@@ -1474,7 +1496,10 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     if (evaluation.reason?.startsWith('1inch quote circuit open')) {
       return undefined;
     }
-    return evaluation.quoteFailureRetryable ? 'failure' : 'success';
+    if (evaluation.quoteFailureRetryable === true) {
+      return 'failure';
+    }
+    return evaluation.quoteAmountRaw !== undefined ? 'success' : 'neutral';
   };
   const probeExternalTakePath = async (
     path: ExternalTakePathKind,
@@ -1986,6 +2011,8 @@ export async function handleDiscoveredTakeTarget(
     dryRun: params.target.dryRun,
     delayBetweenActions: params.config.delayBetweenActions,
     connectorTokens: params.config.connectorTokens,
+    oneInchAggregationExecutorAllowlist:
+      params.config.oneInchAggregationExecutorAllowlist,
     oneInchRouters: params.config.oneInchRouters,
     keeperTaker: params.config.keeperTaker,
     keeperTakerFactory: params.config.keeperTakerFactory,

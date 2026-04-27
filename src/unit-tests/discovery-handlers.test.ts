@@ -1468,6 +1468,107 @@ describe('Discovery Handlers', () => {
       effectiveSelectedPath: 'factory',
       reason: 'selected factory path without a concrete factory source',
     });
+
+    const missingSelectedPath = resolveHybridExternalTakeExecutionSelection({
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      quoteEvaluation: {
+        isTakeable: true,
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+      } as any,
+    });
+
+    expect(missingSelectedPath).to.deep.include({
+      approved: false,
+      reason: 'hybrid external take selection missing selected path',
+    });
+  });
+
+  it('does not clear 1inch circuit failures for local policy quote rejects', async () => {
+    sinon.stub(takeModule, 'takeLiquidation').resolves(true);
+    const oneInchQuoteStub = sinon
+      .stub(takeModule, 'getOneInchTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: false,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        reason: 'missing 1inch router for chain 8453',
+      });
+    const rpcCache = {
+      chainId: 8453,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      gasPriceFetchedAt: Date.now(),
+      oneInchQuoteCircuit: {
+        failures: 1,
+      },
+    };
+    const pool = {
+      name: 'Local 1inch Reject Pool',
+      poolAddress: '0x7777777777777777777777777777777777783',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('100'),
+        }),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+        getChainId: sinon.stub().resolves(8453),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerLocalReject',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+          },
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
+      rpcCache,
+    });
+
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(rpcCache.oneInchQuoteCircuit.failures).to.equal(1);
   });
 
   it('refuses execution when a hybrid quote resolves to an inconsistent path and source', async () => {

@@ -28,6 +28,7 @@ import {
   resolveConfiguredGasQuoteLiquiditySource,
 } from './liquidity-source';
 import { logger } from '../logging';
+import { ethers } from 'ethers';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -310,6 +311,54 @@ function validateExternalTakeRouteSelectionMode(
   }
 }
 
+function validateOneInchAggregationExecutorAllowlist(
+  config: KeeperConfig
+): void {
+  const allowlist = config.oneInchAggregationExecutorAllowlist;
+  if (allowlist === undefined) {
+    return;
+  }
+  if (
+    typeof allowlist !== 'object' ||
+    allowlist === null ||
+    Array.isArray(allowlist)
+  ) {
+    throw new Error(
+      'KeeperConfig: oneInchAggregationExecutorAllowlist must be an object keyed by chainId'
+    );
+  }
+
+  for (const [chainId, executors] of Object.entries(allowlist)) {
+    const parsedChainId = Number(chainId);
+    if (
+      !Number.isInteger(parsedChainId) ||
+      parsedChainId <= 0 ||
+      !Array.isArray(executors) ||
+      executors.length === 0
+    ) {
+      throw new Error(
+        'KeeperConfig: oneInchAggregationExecutorAllowlist entries must use positive integer chain IDs and non-empty address arrays'
+      );
+    }
+
+    const seenExecutors = new Set<string>();
+    for (const executor of executors) {
+      if (typeof executor !== 'string' || !ethers.utils.isAddress(executor)) {
+        throw new Error(
+          `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} contains invalid address ${String(executor)}`
+        );
+      }
+      const normalizedExecutor = ethers.utils.getAddress(executor).toLowerCase();
+      if (seenExecutors.has(normalizedExecutor)) {
+        throw new Error(
+          `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} cannot contain duplicate addresses`
+        );
+      }
+      seenExecutors.add(normalizedExecutor);
+    }
+  }
+}
+
 function getConfiguredTakeWriteMode(
   config: KeeperConfig
 ): TakeWriteTransportMode | undefined {
@@ -567,6 +616,7 @@ export function validateAutoDiscoverConfig(
   chainId?: number
 ): void {
   validateRouterFeeTiers(config);
+  validateOneInchAggregationExecutorAllowlist(config);
 
   const autoDiscover = config.autoDiscover;
   if (!autoDiscover?.enabled) {
@@ -1077,6 +1127,7 @@ export function validateTakeSettingsForChain(
   chainId: number
 ): void {
   validateRouterFeeTiers(config);
+  validateOneInchAggregationExecutorAllowlist(config);
 
   for (const poolConfig of config.pools) {
     if (poolConfig.take) {

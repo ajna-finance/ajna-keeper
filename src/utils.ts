@@ -16,6 +16,9 @@ export async function mapWithConcurrencyPreservingOrder<T, R>(
   if (items.length === 0) {
     return [];
   }
+  if (!Number.isFinite(concurrency) || concurrency < 1) {
+    throw new Error('mapWithConcurrencyPreservingOrder requires concurrency >= 1');
+  }
 
   const workerCount = Math.min(
     Math.max(1, Math.floor(concurrency)),
@@ -23,13 +26,19 @@ export async function mapWithConcurrencyPreservingOrder<T, R>(
   );
   const results = new Array<R>(items.length);
   let nextIndex = 0;
+  let failed = false;
 
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
+      while (!failed && nextIndex < items.length) {
         const index = nextIndex;
         nextIndex += 1;
-        results[index] = await mapper(items[index], index);
+        try {
+          results[index] = await mapper(items[index], index);
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
       }
     })
   );

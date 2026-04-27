@@ -109,6 +109,32 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
+  it('validates optional 1inch aggregation executor allowlists', () => {
+    const config = baseConfig();
+    config.oneInchAggregationExecutorAllowlist = {
+      1: ['0x1111111111111111111111111111111111111111'],
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+
+    config.oneInchAggregationExecutorAllowlist = {
+      1: [
+        '0x1111111111111111111111111111111111111111',
+        '0x1111111111111111111111111111111111111111',
+      ],
+    };
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'oneInchAggregationExecutorAllowlist.1 cannot contain duplicate addresses'
+    );
+
+    config.oneInchAggregationExecutorAllowlist = {
+      1: ['not-an-address'],
+    };
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'oneInchAggregationExecutorAllowlist.1 contains invalid address not-an-address'
+    );
+  });
+
   it('validates hybrid probe timeout and route selection mode', () => {
     const config = baseConfig();
     config.autoDiscover!.take = {
