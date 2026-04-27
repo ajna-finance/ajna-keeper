@@ -474,6 +474,7 @@ describe('Take Factory', () => {
           universalRouterAddress: '0x3333333333333333333333333333333333333333',
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
+          candidateFeeTiers: [3000],
           wethAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
         },
@@ -482,6 +483,7 @@ describe('Take Factory', () => {
         new ethers.providers.JsonRpcProvider()
       );
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -545,6 +547,7 @@ describe('Take Factory', () => {
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           factoryAddress: '0x5555555555555555555555555555555555555555',
           defaultFeeTier: 500,
+          candidateFeeTiers: [500],
           wethAddress: '0x6666666666666666666666666666666666666666',
         },
       };
@@ -552,6 +555,7 @@ describe('Take Factory', () => {
         new ethers.providers.JsonRpcProvider()
       );
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -774,7 +778,10 @@ describe('Take Factory', () => {
         defaultLiquiditySource: LiquiditySource.UNISWAPV3,
         config: {
           universalRouterOverrides: { defaultFeeTier: 3000 },
-          sushiswapRouterOverrides: { defaultFeeTier: 500 },
+          sushiswapRouterOverrides: {
+            defaultFeeTier: 500,
+            candidateFeeTiers: [500],
+          },
         },
         selection: {
           allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
@@ -783,6 +790,72 @@ describe('Take Factory', () => {
 
       expect(routes).to.deep.equal([
         { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
+      ]);
+    });
+
+    it('auto-probes standard Uniswap V3 fee tiers when candidates are not configured', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.UNISWAPV3,
+        config: {
+          universalRouterOverrides: { defaultFeeTier: 3000 },
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 3000 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 100 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 500 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 10000 },
+      ]);
+    });
+
+    it('auto-probes standard SushiSwap fee tiers when candidates are not configured', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.SUSHISWAP,
+        config: {
+          sushiswapRouterOverrides: { defaultFeeTier: 500 },
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 100 },
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 3000 },
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 10000 },
+      ]);
+    });
+
+    it('treats configured Uniswap V3 candidate fee tiers as an explicit override', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.UNISWAPV3,
+        config: {
+          universalRouterOverrides: {
+            defaultFeeTier: 3000,
+            candidateFeeTiers: [500],
+          },
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 3000 },
+        { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 500 },
+      ]);
+    });
+
+    it('treats configured SushiSwap candidate fee tiers as an explicit override', () => {
+      const routes = getFactoryRouteCandidates({
+        defaultLiquiditySource: LiquiditySource.SUSHISWAP,
+        config: {
+          sushiswapRouterOverrides: {
+            defaultFeeTier: 500,
+            candidateFeeTiers: [3000],
+          },
+        },
+      });
+
+      expect(routes).to.deep.equal([
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
+        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 3000 },
       ]);
     });
 
@@ -1073,6 +1146,7 @@ describe('Take Factory', () => {
           quoterV2Address: '0x9999999999999999999999999999999999999999',
           factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           defaultFeeTier: 500,
+          candidateFeeTiers: [500],
           wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         },
       };
@@ -1177,6 +1251,7 @@ describe('Take Factory', () => {
           quoterV2Address: '0x9999999999999999999999999999999999999999',
           factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           defaultFeeTier: 500,
+          candidateFeeTiers: [500],
           wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         },
       };

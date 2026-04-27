@@ -7,6 +7,7 @@ import {
   LiquiditySource,
   LiquiditySourceMap,
   PoolConfig,
+  STANDARD_V3_FEE_TIERS,
   formatLiquiditySource,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
@@ -309,11 +310,13 @@ export function getSlippageFloorQuoteRaw(
 
 export function getEffectiveFactoryFeeTiers(
   defaultFeeTier: number,
-  candidateFeeTiers?: number[]
+  candidateFeeTiers?: number[],
+  automaticCandidateFeeTiers?: readonly number[]
 ): number[] {
-  const tiers = candidateFeeTiers?.length
-    ? candidateFeeTiers
-    : [defaultFeeTier];
+  const tiers =
+    candidateFeeTiers !== undefined
+      ? candidateFeeTiers
+      : (automaticCandidateFeeTiers ?? [defaultFeeTier]);
   const effective = [defaultFeeTier, ...tiers].filter(isValidFactoryFeeTier);
   return Array.from(new Set(effective));
 }
@@ -1041,7 +1044,8 @@ export function getFactoryRouteCandidates(params: {
         source,
         getEffectiveFactoryFeeTiers(
           defaultFeeTier,
-          params.config.universalRouterOverrides?.candidateFeeTiers
+          params.config.universalRouterOverrides?.candidateFeeTiers,
+          STANDARD_V3_FEE_TIERS
         ).map((feeTier) => ({ liquiditySource: source, feeTier }))
       );
     }
@@ -1053,7 +1057,8 @@ export function getFactoryRouteCandidates(params: {
         source,
         getEffectiveFactoryFeeTiers(
           defaultFeeTier,
-          params.config.sushiswapRouterOverrides?.candidateFeeTiers
+          params.config.sushiswapRouterOverrides?.candidateFeeTiers,
+          STANDARD_V3_FEE_TIERS
         ).map((feeTier) => ({ liquiditySource: source, feeTier }))
       );
     }

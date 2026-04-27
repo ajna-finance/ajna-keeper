@@ -459,7 +459,7 @@ A 1inch API key may be obtained from their [developer portal](https://portal.1in
 
 ### Factory Fee-Tier Configuration for External Takes
 
-For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and can optionally probe additional `candidateFeeTiers` per DEX during quote evaluation. The selected fee tier is then carried into execution. These values are not baked into deployed bytecode, so changing them is a config-and-restart decision, not a redeploy.
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, both V3 factory sources automatically probe standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set.
 
 **Fee Tier Value → Percentage → Common Use:**
 
@@ -474,7 +474,7 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 **For External Takes (Time-Sensitive):**
 
 - Uses `universalRouterOverrides.defaultFeeTier` or `sushiswapRouterOverrides.defaultFeeTier` as the preferred route
-- Can add `candidateFeeTiers` to probe other deployed pools for the same token pair
+- Auto-probes standard Uniswap V3 and SushiSwap fee tiers when `candidateFeeTiers` is unset
 - Applies the selected quote route to execution, including the selected fee tier
 - Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
 - Quotes budget-approved factory routes with bounded parallelism, then ranks them deterministically by expected net profit
@@ -503,7 +503,7 @@ Before enabling Uniswap V3 or SushiSwap external takes:
 **Step 1: List all token pairs from your pools**
 **Step 2: Check Uniswap Info or SushiSwap Analytics for each pair's route liquidity**
 **Step 3: Weight by expected liquidation value and frequency, not just TVL**
-**Step 4: Set `defaultFeeTier` and, when useful, `candidateFeeTiers` in config**
+**Step 4: Set `defaultFeeTier`; use `candidateFeeTiers` only to narrow or customize the probed tier set**
 **Step 5: Revisit periodically as liquidity shifts**
 
 Example research process:
@@ -516,8 +516,8 @@ Research Results:
 - DAI/USDC: 500 tier has $100M TVL, 3000 tier has $30M TVL
 - RARE/WETH: Only exists in 10000 tier
 
-Decision: Use defaultFeeTier: 3000 and candidateFeeTiers: [500, 10000]
-Rationale: Prefer the highest-value pair (USDC/WETH), but probe the other deployed tiers when auctions appear
+Decision: Use defaultFeeTier: 3000 and leave candidateFeeTiers unset
+Rationale: Prefer the highest-value pair (USDC/WETH), while letting the keeper probe standard V3 tiers when auctions appear
 Plan: Keep the candidate list small enough for quote latency; LP rewards can still override per pool
 ```
 
@@ -595,6 +595,7 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - For live discovered external takes, `autoDiscover.take.externalTakeTransportPolicy` can be `allow_public`, `prefer_private_or_relay`, or `require_private_or_relay`. Use `require_private_or_relay` only when `takeWrite` is configured for `private_rpc` or `relay`; dry runs skip write submission but still warn if no private/relay transport is configured.
 - `autoDiscover.take.validateRouteDeployments: true` enables startup preflight checks for enabled external-take routers, takers, factory registry entries, and configured Curve pools.
 - `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.
+- Uniswap V3 and SushiSwap automatically probe standard fee tiers when `candidateFeeTiers` is unset. This adds up to three extra pool-existence checks per V3 factory candidate and, when pools exist and quote budget allows, up to three extra quote calls.
 
 For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).
 
@@ -734,7 +735,8 @@ const config: KeeperConfig = {
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
     defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    candidateFeeTiers: [500, 10000], // Optional additional tiers to probe per take
+    // Omit candidateFeeTiers to auto-probe standard V3 tiers.
+    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
     defaultSlippage: 0.5,
   },
 
@@ -752,14 +754,14 @@ const config: KeeperConfig = {
 
 **Uniswap V3 Route Selection**
 
-Uniswap external takes use `defaultFeeTier` as the preferred route and can probe `candidateFeeTiers` for the same token pair. The keeper checks whether a pool exists before spending quote budget, then quotes viable routes and executes with the selected fee tier.
+Uniswap external takes use `defaultFeeTier` as the preferred route and automatically probe standard V3 tiers when `candidateFeeTiers` is unset. The keeper checks whether a pool exists before spending quote budget, then quotes viable routes and executes with the selected fee tier.
 
 To check liquidity:
 
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) for your network
 2. Search for your token pair (e.g., USDC/WETH)
 3. Compare TVL across different fee tiers
-4. Set `defaultFeeTier` to your preferred/common route and add only useful alternatives to `candidateFeeTiers`
+4. Set `defaultFeeTier` to your preferred/common route; add `candidateFeeTiers` only to narrow or customize the automatic standard set
 5. Monitor and update as liquidity shifts over time
 
 Low-liquidity pools can cause swap failures or poor pricing that impacts liquidation profitability.
@@ -787,7 +789,7 @@ const config: KeeperConfig = {
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
     defaultFeeTier: 500, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [3000], // Optional additional tiers to probe per take
+    candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers
     defaultSlippage: 10.0,
   },
 
@@ -805,13 +807,13 @@ const config: KeeperConfig = {
 
 **SushiSwap Route Selection**
 
-SushiSwap external takes use `defaultFeeTier` as the preferred route and can probe `candidateFeeTiers` for deployed pools. Missing pools are skipped before quote-budgeting; viable routes are ranked by profitability and executed with the selected fee tier.
+SushiSwap external takes use `defaultFeeTier` as the preferred route and automatically probe standard V3 tiers when `candidateFeeTiers` is unset. Missing pools are skipped before quote-budgeting; viable routes are ranked by profitability and executed with the selected fee tier.
 
 To verify optimal pools:
 
 1. Check [SushiSwap Analytics](https://sushi.com/pool) for your network
 2. Compare liquidity across fee tiers for your token pairs
-3. Set `defaultFeeTier` to your preferred/common route and add useful alternatives to `candidateFeeTiers`
+3. Set `defaultFeeTier` to your preferred/common route; add `candidateFeeTiers` only to narrow or customize the automatic standard set
 4. Test with small amounts before production deployment
 5. Revisit the setting as market conditions change
 
@@ -963,12 +965,12 @@ const config: KeeperConfig = {
   },
   universalRouterOverrides: {
     defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    candidateFeeTiers: [500, 10000], // Optional extra tiers to probe
+    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
     /* other addresses */
   },
   sushiswapRouterOverrides: {
     defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [500], // Optional extra tiers to probe
+    candidateFeeTiers: [500], // Optional: narrow/customize probed tiers
     /* other addresses */
   },
 

@@ -559,6 +559,8 @@ describe('Discovery Gas Policy', () => {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [3000],
         },
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
@@ -626,6 +628,8 @@ describe('Discovery Gas Policy', () => {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [3000],
         },
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
@@ -696,6 +700,8 @@ describe('Discovery Gas Policy', () => {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [3000],
         },
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
@@ -864,6 +870,75 @@ describe('Discovery Gas Policy', () => {
     expect(poolExistsStub.calledTwice).to.be.true;
     expect(sushiQuoteStub.calledOnce).to.be.true;
     expect(sushiQuoteStub.firstCall.args[3]).to.equal(100);
+  });
+
+  it('auto-probes standard SushiSwap fee tiers for gas quote conversion', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
+    const poolExistsStub = sinon
+      .stub(SushiSwapQuoteProvider.prototype, 'poolExists')
+      .callsFake(
+        async (_tokenIn, _tokenOut, feeTier?: number) => feeTier === 3000
+      );
+    const sushiQuoteStub = sinon
+      .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('4', 6),
+      } as any);
+
+    const result = await evaluateGasPolicy({
+      signer: ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      ) as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        sushiswapRouterOverrides: {
+          swapRouterAddress: '0x2222222222222222222222222222222222222222',
+          factoryAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 500,
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.SUSHISWAP,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 8453,
+      },
+    });
+
+    expect(result.approved).to.be.true;
+    expect(result.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('4', 6))).to.be
+      .true;
+    expect(poolExistsStub.callCount).to.equal(4);
+    expect(poolExistsStub.getCall(0).args[2]).to.equal(500);
+    expect(poolExistsStub.getCall(1).args[2]).to.equal(100);
+    expect(poolExistsStub.getCall(2).args[2]).to.equal(3000);
+    expect(poolExistsStub.getCall(3).args[2]).to.equal(10000);
+    expect(sushiQuoteStub.calledOnce).to.be.true;
+    expect(sushiQuoteStub.firstCall.args[3]).to.equal(3000);
   });
 
   it('quotes gas cost and minProfitNative together when no quote gas cap is configured', async () => {

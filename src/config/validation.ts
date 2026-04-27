@@ -27,6 +27,7 @@ import {
   formatLiquiditySource,
   hasConfiguredWrappedNativeAddress,
   resolveConfiguredGasQuoteLiquiditySource,
+  STANDARD_V3_FEE_TIERS,
 } from './liquidity-source';
 import { logger } from '../logging';
 import { ethers } from 'ethers';
@@ -41,7 +42,9 @@ const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
 const MAX_DEX_GAS_OVERRIDE = BigInt(2_000_000);
 const MAX_MIN_PROFIT_NATIVE_WEI = BigInt('1000000000000000000000000000');
-const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
+const STANDARD_V3_FEE_TIER_SET: ReadonlySet<number> = new Set(
+  STANDARD_V3_FEE_TIERS
+);
 const VALIDATION_BOUNDS = {
   minL2GasCostBufferBps: 10_000,
   maxL2GasCostBufferBps: 30_000,
@@ -178,7 +181,7 @@ function validateCandidateFeeTiers(
         `${fieldName}: candidateFeeTiers cannot contain duplicates`
       );
     }
-    if (!STANDARD_V3_FEE_TIERS.has(tier)) {
+    if (!STANDARD_V3_FEE_TIER_SET.has(tier)) {
       logger.warn(
         `${fieldName}: candidateFeeTiers includes non-standard fee tier ${tier}; verify this tier is deployed on the target DEX before production use`
       );

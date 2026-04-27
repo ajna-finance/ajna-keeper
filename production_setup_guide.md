@@ -58,24 +58,25 @@ Important operational details:
 
 ### What the Current Keeper Actually Does
 
-For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and can optionally probe additional `candidateFeeTiers` per DEX during quote evaluation. The selected fee tier is carried into execution.
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, both V3 factory sources automatically probe standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set.
 
 ```typescript
 universalRouterOverrides: {
   defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-  candidateFeeTiers: [500, 10000], // Optional additional tiers to probe
+  candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
   // ... other settings
 },
 sushiswapRouterOverrides: {
   defaultFeeTier: 500,  // Preferred/default SushiSwap external-take route
-  candidateFeeTiers: [3000], // Optional additional tiers to probe
+  candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers
   // ... other settings
 }
 ```
 
 Implications:
 
-- External takes prefer the configured default, then quote viable candidate tiers when configured
+- External takes prefer the configured default, then quote viable candidate tiers
+- Uniswap V3 and SushiSwap auto-probe standard tiers when `candidateFeeTiers` is unset
 - Missing Uni/Sushi pools are skipped before `takeRouteQuoteBudgetPerCandidate` is applied
 - Budget-approved factory routes are quoted with bounded parallelism, then ranked deterministically by expected net profit
 - `allowedLiquiditySources`, when set, is the complete factory route allowlist; include the default source explicitly if it should remain eligible
@@ -118,7 +119,7 @@ For SushiSwap:
 **Step 3: Make a Strategic Default Selection**
 
 - Optimize for the weighted majority of your expected liquidation flow, not for every pair equally
-- Add only useful alternate deployed tiers to `candidateFeeTiers`; every viable candidate can require an additional quote
+- For Uniswap V3, leave `candidateFeeTiers` unset to probe standard tiers automatically, or set it when you want to narrow/customize the set; every viable candidate can require an additional quote
 - If a few important pairs need a different DEX entirely, decide whether they should use 1inch, arbTake, or a separate keeper config
 - Revisit the default periodically as liquidity migrates
 
@@ -130,17 +131,17 @@ Hemi Network Pools Analysis:
 - vusd/usdc_e (medium value): Most liquidity in 500 tier (0.05%)
 - usd_t1/usdc_t (high frequency): Most liquidity in 3000 tier (0.3%)
 
-Production Decision: Use defaultFeeTier: 3000 and candidateFeeTiers: [500]
+Production Decision: Use defaultFeeTier: 3000 and leave candidateFeeTiers unset
 Rationale:
 - Optimize for highest-frequency pair (usd_t1/usdc_t)
-- External takes prefer the majority route, while still probing the 500-tier cluster when a pool exists
+- External takes prefer the majority route, while still probing standard V3 tiers when pools exist
 - Use `fee: FeeAmount.LOW` overrides in LP rewards for vcred/vusd pairs
 - Consider a separate keeper config if the 500-tier cluster needs a different DEX/gas policy
 
 Result in Production Config:
 universalRouterOverrides: {
   defaultFeeTier: 3000, // Uniswap external takes default to 0.3% in this keeper instance
-  candidateFeeTiers: [500],
+  // Omit candidateFeeTiers to auto-probe standard V3 tiers.
 },
 sushiswapRouterOverrides: {
   defaultFeeTier: 3000, // SushiSwap external takes default to 0.3% in this keeper instance
@@ -157,7 +158,7 @@ When liquidity shifts materially:
 3. Restart the keeper
 4. Re-test with small amounts before relying on the new route selection
 
-This makes fee tier selection a **strategic runtime configuration decision**. It is still important because every added candidate can increase read/quote latency, but it is no longer a contract-redeploy decision.
+This makes fee tier selection a runtime route-optimization decision. It is still important because every viable candidate can increase read/quote latency, but it is no longer a contract-redeploy decision.
 
 ## Step 2: Contract Deployment for External Takes
 
@@ -568,7 +569,7 @@ Recommended rollout order:
 8. Keep `discoveredDefaults.take.allowSubsidy` unset or `false` for normal production discovery. The route-derived policy then requires external takes to clear auction repayment plus route gas/profit floors when quote-normalized inputs are configured or available.
 9. Use `allowSubsidy: true` only on manually reviewed defensive pools where spending keeper P&L to repay an auction earlier is acceptable. Subsidized takes still enforce repayment and swap min-out safety, but they may execute below gas/profit floors.
 10. Set `marketPriceFactor` below 1 for normal operation, for example `0.99` to target auctions below roughly 99% of market. Config validation rejects non-positive values and values above 2, which catches common typos like `99` instead of `0.99`; values above 1 weaken market-factor protection and should be intentional.
-11. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
+11. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`. Uniswap V3 and SushiSwap auto-probe standard fee tiers when `candidateFeeTiers` is unset; set `candidateFeeTiers` only to narrow/customize that set.
 12. Use `externalTakeProbeTimeoutMs` to bound each hybrid 1inch/factory probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values from 1ms to 10000ms are supported for slow infrastructure, but values above 5000ms directly increase the worst-case time spent on each hot auction candidate.
 13. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing 1inch API calls is worth potentially skipping a better 1inch route; it tries factory first and stops once factory is approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
 14. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
@@ -583,24 +584,25 @@ Hot discovered 1inch paths use a small circuit breaker to reduce API waste durin
 
 External take latency and API-cost controls:
 
-| Config field | Default | Use |
-| --- | --- | --- |
-| `delayBetweenRuns` | Operator-configured | Sets the global take loop cadence. `10` seconds is reasonable for hot liquidation monitoring. |
-| `delayBetweenActions` | Operator-configured | Keep `0` for hot discovered takes; use long delays only for slow manual 1inch operation. |
-| `autoDiscover.take.takeQuoteBudgetPerRun` | unset | Caps total discovered take quote work per run. |
-| `autoDiscover.take.takeRouteQuoteBudgetPerCandidate` | unset | Caps factory route candidates quoted per liquidation. Lower values reduce RPC/API work but can miss a better route. |
-| `autoDiscover.take.oneInchQuoteTimeoutMs` | `2000` | Bounds each discovered 1inch quote and swap-data request. |
-| `autoDiscover.take.externalTakeProbeTimeoutMs` | `min(oneInchQuoteTimeoutMs + 1000, 5000)` | Bounds each hybrid path probe. Explicit values may be `1..10000ms`. |
-| `autoDiscover.take.oneInchQuoteFailureThreshold` | `2` | Retryable 1inch failures before the local circuit opens. |
-| `autoDiscover.take.oneInchQuoteFailureCooldownMs` | `30000` | Cooldown after the circuit opens, capped at 1 hour. |
-| `autoDiscover.take.hotAuctionCandidateTtlMs` | `10 minutes` | Keeps already-seen auctions eligible between subgraph refreshes. Set `0` to disable. |
-| `autoDiscover.take.maxHotAuctionCandidates` | `1000` | Bounds hot-auction cache memory. |
+| Config field                                         | Default                                   | Use                                                                                                                                                                                                  |
+| ---------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `delayBetweenRuns`                                   | Operator-configured                       | Sets the global take loop cadence. `10` seconds is reasonable for hot liquidation monitoring.                                                                                                        |
+| `delayBetweenActions`                                | Operator-configured                       | Keep `0` for hot discovered takes; use long delays only for slow manual 1inch operation.                                                                                                             |
+| `autoDiscover.take.takeQuoteBudgetPerRun`            | unset                                     | Caps total discovered take quote work per run.                                                                                                                                                       |
+| `autoDiscover.take.takeRouteQuoteBudgetPerCandidate` | unset                                     | Caps factory route candidates quoted per liquidation. Lower values reduce RPC/API work but can miss a better route.                                                                                  |
+| V3 factory `candidateFeeTiers` unset                 | `[100, 500, 3000, 10000]`                 | Auto-probes standard Uniswap V3/SushiSwap tiers. Adds up to three extra pool-existence checks per V3 factory candidate and, when pools exist and quote budget allows, up to three extra quote calls. |
+| `autoDiscover.take.oneInchQuoteTimeoutMs`            | `2000`                                    | Bounds each discovered 1inch quote and swap-data request.                                                                                                                                            |
+| `autoDiscover.take.externalTakeProbeTimeoutMs`       | `min(oneInchQuoteTimeoutMs + 1000, 5000)` | Bounds each hybrid path probe. Explicit values may be `1..10000ms`.                                                                                                                                  |
+| `autoDiscover.take.oneInchQuoteFailureThreshold`     | `2`                                       | Retryable 1inch failures before the local circuit opens.                                                                                                                                             |
+| `autoDiscover.take.oneInchQuoteFailureCooldownMs`    | `30000`                                   | Cooldown after the circuit opens, capped at 1 hour.                                                                                                                                                  |
+| `autoDiscover.take.hotAuctionCandidateTtlMs`         | `10 minutes`                              | Keeps already-seen auctions eligible between subgraph refreshes. Set `0` to disable.                                                                                                                 |
+| `autoDiscover.take.maxHotAuctionCandidates`          | `1000`                                    | Bounds hot-auction cache memory.                                                                                                                                                                     |
 
 ## Step 6: DEX Configuration Best Practices
 
 ### Pool Liquidity Verification
 
-For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `defaultFeeTier` and can probe `candidateFeeTiers` per take. Keep the candidate list focused on tiers that are actually deployed and useful for your pairs; missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
+For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `defaultFeeTier` and can probe candidate routes per take. Both V3 factory sources automatically check standard tiers when `candidateFeeTiers` is unset. Missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
 
 **For Uniswap V3:**
 
@@ -610,7 +612,7 @@ For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `default
    - 500 (0.05%) - typically stablecoin pairs
    - 3000 (0.3%) - most common for major pairs
    - 10000 (1%) - exotic or volatile pairs
-4. Set `defaultFeeTier` to the preferred route and add useful alternatives to `candidateFeeTiers`
+4. Set `defaultFeeTier` to the preferred route; add `candidateFeeTiers` only to narrow/customize the automatic standard set
 5. For LP rewards, set `fee: FeeAmount.MEDIUM` (or the appropriate tier)
 
 **For SushiSwap:**
@@ -618,7 +620,7 @@ For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `default
 1. Check [SushiSwap Analytics](https://www.sushi.com/pool) → your network
 2. Verify pool existence and liquidity for your pairs
 3. Most SushiSwap pools use 500 (0.05%) or 3000 (0.3%) tiers
-4. Set `defaultFeeTier` to the best-supported option and add useful alternatives to `candidateFeeTiers`
+4. Set `defaultFeeTier` to the best-supported option; add `candidateFeeTiers` only to narrow or customize the automatic standard set
 5. Use higher `defaultSlippage` (5-10%) when liquidity is thinner
 
 **For Curve:**

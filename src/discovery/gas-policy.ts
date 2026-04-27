@@ -5,6 +5,7 @@ import {
   AutoDiscoverTakePolicy,
   DEFAULT_FEE_TIER_BY_SOURCE,
   LiquiditySource,
+  STANDARD_V3_FEE_TIERS,
   formatLiquiditySource,
   hasConfiguredGasQuoteLiquiditySource,
   resolveConfiguredGasQuoteLiquiditySource,
@@ -248,11 +249,14 @@ function getGasQuoteSourceCandidates(params: {
 function getGasQuoteFeeTiers(
   defaultFeeTier: number | undefined,
   candidateFeeTiers: number[] | undefined,
-  fallbackFeeTier: number
+  fallbackFeeTier: number,
+  automaticCandidateFeeTiers?: readonly number[]
 ): number[] {
-  return Array.from(
-    new Set([defaultFeeTier ?? fallbackFeeTier, ...(candidateFeeTiers ?? [])])
-  );
+  const tiers =
+    candidateFeeTiers !== undefined
+      ? candidateFeeTiers
+      : (automaticCandidateFeeTiers ?? []);
+  return Array.from(new Set([defaultFeeTier ?? fallbackFeeTier, ...tiers]));
 }
 
 interface FactoryV3GasQuoteProvider {
@@ -277,12 +281,14 @@ async function quoteFactoryV3GasConversion(params: {
   defaultFeeTier?: number;
   candidateFeeTiers?: number[];
   fallbackFeeTier: number;
+  automaticCandidateFeeTiers?: readonly number[];
 }): Promise<BigNumber | undefined> {
   let bestQuote: BigNumber | undefined;
   for (const feeTier of getGasQuoteFeeTiers(
     params.defaultFeeTier,
     params.candidateFeeTiers,
-    params.fallbackFeeTier
+    params.fallbackFeeTier,
+    params.automaticCandidateFeeTiers
   )) {
     const poolExists = await withTimeout(
       params.quoteProvider.poolExists(params.tokenIn, params.tokenOut, feeTier),
@@ -457,6 +463,7 @@ async function quoteTokensByLiquiditySource(params: {
       defaultFeeTier: routerConfig.defaultFeeTier,
       candidateFeeTiers: routerConfig.candidateFeeTiers,
       fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+      automaticCandidateFeeTiers: STANDARD_V3_FEE_TIERS,
     });
   }
 
@@ -486,6 +493,7 @@ async function quoteTokensByLiquiditySource(params: {
       defaultFeeTier: sushiConfig.defaultFeeTier,
       candidateFeeTiers: sushiConfig.candidateFeeTiers,
       fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
+      automaticCandidateFeeTiers: STANDARD_V3_FEE_TIERS,
     });
   }
 
