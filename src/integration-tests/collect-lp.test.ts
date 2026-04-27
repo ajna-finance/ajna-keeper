@@ -10,7 +10,7 @@ import { DexRouter } from '../dex/router';
 import { getBalanceOfErc20 } from '../erc20';
 import { handleKicks } from '../kick';
 import { NonceTracker } from '../nonce';
-import { handleLegacyOrArbTakes, handleTakes } from '../take';
+import { processManualTakeCandidates, handleTakes } from '../take';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import './subgraph-mock';
 import {
@@ -108,7 +108,7 @@ describe('LpCollector ingest', () => {
       ),
       createSubgraphReader({ subgraphUrl: 'mock://' })
     );
-    await handleLegacyOrArbTakes({
+    await processManualTakeCandidates({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
@@ -155,7 +155,7 @@ describe('LpCollector ingest', () => {
     const takerSigner = await impersonateSigner(
       MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
     );
-    await handleLegacyOrArbTakes({
+    await processManualTakeCandidates({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer: takerSigner,
@@ -202,7 +202,7 @@ describe('LpCollector ingest', () => {
     const takerSigner = await impersonateSigner(
       MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress2
     );
-    await handleLegacyOrArbTakes({
+    await processManualTakeCandidates({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer: takerSigner,
@@ -255,7 +255,7 @@ describe('LpCollector collections', () => {
       ),
       createSubgraphReader({ subgraphUrl: 'mock://' })
     );
-    await handleLegacyOrArbTakes({
+    await processManualTakeCandidates({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
@@ -323,7 +323,7 @@ describe('LpCollector collections', () => {
 
     // First keeper run: accrue rewards via bucketTake, settle, redeem.
     const firstRun = makeCollector();
-    await handleLegacyOrArbTakes({
+    await processManualTakeCandidates({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,

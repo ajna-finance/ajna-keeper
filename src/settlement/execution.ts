@@ -1,7 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { logger } from '../logging';
 import { poolSettle } from '../transactions';
-import { delay } from '../utils';
+import { delay, getErrorMessage } from '../utils';
 import { SettlementReadConfig, SettlementResult } from './model';
 import { SettlementActionConfig } from './types';
 
@@ -69,9 +69,7 @@ export async function settleAuctionCompletely(params: {
         success: false,
         completed: false,
         iterations: iteration,
-        reason: `Settlement failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        reason: `Settlement failed: ${getErrorMessage(error)}`,
       };
     }
   }

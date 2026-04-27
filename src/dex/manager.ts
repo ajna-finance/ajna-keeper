@@ -5,11 +5,11 @@ import { logger } from '../logging';
 
 /**
  * Deployment types supported by the smart detection system
- * - single: Use existing AjnaKeeperTaker.sol approach (major chains)
- * - factory: Use factory pattern with multiple DEX implementations (newer chains)  
+ * - oneinch: Use the manual 1inch keeperTaker atomic path
+ * - factory: Use factory pattern with multiple DEX implementations (newer chains)
  * - none: No DEX integration available, arbTake/settlement only
  */
-export type DeploymentType = 'factory' | 'single' | 'none';
+export type DeploymentType = 'factory' | 'oneinch' | 'none';
 
 /**
  * Minimal config interface for smart detection - only the fields we actually need
@@ -22,9 +22,7 @@ interface SmartDexConfig {
   [key: string]: unknown;
 }
 
-function isFactoryLiquiditySource(
-  liquiditySource?: LiquiditySource
-): boolean {
+function isFactoryLiquiditySource(liquiditySource?: LiquiditySource): boolean {
   return (
     liquiditySource === LiquiditySource.UNISWAPV3 ||
     liquiditySource === LiquiditySource.SUSHISWAP ||
@@ -32,11 +30,10 @@ function isFactoryLiquiditySource(
   );
 }
 
-
 /**
  * Smart DEX Manager - Analyzes configuration and routes to appropriate take implementation
- * 
- * This enables backward compatibility with existing single-contract deployments
+ *
+ * This routes each pool to its configured external-take deployment model
  * while supporting multi-DEX factory deployments on newer chains.
  */
 export class SmartDexManager {
@@ -48,15 +45,17 @@ export class SmartDexManager {
     this.config = config;
   }
 
-  async detectDeploymentTypeForPool(poolConfig: Pick<PoolConfig, 'name' | 'take'>): Promise<DeploymentType> {
+  async detectDeploymentTypeForPool(
+    poolConfig: Pick<PoolConfig, 'name' | 'take'>
+  ): Promise<DeploymentType> {
     const liquiditySource = poolConfig.take?.liquiditySource;
 
     if (liquiditySource === LiquiditySource.ONEINCH) {
       if (this.config.keeperTaker) {
         logger.debug(
-          `Smart Detection: Using single deployment for 1inch pool ${poolConfig.name}`
+          `Smart Detection: Using 1inch keeperTaker deployment for pool ${poolConfig.name}`
         );
-        return 'single';
+        return 'oneinch';
       }
       logger.warn(
         `Smart Detection: 1inch requested for pool ${poolConfig.name} but keeperTaker is not configured`
@@ -93,23 +92,29 @@ export class SmartDexManager {
     const hasExternalTakeConfig = !!(
       liquiditySource !== undefined && poolConfig.take?.marketPriceFactor
     );
-    
+
     switch (deploymentType) {
-      case 'single':
+      case 'oneinch':
         const canTakeSingle =
           liquiditySource === LiquiditySource.ONEINCH && hasExternalTakeConfig;
-        logger.debug(`Single deployment - can take: ${canTakeSingle} for pool ${poolConfig.name}`);
+        logger.debug(
+          `1inch keeperTaker deployment - can take: ${canTakeSingle} for pool ${poolConfig.name}`
+        );
         return canTakeSingle;
-        
+
       case 'factory':
         const canTakeFactory =
           isFactoryLiquiditySource(liquiditySource) && hasExternalTakeConfig;
-        logger.debug(`Factory deployment - can take: ${canTakeFactory} for pool ${poolConfig.name}`);
+        logger.debug(
+          `Factory deployment - can take: ${canTakeFactory} for pool ${poolConfig.name}`
+        );
         return canTakeFactory;
-        
+
       case 'none':
         // No external DEX - only arbTake possible
-        logger.debug(`No DEX deployment - external takes not possible for pool ${poolConfig.name}`);
+        logger.debug(
+          `No DEX deployment - external takes not possible for pool ${poolConfig.name}`
+        );
         return false;
     }
   }
@@ -122,11 +127,16 @@ export class SmartDexManager {
     const liquiditySource = poolConfig.take?.liquiditySource;
 
     switch (deploymentType) {
-      case 'single':
+      case 'oneinch':
         if (!this.config.keeperTaker) {
-          errors.push('Single deployment requires keeperTaker address');
+          errors.push(
+            '1inch keeperTaker deployment requires keeperTaker address'
+          );
         }
-        if (liquiditySource === LiquiditySource.ONEINCH && !this.config.oneInchRouters) {
+        if (
+          liquiditySource === LiquiditySource.ONEINCH &&
+          !this.config.oneInchRouters
+        ) {
           errors.push('1inch deployment requires oneInchRouters configuration');
         }
         break;
@@ -134,8 +144,13 @@ export class SmartDexManager {
         if (!this.config.keeperTakerFactory) {
           errors.push('Factory deployment requires keeperTakerFactory address');
         }
-        if (!this.config.takerContracts || Object.keys(this.config.takerContracts).length === 0) {
-          errors.push('Factory deployment requires at least one takerContracts entry');
+        if (
+          !this.config.takerContracts ||
+          Object.keys(this.config.takerContracts).length === 0
+        ) {
+          errors.push(
+            'Factory deployment requires at least one takerContracts entry'
+          );
         }
         break;
       case 'none':

@@ -12,7 +12,7 @@ import ERC20_ABI from '../abis/erc20.abi.json';
 import { approveErc20, getAllowanceOfErc20, getDecimalsErc20 } from '../erc20';
 import { logger } from '../logging';
 import { swapToWeth } from './uniswap';
-import { tokenChangeDecimals } from '../utils';
+import { getErrorMessage, tokenChangeDecimals } from '../utils';
 import { swapWithUniversalRouter } from './universal-router';
 import { swapWithSushiswapRouter } from './sushiswap-router';
 import { swapWithCurveRouter } from './curve-router';
@@ -68,7 +68,7 @@ function normalizeOneInchUintAmount(
     return { value: parsed.toString() };
   } catch (error) {
     return {
-      error: `1inch ${fieldName} is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      error: `1inch ${fieldName} is invalid: ${getErrorMessage(error)}`,
     };
   }
 }
@@ -124,7 +124,7 @@ function parseOneInchTxValue(value: unknown): {
     return { value: parsed };
   } catch (error) {
     return {
-      error: `1inch tx.value is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      error: `1inch tx.value is invalid: ${getErrorMessage(error)}`,
     };
   }
 }

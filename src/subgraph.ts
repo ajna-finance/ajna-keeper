@@ -8,6 +8,7 @@ import {
   recordEndpointSuccess,
 } from './endpoint-health';
 import { logger } from './logging';
+import { getErrorMessage } from './utils';
 
 const SUBGRAPH_FAILURE_THRESHOLD = 3;
 const SUBGRAPH_COOLDOWN_MS = 30_000;
@@ -37,7 +38,10 @@ function getSubgraphEndpoints(
   return uniqueEndpoints([subgraphUrl, ...(options?.fallbackUrls ?? [])]);
 }
 
-async function requestSubgraph<T, V extends Record<string, any> = Record<string, never>>(params: {
+async function requestSubgraph<
+  T,
+  V extends Record<string, any> = Record<string, never>,
+>(params: {
   subgraphUrl: string;
   document: RequestDocument;
   variables?: V;
@@ -86,7 +90,7 @@ async function requestSubgraph<T, V extends Record<string, any> = Record<string,
           kind: endpointKind,
           from: endpoint,
           to: nextEndpoint,
-          reason: error instanceof Error ? error.message : String(error),
+          reason: getErrorMessage(error),
         });
       }
     }
@@ -120,10 +124,7 @@ async function paginateSubgraphCursor<TItem>(params: {
     const pageItems = await params.fetchPage(cursor);
     items.push(...pageItems);
 
-    if (
-      page === params.maxPages - 1 &&
-      pageItems.length === params.pageSize
-    ) {
+    if (page === params.maxPages - 1 && pageItems.length === params.pageSize) {
       logger.warn(params.truncationWarning);
     }
 
@@ -365,11 +366,7 @@ const getUnsettledAuctionsQuery = gql`
       first: $first
       orderBy: borrower
       orderDirection: asc
-      where: {
-        pool: $poolId
-        settled: false
-        borrower_gt: $afterBorrower
-      }
+      where: { pool: $poolId, settled: false, borrower_gt: $afterBorrower }
     ) {
       borrower
       kickTime
@@ -420,10 +417,7 @@ const getChainwideLiquidationAuctionsQuery = gql`
       first: $first
       orderBy: id
       orderDirection: asc
-      where: {
-        settled: false
-        id_gt: $afterId
-      }
+      where: { settled: false, id_gt: $afterId }
     ) {
       id
       borrower
@@ -485,7 +479,6 @@ async function getChainwideLiquidationAuctions(
   return { liquidationAuctions };
 }
 
-
 export interface BucketTakeLPAwardItem {
   id: string;
   index: number;
@@ -536,15 +529,8 @@ const getBucketTakeLPAwardsQuery = gql`
       orderDirection: asc
       where: {
         or: [
-          {
-            taker: $signerId
-            blockTimestamp_gt: $cursorTs
-          }
-          {
-            taker: $signerId
-            blockTimestamp: $cursorTs
-            id_gt: $cursorId
-          }
+          { taker: $signerId, blockTimestamp_gt: $cursorTs }
+          { taker: $signerId, blockTimestamp: $cursorTs, id_gt: $cursorId }
           {
             liquidationAuction_: { kicker: $signerId }
             blockTimestamp_gt: $cursorTs

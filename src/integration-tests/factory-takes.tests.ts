@@ -5,7 +5,7 @@ import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
 import sinon from 'sinon';
 import { configureAjna, LiquiditySource, KeeperConfig, PoolConfig } from '../config';
-import { handleFactoryTakes } from '../take/factory';
+import { processManualTakeCandidates } from '../take';
 import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
 import { handleKicks } from '../kick';
 import { arrayFromAsync, decimaledToWei } from '../utils';
@@ -128,7 +128,7 @@ describe('Factory Takes Integration Tests', function () {
 
     /**
      * Critical: Tests that factory take workflow executes correctly.
-     * If someone modifies handleFactoryTakes(), these tests catch breaking changes.
+     * If someone modifies processManualTakeCandidates(), these tests catch breaking changes.
      */
 
     it('should execute factory take workflow with valid Hemi configuration', async () => {
@@ -165,7 +165,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Should execute factory take workflow without throwing
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: poolConfigWithUniswap as any,
@@ -208,7 +208,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Should handle both external and arbTake strategies
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: combinedPoolConfig as any,
@@ -247,7 +247,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Should work with minimal valid configuration
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: minimalPoolConfig as any,
@@ -423,7 +423,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Should handle Hemi-specific configuration
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: hemiPoolConfig as any,
@@ -466,7 +466,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Should handle mainnet-style configuration
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: mainnetPoolConfig as any,
@@ -514,7 +514,7 @@ describe('Factory Takes Integration Tests', function () {
         };
 
         // Should handle different fee tiers
-        await handleFactoryTakes({
+        await processManualTakeCandidates({
           signer,
           pool,
           poolConfig: poolConfig as any,
@@ -555,7 +555,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Should handle incomplete config gracefully
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: poolConfig as any,
@@ -590,7 +590,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Should handle missing router overrides gracefully
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: poolConfig as any,
@@ -627,7 +627,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Should handle wrong liquiditySource gracefully
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: invalidPoolConfig as any,
@@ -666,7 +666,7 @@ describe('Factory Takes Integration Tests', function () {
 
       // Test concurrent factory take requests
       const promises = Array.from({ length: 3 }, () =>
-        handleFactoryTakes({
+        processManualTakeCandidates({
           signer,
           pool,
           poolConfig: poolConfig as any,
@@ -703,7 +703,7 @@ describe('Factory Takes Integration Tests', function () {
 
       // Should handle missing take config gracefully
       try {
-        await handleFactoryTakes({
+        await processManualTakeCandidates({
           signer,
           pool,
           poolConfig: poolConfigWithoutTake as any,
@@ -755,7 +755,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Factory takes should work after kick
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: poolConfig as any,
@@ -792,7 +792,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       // Dry run should complete without external transactions
-      await handleFactoryTakes({
+      await processManualTakeCandidates({
         signer,
         pool,
         poolConfig: poolConfig as any,
@@ -840,7 +840,7 @@ describe('Factory Takes Integration Tests', function () {
           subgraphUrl
         };
 
-        await handleFactoryTakes({
+        await processManualTakeCandidates({
           signer,
           pool,
           poolConfig: poolConfig as any,

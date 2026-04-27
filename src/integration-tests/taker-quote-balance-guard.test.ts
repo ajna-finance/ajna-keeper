@@ -92,7 +92,7 @@ describe('Taker quote balance guards', () => {
     return { owner, collateralToken, quoteToken, poolDeployer, pool };
   }
 
-  it('rejects legacy 1inch routes that redirect output away from the taker', async () => {
+  it('rejects 1inch atomic routes that redirect output away from the taker', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
     const taker = await new AjnaKeeperTaker__factory(owner).deploy(poolDeployer.address);
     await taker.deployed();
@@ -134,7 +134,7 @@ describe('Taker quote balance guards', () => {
     );
   });
 
-  it('rejects legacy 1inch swaps that rely on preexisting quote balance', async () => {
+  it('rejects 1inch atomic swaps that rely on preexisting quote balance', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
     const taker = await new AjnaKeeperTaker__factory(owner).deploy(poolDeployer.address);
     await taker.deployed();
@@ -177,7 +177,7 @@ describe('Taker quote balance guards', () => {
     );
   });
 
-  it('rejects legacy 1inch swaps that underdeliver versus the scaled minReturnAmount', async () => {
+  it('rejects 1inch atomic swaps that underdeliver versus the scaled minReturnAmount', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
     const taker = await new AjnaKeeperTaker__factory(owner).deploy(poolDeployer.address);
     await taker.deployed();

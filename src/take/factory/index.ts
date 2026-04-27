@@ -1,6 +1,9 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
-import { mapWithConcurrencyPreservingOrder, weiToDecimaled } from '../../utils';
-import { LiquiditySource } from '../../config';
+import {
+  getErrorMessage,
+  mapWithConcurrencyPreservingOrder,
+} from '../../utils';
+import { LiquiditySource, formatLiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
 import {
@@ -8,14 +11,7 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
-import {
-  ExternalTakeAdapter,
-  formatTakeStrategyLog,
-  getTakeBorrowerCandidates,
-  logSkippedTakeCandidate,
-  processTakeCandidates,
-} from '../engine';
-import { resolveSubgraphConfig } from '../../read-transports';
+import { ExternalTakeAdapter } from '../engine';
 import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
@@ -23,11 +19,9 @@ import {
   FactoryRouteCandidate,
   FactoryRouteEvaluationContext,
   FactoryRouteSelectionOptions,
-  FactoryTakeConfig,
   FactoryTakeParams,
   applyFactoryRouteProfitabilityPolicy,
   buildFactoryRouteEvaluationContext,
-  createFactoryQuoteProviderRuntimeCache,
   deriveApprovedMinOutRaw,
   filterFactoryRouteCandidatesByAvailability,
   formatFactoryRouteCandidate,
@@ -46,8 +40,6 @@ import {
   executeUniswapV3FactoryTake,
 } from './uniswap';
 
-type LiquidationToTake = TakeLiquidationPlan;
-
 const FACTORY_ROUTE_QUOTE_CONCURRENCY = 3;
 
 export type {
@@ -62,81 +54,6 @@ export {
   computeFactoryAmountOutMinimum,
   createFactoryQuoteProviderRuntimeCache,
 } from './shared';
-
-/**
- * Handle takes using factory pattern (Uniswap V3, future DEXs)
- * Completely separate from existing 1inch logic
- */
-export async function handleFactoryTakes({
-  signer,
-  takeWriteTransport,
-  pool,
-  poolConfig,
-  config,
-}: FactoryTakeParams) {
-  const resolvedConfig: FactoryTakeConfig = resolveSubgraphConfig(config);
-  logger.debug(`Factory take handler starting for pool: ${pool.name}`);
-  const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
-  const candidates = await getTakeBorrowerCandidates({
-    subgraph: resolvedConfig.subgraph,
-    poolAddress: pool.poolAddress,
-    minCollateral: poolConfig.take.minCollateral ?? 0,
-  });
-
-  const externalTakeAdapter: ExternalTakeAdapter<any, any> =
-    createFactoryTakeAdapter({
-      quoteConfig: {
-        universalRouterOverrides: resolvedConfig.universalRouterOverrides,
-        sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
-        curveRouterOverrides: resolvedConfig.curveRouterOverrides,
-        tokenAddresses: resolvedConfig.tokenAddresses,
-      },
-      runtimeCache: quoteProviderCache,
-    });
-
-  await processTakeCandidates({
-    pool,
-    signer,
-    poolConfig,
-    candidates,
-    subgraph: resolvedConfig.subgraph,
-    externalTakeAdapter,
-    externalExecutionConfig: {
-      dryRun: resolvedConfig.dryRun,
-      keeperTakerFactory: resolvedConfig.keeperTakerFactory,
-      universalRouterOverrides: resolvedConfig.universalRouterOverrides,
-      sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
-      curveRouterOverrides: resolvedConfig.curveRouterOverrides,
-      tokenAddresses: resolvedConfig.tokenAddresses,
-      takeWriteTransport,
-      runtimeCache: quoteProviderCache,
-    },
-    dryRun: resolvedConfig.dryRun ?? false,
-    delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
-    takeWriteTransport,
-    arbTakeActionLabel: 'Factory ArbTake',
-    arbTakeLogPrefix: 'Factory: ',
-    onFound: (decision) => {
-      logger.debug(
-        `Found liquidation to ${formatTakeStrategyLog(
-          externalTakeAdapter.kind,
-          decision.approvedTake,
-          decision.approvedArbTake
-        )} - pool: ${pool.name}, borrower: ${decision.borrower}, price: ${Number(
-          weiToDecimaled(decision.auctionPrice)
-        )}`
-      );
-    },
-    onSkip: ({ candidate, reason }) => {
-      logSkippedTakeCandidate({
-        pool,
-        borrower: candidate.borrower,
-        reason,
-        prefix: 'Factory: ',
-      });
-    },
-  });
-}
 
 export function createFactoryTakeAdapter(params: {
   quoteConfig: FactoryQuoteConfig;
@@ -484,7 +401,7 @@ export async function getFactoryTakeQuoteEvaluation(
     );
     return {
       isTakeable: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: getErrorMessage(error),
     };
   }
 }
@@ -598,7 +515,7 @@ interface FactoryLiquidationExecutionParams {
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   config: Pick<
     FactoryTakeParams['config'],
     | 'dryRun'
@@ -758,7 +675,7 @@ export async function takeLiquidationFactory({
   }
 
   const routeMetadata =
-    `source=${LiquiditySource[selectedLiquiditySource] ?? selectedLiquiditySource}` +
+    `source=${formatLiquiditySource(selectedLiquiditySource)}` +
     ` feeTier=${externalTakeQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
     ` approvedMinOutRaw=${externalTakeQuoteEvaluation.approvedMinOutRaw.toString()}` +
     ` curvePool=${externalTakeQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
@@ -783,8 +700,7 @@ export async function takeLiquidationFactory({
 }
 
 /**
- * FIXED: Execute Uniswap V3 take via factory
- * Now follows 1inch pattern - sends WAD amounts to smart contract
+ * Execute Uniswap V3 take via factory using WAD auction amounts.
  */
 async function takeWithUniswapV3Factory({
   pool,
@@ -797,7 +713,7 @@ async function takeWithUniswapV3Factory({
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],
@@ -819,8 +735,7 @@ async function takeWithUniswapV3Factory({
  */
 
 /**
- * FIXED: Execute SushiSwap take via factory
- * Now follows 1inch pattern - sends WAD amounts to smart contract
+ * Execute SushiSwap take via factory using WAD auction amounts.
  */
 async function takeWithSushiSwapFactory({
   pool,
@@ -833,7 +748,7 @@ async function takeWithSushiSwapFactory({
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],
@@ -865,7 +780,7 @@ async function takeWithCurveFactory({
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
-  liquidation: LiquidationToTake;
+  liquidation: TakeLiquidationPlan;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],

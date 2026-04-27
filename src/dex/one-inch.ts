@@ -9,6 +9,7 @@ import {
   SwapDescriptionStructOutput,
 } from '../../typechain-types/contracts/AjnaKeeperTaker';
 import { logger } from '../logging';
+import { getErrorMessage } from '../utils';
 
 const ONE_INCH_ATOMIC_TAKE_ALLOWED_FLAGS = BigNumber.from(0);
 
@@ -104,7 +105,7 @@ function parseOneInchSwapDescriptionUint(
     return { value: parsed };
   } catch (error) {
     return {
-      error: `1inch swap description ${fieldName} is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      error: `1inch swap description ${fieldName} is invalid: ${getErrorMessage(error)}`,
     };
   }
 }

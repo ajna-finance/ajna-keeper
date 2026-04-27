@@ -1,9 +1,9 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber, ethers } from 'ethers';
+import { BigNumber } from 'ethers';
 import { logger } from '../logging';
 import { SubgraphReader } from '../read-transports';
-import { delay, weiToDecimaled } from '../utils';
-import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
+import { delay, getErrorMessage, weiToDecimaled } from '../utils';
+import { ArbTakeStrategy } from './arb-strategy';
 import { TakeWriteTransport } from './write-transport';
 import {
   ArbTakeEvaluation,
@@ -14,6 +14,15 @@ import {
   TakeDecision,
   TakeLiquidationPlan,
 } from './types';
+
+export const TAKE_SKIP_REASONS = {
+  auctionInactive: 'auction no longer has collateral onchain',
+  auctionStateChanged: 'onchain revalidation changed the auction state',
+  quoteCollateralMismatch:
+    'approved external take quote no longer matches collateral',
+  quoteAuctionPriceStale:
+    'approved external take quote is stale after auction price increased',
+} as const;
 
 export interface ExternalTakeAdapter<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
@@ -37,6 +46,16 @@ export interface ExternalTakeAdapter<
   }) => Promise<boolean | void>;
 }
 
+/**
+ * Shared candidate loop for independently configured take strategies.
+ *
+ * ExternalTakeAdapter represents routes that swap collateral through external
+ * liquidity. ArbTakeStrategy represents Ajna-native arbTake execution. The
+ * engine may approve both for one auction, but always attempts the external
+ * route first because it usually becomes profitable earlier and repays debt
+ * against external market liquidity before falling back to arbTake.
+ */
+
 interface TakeApprovalResult {
   approved: boolean;
   reason?: string;
@@ -53,6 +72,7 @@ interface EvaluateTakeDecisionParams<
   candidate: TakeBorrowerCandidate;
   subgraph: SubgraphReader;
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
+  arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   approveExternalTake?: (params: {
     pool: FungiblePool;
     signer: Signer;
@@ -88,6 +108,7 @@ interface ExecuteTakeDecisionParams<
   subgraph: SubgraphReader;
   dryRun: boolean;
   delayBetweenActions: number;
+  arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   revalidateBeforeExecution?: boolean;
   reapproveExternalTakeBeforeExecution?: EvaluateTakeDecisionParams<
     TPoolConfig,
@@ -104,8 +125,6 @@ interface ExecuteTakeDecisionParams<
     executedTake: boolean;
     executedArbTake: boolean;
   }) => void;
-  arbTakeActionLabel?: string;
-  arbTakeLogPrefix?: string;
   takeWriteTransport?: TakeWriteTransport;
 }
 
@@ -118,6 +137,7 @@ interface ProcessTakeCandidatesParams<
       | 'approveExternalTake'
       | 'approveArbTake'
       | 'externalTakeAdapter'
+      | 'arbTakeStrategy'
     >,
     Pick<
       ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>,
@@ -127,12 +147,11 @@ interface ProcessTakeCandidatesParams<
       | 'revalidateBeforeExecution'
       | 'onSkip'
       | 'onExecuted'
-      | 'arbTakeActionLabel'
-      | 'arbTakeLogPrefix'
       | 'takeWriteTransport'
     > {
   candidates: TakeBorrowerCandidate[];
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
+  arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   approveExternalTake?: EvaluateTakeDecisionParams<
     TPoolConfig,
     TExecutionConfig
@@ -163,12 +182,15 @@ export async function getTakeBorrowerCandidates(params: {
   return liquidationAuctions.map(({ borrower }) => ({ borrower }));
 }
 
-export async function revalidateTakeDecision(params: {
+export async function revalidateTakeDecision<
+  TPoolConfig extends TakeActionConfig = TakeActionConfig,
+>(params: {
   pool: FungiblePool;
   signer: Signer;
   borrower: string;
   subgraph: SubgraphReader;
-  poolConfig: TakeActionConfig;
+  poolConfig: TPoolConfig;
+  arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   takeablePrice?: number;
   hpbIndex?: number;
   maxArbTakePrice?: number;
@@ -199,21 +221,19 @@ export async function revalidateTakeDecision(params: {
   let hpbIndex = params.hpbIndex ?? 0;
   let maxArbTakePrice = params.maxArbTakePrice;
 
-  if (params.maxArbTakePrice !== undefined) {
-    const prices = await params.pool.getPrices();
-    const hpb = Number(weiToDecimaled(prices.hpb));
-    const minDeposit = params.poolConfig.take.minCollateral
-      ? params.poolConfig.take.minCollateral / hpb
-      : 0;
-    const arbEvaluation = await checkIfArbTakeable(
-      params.pool,
-      currentPrice,
+  if (
+    params.maxArbTakePrice !== undefined &&
+    params.arbTakeStrategy.isEnabled(params.poolConfig)
+  ) {
+    const arbEvaluation = await params.arbTakeStrategy.evaluateArbTake({
+      pool: params.pool,
+      signer: params.signer,
+      poolConfig: params.poolConfig,
+      subgraph: params.subgraph,
+      price: currentPrice,
+      auctionPrice: liquidationStatus.price,
       collateral,
-      params.poolConfig,
-      params.subgraph,
-      minDeposit.toString(),
-      params.signer
-    );
+    });
 
     approvedArbTake = arbEvaluation.isArbTakeable;
     hpbIndex = arbEvaluation.hpbIndex;
@@ -242,6 +262,7 @@ export async function evaluateTakeDecision<
   candidate,
   subgraph,
   externalTakeAdapter,
+  arbTakeStrategy,
   approveExternalTake,
   approveArbTake,
 }: EvaluateTakeDecisionParams<
@@ -263,7 +284,7 @@ export async function evaluateTakeDecision<
       hpbIndex: 0,
       collateral,
       auctionPrice,
-      reason: 'auction no longer has collateral onchain',
+      reason: TAKE_SKIP_REASONS.auctionInactive,
     };
   }
 
@@ -274,12 +295,14 @@ export async function evaluateTakeDecision<
   let takeablePrice: number | undefined;
   let maxArbTakePrice: number | undefined;
   let selectedQuoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
-
-  if (
+  const evaluateExternalTake = externalTakeAdapter.evaluateExternalTake;
+  const externalTakeConfigured =
     poolConfig.take.marketPriceFactor !== undefined &&
-    externalTakeAdapter.evaluateExternalTake
-  ) {
-    const quoteEvaluation = await externalTakeAdapter.evaluateExternalTake({
+    evaluateExternalTake !== undefined;
+  const arbTakeConfigured = arbTakeStrategy.isEnabled(poolConfig);
+
+  if (externalTakeConfigured) {
+    const quoteEvaluation = await evaluateExternalTake({
       pool,
       signer,
       poolConfig,
@@ -314,22 +337,16 @@ export async function evaluateTakeDecision<
     }
   }
 
-  if (
-    poolConfig.take.minCollateral !== undefined &&
-    poolConfig.take.hpbPriceFactor !== undefined
-  ) {
-    const prices = await pool.getPrices();
-    const hpb = Number(weiToDecimaled(prices.hpb));
-    const minDeposit = poolConfig.take.minCollateral / hpb;
-    const arbEvaluation = await checkIfArbTakeable(
+  if (arbTakeConfigured) {
+    const arbEvaluation = await arbTakeStrategy.evaluateArbTake({
       pool,
-      price,
-      collateral,
+      signer,
       poolConfig,
       subgraph,
-      minDeposit.toString(),
-      signer
-    );
+      price,
+      auctionPrice,
+      collateral,
+    });
 
     if (!arbEvaluation.isArbTakeable) {
       if (!approvedTake) {
@@ -357,6 +374,12 @@ export async function evaluateTakeDecision<
         reason = approval.reason ?? reason;
       }
     }
+  }
+  if (!approvedTake && !approvedArbTake && reason === undefined) {
+    reason =
+      externalTakeConfigured || arbTakeConfigured
+        ? `auction price ${price} did not satisfy configured take policies`
+        : 'no external take or arbTake strategy is configured';
   }
 
   return {
@@ -386,12 +409,11 @@ export async function executeTakeDecision<
   subgraph,
   dryRun,
   delayBetweenActions,
+  arbTakeStrategy,
   revalidateBeforeExecution,
   reapproveExternalTakeBeforeExecution,
   onSkip,
   onExecuted,
-  arbTakeActionLabel,
-  arbTakeLogPrefix,
   takeWriteTransport,
 }: ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>): Promise<void> {
   let approvedTake = decision.approvedTake;
@@ -410,6 +432,7 @@ export async function executeTakeDecision<
       borrower: decision.borrower,
       subgraph,
       poolConfig,
+      arbTakeStrategy,
       takeablePrice: decision.takeablePrice,
       hpbIndex,
       maxArbTakePrice,
@@ -427,8 +450,8 @@ export async function executeTakeDecision<
         candidate: { borrower: decision.borrower },
         stage: 'revalidation',
         reason: !collateral.gt(0)
-          ? 'auction no longer has collateral onchain'
-          : 'onchain revalidation changed the auction state',
+          ? TAKE_SKIP_REASONS.auctionInactive
+          : TAKE_SKIP_REASONS.auctionStateChanged,
         decision,
       });
       return;
@@ -440,7 +463,7 @@ export async function executeTakeDecision<
         onSkip?.({
           candidate: { borrower: decision.borrower },
           stage: 'revalidation',
-          reason: 'approved external take quote no longer matches collateral',
+          reason: TAKE_SKIP_REASONS.quoteCollateralMismatch,
           decision,
         });
         return;
@@ -451,8 +474,7 @@ export async function executeTakeDecision<
         onSkip?.({
           candidate: { borrower: decision.borrower },
           stage: 'revalidation',
-          reason:
-            'approved external take quote is stale after auction price increased',
+          reason: TAKE_SKIP_REASONS.quoteAuctionPriceStale,
           decision,
         });
         return;
@@ -526,10 +548,11 @@ export async function executeTakeDecision<
           borrower: decision.borrower,
           subgraph,
           poolConfig,
+          arbTakeStrategy,
           hpbIndex,
           maxArbTakePrice,
         });
-        const arbActionLabel = arbTakeActionLabel ?? 'ArbTake';
+        const arbActionLabel = arbTakeStrategy.actionLabel ?? 'ArbTake';
         approvedArbTake = postTakeRevalidated.approvedArbTake;
         collateral = postTakeRevalidated.collateral;
         auctionPrice = postTakeRevalidated.auctionPrice;
@@ -538,11 +561,11 @@ export async function executeTakeDecision<
 
         if (!approvedArbTake) {
           logger.debug(
-            `Skipping ${arbActionLabel} after external take for ${pool.name}/${decision.borrower}: onchain revalidation changed the auction state`
+            `Skipping ${arbActionLabel} after external take for ${pool.name}/${decision.borrower}: ${TAKE_SKIP_REASONS.auctionStateChanged}`
           );
         }
       } catch (error) {
-        const arbActionLabel = arbTakeActionLabel ?? 'ArbTake';
+        const arbActionLabel = arbTakeStrategy.actionLabel ?? 'ArbTake';
         approvedArbTake = false;
         logger.warn(
           `Skipping ${arbActionLabel} after external take for ${pool.name}/${decision.borrower}: failed to revalidate auction state`,
@@ -553,19 +576,13 @@ export async function executeTakeDecision<
   }
 
   if (approvedArbTake) {
-    executedArbTake = await arbTakeLiquidation({
+    executedArbTake = await arbTakeStrategy.executeArbTake({
       pool,
       signer,
-      liquidation: {
-        borrower: decision.borrower,
-        hpbIndex,
-      },
-      config: {
-        dryRun,
-        takeWriteTransport,
-      },
-      actionLabel: arbTakeActionLabel,
-      logPrefix: arbTakeLogPrefix,
+      borrower: decision.borrower,
+      hpbIndex,
+      dryRun,
+      takeWriteTransport,
     });
   }
 
@@ -586,6 +603,7 @@ export async function processTakeCandidates<
   candidates,
   subgraph,
   externalTakeAdapter,
+  arbTakeStrategy,
   externalExecutionConfig,
   dryRun,
   delayBetweenActions,
@@ -596,8 +614,6 @@ export async function processTakeCandidates<
   onSkip,
   onExecuted,
   onFound,
-  arbTakeActionLabel,
-  arbTakeLogPrefix,
   takeWriteTransport,
 }: ProcessTakeCandidatesParams<TPoolConfig, TExecutionConfig>): Promise<void> {
   for (const candidate of candidates) {
@@ -612,6 +628,7 @@ export async function processTakeCandidates<
         candidate,
         subgraph,
         externalTakeAdapter,
+        arbTakeStrategy,
         approveExternalTake,
         approveArbTake,
       });
@@ -620,7 +637,11 @@ export async function processTakeCandidates<
         onSkip?.({
           candidate,
           stage: 'evaluation',
-          reason: decision.reason ?? 'policy rejected candidate',
+          reason:
+            decision.reason ??
+            `auction price ${Number(
+              weiToDecimaled(decision.auctionPrice)
+            ).toFixed(6)} did not satisfy configured take policies`,
           decision,
         });
         continue;
@@ -639,19 +660,18 @@ export async function processTakeCandidates<
         subgraph,
         dryRun,
         delayBetweenActions,
+        arbTakeStrategy,
         revalidateBeforeExecution,
         reapproveExternalTakeBeforeExecution,
         onSkip,
         onExecuted,
-        arbTakeActionLabel,
-        arbTakeLogPrefix,
         takeWriteTransport,
       });
     } catch (error) {
       onSkip?.({
         candidate,
         stage,
-        reason: error instanceof Error ? error.message : String(error),
+        reason: getErrorMessage(error),
         decision,
       });
     }

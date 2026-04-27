@@ -24,18 +24,19 @@ import {
   resolveFactoryRouteSelectionSources,
 } from './route-policy';
 import {
+  formatLiquiditySource,
   hasConfiguredWrappedNativeAddress,
   resolveConfiguredGasQuoteLiquiditySource,
 } from './liquidity-source';
 import { logger } from '../logging';
 import { ethers } from 'ethers';
+import { MAX_UINT24_FEE_TIER } from '../constants';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
   'prefer_private_or_relay',
   'require_private_or_relay',
 ]);
-const MAX_UINT24_FEE_TIER = 16_777_215;
 const MAX_CANDIDATE_FEE_TIERS = 8;
 const MIN_DEX_GAS_OVERRIDE = BigInt(100_000);
 const MAX_DEX_GAS_OVERRIDE = BigInt(2_000_000);
@@ -989,7 +990,7 @@ export function validateAutoDiscoverConfig(
         const liquiditySource = parseLiquiditySourceKey(source);
         const sourceLabel =
           liquiditySource !== undefined
-            ? LiquiditySource[liquiditySource]
+            ? formatLiquiditySource(liquiditySource)
             : source;
         if (liquiditySource === undefined) {
           throw new Error(

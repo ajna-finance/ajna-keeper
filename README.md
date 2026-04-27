@@ -250,7 +250,7 @@ Starts a liquidation when a loan's threshold price exceeds the lowest utilized p
 
 ### Take
 
-When auction price drops below a configured external-price threshold, the keeper can execute an external take by swapping collateral for quote token and repaying debt. Current external take paths support the legacy 1inch flow plus factory-based Uniswap V3, SushiSwap, and Curve integrations.
+When auction price drops below a configured external-price threshold, the keeper can execute an external take by swapping collateral for quote token and repaying debt. Current external take paths support the manual 1inch atomic `keeperTaker` flow plus factory-based Uniswap V3, SushiSwap, and Curve integrations.
 
 External takes usually require contract deployment. Take submission can also be routed through an optional dedicated private/write transport. See the contract deployment section below.
 
@@ -407,7 +407,7 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 #### Configuring for 1inch
 
-To enable 1inch swaps, set up environment variables and add the 1inch router fields to config.ts. For discovered external takes, keep `delayBetweenActions` low and use `autoDiscover.take.oneInchQuoteTimeoutMs` plus the 1inch failure cooldown to bound API latency. Long `delayBetweenActions` values are only appropriate for slow legacy/manual 1inch operation.
+To enable 1inch swaps, set up environment variables and add the 1inch router fields to config.ts. For discovered external takes, keep `delayBetweenActions` low and use `autoDiscover.take.oneInchQuoteTimeoutMs` plus the 1inch failure cooldown to bound API latency. Long `delayBetweenActions` values are only appropriate for slow manual 1inch operation.
 
 Atomic 1inch takes validate the decoded swap payload before submission. The payload must swap the pool collateral token to the pool quote token, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured 1inch router or the decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `oneInchAggregationExecutorAllowlist` per chain to hard-restrict executors. If 1inch starts returning required non-zero flags for a target pair, use factory routing for that pool or open an issue before loosening this guard.
 
@@ -575,7 +575,7 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
-- `allowedExternalTakePaths: ['oneinch', 'factory']` enables top-level comparison between the 1inch aggregator path and the best factory path. If omitted, autodiscover preserves the legacy single-path behavior from `discoveredDefaults.take.liquiditySource`.
+- `allowedExternalTakePaths: ['oneinch', 'factory']` enables top-level comparison between the 1inch aggregator path and the best factory path. If omitted, autodiscover preserves the single-path behavior from `discoveredDefaults.take.liquiditySource`.
 - `allowedLiquiditySources` remains factory-only. Use it to restrict factory route selection to `UNISWAPV3`, `SUSHISWAP`, and/or `CURVE`; when set, it is the complete factory route allowlist and cannot include `ONEINCH`.
 - If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the factory taker path before hot loops begin.
 - Hybrid 1inch-plus-factory ranking requires a configured native-to-quote gas conversion path and wrapped native token address, because the keeper compares route net profit instead of gross quote output.

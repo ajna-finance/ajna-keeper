@@ -4,6 +4,7 @@ import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../config';
 import { logger } from '../logging';
 import * as takeFactory from '../take/factory';
+import { processManualTakeCandidates } from '../take';
 import { SushiSwapQuoteProvider } from '../dex/providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
 import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
@@ -49,7 +50,7 @@ describe('Take Factory', () => {
     sinon.restore();
   });
 
-  describe('handleFactoryTakes - Real Function Tests', () => {
+  describe('processManualTakeCandidates factory context - Real Function Tests', () => {
     it('should handle missing configuration gracefully', async () => {
       const mockPool = {
         name: 'USD_T1 / USD_T2',
@@ -83,7 +84,7 @@ describe('Take Factory', () => {
 
       try {
         // This should complete without throwing, even with missing config
-        await takeFactory.handleFactoryTakes({
+        await processManualTakeCandidates({
           signer: mockSigner,
           pool: mockPool as any,
           poolConfig: poolConfig as any,
@@ -148,18 +149,19 @@ describe('Take Factory', () => {
         }),
       });
 
-      await takeFactory.handleFactoryTakes({
+      await processManualTakeCandidates({
         signer: mockSigner,
         pool: mockPool as any,
         poolConfig: poolConfig as any,
         config: config as any,
       });
 
-      // Should log the debug message about using factory take handler
+      // Should log the debug message about using the manual factory external take context
       const debugCalls = loggerDebugStub.getCalls();
       const factoryLogFound = debugCalls.some(
         (call) =>
-          call.args[0] && call.args[0].includes('Factory take handler starting')
+          call.args[0] &&
+          call.args[0].includes('Manual factory external take context starting')
       );
       expect(factoryLogFound).to.be.true;
 
@@ -274,7 +276,7 @@ describe('Take Factory', () => {
         },
       };
 
-      // Business logic: factory doesn't support 1inch (use single contract instead)
+      // Business logic: factory doesn't support 1inch (use keeperTaker instead)
       const isFactorySupported =
         poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3;
       expect(isFactorySupported).to.be.false;

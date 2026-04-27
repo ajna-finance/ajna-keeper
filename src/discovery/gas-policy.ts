@@ -5,6 +5,7 @@ import {
   AutoDiscoverTakePolicy,
   DEFAULT_FEE_TIER_BY_SOURCE,
   LiquiditySource,
+  formatLiquiditySource,
   hasConfiguredGasQuoteLiquiditySource,
   resolveConfiguredGasQuoteLiquiditySource,
   resolveConfiguredWrappedNativeAddress,
@@ -34,7 +35,8 @@ import {
   recordOneInchQuoteFailure,
   recordOneInchQuoteSuccess,
 } from './one-inch-circuit';
-import { withTimeout } from '../utils';
+import { getErrorMessage, withTimeout } from '../utils';
+import { BASIS_POINTS_DENOMINATOR_BN } from '../constants';
 
 export interface GasPolicyResult {
   approved: boolean;
@@ -50,16 +52,30 @@ export interface GasPolicyResult {
   reason?: string;
 }
 
-const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
 export const DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS = 13_000;
 export const DEFAULT_L1_DISCOVERY_GAS_PRICE_TTL_MS = 5 * 1000;
 export const DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS = 15 * 1000;
-const L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER = new Set([
-  10, 8453, 42161, 11155420, 84532, 421614,
-]);
-const L2_CHAIN_IDS_WITH_STABLE_GAS = new Set([
-  10, 8453, 42161, 11155420, 84532, 421614,
-]);
+
+interface L2ChainProfile {
+  stableGas: boolean;
+  dataFeeBuffer: boolean;
+}
+
+const L2_CHAIN_PROFILES: Record<number, L2ChainProfile> = {
+  10: { stableGas: true, dataFeeBuffer: true },
+  8453: { stableGas: true, dataFeeBuffer: true },
+  42161: { stableGas: true, dataFeeBuffer: true },
+  11155420: { stableGas: true, dataFeeBuffer: true },
+  84532: { stableGas: true, dataFeeBuffer: true },
+  421614: { stableGas: true, dataFeeBuffer: true },
+};
+
+function hasL2ChainProfileFlag(
+  chainId: number | undefined,
+  flag: keyof L2ChainProfile
+): boolean {
+  return chainId !== undefined && L2_CHAIN_PROFILES[chainId]?.[flag] === true;
+}
 
 export function getDiscoveryGasPriceFreshnessTtlMs(
   policy?: Pick<
@@ -68,7 +84,7 @@ export function getDiscoveryGasPriceFreshnessTtlMs(
   >,
   chainId?: number
 ): number {
-  if (chainId !== undefined && L2_CHAIN_IDS_WITH_STABLE_GAS.has(chainId)) {
+  if (hasL2ChainProfileFlag(chainId, 'stableGas')) {
     return (
       policy?.l2GasPriceFreshnessTtlMs ?? DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS
     );
@@ -83,16 +99,13 @@ function applyL2GasCostBuffer(
   chainId?: number,
   bufferBasisPoints: number = DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS
 ): BigNumber {
-  if (
-    chainId === undefined ||
-    !L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER.has(chainId)
-  ) {
+  if (!hasL2ChainProfileFlag(chainId, 'dataFeeBuffer')) {
     return gasCostNativeRaw;
   }
   return gasCostNativeRaw
     .mul(BigNumber.from(bufferBasisPoints))
-    .add(BASIS_POINTS_DENOMINATOR.sub(1))
-    .div(BASIS_POINTS_DENOMINATOR);
+    .add(BASIS_POINTS_DENOMINATOR_BN.sub(1))
+    .div(BASIS_POINTS_DENOMINATOR_BN);
 }
 
 function ceilDivBigNumber(
@@ -136,10 +149,7 @@ export function getEffectiveL2GasCostBufferBasisPoints(
   policy?: Pick<AutoDiscoverTakePolicy, 'l2GasCostBufferBasisPoints'>,
   chainId?: number
 ): number | undefined {
-  if (
-    chainId === undefined ||
-    !L2_CHAIN_IDS_WITH_DATA_FEE_BUFFER.has(chainId)
-  ) {
+  if (!hasL2ChainProfileFlag(chainId, 'dataFeeBuffer')) {
     return undefined;
   }
   return (
@@ -324,12 +334,11 @@ function logGasQuoteFallback(params: {
     return;
   }
 
-  const message = `Gas quote conversion used ${
-    LiquiditySource[params.usedLiquiditySource] ?? params.usedLiquiditySource
-  } after preferred source ${
-    LiquiditySource[params.preferredLiquiditySource] ??
+  const message = `Gas quote conversion used ${formatLiquiditySource(
+    params.usedLiquiditySource
+  )} after preferred source ${formatLiquiditySource(
     params.preferredLiquiditySource
-  } was unavailable`;
+  )} was unavailable`;
   if (!params.rpcCache || params.gasQuoteCacheKey === undefined) {
     logger.warn(message);
     return;
@@ -544,7 +553,7 @@ async function quoteTokensByGasQuoteSources(params: {
       }
     } catch (error) {
       logger.debug(
-        `Gas quote conversion failed with ${LiquiditySource[liquiditySource] ?? liquiditySource}: ${error instanceof Error ? error.message : String(error)}`
+        `Gas quote conversion failed with ${formatLiquiditySource(liquiditySource)}: ${getErrorMessage(error)}`
       );
     }
   }

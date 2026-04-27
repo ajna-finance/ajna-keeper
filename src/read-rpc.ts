@@ -11,7 +11,7 @@ import {
 } from './endpoint-health';
 import { logger } from './logging';
 import { JsonRpcProvider } from './provider';
-import { withTimeout } from './utils';
+import { getErrorMessage, withTimeout } from './utils';
 
 const READ_RPC_FAILURE_THRESHOLD = 3;
 const READ_RPC_COOLDOWN_MS = 30_000;
@@ -39,7 +39,9 @@ function inferProviderUrl(
   return (provider as any)?.connection?.url;
 }
 
-function getReadRpcEndpoints(config: Pick<KeeperConfig, 'ethRpcUrl' | 'readRpcUrls'>): string[] {
+function getReadRpcEndpoints(
+  config: Pick<KeeperConfig, 'ethRpcUrl' | 'readRpcUrls'>
+): string[] {
   if (config.readRpcUrls && config.readRpcUrls.length > 0) {
     return uniqueEndpoints(config.readRpcUrls);
   }
@@ -101,9 +103,7 @@ export async function getResilientReadGasPrice(params: {
   for (let index = 0; index < orderedEndpoints.length; index++) {
     const endpoint = orderedEndpoints[index];
     const provider =
-      params.primaryProvider &&
-      index === 0 &&
-      endpoint === primaryEndpoint
+      params.primaryProvider && index === 0 && endpoint === primaryEndpoint
         ? params.primaryProvider
         : getReadProvider(endpoint);
 
@@ -112,7 +112,10 @@ export async function getResilientReadGasPrice(params: {
         params.expectedChainId !== undefined &&
         provider !== params.primaryProvider
       ) {
-        const providerChainId = await getReadProviderChainId(endpoint, provider);
+        const providerChainId = await getReadProviderChainId(
+          endpoint,
+          provider
+        );
         if (providerChainId !== params.expectedChainId) {
           throw new Error(
             `read-rpc endpoint ${formatEndpointForLogs(endpoint)} is on chainId ${providerChainId}, expected ${params.expectedChainId}`
@@ -144,7 +147,7 @@ export async function getResilientReadGasPrice(params: {
           kind: endpointKind,
           from: endpoint,
           to: nextEndpoint,
-          reason: error instanceof Error ? error.message : String(error),
+          reason: getErrorMessage(error),
         });
       }
     }

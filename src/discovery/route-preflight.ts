@@ -3,11 +3,13 @@ import {
   ExternalTakePathKind,
   KeeperConfig,
   LiquiditySource,
+  formatLiquiditySource,
   getAutoDiscoverTakePolicy,
   resolveExternalTakePaths,
   resolveFactoryRouteSelectionSources,
 } from '../config';
 import { logger } from '../logging';
+import { getErrorMessage } from '../utils';
 
 const FACTORY_TAKER_REGISTRY_ABI = [
   'function takerContracts(uint8 source) view returns (address)',
@@ -45,10 +47,6 @@ function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function isRetryableRpcReadError(error: unknown): boolean {
   const maybeError = error as { code?: unknown; reason?: unknown };
   const code =
@@ -77,6 +75,32 @@ function isRetryableRpcReadError(error: unknown): boolean {
       reason.includes(needle) ||
       message.includes(needle)
   );
+}
+
+async function retryRpcRead<T>(operation: () => Promise<T>): Promise<{
+  value?: T;
+  error?: unknown;
+}> {
+  let lastError: unknown;
+  for (
+    let attempt = 0;
+    attempt <= FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
+    try {
+      return { value: await operation() };
+    } catch (error) {
+      lastError = error;
+      if (
+        !isRetryableRpcReadError(error) ||
+        attempt === FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length
+      ) {
+        break;
+      }
+      await sleepMs(FACTORY_REGISTRY_READ_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  return { error: lastError };
 }
 
 function getEffectiveFactorySources(config: KeeperConfig): LiquiditySource[] {
@@ -121,38 +145,19 @@ async function requireContractCode(params: {
     params.errors.push(`${params.label} address is invalid: ${params.address}`);
     return;
   }
+  const address = params.address;
 
-  let code: string | undefined;
-  let lastError: unknown;
-  for (
-    let attempt = 0;
-    attempt <= FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length;
-    attempt += 1
-  ) {
-    try {
-      code = await params.provider.getCode(params.address);
-      break;
-    } catch (error) {
-      lastError = error;
-      if (
-        !isRetryableRpcReadError(error) ||
-        attempt === FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length
-      ) {
-        break;
-      }
-      await sleepMs(FACTORY_REGISTRY_READ_RETRY_DELAYS_MS[attempt]);
-    }
-  }
+  const { value: code, error } = await retryRpcRead(() =>
+    params.provider.getCode(address)
+  );
   if (code === undefined) {
     params.errors.push(
-      `${params.label} code could not be read after retries at ${params.address}: ${getErrorMessage(lastError)}`
+      `${params.label} code could not be read after retries at ${address}: ${getErrorMessage(error)}`
     );
     return;
   }
   if (code === '0x') {
-    params.errors.push(
-      `${params.label} has no contract code at ${params.address}`
-    );
+    params.errors.push(`${params.label} has no contract code at ${address}`);
   }
 }
 
@@ -173,30 +178,12 @@ async function validateFactoryRegistry(params: {
       FACTORY_TAKER_REGISTRY_ABI,
       params.provider
     );
-    let registeredTaker: string | undefined;
-    let lastError: unknown;
-    for (
-      let attempt = 0;
-      attempt <= FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length;
-      attempt += 1
-    ) {
-      try {
-        registeredTaker = await factory.takerContracts(params.source);
-        break;
-      } catch (error) {
-        lastError = error;
-        if (
-          !isRetryableRpcReadError(error) ||
-          attempt === FACTORY_REGISTRY_READ_RETRY_DELAYS_MS.length
-        ) {
-          break;
-        }
-        await sleepMs(FACTORY_REGISTRY_READ_RETRY_DELAYS_MS[attempt]);
-      }
-    }
+    const { value: registeredTaker, error } = await retryRpcRead<string>(() =>
+      factory.takerContracts(params.source)
+    );
     if (registeredTaker === undefined) {
       params.errors.push(
-        `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read after retries: ${getErrorMessage(lastError)}`
+        `keeperTakerFactory registry for ${formatLiquiditySource(params.source)} could not be read after retries: ${getErrorMessage(error)}`
       );
       return;
     }
@@ -206,18 +193,18 @@ async function validateFactoryRegistry(params: {
         ethers.constants.AddressZero.toLowerCase()
     ) {
       params.errors.push(
-        `keeperTakerFactory registry has no taker for ${LiquiditySource[params.source]}, expected ${params.expectedTaker}`
+        `keeperTakerFactory registry has no taker for ${formatLiquiditySource(params.source)}, expected ${params.expectedTaker}`
       );
       return;
     }
     if (registeredTaker.toLowerCase() !== params.expectedTaker.toLowerCase()) {
       params.errors.push(
-        `keeperTakerFactory registry maps ${LiquiditySource[params.source]} to ${registeredTaker}, expected ${params.expectedTaker}`
+        `keeperTakerFactory registry maps ${formatLiquiditySource(params.source)} to ${registeredTaker}, expected ${params.expectedTaker}`
       );
     }
   } catch (error) {
     params.errors.push(
-      `keeperTakerFactory registry for ${LiquiditySource[params.source]} could not be read: ${getErrorMessage(error)}`
+      `keeperTakerFactory registry for ${formatLiquiditySource(params.source)} could not be read: ${getErrorMessage(error)}`
     );
   }
 }
@@ -265,7 +252,7 @@ export async function validateAutoDiscoverRouteDeployments(params: {
       const takerAddress = getConfiguredTakerAddress(params.config, source);
       await requireContractCode({
         provider: params.provider,
-        label: `${LiquiditySource[source]} taker`,
+        label: `${formatLiquiditySource(source)} taker`,
         address: takerAddress,
         errors,
       });

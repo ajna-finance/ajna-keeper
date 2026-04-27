@@ -4,13 +4,17 @@ import { logger } from '../logging';
 import { AuctionToSettle, SettlementReadConfig } from './model';
 import { SettlementActionConfig } from './types';
 import { needsSettlement } from './checks';
+import { getErrorMessage } from '../utils';
 
 interface SettlementScannerCacheEntry {
   lastSubgraphQuery: number;
   cachedAuctions: AuctionToSettle[];
 }
 
-const sharedSettlementScannerCache = new Map<string, SettlementScannerCacheEntry>();
+const sharedSettlementScannerCache = new Map<
+  string,
+  SettlementScannerCacheEntry
+>();
 const SHARED_SETTLEMENT_SCANNER_CACHE_RETENTION_MS = 900000;
 
 function parseSubgraphKickTimeMs(rawKickTime: unknown): number | undefined {
@@ -34,7 +38,10 @@ export function clearSharedSettlementScannerCache(): void {
 
 function pruneSharedSettlementScannerCache(now: number): void {
   sharedSettlementScannerCache.forEach((entry, cacheKey) => {
-    if (now - entry.lastSubgraphQuery > SHARED_SETTLEMENT_SCANNER_CACHE_RETENTION_MS) {
+    if (
+      now - entry.lastSubgraphQuery >
+      SHARED_SETTLEMENT_SCANNER_CACHE_RETENTION_MS
+    ) {
       sharedSettlementScannerCache.delete(cacheKey);
     }
   });
@@ -216,7 +223,7 @@ export class SettlementScanner {
       }
       return actuallySettleable;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
       if (
         errorMessage.includes('ECONNRESET') ||
         errorMessage.includes('ETIMEDOUT')
@@ -225,7 +232,10 @@ export class SettlementScanner {
           `Network error querying settlements for ${this.pool.name}, will retry: ${errorMessage}`
         );
       } else {
-        logger.error(`Error querying settlements for ${this.pool.name}:`, error);
+        logger.error(
+          `Error querying settlements for ${this.pool.name}:`,
+          error
+        );
       }
 
       return [];
