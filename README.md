@@ -459,7 +459,7 @@ A 1inch API key may be obtained from their [developer portal](https://portal.1in
 
 ### Factory Fee-Tier Configuration for External Takes
 
-For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, both V3 factory sources automatically probe standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set.
+For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, both V3 factory sources automatically probe standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set; use `candidateFeeTiers: [defaultFeeTier]` for default-tier-only probing.
 
 **Fee Tier Value → Percentage → Common Use:**
 
@@ -595,7 +595,7 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - For live discovered external takes, `autoDiscover.take.externalTakeTransportPolicy` can be `allow_public`, `prefer_private_or_relay`, or `require_private_or_relay`. Use `require_private_or_relay` only when `takeWrite` is configured for `private_rpc` or `relay`; dry runs skip write submission but still warn if no private/relay transport is configured.
 - `autoDiscover.take.validateRouteDeployments: true` enables startup preflight checks for enabled external-take routers, takers, factory registry entries, and configured Curve pools.
 - `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.
-- Uniswap V3 and SushiSwap automatically probe standard fee tiers when `candidateFeeTiers` is unset. This adds up to three extra pool-existence checks per V3 factory candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`.
+- Uniswap V3 and SushiSwap automatically probe standard fee tiers when `candidateFeeTiers` is unset. This adds up to three extra pool-existence checks per V3 factory candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`. Set `candidateFeeTiers: [defaultFeeTier]` to opt out of automatic standard-tier probing.
 
 For a conservative first live rollout on Base, start from [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts).
 

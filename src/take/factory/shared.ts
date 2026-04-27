@@ -244,10 +244,10 @@ async function initializeQuoteProviderWithCooldown<
 
 function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
   while (map.size > maxSize) {
-    const oldestKey = map.keys().next().value;
-    if (oldestKey === undefined) {
+    if (map.size === 0) {
       return;
     }
+    const oldestKey = map.keys().next().value;
     map.delete(oldestKey);
   }
 }
@@ -994,9 +994,10 @@ export function selectBestFactoryRouteEvaluation(params: {
       return false;
     }
     if (!evaluation.routeProfitability?.expectedNetProfitQuoteRaw) {
-      throw new Error(
-        'Factory: takeable route missing expected net profit metadata'
+      logger.warn(
+        'Factory: skipping takeable route missing expected net profit metadata'
       );
+      return false;
     }
     return true;
   });

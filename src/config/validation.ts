@@ -31,7 +31,7 @@ import {
 } from './liquidity-source';
 import { logger } from '../logging';
 import { ethers } from 'ethers';
-import { MAX_UINT24_FEE_TIER } from '../constants';
+import { MARKET_FACTOR_SCALE, MAX_UINT24_FEE_TIER } from '../constants';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -48,6 +48,7 @@ const STANDARD_V3_FEE_TIER_SET: ReadonlySet<number> = new Set(
 const VALIDATION_BOUNDS = {
   minL2GasCostBufferBps: 10_000,
   maxL2GasCostBufferBps: 30_000,
+  minMarketPriceFactor: 1 / MARKET_FACTOR_SCALE,
   maxMarketPriceFactor: 2,
   // Keep drift tolerance bounded to operationally sane values; 5000 = 50%.
   maxGasPriceDriftToleranceBps: 5_000,
@@ -495,6 +496,14 @@ export function validateTakeSettings(
       config.marketPriceFactor,
       'TakeSettings: marketPriceFactor must be positive'
     );
+    if (
+      config.marketPriceFactor !== undefined &&
+      config.marketPriceFactor < VALIDATION_BOUNDS.minMarketPriceFactor
+    ) {
+      throw new Error(
+        `TakeSettings: marketPriceFactor ${config.marketPriceFactor} is below the minimum supported precision ${VALIDATION_BOUNDS.minMarketPriceFactor}`
+      );
+    }
     if (
       config.marketPriceFactor !== undefined &&
       config.marketPriceFactor > VALIDATION_BOUNDS.maxMarketPriceFactor
@@ -1218,6 +1227,11 @@ export function validateTakeSettingsForChain(
 
   for (const poolConfig of config.pools) {
     if (poolConfig.take) {
+      if (poolConfig.take.allowSubsidy === true) {
+        logger.warn(
+          `Pool ${poolConfig.name ?? poolConfig.address} has take.allowSubsidy=true; this can intentionally execute external takes that repay the auction while bypassing gas/profit shortfall protection`
+        );
+      }
       validateTakeSettings(poolConfig.take, config, chainId);
     }
   }

@@ -6,6 +6,7 @@ import {
   TakeWriteTransportMode,
   validateAutoDiscoverConfig,
   validateTakeSettings,
+  validateTakeSettingsForChain,
   validateTakeWriteConfig,
 } from '../config';
 import { logger } from '../logging';
@@ -324,6 +325,18 @@ describe('auto-discover validation', () => {
     expect(() =>
       validateTakeSettings(
         {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.0000001,
+        },
+        config
+      )
+    ).to.throw(
+      'TakeSettings: marketPriceFactor 1e-7 is below the minimum supported precision 0.000001'
+    );
+
+    expect(() =>
+      validateTakeSettings(
+        {
           minCollateral: '1' as unknown as number,
           hpbPriceFactor: 0.98,
         },
@@ -340,6 +353,33 @@ describe('auto-discover validation', () => {
         {} as KeeperConfig
       )
     ).to.throw('TakeSettings: hpbPriceFactor must be positive');
+  });
+
+  it('warns when per-pool config allows subsidized external takes', () => {
+    const config = baseConfig();
+    config.pools = [
+      {
+        name: 'Reviewed Defensive Pool',
+        address: '0x0000000000000000000000000000000000000001',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+          allowSubsidy: true,
+        },
+      } as any,
+    ];
+    const warnStub = sinon.stub(logger, 'warn');
+
+    try {
+      validateTakeSettingsForChain(config, 1);
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match('Pool Reviewed Defensive Pool has take.allowSubsidy=true')
+        )
+      ).to.equal(true);
+    } finally {
+      warnStub.restore();
+    }
   });
 
   it('warns when autodiscovery defaults allow subsidized external takes', () => {

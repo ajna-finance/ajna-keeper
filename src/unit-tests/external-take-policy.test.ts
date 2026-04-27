@@ -134,7 +134,10 @@ describe('External take route policy', () => {
       configuredProfitFloorQuoteRaw: raw(10),
     });
 
-    expect(policy.routeBreakEvenMarketPriceFactor).to.equal(0.869565);
-    expect(policy.effectiveMarketPriceFactor).to.equal(0.869565);
+    expect(policy.routeBreakEvenMarketPriceFactor).to.be.closeTo(
+      0.869565,
+      1e-7
+    );
+    expect(policy.effectiveMarketPriceFactor).to.be.closeTo(0.869565, 1e-7);
   });
 });

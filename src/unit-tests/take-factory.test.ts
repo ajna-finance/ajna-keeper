@@ -860,8 +860,25 @@ describe('Take Factory', () => {
       ]);
     });
 
-    it('rejects takeable route evaluations without net-profit metadata', () => {
-      expect(() =>
+    it('skips takeable route evaluations without net-profit metadata', () => {
+      const loggerWarnStub = sinon.stub(logger, 'warn');
+      const validRoute = {
+        route: {
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          feeTier: 500,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(125),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(20),
+            expectedSubsidyQuoteRaw: BigNumber.from(0),
+            subsidyAllowed: false,
+          },
+        },
+      };
+
+      expect(
         selectBestFactoryRouteEvaluation({
           evaluations: [
             {
@@ -877,14 +894,18 @@ describe('Take Factory', () => {
                 approvedMinOutRaw: ethers.utils.parseUnits('118', 6),
               },
             },
+            validRoute,
           ],
           defaultLiquiditySource: LiquiditySource.UNISWAPV3,
           config: {
             universalRouterOverrides: { defaultFeeTier: 3000 },
+            sushiswapRouterOverrides: { defaultFeeTier: 500 },
           },
         })
-      ).to.throw(
-        'Factory: takeable route missing expected net profit metadata'
+      ).to.equal(validRoute);
+      expect(loggerWarnStub.calledOnce).to.equal(true);
+      expect(loggerWarnStub.firstCall.args[0]).to.equal(
+        'Factory: skipping takeable route missing expected net profit metadata'
       );
     });
 
