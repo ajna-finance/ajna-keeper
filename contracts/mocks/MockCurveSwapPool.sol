@@ -6,19 +6,30 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract MockCurveSwapPool {
     IERC20 public immutable tokenIn;
     uint256 public immutable fixedAmountOut;
+    IERC20 public tokenOut;
 
     constructor(address tokenIn_, uint256 fixedAmountOut_) {
         tokenIn = IERC20(tokenIn_);
         fixedAmountOut = fixedAmountOut_;
     }
 
-    function exchange(int128, int128, uint256 dx, uint256) external returns (uint256 amountOut) {
-        tokenIn.transferFrom(msg.sender, address(this), dx);
-        return fixedAmountOut;
+    function setTokenOut(address tokenOut_) external {
+        tokenOut = IERC20(tokenOut_);
     }
 
-    function exchange(uint256, uint256, uint256 dx, uint256, bool, address) external returns (uint256 amountOut) {
+    function exchange(int128, int128, uint256 dx, uint256) external returns (uint256 amountOut) {
         tokenIn.transferFrom(msg.sender, address(this), dx);
-        return fixedAmountOut;
+        amountOut = fixedAmountOut;
+        if (address(tokenOut) != address(0) && amountOut > 0) {
+            tokenOut.transfer(msg.sender, amountOut);
+        }
+    }
+
+    function exchange(uint256, uint256, uint256 dx, uint256, bool, address receiver) external returns (uint256 amountOut) {
+        tokenIn.transferFrom(msg.sender, address(this), dx);
+        amountOut = fixedAmountOut;
+        if (address(tokenOut) != address(0) && amountOut > 0) {
+            tokenOut.transfer(receiver, amountOut);
+        }
     }
 }

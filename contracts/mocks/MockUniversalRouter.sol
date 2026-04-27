@@ -16,7 +16,7 @@ contract MockUniversalRouter {
     }
 
     function execute(bytes calldata, bytes[] calldata inputs, uint256) external {
-        (address recipient, uint256 amountIn,, bytes memory path,) = abi.decode(
+        (address recipient, uint256 amountIn, uint256 amountOutMinimum, bytes memory path,) = abi.decode(
             inputs[0],
             (address, uint256, uint256, bytes, bool)
         );
@@ -25,6 +25,10 @@ contract MockUniversalRouter {
         permit2.transferFrom(msg.sender, address(this), uint160(amountIn), tokenIn);
 
         if (quoteAmountOut > 0) {
+            require(
+                quoteAmountOut >= amountOutMinimum,
+                "MockUniversalRouter: insufficient output amount"
+            );
             quoteToken.transfer(recipient, quoteAmountOut);
         }
     }

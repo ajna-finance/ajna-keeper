@@ -1,0 +1,397 @@
+import { expect } from 'chai';
+import sinon from 'sinon';
+import { BigNumber, Wallet, constants, ethers, providers, utils } from 'ethers';
+import { network } from 'hardhat';
+import { CurvePoolType, LiquiditySource } from '../config';
+import * as erc20 from '../erc20';
+import { UniswapV3QuoteProvider } from '../dex/providers/uniswap-quote-provider';
+import { getFactoryTakeQuoteEvaluation } from '../take/factory';
+import { createFactoryQuoteProviderRuntimeCache } from '../take/factory/shared';
+import { resetHardhat, setBalance } from './test-utils';
+import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
+import {
+  CurveKeeperTaker__factory,
+  SushiSwapKeeperTaker__factory,
+  UniswapV3KeeperTaker__factory,
+} from '../../typechain-types/factories/contracts/takers';
+import {
+  MockAtomicSwapPool__factory,
+  MockCurveSwapPool__factory,
+  MockERC20__factory,
+  MockPermit2__factory,
+  MockPoolDeployer__factory,
+  MockSushiSwapRouter__factory,
+  MockUniversalRouter__factory,
+} from '../../typechain-types/factories/contracts/mocks';
+
+const ERC20_NON_SUBSET_HASH = utils.keccak256(
+  utils.toUtf8Bytes('ERC20_NON_SUBSET_HASH')
+);
+const AUCTION_PRICE = utils.parseEther('0.5');
+const COLLATERAL_AMOUNT = utils.parseEther('10');
+const QUOTE_AMOUNT_DUE = utils.parseEther('5');
+const ROUTER_AMOUNT_OUT = utils.parseEther('7');
+const APPROVED_MIN_OUT = utils.parseEther('6');
+const QUOTE_TOKEN_SCALE = BigNumber.from(1);
+const DEADLINE = 4_102_444_800;
+const BORROWER = '0x000000000000000000000000000000000000b0b0';
+
+function getProvider() {
+  return new providers.Web3Provider(network.provider as any);
+}
+
+async function expectRevert(tx: Promise<unknown>, expectedMessage: string) {
+  let caught: unknown;
+  try {
+    await tx;
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).to.be.instanceOf(Error);
+  expect((caught as Error).message).to.contain(expectedMessage);
+}
+
+describe('Production route selection fork verification', function () {
+  this.timeout(300_000);
+
+  beforeEach(async function () {
+    const forkNetwork = process.env.FORK_NETWORK || 'mainnet';
+    if (!['mainnet', 'base'].includes(forkNetwork)) {
+      this.skip();
+    }
+    await resetHardhat();
+  });
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  async function deployFactoryHarness() {
+    const provider = getProvider();
+    const owner = Wallet.createRandom().connect(provider);
+    await setBalance(owner.address, utils.parseEther('100').toHexString());
+
+    const collateralToken = await new MockERC20__factory(owner).deploy(
+      'Mock Collateral',
+      'MCOLL',
+      18
+    );
+    await collateralToken.deployed();
+
+    const quoteToken = await new MockERC20__factory(owner).deploy(
+      'Mock Quote',
+      'MQUOTE',
+      18
+    );
+    await quoteToken.deployed();
+
+    const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
+    await poolDeployer.deployed();
+
+    const pool = await new MockAtomicSwapPool__factory(owner).deploy(
+      collateralToken.address,
+      quoteToken.address,
+      QUOTE_TOKEN_SCALE
+    );
+    await pool.deployed();
+    await pool.setQuoteAmountDue(QUOTE_AMOUNT_DUE);
+    await collateralToken.mint(pool.address, COLLATERAL_AMOUNT.mul(10));
+
+    await poolDeployer.setDeployedPool(
+      ERC20_NON_SUBSET_HASH,
+      collateralToken.address,
+      quoteToken.address,
+      pool.address
+    );
+
+    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+      poolDeployer.address
+    );
+    await factory.deployed();
+
+    const uniswapTaker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      factory.address
+    );
+    await uniswapTaker.deployed();
+
+    const sushiTaker = await new SushiSwapKeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      factory.address
+    );
+    await sushiTaker.deployed();
+
+    const curveTaker = await new CurveKeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      factory.address
+    );
+    await curveTaker.deployed();
+
+    await factory.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address);
+    await factory.setTaker(LiquiditySource.SUSHISWAP, sushiTaker.address);
+    await factory.setTaker(LiquiditySource.CURVE, curveTaker.address);
+
+    return {
+      owner,
+      collateralToken,
+      quoteToken,
+      pool,
+      factory,
+      uniswapTaker,
+      sushiTaker,
+      curveTaker,
+    };
+  }
+
+  async function expectSuccessfulFactoryTake(params: {
+    source: LiquiditySource;
+    poolType?: CurvePoolType;
+  }) {
+    const {
+      owner,
+      collateralToken,
+      quoteToken,
+      pool,
+      factory,
+      uniswapTaker,
+      sushiTaker,
+      curveTaker,
+    } = await deployFactoryHarness();
+
+    const poolQuoteBefore = await quoteToken.balanceOf(pool.address);
+    const poolCollateralBefore = await collateralToken.balanceOf(pool.address);
+    const ownerQuoteBefore = await quoteToken.balanceOf(owner.address);
+    const takeCountBefore = await pool.takeCount();
+
+    let swapRouter: string;
+    let swapDetails: string;
+    let takerAddress: string;
+
+    if (params.source === LiquiditySource.UNISWAPV3) {
+      const permit2 = await new MockPermit2__factory(owner).deploy();
+      await permit2.deployed();
+      const router = await new MockUniversalRouter__factory(owner).deploy(
+        permit2.address,
+        quoteToken.address,
+        ROUTER_AMOUNT_OUT
+      );
+      await router.deployed();
+      await quoteToken.mint(router.address, ROUTER_AMOUNT_OUT);
+
+      swapRouter = router.address;
+      swapDetails = utils.defaultAbiCoder.encode(
+        ['(address,address,address,uint24,uint256,uint256)'],
+        [
+          [
+            router.address,
+            permit2.address,
+            quoteToken.address,
+            500,
+            APPROVED_MIN_OUT,
+            DEADLINE,
+          ],
+        ]
+      );
+      takerAddress = uniswapTaker.address;
+    } else if (params.source === LiquiditySource.SUSHISWAP) {
+      const router = await new MockSushiSwapRouter__factory(owner).deploy(
+        ROUTER_AMOUNT_OUT
+      );
+      await router.deployed();
+      await quoteToken.mint(router.address, ROUTER_AMOUNT_OUT);
+
+      swapRouter = router.address;
+      swapDetails = utils.defaultAbiCoder.encode(
+        ['uint24', 'uint256', 'uint256'],
+        [500, APPROVED_MIN_OUT, DEADLINE]
+      );
+      takerAddress = sushiTaker.address;
+    } else {
+      const curvePool = await new MockCurveSwapPool__factory(owner).deploy(
+        collateralToken.address,
+        ROUTER_AMOUNT_OUT
+      );
+      await curvePool.deployed();
+      await curvePool.setTokenOut(quoteToken.address);
+      await quoteToken.mint(curvePool.address, ROUTER_AMOUNT_OUT);
+
+      swapRouter = curvePool.address;
+      swapDetails = utils.defaultAbiCoder.encode(
+        ['address', 'uint8', 'uint8', 'uint8', 'uint256', 'uint256'],
+        [
+          curvePool.address,
+          params.poolType === CurvePoolType.CRYPTO ? 1 : 0,
+          0,
+          1,
+          APPROVED_MIN_OUT,
+          DEADLINE,
+        ]
+      );
+      takerAddress = curveTaker.address;
+    }
+
+    const tx = await factory.takeWithAtomicSwap(
+      pool.address,
+      BORROWER,
+      AUCTION_PRICE,
+      COLLATERAL_AMOUNT,
+      params.source,
+      swapRouter,
+      swapDetails
+    );
+    await tx.wait();
+
+    expect((await pool.takeCount()).eq(takeCountBefore.add(1))).to.be.true;
+    expect(await pool.lastBorrower()).to.equal(BORROWER);
+    expect(await pool.lastCallee()).to.equal(takerAddress);
+    expect((await pool.lastCollateralTaken()).eq(COLLATERAL_AMOUNT)).to.be.true;
+    expect(
+      (await quoteToken.balanceOf(pool.address)).eq(
+        poolQuoteBefore.add(QUOTE_AMOUNT_DUE)
+      )
+    ).to.be.true;
+    expect(
+      (await collateralToken.balanceOf(pool.address)).eq(
+        poolCollateralBefore.sub(COLLATERAL_AMOUNT)
+      )
+    ).to.be.true;
+    expect(
+      (await quoteToken.balanceOf(owner.address)).eq(
+        ownerQuoteBefore.add(ROUTER_AMOUNT_OUT.sub(QUOTE_AMOUNT_DUE))
+      )
+    ).to.be.true;
+    expect(
+      (await quoteToken.allowance(takerAddress, pool.address)).eq(
+        constants.Zero
+      )
+    ).to.be.true;
+  }
+
+  it('executes Uniswap V3 factory takes with selected fee tier and bound min-out', async () => {
+    await expectSuccessfulFactoryTake({
+      source: LiquiditySource.UNISWAPV3,
+    });
+  });
+
+  it('executes SushiSwap factory takes with selected fee tier and bound min-out', async () => {
+    await expectSuccessfulFactoryTake({
+      source: LiquiditySource.SUSHISWAP,
+    });
+  });
+
+  it('executes Curve factory takes through stable and crypto dispatch', async () => {
+    await expectSuccessfulFactoryTake({
+      source: LiquiditySource.CURVE,
+      poolType: CurvePoolType.STABLE,
+    });
+    await expectSuccessfulFactoryTake({
+      source: LiquiditySource.CURVE,
+      poolType: CurvePoolType.CRYPTO,
+    });
+  });
+
+  it('fails stale factory routes without clearing collateral or weakening min-out', async () => {
+    const { owner, quoteToken, collateralToken, pool, factory, sushiTaker } =
+      await deployFactoryHarness();
+    const staleAmountOut = QUOTE_AMOUNT_DUE.add(utils.parseEther('0.1'));
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(
+      staleAmountOut
+    );
+    await router.deployed();
+    await quoteToken.mint(router.address, staleAmountOut);
+
+    const poolQuoteBefore = await quoteToken.balanceOf(pool.address);
+    const poolCollateralBefore = await collateralToken.balanceOf(pool.address);
+    const swapDetails = utils.defaultAbiCoder.encode(
+      ['uint24', 'uint256', 'uint256'],
+      [500, APPROVED_MIN_OUT, DEADLINE]
+    );
+
+    await expectRevert(
+      factory.takeWithAtomicSwap(
+        pool.address,
+        BORROWER,
+        AUCTION_PRICE,
+        COLLATERAL_AMOUNT,
+        LiquiditySource.SUSHISWAP,
+        router.address,
+        swapDetails
+      ),
+      'SushiSwap swap failed'
+    );
+
+    expect((await pool.takeCount()).eq(constants.Zero)).to.be.true;
+    expect((await quoteToken.balanceOf(pool.address)).eq(poolQuoteBefore)).to.be
+      .true;
+    expect(
+      (await collateralToken.balanceOf(pool.address)).eq(poolCollateralBefore)
+    ).to.be.true;
+    expect(
+      (await quoteToken.allowance(sushiTaker.address, pool.address)).eq(
+        constants.Zero
+      )
+    ).to.be.true;
+  });
+
+  it('fails closed when the route quote budget skips a later viable fee tier', async () => {
+    sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+    sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+      .returns('0x7777777777777777777777777777777777777777');
+    sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
+    sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+      .callsFake(async (_amountIn, _tokenIn, _tokenOut, feeTier?: number) => ({
+        success: true,
+        dstAmount: ethers.utils.parseUnits(
+          feeTier === 500 ? '130' : '80',
+          6
+        ),
+      }) as any);
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+    const pool = {
+      name: 'Budget Exhaustion Pool',
+      collateralAddress: '0x1111111111111111111111111111111111111111',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      contract: {
+        quoteTokenScale: sinon
+          .stub()
+          .resolves(BigNumber.from('1000000000000')),
+      },
+    };
+
+    const evaluation = await getFactoryTakeQuoteEvaluation(
+      pool as any,
+      ethers.utils.parseEther('100'),
+      ethers.utils.parseEther('1'),
+      {
+        name: 'Budget Exhaustion Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      {
+        universalRouterOverrides: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [500],
+          wethAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+        },
+      } as any,
+      Wallet.createRandom().connect(getProvider()) as any,
+      createFactoryQuoteProviderRuntimeCache(),
+      {
+        routeQuoteBudgetPerCandidate: 1,
+      }
+    );
+
+    expect(evaluation.isTakeable).to.be.false;
+    expect(evaluation.reason).to.contain('skipped by route quote budget');
+    expect(evaluation.reason).to.contain('UNISWAPV3:500');
+  });
+});

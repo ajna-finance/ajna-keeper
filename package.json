@@ -9,6 +9,9 @@
     "compile": "npx hardhat compile",
     "unit-tests": "npx mocha --require ts-node/register 'src/unit-tests/**/*.test.ts'",
     "integration-tests": "npx hardhat test",
+    "production-verification:mainnet": "FORK_NETWORK=mainnet npx hardhat test src/integration-tests/production-route-selection.test.ts",
+    "production-verification:base": "FORK_NETWORK=base npx hardhat test src/integration-tests/production-route-selection.test.ts",
+    "production-verification": "npm run production-verification:mainnet && npm run production-verification:base",
     "create-keystore": "./node_modules/ts-node/dist/bin.js scripts/create-keystore.ts",
     "fork-base": "FORK_NETWORK=base hardhat node"
   },

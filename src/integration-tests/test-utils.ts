@@ -98,6 +98,11 @@ export const resetHardhat = async () => {
   const jsonRpcUrl =
     hardhatNetworkConfig?.url ??
     `https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`;
+  const forkNetwork = process.env.FORK_NETWORK || 'mainnet';
+  const resetBlockNumber =
+    forkNetwork === 'mainnet'
+      ? MAINNET_CONFIG.BLOCK_NUMBER
+      : hardhatNetworkConfig?.blockNumber;
 
   for (let attempt = 0; attempt < TEST_RPC_RESET_RETRIES; attempt++) {
     try {
@@ -105,11 +110,13 @@ export const resetHardhat = async () => {
         {
           forking: {
             jsonRpcUrl,
-            blockNumber: MAINNET_CONFIG.BLOCK_NUMBER,
+            ...(resetBlockNumber ? { blockNumber: resetBlockNumber } : {}),
           },
         },
       ]);
-      await waitForBlockReset(provider, MAINNET_CONFIG.BLOCK_NUMBER);
+      if (resetBlockNumber) {
+        await waitForBlockReset(provider, resetBlockNumber);
+      }
       NonceTracker.clearNonces();
       return;
     } catch (error) {
