@@ -462,6 +462,8 @@ export interface KeeperConfig {
   delayBetweenActions: number;
   delayBetweenRuns: number;
   oneInchRouters?: { [chainId: number]: string };
+  /** Default 1inch external-take slippage percentage. Defaults to 1.0 when unset. */
+  oneInchDefaultSlippage?: number;
   /**
    * Optional per-chain allowlist for decoded 1inch aggregationExecutor
    * addresses. When omitted, executors are logged but not hard-rejected.

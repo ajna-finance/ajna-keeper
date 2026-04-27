@@ -14,6 +14,7 @@ export type DiscoveryExecutionConfig = Pick<
   | 'keeperTaker'
   | 'keeperTakerFactory'
   | 'oneInchAggregationExecutorAllowlist'
+  | 'oneInchDefaultSlippage'
   | 'oneInchRouters'
   | 'sushiswapRouterOverrides'
   | 'takerContracts'

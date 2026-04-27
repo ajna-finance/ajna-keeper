@@ -795,6 +795,7 @@ type DiscoveryExternalExecutionConfig = Pick<
   | 'keeperTaker'
   | 'keeperTakerFactory'
   | 'oneInchAggregationExecutorAllowlist'
+  | 'oneInchDefaultSlippage'
   | 'oneInchRouters'
   | 'sushiswapRouterOverrides'
   | 'tokenAddresses'
@@ -1586,6 +1587,7 @@ async function quoteOneInchPathForDiscovery(
         {
           ...quoteOptions,
           delayBetweenActions: params.config.delayBetweenActions,
+          oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
         },
         params.signer,
         params.config.oneInchRouters,
@@ -1613,6 +1615,7 @@ async function quoteKeeperTakerOneInchTakeForDiscovery(
         {
           ...quoteOptions,
           delayBetweenActions: params.config.delayBetweenActions,
+          oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
         },
         params.signer,
         params.config.oneInchRouters,
@@ -2332,6 +2335,7 @@ export async function handleDiscoveredTakeTarget(
     connectorTokens: params.config.connectorTokens,
     oneInchAggregationExecutorAllowlist:
       params.config.oneInchAggregationExecutorAllowlist,
+    oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
     oneInchRouters: params.config.oneInchRouters,
     keeperTaker: params.config.keeperTaker,
     keeperTakerFactory: params.config.keeperTakerFactory,

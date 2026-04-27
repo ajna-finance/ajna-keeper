@@ -301,12 +301,10 @@ export async function getOneInchPathQuoteEvaluation(
         )
       )
     );
-    const slippageFloor = amountOut
-      .mul(
-        factoryShared.BASIS_POINTS_DENOMINATOR -
-          factoryShared.getSlippageBasisPoints(1)
-      )
-      .div(factoryShared.BASIS_POINTS_DENOMINATOR);
+    const slippageFloor = factoryShared.getSlippageFloorQuoteRaw(
+      amountOut,
+      config.oneInchDefaultSlippage
+    );
     const policy = applyExternalTakeRoutePolicy({
       configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
       allowSubsidy: poolConfig.take.allowSubsidy === true,
@@ -500,6 +498,7 @@ export async function takeLiquidation({
         {
           delayBetweenActions: config.delayBetweenActions,
           oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
+          oneInchDefaultSlippage: config.oneInchDefaultSlippage,
           skipOneInchRateLimitDelay: config.skipOneInchRateLimitDelay,
           chainId: config.chainId,
           tokenDecimalsCache: config.tokenDecimalsCache,
@@ -574,7 +573,7 @@ export async function takeLiquidation({
       collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
-      1,
+      config.oneInchDefaultSlippage ?? 1,
       keeperTaker.address,
       true,
       { timeoutMs: config.oneInchRequestTimeoutMs }

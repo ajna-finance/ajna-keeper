@@ -119,6 +119,15 @@ function requireOptionalNonNegative(value: unknown, message: string): void {
   }
 }
 
+function requireOptionalPercentage(value: unknown, message: string): void {
+  if (
+    value !== undefined &&
+    (!isFiniteNumber(value) || value < 0 || value > 100)
+  ) {
+    throw new Error(message);
+  }
+}
+
 function requireOptionalBoolean(value: unknown, message: string): void {
   if (value !== undefined && typeof value !== 'boolean') {
     throw new Error(message);
@@ -199,6 +208,10 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
     config.universalRouterOverrides;
   const sushiConfig: SushiswapRouterOverrides | undefined =
     config.sushiswapRouterOverrides;
+  requireOptionalPercentage(
+    config.oneInchDefaultSlippage,
+    'KeeperConfig: oneInchDefaultSlippage must be a number between 0 and 100'
+  );
   requireOptionalIntegerRange(
     config.curveRouterOverrides?.executionDelayMs,
     0,

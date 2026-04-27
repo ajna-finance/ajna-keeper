@@ -269,7 +269,7 @@ describe('take write submission', () => {
     };
 
     sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
-    sinon
+    const getSwapDataStub = sinon
       .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
       .resolves({ success: true, data: '0xdeadbeef' } as any);
     sinon
@@ -329,6 +329,7 @@ describe('take write submission', () => {
         dryRun: false,
         delayBetweenActions: 0,
         connectorTokens: [],
+        oneInchDefaultSlippage: 2.5,
         oneInchRouters: {
           1: '0x00000000000000000000000000000000000000cc',
         },
@@ -347,6 +348,8 @@ describe('take write submission', () => {
     ).to.be.true;
     expect(queueTransactionStub.calledOnce).to.be.true;
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
+    expect(getSwapDataStub.calledOnce).to.be.true;
+    expect(getSwapDataStub.firstCall.args[4]).to.equal(2.5);
   });
 
   it('fails 1inch atomic execution before API calls when the router is not configured', async () => {

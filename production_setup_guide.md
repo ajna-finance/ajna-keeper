@@ -219,6 +219,7 @@ const config: KeeperConfig = {
     8453: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Base
     42161: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Arbitrum
   },
+  oneInchDefaultSlippage: 1.0, // Optional; defaults to 1% when unset
 
   // ADD: Connector tokens for better routing (optional)
   connectorTokens: [
@@ -591,6 +592,7 @@ External take latency and API-cost controls:
 | `autoDiscover.take.takeQuoteBudgetPerRun`            | unset                                             | Caps total discovered take quote work per run.                                                                                                                                                                                                                                                                                                                           |
 | `autoDiscover.take.takeRouteQuoteBudgetPerCandidate` | unset                                             | Caps factory route candidates quoted per liquidation. Lower values reduce RPC/API work but can miss a better route.                                                                                                                                                                                                                                                      |
 | V3 factory `candidateFeeTiers` unset                 | `[defaultFeeTier, 100, 500, 3000, 10000]` deduped | Auto-probes standard Uniswap V3/SushiSwap tiers. Adds up to three extra pool-existence checks per V3 factory candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`. |
+| `oneInchDefaultSlippage`                             | `1.0`                                             | 1inch external-take min-out slippage percentage. Tighten for stable routes; widen only for reviewed volatile or thin routes.                                                                                                                                                                                                                                             |
 | `autoDiscover.take.oneInchQuoteTimeoutMs`            | `2000`                                            | Bounds each discovered 1inch quote and swap-data request.                                                                                                                                                                                                                                                                                                                |
 | `autoDiscover.take.externalTakeProbeTimeoutMs`       | `min(oneInchQuoteTimeoutMs + 1000, 5000)`         | Bounds each hybrid path probe. Explicit values may be `1..10000ms`.                                                                                                                                                                                                                                                                                                      |
 | `autoDiscover.take.oneInchQuoteFailureThreshold`     | `2`                                               | Retryable 1inch failures before the local circuit opens.                                                                                                                                                                                                                                                                                                                 |
@@ -748,6 +750,7 @@ const config: KeeperConfig = {
   oneInchRouters: {
     43114: '0x111111125421ca6dc452d289314280a0f8842a65',
   },
+  oneInchDefaultSlippage: 1.0,
 
   // Universal Router configuration (for LP rewards)
   universalRouterOverrides: {

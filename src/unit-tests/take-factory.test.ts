@@ -1257,6 +1257,8 @@ describe('Take Factory', () => {
           wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         },
       };
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -1267,7 +1269,7 @@ describe('Take Factory', () => {
         ethers.Wallet.createRandom().connect(
           new ethers.providers.JsonRpcProvider()
         ) as any,
-        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        runtimeCache,
         {
           allowedLiquiditySources: [
             LiquiditySource.UNISWAPV3,
