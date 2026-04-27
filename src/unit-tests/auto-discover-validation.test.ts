@@ -312,6 +312,18 @@ describe('auto-discover validation', () => {
     expect(() =>
       validateTakeSettings(
         {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 99,
+        },
+        config
+      )
+    ).to.throw(
+      'TakeSettings: marketPriceFactor 99 is unreasonable; values above 2 are rejected because values above 1 weaken market-factor protection. Did you mean 0.99?'
+    );
+
+    expect(() =>
+      validateTakeSettings(
+        {
           minCollateral: '1' as unknown as number,
           hpbPriceFactor: 0.98,
         },

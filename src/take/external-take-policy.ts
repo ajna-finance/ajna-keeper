@@ -135,12 +135,12 @@ export function applyExternalTakeRoutePolicy(
       : ZERO_BN;
 
   let rejectionReason: string | undefined;
-  if (!passesMarketThreshold) {
-    rejectionReason =
-      EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold;
-  } else if (!isRepayable) {
+  if (!isRepayable) {
     rejectionReason =
       EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRepaymentFloor;
+  } else if (!passesMarketThreshold) {
+    rejectionReason =
+      EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold;
   } else if (!params.allowSubsidy && !isNonSubsidizedProfitable) {
     rejectionReason =
       EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor;

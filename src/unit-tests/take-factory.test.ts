@@ -11,12 +11,15 @@ import { CurveQuoteProvider } from '../dex/providers/curve-quote-provider';
 import * as erc20 from '../erc20';
 import {
   applyFactoryRouteProfitabilityPolicy,
+  ceilDiv,
   filterFactoryRouteCandidatesByAvailability,
   getCurveQuoteProvider,
   getFactoryRouteCandidates,
+  getMarketPriceFactorUnits,
   getSushiSwapQuoteProvider,
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
+  MARKET_FACTOR_SCALE,
 } from '../take/factory/shared';
 
 describe('Take Factory', () => {
@@ -975,6 +978,39 @@ describe('Take Factory', () => {
         .true;
       expect(evaluation.approvedMinOutRaw?.eq(refreshedProfitMinOutRaw)).to.be
         .true;
+    });
+
+    it('re-derives the market-factor floor when route metadata is incomplete', () => {
+      const auctionRepayRequirementQuoteRaw = ethers.utils.parseUnits('100', 6);
+      const configuredMarketPriceFactor = 0.99;
+      const expectedMarketFactorFloorQuoteRaw = ceilDiv(
+        auctionRepayRequirementQuoteRaw.mul(MARKET_FACTOR_SCALE),
+        BigNumber.from(getMarketPriceFactorUnits(configuredMarketPriceFactor))
+      );
+
+      const evaluation = applyFactoryRouteProfitabilityPolicy({
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: ethers.utils.parseUnits('150', 6),
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+          selectedFeeTier: 3000,
+          routeProfitability: {
+            auctionRepayRequirementQuoteRaw,
+            configuredMarketPriceFactor,
+          },
+        },
+        liquiditySource: LiquiditySource.UNISWAPV3,
+        context: {
+          configuredProfitFloorQuoteRaw: ethers.utils.parseUnits('1', 6),
+        },
+      });
+
+      expect(
+        evaluation.routeProfitability?.marketFactorFloorQuoteRaw?.eq(
+          expectedMarketFactorFloorQuoteRaw
+        )
+      ).to.be.true;
+      expect(evaluation.isTakeable).to.be.true;
     });
 
     it('ranks viable Uni/Sushi routes by gas-adjusted net profit and keeps the selected fee tier', async () => {

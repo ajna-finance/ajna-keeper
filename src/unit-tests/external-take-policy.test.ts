@@ -67,12 +67,27 @@ describe('External take route policy', () => {
       allowSubsidy: true,
       quoteAmountRaw: raw(99),
       quoteDueRaw: raw(100),
-      marketFactorFloorQuoteRaw: raw(98),
+      marketFactorFloorQuoteRaw: raw(102),
     });
 
     expect(policy.isEconomicallyExecutable).to.equal(false);
     expect(policy.rejectionReason).to.equal(
       EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRepaymentFloor
+    );
+  });
+
+  it('rejects subsidized routes below the configured market threshold even when repayment clears', () => {
+    const policy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: 0.99,
+      allowSubsidy: true,
+      quoteAmountRaw: raw(101),
+      quoteDueRaw: raw(100),
+      marketFactorFloorQuoteRaw: raw(102),
+    });
+
+    expect(policy.isEconomicallyExecutable).to.equal(false);
+    expect(policy.rejectionReason).to.equal(
+      EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold
     );
   });
 

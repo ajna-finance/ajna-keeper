@@ -45,6 +45,7 @@ const STANDARD_V3_FEE_TIERS = new Set([100, 500, 3000, 10000]);
 const VALIDATION_BOUNDS = {
   minL2GasCostBufferBps: 10_000,
   maxL2GasCostBufferBps: 30_000,
+  maxMarketPriceFactor: 2,
   // Keep drift tolerance bounded to operationally sane values; 5000 = 50%.
   maxGasPriceDriftToleranceBps: 5_000,
   maxCurveExecutionDelayMs: 60_000,
@@ -478,6 +479,14 @@ export function validateTakeSettings(
       config.marketPriceFactor,
       'TakeSettings: marketPriceFactor must be positive'
     );
+    if (
+      config.marketPriceFactor !== undefined &&
+      config.marketPriceFactor > VALIDATION_BOUNDS.maxMarketPriceFactor
+    ) {
+      throw new Error(
+        `TakeSettings: marketPriceFactor ${config.marketPriceFactor} is unreasonable; values above ${VALIDATION_BOUNDS.maxMarketPriceFactor} are rejected because values above 1 weaken market-factor protection. Did you mean ${config.marketPriceFactor / 100}?`
+      );
+    }
     requireOptionalBoolean(
       config.allowSubsidy,
       'TakeSettings: allowSubsidy must be a boolean'

@@ -1389,9 +1389,6 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
     params.context.configuredProfitFloorQuoteRaw ?? ZERO;
   const slippageRiskBufferQuoteRaw =
     params.context.slippageRiskBufferQuoteRaw ?? ZERO;
-  const marketFactorFloorQuoteRaw =
-    routeProfitability.marketFactorFloorQuoteRaw ??
-    auctionRepayRequirementQuoteRaw;
   const configuredMarketPriceFactor =
     routeProfitability.configuredMarketPriceFactor;
   if (!configuredMarketPriceFactor || configuredMarketPriceFactor <= 0) {
@@ -1401,6 +1398,12 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       reason: 'route profitability context missing market price factor',
     };
   }
+  const marketFactorFloorQuoteRaw =
+    routeProfitability.marketFactorFloorQuoteRaw ??
+    ceilDiv(
+      auctionRepayRequirementQuoteRaw.mul(MARKET_FACTOR_SCALE),
+      BigNumber.from(getMarketPriceFactorUnits(configuredMarketPriceFactor))
+    );
   const requiredProfitFloorQuoteRaw = maxBigNumber(
     nativeProfitFloorQuoteRaw,
     configuredProfitFloorQuoteRaw

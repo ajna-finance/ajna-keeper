@@ -1075,35 +1075,6 @@ function applyDiscoveryApprovalProfitabilityPolicy(params: {
       nativeProfitFloorQuoteRaw:
         params.gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
     });
-    const approvedQuoteEvaluation = params.quoteEvaluation;
-    approvedQuoteEvaluation.routeMinOutRaw = policy.routeMinOutRaw;
-    approvedQuoteEvaluation.profitMinOutRaw = policy.profitMinOutRaw;
-    approvedQuoteEvaluation.approvedMinOutRaw = policy.approvedMinOutRaw;
-    approvedQuoteEvaluation.takeablePrice =
-      approvedQuoteEvaluation.marketPrice !== undefined
-        ? approvedQuoteEvaluation.marketPrice *
-          policy.effectiveMarketPriceFactor
-        : approvedQuoteEvaluation.takeablePrice;
-    approvedQuoteEvaluation.routeProfitability = {
-      ...approvedQuoteEvaluation.routeProfitability,
-      auctionRepayRequirementQuoteRaw: auctionCostQuoteRaw,
-      routeExecutionCostQuoteRaw: gasCostQuoteRaw,
-      nativeProfitFloorQuoteRaw:
-        params.gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
-      configuredProfitFloorQuoteRaw: params.minExpectedProfitQuoteRaw,
-      configuredMarketPriceFactor,
-      marketFactorFloorQuoteRaw,
-      requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
-      requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
-      requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
-      expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
-      surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
-      routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
-      effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
-      subsidyAllowed: policy.subsidyAllowed,
-      expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
-      ...gasTelemetryFields,
-    };
     if (!policy.isEconomicallyExecutable) {
       return rejectDiscoveryProfitFloor({
         reason:
@@ -1113,6 +1084,37 @@ function applyDiscoveryApprovalProfitabilityPolicy(params: {
         stats: params.stats,
       });
     }
+    const approvedQuoteEvaluation: ExternalTakeQuoteEvaluation = {
+      ...params.quoteEvaluation,
+      routeMinOutRaw: policy.routeMinOutRaw,
+      profitMinOutRaw: policy.profitMinOutRaw,
+      approvedMinOutRaw: policy.approvedMinOutRaw,
+      takeablePrice:
+        params.quoteEvaluation.marketPrice !== undefined
+          ? params.quoteEvaluation.marketPrice *
+            policy.effectiveMarketPriceFactor
+          : params.quoteEvaluation.takeablePrice,
+      routeProfitability: {
+        ...params.quoteEvaluation.routeProfitability,
+        auctionRepayRequirementQuoteRaw: auctionCostQuoteRaw,
+        routeExecutionCostQuoteRaw: gasCostQuoteRaw,
+        nativeProfitFloorQuoteRaw:
+          params.gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
+        configuredProfitFloorQuoteRaw: params.minExpectedProfitQuoteRaw,
+        configuredMarketPriceFactor,
+        marketFactorFloorQuoteRaw,
+        requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
+        requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
+        requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
+        expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+        surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
+        routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
+        effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
+        subsidyAllowed: policy.subsidyAllowed,
+        expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
+        ...gasTelemetryFields,
+      },
+    };
     return { approved: true, quoteEvaluation: approvedQuoteEvaluation };
   }
 
