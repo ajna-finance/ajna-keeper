@@ -233,7 +233,7 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   /**
    * Maximum time to wait for a 1inch quote while probing hybrid external-take
    * paths and for the matching 1inch swap-data request before submission.
-   * Defaults to 2000ms.
+   * Defaults to 2000ms. Must be between 1ms and 10000ms.
    */
   oneInchQuoteTimeoutMs?: number;
   /**
@@ -246,7 +246,8 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   oneInchQuoteFailureThreshold?: number;
   /**
    * Maximum time to wait for each external-take path probe in hybrid mode.
-   * Defaults to oneInchQuoteTimeoutMs plus a 1000ms RPC preflight budget.
+   * Defaults to oneInchQuoteTimeoutMs plus a 1000ms RPC preflight budget,
+   * capped at 5000ms. Must be between 1ms and 10000ms when configured.
    */
   externalTakeProbeTimeoutMs?: number;
   /**
@@ -457,6 +458,7 @@ export interface KeeperConfig {
   /**
    * Optional per-chain allowlist for decoded 1inch aggregationExecutor
    * addresses. When omitted, executors are logged but not hard-rejected.
+   * Each chain may list up to 64 executor addresses.
    */
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   tokenAddresses?: { [tokenSymbol: string]: string };

@@ -58,6 +58,7 @@ const WAD = ethers.constants.WeiPerEther;
 const ZERO = BigNumber.from(0);
 const BASIS_POINTS_DENOMINATOR = BigNumber.from(10_000);
 const DEFAULT_EXTERNAL_TAKE_PROBE_RPC_BUDGET_MS = 1_000;
+const MAX_DEFAULT_EXTERNAL_TAKE_PROBE_TIMEOUT_MS = 5_000;
 type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy
 >;
@@ -304,9 +305,10 @@ function getExternalTakeProbeTimeoutMs(
   if (takePolicy?.externalTakeProbeTimeoutMs !== undefined) {
     return takePolicy.externalTakeProbeTimeoutMs;
   }
-  return (
+  return Math.min(
     getOneInchQuoteTimeoutMs(takePolicy) +
-    DEFAULT_EXTERNAL_TAKE_PROBE_RPC_BUDGET_MS
+      DEFAULT_EXTERNAL_TAKE_PROBE_RPC_BUDGET_MS,
+    MAX_DEFAULT_EXTERNAL_TAKE_PROBE_TIMEOUT_MS
   );
 }
 
@@ -507,7 +509,8 @@ async function buildFactoryRouteProfitabilityContext(params: {
 
   const quoteTokenDecimals = await getDecimalsErc20(
     params.signer,
-    params.pool.quoteAddress
+    params.pool.quoteAddress,
+    params.rpcCache?.chainId
   );
   const configuredProfitFloorQuoteRaw =
     params.takePolicy?.minExpectedProfitQuote !== undefined
@@ -708,6 +711,7 @@ type DiscoveryExternalExecutionConfig = Pick<
   | 'dryRun'
   | 'keeperTaker'
   | 'keeperTakerFactory'
+  | 'oneInchAggregationExecutorAllowlist'
   | 'oneInchRouters'
   | 'sushiswapRouterOverrides'
   | 'tokenAddresses'
@@ -1033,7 +1037,11 @@ async function approveExternalTakeForDiscovery(
       gasCostQuoteRaw !== undefined);
   let quoteTokenDecimals = gasPolicy.quoteTokenDecimals;
   if (quoteTokenDecimals === undefined && needsSimpleProfitability) {
-    quoteTokenDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
+    quoteTokenDecimals = await getDecimalsErc20(
+      signer,
+      pool.quoteAddress,
+      rpcCache?.chainId
+    );
   }
   const auctionCostQuoteRaw =
     quoteTokenDecimals !== undefined
@@ -1652,7 +1660,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
         `${result.path}=${result.reason ?? 'not takeable'} (${result.durationMs}ms)`
     );
 
-  const selected = approvedEvaluations.sort((left, right) => {
+  const sortedApprovedEvaluations = approvedEvaluations.sort((left, right) => {
     const profitCompare = compareBigNumberDescending(
       rankExternalTakeQuote(left),
       rankExternalTakeQuote(right)
@@ -1674,12 +1682,20 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
       left.quoteAmountRaw,
       right.quoteAmountRaw
     );
-  })[0];
+  });
+  const selected = sortedApprovedEvaluations[0];
   if (selected) {
+    const selectedWithFallbacks = cloneExternalTakeQuoteEvaluation(selected);
+    selectedWithFallbacks.fallbackExternalTakeQuoteEvaluations =
+      sortedApprovedEvaluations.slice(1).map((evaluation) => {
+        const fallback = cloneExternalTakeQuoteEvaluation(evaluation);
+        fallback.fallbackExternalTakeQuoteEvaluations = undefined;
+        return fallback;
+      });
     logger.debug(
       `Hybrid external take selected path=${selected.externalTakePath} source=${formatLiquiditySource(selected.selectedLiquiditySource)} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${selected.approvedMinOutRaw?.toString() ?? 'n/a'} rejectedPaths=${rejectedReasons.join(', ') || 'none'} for pool ${params.pool.name}`
     );
-    return selected;
+    return selectedWithFallbacks;
   }
 
   const hasGasPolicyReject = probeResults.some(
@@ -1754,44 +1770,125 @@ function createExternalTakeAdapterForDiscovery(params: {
         liquidation,
         config,
       }) => {
-        const selection = resolveHybridExternalTakeExecutionSelection({
-          quoteEvaluation: liquidation.externalTakeQuoteEvaluation,
-          allowedExternalTakePaths: params.externalTakePaths,
-        });
-        if (!selection.approved) {
-          logger.error(
-            `Hybrid external take ${selection.reason}; refusing execution for ${pool.name}/${liquidation.borrower}`
-          );
-          return false;
-        }
-        const selectedPath = selection.effectiveSelectedPath;
-        const selectedSource = selection.selectedSource;
-        if (
-          selectedPath === 'oneinch' ||
-          selectedSource === LiquiditySource.ONEINCH
-        ) {
-          return takeModule.takeLiquidation({
+        const primaryEvaluation = liquidation.externalTakeQuoteEvaluation;
+        const executionCandidates = [
+          primaryEvaluation,
+          ...(primaryEvaluation?.fallbackExternalTakeQuoteEvaluations ?? []),
+        ].filter(
+          (evaluation): evaluation is ExternalTakeQuoteEvaluation =>
+            evaluation !== undefined
+        );
+
+        for (let index = 0; index < executionCandidates.length; index += 1) {
+          const candidateEvaluation = executionCandidates[index];
+          const selection = resolveHybridExternalTakeExecutionSelection({
+            quoteEvaluation: candidateEvaluation,
+            allowedExternalTakePaths: params.externalTakePaths,
+          });
+          if (!selection.approved) {
+            logger.error(
+              `Hybrid external take ${selection.reason}; refusing execution for ${pool.name}/${liquidation.borrower}`
+            );
+            if (index === 0) {
+              return false;
+            }
+            continue;
+          }
+
+          let approvedEvaluation = candidateEvaluation;
+          if (index > 0) {
+            const fallbackApproval = await params.approveExternalTake({
+              price: Number(ethers.utils.formatEther(liquidation.auctionPrice)),
+              auctionPrice: liquidation.auctionPrice,
+              collateral: liquidation.collateral,
+              quoteEvaluation: candidateEvaluation,
+              countStats: false,
+              forceGasRefresh: true,
+            });
+            if (!fallbackApproval.approved) {
+              logger.debug(
+                `Hybrid fallback path rejected during final approval for ${pool.name}/${liquidation.borrower}: ${
+                  fallbackApproval.reason ?? 'policy rejected fallback path'
+                }`
+              );
+              continue;
+            }
+            approvedEvaluation =
+              fallbackApproval.quoteEvaluation ?? candidateEvaluation;
+          }
+
+          const selectedPath = selection.effectiveSelectedPath;
+          const selectedSource = selection.selectedSource;
+          const liquidationForCandidate = {
+            ...liquidation,
+            externalTakeQuoteEvaluation: approvedEvaluation,
+          };
+
+          if (
+            selectedPath === 'oneinch' ||
+            selectedSource === LiquiditySource.ONEINCH
+          ) {
+            let oneInchPreSubmitRejected = false;
+            let oneInchSwapDataSucceeded = false;
+            const originalSwapDataResult = config.onOneInchSwapDataResult;
+            const oneInchConfig = {
+              ...config,
+              onOneInchSwapDataResult: (result: {
+                success: boolean;
+                retryable?: boolean;
+                errorCode?: number | string;
+                error?: string;
+              }) => {
+                originalSwapDataResult?.(result);
+                if (result.success) {
+                  oneInchSwapDataSucceeded = true;
+                } else {
+                  oneInchPreSubmitRejected = true;
+                }
+              },
+            };
+            const oneInchSucceeded = await takeModule.takeLiquidation({
+              pool,
+              signer,
+              poolConfig,
+              liquidation: liquidationForCandidate,
+              config: oneInchConfig,
+            });
+            if (oneInchSucceeded) {
+              return true;
+            }
+            if (
+              oneInchPreSubmitRejected &&
+              !oneInchSwapDataSucceeded &&
+              index < executionCandidates.length - 1
+            ) {
+              logger.warn(
+                `Hybrid 1inch path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
+              );
+              continue;
+            }
+            return false;
+          }
+
+          const selectedFactorySource = selectedSource;
+          const factoryPoolConfig =
+            selectedFactorySource !== undefined &&
+            isFactoryDynamicSource(selectedFactorySource)
+              ? withTakeLiquiditySource(poolConfig, selectedFactorySource)
+              : poolConfig;
+          return takeFactoryModule.takeLiquidationFactory({
             pool,
             signer,
-            poolConfig,
-            liquidation,
+            poolConfig: factoryPoolConfig,
+            liquidation: liquidationForCandidate,
             config,
           });
         }
 
-        const selectedFactorySource = selectedSource;
-        const factoryPoolConfig =
-          selectedFactorySource !== undefined &&
-          isFactoryDynamicSource(selectedFactorySource)
-            ? withTakeLiquiditySource(poolConfig, selectedFactorySource)
-            : poolConfig;
-        return takeFactoryModule.takeLiquidationFactory({
-          pool,
-          signer,
-          poolConfig: factoryPoolConfig,
-          liquidation,
-          config,
-        });
+        logger.error(
+          `Hybrid external take had no executable approved path for ${pool.name}/${liquidation.borrower}`
+        );
+        return false;
       },
     };
   }

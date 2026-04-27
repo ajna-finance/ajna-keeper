@@ -150,11 +150,15 @@ describe('take write submission', () => {
     expect(
       oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, {
         ...expected,
-        aggregationExecutors: [
-          '0x00000000000000000000000000000000000000dd',
-        ],
+        aggregationExecutors: ['0x00000000000000000000000000000000000000dd'],
       })
     ).to.include('is not in the configured allowlist');
+    expect(
+      oneInch.validateOneInchSwapDetailsForAtomicTake(validDetails, {
+        ...expected,
+        aggregationExecutors: [],
+      })
+    ).to.include('aggregationExecutor allowlist is empty');
     expect(
       oneInch.validateOneInchSwapDetailsForAtomicTake(
         {

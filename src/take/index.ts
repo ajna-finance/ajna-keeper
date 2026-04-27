@@ -46,7 +46,16 @@ import {
 import { logTakeExecutionTelemetry } from './execution-telemetry';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
-const verifiedOneInchChainIds = new WeakMap<object, Map<number, Promise<void>>>();
+const ONEINCH_CHAIN_ID_CHECK_TTL_MS = 60_000;
+interface VerifiedOneInchChainCheck {
+  provider?: object;
+  checkedAtMs?: number;
+  pending?: Promise<void>;
+}
+const verifiedOneInchChainIds = new WeakMap<
+  object,
+  Map<number, VerifiedOneInchChainCheck>
+>();
 
 type HandleTakeConfigBase = Pick<
   KeeperConfig,
@@ -156,29 +165,44 @@ async function assertConfiguredChainIdMatchesSigner(
   if (typeof signer !== 'object' || signer === null) {
     return;
   }
+  const provider = (signer as { provider?: object }).provider;
+  const now = Date.now();
   let signerChecks = verifiedOneInchChainIds.get(signer);
   if (!signerChecks) {
     signerChecks = new Map();
     verifiedOneInchChainIds.set(signer, signerChecks);
   }
-  let pending = signerChecks.get(configuredChainId);
-  if (!pending) {
-    pending = (async () => {
-      try {
-        const signerChainId = await signer.getChainId();
-        if (signerChainId !== configuredChainId) {
-          throw new Error(
-            `configured 1inch chainId ${configuredChainId} does not match signer chainId ${signerChainId}`
-          );
-        }
-      } catch (error) {
-        signerChecks.delete(configuredChainId);
-        throw error;
-      }
-    })();
-    signerChecks.set(configuredChainId, pending);
+  const cached = signerChecks.get(configuredChainId);
+  if (
+    cached?.checkedAtMs !== undefined &&
+    cached.provider === provider &&
+    now - cached.checkedAtMs <= ONEINCH_CHAIN_ID_CHECK_TTL_MS
+  ) {
+    return;
   }
-  await pending;
+  if (cached?.pending && cached.provider === provider) {
+    await cached.pending;
+    return;
+  }
+
+  const check: VerifiedOneInchChainCheck = { provider };
+  check.pending = (async () => {
+    try {
+      const signerChainId = await signer.getChainId();
+      if (signerChainId !== configuredChainId) {
+        throw new Error(
+          `configured 1inch chainId ${configuredChainId} does not match signer chainId ${signerChainId}`
+        );
+      }
+      check.checkedAtMs = Date.now();
+      check.pending = undefined;
+    } catch (error) {
+      signerChecks.delete(configuredChainId);
+      throw error;
+    }
+  })();
+  signerChecks.set(configuredChainId, check);
+  await check.pending;
 }
 
 async function resolveOneInchChainId(

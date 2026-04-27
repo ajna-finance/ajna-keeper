@@ -129,6 +129,9 @@ export function validateOneInchSwapDetailsForAtomicTake(
     return '1inch aggregationExecutor cannot be the zero address';
   }
   if (expected.aggregationExecutors !== undefined) {
+    if (expected.aggregationExecutors.length === 0) {
+      return '1inch aggregationExecutor allowlist is empty';
+    }
     const allowedAggregationExecutors = new Set<string>();
     for (const executor of expected.aggregationExecutors) {
       const normalizedExecutor = normalizeAddress(executor);

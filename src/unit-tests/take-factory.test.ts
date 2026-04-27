@@ -11,7 +11,9 @@ import * as erc20 from '../erc20';
 import {
   applyFactoryRouteProfitabilityPolicy,
   filterFactoryRouteCandidatesByAvailability,
+  getCurveQuoteProvider,
   getFactoryRouteCandidates,
+  getSushiSwapQuoteProvider,
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
 } from '../take/factory/shared';
@@ -572,6 +574,57 @@ describe('Take Factory', () => {
       expect(runtimeCache.sushiswap).to.equal(cachedProvider);
     });
 
+    it('does not sticky-cache failed SushiSwap provider initialization', async () => {
+      const initializeStub = sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'initialize')
+        .onFirstCall()
+        .rejects(new Error('rpc unavailable'))
+        .onSecondCall()
+        .resolves(true);
+      const warnStub = sinon.stub(logger, 'warn');
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      const routerConfig = {
+        swapRouterAddress: '0x3333333333333333333333333333333333333333',
+        quoterV2Address: '0x4444444444444444444444444444444444444444',
+        factoryAddress: '0x5555555555555555555555555555555555555555',
+        defaultFeeTier: 500,
+        wethAddress: '0x6666666666666666666666666666666666666666',
+      };
+      const quoteSigner = ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      );
+
+      const firstProvider = await getSushiSwapQuoteProvider({
+        signer: quoteSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+      expect(firstProvider).to.equal(undefined);
+      expect(runtimeCache.sushiswap).to.equal(undefined);
+      expect(runtimeCache.sushiswapUnavailableUntilMs).to.be.greaterThan(
+        Date.now()
+      );
+
+      const secondProvider = await getSushiSwapQuoteProvider({
+        signer: quoteSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+      expect(secondProvider).to.equal(undefined);
+      expect(initializeStub.calledOnce).to.be.true;
+
+      runtimeCache.sushiswapUnavailableUntilMs = Date.now() - 1;
+      const recoveredProvider = await getSushiSwapQuoteProvider({
+        signer: quoteSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+
+      expect(recoveredProvider).to.not.equal(undefined);
+      expect(initializeStub.calledTwice).to.be.true;
+      expect(warnStub.calledOnce).to.be.true;
+    });
+
     it('reuses a shared Curve quote provider cache across quote evaluations', async () => {
       const initializeStub = sinon
         .stub(CurveQuoteProvider.prototype, 'initialize')
@@ -646,6 +699,61 @@ describe('Take Factory', () => {
 
       expect(initializeStub.calledOnce).to.be.true;
       expect(runtimeCache.curve).to.equal(cachedProvider);
+    });
+
+    it('does not sticky-cache failed Curve provider initialization', async () => {
+      const initializeStub = sinon
+        .stub(CurveQuoteProvider.prototype, 'initialize')
+        .onFirstCall()
+        .rejects(new Error('rpc unavailable'))
+        .onSecondCall()
+        .resolves(true);
+      const warnStub = sinon.stub(logger, 'warn');
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      const routerConfig = {
+        poolConfigs: {
+          'COLLATERAL-QUOTE': {
+            address: '0x3333333333333333333333333333333333333333',
+            poolType: CurvePoolType.STABLE,
+          },
+        },
+        defaultSlippage: 0.5,
+        wethAddress: '0x4444444444444444444444444444444444444444',
+      };
+
+      const firstProvider = await getCurveQuoteProvider({
+        signer: mockSigner as any,
+        routerConfig,
+        tokenAddresses: {
+          COLLATERAL: '0x1111111111111111111111111111111111111111',
+          QUOTE: '0x2222222222222222222222222222222222222222',
+        },
+        runtimeCache,
+      });
+      expect(firstProvider).to.equal(undefined);
+      expect(runtimeCache.curve).to.equal(undefined);
+      expect(runtimeCache.curveUnavailableUntilMs).to.be.greaterThan(
+        Date.now()
+      );
+
+      const secondProvider = await getCurveQuoteProvider({
+        signer: mockSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+      expect(secondProvider).to.equal(undefined);
+      expect(initializeStub.calledOnce).to.be.true;
+
+      runtimeCache.curveUnavailableUntilMs = Date.now() - 1;
+      const recoveredProvider = await getCurveQuoteProvider({
+        signer: mockSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+
+      expect(recoveredProvider).to.not.equal(undefined);
+      expect(initializeStub.calledTwice).to.be.true;
+      expect(warnStub.calledOnce).to.be.true;
     });
   });
 
@@ -984,14 +1092,14 @@ describe('Take Factory', () => {
         .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
         .returns('0x7777777777777777777777777777777777777777');
       sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
-      sinon
-        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
-        .resolves({
-          success: true,
-          dstAmount: ethers.utils.parseUnits('120', 6),
-        } as any);
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'getQuote').resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('120', 6),
+      } as any);
       sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(false);
+      sinon
+        .stub(SushiSwapQuoteProvider.prototype, 'poolExists')
+        .resolves(false);
       const sushiQuoteStub = sinon.stub(
         SushiSwapQuoteProvider.prototype,
         'getQuote'

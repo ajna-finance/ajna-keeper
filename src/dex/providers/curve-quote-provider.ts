@@ -16,6 +16,9 @@ const STABLESWAP_ABI = [
 ];
 
 const MAX_CURVE_TOKEN_INDEX_PROBES = 16;
+const CURVE_POOL_SELECTION_CACHE_TTL_MS = 5 * 60 * 1000;
+const CURVE_POOL_SELECTION_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
+const MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES = 512;
 
 // CryptoSwap ABI (uint256 indices) - from working test scripts
 const CRYPTOSWAP_ABI = [
@@ -30,7 +33,7 @@ interface CurveQuoteConfig {
     [tokenPair: string]: {
       address: string;
       poolType: CurvePoolType;
-    }
+    };
   };
   defaultSlippage: number;
   wethAddress: string;
@@ -58,9 +61,14 @@ interface QuoteDecimals {
   outputDecimals: number;
 }
 
+interface CurvePoolSelectionCacheEntry {
+  selection?: CurvePoolSelection;
+  expiresAt: number;
+}
+
 /**
  * Curve Quote Provider for External Take Profitability Analysis
- * 
+ *
  * Uses Curve pool contracts directly for accurate pricing
  * FIXED: Now uses tokenAddresses mapping like DexRouter for reliable pool discovery
  */
@@ -68,6 +76,7 @@ export class CurveQuoteProvider {
   private signer: Signer;
   private config: CurveQuoteConfig;
   private isInitialized: boolean = false;
+  private poolSelectionCache = new Map<string, CurvePoolSelectionCacheEntry>();
 
   constructor(signer: Signer, config: CurveQuoteConfig) {
     this.signer = signer;
@@ -84,31 +93,51 @@ export class CurveQuoteProvider {
 
     try {
       // Test that we have pool configurations
-      if (!this.config.poolConfigs || Object.keys(this.config.poolConfigs).length === 0) {
+      if (
+        !this.config.poolConfigs ||
+        Object.keys(this.config.poolConfigs).length === 0
+      ) {
         logger.warn(`Curve quote provider has no pool configurations`);
         return false;
       }
 
       // Validate each pool configuration
       let validPools = 0;
-      for (const [tokenPair, poolConfig] of Object.entries(this.config.poolConfigs)) {
+      for (const [tokenPair, poolConfig] of Object.entries(
+        this.config.poolConfigs
+      )) {
         try {
-          const poolCode = await this.signer.provider!.getCode(poolConfig.address);
+          const poolCode = await this.signer.provider!.getCode(
+            poolConfig.address
+          );
           if (poolCode === '0x') {
-            logger.warn(`Curve pool not found at ${poolConfig.address} for pair ${tokenPair}`);
+            logger.warn(
+              `Curve pool not found at ${poolConfig.address} for pair ${tokenPair}`
+            );
             continue;
           }
 
           // Test pool interaction with correct ABI
-          const poolAbi = poolConfig.poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-          const poolContract = new ethers.Contract(poolConfig.address, poolAbi, this.signer);
-          
+          const poolAbi =
+            poolConfig.poolType === CurvePoolType.STABLE
+              ? STABLESWAP_ABI
+              : CRYPTOSWAP_ABI;
+          const poolContract = new ethers.Contract(
+            poolConfig.address,
+            poolAbi,
+            this.signer
+          );
+
           // Test coins() function to verify pool is working
           const token0 = await poolContract.coins(0);
-          logger.debug(`Curve pool ${tokenPair} initialized successfully at ${poolConfig.address}, first token: ${token0}`);
+          logger.debug(
+            `Curve pool ${tokenPair} initialized successfully at ${poolConfig.address}, first token: ${token0}`
+          );
           validPools++;
         } catch (error) {
-          logger.warn(`Failed to validate Curve pool ${tokenPair} at ${poolConfig.address}: ${error}`);
+          logger.warn(
+            `Failed to validate Curve pool ${tokenPair} at ${poolConfig.address}: ${error}`
+          );
         }
       }
 
@@ -117,10 +146,11 @@ export class CurveQuoteProvider {
         return false;
       }
 
-      logger.debug(`Curve quote provider initialized with ${validPools} valid pools`);
+      logger.debug(
+        `Curve quote provider initialized with ${validPools} valid pools`
+      );
       this.isInitialized = true;
       return true;
-
     } catch (error) {
       logger.error(`Failed to initialize Curve quote provider: ${error}`);
       return false;
@@ -131,27 +161,35 @@ export class CurveQuoteProvider {
    * Check if quote provider is available and ready
    */
   isAvailable(): boolean {
-    return this.isInitialized && Object.keys(this.config.poolConfigs).length > 0;
+    return (
+      this.isInitialized && Object.keys(this.config.poolConfigs).length > 0
+    );
   }
 
   /**
    * FIXED: Find pool configuration using reliable symbol-based lookup (same as DexRouter)
    */
-  private async findPoolForTokenPair(tokenA: string, tokenB: string): Promise<{ address: string; poolType: CurvePoolType } | undefined> {
+  private async findPoolForTokenPair(
+    tokenA: string,
+    tokenB: string
+  ): Promise<{ address: string; poolType: CurvePoolType } | undefined> {
     // FIXED: Use tokenAddresses mapping if available (same logic as DexRouter)
     if (this.config.tokenAddresses) {
       const tokenASymbol = this.getTokenSymbolFromAddress(tokenA);
       const tokenBSymbol = this.getTokenSymbolFromAddress(tokenB);
-      
+
       if (tokenASymbol && tokenBSymbol) {
         // Try both directions for the token pair (same as DexRouter)
         const key1 = `${tokenASymbol}-${tokenBSymbol}`;
         const key2 = `${tokenBSymbol}-${tokenASymbol}`;
-        
-        const poolConfig = this.config.poolConfigs[key1] || this.config.poolConfigs[key2];
-        
+
+        const poolConfig =
+          this.config.poolConfigs[key1] || this.config.poolConfigs[key2];
+
         if (poolConfig) {
-          logger.debug(`Found Curve pool for ${tokenASymbol}/${tokenBSymbol}: ${poolConfig.address} (${poolConfig.poolType})`);
+          logger.debug(
+            `Found Curve pool for ${tokenASymbol}/${tokenBSymbol}: ${poolConfig.address} (${poolConfig.poolType})`
+          );
           return poolConfig;
         }
 
@@ -162,24 +200,43 @@ export class CurveQuoteProvider {
     }
 
     // FALLBACK: Direct address matching (less reliable but handles missing tokenAddresses)
-    logger.debug(`Falling back to direct address matching for ${tokenA}/${tokenB}`);
-    
+    logger.debug(
+      `Falling back to direct address matching for ${tokenA}/${tokenB}`
+    );
+
     // Handle ETH/WETH conversion for lookup
     const ethAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-    const tokenALookup = tokenA.toLowerCase() === ethAddress.toLowerCase() ? this.config.wethAddress.toLowerCase() : tokenA.toLowerCase();
-    const tokenBLookup = tokenB.toLowerCase() === ethAddress.toLowerCase() ? this.config.wethAddress.toLowerCase() : tokenB.toLowerCase();
+    const tokenALookup =
+      tokenA.toLowerCase() === ethAddress.toLowerCase()
+        ? this.config.wethAddress.toLowerCase()
+        : tokenA.toLowerCase();
+    const tokenBLookup =
+      tokenB.toLowerCase() === ethAddress.toLowerCase()
+        ? this.config.wethAddress.toLowerCase()
+        : tokenB.toLowerCase();
 
     // Search configured pools by checking actual pool contents
-    for (const [tokenPair, poolConfig] of Object.entries(this.config.poolConfigs)) {
+    for (const [tokenPair, poolConfig] of Object.entries(
+      this.config.poolConfigs
+    )) {
       try {
         // Check if tokens actually exist in this pool by querying the pool contract
-        const poolExists = await this.checkTokensInPool(poolConfig.address, poolConfig.poolType, tokenALookup, tokenBLookup);
+        const poolExists = await this.checkTokensInPool(
+          poolConfig.address,
+          poolConfig.poolType,
+          tokenALookup,
+          tokenBLookup
+        );
         if (poolExists) {
-          logger.debug(`Found Curve pool for ${tokenA}/${tokenB}: ${poolConfig.address} (${poolConfig.poolType})`);
+          logger.debug(
+            `Found Curve pool for ${tokenA}/${tokenB}: ${poolConfig.address} (${poolConfig.poolType})`
+          );
           return poolConfig;
         }
       } catch (error) {
-        logger.debug(`Error checking pool ${tokenPair} for tokens ${tokenA}/${tokenB}: ${error}`);
+        logger.debug(
+          `Error checking pool ${tokenPair} for tokens ${tokenA}/${tokenB}: ${error}`
+        );
       }
     }
 
@@ -191,9 +248,9 @@ export class CurveQuoteProvider {
    * FIXED: Helper to check if tokens actually exist in a pool contract
    */
   private async checkTokensInPool(
-    poolAddress: string, 
-    poolType: CurvePoolType, 
-    tokenA: string, 
+    poolAddress: string,
+    poolType: CurvePoolType,
+    tokenA: string,
     tokenB: string
   ): Promise<boolean> {
     try {
@@ -216,8 +273,10 @@ export class CurveQuoteProvider {
     if (!this.config.tokenAddresses) {
       return undefined;
     }
-    
-    for (const [symbol, tokenAddress] of Object.entries(this.config.tokenAddresses)) {
+
+    for (const [symbol, tokenAddress] of Object.entries(
+      this.config.tokenAddresses
+    )) {
       if (tokenAddress.toString().toLowerCase() === address.toLowerCase()) {
         return symbol;
       }
@@ -260,21 +319,74 @@ export class CurveQuoteProvider {
       }
     }
 
+    const cacheKey = this.getPoolSelectionCacheKey(tokenIn, tokenOut);
+    const cachedSelection = this.getCachedPoolSelection(cacheKey);
+    if (cachedSelection.hit) {
+      return cachedSelection.selection;
+    }
+
     const poolConfig = await this.findPoolForTokenPair(tokenIn, tokenOut);
     if (!poolConfig) {
+      this.setCachedPoolSelection(cacheKey, undefined);
       return undefined;
     }
 
-    return await this.resolvePoolSelectionFromConfig(poolConfig, tokenIn, tokenOut);
+    const selection = await this.resolvePoolSelectionFromConfig(
+      poolConfig,
+      tokenIn,
+      tokenOut
+    );
+    this.setCachedPoolSelection(cacheKey, selection);
+    return selection;
+  }
+
+  private getPoolSelectionCacheKey(tokenIn: string, tokenOut: string): string {
+    return `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`;
+  }
+
+  private getCachedPoolSelection(cacheKey: string): {
+    hit: boolean;
+    selection?: CurvePoolSelection;
+  } {
+    const cached = this.poolSelectionCache.get(cacheKey);
+    if (!cached) {
+      return { hit: false };
+    }
+    if (cached.expiresAt <= Date.now()) {
+      this.poolSelectionCache.delete(cacheKey);
+      return { hit: false };
+    }
+    return { hit: true, selection: cached.selection };
+  }
+
+  private setCachedPoolSelection(
+    cacheKey: string,
+    selection: CurvePoolSelection | undefined
+  ): void {
+    this.poolSelectionCache.delete(cacheKey);
+    this.poolSelectionCache.set(cacheKey, {
+      selection,
+      expiresAt:
+        Date.now() +
+        (selection
+          ? CURVE_POOL_SELECTION_CACHE_TTL_MS
+          : CURVE_POOL_SELECTION_NEGATIVE_CACHE_TTL_MS),
+    });
+    while (
+      this.poolSelectionCache.size > MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES
+    ) {
+      const oldestKey = this.poolSelectionCache.keys().next().value;
+      if (oldestKey === undefined) {
+        return;
+      }
+      this.poolSelectionCache.delete(oldestKey);
+    }
   }
 
   /**
    * Check if pool exists and tokens are available
    */
-  async poolExists(
-    tokenA: string,
-    tokenB: string
-  ): Promise<boolean> {
+  async poolExists(tokenA: string, tokenB: string): Promise<boolean> {
     try {
       const selectedPool = await this.resolvePoolSelection(tokenA, tokenB);
       const exists = selectedPool !== undefined;
@@ -305,10 +417,17 @@ export class CurveQuoteProvider {
   ): Promise<{ tokenInIndex?: number; tokenOutIndex?: number }> {
     // Handle ETH/WETH conversion for lookup
     const ethAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-    const tokenInForLookup = tokenIn.toLowerCase() === ethAddress.toLowerCase() ? this.config.wethAddress : tokenIn;
-    const tokenOutForLookup = tokenOut.toLowerCase() === ethAddress.toLowerCase() ? this.config.wethAddress : tokenOut;
+    const tokenInForLookup =
+      tokenIn.toLowerCase() === ethAddress.toLowerCase()
+        ? this.config.wethAddress
+        : tokenIn;
+    const tokenOutForLookup =
+      tokenOut.toLowerCase() === ethAddress.toLowerCase()
+        ? this.config.wethAddress
+        : tokenOut;
 
-    const poolAbi = poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
+    const poolAbi =
+      poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
     const poolContract = new ethers.Contract(poolAddress, poolAbi, this.signer);
 
     let tokenInIndex: number | undefined;
@@ -318,8 +437,10 @@ export class CurveQuoteProvider {
     for (let i = 0; i < MAX_CURVE_TOKEN_INDEX_PROBES; i++) {
       try {
         const tokenAddr = await poolContract.coins(i);
-        if (tokenAddr.toLowerCase() === tokenInForLookup.toLowerCase()) tokenInIndex = i;
-        if (tokenAddr.toLowerCase() === tokenOutForLookup.toLowerCase()) tokenOutIndex = i;
+        if (tokenAddr.toLowerCase() === tokenInForLookup.toLowerCase())
+          tokenInIndex = i;
+        if (tokenAddr.toLowerCase() === tokenOutForLookup.toLowerCase())
+          tokenOutIndex = i;
       } catch (e) {
         break; // No more tokens in pool
       }
@@ -345,18 +466,12 @@ export class CurveQuoteProvider {
         }
       }
 
-      const poolConfig = await this.findPoolForTokenPair(tokenIn, tokenOut);
-      if (!poolConfig) {
-        return { success: false, error: `No Curve pool configured for ${tokenIn}/${tokenOut}` };
-      }
-
-      const selectedPool = await this.resolvePoolSelectionFromConfig(
-        poolConfig,
-        tokenIn,
-        tokenOut
-      );
+      const selectedPool = await this.resolvePoolSelection(tokenIn, tokenOut);
       if (!selectedPool) {
-        return { success: false, error: `Tokens not found in Curve pool ${poolConfig.address}` };
+        return {
+          success: false,
+          error: `No Curve pool configured for ${tokenIn}/${tokenOut}`,
+        };
       }
 
       // Get quote using pool-specific ABI (pattern from test scripts)
@@ -393,11 +508,15 @@ export class CurveQuoteProvider {
 
       // Get correct decimals for proper formatting
       const inputDecimals =
-        decimals?.inputDecimals ?? (await getDecimalsErc20(this.signer, tokenIn));
+        decimals?.inputDecimals ??
+        (await getDecimalsErc20(this.signer, tokenIn));
       const outputDecimals =
-        decimals?.outputDecimals ?? (await getDecimalsErc20(this.signer, tokenOut));
+        decimals?.outputDecimals ??
+        (await getDecimalsErc20(this.signer, tokenOut));
 
-      logger.debug(`Curve quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`);
+      logger.debug(
+        `Curve quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`
+      );
 
       return {
         success: true,
@@ -405,15 +524,20 @@ export class CurveQuoteProvider {
         selectedPool,
         // Note: Curve pools don't provide gas estimates like Uniswap QuoterV2
       };
-
     } catch (error: any) {
       logger.debug(`Curve quote failed: ${error.message}`);
-      
+
       // Parse common errors
       if (error.message?.includes('INSUFFICIENT_LIQUIDITY')) {
-        return { success: false, error: 'Insufficient liquidity in Curve pool' };
+        return {
+          success: false,
+          error: 'Insufficient liquidity in Curve pool',
+        };
       } else if (error.message?.includes('revert')) {
-        return { success: false, error: `Curve pool reverted: ${error.reason || error.message}` };
+        return {
+          success: false,
+          error: `Curve pool reverted: ${error.reason || error.message}`,
+        };
       } else {
         return { success: false, error: `Curve quote error: ${error.message}` };
       }
@@ -432,27 +556,38 @@ export class CurveQuoteProvider {
   ): Promise<{ success: boolean; price?: number; error?: string }> {
     try {
       const quoteResult = await this.getQuote(amountIn, tokenIn, tokenOut);
-      
+
       if (!quoteResult.success || !quoteResult.dstAmount) {
         return { success: false, error: quoteResult.error };
       }
 
       // Calculate price: output tokens per input token
-      const inputAmount = Number(ethers.utils.formatUnits(amountIn, tokenInDecimals));
-      const outputAmount = Number(ethers.utils.formatUnits(quoteResult.dstAmount, tokenOutDecimals));
-      
+      const inputAmount = Number(
+        ethers.utils.formatUnits(amountIn, tokenInDecimals)
+      );
+      const outputAmount = Number(
+        ethers.utils.formatUnits(quoteResult.dstAmount, tokenOutDecimals)
+      );
+
       if (inputAmount <= 0 || outputAmount <= 0) {
-        return { success: false, error: 'Invalid amounts for price calculation' };
+        return {
+          success: false,
+          error: 'Invalid amounts for price calculation',
+        };
       }
 
       const marketPrice = outputAmount / inputAmount;
-      
-      logger.debug(`Curve market price: 1 ${tokenIn} = ${marketPrice.toFixed(6)} ${tokenOut}`);
-      
-      return { success: true, price: marketPrice };
 
+      logger.debug(
+        `Curve market price: 1 ${tokenIn} = ${marketPrice.toFixed(6)} ${tokenOut}`
+      );
+
+      return { success: true, price: marketPrice };
     } catch (error: any) {
-      return { success: false, error: `Market price calculation failed: ${error.message}` };
+      return {
+        success: false,
+        error: `Market price calculation failed: ${error.message}`,
+      };
     }
   }
 
@@ -460,6 +595,8 @@ export class CurveQuoteProvider {
    * Get configured pool addresses for debugging
    */
   getConfiguredPools(): string[] {
-    return Object.values(this.config.poolConfigs).map(config => config.address);
+    return Object.values(this.config.poolConfigs).map(
+      (config) => config.address
+    );
   }
 }

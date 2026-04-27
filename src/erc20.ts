@@ -7,10 +7,13 @@ import { logger } from './logging';
 
 // Process-wide decimals cache. Include chainId when available so multi-chain
 // keepers do not reuse same-address token metadata across networks.
+const MAX_CACHED_DECIMAL_ENTRIES = 4096;
 const cachedDecimals: Map<string, number> = new Map();
 const pendingDecimals: Map<string, Promise<number>> = new Map();
-let pendingChainIds: WeakMap<object, Promise<number | undefined>> =
-  new WeakMap();
+let pendingChainIds: WeakMap<
+  object,
+  Promise<number | undefined>
+> = new WeakMap();
 
 function normalizeTokenAddress(tokenAddress: string): string {
   return tokenAddress.toLowerCase();
@@ -59,19 +62,20 @@ async function resolveChainId(
   if (typeof signerOrProvider !== 'object' || signerOrProvider === null) {
     return undefined;
   }
-  const cached = pendingChainIds.get(signerOrProvider);
+  const chainIdCache = pendingChainIds;
+  const cached = chainIdCache.get(signerOrProvider);
   if (cached) {
     return await cached;
   }
   const pending = resolveChainIdUncached(signerOrProvider).then(
     (resolvedChainId) => {
       if (resolvedChainId === undefined) {
-        pendingChainIds.delete(signerOrProvider);
+        chainIdCache.delete(signerOrProvider);
       }
       return resolvedChainId;
     }
   );
-  pendingChainIds.set(signerOrProvider, pending);
+  chainIdCache.set(signerOrProvider, pending);
   return await pending;
 }
 
@@ -82,6 +86,16 @@ function getDecimalsCacheKey(params: {
   return `${params.chainId ?? 'unknown'}:${normalizeTokenAddress(
     params.tokenAddress
   )}`;
+}
+
+function pruneCachedDecimals(): void {
+  while (cachedDecimals.size > MAX_CACHED_DECIMAL_ENTRIES) {
+    const oldestKey = cachedDecimals.keys().next().value;
+    if (oldestKey === undefined) {
+      return;
+    }
+    cachedDecimals.delete(oldestKey);
+  }
 }
 
 export function clearErc20DecimalCache(): void {
@@ -96,7 +110,10 @@ export async function getDecimalsErc20(
   chainId?: number
 ) {
   const resolvedChainId = await resolveChainId(signer, chainId);
-  const cacheKey = getDecimalsCacheKey({ chainId: resolvedChainId, tokenAddress });
+  const cacheKey = getDecimalsCacheKey({
+    chainId: resolvedChainId,
+    tokenAddress,
+  });
   if (cachedDecimals.has(cacheKey)) {
     return cachedDecimals.get(cacheKey)!;
   }
@@ -105,6 +122,7 @@ export async function getDecimalsErc20(
     const pending = _getDecimalsErc20(signer, tokenAddress)
       .then((decimals) => {
         cachedDecimals.set(cacheKey, decimals);
+        pruneCachedDecimals();
         pendingDecimals.delete(cacheKey);
         return decimals;
       })
@@ -146,19 +164,25 @@ export async function getAllowanceOfErc20(
   return await contract.allowance(signerAddress, allowedAddress);
 }
 
-
 export async function approveErc20(
   signer: Signer,
   tokenAddress: string,
   allowedAddress: string,
-  amount: BigNumber) {
-  logger.debug(`Approving ${amount.toString()} of token ${tokenAddress} for spender ${allowedAddress}`);
+  amount: BigNumber
+) {
+  logger.debug(
+    `Approving ${amount.toString()} of token ${tokenAddress} for spender ${allowedAddress}`
+  );
   return await NonceTracker.queueTransaction(signer, async (nonce: number) => {
     const contractUnconnected = new Contract(tokenAddress, Erc20Abi, signer);
     const contract = contractUnconnected.connect(signer);
-    const tx = await contract.approve(allowedAddress, amount, { nonce: nonce.toString() });
+    const tx = await contract.approve(allowedAddress, amount, {
+      nonce: nonce.toString(),
+    });
     const receipt = await tx.wait();
-    logger.info(`Approved token ${tokenAddress} for ${allowedAddress} | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Approved token ${tokenAddress} for ${allowedAddress} | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }
@@ -169,19 +193,22 @@ export async function transferErc20(
   recipient: string,
   amount: BigNumber
 ) {
-  logger.debug(`Transferring ${amount.toString()} of token ${tokenAddress} to ${recipient}`);
+  logger.debug(
+    `Transferring ${amount.toString()} of token ${tokenAddress} to ${recipient}`
+  );
   return await NonceTracker.queueTransaction(signer, async (nonce: number) => {
     const contractUnconnected = new Contract(tokenAddress, Erc20Abi, signer);
     const contract = contractUnconnected.connect(signer);
     const tx = await contract.transfer(recipient, amount, {
-      nonce: nonce.toString()
+      nonce: nonce.toString(),
     });
     const receipt = await tx.wait();
-    logger.info(`Transferred ${amount.toString()} of token ${tokenAddress} to ${recipient} | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Transferred ${amount.toString()} of token ${tokenAddress} to ${recipient} | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }
-
 
 /**
  * Convert from WAD (18 decimals) to token's native decimals

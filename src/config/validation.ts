@@ -47,6 +47,9 @@ const VALIDATION_BOUNDS = {
   // Keep drift tolerance bounded to operationally sane values; 5000 = 50%.
   maxGasPriceDriftToleranceBps: 5_000,
   maxCurveExecutionDelayMs: 60_000,
+  maxOneInchQuoteTimeoutMs: 10_000,
+  maxExternalTakeProbeTimeoutMs: 10_000,
+  maxOneInchAggregationExecutorAllowlistEntries: 64,
 };
 
 function validateQuoteDenominatedGasPolicy(
@@ -93,6 +96,15 @@ function requireNonNegative(value: unknown, message: string): void {
 function requireOptionalPositive(value: unknown, message: string): void {
   if (value !== undefined) {
     requirePositive(value, message);
+  }
+}
+
+function requireOptionalPositiveInteger(value: unknown, message: string): void {
+  if (
+    value !== undefined &&
+    (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)
+  ) {
+    throw new Error(message);
   }
 }
 
@@ -331,13 +343,23 @@ function validateOneInchAggregationExecutorAllowlist(
   for (const [chainId, executors] of Object.entries(allowlist)) {
     const parsedChainId = Number(chainId);
     if (
+      !/^[1-9]\d*$/.test(chainId) ||
       !Number.isInteger(parsedChainId) ||
       parsedChainId <= 0 ||
+      String(parsedChainId) !== chainId ||
       !Array.isArray(executors) ||
       executors.length === 0
     ) {
       throw new Error(
-        'KeeperConfig: oneInchAggregationExecutorAllowlist entries must use positive integer chain IDs and non-empty address arrays'
+        'KeeperConfig: oneInchAggregationExecutorAllowlist entries must use canonical positive integer chain ID keys and non-empty address arrays'
+      );
+    }
+    if (
+      executors.length >
+      VALIDATION_BOUNDS.maxOneInchAggregationExecutorAllowlistEntries
+    ) {
+      throw new Error(
+        `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} cannot contain more than ${VALIDATION_BOUNDS.maxOneInchAggregationExecutorAllowlistEntries} addresses`
       );
     }
 
@@ -348,7 +370,9 @@ function validateOneInchAggregationExecutorAllowlist(
           `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} contains invalid address ${String(executor)}`
         );
       }
-      const normalizedExecutor = ethers.utils.getAddress(executor).toLowerCase();
+      const normalizedExecutor = ethers.utils
+        .getAddress(executor)
+        .toLowerCase();
       if (seenExecutors.has(normalizedExecutor)) {
         throw new Error(
           `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} cannot contain duplicate addresses`
@@ -641,25 +665,25 @@ export function validateAutoDiscoverConfig(
   );
 
   if (takePolicy) {
-    requireOptionalPositive(
+    requireOptionalPositiveInteger(
       takePolicy.maxPoolsPerRun,
-      'AutoDiscoverConfig.take: maxPoolsPerRun must be greater than 0'
+      'AutoDiscoverConfig.take: maxPoolsPerRun must be a positive integer'
     );
-    requireOptionalPositive(
+    requireOptionalPositiveInteger(
       takePolicy.takeQuoteBudgetPerRun,
-      'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be greater than 0'
+      'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be a positive integer'
     );
     requireOptionalNonNegative(
       takePolicy.hotAuctionCandidateTtlMs,
       'AutoDiscoverConfig.take: hotAuctionCandidateTtlMs cannot be negative'
     );
-    requireOptionalPositive(
+    requireOptionalPositiveInteger(
       takePolicy.maxHotAuctionCandidates,
-      'AutoDiscoverConfig.take: maxHotAuctionCandidates must be greater than 0'
+      'AutoDiscoverConfig.take: maxHotAuctionCandidates must be a positive integer'
     );
-    requireOptionalPositive(
+    requireOptionalPositiveInteger(
       takePolicy.takeRouteQuoteBudgetPerCandidate,
-      'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be greater than 0'
+      'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be a positive integer'
     );
     requireOptionalNonNegative(
       takePolicy.l1GasPriceFreshnessTtlMs,
@@ -681,9 +705,11 @@ export function validateAutoDiscoverConfig(
       VALIDATION_BOUNDS.maxGasPriceDriftToleranceBps,
       'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 5000'
     );
-    requireOptionalPositive(
+    requireOptionalIntegerRange(
       takePolicy.oneInchQuoteTimeoutMs,
-      'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be greater than 0'
+      1,
+      VALIDATION_BOUNDS.maxOneInchQuoteTimeoutMs,
+      `AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be an integer between 1 and ${VALIDATION_BOUNDS.maxOneInchQuoteTimeoutMs}`
     );
     requireOptionalPositive(
       takePolicy.oneInchQuoteFailureCooldownMs,
@@ -695,9 +721,11 @@ export function validateAutoDiscoverConfig(
       100,
       'AutoDiscoverConfig.take: oneInchQuoteFailureThreshold must be an integer between 1 and 100'
     );
-    requireOptionalPositive(
+    requireOptionalIntegerRange(
       takePolicy.externalTakeProbeTimeoutMs,
-      'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be greater than 0'
+      1,
+      VALIDATION_BOUNDS.maxExternalTakeProbeTimeoutMs,
+      `AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be an integer between 1 and ${VALIDATION_BOUNDS.maxExternalTakeProbeTimeoutMs}`
     );
     validateExternalTakeRouteSelectionMode(
       takePolicy.externalTakeRouteSelectionMode
@@ -807,12 +835,28 @@ export function validateAutoDiscoverConfig(
     if (
       externalTakePaths.has('factory') &&
       externalTakePaths.has('oneinch') &&
-      discoveredTake.liquiditySource === LiquiditySource.ONEINCH &&
       takePolicy.validateRouteDeployments !== true
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory while discoveredDefaults.take.liquiditySource is ONEINCH'
+        'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
       );
+    }
+    if (externalTakePaths.has('oneinch')) {
+      if (
+        !config.oneInchAggregationExecutorAllowlist ||
+        Object.keys(config.oneInchAggregationExecutorAllowlist).length === 0
+      ) {
+        logger.warn(
+          'AutoDiscoverConfig.take: oneInchAggregationExecutorAllowlist is not configured; decoded 1inch aggregationExecutor addresses will be logged but not hard-restricted'
+        );
+      } else if (
+        chainId !== undefined &&
+        !config.oneInchAggregationExecutorAllowlist[chainId]
+      ) {
+        logger.warn(
+          `AutoDiscoverConfig.take: oneInchAggregationExecutorAllowlist has no entry for chain ${chainId}; decoded 1inch aggregationExecutor addresses will be logged but not hard-restricted`
+        );
+      }
     }
     if (externalTakePaths.has('factory') && externalTakePaths.has('oneinch')) {
       validateQuoteDenominatedGasPolicy(

@@ -404,5 +404,55 @@ describe('mapWithConcurrencyPreservingOrder', () => {
     ).to.be.rejectedWith(
       'mapWithConcurrencyPreservingOrder requires concurrency >= 1'
     );
+    await expect(
+      mapWithConcurrencyPreservingOrder(
+        [1],
+        Number.POSITIVE_INFINITY,
+        async (value) => value
+      )
+    ).to.be.rejectedWith(
+      'mapWithConcurrencyPreservingOrder requires concurrency >= 1'
+    );
+    await expect(
+      mapWithConcurrencyPreservingOrder([1], -1, async (value) => value)
+    ).to.be.rejectedWith(
+      'mapWithConcurrencyPreservingOrder requires concurrency >= 1'
+    );
+  });
+
+  it('stops assigning new work after the first mapper failure', async () => {
+    let markSecondWorkerStarted!: () => void;
+    let releaseSecondWorker!: () => void;
+    const secondWorkerStarted = new Promise<void>((resolve) => {
+      markSecondWorkerStarted = resolve;
+    });
+    const secondWorkerCanFinish = new Promise<void>((resolve) => {
+      releaseSecondWorker = resolve;
+    });
+    const visited: number[] = [];
+
+    const run = mapWithConcurrencyPreservingOrder(
+      [1, 2, 3, 4],
+      2,
+      async (value) => {
+        visited.push(value);
+        if (value === 1) {
+          await secondWorkerStarted;
+          throw new Error('mapper failed');
+        }
+        if (value === 2) {
+          markSecondWorkerStarted();
+          await secondWorkerCanFinish;
+        }
+        return value;
+      }
+    );
+
+    await expect(run).to.be.rejectedWith('mapper failed');
+    releaseSecondWorker();
+
+    expect(visited).to.have.members([1, 2]);
+    expect(visited).to.not.include(3);
+    expect(visited).to.not.include(4);
   });
 });

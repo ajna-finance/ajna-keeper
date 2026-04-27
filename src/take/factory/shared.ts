@@ -113,7 +113,9 @@ export interface FactoryQuoteProviderRuntimeCache {
   chainIdInflight?: Promise<number | undefined>;
   uniswapV3?: UniswapV3QuoteProvider | null;
   sushiswap?: SushiSwapQuoteProvider | null;
+  sushiswapUnavailableUntilMs?: number;
   curve?: CurveQuoteProvider | null;
+  curveUnavailableUntilMs?: number;
   tokenDecimals?: Map<string, number>;
   quoteTokenScales?: Map<string, BigNumber>;
   recentRouteSuccesses?: Map<string, number>;
@@ -132,6 +134,7 @@ const MAX_RECENT_ROUTE_SUCCESSES = 512;
 const MAX_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 const MAX_QUOTE_TOKEN_SCALE_CACHE_ENTRIES = 512;
 const FACTORY_ROUTE_AVAILABILITY_CONCURRENCY = 3;
+const PROVIDER_INIT_FAILURE_RETRY_MS = 30_000;
 export const DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS = 2_000;
 
 function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
@@ -514,6 +517,13 @@ export async function getSushiSwapQuoteProvider(params: {
   }
 
   let quoteProvider = params.runtimeCache?.sushiswap;
+  if (
+    quoteProvider === undefined &&
+    params.runtimeCache?.sushiswapUnavailableUntilMs !== undefined &&
+    params.runtimeCache.sushiswapUnavailableUntilMs > Date.now()
+  ) {
+    return undefined;
+  }
   if (quoteProvider === undefined) {
     const candidateProvider = new SushiSwapQuoteProvider(params.signer, {
       swapRouterAddress: routerConfig.swapRouterAddress,
@@ -524,10 +534,27 @@ export async function getSushiSwapQuoteProvider(params: {
         DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
       wethAddress: routerConfig.wethAddress,
     });
-    const initialized = await candidateProvider.initialize();
+    const initialized = await withTimeout(
+      candidateProvider.initialize(),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'SushiSwap quote provider initialization'
+    ).catch((error) => {
+      logger.warn(
+        `SushiSwap quote provider initialization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    });
     quoteProvider = initialized ? candidateProvider : null;
     if (params.runtimeCache) {
-      params.runtimeCache.sushiswap = quoteProvider;
+      if (quoteProvider) {
+        params.runtimeCache.sushiswap = quoteProvider;
+        params.runtimeCache.sushiswapUnavailableUntilMs = undefined;
+      } else {
+        params.runtimeCache.sushiswapUnavailableUntilMs =
+          Date.now() + PROVIDER_INIT_FAILURE_RETRY_MS;
+      }
     }
   }
 
@@ -546,6 +573,13 @@ export async function getCurveQuoteProvider(params: {
   }
 
   let quoteProvider = params.runtimeCache?.curve;
+  if (
+    quoteProvider === undefined &&
+    params.runtimeCache?.curveUnavailableUntilMs !== undefined &&
+    params.runtimeCache.curveUnavailableUntilMs > Date.now()
+  ) {
+    return undefined;
+  }
   if (quoteProvider === undefined) {
     const candidateProvider = new CurveQuoteProvider(params.signer, {
       poolConfigs: routerConfig.poolConfigs as any,
@@ -553,10 +587,27 @@ export async function getCurveQuoteProvider(params: {
       wethAddress: routerConfig.wethAddress,
       tokenAddresses: params.tokenAddresses ?? {},
     });
-    const initialized = await candidateProvider.initialize();
+    const initialized = await withTimeout(
+      candidateProvider.initialize(),
+      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      'Curve quote provider initialization'
+    ).catch((error) => {
+      logger.warn(
+        `Curve quote provider initialization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    });
     quoteProvider = initialized ? candidateProvider : null;
     if (params.runtimeCache) {
-      params.runtimeCache.curve = quoteProvider;
+      if (quoteProvider) {
+        params.runtimeCache.curve = quoteProvider;
+        params.runtimeCache.curveUnavailableUntilMs = undefined;
+      } else {
+        params.runtimeCache.curveUnavailableUntilMs =
+          Date.now() + PROVIDER_INIT_FAILURE_RETRY_MS;
+      }
     }
   }
 
@@ -976,8 +1027,11 @@ export async function getCachedFactoryTokenDecimals(
         );
         return undefined;
       });
-      chainId = await runtimeCache.chainIdInflight;
-      runtimeCache.chainId = chainId;
+      const resolvedChainId = await runtimeCache.chainIdInflight;
+      if (resolvedChainId !== undefined) {
+        chainId = resolvedChainId;
+        runtimeCache.chainId = resolvedChainId;
+      }
     } finally {
       runtimeCache.chainIdInflight = undefined;
     }

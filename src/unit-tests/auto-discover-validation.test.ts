@@ -133,6 +133,23 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'oneInchAggregationExecutorAllowlist.1 contains invalid address not-an-address'
     );
+
+    config.oneInchAggregationExecutorAllowlist = {
+      '01': ['0x1111111111111111111111111111111111111111'],
+    } as any;
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'oneInchAggregationExecutorAllowlist entries must use canonical positive integer chain ID keys'
+    );
+
+    config.oneInchAggregationExecutorAllowlist = {
+      1: Array.from(
+        { length: 65 },
+        (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`
+      ),
+    };
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'oneInchAggregationExecutorAllowlist.1 cannot contain more than 64 addresses'
+    );
   });
 
   it('validates hybrid probe timeout and route selection mode', () => {
@@ -162,7 +179,7 @@ describe('auto-discover validation', () => {
 
     (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 0;
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be greater than 0'
+      'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be an integer between 1 and 10000'
     );
 
     (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 1500;
@@ -218,7 +235,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory while discoveredDefaults.take.liquiditySource is ONEINCH'
+      'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
     );
   });
 
@@ -296,7 +313,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: maxPoolsPerRun must be greater than 0'
+      'AutoDiscoverConfig.take: maxPoolsPerRun must be a positive integer'
     );
 
     config.autoDiscover!.take = false;
@@ -330,7 +347,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: maxHotAuctionCandidates must be greater than 0'
+      'AutoDiscoverConfig.take: maxHotAuctionCandidates must be a positive integer'
     );
 
     config.autoDiscover!.take = {
@@ -375,7 +392,25 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be greater than 0'
+      'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be an integer between 1 and 10000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      oneInchQuoteTimeoutMs: 10_001,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be an integer between 1 and 10000'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      externalTakeProbeTimeoutMs: 10_001,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be an integer between 1 and 10000'
     );
 
     config.autoDiscover!.take = {
@@ -403,6 +438,24 @@ describe('auto-discover validation', () => {
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: validateRouteDeployments must be a boolean'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      takeQuoteBudgetPerRun: 1.5,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be a positive integer'
+    );
+
+    config.autoDiscover!.take = {
+      enabled: true,
+      takeRouteQuoteBudgetPerCandidate: 0.5,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be a positive integer'
     );
   });
 

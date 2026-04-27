@@ -60,6 +60,7 @@ export interface ExternalTakeQuoteEvaluation {
   quotedAuctionPriceWad?: BigNumber;
   quotedCollateralWad?: BigNumber;
   auctionIdentity?: string;
+  fallbackExternalTakeQuoteEvaluations?: ExternalTakeQuoteEvaluation[];
   curvePool?: {
     address: string;
     poolType: CurvePoolType;
