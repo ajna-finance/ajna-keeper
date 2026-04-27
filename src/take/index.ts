@@ -23,14 +23,8 @@ import {
   SubgraphConfigInput,
   WithSubgraph,
 } from '../read-transports';
-import {
-  createFactoryQuoteProviderRuntimeCache,
-  createFactoryTakeAdapter,
-  FactoryExecutionConfig,
-} from './factory';
 import * as factoryShared from './factory/shared';
 import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
-import { ArbTakeStrategy, createArbTakeStrategy } from './arb-strategy';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
@@ -50,6 +44,19 @@ import {
   processTakeCandidates,
 } from './engine';
 import { logTakeExecutionTelemetry } from './execution-telemetry';
+import {
+  createManualFactoryTakeContext,
+  createManualSingleContractTakeContext,
+  isFactoryExternalTakeSource,
+  ManualTakeContext,
+  stripExternalTakeSettings,
+} from './manual-context';
+import { OneInchExecutionConfig, OneInchQuoteConfig } from './one-inch-types';
+
+export type {
+  OneInchExecutionConfig,
+  OneInchQuoteConfig,
+} from './one-inch-types';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 interface VerifiedOneInchChainCheck {
@@ -86,63 +93,6 @@ interface HandleTakeParams {
   pool: FungiblePool;
   poolConfig: RequireFields<PoolConfig, 'take'>;
   config: HandleTakeConfigInput;
-}
-
-type OneInchExecutionConfig = Pick<
-  KeeperConfig,
-  | 'dryRun'
-  | 'delayBetweenActions'
-  | 'connectorTokens'
-  | 'oneInchRouters'
-  | 'oneInchAggregationExecutorAllowlist'
-  | 'keeperTaker'
-> &
-  TakeWriteTransportConfig & {
-    oneInchRequestTimeoutMs?: number;
-    skipOneInchRateLimitDelay?: boolean;
-    chainId?: number;
-    tokenDecimalsCache?: Map<string, number>;
-    onOneInchSwapDataResult?: (result: {
-      success: boolean;
-      retryable?: boolean;
-      errorCode?: number | string;
-      error?: string;
-    }) => void;
-    onOneInchExecutionFailure?: (result: {
-      preBroadcast: boolean;
-      error?: string;
-    }) => void;
-  };
-
-type OneInchQuoteConfig = Pick<
-  KeeperConfig,
-  'delayBetweenActions' | 'oneInchRouters' | 'connectorTokens'
-> & {
-  oneInchRequestTimeoutMs?: number;
-  skipOneInchRateLimitDelay?: boolean;
-  chainId?: number;
-  tokenDecimalsCache?: Map<string, number>;
-};
-
-interface ManualTakeContext<TExecutionConfig> {
-  externalTakeAdapter: ExternalTakeAdapter<TakeActionConfig, TExecutionConfig>;
-  externalExecutionConfig: TExecutionConfig;
-  arbTakeStrategy: ArbTakeStrategy<TakeActionConfig>;
-  logPrefix?: string;
-  foundLogLevel: 'debug' | 'info';
-}
-
-function stripExternalTakeSettings(
-  poolConfig: RequireFields<PoolConfig, 'take'>
-): RequireFields<PoolConfig, 'take'> {
-  return {
-    ...poolConfig,
-    take: {
-      ...poolConfig.take,
-      liquiditySource: undefined,
-      marketPriceFactor: undefined,
-    },
-  };
 }
 
 async function getOneInchTokenDecimals(params: {
@@ -246,56 +196,36 @@ export async function handleTakes({
     logger.error(`Configuration errors: ${validation.errors.join(', ')}`);
   }
 
+  let effectivePoolConfig = poolConfig;
   switch (deploymentType) {
     case 'single':
       logger.debug(
         `Using single-contract external take strategy for pool: ${pool.name}`
       );
-      await processManualTakeCandidates({
-        signer,
-        takeWriteTransport,
-        pool,
-        poolConfig,
-        config: resolvedConfig,
-      });
       break;
 
     case 'factory':
       logger.debug(
         `Using factory external take strategy for pool: ${pool.name}`
       );
-      await processManualTakeCandidates({
-        signer,
-        takeWriteTransport,
-        pool,
-        poolConfig,
-        config: resolvedConfig,
-      });
       break;
 
     case 'none':
       logger.warn(
         `External liquidity source ${requestedLiquiditySource ?? 'none'} unavailable for pool ${pool.name} - checking arbTake only`
       );
-      await processManualTakeCandidates({
-        signer,
-        takeWriteTransport,
-        pool,
-        poolConfig: stripExternalTakeSettings(poolConfig),
-        config: resolvedConfig,
-      });
+      effectivePoolConfig = stripExternalTakeSettings(poolConfig);
       break;
   }
-}
 
-/**
- * Manual/configured-pool context builder for the shared take candidate loop.
- *
- * This selects the configured manual external-take strategy
- * (single-contract 1inch, factory, or none), pairs it with the manual arbTake
- * strategy, and delegates actual candidate evaluation/execution to
- * processTakeCandidates.
- */
+  await processManualTakeCandidates({
+    signer,
+    takeWriteTransport,
+    pool,
+    poolConfig: effectivePoolConfig,
+    config: resolvedConfig,
+  });
+}
 
 export async function processManualTakeCandidates({
   signer,
@@ -337,6 +267,10 @@ export async function processManualTakeCandidates({
     poolConfig,
     config: resolvedConfig,
     takeWriteTransport,
+    adapters: {
+      createOneInchTakeAdapter,
+      createNoExternalTakeAdapter,
+    },
   });
   await runManualTakeCandidateEngine({
     pool,
@@ -377,14 +311,13 @@ async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
     delayBetweenActions: params.delayBetweenActions,
     takeWriteTransport: params.takeWriteTransport,
     onFound: (decision) => {
-      const message =
-        `Found liquidation to ${formatTakeStrategyLog(
-          params.context.externalTakeAdapter.kind,
-          decision.approvedTake,
-          decision.approvedArbTake
-        )} - pool: ${params.pool.name}, borrower: ${decision.borrower}, auctionPrice: ${Number(
-          weiToDecimaled(decision.auctionPrice)
-        ).toFixed(6)}, collateral: ${weiToDecimaled(decision.collateral)}`;
+      const message = `Found liquidation to ${formatTakeStrategyLog(
+        params.context.externalTakeAdapter.kind,
+        decision.approvedTake,
+        decision.approvedArbTake
+      )} - pool: ${params.pool.name}, borrower: ${decision.borrower}, auctionPrice: ${Number(
+        weiToDecimaled(decision.auctionPrice)
+      ).toFixed(6)}, collateral: ${weiToDecimaled(decision.collateral)}`;
       if (params.context.foundLogLevel === 'debug') {
         logger.debug(message);
         return;
@@ -400,79 +333,6 @@ async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
       });
     },
   });
-}
-
-function isFactoryExternalTakeSource(
-  liquiditySource: LiquiditySource | undefined
-): boolean {
-  return (
-    liquiditySource === LiquiditySource.UNISWAPV3 ||
-    liquiditySource === LiquiditySource.SUSHISWAP ||
-    liquiditySource === LiquiditySource.CURVE
-  );
-}
-
-function createManualSingleContractTakeContext(params: {
-  poolConfig: TakeActionConfig;
-  config: HandleTakeConfig;
-  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
-}): ManualTakeContext<OneInchExecutionConfig> {
-  return {
-    externalTakeAdapter:
-      params.poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
-        ? createOneInchTakeAdapter({
-            delayBetweenActions: params.config.delayBetweenActions ?? 0,
-            oneInchRouters: params.config.oneInchRouters,
-            connectorTokens: params.config.connectorTokens,
-          })
-        : createNoExternalTakeAdapter(),
-    arbTakeStrategy: createArbTakeStrategy(),
-    externalExecutionConfig: {
-      dryRun: params.config.dryRun,
-      delayBetweenActions: params.config.delayBetweenActions ?? 0,
-      connectorTokens: params.config.connectorTokens,
-      oneInchRouters: params.config.oneInchRouters,
-      oneInchAggregationExecutorAllowlist:
-        params.config.oneInchAggregationExecutorAllowlist,
-      keeperTaker: params.config.keeperTaker,
-      takeWriteTransport: params.takeWriteTransport,
-    },
-    foundLogLevel: 'info',
-  };
-}
-
-function createManualFactoryTakeContext(params: {
-  config: HandleTakeConfig;
-  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
-}): ManualTakeContext<FactoryExecutionConfig> {
-  const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
-  return {
-    externalTakeAdapter: createFactoryTakeAdapter({
-      quoteConfig: {
-        universalRouterOverrides: params.config.universalRouterOverrides,
-        sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
-        curveRouterOverrides: params.config.curveRouterOverrides,
-        tokenAddresses: params.config.tokenAddresses,
-      },
-      runtimeCache: quoteProviderCache,
-    }),
-    arbTakeStrategy: createArbTakeStrategy({
-      actionLabel: 'Factory ArbTake',
-      logPrefix: 'Factory: ',
-    }),
-    externalExecutionConfig: {
-      dryRun: params.config.dryRun,
-      keeperTakerFactory: params.config.keeperTakerFactory,
-      universalRouterOverrides: params.config.universalRouterOverrides,
-      sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
-      curveRouterOverrides: params.config.curveRouterOverrides,
-      tokenAddresses: params.config.tokenAddresses,
-      takeWriteTransport: params.takeWriteTransport,
-      runtimeCache: quoteProviderCache,
-    },
-    logPrefix: 'Factory: ',
-    foundLogLevel: 'debug',
-  };
 }
 
 export function createNoExternalTakeAdapter(): ExternalTakeAdapter<

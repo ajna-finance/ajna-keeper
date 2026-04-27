@@ -1431,7 +1431,7 @@ async function quoteOneInchPathForDiscovery(
   });
 }
 
-async function quoteLegacyOneInchTakeForDiscovery(
+async function quoteSingleContractOneInchTakeForDiscovery(
   params: {
     config: DiscoveryExecutionConfig;
     rpcCache?: DiscoveryRpcCache;
@@ -1735,7 +1735,7 @@ function createExternalTakeAdapterForDiscovery(params: {
   routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   probeTimeoutMs: number;
   quoteOneInchPath: OneInchPathQuoteFn;
-  quoteOneInchTake: OneInchPathQuoteFn;
+  quoteSingleContractOneInchTake: OneInchPathQuoteFn;
   quoteFactoryPath: FactoryPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
   recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
@@ -1943,7 +1943,7 @@ function createExternalTakeAdapterForDiscovery(params: {
         auctionPrice,
         collateral,
       }) =>
-        params.quoteOneInchTake({
+        params.quoteSingleContractOneInchTake({
           pool,
           signer,
           poolConfig,
@@ -2110,8 +2110,8 @@ export async function handleDiscoveredTakeTarget(
       takePolicy,
       recordCircuitOutcome: false,
     });
-  const quoteOneInchTake: OneInchPathQuoteFn = (quoteParams) =>
-    quoteLegacyOneInchTakeForDiscovery({
+  const quoteSingleContractOneInchTake: OneInchPathQuoteFn = (quoteParams) =>
+    quoteSingleContractOneInchTakeForDiscovery({
       ...quoteParams,
       config: params.config,
       rpcCache,
@@ -2135,7 +2135,7 @@ export async function handleDiscoveredTakeTarget(
     ),
     probeTimeoutMs: getExternalTakeProbeTimeoutMs(takePolicy),
     quoteOneInchPath,
-    quoteOneInchTake,
+    quoteSingleContractOneInchTake,
     quoteFactoryPath,
     approveExternalTake,
     recordOneInchCircuitOutcome,
