@@ -290,34 +290,44 @@ async function quoteFactoryV3GasConversion(params: {
     params.fallbackFeeTier,
     params.automaticCandidateFeeTiers
   )) {
-    const poolExists = await withTimeout(
-      params.quoteProvider.poolExists(params.tokenIn, params.tokenOut, feeTier),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'factory gas quote pool existence check'
-    );
-    if (!poolExists) {
-      continue;
-    }
-    const quoteResult = await withTimeout(
-      params.quoteProvider.getQuote(
-        params.amountIn,
-        params.tokenIn,
-        params.tokenOut,
-        feeTier
-      ),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'factory gas quote'
-    );
-    if (quoteResult.success && quoteResult.dstAmount) {
-      const quote = BigNumber.from(quoteResult.dstAmount);
-      if (quote.isZero()) {
-        logger.debug(
-          `Gas quote conversion returned zero output for ${params.tokenIn}/${params.tokenOut} fee=${feeTier}`
-        );
+    try {
+      const poolExists = await withTimeout(
+        params.quoteProvider.poolExists(
+          params.tokenIn,
+          params.tokenOut,
+          feeTier
+        ),
+        DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+        'factory gas quote pool existence check'
+      );
+      if (!poolExists) {
         continue;
       }
-      // Use the highest output to conservatively price gas in quote-token terms.
-      bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
+      const quoteResult = await withTimeout(
+        params.quoteProvider.getQuote(
+          params.amountIn,
+          params.tokenIn,
+          params.tokenOut,
+          feeTier
+        ),
+        DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+        'factory gas quote'
+      );
+      if (quoteResult.success && quoteResult.dstAmount) {
+        const quote = BigNumber.from(quoteResult.dstAmount);
+        if (quote.isZero()) {
+          logger.debug(
+            `Gas quote conversion returned zero output for ${params.tokenIn}/${params.tokenOut} fee=${feeTier}`
+          );
+          continue;
+        }
+        // Use the highest output to conservatively price gas in quote-token terms.
+        bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
+      }
+    } catch (error) {
+      logger.debug(
+        `Factory gas quote conversion skipped fee=${feeTier} for ${params.tokenIn}/${params.tokenOut}: ${getErrorMessage(error)}`
+      );
     }
   }
   return bestQuote;
