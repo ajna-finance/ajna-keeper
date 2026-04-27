@@ -389,6 +389,7 @@ describe('take write submission', () => {
         externalTakeQuoteEvaluation: {
           isTakeable: true,
           quoteAmountRaw: BigNumber.from(11),
+          approvedMinOutRaw: BigNumber.from(10),
           externalTakePath: 'oneinch',
           selectedLiquiditySource: LiquiditySource.ONEINCH,
         },

@@ -4,6 +4,7 @@ import { DEFAULT_FEE_TIER_BY_SOURCE, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import {
+  ApprovedUniswapV3FactoryQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -242,7 +243,7 @@ export async function executeUniswapV3FactoryTake({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation;
   config: Pick<
     FactoryExecutionConfig,
     'keeperTakerFactory' | 'universalRouterOverrides' | 'takeWriteTransport'
@@ -260,12 +261,6 @@ export async function executeUniswapV3FactoryTake({
     logger.error(message);
     throw new Error(message);
   }
-  if (quoteEvaluation.selectedFeeTier === undefined) {
-    const message = 'Factory: selectedFeeTier required for UniswapV3 takes';
-    logger.error(message);
-    throw new Error(message);
-  }
-
   const minimalAmountOut = await computeFactoryAmountOutMinimum({
     pool,
     liquidation,

@@ -22,7 +22,11 @@ import {
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
-import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../types';
+import {
+  ApprovedFactoryQuoteEvaluation,
+  ExternalTakeQuoteEvaluation,
+  TakeLiquidationPlan,
+} from '../types';
 import { TakeWriteTransport } from '../write-transport';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
@@ -1241,11 +1245,8 @@ export async function computeFactoryAmountOutMinimum({
 }: {
   pool: FungiblePool;
   liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedFactoryQuoteEvaluation;
 }): Promise<BigNumber> {
-  if (!quoteEvaluation.quoteAmountRaw) {
-    throw new Error('Factory: quoteAmountRaw missing from evaluation');
-  }
   const approvedMinOutRaw = deriveApprovedMinOutRaw({
     routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
     profitMinOutRaw: quoteEvaluation.profitMinOutRaw,

@@ -7,6 +7,10 @@ import { LiquiditySource, formatLiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
 import {
+  ApprovedCurveFactoryQuoteEvaluation,
+  ApprovedFactoryQuoteEvaluation,
+  ApprovedSushiSwapFactoryQuoteEvaluation,
+  ApprovedUniswapV3FactoryQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -495,15 +499,136 @@ function failFactoryTakeExecution(message: string): false {
   return false;
 }
 
+type FactoryQuoteApprovalResult =
+  | { approved: true; quoteEvaluation: ApprovedFactoryQuoteEvaluation }
+  | { approved: false; reason: string };
+
+function approveFactoryQuoteForExecution(params: {
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  poolName: string;
+  borrower: string;
+}): FactoryQuoteApprovalResult {
+  const { quoteEvaluation, poolName, borrower } = params;
+
+  if (!quoteEvaluation.isTakeable) {
+    return {
+      approved: false,
+      reason: `Factory: Take quote no longer satisfies execution policy for ${poolName}/${borrower}: ${quoteEvaluation.reason ?? 'not takeable'}`,
+    };
+  }
+
+  if (!quoteEvaluation.quoteAmountRaw) {
+    return {
+      approved: false,
+      reason: `Factory: Missing raw quote amount for ${poolName}/${borrower}; refusing to send an unbounded swap`,
+    };
+  }
+
+  const selectedLiquiditySource = quoteEvaluation.selectedLiquiditySource;
+  if (selectedLiquiditySource === undefined) {
+    return {
+      approved: false,
+      reason: `Factory: Missing selected liquidity source for ${poolName}/${borrower}; refusing to execute an unbound route`,
+    };
+  }
+
+  if (
+    quoteEvaluation.externalTakePath !== undefined &&
+    quoteEvaluation.externalTakePath !== 'factory'
+  ) {
+    return {
+      approved: false,
+      reason: `Factory: Received non-factory approved path for ${poolName}/${borrower}; refusing to execute an unbound route`,
+    };
+  }
+
+  const approvedMinOutRaw = deriveApprovedMinOutRaw({
+    routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
+    profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
+    fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
+  });
+  if (!approvedMinOutRaw) {
+    return {
+      approved: false,
+      reason: `Factory: Missing approved min-out floor for ${poolName}/${borrower}; refusing to execute an unbound swap`,
+    };
+  }
+
+  const approvedBase = {
+    ...quoteEvaluation,
+    isTakeable: true as const,
+    quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
+    approvedMinOutRaw,
+  };
+
+  if (selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
+    if (quoteEvaluation.selectedFeeTier === undefined) {
+      return {
+        approved: false,
+        reason: `Factory: Missing selected fee tier for ${poolName}/${borrower}; refusing to execute an unbound route`,
+      };
+    }
+    return {
+      approved: true,
+      quoteEvaluation: {
+        ...approvedBase,
+        externalTakePath: 'factory',
+        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+        selectedFeeTier: quoteEvaluation.selectedFeeTier,
+      },
+    };
+  }
+
+  if (selectedLiquiditySource === LiquiditySource.SUSHISWAP) {
+    if (quoteEvaluation.selectedFeeTier === undefined) {
+      return {
+        approved: false,
+        reason: `Factory: Missing selected fee tier for ${poolName}/${borrower}; refusing to execute an unbound route`,
+      };
+    }
+    return {
+      approved: true,
+      quoteEvaluation: {
+        ...approvedBase,
+        externalTakePath: 'factory',
+        selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+        selectedFeeTier: quoteEvaluation.selectedFeeTier,
+      },
+    };
+  }
+
+  if (selectedLiquiditySource === LiquiditySource.CURVE) {
+    if (!quoteEvaluation.curvePool) {
+      return {
+        approved: false,
+        reason: `Factory: Missing selected Curve pool for ${poolName}/${borrower}; refusing to execute an unbound route`,
+      };
+    }
+    return {
+      approved: true,
+      quoteEvaluation: {
+        ...approvedBase,
+        externalTakePath: 'factory',
+        selectedLiquiditySource: LiquiditySource.CURVE,
+        curvePool: quoteEvaluation.curvePool,
+      },
+    };
+  }
+
+  return {
+    approved: false,
+    reason: `Factory: Unsupported liquidity source: ${selectedLiquiditySource}`,
+  };
+}
+
 function recordExecutedFactoryRouteSuccess(params: {
   pool: FungiblePool;
-  selectedLiquiditySource: LiquiditySource;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedFactoryQuoteEvaluation;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
 }): void {
   recordFactoryRouteSuccess({
     route: {
-      liquiditySource: params.selectedLiquiditySource,
+      liquiditySource: params.quoteEvaluation.selectedLiquiditySource,
       feeTier: params.quoteEvaluation.selectedFeeTier,
     },
     pool: params.pool,
@@ -532,8 +657,7 @@ interface FactoryLiquidationExecutionParams {
 
 async function executeSelectedFactoryRoute(
   params: FactoryLiquidationExecutionParams & {
-    selectedLiquiditySource: LiquiditySource;
-    quoteEvaluation: ExternalTakeQuoteEvaluation;
+    quoteEvaluation: ApprovedFactoryQuoteEvaluation;
   }
 ): Promise<boolean> {
   const {
@@ -542,11 +666,10 @@ async function executeSelectedFactoryRoute(
     signer,
     liquidation,
     config,
-    selectedLiquiditySource,
     quoteEvaluation,
   } = params;
 
-  if (selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
+  if (quoteEvaluation.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
     await takeWithUniswapV3Factory({
       pool,
       poolConfig,
@@ -555,7 +678,9 @@ async function executeSelectedFactoryRoute(
       quoteEvaluation,
       config,
     });
-  } else if (selectedLiquiditySource === LiquiditySource.SUSHISWAP) {
+  } else if (
+    quoteEvaluation.selectedLiquiditySource === LiquiditySource.SUSHISWAP
+  ) {
     await takeWithSushiSwapFactory({
       pool,
       poolConfig,
@@ -564,7 +689,7 @@ async function executeSelectedFactoryRoute(
       quoteEvaluation,
       config,
     });
-  } else if (selectedLiquiditySource === LiquiditySource.CURVE) {
+  } else {
     await takeWithCurveFactory({
       pool,
       poolConfig,
@@ -573,15 +698,10 @@ async function executeSelectedFactoryRoute(
       quoteEvaluation,
       config,
     });
-  } else {
-    return failFactoryTakeExecution(
-      `Factory: Unsupported liquidity source: ${selectedLiquiditySource}`
-    );
   }
 
   recordExecutedFactoryRouteSuccess({
     pool,
-    selectedLiquiditySource,
     quoteEvaluation,
     runtimeCache: config.runtimeCache,
   });
@@ -613,57 +733,19 @@ export async function takeLiquidationFactory({
       config.runtimeCache
     ));
 
-  if (!externalTakeQuoteEvaluation.isTakeable) {
-    return failFactoryTakeExecution(
-      `Factory: Take quote no longer satisfies execution policy for ${pool.name}/${borrower}: ${externalTakeQuoteEvaluation.reason ?? 'not takeable'}`
-    );
-  }
-
-  if (!externalTakeQuoteEvaluation.quoteAmountRaw) {
-    return failFactoryTakeExecution(
-      `Factory: Missing raw quote amount for ${pool.name}/${borrower}; refusing to send an unbounded swap`
-    );
-  }
-
-  const selectedLiquiditySource =
-    externalTakeQuoteEvaluation.selectedLiquiditySource;
-  if (selectedLiquiditySource === undefined) {
-    return failFactoryTakeExecution(
-      `Factory: Missing selected liquidity source for ${pool.name}/${borrower}; refusing to execute an unbound route`
-    );
-  }
-  const approvedMinOutRaw = deriveApprovedMinOutRaw({
-    routeMinOutRaw: externalTakeQuoteEvaluation.routeMinOutRaw,
-    profitMinOutRaw: externalTakeQuoteEvaluation.profitMinOutRaw,
-    fallbackMinOutRaw: externalTakeQuoteEvaluation.approvedMinOutRaw,
+  const approval = approveFactoryQuoteForExecution({
+    quoteEvaluation: externalTakeQuoteEvaluation,
+    poolName: pool.name,
+    borrower,
   });
-  if (!approvedMinOutRaw) {
-    return failFactoryTakeExecution(
-      `Factory: Missing approved min-out floor for ${pool.name}/${borrower}; refusing to execute an unbound swap`
-    );
+  if (!approval.approved) {
+    return failFactoryTakeExecution(approval.reason);
   }
-  externalTakeQuoteEvaluation.approvedMinOutRaw = approvedMinOutRaw;
-  if (
-    (selectedLiquiditySource === LiquiditySource.UNISWAPV3 ||
-      selectedLiquiditySource === LiquiditySource.SUSHISWAP) &&
-    externalTakeQuoteEvaluation.selectedFeeTier === undefined
-  ) {
-    return failFactoryTakeExecution(
-      `Factory: Missing selected fee tier for ${pool.name}/${borrower}; refusing to execute an unbound route`
-    );
-  }
-  if (
-    selectedLiquiditySource === LiquiditySource.CURVE &&
-    !externalTakeQuoteEvaluation.curvePool
-  ) {
-    return failFactoryTakeExecution(
-      `Factory: Missing selected Curve pool for ${pool.name}/${borrower}; refusing to execute an unbound route`
-    );
-  }
+  const approvedQuoteEvaluation = approval.quoteEvaluation;
 
   if (dryRun) {
     logger.info(
-      `DryRun - would Factory Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, selectedSource=${externalTakeQuoteEvaluation.selectedLiquiditySource ?? 'n/a'}, selectedFeeTier=${externalTakeQuoteEvaluation.selectedFeeTier ?? 'n/a'}, approvedMinOutRaw=${externalTakeQuoteEvaluation.approvedMinOutRaw?.toString() ?? 'n/a'}`
+      `DryRun - would Factory Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, selectedSource=${approvedQuoteEvaluation.selectedLiquiditySource}, selectedFeeTier=${approvedQuoteEvaluation.selectedFeeTier ?? 'n/a'}, approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
     );
     return true;
   }
@@ -675,10 +757,10 @@ export async function takeLiquidationFactory({
   }
 
   const routeMetadata =
-    `source=${formatLiquiditySource(selectedLiquiditySource)}` +
-    ` feeTier=${externalTakeQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
-    ` approvedMinOutRaw=${externalTakeQuoteEvaluation.approvedMinOutRaw.toString()}` +
-    ` curvePool=${externalTakeQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
+    `source=${formatLiquiditySource(approvedQuoteEvaluation.selectedLiquiditySource)}` +
+    ` feeTier=${approvedQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
+    ` approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}` +
+    ` curvePool=${approvedQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
 
   try {
     return await executeSelectedFactoryRoute({
@@ -687,8 +769,7 @@ export async function takeLiquidationFactory({
       signer,
       liquidation,
       config,
-      selectedLiquiditySource,
-      quoteEvaluation: externalTakeQuoteEvaluation,
+      quoteEvaluation: approvedQuoteEvaluation,
     });
   } catch (error) {
     logger.error(
@@ -714,7 +795,7 @@ async function takeWithUniswapV3Factory({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],
     'keeperTakerFactory' | 'universalRouterOverrides'
@@ -749,7 +830,7 @@ async function takeWithSushiSwapFactory({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedSushiSwapFactoryQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],
     'keeperTakerFactory' | 'sushiswapRouterOverrides'
@@ -781,7 +862,7 @@ async function takeWithCurveFactory({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedCurveFactoryQuoteEvaluation;
   config: Pick<
     FactoryTakeParams['config'],
     'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'

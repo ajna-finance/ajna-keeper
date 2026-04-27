@@ -4,6 +4,7 @@ import { DEFAULT_FEE_TIER_BY_SOURCE, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import {
+  ApprovedSushiSwapFactoryQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -237,7 +238,7 @@ export async function executeSushiSwapFactoryTake({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedSushiSwapFactoryQuoteEvaluation;
   config: Pick<
     FactoryExecutionConfig,
     'keeperTakerFactory' | 'sushiswapRouterOverrides' | 'takeWriteTransport'
@@ -255,12 +256,6 @@ export async function executeSushiSwapFactoryTake({
     logger.error(message);
     throw new Error(message);
   }
-  if (quoteEvaluation.selectedFeeTier === undefined) {
-    const message = 'Factory: selectedFeeTier required for SushiSwap takes';
-    logger.error(message);
-    throw new Error(message);
-  }
-
   const minimalAmountOut = await computeFactoryAmountOutMinimum({
     pool,
     liquidation,

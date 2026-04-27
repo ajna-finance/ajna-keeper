@@ -685,6 +685,7 @@ describe('Take Factory', () => {
         new ethers.providers.JsonRpcProvider()
       );
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,
@@ -1151,6 +1152,7 @@ describe('Take Factory', () => {
         },
       };
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
 
       const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
         pool as any,

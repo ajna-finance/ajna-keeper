@@ -4,6 +4,7 @@ import { CurvePoolType, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import {
+  ApprovedCurveFactoryQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -226,7 +227,7 @@ export async function executeCurveFactoryTake({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  quoteEvaluation: ApprovedCurveFactoryQuoteEvaluation;
   config: Pick<
     FactoryExecutionConfig,
     | 'keeperTakerFactory'
@@ -246,12 +247,6 @@ export async function executeCurveFactoryTake({
     logger.error(message);
     throw new Error(message);
   }
-  if (!quoteEvaluation.curvePool) {
-    const message = `Factory: selected Curve pool required for ${pool.collateralAddress}/${pool.quoteAddress}`;
-    logger.error(message);
-    throw new Error(message);
-  }
-
   try {
     const resolvedCurvePool = quoteEvaluation.curvePool;
 

@@ -193,6 +193,8 @@ describe('Factory slippage bound', function () {
         isTakeable: true,
         quoteAmountRaw: quotedAmountRaw,
         approvedMinOutRaw: quotedAmountRaw.mul(99).div(100),
+        selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+        selectedFeeTier: 3000,
       },
     });
 
