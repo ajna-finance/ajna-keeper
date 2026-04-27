@@ -17,6 +17,7 @@ import {
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
 } from '../take/factory';
+import { EXTERNAL_TAKE_REJECTION_REASONS } from '../take/external-take-policy';
 import { TakeLiquidationPlan } from '../take/types';
 import { arrayFromAsync, weiToDecimaled } from '../utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
@@ -38,8 +39,7 @@ import {
   setBalance,
 } from './test-utils';
 
-const RUN_LIVE_LIQUIDITY_E2E =
-  process.env.RUN_LIVE_LIQUIDITY_E2E === 'true';
+const RUN_LIVE_LIQUIDITY_E2E = process.env.RUN_LIVE_LIQUIDITY_E2E === 'true';
 const LIVE_LIQUIDITY_TIMEOUT_MS = 300_000;
 
 const MAINNET_UNISWAP_SOL_WETH_FIXTURE = {
@@ -148,9 +148,10 @@ async function createLiveAjnaLiquidation(params: {
       config: { subgraphUrl: '', coinGeckoApiKey: '' },
     })
   );
-  expect(loansToKick.length, 'expected at least one kickable loan').to.be.greaterThan(
-    0
-  );
+  expect(
+    loansToKick.length,
+    'expected at least one kickable loan'
+  ).to.be.greaterThan(0);
 
   const kickSigner = await impersonateSigner(fixture.kicker);
   await setBalance(fixture.kicker, utils.parseEther('100').toHexString());
@@ -185,6 +186,20 @@ async function buildLiveFactoryLiquidationPlan(params: {
   };
 }
 
+function buildLiveUniswapPoolConfig(
+  fixture: LiveLiquidityFixture,
+  marketPriceFactor: number
+) {
+  return {
+    ...fixture.poolConfig,
+    take: {
+      minCollateral: 1e-8,
+      liquiditySource: LiquiditySource.UNISWAPV3,
+      marketPriceFactor,
+    },
+  };
+}
+
 describe('Live liquidity end-to-end factory execution', function () {
   this.timeout(LIVE_LIQUIDITY_TIMEOUT_MS);
 
@@ -205,7 +220,9 @@ describe('Live liquidity end-to-end factory execution', function () {
   it('executes a pinned Ajna liquidation through real Uniswap V3 liquidity', async () => {
     const fixture = MAINNET_UNISWAP_SOL_WETH_FIXTURE;
     const provider = getProvider();
-    expect(await provider.getBlockNumber()).to.equal(MAINNET_CONFIG.BLOCK_NUMBER);
+    expect(await provider.getBlockNumber()).to.equal(
+      MAINNET_CONFIG.BLOCK_NUMBER
+    );
 
     const signer = Wallet.fromMnemonic(USER1_MNEMONIC).connect(provider);
     await setBalance(signer.address, utils.parseEther('100').toHexString());
@@ -224,14 +241,26 @@ describe('Live liquidity end-to-end factory execution', function () {
     ).to.be.true;
 
     const runtimeCache = createFactoryQuoteProviderRuntimeCache();
-    const poolConfig = {
-      ...fixture.poolConfig,
-      take: {
-        minCollateral: 1e-8,
-        liquiditySource: LiquiditySource.UNISWAPV3,
-        marketPriceFactor: 0.99,
+    const restrictiveQuoteEvaluation = await getFactoryTakeQuoteEvaluation(
+      pool,
+      liquidationStatus.price,
+      liquidationStatus.collateral,
+      buildLiveUniswapPoolConfig(fixture, 0.000001),
+      {
+        universalRouterOverrides: fixture.uniswap,
       },
-    };
+      signer,
+      runtimeCache,
+      {
+        routeQuoteBudgetPerCandidate: 1,
+      }
+    );
+    expect(restrictiveQuoteEvaluation.isTakeable).to.equal(false);
+    expect(restrictiveQuoteEvaluation.reason).to.contain(
+      EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold
+    );
+
+    const poolConfig = buildLiveUniswapPoolConfig(fixture, 0.99);
     const quoteEvaluation = await getFactoryTakeQuoteEvaluation(
       pool,
       liquidationStatus.price,
