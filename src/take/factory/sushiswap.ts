@@ -241,52 +241,56 @@ export async function executeSushiSwapFactoryTake({
   quoteEvaluation: ApprovedSushiSwapFactoryQuoteEvaluation;
   config: Pick<
     FactoryExecutionConfig,
-    'keeperTakerFactory' | 'sushiswapRouterOverrides' | 'takeWriteTransport'
+    | 'keeperTakerFactory'
+    | 'sushiswapRouterOverrides'
+    | 'takeWriteTransport'
+    | 'onFactoryExecutionFailure'
   >;
 }): Promise<void> {
-  const takeWriteTransport = resolveTakeWriteTransport(signer, config);
-  const factory = AjnaKeeperTakerFactory__factory.connect(
-    config.keeperTakerFactory!,
-    signer
-  );
-
-  if (!config.sushiswapRouterOverrides) {
-    const message =
-      'Factory: sushiswapRouterOverrides required for SushiSwap takes';
-    logger.error(message);
-    throw new Error(message);
-  }
-  const minimalAmountOut = await computeFactoryAmountOutMinimum({
-    pool,
-    liquidation,
-    quoteEvaluation,
-  });
-  const deadline = await getSwapDeadline(signer);
-
-  logger.debug(
-    formatFactoryExecutionLog({
-      source: LiquiditySource.SUSHISWAP,
-      poolName: pool.name,
-      collateralWad: liquidation.collateral,
-      auctionPriceWad: liquidation.auctionPrice,
-      minimalAmountOut,
-    })
-  );
-
-  const swapDetails = {
-    swapRouter: config.sushiswapRouterOverrides.swapRouterAddress!,
-    targetToken: pool.quoteAddress,
-    feeTier: quoteEvaluation.selectedFeeTier,
-    amountOutMinimum: minimalAmountOut,
-    deadline,
-  };
-
-  const encodedSwapDetails = ethers.utils.defaultAbiCoder.encode(
-    ['uint24', 'uint256', 'uint256'],
-    [swapDetails.feeTier, swapDetails.amountOutMinimum, swapDetails.deadline]
-  );
-
+  let attemptedSubmission = false;
   try {
+    const takeWriteTransport = resolveTakeWriteTransport(signer, config);
+    const factory = AjnaKeeperTakerFactory__factory.connect(
+      config.keeperTakerFactory!,
+      signer
+    );
+
+    if (!config.sushiswapRouterOverrides) {
+      const message =
+        'Factory: sushiswapRouterOverrides required for SushiSwap takes';
+      logger.error(message);
+      throw new Error(message);
+    }
+    const minimalAmountOut = await computeFactoryAmountOutMinimum({
+      pool,
+      liquidation,
+      quoteEvaluation,
+    });
+    const deadline = await getSwapDeadline(signer);
+
+    logger.debug(
+      formatFactoryExecutionLog({
+        source: LiquiditySource.SUSHISWAP,
+        poolName: pool.name,
+        collateralWad: liquidation.collateral,
+        auctionPriceWad: liquidation.auctionPrice,
+        minimalAmountOut,
+      })
+    );
+
+    const swapDetails = {
+      swapRouter: config.sushiswapRouterOverrides.swapRouterAddress!,
+      targetToken: pool.quoteAddress,
+      feeTier: quoteEvaluation.selectedFeeTier,
+      amountOutMinimum: minimalAmountOut,
+      deadline,
+    };
+
+    const encodedSwapDetails = ethers.utils.defaultAbiCoder.encode(
+      ['uint24', 'uint256', 'uint256'],
+      [swapDetails.feeTier, swapDetails.amountOutMinimum, swapDetails.deadline]
+    );
+
     logger.debug(
       formatFactoryTakeSubmissionLog({
         source: LiquiditySource.SUSHISWAP,
@@ -320,6 +324,7 @@ export async function executeSushiSwapFactoryTake({
             nonce: nonce.toString(),
           }
         );
+        attemptedSubmission = true;
         return await submitTakeTransaction(takeWriteTransport, txRequest);
       }
     );
@@ -344,6 +349,10 @@ export async function executeSushiSwapFactoryTake({
       `Factory: Failed to SushiSwap Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
       error
     );
+    config.onFactoryExecutionFailure?.({
+      preBroadcast: !attemptedSubmission,
+      error: getErrorMessage(error),
+    });
     throw error;
   }
 }

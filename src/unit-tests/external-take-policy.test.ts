@@ -23,6 +23,7 @@ describe('External take route policy', () => {
     expect(policy.requiredNonSubsidizedOutputRaw.eq(raw(115))).to.equal(true);
     expect(policy.approvedMinOutRaw.eq(raw(115))).to.equal(true);
     expect(policy.expectedNetProfitQuoteRaw.eq(raw(20))).to.equal(true);
+    expect(policy.expectedShortfallQuoteRaw.eq(0)).to.equal(true);
     expect(policy.expectedSubsidyQuoteRaw.eq(0)).to.equal(true);
   });
 
@@ -42,6 +43,23 @@ describe('External take route policy', () => {
       EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor
     );
     expect(policy.approvedMinOutRaw.eq(raw(115))).to.equal(true);
+  });
+
+  it('reports break-even shortfall separately from clamped net profit', () => {
+    const policy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: 0.99,
+      allowSubsidy: true,
+      quoteAmountRaw: raw(103),
+      quoteDueRaw: raw(100),
+      marketFactorFloorQuoteRaw: raw(102),
+      routeExecutionCostQuoteRaw: raw(5),
+      configuredProfitFloorQuoteRaw: raw(10),
+    });
+
+    expect(policy.isEconomicallyExecutable).to.equal(true);
+    expect(policy.expectedNetProfitQuoteRaw.eq(0)).to.equal(true);
+    expect(policy.expectedShortfallQuoteRaw.eq(raw(2))).to.equal(true);
+    expect(policy.expectedSubsidyQuoteRaw.eq(raw(12))).to.equal(true);
   });
 
   it('allows explicitly subsidized routes that repay the auction', () => {

@@ -24,7 +24,13 @@ function ratioToNumber(numerator: BigNumber, denominator: BigNumber): number {
   );
 }
 
-/** Inputs required to apply route-derived external-take profitability policy. */
+/**
+ * Inputs required to apply route-derived external-take profitability policy.
+ *
+ * The market factor inputs are route-implied quote floors. They do not come from
+ * a separate oracle; callers compare the current route quote against the floor
+ * implied by the configured market price factor.
+ */
 export interface ExternalTakeRoutePolicyInput {
   configuredMarketPriceFactor: number;
   allowSubsidy: boolean;
@@ -55,6 +61,7 @@ export interface ExternalTakeRoutePolicyResult {
   /** Alias for requiredNonSubsidizedOutputRaw used by route telemetry. */
   requiredOutputFloorQuoteRaw: BigNumber;
   expectedNetProfitQuoteRaw: BigNumber;
+  expectedShortfallQuoteRaw: BigNumber;
   surplusOverFloorQuoteRaw: BigNumber;
   routeBreakEvenMarketPriceFactor: number;
   effectiveMarketPriceFactor: number;
@@ -123,6 +130,11 @@ export function applyExternalTakeRoutePolicy(
   )
     ? params.quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
     : ZERO_BN;
+  const expectedShortfallQuoteRaw = params.quoteAmountRaw.lt(
+    breakEvenQuoteAmountRaw
+  )
+    ? breakEvenQuoteAmountRaw.sub(params.quoteAmountRaw)
+    : ZERO_BN;
   const surplusOverFloorQuoteRaw = params.quoteAmountRaw.gte(
     requiredNonSubsidizedOutputRaw
   )
@@ -160,6 +172,7 @@ export function applyExternalTakeRoutePolicy(
     requiredNonSubsidizedOutputRaw,
     requiredOutputFloorQuoteRaw: requiredNonSubsidizedOutputRaw,
     expectedNetProfitQuoteRaw,
+    expectedShortfallQuoteRaw,
     surplusOverFloorQuoteRaw,
     routeBreakEvenMarketPriceFactor,
     effectiveMarketPriceFactor,

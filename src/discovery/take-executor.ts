@@ -55,6 +55,7 @@ import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
   compareExternalTakeBySubsidyThenRank,
+  isSubsidizedExternalTakeQuote,
 } from '../take/external-take-policy';
 import { decimaledToWei, getErrorMessage, withTimeout } from '../utils';
 import { convertWadToTokenDecimalsCeil, getDecimalsErc20 } from '../erc20';
@@ -305,6 +306,7 @@ function formatExternalTakeGasTelemetry(params: {
     ` allowSubsidy=${routeProfitability?.subsidyAllowed ?? false}` +
     ` quoteDueRaw=${routeProfitability?.auctionRepayRequirementQuoteRaw?.toString() ?? 'n/a'}` +
     ` requiredNonSubsidizedOutputRaw=${routeProfitability?.requiredNonSubsidizedOutputRaw?.toString() ?? 'n/a'}` +
+    ` expectedShortfallQuoteRaw=${routeProfitability?.expectedShortfallQuoteRaw?.toString() ?? 'n/a'}` +
     ` expectedSubsidyQuoteRaw=${routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'}` +
     ` writeTransport=${getWriteTransportMode(params.writeTransport)}`
   );
@@ -399,6 +401,9 @@ function applySimpleQuoteProfitability(params: {
     routeExecutionCostQuoteRaw,
     expectedNetProfitQuoteRaw: quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
       ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
+      : ZERO,
+    expectedShortfallQuoteRaw: quoteAmountRaw.lt(breakEvenQuoteAmountRaw)
+      ? breakEvenQuoteAmountRaw.sub(quoteAmountRaw)
       : ZERO,
     routeGasLimit: params.routeGasLimit,
     gasPriceWei: params.gasPriceRaw,
@@ -811,6 +816,10 @@ type DiscoveryExternalExecutionConfig = Pick<
     preBroadcast: boolean;
     error?: string;
   }) => void;
+  onFactoryExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
 };
 
 function hasDiscoveryTransportConfig(
@@ -1107,6 +1116,7 @@ function applyDiscoveryApprovalProfitabilityPolicy(params: {
         requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
         requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
         expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+        expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
         surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
         routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
         effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
@@ -1796,6 +1806,12 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
       probeResults.push(result);
       recordProbeCircuitOutcome(result);
       if (result.evaluation) {
+        if (isSubsidizedExternalTakeQuote(result.evaluation)) {
+          logger.debug(
+            `Hybrid external take factory-first approved subsidized path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'}; continuing to probe remaining paths for pool ${params.pool.name}`
+          );
+          continue;
+        }
         logger.debug(
           `Hybrid external take factory-first selected path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${result.evaluation.approvedMinOutRaw?.toString() ?? 'n/a'} priorRejectedPaths=${
             probeResults
@@ -2047,19 +2063,48 @@ function createExternalTakeAdapterForDiscovery(params: {
             return false;
           }
 
+          let factoryPreBroadcastFailed = false;
           const selectedFactorySource = selectedSource;
           const factoryPoolConfig =
             selectedFactorySource !== undefined &&
             isFactoryDynamicSource(selectedFactorySource)
               ? withTakeLiquiditySource(poolConfig, selectedFactorySource)
               : poolConfig;
-          return takeFactoryModule.takeLiquidationFactory({
-            pool,
-            signer,
-            poolConfig: factoryPoolConfig,
-            liquidation: liquidationForCandidate,
-            config,
-          });
+          const originalFactoryExecutionFailure =
+            config.onFactoryExecutionFailure;
+          const factoryConfig = {
+            ...config,
+            onFactoryExecutionFailure: (result: {
+              preBroadcast: boolean;
+              error?: string;
+            }) => {
+              originalFactoryExecutionFailure?.(result);
+              if (result.preBroadcast) {
+                factoryPreBroadcastFailed = true;
+              }
+            },
+          };
+          const factorySucceeded =
+            await takeFactoryModule.takeLiquidationFactory({
+              pool,
+              signer,
+              poolConfig: factoryPoolConfig,
+              liquidation: liquidationForCandidate,
+              config: factoryConfig,
+            });
+          if (factorySucceeded) {
+            return true;
+          }
+          if (
+            factoryPreBroadcastFailed &&
+            index < executionCandidates.length - 1
+          ) {
+            logger.warn(
+              `Hybrid factory path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
+            );
+            continue;
+          }
+          return false;
         }
 
         logger.error(

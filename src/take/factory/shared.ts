@@ -123,6 +123,10 @@ export type FactoryExecutionConfig = Pick<
 > & {
   takeWriteTransport?: TakeWriteTransport;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  onFactoryExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
 };
 
 export type FactoryQuoteConfig = Pick<
@@ -1097,6 +1101,7 @@ export async function getQuoteAmountDueRaw(
   runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<BigNumber> {
   const scale = await getCachedQuoteTokenScale(pool, runtimeCache);
+  // Round repayment up so router min-out covers the exact Ajna quote obligation.
   return ceilDiv(ceilWmul(collateral, auctionPrice), scale);
 }
 
@@ -1338,6 +1343,7 @@ export async function buildFactoryQuoteEvaluation(params: {
       requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
       requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
       expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+      expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
       surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
       routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
       effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
@@ -1462,6 +1468,7 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
       requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
       expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+      expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
       surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
       routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
       effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,

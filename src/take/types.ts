@@ -18,6 +18,7 @@ export interface RouteProfitabilityBreakdown {
   requiredNonSubsidizedOutputRaw?: BigNumber;
   requiredOutputFloorQuoteRaw?: BigNumber;
   expectedNetProfitQuoteRaw?: BigNumber;
+  expectedShortfallQuoteRaw?: BigNumber;
   surplusOverFloorQuoteRaw?: BigNumber;
   routeBreakEvenMarketPriceFactor?: number;
   effectiveMarketPriceFactor?: number;
@@ -88,24 +89,24 @@ interface ApprovedExternalTakeQuoteBase<TSource extends LiquiditySource>
 
 export interface ApprovedOneInchQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.ONEINCH> {
-  externalTakePath?: 'oneinch';
+  externalTakePath: 'oneinch';
 }
 
 export interface ApprovedUniswapV3FactoryQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.UNISWAPV3> {
-  externalTakePath?: 'factory';
+  externalTakePath: 'factory';
   selectedFeeTier: number;
 }
 
 export interface ApprovedSushiSwapFactoryQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.SUSHISWAP> {
-  externalTakePath?: 'factory';
+  externalTakePath: 'factory';
   selectedFeeTier: number;
 }
 
 export interface ApprovedCurveFactoryQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.CURVE> {
-  externalTakePath?: 'factory';
+  externalTakePath: 'factory';
   curvePool: CurvePoolSelection;
 }
 

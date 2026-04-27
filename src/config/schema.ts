@@ -259,7 +259,8 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   /**
    * Hybrid route selection mode. maximize_profit probes all enabled paths and
    * picks the best net-profit route. factory_first probes factory before
-   * 1inch and stops at the first approved path to reduce 1inch API use.
+   * 1inch and stops at the first non-subsidized approved path to reduce 1inch
+   * API use; subsidized approvals keep probing remaining paths.
    * cost_aware is a deprecated alias for factory_first.
    */
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;

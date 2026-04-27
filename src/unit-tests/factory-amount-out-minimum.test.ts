@@ -19,6 +19,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
+      externalTakePath: 'factory',
       quoteAmountRaw: ethers.utils.parseEther('120'),
       approvedMinOutRaw: ethers.utils.parseEther('118.8'),
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -48,6 +49,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
+      externalTakePath: 'factory',
       quoteAmountRaw: ethers.utils.parseEther('101'),
       approvedMinOutRaw: ethers.utils.parseEther('99'),
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -84,6 +86,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
+      externalTakePath: 'factory',
       quoteAmountRaw: ethers.utils.parseEther('126'),
       approvedMinOutRaw: ethers.utils.parseEther('125'),
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -113,6 +116,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
+      externalTakePath: 'factory',
       quoteAmountRaw: ethers.utils.parseEther('150'),
       routeMinOutRaw: ethers.utils.parseEther('125'),
       profitMinOutRaw: ethers.utils.parseEther('105'),

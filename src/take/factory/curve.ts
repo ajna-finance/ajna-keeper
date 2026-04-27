@@ -234,20 +234,22 @@ export async function executeCurveFactoryTake({
     | 'curveRouterOverrides'
     | 'tokenAddresses'
     | 'takeWriteTransport'
+    | 'onFactoryExecutionFailure'
   >;
 }): Promise<void> {
-  const takeWriteTransport = resolveTakeWriteTransport(signer, config);
-  const factory = AjnaKeeperTakerFactory__factory.connect(
-    config.keeperTakerFactory!,
-    signer
-  );
-
-  if (!config.curveRouterOverrides) {
-    const message = 'Factory: curveRouterOverrides required for Curve takes';
-    logger.error(message);
-    throw new Error(message);
-  }
+  let attemptedSubmission = false;
   try {
+    const takeWriteTransport = resolveTakeWriteTransport(signer, config);
+    const factory = AjnaKeeperTakerFactory__factory.connect(
+      config.keeperTakerFactory!,
+      signer
+    );
+
+    if (!config.curveRouterOverrides) {
+      const message = 'Factory: curveRouterOverrides required for Curve takes';
+      logger.error(message);
+      throw new Error(message);
+    }
     const resolvedCurvePool = quoteEvaluation.curvePool;
 
     logger.debug(
@@ -329,6 +331,7 @@ export async function executeCurveFactoryTake({
             nonce: nonce.toString(),
           }
         );
+        attemptedSubmission = true;
         return await submitTakeTransaction(takeWriteTransport, txRequest);
       }
     );
@@ -353,6 +356,10 @@ export async function executeCurveFactoryTake({
       `Factory: Failed to Curve Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
       error
     );
+    config.onFactoryExecutionFailure?.({
+      preBroadcast: !attemptedSubmission,
+      error: getErrorMessage(error),
+    });
     throw error;
   }
 }

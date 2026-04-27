@@ -652,6 +652,7 @@ interface FactoryLiquidationExecutionParams {
   > & {
     takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
     runtimeCache?: FactoryQuoteProviderRuntimeCache;
+    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
   };
 }
 
@@ -660,14 +661,8 @@ async function executeSelectedFactoryRoute(
     quoteEvaluation: ApprovedFactoryQuoteEvaluation;
   }
 ): Promise<boolean> {
-  const {
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    config,
-    quoteEvaluation,
-  } = params;
+  const { pool, poolConfig, signer, liquidation, config, quoteEvaluation } =
+    params;
 
   if (quoteEvaluation.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
     await takeWithUniswapV3Factory({
@@ -799,7 +794,10 @@ async function takeWithUniswapV3Factory({
   config: Pick<
     FactoryTakeParams['config'],
     'keeperTakerFactory' | 'universalRouterOverrides'
-  > & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
+  > & {
+    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
+    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
+  };
 }) {
   await executeUniswapV3FactoryTake({
     pool,
@@ -834,7 +832,10 @@ async function takeWithSushiSwapFactory({
   config: Pick<
     FactoryTakeParams['config'],
     'keeperTakerFactory' | 'sushiswapRouterOverrides'
-  > & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
+  > & {
+    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
+    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
+  };
 }) {
   await executeSushiSwapFactoryTake({
     pool,
@@ -866,7 +867,10 @@ async function takeWithCurveFactory({
   config: Pick<
     FactoryTakeParams['config'],
     'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'
-  > & { takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'] };
+  > & {
+    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
+    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
+  };
 }) {
   await executeCurveFactoryTake({
     pool,

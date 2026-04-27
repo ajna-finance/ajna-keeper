@@ -420,6 +420,49 @@ describe('take write submission', () => {
     });
   });
 
+  it('validates 1inch dry-run quotes before reporting a would-take action', async () => {
+    const connectStub = sinon.stub(AjnaKeeperTaker__factory, 'connect');
+
+    const result = await takeLiquidation({
+      pool: {
+        name: '1inch Atomic Take Pool',
+        poolAddress: '0x0000000000000000000000000000000000000001',
+        collateralAddress: '0x0000000000000000000000000000000000000002',
+        quoteAddress: '0x0000000000000000000000000000000000000003',
+      } as any,
+      poolConfig: {
+        name: '1inch Atomic Take Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.95,
+        },
+      },
+      signer: {} as any,
+      liquidation: {
+        borrower: '0xBorrower',
+        hpbIndex: 0,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+        isTakeable: true,
+        isArbTakeable: false,
+        externalTakeQuoteEvaluation: {
+          isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(11),
+        },
+      },
+      config: {
+        dryRun: true,
+        delayBetweenActions: 0,
+        connectorTokens: [],
+      },
+    });
+
+    expect(result).to.equal(false);
+    expect(connectStub.called).to.be.false;
+  });
+
   it('raises the 1inch atomic minReturnAmount to the approved execution floor', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),
@@ -789,6 +832,7 @@ describe('take write submission', () => {
       },
       quoteEvaluation: {
         isTakeable: true,
+        externalTakePath: 'factory',
         quoteAmountRaw: BigNumber.from(11),
         approvedMinOutRaw: BigNumber.from(10),
         selectedLiquiditySource: LiquiditySource.CURVE,
@@ -1025,6 +1069,7 @@ describe('take write submission', () => {
       },
       quoteEvaluation: {
         isTakeable: true,
+        externalTakePath: 'factory',
         quoteAmountRaw: BigNumber.from(11),
         approvedMinOutRaw: BigNumber.from(10),
         selectedLiquiditySource: LiquiditySource.UNISWAPV3,

@@ -800,7 +800,7 @@ export function validateAutoDiscoverConfig(
         takePolicy.minProfitNative !== undefined)
     ) {
       logger.warn(
-        `AutoDiscoverConfig.take: externalTakeRouteSelectionMode=${takePolicy.externalTakeRouteSelectionMode} stops after the first approved path; quote-normalized gas-cost ranking is skipped to reduce 1inch/API use`
+        `AutoDiscoverConfig.take: externalTakeRouteSelectionMode=${takePolicy.externalTakeRouteSelectionMode} stops after the first non-subsidized approved path; subsidized paths continue probing, but quote-normalized gas-cost ranking is skipped to reduce 1inch/API use`
       );
     }
     requireOptionalPositive(

@@ -141,6 +141,7 @@ function getQuoteAmountDueRawFromDecimals(params: {
     .mul(params.auctionPriceWad)
     .add(factoryShared.WAD.sub(1))
     .div(factoryShared.WAD);
+  // Round repayment up so min-out never underfunds the Ajna take amount.
   return convertWadToTokenDecimalsCeil(quoteDueWad, params.quoteDecimals);
 }
 
@@ -344,6 +345,7 @@ export async function getOneInchPathQuoteEvaluation(
         requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
         requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
         expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+        expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
         surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
         routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
         effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
@@ -473,16 +475,6 @@ export async function takeLiquidation({
   const { borrower } = liquidation;
   const { dryRun } = config;
 
-  if (dryRun) {
-    const selectedLiquiditySource =
-      liquidation.externalTakeQuoteEvaluation?.selectedLiquiditySource ??
-      poolConfig.take.liquiditySource;
-    logger.info(
-      `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${selectedLiquiditySource}`
-    );
-    return true;
-  }
-
   const suppliedQuoteEvaluation = liquidation.externalTakeQuoteEvaluation;
   const usesOneInchExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ||
@@ -528,6 +520,13 @@ export async function takeLiquidation({
       return false;
     }
     const approvedQuoteEvaluation = approval.quoteEvaluation;
+
+    if (dryRun) {
+      logger.info(
+        `DryRun - would Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower} using ${approvedQuoteEvaluation.selectedLiquiditySource}, approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
+      );
+      return true;
+    }
 
     const takeWriteTransport = resolveTakeWriteTransport(signer, config);
     const keeperTaker = AjnaKeeperTaker__factory.connect(
