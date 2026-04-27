@@ -114,10 +114,11 @@ async function assertConfiguredChainIdMatchesSigner(
   signerChecks.set(configuredChainId, check);
   try {
     await check.pending;
-  } finally {
+  } catch (error) {
     if (signerChecks.get(configuredChainId) === check) {
       signerChecks.delete(configuredChainId);
     }
+    throw error;
   }
 }
 

@@ -142,11 +142,14 @@ export interface FactoryQuoteProviderRuntimeCache {
   chainIdInflight?: Promise<number | undefined>;
   uniswapV3?: UniswapV3QuoteProvider | null;
   sushiswap?: SushiSwapQuoteProvider | null;
+  sushiswapInitInflight?: Promise<SushiSwapQuoteProvider | null>;
   sushiswapUnavailableUntilMs?: number;
   curve?: CurveQuoteProvider | null;
+  curveInitInflight?: Promise<CurveQuoteProvider | null>;
   curveUnavailableUntilMs?: number;
   tokenDecimals?: Map<string, number>;
   quoteTokenScales?: Map<string, BigNumber>;
+  /** Success timestamps keyed by route; refreshed only after successful execution. */
   recentRouteSuccesses?: Map<string, number>;
 }
 
@@ -188,6 +191,10 @@ async function initializeQuoteProviderWithCooldown<
   setCachedProvider: (provider: TProvider | null) => void;
   getUnavailableUntilMs: () => number | undefined;
   setUnavailableUntilMs: (untilMs: number | undefined) => void;
+  getInitializationInflight?: () => Promise<TProvider | null> | undefined;
+  setInitializationInflight?: (
+    pending: Promise<TProvider | null> | undefined
+  ) => void;
   createProvider: () => TProvider;
 }): Promise<TProvider | undefined> {
   let quoteProvider = params.getCachedProvider();
@@ -208,33 +215,51 @@ async function initializeQuoteProviderWithCooldown<
   }
 
   if (quoteProvider === undefined) {
-    const candidateProvider = params.createProvider();
-    const initialized = await withTimeout(
-      candidateProvider.initialize(),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      `${params.label} quote provider initialization`
-    ).catch((error) => {
-      logger.warn(
-        `${params.label} quote provider initialization failed: ${getErrorMessage(error)}`
-      );
-      return false;
-    });
-    quoteProvider = initialized ? candidateProvider : null;
-    if (params.runtimeCache) {
-      if (quoteProvider) {
-        if (unavailableUntilMs !== undefined) {
-          logger.info(
-            `${params.label} quote provider initialization recovered`
+    const initializeProvider = async (): Promise<TProvider | null> => {
+      const candidateProvider = params.createProvider();
+      const initialized = await withTimeout(
+        candidateProvider.initialize(),
+        DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+        `${params.label} quote provider initialization`
+      ).catch((error) => {
+        logger.warn(
+          `${params.label} quote provider initialization failed: ${getErrorMessage(error)}`
+        );
+        return false;
+      });
+      const initializedProvider = initialized ? candidateProvider : null;
+      if (params.runtimeCache) {
+        if (initializedProvider) {
+          if (unavailableUntilMs !== undefined) {
+            logger.info(
+              `${params.label} quote provider initialization recovered`
+            );
+          }
+          params.setCachedProvider(initializedProvider);
+          params.setUnavailableUntilMs(undefined);
+        } else {
+          const retryMs = getProviderInitFailureRetryMs();
+          params.setUnavailableUntilMs(Date.now() + retryMs);
+          logger.warn(
+            `${params.label} quote provider unavailable; retrying initialization in ${retryMs}ms`
           );
         }
-        params.setCachedProvider(quoteProvider);
-        params.setUnavailableUntilMs(undefined);
-      } else {
-        const retryMs = getProviderInitFailureRetryMs();
-        params.setUnavailableUntilMs(Date.now() + retryMs);
-        logger.warn(
-          `${params.label} quote provider unavailable; retrying initialization in ${retryMs}ms`
-        );
+      }
+      return initializedProvider;
+    };
+
+    const cachedInitialization = params.getInitializationInflight?.();
+    if (cachedInitialization) {
+      quoteProvider = await cachedInitialization;
+    } else {
+      const pendingInitialization = initializeProvider();
+      params.setInitializationInflight?.(pendingInitialization);
+      try {
+        quoteProvider = await pendingInitialization;
+      } finally {
+        if (params.getInitializationInflight?.() === pendingInitialization) {
+          params.setInitializationInflight?.(undefined);
+        }
       }
     }
   }
@@ -446,14 +471,17 @@ export function formatFactoryTakeSubmissionLog(params: {
   return `Factory: Sending ${getFactoryRouteSourceLabel(params.source)} Take Tx - poolAddress: ${params.poolAddress}, borrower: ${params.borrower}`;
 }
 
+function getFactoryRouteCandidateKey(route: FactoryRouteCandidate): string {
+  return `${route.liquiditySource}:${route.feeTier ?? 'configured'}`;
+}
+
 export function getFactoryRouteKey(params: {
   route: FactoryRouteCandidate;
   collateralTokenAddress: string;
   quoteTokenAddress: string;
 }): string {
   return [
-    params.route.liquiditySource,
-    params.route.feeTier ?? 'configured',
+    getFactoryRouteCandidateKey(params.route),
     params.collateralTokenAddress.toLowerCase(),
     params.quoteTokenAddress.toLowerCase(),
   ].join(':');
@@ -482,15 +510,15 @@ function isDefaultFactoryRoute(params: {
 const RECENT_ROUTE_SUCCESS_TTL_MS = 10 * 60 * 1000;
 
 function pruneExpiredRouteSuccesses(
-  successes: Map<string, number>,
+  successTimestamps: Map<string, number>,
   now: number
 ): void {
-  for (const [key, timestamp] of Array.from(successes.entries())) {
+  for (const [key, timestamp] of Array.from(successTimestamps.entries())) {
     if (now - timestamp > RECENT_ROUTE_SUCCESS_TTL_MS) {
-      successes.delete(key);
+      successTimestamps.delete(key);
     }
   }
-  pruneMapToMaxSize(successes, MAX_RECENT_ROUTE_SUCCESSES);
+  pruneMapToMaxSize(successTimestamps, MAX_RECENT_ROUTE_SUCCESSES);
 }
 
 export function orderFactoryRouteCandidates(params: {
@@ -504,9 +532,9 @@ export function orderFactoryRouteCandidates(params: {
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
 }): FactoryRouteCandidate[] {
   const now = Date.now();
-  const successes = params.runtimeCache?.recentRouteSuccesses;
-  if (successes) {
-    pruneExpiredRouteSuccesses(successes, now);
+  const successTimestamps = params.runtimeCache?.recentRouteSuccesses;
+  if (successTimestamps) {
+    pruneExpiredRouteSuccesses(successTimestamps, now);
   }
 
   return params.routes
@@ -524,7 +552,7 @@ export function orderFactoryRouteCandidates(params: {
           defaultLiquiditySource: params.defaultLiquiditySource,
           config: params.config,
         }),
-        recentSuccessAt: successes?.get(key) ?? 0,
+        recentSuccessAt: successTimestamps?.get(key) ?? 0,
       };
     })
     .sort((left, right) => {
@@ -642,6 +670,12 @@ export async function getSushiSwapQuoteProvider(params: {
         params.runtimeCache.sushiswapUnavailableUntilMs = untilMs;
       }
     },
+    getInitializationInflight: () => params.runtimeCache?.sushiswapInitInflight,
+    setInitializationInflight: (pending) => {
+      if (params.runtimeCache) {
+        params.runtimeCache.sushiswapInitInflight = pending;
+      }
+    },
     createProvider: () =>
       new SushiSwapQuoteProvider(params.signer, {
         swapRouterAddress,
@@ -681,6 +715,12 @@ export async function getCurveQuoteProvider(params: {
     setUnavailableUntilMs: (untilMs) => {
       if (params.runtimeCache) {
         params.runtimeCache.curveUnavailableUntilMs = untilMs;
+      }
+    },
+    getInitializationInflight: () => params.runtimeCache?.curveInitInflight,
+    setInitializationInflight: (pending) => {
+      if (params.runtimeCache) {
+        params.runtimeCache.curveInitInflight = pending;
       }
     },
     createProvider: () =>
@@ -954,8 +994,17 @@ function compareFactoryRouteRank(
     return leftUsesDefaultFeeTier ? -1 : 1;
   }
 
-  const leftQuote = left.evaluation.quoteAmountRaw!;
-  const rightQuote = right.evaluation.quoteAmountRaw!;
+  const leftQuote = left.evaluation.quoteAmountRaw;
+  const rightQuote = right.evaluation.quoteAmountRaw;
+  if (!leftQuote && !rightQuote) {
+    return 0;
+  }
+  if (!leftQuote) {
+    return 1;
+  }
+  if (!rightQuote) {
+    return -1;
+  }
   if (!leftQuote.eq(rightQuote)) {
     return leftQuote.gt(rightQuote) ? -1 : 1;
   }
@@ -1019,7 +1068,7 @@ function pushFactoryRouteCandidate(
     return;
   }
 
-  const key = `${route.liquiditySource}:${route.feeTier ?? 'configured'}`;
+  const key = getFactoryRouteCandidateKey(route);
   if (seen.has(key)) {
     return;
   }

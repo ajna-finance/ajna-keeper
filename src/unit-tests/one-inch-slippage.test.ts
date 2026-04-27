@@ -85,4 +85,61 @@ describe('1inch external take slippage', () => {
       true
     );
   });
+
+  it('caches successful configured chain-id checks for the same signer/provider', async () => {
+    const quoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('120', 6).toString(),
+      });
+    const pool = {
+      name: '1inch Chain Cache Pool',
+      poolAddress: '0x4444444444444444444444444444444444444444',
+      collateralAddress: COLLATERAL_ADDRESS,
+      quoteAddress: QUOTE_ADDRESS,
+    } as unknown as FungiblePool;
+    const getChainId = sinon.stub().resolves(CHAIN_ID);
+    const signer = {
+      getChainId,
+      provider: {},
+    } as unknown as Signer;
+    const poolConfig: TakeActionConfig = {
+      take: {
+        liquiditySource: LiquiditySource.ONEINCH,
+        marketPriceFactor: 0.99,
+      },
+    };
+    const config = {
+      chainId: CHAIN_ID,
+      skipOneInchRateLimitDelay: true,
+      tokenDecimalsCache: makeTokenDecimalsCache(),
+    };
+
+    await getOneInchPathQuoteEvaluation(
+      pool,
+      100,
+      ethers.utils.parseEther('1'),
+      poolConfig,
+      config,
+      signer,
+      { [CHAIN_ID]: ROUTER_ADDRESS },
+      undefined,
+      ethers.utils.parseEther('100')
+    );
+    await getOneInchPathQuoteEvaluation(
+      pool,
+      100,
+      ethers.utils.parseEther('1'),
+      poolConfig,
+      config,
+      signer,
+      { [CHAIN_ID]: ROUTER_ADDRESS },
+      undefined,
+      ethers.utils.parseEther('100')
+    );
+
+    expect(getChainId.calledOnce).to.equal(true);
+    expect(quoteStub.calledTwice).to.equal(true);
+  });
 });

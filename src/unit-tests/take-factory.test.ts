@@ -637,6 +637,60 @@ describe('Take Factory', () => {
       );
     });
 
+    it('coalesces concurrent SushiSwap provider initialization', async () => {
+      let resolveInitialization: ((value: boolean) => void) | undefined;
+      const initializeStub = sinon.stub(
+        SushiSwapQuoteProvider.prototype,
+        'initialize'
+      );
+      const initializationStarted = new Promise<void>((resolveStarted) => {
+        initializeStub.callsFake(
+          () =>
+            new Promise<boolean>((resolve) => {
+              resolveInitialization = resolve;
+              resolveStarted();
+            })
+        );
+      });
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      const routerConfig = {
+        swapRouterAddress: '0x3333333333333333333333333333333333333333',
+        quoterV2Address: '0x4444444444444444444444444444444444444444',
+        factoryAddress: '0x5555555555555555555555555555555555555555',
+        defaultFeeTier: 500,
+        wethAddress: '0x6666666666666666666666666666666666666666',
+      };
+      const quoteSigner = ethers.Wallet.createRandom().connect(
+        new ethers.providers.JsonRpcProvider()
+      );
+
+      const firstProviderPromise = getSushiSwapQuoteProvider({
+        signer: quoteSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+      await initializationStarted;
+      expect(runtimeCache.sushiswapInitInflight).to.not.equal(undefined);
+
+      const secondProviderPromise = getSushiSwapQuoteProvider({
+        signer: quoteSigner as any,
+        routerConfig,
+        runtimeCache,
+      });
+      expect(initializeStub.calledOnce).to.be.true;
+
+      resolveInitialization?.(true);
+      const [firstProvider, secondProvider] = await Promise.all([
+        firstProviderPromise,
+        secondProviderPromise,
+      ]);
+
+      expect(firstProvider).to.not.equal(undefined);
+      expect(secondProvider).to.equal(firstProvider);
+      expect(runtimeCache.sushiswap).to.equal(firstProvider);
+      expect(runtimeCache.sushiswapInitInflight).to.equal(undefined);
+    });
+
     it('reuses a shared Curve quote provider cache across quote evaluations', async () => {
       const initializeStub = sinon
         .stub(CurveQuoteProvider.prototype, 'initialize')
@@ -770,6 +824,66 @@ describe('Take Factory', () => {
       expect(warnStub.secondCall.args[0]).to.contain(
         'Curve quote provider unavailable; retrying initialization'
       );
+    });
+
+    it('coalesces concurrent Curve provider initialization', async () => {
+      let resolveInitialization: ((value: boolean) => void) | undefined;
+      const initializeStub = sinon.stub(
+        CurveQuoteProvider.prototype,
+        'initialize'
+      );
+      const initializationStarted = new Promise<void>((resolveStarted) => {
+        initializeStub.callsFake(
+          () =>
+            new Promise<boolean>((resolve) => {
+              resolveInitialization = resolve;
+              resolveStarted();
+            })
+        );
+      });
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      const routerConfig = {
+        poolConfigs: {
+          'COLLATERAL-QUOTE': {
+            address: '0x3333333333333333333333333333333333333333',
+            poolType: CurvePoolType.STABLE,
+          },
+        },
+        defaultSlippage: 0.5,
+        wethAddress: '0x4444444444444444444444444444444444444444',
+      };
+      const tokenAddresses = {
+        COLLATERAL: '0x1111111111111111111111111111111111111111',
+        QUOTE: '0x2222222222222222222222222222222222222222',
+      };
+
+      const firstProviderPromise = getCurveQuoteProvider({
+        signer: mockSigner as any,
+        routerConfig,
+        tokenAddresses,
+        runtimeCache,
+      });
+      await initializationStarted;
+      expect(runtimeCache.curveInitInflight).to.not.equal(undefined);
+
+      const secondProviderPromise = getCurveQuoteProvider({
+        signer: mockSigner as any,
+        routerConfig,
+        tokenAddresses,
+        runtimeCache,
+      });
+      expect(initializeStub.calledOnce).to.be.true;
+
+      resolveInitialization?.(true);
+      const [firstProvider, secondProvider] = await Promise.all([
+        firstProviderPromise,
+        secondProviderPromise,
+      ]);
+
+      expect(firstProvider).to.not.equal(undefined);
+      expect(secondProvider).to.equal(firstProvider);
+      expect(runtimeCache.curve).to.equal(firstProvider);
+      expect(runtimeCache.curveInitInflight).to.equal(undefined);
     });
   });
 

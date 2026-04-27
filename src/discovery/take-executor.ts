@@ -373,7 +373,7 @@ function getDiscoveryTokenDecimalsCache(
   return rpcCache.factoryQuoteProviders.tokenDecimals;
 }
 
-function applySimpleQuoteProfitability(params: {
+function buildSimpleQuoteProfitability(params: {
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   auctionCostQuoteRaw: BigNumber;
   routeGasLimit: BigNumber;
@@ -383,17 +383,17 @@ function applySimpleQuoteProfitability(params: {
   gasPriceAgeMs?: number;
   gasPriceFreshnessTtlMs?: number;
   l2GasCostBufferBasisPoints?: number;
-}): void {
+}): RouteProfitabilityBreakdown | undefined {
   const quoteAmountRaw = params.quoteEvaluation.quoteAmountRaw;
   if (!quoteAmountRaw) {
-    return;
+    return undefined;
   }
 
   const routeExecutionCostQuoteRaw = params.gasCostQuoteRaw ?? ZERO;
   const breakEvenQuoteAmountRaw = params.auctionCostQuoteRaw.add(
     routeExecutionCostQuoteRaw
   );
-  params.quoteEvaluation.routeProfitability = {
+  return {
     ...params.quoteEvaluation.routeProfitability,
     auctionRepayRequirementQuoteRaw:
       params.quoteEvaluation.routeProfitability
@@ -1354,7 +1354,7 @@ async function approveExternalTakeForDiscovery(
         })
       : undefined;
   if (quoteAmountRaw && auctionCostQuoteRaw) {
-    applySimpleQuoteProfitability({
+    const routeProfitability = buildSimpleQuoteProfitability({
       quoteEvaluation: approvedQuoteEvaluation,
       auctionCostQuoteRaw,
       routeGasLimit,
@@ -1368,6 +1368,12 @@ async function approveExternalTakeForDiscovery(
       ),
       l2GasCostBufferBasisPoints: gasPolicy.l2GasCostBufferBasisPoints,
     });
+    if (routeProfitability) {
+      approvedQuoteEvaluation = {
+        ...approvedQuoteEvaluation,
+        routeProfitability,
+      };
+    }
   } else if (quoteAmountRaw) {
     approvedQuoteEvaluation.routeProfitability = {
       ...approvedQuoteEvaluation.routeProfitability,
@@ -1963,6 +1969,9 @@ function createExternalTakeAdapterForDiscovery(params: {
           let approvedEvaluation = candidateEvaluation;
           let executionLiquidation = liquidation;
           if (index > 0) {
+            // The primary path already passed the engine's final approval hook.
+            // Fallbacks are selected inside this executor, so refresh and
+            // reapprove them immediately before attempting execution.
             let refreshedStatus;
             try {
               refreshedStatus = await pool
