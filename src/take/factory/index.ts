@@ -15,6 +15,7 @@ import {
   logSkippedTakeCandidate,
   processTakeCandidates,
 } from '../engine';
+import { createArbTakeStrategy } from '../arb-strategy';
 import { resolveSubgraphConfig } from '../../read-transports';
 import {
   FactoryExecutionConfig,
@@ -64,8 +65,8 @@ export {
 } from './shared';
 
 /**
- * Handle takes using factory pattern (Uniswap V3, future DEXs)
- * Completely separate from existing 1inch logic
+ * Handle external takes using the factory strategy while the shared candidate
+ * engine independently evaluates arbTake for the same auction candidates.
  */
 export async function handleFactoryTakes({
   signer,
@@ -75,7 +76,7 @@ export async function handleFactoryTakes({
   config,
 }: FactoryTakeParams) {
   const resolvedConfig: FactoryTakeConfig = resolveSubgraphConfig(config);
-  logger.debug(`Factory take handler starting for pool: ${pool.name}`);
+  logger.debug(`Factory external take strategy starting for pool: ${pool.name}`);
   const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
   const candidates = await getTakeBorrowerCandidates({
     subgraph: resolvedConfig.subgraph,
@@ -83,16 +84,15 @@ export async function handleFactoryTakes({
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
 
-  const externalTakeAdapter: ExternalTakeAdapter<any, any> =
-    createFactoryTakeAdapter({
-      quoteConfig: {
-        universalRouterOverrides: resolvedConfig.universalRouterOverrides,
-        sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
-        curveRouterOverrides: resolvedConfig.curveRouterOverrides,
-        tokenAddresses: resolvedConfig.tokenAddresses,
-      },
-      runtimeCache: quoteProviderCache,
-    });
+  const externalTakeAdapter = createFactoryTakeAdapter({
+    quoteConfig: {
+      universalRouterOverrides: resolvedConfig.universalRouterOverrides,
+      sushiswapRouterOverrides: resolvedConfig.sushiswapRouterOverrides,
+      curveRouterOverrides: resolvedConfig.curveRouterOverrides,
+      tokenAddresses: resolvedConfig.tokenAddresses,
+    },
+    runtimeCache: quoteProviderCache,
+  });
 
   await processTakeCandidates({
     pool,
@@ -101,6 +101,10 @@ export async function handleFactoryTakes({
     candidates,
     subgraph: resolvedConfig.subgraph,
     externalTakeAdapter,
+    arbTakeStrategy: createArbTakeStrategy({
+      actionLabel: 'Factory ArbTake',
+      logPrefix: 'Factory: ',
+    }),
     externalExecutionConfig: {
       dryRun: resolvedConfig.dryRun,
       keeperTakerFactory: resolvedConfig.keeperTakerFactory,
@@ -114,8 +118,6 @@ export async function handleFactoryTakes({
     dryRun: resolvedConfig.dryRun ?? false,
     delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
     takeWriteTransport,
-    arbTakeActionLabel: 'Factory ArbTake',
-    arbTakeLogPrefix: 'Factory: ',
     onFound: (decision) => {
       logger.debug(
         `Found liquidation to ${formatTakeStrategyLog(
@@ -783,8 +785,7 @@ export async function takeLiquidationFactory({
 }
 
 /**
- * FIXED: Execute Uniswap V3 take via factory
- * Now follows 1inch pattern - sends WAD amounts to smart contract
+ * Execute Uniswap V3 take via factory using WAD auction amounts.
  */
 async function takeWithUniswapV3Factory({
   pool,
@@ -819,8 +820,7 @@ async function takeWithUniswapV3Factory({
  */
 
 /**
- * FIXED: Execute SushiSwap take via factory
- * Now follows 1inch pattern - sends WAD amounts to smart contract
+ * Execute SushiSwap take via factory using WAD auction amounts.
  */
 async function takeWithSushiSwapFactory({
   pool,

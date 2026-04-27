@@ -5,7 +5,7 @@ import { logger } from '../logging';
 
 /**
  * Deployment types supported by the smart detection system
- * - single: Use existing AjnaKeeperTaker.sol approach (major chains)
+ * - single: Use a single-contract external take path, currently 1inch atomic
  * - factory: Use factory pattern with multiple DEX implementations (newer chains)  
  * - none: No DEX integration available, arbTake/settlement only
  */
@@ -36,7 +36,7 @@ function isFactoryLiquiditySource(
 /**
  * Smart DEX Manager - Analyzes configuration and routes to appropriate take implementation
  * 
- * This enables backward compatibility with existing single-contract deployments
+ * This routes each pool to its configured external-take deployment model
  * while supporting multi-DEX factory deployments on newer chains.
  */
 export class SmartDexManager {

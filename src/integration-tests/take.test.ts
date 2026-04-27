@@ -24,7 +24,7 @@ import { createSubgraphReader } from '../read-transports';
 import { expect } from 'chai';
 import {
   getLiquidationsToTake,
-  handleLegacyOrArbTakes,
+  handleTakeCandidatesForPool,
 } from '../take';
 import { arbTakeLiquidation } from '../take/arb';
 import { BigNumber, constants, Wallet } from 'ethers';
@@ -317,7 +317,7 @@ describe('arbTakeLiquidation', () => {
   });
 });
 
-describe('handleLegacyOrArbTakes', () => {
+describe('handleTakeCandidatesForPool', () => {
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
@@ -377,7 +377,7 @@ describe('handleLegacyOrArbTakes', () => {
     // Record initial deposits for comparison
     const bucket2DepositBefore = weiToDecimaled((await bucket2.getStatus()).deposit);
 
-    await handleLegacyOrArbTakes({
+    await handleTakeCandidatesForPool({
       signer,
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -393,7 +393,7 @@ describe('handleLegacyOrArbTakes', () => {
       'Bucket 1 should only have dust remaining'
     );
 
-    await handleLegacyOrArbTakes({
+    await handleTakeCandidatesForPool({
       signer,
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -456,7 +456,7 @@ describe('ArbTake → LP Collection chain', () => {
     );
 
     // Execute arb take
-    await handleLegacyOrArbTakes({
+    await handleTakeCandidatesForPool({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,
@@ -511,7 +511,7 @@ describe('ArbTake → Settlement → Bond Collection chain', () => {
     await increaseTime(SECONDS_PER_DAY * 2);
 
     // Execute arb take — consumes all collateral
-    await handleLegacyOrArbTakes({
+    await handleTakeCandidatesForPool({
       pool,
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       signer,

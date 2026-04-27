@@ -420,7 +420,7 @@ describe('shared arbTake helpers', () => {
       candidates: [{ borrower: '0xBorrower' }],
       subgraph: {} as any,
       externalTakeAdapter: {
-        kind: 'legacy',
+        kind: 'oneinch',
         evaluateExternalTake: sinon.stub().resolves({
           isTakeable: true,
           takeablePrice: 1,
@@ -481,7 +481,7 @@ describe('shared arbTake helpers', () => {
       candidates: [{ borrower: '0xBorrowerA' }, { borrower: '0xBorrowerB' }],
       subgraph: {} as any,
       externalTakeAdapter: {
-        kind: 'legacy',
+        kind: 'oneinch',
         evaluateExternalTake: sinon.stub().resolves({
           isTakeable: true,
           takeablePrice: 1,

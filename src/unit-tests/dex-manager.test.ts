@@ -17,7 +17,7 @@ describe('SmartDexManager', () => {
   });
 
   describe('detectDeploymentTypeForPool()', () => {
-    it('returns single for a 1inch pool when the legacy taker is configured', async () => {
+    it('returns single for a 1inch pool when the single-contract taker is configured', async () => {
       const manager = new SmartDexManager(mockSigner, {
         keeperTaker: '0xTaker123',
         oneInchRouters: { 43114: '0xRouter123' },
@@ -181,7 +181,7 @@ describe('SmartDexManager', () => {
   });
 
   describe('canTakeLiquidation()', () => {
-    it('returns true for 1inch external takes when the legacy deployment is available', async () => {
+    it('returns true for 1inch external takes when the single-contract deployment is available', async () => {
       const manager = new SmartDexManager(mockSigner, {
         keeperTaker: '0xTaker123',
         oneInchRouters: { 43114: '0xRouter123' },

@@ -26,6 +26,7 @@ import {
 import { handleFactoryTakes } from './factory';
 import * as factoryShared from './factory/shared';
 import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
+import { createArbTakeStrategy } from './arb-strategy';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
@@ -235,9 +236,9 @@ export async function handleTakes({
   switch (deploymentType) {
     case 'single':
       logger.debug(
-        `Using single contract (1inch) take handler for pool: ${pool.name}`
+        `Using single-contract external take strategy for pool: ${pool.name}`
       );
-      await handleLegacyOrArbTakes({
+      await handleTakeCandidatesForPool({
         signer,
         takeWriteTransport,
         pool,
@@ -248,7 +249,7 @@ export async function handleTakes({
 
     case 'factory':
       logger.debug(
-        `Using factory (multi-DEX) take handler for pool: ${pool.name}`
+        `Using factory external take strategy for pool: ${pool.name}`
       );
       await handleFactoryTakes({
         signer,
@@ -273,7 +274,7 @@ export async function handleTakes({
       logger.warn(
         `External liquidity source ${requestedLiquiditySource ?? 'none'} unavailable for pool ${pool.name} - checking arbTake only`
       );
-      await handleLegacyOrArbTakes({
+      await handleTakeCandidatesForPool({
         signer,
         takeWriteTransport,
         pool,
@@ -285,12 +286,15 @@ export async function handleTakes({
 }
 
 /**
- * Handle the non-factory take path:
- * - legacy 1inch external takes when available
- * - arbTake-only fallback when no external DEX deployment exists
+ * Runs the shared candidate loop for pool-level take strategies.
+ *
+ * External takes and arbTake are independently configured. The selected
+ * external-take adapter handles single-contract 1inch or no external route;
+ * processTakeCandidates evaluates arbTake separately and preserves the
+ * external-take-first execution priority when both strategies approve.
  */
 
-export async function handleLegacyOrArbTakes({
+export async function handleTakeCandidatesForPool({
   signer,
   takeWriteTransport,
   pool,
@@ -304,14 +308,10 @@ export async function handleLegacyOrArbTakes({
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
 
-  const externalTakeAdapter: ExternalTakeAdapter<any, any> =
-    poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
-      ? createOneInchTakeAdapter({
-          delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
-          oneInchRouters: resolvedConfig.oneInchRouters,
-          connectorTokens: resolvedConfig.connectorTokens,
-        })
-      : createNoExternalTakeAdapter();
+  const externalTakeAdapter = createExternalTakeStrategyForPool({
+    poolConfig,
+    config: resolvedConfig,
+  });
 
   await processTakeCandidates({
     pool,
@@ -320,11 +320,14 @@ export async function handleLegacyOrArbTakes({
     candidates,
     subgraph: resolvedConfig.subgraph,
     externalTakeAdapter,
+    arbTakeStrategy: createArbTakeStrategy(),
     externalExecutionConfig: {
       dryRun: resolvedConfig.dryRun,
       delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
       connectorTokens: resolvedConfig.connectorTokens,
       oneInchRouters: resolvedConfig.oneInchRouters,
+      oneInchAggregationExecutorAllowlist:
+        resolvedConfig.oneInchAggregationExecutorAllowlist,
       keeperTaker: resolvedConfig.keeperTaker,
       takeWriteTransport,
     },
@@ -353,6 +356,21 @@ export async function handleLegacyOrArbTakes({
 }
 
 type LiquidationToTake = TakeLiquidationPlan;
+
+function createExternalTakeStrategyForPool(params: {
+  poolConfig: TakeActionConfig;
+  config: HandleTakeConfig;
+}): ExternalTakeAdapter<TakeActionConfig, OneInchExecutionConfig> {
+  if (params.poolConfig.take.liquiditySource === LiquiditySource.ONEINCH) {
+    return createOneInchTakeAdapter({
+      delayBetweenActions: params.config.delayBetweenActions ?? 0,
+      oneInchRouters: params.config.oneInchRouters,
+      connectorTokens: params.config.connectorTokens,
+    });
+  }
+
+  return createNoExternalTakeAdapter();
+}
 
 export function createNoExternalTakeAdapter(): ExternalTakeAdapter<
   TakeActionConfig,
@@ -486,7 +504,7 @@ export async function getOneInchPathQuoteEvaluation(
     }
 
     if (!config.skipOneInchRateLimitDelay) {
-      // Legacy/manual 1inch mode still honors operator pacing.
+      // Manual/single-contract 1inch mode still honors operator pacing.
       await delay(config.delayBetweenActions ?? 0);
     }
 
@@ -609,17 +627,17 @@ async function checkIfTakeable(
   return { isTakeable: evaluation.isTakeable };
 }
 
-async function computeLegacyOneInchMinReturnAmount(params: {
+async function computeOneInchAtomicMinReturnAmount(params: {
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
 }): Promise<BigNumber> {
   if (!params.poolConfig.take.marketPriceFactor) {
-    throw new Error('Legacy 1inch execution requires marketPriceFactor');
+    throw new Error('1inch atomic execution requires marketPriceFactor');
   }
   if (!params.quoteEvaluation.quoteAmountRaw) {
-    throw new Error('Legacy 1inch execution requires quoteAmountRaw');
+    throw new Error('1inch atomic execution requires quoteAmountRaw');
   }
 
   const quoteAmountDueRaw = await factoryShared.getQuoteAmountDueRaw(
@@ -803,14 +821,14 @@ export async function takeLiquidation({
 
     if (!approvedQuoteEvaluation.isTakeable) {
       logger.error(
-        `Legacy 1inch take quote no longer satisfies execution policy for ${pool.name}/${borrower}: ${approvedQuoteEvaluation.reason ?? 'not takeable'}`
+        `1inch atomic take quote no longer satisfies execution policy for ${pool.name}/${borrower}: ${approvedQuoteEvaluation.reason ?? 'not takeable'}`
       );
       return false;
     }
 
     if (!approvedQuoteEvaluation.quoteAmountRaw) {
       logger.error(
-        `Legacy 1inch take is missing raw quote amount for ${pool.name}/${borrower}; refusing to send an unbounded swap`
+        `1inch atomic take is missing raw quote amount for ${pool.name}/${borrower}; refusing to send an unbounded swap`
       );
       return false;
     }
@@ -835,13 +853,13 @@ export async function takeLiquidation({
         error,
       });
       logger.error(
-        `Legacy 1inch take cannot request swap data for ${pool.name}/${borrower}: ${error}`
+        `1inch atomic take cannot request swap data for ${pool.name}/${borrower}: ${error}`
       );
       return false;
     }
 
     if (!config.skipOneInchRateLimitDelay) {
-      // Legacy/manual 1inch mode still honors operator pacing.
+      // Manual/single-contract 1inch mode still honors operator pacing.
       await delay(config.delayBetweenActions ?? 0);
     }
 
@@ -875,7 +893,7 @@ export async function takeLiquidation({
         error: swapData.error,
       });
       logger.error(
-        `Legacy 1inch swap data request failed for ${pool.name}/${borrower}: ${swapData.error ?? 'unknown error'}`
+        `1inch atomic swap data request failed for ${pool.name}/${borrower}: ${swapData.error ?? 'unknown error'}`
       );
       return false;
     }
@@ -900,7 +918,7 @@ export async function takeLiquidation({
         error: swapDetailsValidationError,
       });
       logger.error(
-        `Legacy 1inch swap data validation failed for ${pool.name}/${borrower}: ${swapDetailsValidationError}`
+        `1inch atomic swap data validation failed for ${pool.name}/${borrower}: ${swapDetailsValidationError}`
       );
       return false;
     }
@@ -908,7 +926,7 @@ export async function takeLiquidation({
       `1inch atomic take swap validated - pool: ${pool.name}, borrower: ${borrower}, executor: ${swapDetails.aggregationExecutor}, srcReceiver: ${swapDetails.swapDescription.srcReceiver}, allowlist: ${allowedAggregationExecutors ? 'configured' : 'not_configured'}`
     );
 
-    const requiredMinReturnAmount = await computeLegacyOneInchMinReturnAmount({
+    const requiredMinReturnAmount = await computeOneInchAtomicMinReturnAmount({
       pool,
       poolConfig,
       liquidation,
@@ -932,7 +950,7 @@ export async function takeLiquidation({
           error: '1inch swap data expected output below execution floor',
         });
         logger.warn(
-          `Legacy 1inch swap data expected output ${freshSwapDstAmount.toString()} is below execution floor ${executionMinReturnAmount.toString()} for ${pool.name}/${borrower}; refusing to estimate or submit`
+          `1inch atomic swap data expected output ${freshSwapDstAmount.toString()} is below execution floor ${executionMinReturnAmount.toString()} for ${pool.name}/${borrower}; refusing to estimate or submit`
         );
         return false;
       }

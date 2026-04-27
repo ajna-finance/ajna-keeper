@@ -30,6 +30,7 @@ import {
 import { DiscoveryReadTransports } from '../read-transports';
 import * as takeModule from '../take';
 import * as takeFactoryModule from '../take/factory';
+import { createArbTakeStrategy } from '../take/arb-strategy';
 import { ExternalTakeAdapter, processTakeCandidates } from '../take/engine';
 import { ExternalTakeQuoteEvaluation } from '../take/types';
 import { TakeWriteTransport } from '../take/write-transport';
@@ -2190,6 +2191,7 @@ export async function handleDiscoveredTakeTarget(
       })),
       subgraph: transports.subgraph,
       externalTakeAdapter,
+      arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig,
       dryRun: params.target.dryRun,
       delayBetweenActions: params.config.delayBetweenActions,

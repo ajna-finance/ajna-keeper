@@ -72,7 +72,7 @@ describe('Take Integration Tests', () => {
     expect((subgraph.getLiquidations as sinon.SinonStub).called).to.be.false;
   });
 
-  it('routes 1inch pools through the legacy take path', async () => {
+  it('routes 1inch pools through the single-contract take path', async () => {
     const config: Partial<KeeperConfig> = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
@@ -110,7 +110,7 @@ describe('Take Integration Tests', () => {
     )).to.be.true;
   });
 
-  it('routes arb-only pools through the legacy take path', async () => {
+  it('routes arb-only pools through the shared take candidate path', async () => {
     const config: Partial<KeeperConfig> = {
       dryRun: true,
       subgraphUrl: 'http://test-url',

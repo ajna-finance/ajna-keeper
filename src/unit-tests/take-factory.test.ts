@@ -155,11 +155,12 @@ describe('Take Factory', () => {
         config: config as any,
       });
 
-      // Should log the debug message about using factory take handler
+      // Should log the debug message about using the factory external take strategy
       const debugCalls = loggerDebugStub.getCalls();
       const factoryLogFound = debugCalls.some(
         (call) =>
-          call.args[0] && call.args[0].includes('Factory take handler starting')
+          call.args[0] &&
+          call.args[0].includes('Factory external take strategy starting')
       );
       expect(factoryLogFound).to.be.true;
 

@@ -172,7 +172,7 @@ describe('Smart DEX Routing Integration Tests', () => {
       }).to.not.throw();
     });
 
-    it('validates 1inch take settings with legacy config', async () => {
+    it('validates 1inch take settings with single-contract config', async () => {
       const singleConfig = {
         keeperTaker: '0x1234567890123456789012345678901234567890',
         oneInchRouters: {

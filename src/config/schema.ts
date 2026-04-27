@@ -203,7 +203,7 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   maxHotAuctionCandidates?: number;
   /**
    * External take execution paths eligible for discovered liquidation takes.
-   * When omitted, autodiscover preserves the legacy single-path behavior from
+   * When omitted, autodiscover preserves the single-path behavior from
    * discoveredDefaults.take.liquiditySource.
    */
   allowedExternalTakePaths?: ExternalTakePathKind[];

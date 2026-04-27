@@ -536,7 +536,7 @@ The keeper is configured with conservative timing to respect rate limits:
 }
 ```
 
-For discovered external takes, use `autoDiscover.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, and the 1inch failure cooldown instead of a long `delayBetweenActions`. A 31-61 second action delay is appropriate only for slow legacy/manual 1inch operation; it is too slow for the short window where liquidation auctions are below market. Upgrade API tiers when you need lower timeout/cooldown values without hitting provider limits.
+For discovered external takes, use `autoDiscover.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, and the 1inch failure cooldown instead of a long `delayBetweenActions`. A 31-61 second action delay is appropriate only for slow manual/single-contract 1inch operation; it is too slow for the short window where liquidation auctions are below market. Upgrade API tiers when you need lower timeout/cooldown values without hitting provider limits.
 
 ### Auto-Discovery Rollout (V1)
 
@@ -559,7 +559,7 @@ Recommended rollout order:
 1. Keep `dryRunNewPools: true` and inspect discovered skip/action logs first.
 2. Enable discovered `settlement` before discovered external `take` if you want the lower-risk path first.
 3. Prefer `autoDiscover.take.maxGasCostNative` and `autoDiscover.settlement.maxGasCostNative` before quote-denominated gas caps. Native gas caps use the RPC gas price directly and avoid extra native-to-quote conversion fetches.
-4. Use `allowedExternalTakePaths: ['oneinch', 'factory']` when you want discovered external takes to compare 1inch against the best factory route. If omitted, autodiscover preserves the legacy single-path behavior from `discoveredDefaults.take.liquiditySource`.
+4. Use `allowedExternalTakePaths: ['oneinch', 'factory']` when you want discovered external takes to compare 1inch against the best factory route. If omitted, autodiscover preserves the single-path behavior from `discoveredDefaults.take.liquiditySource`.
 5. Prefer `autoDiscover.take.minProfitNative` over `minExpectedProfitQuote` when you want one profit floor across mixed quote tokens. It is a wei-denominated native-token floor, not a USD field.
 6. To approximate a USD target, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18`. Example: a $3 floor at ETH=$3,000 is `0.001 ETH`, or `1000000000000000` wei. Recalibrate periodically because the USD value drifts with native token price.
 7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
@@ -1134,7 +1134,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 
 - Free tier: 1 req/sec, 100K/month
 - For hot discovered takes, keep `delayBetweenActions` low and rely on bounded 1inch request timeouts plus cooldowns
-- For slow legacy/manual 1inch-only operation, increase `delayBetweenActions` if your API tier requires it
+- For slow manual/single-contract 1inch-only operation, increase `delayBetweenActions` if your API tier requires it
 - Consider paid tier for faster operation
 
 **Uniswap V3 Gas Optimization:**

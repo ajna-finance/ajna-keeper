@@ -23,7 +23,7 @@ describe('take write submission', () => {
     sinon.restore();
   });
 
-  it('validates legacy 1inch swap details against the atomic take invariants', () => {
+  it('validates 1inch atomic swap details against the atomic take invariants', () => {
     const validDetails = {
       aggregationExecutor: '0x00000000000000000000000000000000000000ce',
       swapDescription: {
@@ -235,7 +235,7 @@ describe('take write submission', () => {
     expect(decimalsStub.calledTwice).to.be.true;
   });
 
-  it('uses the configured take write transport for legacy 1inch take submission', async () => {
+  it('uses the configured take write transport for 1inch atomic take submission', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),
     };
@@ -299,13 +299,13 @@ describe('take write submission', () => {
 
     await takeLiquidation({
       pool: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000001',
         collateralAddress: '0x0000000000000000000000000000000000000002',
         quoteAddress: '0x0000000000000000000000000000000000000003',
       } as any,
       poolConfig: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         take: {
           liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.95,
@@ -348,7 +348,7 @@ describe('take write submission', () => {
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
   });
 
-  it('fails legacy 1inch execution before API calls when the router is not configured', async () => {
+  it('fails 1inch atomic execution before API calls when the router is not configured', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),
     };
@@ -365,13 +365,13 @@ describe('take write submission', () => {
 
     const result = await takeLiquidation({
       pool: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000001',
         collateralAddress: '0x0000000000000000000000000000000000000002',
         quoteAddress: '0x0000000000000000000000000000000000000003',
       } as any,
       poolConfig: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         take: {
           liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.95,
@@ -418,7 +418,7 @@ describe('take write submission', () => {
     });
   });
 
-  it('raises the legacy 1inch minReturnAmount to the approved execution floor', async () => {
+  it('raises the 1inch atomic minReturnAmount to the approved execution floor', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),
     };
@@ -482,13 +482,13 @@ describe('take write submission', () => {
 
     await takeLiquidation({
       pool: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000001',
         collateralAddress: '0x0000000000000000000000000000000000000002',
         quoteAddress: '0x0000000000000000000000000000000000000003',
       } as any,
       poolConfig: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         take: {
           liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.95,
@@ -530,7 +530,7 @@ describe('take write submission', () => {
     expect(decoded[0][1][5].toString()).to.equal('1100');
   });
 
-  it('rejects legacy 1inch swap data before gas estimation when fresh dstAmount is below the execution floor', async () => {
+  it('rejects 1inch atomic swap data before gas estimation when fresh dstAmount is below the execution floor', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),
     };
@@ -572,13 +572,13 @@ describe('take write submission', () => {
 
     const result = await takeLiquidation({
       pool: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000001',
         collateralAddress: '0x0000000000000000000000000000000000000002',
         quoteAddress: '0x0000000000000000000000000000000000000003',
       } as any,
       poolConfig: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         take: {
           liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.95,
@@ -614,7 +614,7 @@ describe('take write submission', () => {
     expect(keeperTaker.estimateGas.takeWithAtomicSwap.called).to.be.false;
   });
 
-  it('records legacy 1inch swap-data validation failures before clearing the circuit', async () => {
+  it('records 1inch atomic swap-data validation failures before clearing the circuit', async () => {
     const readSigner = {
       getChainId: sinon.stub().resolves(1),
     };
@@ -656,13 +656,13 @@ describe('take write submission', () => {
 
     const result = await takeLiquidation({
       pool: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000001',
         collateralAddress: '0x0000000000000000000000000000000000000002',
         quoteAddress: '0x0000000000000000000000000000000000000003',
       } as any,
       poolConfig: {
-        name: 'Legacy Take Pool',
+        name: '1inch Atomic Take Pool',
         take: {
           liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.95,
