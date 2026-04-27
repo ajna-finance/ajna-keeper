@@ -54,7 +54,7 @@ Important operational details:
 - All `readRpcUrls` must point to the same chain as the keeper signer. Wrong-chain read fallbacks are rejected.
 - `subgraphFallbackUrls` are only used when the primary subgraph is unavailable or unhealthy.
 
-## Step 1.5: Critical Fee Tier Selection (Before Enabling External Takes)
+## Step 1.5: Factory Route Liquidity Selection (Before Enabling External Takes)
 
 ### What the Current Keeper Actually Does
 
@@ -97,7 +97,7 @@ Implications:
 
 **Step 2: Research Fee Tier Liquidity**
 
-**Fee Tier Mapping (Critical Reference):**
+**Fee Tier Mapping:**
 
 - `500` = 0.05% = 5 basis points (typically stablecoins)
 - `3000` = 0.3% = 30 basis points (most common major pairs)
@@ -538,7 +538,7 @@ The keeper is configured with conservative timing to respect rate limits:
 }
 ```
 
-For discovered external takes, use `autoDiscover.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, and the 1inch failure cooldown instead of a long `delayBetweenActions`. A 31-61 second action delay is appropriate only for slow manual/single-contract 1inch operation; it is too slow for the short window where liquidation auctions are below market. Upgrade API tiers when you need lower timeout/cooldown values without hitting provider limits.
+For discovered external takes, use `autoDiscover.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` instead of a long `delayBetweenActions`. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. A 31-61 second action delay is appropriate only for slow manual/single-contract 1inch operation; it is too slow for the short window where liquidation auctions are below market. Upgrade API tiers when you need lower timeout/cooldown values without hitting provider limits.
 
 ### Auto-Discovery Rollout (V1)
 
@@ -567,22 +567,40 @@ Recommended rollout order:
 7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes. Set it to `0` if you want quote-normalized gas coverage with no extra quote-token profit floor.
 8. Keep `discoveredDefaults.take.allowSubsidy` unset or `false` for normal production discovery. The route-derived policy then requires external takes to clear auction repayment plus route gas/profit floors when quote-normalized inputs are configured or available.
 9. Use `allowSubsidy: true` only on manually reviewed defensive pools where spending keeper P&L to repay an auction earlier is acceptable. Subsidized takes still enforce repayment and swap min-out safety, but they may execute below gas/profit floors.
-10. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
-11. Use `externalTakeProbeTimeoutMs` to bound each hybrid 1inch/factory probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values above 5000ms are supported for slow infrastructure, but they directly increase the worst-case time spent on each hot auction candidate.
-12. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing 1inch API calls is worth potentially skipping a better 1inch route; it tries factory first and stops once factory is approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
-13. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
-14. Use `autoDiscover.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `takeWrite` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
-15. If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the taker path.
-16. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
-17. Use `autoDiscover.take.validateRouteDeployments: true` for production startup preflight. It is required for hybrid 1inch/factory routing and recommended for every live factory route.
+10. Set `marketPriceFactor` below 1 for normal operation, for example `0.99` to target auctions below roughly 99% of market. Config validation rejects non-positive values and values above 2, which catches common typos like `99` instead of `0.99`; values above 1 weaken market-factor protection and should be intentional.
+11. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
+12. Use `externalTakeProbeTimeoutMs` to bound each hybrid 1inch/factory probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values from 1ms to 10000ms are supported for slow infrastructure, but values above 5000ms directly increase the worst-case time spent on each hot auction candidate.
+13. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing 1inch API calls is worth potentially skipping a better 1inch route; it tries factory first and stops once factory is approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
+14. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
+15. Use `autoDiscover.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `takeWrite` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
+16. If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the taker path.
+17. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
+18. Use `autoDiscover.take.validateRouteDeployments: true` for production startup preflight. It is required for hybrid 1inch/factory routing and recommended for every live factory route.
 
-Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; override it with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed execution costs. `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion. Gas-price freshness defaults are 5 seconds on L1 and 15 seconds on common L2s; use `l1GasPriceFreshnessTtlMs` / `l2GasPriceFreshnessTtlMs` only if your RPC latency profile requires a different window. `gasPriceDriftToleranceBasisPoints` optionally forces final pre-submission reapproval when current gas differs materially from the evaluation snapshot.
+Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; override it with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed execution costs. `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion. Gas-price freshness defaults are 5 seconds on L1 and 15 seconds on common L2s; use `l1GasPriceFreshnessTtlMs` / `l2GasPriceFreshnessTtlMs` only if your RPC latency profile requires a different window. `gasPriceDriftToleranceBasisPoints` optionally rejects final pre-submission approval when current gas is higher than the evaluation snapshot by more than the configured tolerance; lower gas is favorable and does not reject.
+
+Hot discovered 1inch paths use a small circuit breaker to reduce API waste during rate-limit or timeout storms. `oneInchQuoteFailureThreshold` defaults to 2 retryable failures, `oneInchQuoteFailureCooldownMs` defaults to 30000ms and is capped at 1 hour, and local quote/validation rejects do not count as retryable provider failures.
+
+External take latency and API-cost controls:
+
+| Config field | Default | Use |
+| --- | --- | --- |
+| `delayBetweenRuns` | Operator-configured | Sets the global take loop cadence. `10` seconds is reasonable for hot liquidation monitoring. |
+| `delayBetweenActions` | Operator-configured | Keep `0` for hot discovered takes; use long delays only for slow manual 1inch operation. |
+| `autoDiscover.take.takeQuoteBudgetPerRun` | unset | Caps total discovered take quote work per run. |
+| `autoDiscover.take.takeRouteQuoteBudgetPerCandidate` | unset | Caps factory route candidates quoted per liquidation. Lower values reduce RPC/API work but can miss a better route. |
+| `autoDiscover.take.oneInchQuoteTimeoutMs` | `2000` | Bounds each discovered 1inch quote and swap-data request. |
+| `autoDiscover.take.externalTakeProbeTimeoutMs` | `min(oneInchQuoteTimeoutMs + 1000, 5000)` | Bounds each hybrid path probe. Explicit values may be `1..10000ms`. |
+| `autoDiscover.take.oneInchQuoteFailureThreshold` | `2` | Retryable 1inch failures before the local circuit opens. |
+| `autoDiscover.take.oneInchQuoteFailureCooldownMs` | `30000` | Cooldown after the circuit opens, capped at 1 hour. |
+| `autoDiscover.take.hotAuctionCandidateTtlMs` | `10 minutes` | Keeps already-seen auctions eligible between subgraph refreshes. Set `0` to disable. |
+| `autoDiscover.take.maxHotAuctionCandidates` | `1000` | Bounds hot-auction cache memory. |
 
 ## Step 6: DEX Configuration Best Practices
 
 ### Pool Liquidity Verification
 
-**Critical for Production Success:** For Uniswap V3 and SushiSwap external takes, the keeper prefers `defaultFeeTier` and can probe `candidateFeeTiers` per take. Keep the candidate list focused on tiers that are actually deployed and useful for your pairs; missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
+For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `defaultFeeTier` and can probe `candidateFeeTiers` per take. Keep the candidate list focused on tiers that are actually deployed and useful for your pairs; missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
 
 **For Uniswap V3:**
 
