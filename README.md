@@ -482,6 +482,9 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 - Can compare the best factory route against 1inch when `autoDiscover.take.allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`.
 - In hybrid mode, `externalTakeProbeTimeoutMs` bounds each 1inch/factory path probe so one slow route cannot block another viable route. Values above 5000ms are allowed for slow infrastructure, but they directly trade hot-auction latency for provider tolerance.
 - Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` to probe factory first and skip 1inch when the factory path is already approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
+- `marketPriceFactor` remains the operator-facing early-take threshold. For external takes, the keeper also derives a route-specific non-subsidized output floor from auction repayment, slippage buffer, and quote-normalized gas/profit inputs when those inputs are configured or available.
+- `allowSubsidy` defaults to `false`. In that mode, an external take must clear the route-derived non-subsidized floor before execution. Set `autoDiscover.take.minExpectedProfitQuote: 0` if you want quote-normalized gas coverage with no extra profit floor.
+- Use `allowSubsidy: true` only for manually reviewed defensive pools where the keeper may intentionally spend P&L to repay an auction earlier. Subsidized takes still enforce auction repayment and swap min-out safety, but they may execute below the gas/profit floor.
 - A low `takeRouteQuoteBudgetPerCandidate` reduces quote latency but can miss a more profitable route that was not probed.
 - No per-pool external-take fee override today
 - Change requires updating config and restarting the keeper
@@ -580,6 +583,8 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the factory taker path before hot loops begin.
 - Hybrid 1inch-plus-factory ranking requires a configured native-to-quote gas conversion path and wrapped native token address, because the keeper compares route net profit instead of gross quote output.
 - `externalTakeProbeTimeoutMs` bounds each hybrid path probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values above 5000ms are accepted, but should only be used when avoiding provider false-negatives is more important than tight take-loop latency. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a factory path is approved. `'cost_aware'` is still accepted for migration but should be replaced with `'factory_first'`.
+- `discoveredDefaults.take.allowSubsidy` should normally stay unset or `false`. Setting it to `true` permits subsidized external takes on every discovered pool that matches the defaults; reserve that for intentionally defensive deployments with a known blast radius.
+- Route-derived subsidy policy is evaluated from the actual selected quote. Non-subsidized external takes must clear auction repayment plus route gas/profit floors when quote-normalized gas/profit inputs are configured or available; subsidized takes may skip that economic floor but never the repayment/min-out floor.
 - `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
 - Once an auction has appeared in subgraph discovery, the keeper keeps it in a short-lived hot-auction cache so fast take loops can keep probing it even if a later subgraph refresh temporarily omits it. Tune with `autoDiscover.take.hotAuctionCandidateTtlMs` and `autoDiscover.take.maxHotAuctionCandidates`; set the TTL to `0` to disable the cache.
 - On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token. Override with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed gas costs.
@@ -652,7 +657,7 @@ At runtime, discovered `take` refreshes the shared chain-wide auction snapshot w
 
 Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh. No extra operator action is needed to discover 101 active auctions.
 
-`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. `maxGasCostNative`, `maxGasCostQuote`, and `maxGasPriceGwei` are action-specific under `autoDiscover.take` and `autoDiscover.settlement`.
+`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. Set it to `0` when you want the route-derived policy to require quote-normalized gas coverage without adding an extra profit floor. `maxGasCostNative`, `maxGasCostQuote`, and `maxGasPriceGwei` are action-specific under `autoDiscover.take` and `autoDiscover.settlement`.
 
 Prefer `maxGasCostNative` on L2s and mixed-quote deployments. It uses the RPC gas price directly and does not require an extra native-to-quote conversion fetch. `maxGasCostQuote` remains available as an explicit quote-denominated mode; when it is enabled the keeper may need to convert native gas cost into the pool quote token. If the pool collateral is already wrapped native, the keeper reuses the existing take quote instead of fetching a second conversion quote. All quote-denominated thresholds are per-pool quote token amounts.
 
@@ -693,6 +698,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.ONEINCH,
         marketPriceFactor: 0.98, // Take when auction < market * 0.98
+        allowSubsidy: false, // Default: route must cover repayment plus configured gas/profit floors
       },
     },
   ],
@@ -735,6 +741,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.UNISWAPV3,
         marketPriceFactor: 0.99, // Take when auction < market * 0.99
+        allowSubsidy: false, // Set true only for intentionally defensive subsidized takes
       },
     },
   ],
@@ -787,6 +794,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.SUSHISWAP,
         marketPriceFactor: 0.99, // Take when auction < market * 0.99
+        allowSubsidy: false,
       },
     },
   ],
@@ -856,6 +864,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.CURVE,
         marketPriceFactor: 0.99, // Take when auction < market * 0.99
+        allowSubsidy: false,
       },
     },
   ],
@@ -933,6 +942,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.ONEINCH,
         marketPriceFactor: 0.98,
+        allowSubsidy: false,
       },
     },
   ],
@@ -965,6 +975,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.SUSHISWAP, // or UNISWAPV3
         marketPriceFactor: 0.99,
+        allowSubsidy: false,
       },
     },
   ],

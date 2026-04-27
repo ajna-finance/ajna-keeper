@@ -160,6 +160,7 @@ const config: KeeperConfig = {
         // liquiditySource: LiquiditySource.UNISWAPV3,    // Use Uniswap V3 (requires keeperTakerFactory)
         // liquiditySource: LiquiditySource.SUSHISWAP,    // Use SushiSwap (requires keeperTakerFactory)
         // marketPriceFactor: 0.98,                       // Take when auction < market * 0.98
+        // allowSubsidy: false,                           // Default: require route-derived repayment + gas/profit coverage
       },
       collectBond: true,
       collectLpReward: {
@@ -203,6 +204,7 @@ const config: KeeperConfig = {
         // liquiditySource: LiquiditySource.ONEINCH,     // 1inch for best pricing
         // liquiditySource: LiquiditySource.SUSHISWAP,   // SushiSwap for lower fees
         // marketPriceFactor: 0.99,  // More conservative for volatile pairs
+        // allowSubsidy: false,      // Set true only for reviewed defensive pools
       },
       collectBond: true,
       // Example of a per-pool override on top of `defaultLpReward`.
@@ -262,6 +264,7 @@ const config: KeeperConfig = {
         liquiditySource: LiquiditySource.ONEINCH, // 1inch for aggregation
         // liquiditySource: LiquiditySource.SUSHISWAP,   // SushiSwap for direct routing
         marketPriceFactor: 0.98, // Stable pairs can be more aggressive
+        allowSubsidy: false,
       },
       collectBond: true,
       collectLpReward: {
@@ -303,6 +306,7 @@ const config: KeeperConfig = {
         // SushiSwap external take configuration
         liquiditySource: LiquiditySource.SUSHISWAP,
         marketPriceFactor: 0.99, // Take when auction < market * 0.99
+        allowSubsidy: false,
       },
       collectBond: true,
       collectLpReward: {

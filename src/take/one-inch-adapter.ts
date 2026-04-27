@@ -25,6 +25,7 @@ export function createOneInchTakeAdapter(
       signer,
       poolConfig,
       price,
+      auctionPrice,
       collateral,
     }) =>
       getOneInchTakeQuoteEvaluation(
@@ -39,7 +40,8 @@ export function createOneInchTakeAdapter(
         },
         signer,
         quoteConfig.oneInchRouters,
-        quoteConfig.connectorTokens
+        quoteConfig.connectorTokens,
+        auctionPrice
       ),
     executeExternalTake: async ({
       pool,

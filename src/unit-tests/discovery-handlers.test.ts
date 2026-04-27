@@ -8,6 +8,7 @@ import {
 import {
   refreshDiscoveryGasPriceIfStale,
   resolveHybridExternalTakeExecutionSelection,
+  selectBestExternalTakeQuoteEvaluation,
 } from '../discovery/take-executor';
 import * as oneInchExecutionModule from '../take/one-inch-execution';
 import * as takeFactoryModule from '../take/factory';
@@ -1648,6 +1649,70 @@ describe('Discovery Handlers', () => {
     });
   });
 
+  it('prefers non-subsidized hybrid external take quotes over higher-profit subsidized quotes', () => {
+    const nonSubsidized = {
+      isTakeable: true,
+      externalTakePath: 'factory',
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      quoteAmountRaw: BigNumber.from(125),
+      routeProfitability: {
+        expectedNetProfitQuoteRaw: BigNumber.from(20),
+        expectedSubsidyQuoteRaw: BigNumber.from(0),
+        subsidyAllowed: false,
+      },
+    } as any;
+    const subsidized = {
+      isTakeable: true,
+      externalTakePath: 'oneinch',
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      quoteAmountRaw: BigNumber.from(140),
+      routeProfitability: {
+        expectedNetProfitQuoteRaw: BigNumber.from(35),
+        expectedSubsidyQuoteRaw: BigNumber.from(5),
+        subsidyAllowed: true,
+      },
+    } as any;
+
+    expect(
+      selectBestExternalTakeQuoteEvaluation({
+        evaluations: [subsidized, nonSubsidized],
+        externalTakePaths: ['oneinch', 'factory'],
+      })
+    ).to.equal(nonSubsidized);
+  });
+
+  it('chooses the smallest subsidy among subsidized hybrid external take quotes', () => {
+    const smallerSubsidy = {
+      isTakeable: true,
+      externalTakePath: 'factory',
+      selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+      quoteAmountRaw: BigNumber.from(130),
+      routeProfitability: {
+        expectedNetProfitQuoteRaw: BigNumber.from(15),
+        expectedSubsidyQuoteRaw: BigNumber.from(2),
+        subsidyAllowed: true,
+      },
+    } as any;
+    const largerSubsidy = {
+      isTakeable: true,
+      externalTakePath: 'oneinch',
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      quoteAmountRaw: BigNumber.from(150),
+      routeProfitability: {
+        expectedNetProfitQuoteRaw: BigNumber.from(40),
+        expectedSubsidyQuoteRaw: BigNumber.from(8),
+        subsidyAllowed: true,
+      },
+    } as any;
+
+    expect(
+      selectBestExternalTakeQuoteEvaluation({
+        evaluations: [largerSubsidy, smallerSubsidy],
+        externalTakePaths: ['oneinch', 'factory'],
+      })
+    ).to.equal(smallerSubsidy);
+  });
+
   it('does not clear 1inch circuit failures for local policy quote rejects', async () => {
     sinon.stub(oneInchExecutionModule, 'takeLiquidation').resolves(true);
     const oneInchQuoteStub = sinon
@@ -2991,11 +3056,11 @@ describe('Discovery Handlers', () => {
       .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
       .resolves({
         isTakeable: true,
-        quoteAmount: Number('9007199254740993'),
-        quoteAmountRaw: ethers.utils.parseUnits('9007199254740993', 6),
+        quoteAmount: Number('9100000000000000'),
+        quoteAmountRaw: ethers.utils.parseUnits('9100000000000000', 6),
         collateralAmount: 1,
-        marketPrice: Number('9007199254740993'),
-        takeablePrice: Number('9007199254740993'),
+        marketPrice: Number('9100000000000000'),
+        takeablePrice: Number('9100000000000000'),
       });
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
 

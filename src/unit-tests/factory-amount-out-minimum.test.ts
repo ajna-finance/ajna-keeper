@@ -25,7 +25,6 @@ describe('Factory amountOutMinimum', () => {
       pool: pool as any,
       liquidation,
       quoteEvaluation,
-      marketPriceFactor: 0.95,
     });
 
     expect(amountOutMinimum.eq(ethers.utils.parseEther('118.8'))).to.be.true;
@@ -55,14 +54,13 @@ describe('Factory amountOutMinimum', () => {
         pool: pool as any,
         liquidation,
         quoteEvaluation,
-        marketPriceFactor: 1.05,
       });
     } catch (error) {
       thrown = error as Error;
     }
 
     expect(thrown?.message).to.equal(
-      'Factory: approvedMinOutRaw below auction repayment/market-factor floor'
+      'Factory: approvedMinOutRaw below auction repayment floor'
     );
   });
 
@@ -88,7 +86,6 @@ describe('Factory amountOutMinimum', () => {
       pool: pool as any,
       liquidation,
       quoteEvaluation,
-      marketPriceFactor: 0.99,
     });
 
     expect(amountOutMinimum.eq(ethers.utils.parseEther('125'))).to.be.true;
@@ -118,7 +115,6 @@ describe('Factory amountOutMinimum', () => {
       pool: pool as any,
       liquidation,
       quoteEvaluation,
-      marketPriceFactor: 0.99,
     });
 
     expect(amountOutMinimum.eq(ethers.utils.parseEther('125'))).to.be.true;
@@ -147,7 +143,6 @@ describe('Factory amountOutMinimum', () => {
         pool: pool as any,
         liquidation,
         quoteEvaluation,
-        marketPriceFactor: 0.99,
       });
     } catch (error) {
       thrown = error as Error;

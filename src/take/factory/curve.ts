@@ -183,6 +183,7 @@ export async function evaluateCurveFactoryQuote({
         quoteAmountRaw,
         curveConfig.defaultSlippage
       ),
+      allowSubsidy: poolConfig.take.allowSubsidy === true,
       routeContext: context,
       failureReason: 'quoted output below required Curve profitability floor',
     });
@@ -262,7 +263,6 @@ export async function executeCurveFactoryTake({
       pool,
       liquidation,
       quoteEvaluation,
-      marketPriceFactor: poolConfig.take.marketPriceFactor!,
     });
     const deadline = await getSwapDeadline(signer);
 

@@ -4,8 +4,8 @@ import {
   RewardActionLabel,
   PriceOriginSource,
   TokenToCollect,
-  LiquiditySource,  // Import for external takes
-  PostAuctionDex    // NEW: Import for LP reward swaps
+  LiquiditySource, // Import for external takes
+  PostAuctionDex, // NEW: Import for LP reward swaps
 } from '../src/config';
 import { FeeAmount } from '@uniswap/v3-sdk';
 
@@ -29,21 +29,21 @@ const config: KeeperConfig = {
   //   mode: 'private_rpc',
   //   rpcUrl: `https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_PRIVATE_TX_KEY}`,
   // },
-  
+
   // 1inch Single Contract Setup for External Takes (deploy with scripts/query-1inch.ts --action deploy)
-  keeperTaker: '0x[DEPLOY_WITH_query-1inch.ts]',  // Deploy smart contract using: yarn compile && scripts/query-1inch.ts --config [config] --action deploy
-  
+  keeperTaker: '0x[DEPLOY_WITH_query-1inch.ts]', // Deploy smart contract using: yarn compile && scripts/query-1inch.ts --config [config] --action deploy
+
   multicallAddress: '0xcA11bde05977b3631167028862bE2a173976CA11',
   multicallBlock: 11907934,
   delayBetweenRuns: 15,
   delayBetweenActions: 61, // THIS IS IN SECONDS AND NEEDS TO BE CONSERVATIVE FOR FREE TIER OF 1INCH API KEY
   logLevel: 'debug',
-  
+
   // 1inch Router Configuration for External Takes
   oneInchRouters: {
     43114: '0x111111125421ca6dc452d289314280a0f8842a65', // Avalanche
   },
-  
+
   tokenAddresses: {
     avax: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE', // Native AVAX
     wavax: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', // Wrapped AVAX
@@ -52,7 +52,7 @@ const config: KeeperConfig = {
     usd_t1: '0x9a522edA6e9420CD15143b1610193E6a657A7dBd', // Your USD_T1 token
     usd_t2: '0xAD47a9b2Bc081D074EC25A0953DDC11E650b1784', // Your USD_T2 token
   },
-  
+
   // Universal Router configuration (for LP reward swapping via Uniswap V3)
   universalRouterOverrides: {
     universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Avalanche UniversalRouter
@@ -70,7 +70,7 @@ const config: KeeperConfig = {
     '0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7',
     '0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7',
   ],
-  
+
   // Avalanche-specific Ajna contract addresses
   ajna: {
     erc20PoolFactory: '0x2aA2A6e6B4b20f496A4Ed65566a6FD13b1b8A17A',
@@ -83,48 +83,47 @@ const config: KeeperConfig = {
     lenderHelper: '',
   },
   coinGeckoApiKey: process.env.COINGECKO_API_KEY, // Get a free key from https://www.coingecko.com/en/developers/dashboard
-  pools: 
-  [
+  pools: [
     {
       name: 'savusd / usdc',
       address: '0x936e0fdec18d4dc5055b3e091fa063bc75d6215c',
       price: {
-          source: PriceOriginSource.FIXED,
-          value: 1.04,
-        },
-        kick: {
-          minDebt: 0.07,
-          priceFactor: 0.99,
-  	},
+        source: PriceOriginSource.FIXED,
+        value: 1.04,
+      },
+      kick: {
+        minDebt: 0.07,
+        priceFactor: 0.99,
+      },
       take: {
-          minCollateral: 0.07,
-          hpbPriceFactor: 0.90,
+        minCollateral: 0.07,
+        hpbPriceFactor: 0.9,
 
-          // External Takes via 1inch (requires keeperTaker deployment)
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.98, // Take when auction price < market * 0.98
-
-        },	
+        // External Takes via 1inch (requires keeperTaker deployment)
+        liquiditySource: LiquiditySource.ONEINCH,
+        marketPriceFactor: 0.98, // Take when auction price < market * 0.98
+        allowSubsidy: false,
+      },
       collectBond: true,
       collectLpReward: {
         redeemFirst: TokenToCollect.QUOTE,
-        minAmountQuote: 0.01,       // don't redeem LP for less than a penny
-        minAmountCollateral: 0.05,  // don't redeem LP for less than what it may cost to swap collateral for USDC
+        minAmountQuote: 0.01, // don't redeem LP for less than a penny
+        minAmountCollateral: 0.05, // don't redeem LP for less than what it may cost to swap collateral for USDC
         rewardActionCollateral: {
           action: RewardActionLabel.EXCHANGE,
-          address: "0x06d47F3fb376649c3A9Dafe069B3D6E35572219E", // Token to swap (savUSD)
-          targetToken: "usdc",                                   // Target token (USDC)
-          slippage: 1,                                           // Slippage percentage (0-100)
-          dexProvider: PostAuctionDex.ONEINCH,                   // NEW: Use enum instead of useOneInch: true
+          address: '0x06d47F3fb376649c3A9Dafe069B3D6E35572219E', // Token to swap (savUSD)
+          targetToken: 'usdc', // Target token (USDC)
+          slippage: 1, // Slippage percentage (0-100)
+          dexProvider: PostAuctionDex.ONEINCH, // NEW: Use enum instead of useOneInch: true
         },
       },
       // Settlement configuration for stable pools - conservative settings
       settlement: {
-        enabled: true,                    // Enable settlement
-        minAuctionAge: 18000,             // Wait 5 hours for stable pools (18000 seconds)
-        maxBucketDepth: 100,             // Process more buckets for stable pools
-        maxIterations: 8,                // More iterations may be needed for complex settlements
-        checkBotIncentive: false,        // Settle even without kicker rewards for stable pools, being altruistic for the pool
+        enabled: true, // Enable settlement
+        minAuctionAge: 18000, // Wait 5 hours for stable pools (18000 seconds)
+        maxBucketDepth: 100, // Process more buckets for stable pools
+        maxIterations: 8, // More iterations may be needed for complex settlements
+        checkBotIncentive: false, // Settle even without kicker rewards for stable pools, being altruistic for the pool
       },
     },
     {
@@ -141,10 +140,11 @@ const config: KeeperConfig = {
       take: {
         minCollateral: 0.1, // Enable arbTake when collateral >= 0.1
         hpbPriceFactor: 0.99, // ArbTake when price < hpb * 0.99
-        
+
         // OPTION: Could also use 1inch for external takes here
         // liquiditySource: LiquiditySource.ONEINCH,
         // marketPriceFactor: 0.98,
+        // allowSubsidy: false,
       },
       collectBond: true, // Collect liquidation bonds
       collectLpReward: {
@@ -163,14 +163,14 @@ const config: KeeperConfig = {
       },
       // Settlement configuration for test tokens - standard settings
       settlement: {
-        enabled: true,                    // Enable settlement
-        minAuctionAge: 3600,             // Wait 1 hour before settling (3600 seconds)
-        maxBucketDepth: 50,              // Process 50 buckets per settlement call
-        maxIterations: 10,               // Max 10 settlement iterations
-        checkBotIncentive: true,         // Only settle if bot has rewards to claim
+        enabled: true, // Enable settlement
+        minAuctionAge: 3600, // Wait 1 hour before settling (3600 seconds)
+        maxBucketDepth: 50, // Process 50 buckets per settlement call
+        maxIterations: 10, // Max 10 settlement iterations
+        checkBotIncentive: true, // Only settle if bot has rewards to claim
       },
     },
-  ]
+  ],
 };
 
 export default config;

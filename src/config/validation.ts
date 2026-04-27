@@ -478,6 +478,10 @@ export function validateTakeSettings(
       config.marketPriceFactor,
       'TakeSettings: marketPriceFactor must be positive'
     );
+    requireOptionalBoolean(
+      config.allowSubsidy,
+      'TakeSettings: allowSubsidy must be a boolean'
+    );
 
     if (config.liquiditySource === LiquiditySource.ONEINCH) {
       if (!keeperConfig.keeperTaker) {
@@ -805,6 +809,19 @@ export function validateAutoDiscoverConfig(
       throw new Error(
         'AutoDiscoverConfig: discoveredDefaults.take required when autoDiscover.take is enabled'
       );
+    }
+    if (discoveredTake.allowSubsidy === true) {
+      logger.warn(
+        'AutoDiscoverConfig: discoveredDefaults.take.allowSubsidy=true can subsidize external takes on every discovered pool that matches this policy; prefer enabling it only on manually reviewed defensive pools'
+      );
+      if (
+        takePolicy.minExpectedProfitQuote === undefined &&
+        takePolicy.minProfitNative === undefined
+      ) {
+        logger.warn(
+          'AutoDiscoverConfig: allowSubsidy=true is configured without minExpectedProfitQuote or minProfitNative; gas/profit shortfall protection is intentionally bypassable for discovered external takes'
+        );
+      }
     }
 
     validateAllowedExternalTakePaths(takePolicy.allowedExternalTakePaths);

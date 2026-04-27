@@ -92,6 +92,7 @@ export interface TakeSettings {
   hpbPriceFactor?: number;
   liquiditySource?: LiquiditySource;
   marketPriceFactor?: number;
+  allowSubsidy?: boolean;
 }
 
 export interface CollectSettings {

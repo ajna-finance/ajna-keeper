@@ -195,6 +195,7 @@ export async function evaluateSushiSwapFactoryQuote({
         quoteAmountRaw,
         sushiConfig.defaultSlippage
       ),
+      allowSubsidy: poolConfig.take.allowSubsidy === true,
       routeContext: context,
       failureReason:
         'quoted output below required SushiSwap profitability floor',
@@ -264,7 +265,6 @@ export async function executeSushiSwapFactoryTake({
     pool,
     liquidation,
     quoteEvaluation,
-    marketPriceFactor: poolConfig.take.marketPriceFactor!,
   });
   const deadline = await getSwapDeadline(signer);
 

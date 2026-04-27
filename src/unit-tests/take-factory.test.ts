@@ -811,6 +811,94 @@ describe('Take Factory', () => {
       );
     });
 
+    it('prefers non-subsidized factory routes over higher-profit subsidized routes', () => {
+      const nonSubsidizedRoute = {
+        route: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          feeTier: 3000,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(125),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(20),
+            expectedSubsidyQuoteRaw: BigNumber.from(0),
+            subsidyAllowed: false,
+          },
+        },
+      };
+      const subsidizedRoute = {
+        route: {
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          feeTier: 500,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(150),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(40),
+            expectedSubsidyQuoteRaw: BigNumber.from(5),
+            subsidyAllowed: true,
+          },
+        },
+      };
+
+      expect(
+        selectBestFactoryRouteEvaluation({
+          evaluations: [subsidizedRoute, nonSubsidizedRoute],
+          defaultLiquiditySource: LiquiditySource.UNISWAPV3,
+          config: {
+            universalRouterOverrides: { defaultFeeTier: 3000 },
+            sushiswapRouterOverrides: { defaultFeeTier: 500 },
+          },
+        })
+      ).to.equal(nonSubsidizedRoute);
+    });
+
+    it('chooses the smallest subsidy among subsidized factory routes before net profit', () => {
+      const smallerSubsidyRoute = {
+        route: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          feeTier: 3000,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(130),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(15),
+            expectedSubsidyQuoteRaw: BigNumber.from(2),
+            subsidyAllowed: true,
+          },
+        },
+      };
+      const largerSubsidyRoute = {
+        route: {
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          feeTier: 500,
+        },
+        evaluation: {
+          isTakeable: true,
+          quoteAmountRaw: BigNumber.from(150),
+          routeProfitability: {
+            expectedNetProfitQuoteRaw: BigNumber.from(40),
+            expectedSubsidyQuoteRaw: BigNumber.from(8),
+            subsidyAllowed: true,
+          },
+        },
+      };
+
+      expect(
+        selectBestFactoryRouteEvaluation({
+          evaluations: [largerSubsidyRoute, smallerSubsidyRoute],
+          defaultLiquiditySource: LiquiditySource.SUSHISWAP,
+          config: {
+            universalRouterOverrides: { defaultFeeTier: 3000 },
+            sushiswapRouterOverrides: { defaultFeeTier: 500 },
+          },
+        })
+      ).to.equal(smallerSubsidyRoute);
+    });
+
     it('recomputes approved min-out from split route and profit floors during reapproval', () => {
       const routeMinOutRaw = ethers.utils.parseUnits('120', 6);
       const staleProfitMinOutRaw = ethers.utils.parseUnits('140', 6);
@@ -819,6 +907,8 @@ describe('Take Factory', () => {
       const evaluation = applyFactoryRouteProfitabilityPolicy({
         evaluation: {
           isTakeable: true,
+          marketPrice: 200,
+          takeablePrice: 198,
           quoteAmountRaw: ethers.utils.parseUnits('150', 6),
           selectedLiquiditySource: LiquiditySource.UNISWAPV3,
           selectedFeeTier: 3000,
@@ -828,6 +918,7 @@ describe('Take Factory', () => {
           routeProfitability: {
             auctionRepayRequirementQuoteRaw: ethers.utils.parseUnits('100', 6),
             marketFactorFloorQuoteRaw: ethers.utils.parseUnits('100', 6),
+            configuredMarketPriceFactor: 0.99,
           },
         },
         liquiditySource: LiquiditySource.UNISWAPV3,
@@ -843,6 +934,7 @@ describe('Take Factory', () => {
       expect(evaluation.profitMinOutRaw?.eq(refreshedProfitMinOutRaw)).to.be
         .true;
       expect(evaluation.approvedMinOutRaw?.eq(routeMinOutRaw)).to.be.true;
+      expect(evaluation.takeablePrice).to.be.closeTo(188.6792, 0.0001);
       expect(
         evaluation.routeProfitability?.requiredOutputFloorQuoteRaw?.eq(
           refreshedProfitMinOutRaw
@@ -866,6 +958,7 @@ describe('Take Factory', () => {
           routeProfitability: {
             auctionRepayRequirementQuoteRaw: ethers.utils.parseUnits('100', 6),
             marketFactorFloorQuoteRaw: ethers.utils.parseUnits('100', 6),
+            configuredMarketPriceFactor: 0.99,
           },
         },
         liquiditySource: LiquiditySource.UNISWAPV3,

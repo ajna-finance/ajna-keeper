@@ -200,6 +200,7 @@ export async function evaluateUniswapV3FactoryQuote({
         quoteAmountRaw,
         routerConfig.defaultSlippage
       ),
+      allowSubsidy: poolConfig.take.allowSubsidy === true,
       routeContext: context,
       failureReason:
         'quoted output below required Uniswap V3 profitability floor',
@@ -269,7 +270,6 @@ export async function executeUniswapV3FactoryTake({
     pool,
     liquidation,
     quoteEvaluation,
-    marketPriceFactor: poolConfig.take.marketPriceFactor!,
   });
   const deadline = await getSwapDeadline(signer);
 

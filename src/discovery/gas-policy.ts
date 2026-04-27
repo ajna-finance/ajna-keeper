@@ -17,7 +17,7 @@ import {
 } from '../read-transports';
 import { logger } from '../logging';
 import { DexRouter } from '../dex/router';
-import { getDecimalsErc20 } from '../erc20';
+import { convertWadToTokenDecimalsCeil, getDecimalsErc20 } from '../erc20';
 import {
   DiscoveryExecutionConfig,
   DiscoveryExecutionTransportConfig,
@@ -115,6 +115,13 @@ function ceilDivBigNumber(
   return numerator.isZero()
     ? BigNumber.from(0)
     : numerator.add(denominator).sub(1).div(denominator);
+}
+
+function convertNativeWadToQuoteRaw(
+  nativeWadAmount: BigNumber,
+  quoteDecimals: number
+): BigNumber {
+  return convertWadToTokenDecimalsCeil(nativeWadAmount, quoteDecimals);
 }
 
 function apportionCombinedNativeQuote(params: {
@@ -736,8 +743,14 @@ export async function evaluateGasPolicy(params: {
     wrappedNativeAddress.toLowerCase() ===
     params.quoteTokenAddress.toLowerCase()
   ) {
-    gasCostQuoteRaw = gasCostNativeRaw;
-    minProfitNativeQuoteRaw = minProfitNativeRaw;
+    gasCostQuoteRaw = convertNativeWadToQuoteRaw(
+      gasCostNativeRaw,
+      quoteDecimals
+    );
+    minProfitNativeQuoteRaw =
+      minProfitNativeRaw !== undefined
+        ? convertNativeWadToQuoteRaw(minProfitNativeRaw, quoteDecimals)
+        : undefined;
     gasCostQuote = Number(
       ethers.utils.formatUnits(gasCostQuoteRaw, quoteDecimals)
     );

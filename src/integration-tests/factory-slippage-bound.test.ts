@@ -194,7 +194,6 @@ describe('Factory slippage bound', function () {
         quoteAmountRaw: quotedAmountRaw,
         approvedMinOutRaw: quotedAmountRaw.mul(99).div(100),
       },
-      marketPriceFactor: 0.95,
     });
 
     expect(manipulatedOutputRaw.gt(quoteAmountDueRaw)).to.be.true;

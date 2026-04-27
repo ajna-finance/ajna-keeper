@@ -24,6 +24,10 @@ import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provid
 import { ExternalTakeQuoteEvaluation, TakeLiquidationPlan } from '../types';
 import { TakeWriteTransport } from '../write-transport';
 import {
+  applyExternalTakeRoutePolicy,
+  isSubsidizedExternalTakeQuote,
+} from '../external-take-policy';
+import {
   BASIS_POINTS_DENOMINATOR,
   MAX_UINT24_FEE_TIER,
   WAD,
@@ -64,6 +68,7 @@ export interface FactoryRouteProfitabilityContext {
   nativeProfitFloorQuoteRawBySource?: LiquiditySourceMap<BigNumber>;
   configuredProfitFloorQuoteRaw?: BigNumber;
   slippageRiskBufferQuoteRaw?: BigNumber;
+  allowSubsidy?: boolean;
   routeRejectionReasonsBySource?: LiquiditySourceMap<string>;
   gasPriceWei?: BigNumber;
   gasPriceGwei?: number;
@@ -889,6 +894,21 @@ function compareFactoryRouteEvaluations(
     >;
   }
 ): number {
+  const leftSubsidized = isSubsidizedExternalTakeQuote(left.evaluation);
+  const rightSubsidized = isSubsidizedExternalTakeQuote(right.evaluation);
+  if (leftSubsidized !== rightSubsidized) {
+    return leftSubsidized ? 1 : -1;
+  }
+  if (leftSubsidized && rightSubsidized) {
+    const leftSubsidy =
+      left.evaluation.routeProfitability?.expectedSubsidyQuoteRaw ?? ZERO;
+    const rightSubsidy =
+      right.evaluation.routeProfitability?.expectedSubsidyQuoteRaw ?? ZERO;
+    if (!leftSubsidy.eq(rightSubsidy)) {
+      return leftSubsidy.lt(rightSubsidy) ? -1 : 1;
+    }
+  }
+
   const leftProfit =
     left.evaluation.routeProfitability?.expectedNetProfitQuoteRaw;
   const rightProfit =
@@ -1205,12 +1225,10 @@ export async function computeFactoryAmountOutMinimum({
   pool,
   liquidation,
   quoteEvaluation,
-  marketPriceFactor,
 }: {
   pool: FungiblePool;
   liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  marketPriceFactor: number;
 }): Promise<BigNumber> {
   if (!quoteEvaluation.quoteAmountRaw) {
     throw new Error('Factory: quoteAmountRaw missing from evaluation');
@@ -1229,18 +1247,8 @@ export async function computeFactoryAmountOutMinimum({
     liquidation.auctionPrice,
     liquidation.collateral
   );
-  const profitabilityFloor = ceilDiv(
-    quoteAmountDueRaw.mul(MARKET_FACTOR_SCALE),
-    BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
-  );
-  const minimumSanityFloor = maxBigNumber(
-    quoteAmountDueRaw,
-    profitabilityFloor
-  );
-  if (approvedMinOutRaw.lt(minimumSanityFloor)) {
-    throw new Error(
-      'Factory: approvedMinOutRaw below auction repayment/market-factor floor'
-    );
+  if (approvedMinOutRaw.lt(quoteAmountDueRaw)) {
+    throw new Error('Factory: approvedMinOutRaw below auction repayment floor');
   }
 
   return approvedMinOutRaw;
@@ -1257,6 +1265,7 @@ export async function buildFactoryQuoteEvaluation(params: {
   selectedLiquiditySource: LiquiditySource;
   selectedFeeTier?: number;
   existingSlippageFloorQuoteRaw?: BigNumber;
+  allowSubsidy?: boolean;
   routeContext?: FactoryRouteEvaluationContext;
   successReason?: string;
   failureReason: string;
@@ -1276,50 +1285,55 @@ export async function buildFactoryQuoteEvaluation(params: {
     quoteAmountDueRaw.mul(MARKET_FACTOR_SCALE),
     BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
   );
-  const isProfitable = params.quoteAmountRaw.gte(marketFactorFloorQuoteRaw);
-  const grossProfitQuoteRaw = params.quoteAmountRaw.gte(quoteAmountDueRaw)
-    ? params.quoteAmountRaw.sub(quoteAmountDueRaw)
-    : ZERO;
-  const surplusOverFloorQuoteRaw = params.quoteAmountRaw.gte(
-    marketFactorFloorQuoteRaw
-  )
-    ? params.quoteAmountRaw.sub(marketFactorFloorQuoteRaw)
-    : ZERO;
   const routeMinOutRaw = params.existingSlippageFloorQuoteRaw;
-  const profitMinOutRaw = marketFactorFloorQuoteRaw;
-  const approvedMinOutRaw =
-    deriveApprovedMinOutRaw({ routeMinOutRaw, profitMinOutRaw }) ??
-    profitMinOutRaw;
+  const policy = applyExternalTakeRoutePolicy({
+    configuredMarketPriceFactor: marketPriceFactor,
+    allowSubsidy: params.allowSubsidy === true,
+    quoteAmountRaw: params.quoteAmountRaw,
+    quoteDueRaw: quoteAmountDueRaw,
+    marketFactorFloorQuoteRaw,
+    routeMinOutRaw,
+  });
 
   return {
-    isTakeable: isProfitable,
+    isTakeable: policy.isEconomicallyExecutable,
     externalTakePath: 'factory',
     marketPrice: params.quoteAmount / collateralAmount,
-    takeablePrice: (params.quoteAmount / collateralAmount) * marketPriceFactor,
+    takeablePrice:
+      (params.quoteAmount / collateralAmount) *
+      policy.effectiveMarketPriceFactor,
     quoteAmount: params.quoteAmount,
     quoteAmountRaw: params.quoteAmountRaw,
     selectedLiquiditySource: params.selectedLiquiditySource,
     selectedFeeTier: params.selectedFeeTier,
-    routeMinOutRaw,
-    profitMinOutRaw,
-    approvedMinOutRaw,
+    routeMinOutRaw: policy.routeMinOutRaw,
+    profitMinOutRaw: policy.profitMinOutRaw,
+    approvedMinOutRaw: policy.approvedMinOutRaw,
     collateralAmount,
     quotedAuctionPriceWad: params.auctionPriceWad,
     quotedCollateralWad: params.collateral,
     routeProfitability: {
       auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
-      routeExecutionCostQuoteRaw: ZERO,
-      nativeProfitFloorQuoteRaw: ZERO,
-      configuredProfitFloorQuoteRaw: ZERO,
-      slippageRiskBufferQuoteRaw: ZERO,
+      routeExecutionCostQuoteRaw: policy.routeExecutionCostQuoteRaw,
+      nativeProfitFloorQuoteRaw: policy.nativeProfitFloorQuoteRaw,
+      configuredProfitFloorQuoteRaw: policy.configuredProfitFloorQuoteRaw,
+      slippageRiskBufferQuoteRaw: policy.slippageRiskBufferQuoteRaw,
+      configuredMarketPriceFactor: marketPriceFactor,
       marketFactorFloorQuoteRaw,
-      requiredProfitFloorQuoteRaw: ZERO,
-      requiredOutputFloorQuoteRaw: marketFactorFloorQuoteRaw,
-      expectedNetProfitQuoteRaw: grossProfitQuoteRaw,
-      surplusOverFloorQuoteRaw,
+      requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
+      requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
+      requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
+      expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+      surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
+      routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
+      effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
+      subsidyAllowed: policy.subsidyAllowed,
+      expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
       routeGasLimit: undefined,
     },
-    reason: isProfitable ? params.successReason : params.failureReason,
+    reason: policy.isEconomicallyExecutable
+      ? params.successReason
+      : (policy.rejectionReason ?? params.failureReason),
   };
 }
 
@@ -1370,51 +1384,56 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
   const marketFactorFloorQuoteRaw =
     routeProfitability.marketFactorFloorQuoteRaw ??
     auctionRepayRequirementQuoteRaw;
+  const configuredMarketPriceFactor =
+    routeProfitability.configuredMarketPriceFactor ??
+    (params.evaluation.marketPrice && params.evaluation.takeablePrice
+      ? params.evaluation.takeablePrice / params.evaluation.marketPrice
+      : undefined);
+  if (!configuredMarketPriceFactor || configuredMarketPriceFactor <= 0) {
+    return {
+      ...params.evaluation,
+      isTakeable: false,
+      reason: 'route profitability context missing market price factor',
+    };
+  }
   const requiredProfitFloorQuoteRaw = maxBigNumber(
     nativeProfitFloorQuoteRaw,
     configuredProfitFloorQuoteRaw
   );
-  const breakEvenQuoteAmountRaw = auctionRepayRequirementQuoteRaw
-    .add(routeExecutionCostQuoteRaw)
-    .add(slippageRiskBufferQuoteRaw);
-  const requiredOutputFloorQuoteRaw = maxBigNumber(
-    marketFactorFloorQuoteRaw,
-    auctionRepayRequirementQuoteRaw
-      .add(routeExecutionCostQuoteRaw)
-      .add(requiredProfitFloorQuoteRaw)
-      .add(slippageRiskBufferQuoteRaw)
-  );
   const quoteAmountRaw = params.evaluation.quoteAmountRaw;
-  const expectedNetProfitQuoteRaw = quoteAmountRaw.gte(breakEvenQuoteAmountRaw)
-    ? quoteAmountRaw.sub(breakEvenQuoteAmountRaw)
-    : ZERO;
-  const surplusOverFloorQuoteRaw = quoteAmountRaw.gte(
-    requiredOutputFloorQuoteRaw
-  )
-    ? quoteAmountRaw.sub(requiredOutputFloorQuoteRaw)
-    : ZERO;
   const routeMinOutRaw =
     params.evaluation.routeMinOutRaw ??
     (params.evaluation.profitMinOutRaw
       ? undefined
       : params.evaluation.approvedMinOutRaw);
-  const profitMinOutRaw = requiredOutputFloorQuoteRaw;
-  const approvedMinOutRaw =
-    deriveApprovedMinOutRaw({ routeMinOutRaw, profitMinOutRaw }) ??
-    profitMinOutRaw;
+  const policy = applyExternalTakeRoutePolicy({
+    configuredMarketPriceFactor,
+    allowSubsidy: params.context.allowSubsidy === true,
+    quoteAmountRaw,
+    quoteDueRaw: auctionRepayRequirementQuoteRaw,
+    marketFactorFloorQuoteRaw,
+    routeMinOutRaw,
+    routeExecutionCostQuoteRaw,
+    configuredProfitFloorQuoteRaw,
+    nativeProfitFloorQuoteRaw,
+    slippageRiskBufferQuoteRaw,
+  });
   const isTakeable =
-    params.evaluation.isTakeable &&
-    quoteAmountRaw.gte(requiredOutputFloorQuoteRaw);
+    params.evaluation.isTakeable && policy.isEconomicallyExecutable;
 
   return {
     ...params.evaluation,
     isTakeable,
     reason: isTakeable
       ? params.evaluation.reason
-      : 'route quote below required output floor',
-    routeMinOutRaw,
-    profitMinOutRaw,
-    approvedMinOutRaw,
+      : (policy.rejectionReason ?? 'route quote below required output floor'),
+    routeMinOutRaw: policy.routeMinOutRaw,
+    profitMinOutRaw: policy.profitMinOutRaw,
+    approvedMinOutRaw: policy.approvedMinOutRaw,
+    takeablePrice:
+      params.evaluation.marketPrice !== undefined
+        ? params.evaluation.marketPrice * policy.effectiveMarketPriceFactor
+        : params.evaluation.takeablePrice,
     routeProfitability: {
       ...routeProfitability,
       auctionRepayRequirementQuoteRaw,
@@ -1422,11 +1441,17 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       nativeProfitFloorQuoteRaw,
       configuredProfitFloorQuoteRaw,
       slippageRiskBufferQuoteRaw,
+      configuredMarketPriceFactor,
       marketFactorFloorQuoteRaw,
       requiredProfitFloorQuoteRaw,
-      requiredOutputFloorQuoteRaw,
-      expectedNetProfitQuoteRaw,
-      surplusOverFloorQuoteRaw,
+      requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
+      requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
+      expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+      surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
+      routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
+      effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
+      subsidyAllowed: policy.subsidyAllowed,
+      expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
       routeGasLimit,
       gasPriceWei: params.context.gasPriceWei,
       gasPriceGwei: params.context.gasPriceGwei,

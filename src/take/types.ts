@@ -12,11 +12,17 @@ export interface RouteProfitabilityBreakdown {
   nativeProfitFloorQuoteRaw?: BigNumber;
   configuredProfitFloorQuoteRaw?: BigNumber;
   slippageRiskBufferQuoteRaw?: BigNumber;
+  configuredMarketPriceFactor?: number;
   marketFactorFloorQuoteRaw?: BigNumber;
   requiredProfitFloorQuoteRaw?: BigNumber;
+  requiredNonSubsidizedOutputRaw?: BigNumber;
   requiredOutputFloorQuoteRaw?: BigNumber;
   expectedNetProfitQuoteRaw?: BigNumber;
   surplusOverFloorQuoteRaw?: BigNumber;
+  routeBreakEvenMarketPriceFactor?: number;
+  effectiveMarketPriceFactor?: number;
+  subsidyAllowed?: boolean;
+  expectedSubsidyQuoteRaw?: BigNumber;
   routeGasLimit?: BigNumber;
   gasPriceWei?: BigNumber;
   gasPriceGwei?: number;

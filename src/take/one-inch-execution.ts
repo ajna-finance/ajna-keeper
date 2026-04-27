@@ -8,11 +8,16 @@ import {
   encodeOneInchSwapDetailsBytes,
   validateOneInchSwapDetailsForAtomicTake,
 } from '../dex/one-inch';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
+import {
+  convertWadToTokenDecimals,
+  convertWadToTokenDecimalsCeil,
+  getDecimalsErc20,
+} from '../erc20';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import {
   delay,
+  decimaledToWei,
   estimateGasWithBuffer,
   getErrorMessage,
   weiToDecimaled,
@@ -29,6 +34,7 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from './types';
+import { applyExternalTakeRoutePolicy } from './external-take-policy';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
 
@@ -122,6 +128,18 @@ async function resolveOneInchChainId(
   return config.chainId;
 }
 
+function getQuoteAmountDueRawFromDecimals(params: {
+  auctionPriceWad: BigNumber;
+  collateralWad: BigNumber;
+  quoteDecimals: number;
+}): BigNumber {
+  const quoteDueWad = params.collateralWad
+    .mul(params.auctionPriceWad)
+    .add(factoryShared.WAD.sub(1))
+    .div(factoryShared.WAD);
+  return convertWadToTokenDecimalsCeil(quoteDueWad, params.quoteDecimals);
+}
+
 export async function getOneInchTakeQuoteEvaluation(
   pool: FungiblePool,
   price: number,
@@ -130,7 +148,8 @@ export async function getOneInchTakeQuoteEvaluation(
   config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
-  connectorTokens: string[] | undefined
+  connectorTokens: string[] | undefined,
+  auctionPriceWad?: BigNumber
 ): Promise<ExternalTakeQuoteEvaluation> {
   if (
     poolConfig.take.liquiditySource !== LiquiditySource.ONEINCH ||
@@ -150,7 +169,8 @@ export async function getOneInchTakeQuoteEvaluation(
     config,
     signer,
     oneInchRouters,
-    connectorTokens
+    connectorTokens,
+    auctionPriceWad
   );
 }
 
@@ -162,7 +182,8 @@ export async function getOneInchPathQuoteEvaluation(
   config: Partial<OneInchQuoteConfig>,
   signer: Signer,
   oneInchRouters: { [chainId: number]: string } | undefined,
-  connectorTokens: string[] | undefined
+  connectorTokens: string[] | undefined,
+  auctionPriceWad?: BigNumber
 ): Promise<ExternalTakeQuoteEvaluation> {
   if (!poolConfig.take.marketPriceFactor) {
     return {
@@ -261,15 +282,42 @@ export async function getOneInchPathQuoteEvaluation(
     );
 
     const marketPrice = quoteAmount / collateralAmount;
-    const takeablePrice = marketPrice * poolConfig.take.marketPriceFactor;
+    const effectiveAuctionPriceWad = auctionPriceWad ?? decimaledToWei(price);
+    const quoteAmountDueRaw = getQuoteAmountDueRawFromDecimals({
+      auctionPriceWad: effectiveAuctionPriceWad,
+      collateralWad: collateral,
+      quoteDecimals,
+    });
+    const marketFactorFloorQuoteRaw = factoryShared.ceilDiv(
+      quoteAmountDueRaw.mul(factoryShared.MARKET_FACTOR_SCALE),
+      BigNumber.from(
+        factoryShared.getMarketPriceFactorUnits(
+          poolConfig.take.marketPriceFactor
+        )
+      )
+    );
+    const slippageFloor = amountOut
+      .mul(
+        factoryShared.BASIS_POINTS_DENOMINATOR -
+          factoryShared.getSlippageBasisPoints(1)
+      )
+      .div(factoryShared.BASIS_POINTS_DENOMINATOR);
+    const policy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
+      allowSubsidy: poolConfig.take.allowSubsidy === true,
+      quoteAmountRaw: amountOut,
+      quoteDueRaw: quoteAmountDueRaw,
+      marketFactorFloorQuoteRaw,
+      routeMinOutRaw: slippageFloor,
+    });
+    const takeablePrice = marketPrice * policy.effectiveMarketPriceFactor;
 
-    const takeable = price <= takeablePrice;
     logger.info(
-      `Take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor} → ${takeable ? 'TAKEABLE' : 'skip'}`
+      `Take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor}, effectiveFactor=${policy.effectiveMarketPriceFactor.toFixed(6)}, subsidy=${policy.expectedSubsidyQuoteRaw.gt(0) ? policy.expectedSubsidyQuoteRaw.toString() : '0'} → ${policy.isEconomicallyExecutable ? 'TAKEABLE' : 'skip'}`
     );
 
     return {
-      isTakeable: takeable,
+      isTakeable: policy.isEconomicallyExecutable,
       externalTakePath: 'oneinch',
       marketPrice,
       takeablePrice,
@@ -277,10 +325,33 @@ export async function getOneInchPathQuoteEvaluation(
       quoteAmountRaw: amountOut,
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       collateralAmount,
+      routeMinOutRaw: policy.routeMinOutRaw,
+      profitMinOutRaw: policy.profitMinOutRaw,
+      approvedMinOutRaw: policy.approvedMinOutRaw,
+      routeProfitability: {
+        auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
+        routeExecutionCostQuoteRaw: policy.routeExecutionCostQuoteRaw,
+        nativeProfitFloorQuoteRaw: policy.nativeProfitFloorQuoteRaw,
+        configuredProfitFloorQuoteRaw: policy.configuredProfitFloorQuoteRaw,
+        slippageRiskBufferQuoteRaw: policy.slippageRiskBufferQuoteRaw,
+        configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
+        marketFactorFloorQuoteRaw,
+        requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
+        requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
+        requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
+        expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
+        surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
+        routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
+        effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
+        subsidyAllowed: policy.subsidyAllowed,
+        expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
+      },
       quotedCollateralWad: collateral,
-      reason: takeable
+      quotedAuctionPriceWad: effectiveAuctionPriceWad,
+      reason: policy.isEconomicallyExecutable
         ? undefined
-        : 'auction price above external take threshold',
+        : (policy.rejectionReason ??
+          'auction price above external take threshold'),
     };
   } catch (error) {
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);
@@ -293,13 +364,9 @@ export async function getOneInchPathQuoteEvaluation(
 
 async function computeOneInchAtomicMinReturnAmount(params: {
   pool: FungiblePool;
-  poolConfig: TakeActionConfig;
   liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
 }): Promise<BigNumber> {
-  if (!params.poolConfig.take.marketPriceFactor) {
-    throw new Error('1inch atomic execution requires marketPriceFactor');
-  }
   if (!params.quoteEvaluation.quoteAmountRaw) {
     throw new Error('1inch atomic execution requires quoteAmountRaw');
   }
@@ -309,33 +376,22 @@ async function computeOneInchAtomicMinReturnAmount(params: {
     params.liquidation.auctionPrice,
     params.liquidation.collateral
   );
-  const profitabilityFloor = factoryShared.ceilDiv(
-    quoteAmountDueRaw.mul(factoryShared.MARKET_FACTOR_SCALE),
-    BigNumber.from(
-      factoryShared.getMarketPriceFactorUnits(
-        params.poolConfig.take.marketPriceFactor
-      )
-    )
-  );
-  const slippageFloor = params.quoteEvaluation.quoteAmountRaw
-    .mul(
-      factoryShared.BASIS_POINTS_DENOMINATOR -
-        factoryShared.getSlippageBasisPoints(1)
-    )
-    .div(factoryShared.BASIS_POINTS_DENOMINATOR);
-  const approvedMinOutRaw =
-    factoryShared.deriveApprovedMinOutRaw({
-      routeMinOutRaw: params.quoteEvaluation.routeMinOutRaw,
-      profitMinOutRaw: params.quoteEvaluation.profitMinOutRaw,
-      fallbackMinOutRaw: params.quoteEvaluation.approvedMinOutRaw,
-    }) ?? BigNumber.from(0);
+  const approvedMinOutRaw = factoryShared.deriveApprovedMinOutRaw({
+    routeMinOutRaw: params.quoteEvaluation.routeMinOutRaw,
+    profitMinOutRaw: params.quoteEvaluation.profitMinOutRaw,
+    fallbackMinOutRaw: params.quoteEvaluation.approvedMinOutRaw,
+  });
+  if (!approvedMinOutRaw) {
+    throw new Error(
+      '1inch atomic execution requires approvedMinOutRaw from quote evaluation'
+    );
+  }
 
-  return factoryShared.maxBigNumber(
-    quoteAmountDueRaw,
-    profitabilityFloor,
-    slippageFloor,
-    approvedMinOutRaw
-  );
+  if (approvedMinOutRaw.lt(quoteAmountDueRaw)) {
+    throw new Error('1inch approvedMinOutRaw below auction repayment floor');
+  }
+
+  return approvedMinOutRaw;
 }
 
 interface TakeLiquidationParams {
@@ -397,7 +453,8 @@ export async function takeLiquidation({
         },
         signer,
         config.oneInchRouters,
-        config.connectorTokens
+        config.connectorTokens,
+        liquidation.auctionPrice
       ));
 
     if (!approvedQuoteEvaluation.isTakeable) {
@@ -508,7 +565,6 @@ export async function takeLiquidation({
 
     const requiredMinReturnAmount = await computeOneInchAtomicMinReturnAmount({
       pool,
-      poolConfig,
       liquidation,
       quoteEvaluation: approvedQuoteEvaluation,
     });

@@ -49,12 +49,12 @@ const config: KeeperConfig = {
   multicallBlock: 5022,
 
   // Timing configuration (conservative for testing)
-  delayBetweenRuns: 30,      // 30 seconds between cycles
-  delayBetweenActions: 2,     // 2 seconds between actions
+  delayBetweenRuns: 30, // 30 seconds between cycles
+  delayBetweenActions: 2, // 2 seconds between actions
 
   // 1inch Router Configuration (optional for now)
   oneInchRouters: {
-    8453: '0x1111111254EEB25477B68fb85Ed929f73A960582',  // Base
+    8453: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Base
   },
 
   // Token addresses on Base
@@ -70,9 +70,9 @@ const config: KeeperConfig = {
     permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
     poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
     quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
-    defaultFeeTier: 3000,      // Preferred/default 0.3% fee tier
+    defaultFeeTier: 3000, // Preferred/default 0.3% fee tier
     candidateFeeTiers: [500, 10000], // Optional extra deployed tiers to probe per external take
-    defaultSlippage: 0.5,      // 0.5% slippage
+    defaultSlippage: 0.5, // 0.5% slippage
   },
 
   // Ajna contract addresses on Base
@@ -123,6 +123,8 @@ const config: KeeperConfig = {
     take: {
       // Start discovered pools on arb-take only.
       // Add liquiditySource + marketPriceFactor after external take contracts are deployed.
+      // Keep allowSubsidy false unless you intentionally want defensive subsidized takes.
+      // allowSubsidy: false,
       minCollateral: 0.01,
       hpbPriceFactor: 0.9,
     },
@@ -154,6 +156,7 @@ const config: KeeperConfig = {
         // External takes disabled for now - enable after contract deployment
         // liquiditySource: LiquiditySource.UNISWAPV3,
         // marketPriceFactor: 0.98,
+        // allowSubsidy: false,
       },
       collectBond: true,
       collectLpReward: {
@@ -163,7 +166,7 @@ const config: KeeperConfig = {
       },
       settlement: {
         enabled: true,
-        minAuctionAge: 18000,     // 5 hours
+        minAuctionAge: 18000, // 5 hours
         maxBucketDepth: 50,
         maxIterations: 10,
         checkBotIncentive: true,

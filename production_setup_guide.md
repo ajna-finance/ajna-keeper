@@ -232,6 +232,7 @@ const config: KeeperConfig = {
         // ADD: Configure external takes
         liquiditySource: LiquiditySource.ONEINCH,
         marketPriceFactor: 0.98, // Take when auction price < market * 0.98
+        allowSubsidy: false, // Default: require route-derived repayment + gas/profit coverage
         minCollateral: 0.01, // Minimum collateral to attempt take
       },
       collectLpReward: {
@@ -315,6 +316,7 @@ const config: KeeperConfig = {
         // ADD: Configure external takes - choose your preferred DEX
         liquiditySource: LiquiditySource.SUSHISWAP, // or UNISWAPV3
         marketPriceFactor: 0.99, // Take when auction price < market * 0.99
+        allowSubsidy: false, // Set true only for reviewed defensive pools
         minCollateral: 0.01, // Minimum collateral to attempt take
       },
       collectLpReward: {
@@ -562,15 +564,17 @@ Recommended rollout order:
 4. Use `allowedExternalTakePaths: ['oneinch', 'factory']` when you want discovered external takes to compare 1inch against the best factory route. If omitted, autodiscover preserves the single-path behavior from `discoveredDefaults.take.liquiditySource`.
 5. Prefer `autoDiscover.take.minProfitNative` over `minExpectedProfitQuote` when you want one profit floor across mixed quote tokens. It is a wei-denominated native-token floor, not a USD field.
 6. To approximate a USD target, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18`. Example: a $3 floor at ETH=$3,000 is `0.001 ETH`, or `1000000000000000` wei. Recalibrate periodically because the USD value drifts with native token price.
-7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes.
-8. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
-9. Use `externalTakeProbeTimeoutMs` to bound each hybrid 1inch/factory probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values above 5000ms are supported for slow infrastructure, but they directly increase the worst-case time spent on each hot auction candidate.
-10. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing 1inch API calls is worth potentially skipping a better 1inch route; it tries factory first and stops once factory is approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
-11. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
-12. Use `autoDiscover.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `takeWrite` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
-13. If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the taker path.
-14. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
-15. Use `autoDiscover.take.validateRouteDeployments: true` for production startup preflight. It is required for hybrid 1inch/factory routing and recommended for every live factory route.
+7. Only set `autoDiscover.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes. Set it to `0` if you want quote-normalized gas coverage with no extra quote-token profit floor.
+8. Keep `discoveredDefaults.take.allowSubsidy` unset or `false` for normal production discovery. The route-derived policy then requires external takes to clear auction repayment plus route gas/profit floors when quote-normalized inputs are configured or available.
+9. Use `allowSubsidy: true` only on manually reviewed defensive pools where spending keeper P&L to repay an auction earlier is acceptable. Subsidized takes still enforce repayment and swap min-out safety, but they may execute below gas/profit floors.
+10. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH`.
+11. Use `externalTakeProbeTimeoutMs` to bound each hybrid 1inch/factory probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values above 5000ms are supported for slow infrastructure, but they directly increase the worst-case time spent on each hot auction candidate.
+12. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing 1inch API calls is worth potentially skipping a better 1inch route; it tries factory first and stops once factory is approved. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
+13. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `autoDiscover.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
+14. Use `autoDiscover.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `takeWrite` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
+15. If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the taker path.
+16. If you use Curve for discovered takes, include both `curveRouterOverrides.poolConfigs` and `tokenAddresses`, or config validation will reject startup.
+17. Use `autoDiscover.take.validateRouteDeployments: true` for production startup preflight. It is required for hybrid 1inch/factory routing and recommended for every live factory route.
 
 Quote-denominated gas policy on Base, Optimism, Arbitrum, and related testnets applies a conservative 30% native gas cost buffer before converting into the pool quote token. This is intended to account for L1 data fees; override it with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed execution costs. `dexGasOverrides` should represent the expected route execution gas, with the L1-data buffer applied separately by the keeper. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` means 450k route execution gas; the keeper still adds its 30% L2 buffer before native-to-quote conversion. Gas-price freshness defaults are 5 seconds on L1 and 15 seconds on common L2s; use `l1GasPriceFreshnessTtlMs` / `l2GasPriceFreshnessTtlMs` only if your RPC latency profile requires a different window. `gasPriceDriftToleranceBasisPoints` optionally forces final pre-submission reapproval when current gas differs materially from the evaluation snapshot.
 
@@ -770,6 +774,7 @@ const config: KeeperConfig = {
         // External take via 1inch
         liquiditySource: LiquiditySource.ONEINCH,
         marketPriceFactor: 0.98,
+        allowSubsidy: false,
         minCollateral: 0.07,
         // ArbTake as backup
         hpbPriceFactor: 0.9,
@@ -899,6 +904,7 @@ const config: KeeperConfig = {
         // External take via SushiSwap (uses this keeper's configured 0.3% default)
         liquiditySource: LiquiditySource.SUSHISWAP,
         marketPriceFactor: 0.99,
+        allowSubsidy: false,
         minCollateral: 0.01,
         // ArbTake as backup
         hpbPriceFactor: 0.985,
@@ -987,6 +993,7 @@ const config: KeeperConfig = {
       take: {
         liquiditySource: LiquiditySource.CURVE, // Use Curve for external takes
         marketPriceFactor: 0.99,
+        allowSubsidy: false,
         minCollateral: 0.01,
         hpbPriceFactor: 0.98, // ArbTake backup
       },

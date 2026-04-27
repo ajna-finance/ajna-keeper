@@ -1,4 +1,5 @@
 import { expect } from 'chai';
+import sinon from 'sinon';
 import {
   KeeperConfig,
   LiquiditySource,
@@ -7,6 +8,7 @@ import {
   validateTakeSettings,
   validateTakeWriteConfig,
 } from '../config';
+import { logger } from '../logging';
 
 describe('auto-discover validation', () => {
   const baseConfig = (): KeeperConfig =>
@@ -274,6 +276,29 @@ describe('auto-discover validation', () => {
   });
 
   it('rejects non-finite and non-number take thresholds', () => {
+    const config = baseConfig();
+    expect(() =>
+      validateTakeSettings(
+        {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+          allowSubsidy: 'true' as unknown as boolean,
+        },
+        config
+      )
+    ).to.throw('TakeSettings: allowSubsidy must be a boolean');
+
+    expect(() =>
+      validateTakeSettings(
+        {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+          allowSubsidy: true,
+        },
+        config
+      )
+    ).to.not.throw();
+
     expect(() =>
       validateTakeSettings(
         {
@@ -303,6 +328,36 @@ describe('auto-discover validation', () => {
         {} as KeeperConfig
       )
     ).to.throw('TakeSettings: hpbPriceFactor must be positive');
+  });
+
+  it('warns when autodiscovery defaults allow subsidized external takes', () => {
+    const config = baseConfig();
+    config.discoveredDefaults!.take = {
+      liquiditySource: LiquiditySource.UNISWAPV3,
+      marketPriceFactor: 0.99,
+      allowSubsidy: true,
+    };
+    const warnStub = sinon.stub(logger, 'warn');
+
+    try {
+      expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'AutoDiscoverConfig: discoveredDefaults.take.allowSubsidy=true can subsidize external takes'
+          )
+        )
+      ).to.equal(true);
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'AutoDiscoverConfig: allowSubsidy=true is configured without minExpectedProfitQuote or minProfitNative'
+          )
+        )
+      ).to.equal(true);
+    } finally {
+      warnStub.restore();
+    }
   });
 
   it('rejects malformed numeric auto-discover policy values', () => {
