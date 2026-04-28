@@ -41,7 +41,7 @@ const config: HardhatUserConfig = {
     },
   },
   paths: {
-    tests: './src/integration-tests',
+    tests: './tests/integration',
   },
   networks: {
     hardhat: {

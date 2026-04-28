@@ -1,0 +1,81 @@
+import { KeeperConfig, RewardActionLabel } from '../../src/config';
+import {
+  getProvider,
+  impersonateSigner,
+  resetHardhat,
+  setBalance,
+} from './test-utils';
+import { MAINNET_CONFIG } from './test-config';
+import { RewardActionTracker } from '../../src/rewards';
+import { decimaledToWei } from '../../src/utils';
+import { Wallet } from 'ethers';
+import { getBalanceOfErc20, transferErc20 } from '../../src/erc20';
+import { expect } from 'chai';
+import { DexRouter } from '../../src/dex/router';
+
+describe('RewardActionTracker', () => {
+  beforeEach(async () => {
+    await resetHardhat();
+  });
+
+  it('Transfers to wallet', async () => {
+    const tokenWhaleSigner = await impersonateSigner(
+      MAINNET_CONFIG.WBTC_USDC_POOL.collateralWhaleAddress
+    );
+    const signer = Wallet.createRandom().connect(getProvider());
+    const tokenToSwap = MAINNET_CONFIG.WBTC_USDC_POOL.collateralAddress;
+    await setBalance(signer.address, decimaledToWei(1000).toHexString());
+    await setBalance(
+      await tokenWhaleSigner.getAddress(),
+      decimaledToWei(1000).toHexString()
+    );
+    await transferErc20(
+      tokenWhaleSigner,
+      tokenToSwap,
+      signer.address,
+      decimaledToWei(1, 8)
+    );
+    const receiver = Wallet.createRandom().connect(getProvider());
+    const wethAddress = MAINNET_CONFIG.WETH_ADDRESS;
+    const uniswapV3Router = MAINNET_CONFIG.UNISWAP_V3_ROUTER;
+    const dexRouter = new DexRouter(signer);
+    const config: KeeperConfig = {
+      ethRpcUrl: '',
+      logLevel: 'debug',
+      subgraphUrl: '',
+      keeperKeystore: '',
+      ajna: MAINNET_CONFIG.AJNA_CONFIG,
+      uniswapOverrides: {
+        wethAddress: wethAddress,
+        uniswapV3Router: uniswapV3Router,
+      },
+      delayBetweenActions: 0,
+      delayBetweenRuns: 0,
+      pools: [],
+    };
+    const et = new RewardActionTracker(
+      signer,
+      config,
+      dexRouter
+    );
+    et.addToken(
+      { action: RewardActionLabel.TRANSFER, to: receiver.address },
+      tokenToSwap,
+      decimaledToWei(1)
+    );
+    const senderBalanceBefore = await getBalanceOfErc20(signer, tokenToSwap);
+    const receiverBalanceBefore = await getBalanceOfErc20(
+      receiver,
+      tokenToSwap
+    );
+    await et.handleAllTokens();
+    const senderBalanceAfter = await getBalanceOfErc20(signer, tokenToSwap);
+    const receiverBalanceAfter = await getBalanceOfErc20(receiver, tokenToSwap);
+    const senderBalanceDecrease = senderBalanceBefore.sub(senderBalanceAfter);
+    const receiverBalanceIncrease = receiverBalanceAfter.sub(
+      receiverBalanceBefore
+    );
+    expect(senderBalanceDecrease.eq(decimaledToWei(1, 8))).to.be.true;
+    expect(receiverBalanceIncrease.eq(decimaledToWei(1, 8))).to.be.true;
+  });
+});
