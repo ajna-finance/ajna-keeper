@@ -71,7 +71,8 @@ const config: KeeperConfig = {
     poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
     quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
     defaultFeeTier: 3000, // Preferred/default 0.3% fee tier
-    candidateFeeTiers: [500, 10000], // Optional extra deployed tiers to probe per external take
+    // Omit candidateFeeTiers to auto-probe standard V3 tiers. Add it only to narrow/customize the probed set.
+    // candidateFeeTiers: [500, 10000],
     defaultSlippage: 0.5, // 0.5% slippage
   },
 

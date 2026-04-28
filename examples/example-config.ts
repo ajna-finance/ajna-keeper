@@ -108,7 +108,7 @@ const config: KeeperConfig = {
     wethAddress: '0x4200000000000000000000000000000000000006', // WETH on Base
     permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
     defaultFeeTier: 3000, // Preferred/default 0.3% fee tier
-    candidateFeeTiers: [500, 10000], // Optional extra deployed tiers to probe per external take
+    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
     defaultSlippage: 0.5, // 0.5% slippage tolerance
     poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD', // Base pool factory
     quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a', // QuoterV2 for accurate pricing
@@ -124,7 +124,7 @@ const config: KeeperConfig = {
     factoryAddress: '0x[SUSHISWAP_FACTORY_ADDRESS]', // SushiSwap V3 Factory
     wethAddress: '0x4200000000000000000000000000000000000006',
     defaultFeeTier: 500, // Preferred/default 0.05% fee tier
-    candidateFeeTiers: [3000], // Optional extra deployed tiers to probe per external take
+    candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
     defaultSlippage: 2.0, // 2% slippage tolerance (conservative for SushiSwap)
   },
 

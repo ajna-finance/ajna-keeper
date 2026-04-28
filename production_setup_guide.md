@@ -63,12 +63,14 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 ```typescript
 universalRouterOverrides: {
   defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-  candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
+  // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
+  // candidateFeeTiers: [500, 10000],
   // ... other settings
 },
 sushiswapRouterOverrides: {
   defaultFeeTier: 500,  // Preferred/default SushiSwap external-take route
-  candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers
+  // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
+  // candidateFeeTiers: [3000],
   // ... other settings
 }
 ```
@@ -145,7 +147,7 @@ universalRouterOverrides: {
 },
 sushiswapRouterOverrides: {
   defaultFeeTier: 3000, // SushiSwap external takes default to 0.3% in this keeper instance
-  candidateFeeTiers: [500],
+  candidateFeeTiers: [500], // Optional: also probe 0.05%; defaultFeeTier is always included
 }
 ```
 
@@ -394,6 +396,18 @@ yarn start --config your-config.ts
 
 # Expected log: "Detection Results - Type: factory, Valid: true"
 ```
+
+**Production verification fork tests:**
+
+```bash
+npm run production-verification:mainnet
+npm run production-verification:base
+
+# Opt-in pinned live-liquidity fork execution through real DEX liquidity
+npm run production-verification:live-liquidity:mainnet
+```
+
+These tests exercise factory route selection, selected fee-tier execution, `marketPriceFactor` thresholding, stale-route rejection, and the pinned mainnet SOL/WETH live-liquidity E2E path.
 
 ## Step 3: Subgraph Setup with Goldsky
 
@@ -663,7 +677,8 @@ For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `default
 ```typescript
 universalRouterOverrides: {
   defaultFeeTier: 3000, // Optimize for most common pairs (WETH/USDC, etc.)
-  candidateFeeTiers: [500, 10000], // Optional targeted alternatives
+  // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
+  // candidateFeeTiers: [500, 10000],
   defaultSlippage: 0.5,
   // ... other settings
 }
@@ -873,7 +888,7 @@ const config: KeeperConfig = {
     wethAddress: '0x4200000000000000000000000000000000000006',
     permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
     defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    candidateFeeTiers: [500], // Optional targeted alternatives
+    candidateFeeTiers: [500], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
     defaultSlippage: 0.5,
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
@@ -886,7 +901,7 @@ const config: KeeperConfig = {
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
     defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [500], // Optional targeted alternatives
+    candidateFeeTiers: [500], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
     defaultSlippage: 1.0,
   },
 

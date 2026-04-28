@@ -126,6 +126,8 @@ ONEINCH_API="https://api.1inch.dev/swap/v6.0"
 ONEINCH_API_KEY="????????????????????????????????????"
 ```
 
+Optional read/write routing and non-interactive unlock variables are listed in `.env.example`. Leave them unset unless you are configuring read failover, subgraph failover, private take submission, relay submission, or password-file based keystore unlock.
+
 ### Create a new config file
 
 Create a new `config.ts` file in the `ajna-keeper/` folder and copy the contents from `examples/example-config.ts` or `examples/example-base-config.ts`.
@@ -228,6 +230,7 @@ make help           # Show all available commands
 make setup          # First-time setup
 make env-check      # Verify .env configuration
 make test-unit      # Run unit tests
+make test-integration  # Run Hardhat integration tests
 make test-prices    # Test price APIs
 make keystore       # Create new keystore
 make format         # Format code
@@ -735,8 +738,8 @@ const config: KeeperConfig = {
     poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
     quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
     defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    // Omit candidateFeeTiers to auto-probe standard V3 tiers.
-    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
+    // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
+    // candidateFeeTiers: [500, 10000],
     defaultSlippage: 0.5,
   },
 
@@ -789,7 +792,8 @@ const config: KeeperConfig = {
     factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
     wethAddress: '0x4200000000000000000000000000000000000006',
     defaultFeeTier: 500, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers
+    // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
+    // candidateFeeTiers: [3000],
     defaultSlippage: 10.0,
   },
 
@@ -965,12 +969,12 @@ const config: KeeperConfig = {
   },
   universalRouterOverrides: {
     defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
+    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
     /* other addresses */
   },
   sushiswapRouterOverrides: {
     defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [500], // Optional: narrow/customize probed tiers
+    candidateFeeTiers: [500], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
     /* other addresses */
   },
 
@@ -1275,10 +1279,11 @@ Create a `.env` file with your API keys (see [Setup Environment Variables](#setu
 
 ```env
 ALCHEMY_API_KEY="your_alchemy_key"
+GRAPH_API_KEY="your_graph_key"
 COINGECKO_API_KEY="your_coingecko_key"
 ```
 
-**Note**: You will need to enable Ethereum mainnet in your Alchemy app since hardhat queries from mainnet for integration tests.
+**Note**: Enable Ethereum mainnet and Base in your Alchemy app. The fork-backed tests use pinned mainnet/Base blocks depending on `FORK_NETWORK`.
 
 ### Running tests
 
@@ -1298,31 +1303,34 @@ yarn unit-tests
 
 #### Integration tests
 
-In one terminal run a hardhat fork (defaults to Ethereum mainnet):
-
-```bash
-make fork-base
-# Or: npx hardhat node
-```
-
-To fork a different network, set the `FORK_NETWORK` environment variable:
-
-```bash
-FORK_NETWORK=base npx hardhat node    # fork Base
-FORK_NETWORK=avalanche npx hardhat node  # fork Avalanche
-```
-
-Or use the shorthand:
-
-```bash
-yarn fork-base
-```
-
-In a second terminal run:
+Hardhat integration tests run against an in-process fork; you do not need to start a separate node for the normal suite.
 
 ```bash
 make test-integration
 # Or: yarn integration-tests
+```
+
+To fork a specific network, set `FORK_NETWORK`:
+
+```bash
+FORK_NETWORK=base yarn integration-tests
+FORK_NETWORK=avalanche yarn integration-tests
+```
+
+Use `make fork-base` only when you want a long-running local Base fork for manual debugging.
+
+#### Production verification
+
+```bash
+npm run production-verification:mainnet
+npm run production-verification:base
+npm run production-verification
+```
+
+The live-liquidity E2E sweep is opt-in because it performs a pinned fork execution through real DEX liquidity:
+
+```bash
+npm run production-verification:live-liquidity:mainnet
 ```
 
 #### Price API tests
@@ -1331,6 +1339,9 @@ Test the Alchemy and CoinGecko price integrations:
 
 ```bash
 make test-prices
+npx ts-node scripts/price-diagnostics.ts alchemy
+npx ts-node scripts/price-diagnostics.ts fallback
+npx ts-node scripts/price-diagnostics.ts cana
 ```
 
 ## Disclaimer
