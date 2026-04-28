@@ -191,7 +191,7 @@ This makes fee tier selection a runtime route-optimization decision. It is still
 
 **Best for:** Established chains with 1inch aggregator support
 
-**IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
+**IMPORTANT:** 1inch contract deployment is required for 1inch external takes only. LP reward swaps that use `PostAuctionDex.ONEINCH` use `dex.oneInch.routers` and the 1inch API directly; they do not require `takers.oneInch`.
 
 Atomic 1inch external takes validate decoded swap calldata before submission. Supported payloads must swap pool collateral to pool quote, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured router or decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `dex.oneInch.aggregationExecutorAllowlist` per chain to hard-restrict executors. If a route starts requiring non-zero 1inch flags, route that pool through factory DEXes until the keeper explicitly supports that payload shape.
 
@@ -217,14 +217,14 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 # Expected output:
 # ✅ 1inch keeper taker deployed to: 0x[deployed-address]
 # ✅ Contract verification successful
-# ✅ Ready for 1inch external takes and optional 1inch LP reward swaps
+# ✅ Ready for 1inch external takes
 ```
 
 **Configuration Updates:**
 
 ```typescript
 const config: KeeperConfig = {
-  // ADD: Deployed contract address (REQUIRED for 1inch external takes; also needed if LP rewards use PostAuctionDex.ONEINCH)
+  // ADD: Deployed contract address (REQUIRED for 1inch external takes only)
   takers: {
     oneInch: '0x[deployed-contract-address]',
   },
@@ -259,6 +259,7 @@ const config: KeeperConfig = {
         collectLpReward: {
           rewardActionCollateral: {
             action: RewardActionLabel.EXCHANGE,
+            address: '0x[collateral-token-address]',
             targetToken: 'usdc',
             slippage: 1,
             dexProvider: PostAuctionDex.ONEINCH, // Use enum
@@ -873,11 +874,13 @@ const config: KeeperConfig = {
           // ArbTake as backup
           hpbPriceFactor: 0.9,
         },
-        // LP reward swapping via 1inch (requires contracts)
+        // LP reward swapping via 1inch (requires router config and API credentials)
         collectLpReward: {
           rewardActionCollateral: {
             action: RewardActionLabel.EXCHANGE,
+            address: '0x06d47F3fb376649c3A9Dafe069B3D6E35572219E', // savUSD
             targetToken: 'usdc',
+            slippage: 1,
             dexProvider: PostAuctionDex.ONEINCH,
           },
         },
@@ -1240,7 +1243,8 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 # Solution: Replace old boolean logic with dexProvider: PostAuctionDex.ONEINCH/UNISWAP_V3/SUSHISWAP
 
 # Log: "Configuration validation failed for oneinch: Missing takers.oneInch"
-# Solution: Deploy 1inch contract even for LP rewards
+# Cause: 1inch external takes are enabled without the deployed taker contract
+# Solution: Deploy the 1inch taker contract for external takes, or use 1inch only for LP rewards with dex.oneInch.routers and API credentials
 ```
 
 **External Take Not Executing:**

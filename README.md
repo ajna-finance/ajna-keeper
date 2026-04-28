@@ -192,9 +192,10 @@ Setting both `KEYSTORE_PASSWORD_FILE` and `KEYSTORE_PASSWORD` is refused to avoi
 ```ini
 # /etc/systemd/system/ajna-keeper.service
 [Service]
+WorkingDirectory=/opt/ajna-keeper
 LoadCredential=keystore-password:/etc/ajna-keeper/keystore-password
 Environment=KEYSTORE_PASSWORD_FILE=%d/keystore-password
-ExecStart=/usr/bin/node /opt/ajna-keeper/dist/run.js /etc/ajna-keeper/config.ts
+ExecStart=/usr/bin/env yarn start --config /etc/ajna-keeper/config.ts
 ```
 
 `%d` expands to `/run/credentials/ajna-keeper.service/` at runtime; the credential file is owned by root and only readable by the service user, and is unmounted when the service stops.
@@ -576,7 +577,7 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 - Use arbTake and settlement only
 - Still supports LP reward swapping (no contracts needed for LP rewards)
 
-> **Note**: LP reward swapping works with all approaches and doesn't require contracts for Uniswap V3 or SushiSwap (only 1inch requires contracts for LP rewards).
+> **Note**: LP reward swapping does not use taker contracts. 1inch LP rewards need `dex.oneInch.routers` plus the 1inch API environment variables, while Uniswap V3, SushiSwap, and Curve use direct DEX routing.
 
 ---
 
@@ -695,7 +696,7 @@ External takes require contract deployment and specific configuration:
 
 #### 1inch Integration (Single Contract)
 
-**IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
+**IMPORTANT:** 1inch contract deployment is required for 1inch external takes only. LP reward swaps that use `PostAuctionDex.ONEINCH` use `dex.oneInch.routers` and the 1inch API directly; they do not require `takers.oneInch`.
 
 **Contract Deployment:**
 
@@ -707,7 +708,7 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 
 ```typescript
 const config: KeeperConfig = {
-  // Required for 1inch external takes; only needed for LP rewards when they also use PostAuctionDex.ONEINCH
+  // Required for 1inch external takes only
   takers: {
     oneInch: '0x[deployed-address]',
   },
@@ -1064,12 +1065,7 @@ The following sections provide comprehensive examples for configuring LP reward 
 
 ##### 1inch LP Reward Configuration
 
-**IMPORTANT:** 1inch LP reward swaps require smart contract deployment, but LP rewards can also use Uniswap V3, SushiSwap, or Curve without the 1inch contract.
-
-```bash
-# Deploy 1inch contract first (REQUIRED)
-yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
-```
+**IMPORTANT:** 1inch LP reward swaps do not require smart contract deployment. Configure `dex.oneInch.routers` and the 1inch API environment variables; `takers.oneInch` is only for 1inch external takes.
 
 Edit `config.ts` to include these fields:
 
@@ -1211,8 +1207,8 @@ manual: {
 
 ##### Notes
 
-- **Contract deployment is only required** for LP reward swaps that use `PostAuctionDex.ONEINCH`
-- If `dexProvider: PostAuctionDex.ONEINCH` but `takers.oneInch` is missing, the script will fail.
+- 1inch LP reward swaps require `dex.oneInch.routers` and the 1inch API environment variables, not `takers.oneInch`.
+- `takers.oneInch` is only required for 1inch external takes.
 - Ensure the `.env` file is loaded (via `dotenv/config`) in your project.
 
 ##### Uniswap V3 LP Reward Configuration
@@ -1271,7 +1267,7 @@ For pools where you want to swap rewards with Uniswap V3, set `dexProvider: Post
       action: RewardActionLabel.EXCHANGE,
       address: "0xtokenAddress", // Token to swap (quote token here)
       targetToken: "weth",       // Target token (e.g., "weth", "usdc")
-      slippage: 1,               // Slippage (ignored for Uniswap)
+      slippage: 1,               // Slippage percentage
       dexProvider: PostAuctionDex.UNISWAP_V3,
       fee: 3000                  // Fee tier (500, 3000, 10000)
     }
