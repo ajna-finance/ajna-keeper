@@ -20,7 +20,13 @@ export async function getPrice(
   let price: number;
   switch (priceOrigin.source) {
     case PriceOriginSource.COINGECKO:
-      price = await getPriceCoinGecko(priceOrigin, coinGeckoApiKey, chainId, rpcUrl, tokenAddresses);
+      price = await getPriceCoinGecko(
+        priceOrigin,
+        coinGeckoApiKey,
+        chainId,
+        rpcUrl,
+        tokenAddresses
+      );
       break;
     case PriceOriginSource.FIXED:
       price = priceOrigin.value;
@@ -36,7 +42,9 @@ export async function getPrice(
   }
   if (priceOrigin.invert) {
     const inverted = price !== 0 ? 1 / price : 0;
-    logger.debug(`Price resolved: ${inverted} (source: ${priceOrigin.source}, inverted from ${price})`);
+    logger.debug(
+      `Price resolved: ${inverted} (source: ${priceOrigin.source}, inverted from ${price})`
+    );
     return inverted;
   } else {
     logger.debug(`Price resolved: ${price} (source: ${priceOrigin.source})`);

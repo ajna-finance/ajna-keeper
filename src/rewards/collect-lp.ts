@@ -58,7 +58,7 @@ import { normalizeAddress } from '../discovery/targets';
 // query, so late-indexed events that land just under the previous cursor
 // boundary are still re-seen. Any event already processed is filtered out
 // by the seen-id set. Fits typical Goldsky lag (~5–30s); operators on slower
-// chains can raise via `KeeperConfig.lpRewardLookbackSeconds`.
+// chains can raise via `KeeperConfig.rewards.lpLookbackSeconds`.
 export const LP_REWARD_LOOKBACK_SECONDS_DEFAULT = 60;
 
 // Advisory threshold for the dedupe set. Memory is hard-bounded by
@@ -80,6 +80,19 @@ const QUARANTINE_ALARM_THRESHOLD = 5;
 // if a future BucketTake crosses the threshold. Reset to 0 on any cycle
 // that actually redeems anything.
 const MAX_CONSECUTIVE_BELOW_THRESHOLD_ATTEMPTS = 20;
+
+const STALE_LP_REDEMPTION_ERROR_MARKERS = [
+  'InvalidAmount',
+  'BucketBankruptcy',
+  'NoClaim',
+  'LPAmountTooLow',
+];
+
+function isStaleLpRedemptionError(message: string): boolean {
+  return STALE_LP_REDEMPTION_ERROR_MARKERS.some((marker) =>
+    message.includes(marker)
+  );
+}
 
 /**
  * Kick off `signer.getAddress()` at construction time and attach a no-op
@@ -136,21 +149,21 @@ export class LpIngester {
   constructor(
     private signer: Signer,
     private subgraph: SubgraphReader,
-    config: Pick<KeeperConfig, 'lpRewardLookbackSeconds'>
+    config: Pick<KeeperConfig, 'rewards'>
   ) {
     this.signerAddressPromise = resolveSignerAddressWithLoggingCatch(
       this.signer,
       'LP ingester'
     );
 
-    // Defense-in-depth beyond `load.ts` validation: if `lpRewardLookbackSeconds`
-    // somehow arrives non-finite (e.g. a caller that bypassed the schema
+    // Defense-in-depth beyond `load.ts` validation: if
+    // `rewards.lpLookbackSeconds` somehow arrives non-finite (e.g. a caller
+    // that bypassed the schema
     // validator), fall back to the default rather than letting NaN/Infinity
     // propagate into BigNumber arithmetic and silently break cursor math.
-    this.lookbackSeconds = isValidLookbackSeconds(
-      config.lpRewardLookbackSeconds
-    )
-      ? config.lpRewardLookbackSeconds
+    const configuredLookbackSeconds = config.rewards?.lpLookbackSeconds;
+    this.lookbackSeconds = isValidLookbackSeconds(configuredLookbackSeconds)
+      ? configuredLookbackSeconds
       : LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
   }
 
@@ -387,7 +400,7 @@ export class LpRedeemer {
     public readonly pool: FungiblePool,
     private signer: Signer,
     private settings: CollectLpRewardSettings,
-    private config: Pick<KeeperConfig, 'dryRun'>,
+    private config: Pick<KeeperConfig, 'runtime'>,
     private exchangeTracker: RewardActionTracker
   ) {
     this.signerAddressPromise = resolveSignerAddressWithLoggingCatch(
@@ -446,8 +459,7 @@ export class LpRedeemer {
             logger.warn(
               `Bucket ${bucketIndex} in pool ${this.pool.name} stayed below minAmount thresholds for ${attempts} consecutive cycles; dropping lpMap entry. A future BucketTake will re-credit if the bucket later clears the threshold.`
             );
-            this.lpMap.delete(bucketIndex);
-            this.belowThresholdAttempts.delete(bucketIndex);
+            this.dropRewardEntry(bucketIndex);
           } else {
             this.belowThresholdAttempts.set(bucketIndex, attempts);
           }
@@ -460,6 +472,13 @@ export class LpRedeemer {
         const errorMessage = getErrorMessage(error);
         if (errorMessage.includes('AuctionNotCleared')) {
           throw error;
+        }
+        if (isStaleLpRedemptionError(errorMessage)) {
+          logger.warn(
+            `Dropping stale LP reward entry after redemption amount was rejected. pool: ${this.pool.name}, bucketIndex: ${bucketIndex}`
+          );
+          this.dropRewardEntry(bucketIndex);
+          continue;
         }
         logger.error(
           `Failed to collect LP reward from bucket; continuing with remaining buckets. pool: ${this.pool.name}, bucketIndex: ${bucketIndex}`,
@@ -485,14 +504,28 @@ export class LpRedeemer {
     } = this.settings;
     const signerAddress = await this.signerAddressPromise;
     const bucket = this.pool.getBucketByIndex(bucketIndex);
-    let { deposit, collateral } = await bucket.getStatus();
-    const { lpBalance, depositRedeemable, collateralRedeemable } =
-      await bucket.getPosition(signerAddress);
+    let {
+      deposit,
+      collateral,
+      lpBalance,
+      depositRedeemable,
+      collateralRedeemable,
+    } = await this.readBucketState(bucket, signerAddress);
     if (lpBalance.lt(rewardLp)) rewardLp = lpBalance;
     // Tracked reward must be stale (already redeemed or never minted) — drop
     // the entry so subsequent cycles don't re-query this bucket.
     if (rewardLp.eq(constants.Zero)) {
-      this.lpMap.delete(bucketIndex);
+      this.dropRewardEntry(bucketIndex);
+      return constants.Zero;
+    }
+    // A replayed historical reward can leave residual LP accounting with no
+    // currently redeemable assets. Drop it now instead of retrying a bucket
+    // that cannot produce quote or collateral for this signer.
+    if (
+      depositRedeemable.eq(constants.Zero) &&
+      collateralRedeemable.eq(constants.Zero)
+    ) {
+      this.dropRewardEntry(bucketIndex);
       return constants.Zero;
     }
     let reedemed = constants.Zero;
@@ -508,14 +541,15 @@ export class LpRedeemer {
             rewardActionCollateral
           )
         );
-        ({ deposit, collateral } = await bucket.getStatus());
+        ({ deposit, collateral, depositRedeemable, collateralRedeemable } =
+          await this.readBucketState(bucket, signerAddress));
       }
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
         return reedemed;
       }
       const remainingQuote = await bucket.lpToQuoteTokens(remainingLp);
-      const quoteToWithdraw = min(remainingQuote, deposit);
+      const quoteToWithdraw = min(remainingQuote, depositRedeemable);
       if (quoteToWithdraw.gt(decimaledToWei(minAmountQuote))) {
         reedemed = reedemed.add(
           await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)
@@ -527,14 +561,18 @@ export class LpRedeemer {
         reedemed = reedemed.add(
           await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)
         );
-        ({ deposit, collateral } = await bucket.getStatus());
+        ({ deposit, collateral, depositRedeemable, collateralRedeemable } =
+          await this.readBucketState(bucket, signerAddress));
       }
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
         return reedemed;
       }
       const remainingCollateral = await bucket.lpToCollateral(remainingLp);
-      const collateralToWithdraw = min(remainingCollateral, collateral);
+      const collateralToWithdraw = min(
+        remainingCollateral,
+        collateralRedeemable
+      );
       if (collateralToWithdraw.gt(decimaledToWei(minAmountCollateral))) {
         reedemed = reedemed.add(
           await this.redeemCollateral(
@@ -550,12 +588,20 @@ export class LpRedeemer {
     return reedemed;
   }
 
+  private async readBucketState(bucket: FungibleBucket, signerAddress: string) {
+    const [status, position] = await Promise.all([
+      bucket.getStatus(),
+      bucket.getPosition(signerAddress),
+    ]);
+    return { ...status, ...position };
+  }
+
   private async redeemQuote(
     bucket: FungibleBucket,
     quoteToWithdraw: BigNumber,
     rewardActionQuote?: RewardAction
   ): Promise<BigNumber> {
-    if (this.config.dryRun) {
+    if (this.config.runtime.dryRun) {
       logger.info(
         `DryRun - Would collect LP reward as ${quoteToWithdraw.toNumber()} quote. pool: ${this.pool.name}`
       );
@@ -595,6 +641,9 @@ export class LpRedeemer {
         );
         throw error;
       }
+      if (isStaleLpRedemptionError(errorMessage)) {
+        throw error;
+      }
       logger.error(
         `Failed to collect LP reward as quote. pool: ${this.pool.name}`,
         error
@@ -626,7 +675,7 @@ export class LpRedeemer {
     collateralToWithdraw: BigNumber,
     rewardActionCollateral?: RewardAction
   ): Promise<BigNumber> {
-    if (this.config.dryRun) {
+    if (this.config.runtime.dryRun) {
       logger.info(
         `DryRun - Would collect LP reward as ${collateralToWithdraw.toNumber()} collateral. pool: ${this.pool.name}`
       );
@@ -671,6 +720,9 @@ export class LpRedeemer {
         );
         throw error;
       }
+      if (isStaleLpRedemptionError(errorMessage)) {
+        throw error;
+      }
       logger.error(
         `Failed to collect LP reward as collateral. pool: ${this.pool.name}`,
         error
@@ -713,10 +765,15 @@ export class LpRedeemer {
     const prevReward = this.lpMap.get(bucketIndex) ?? constants.Zero;
     const newReward = prevReward.sub(lp);
     if (newReward.lte(constants.Zero)) {
-      this.lpMap.delete(bucketIndex);
+      this.dropRewardEntry(bucketIndex);
     } else {
       this.lpMap.set(bucketIndex, newReward);
     }
+  }
+
+  private dropRewardEntry(bucketIndex: number): void {
+    this.lpMap.delete(bucketIndex);
+    this.belowThresholdAttempts.delete(bucketIndex);
   }
 }
 

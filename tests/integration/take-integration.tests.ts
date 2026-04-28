@@ -1,7 +1,7 @@
 // tests/integration/take-integration.test.ts
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { KeeperConfig, LiquiditySource, PoolConfig } from '../../src/config';
+import { LiquiditySource, PoolConfig } from '../../src/config';
 import { logger } from '../../src/logging';
 import subgraph from '../../src/subgraph';
 import { handleTakes } from '../../src/take';
@@ -41,7 +41,7 @@ describe('Take Integration Tests', () => {
 
   it('routes Uniswap V3 pools through the manual factory take context', async () => {
     const debugSpy = sinon.spy(logger, 'debug');
-    const config: Partial<KeeperConfig> = {
+    const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
       delayBetweenActions: 0,
@@ -90,7 +90,7 @@ describe('Take Integration Tests', () => {
 
   it('routes 1inch pools through the manual 1inch take path', async () => {
     const debugSpy = sinon.spy(logger, 'debug');
-    const config: Partial<KeeperConfig> = {
+    const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
       delayBetweenActions: 0,
@@ -140,7 +140,7 @@ describe('Take Integration Tests', () => {
 
   it('routes arb-only pools through the shared take candidate path', async () => {
     const debugSpy = sinon.spy(logger, 'debug');
-    const config: Partial<KeeperConfig> = {
+    const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
       delayBetweenActions: 0,
@@ -173,7 +173,7 @@ describe('Take Integration Tests', () => {
 
   it('routes mixed configs by pool source instead of globally preferring factory', async () => {
     const debugSpy = sinon.spy(logger, 'debug');
-    const config: Partial<KeeperConfig> = {
+    const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
       delayBetweenActions: 0,
@@ -228,7 +228,7 @@ describe('Take Integration Tests', () => {
 
   it('falls back to arb-only when a pool requests factory liquidity without factory contracts', async () => {
     const warnSpy = sinon.spy(logger, 'warn');
-    const config: Partial<KeeperConfig> = {
+    const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
       delayBetweenActions: 0,

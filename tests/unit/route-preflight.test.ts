@@ -9,47 +9,62 @@ describe('route deployment preflight', () => {
     sinon.restore();
   });
 
-  const baseConfig = (): KeeperConfig =>
-    ({
-      ethRpcUrl: 'http://localhost:8545',
-      logLevel: 'debug',
-      subgraphUrl: 'http://example-subgraph',
-      keeperKeystore: '/tmp/keeper.json',
-      ajna: {
-        erc20PoolFactory: '0x0000000000000000000000000000000000000001',
-        erc721PoolFactory: '0x0000000000000000000000000000000000000002',
-        poolUtils: '0x0000000000000000000000000000000000000003',
-        positionManager: '0x0000000000000000000000000000000000000004',
-        ajnaToken: '0x0000000000000000000000000000000000000005',
+  const baseConfig = (): KeeperConfig => ({
+    network: {
+      rpcUrl: 'http://localhost:8545',
+      subgraph: {
+        url: 'http://example-subgraph',
       },
+    },
+    signer: {
+      keystore: '/tmp/keeper.json',
+    },
+    runtime: {
+      logLevel: 'debug',
       delayBetweenActions: 0,
       delayBetweenRuns: 1,
+    },
+    ajna: {
+      erc20PoolFactory: '0x0000000000000000000000000000000000000001',
+      erc721PoolFactory: '0x0000000000000000000000000000000000000002',
+      poolUtils: '0x0000000000000000000000000000000000000003',
+      positionManager: '0x0000000000000000000000000000000000000004',
+      ajnaToken: '0x0000000000000000000000000000000000000005',
+    },
+    manual: {
       pools: [],
-      autoDiscover: {
+    },
+    discovery: {
+      enabled: true,
+      take: {
         enabled: true,
-        take: {
-          enabled: true,
-          validateRouteDeployments: true,
-        },
+        validateRouteDeployments: true,
       },
-      discoveredDefaults: {
+      defaults: {
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.99,
         },
       },
-      keeperTakerFactory: '0x1111111111111111111111111111111111111111',
-      takerContracts: {
+    },
+    takers: {
+      factory: '0x1111111111111111111111111111111111111111',
+      contracts: {
         UniswapV3: '0x2222222222222222222222222222222222222222',
       },
-      universalRouterOverrides: {
-        universalRouterAddress: '0x3333333333333333333333333333333333333333',
-        permit2Address: '0x4444444444444444444444444444444444444444',
-        poolFactoryAddress: '0x5555555555555555555555555555555555555555',
-        quoterV2Address: '0x6666666666666666666666666666666666666666',
-        wethAddress: '0x7777777777777777777777777777777777777777',
+    },
+    dex: {
+      uniswapV3: {
+        universalRouter: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          permit2Address: '0x4444444444444444444444444444444444444444',
+          poolFactoryAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+          wethAddress: '0x7777777777777777777777777777777777777777',
+        },
       },
-    }) as KeeperConfig;
+    },
+  });
 
   it('passes when enabled route contracts have bytecode and factory registry matches', async () => {
     const config = baseConfig();
@@ -62,7 +77,7 @@ describe('route deployment preflight', () => {
         .resolves(
           ethers.utils.defaultAbiCoder.encode(
             ['address'],
-            [config.takerContracts!.UniswapV3]
+            [config.takers!.contracts!.UniswapV3]
           )
         ),
     };
@@ -85,7 +100,7 @@ describe('route deployment preflight', () => {
         .stub()
         .callsFake(async (address: string) =>
           address.toLowerCase() ===
-          config.takerContracts!.UniswapV3.toLowerCase()
+          config.takers!.contracts!.UniswapV3.toLowerCase()
             ? '0x'
             : '0x6000'
         ),
@@ -94,7 +109,7 @@ describe('route deployment preflight', () => {
         .resolves(
           ethers.utils.defaultAbiCoder.encode(
             ['address'],
-            [config.takerContracts!.UniswapV3]
+            [config.takers!.contracts!.UniswapV3]
           )
         ),
     };
@@ -253,7 +268,7 @@ describe('route deployment preflight', () => {
           .resolves(
             ethers.utils.defaultAbiCoder.encode(
               ['address'],
-              [config.takerContracts!.UniswapV3]
+              [config.takers!.contracts!.UniswapV3]
             )
           ),
       };

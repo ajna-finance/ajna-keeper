@@ -240,7 +240,9 @@ export async function tryReactiveSettlement({
     return false;
   }
 
-  logger.info(`Bonds locked in ${pool.name}, attempting reactive settlement...`);
+  logger.info(
+    `Bonds locked in ${pool.name}, attempting reactive settlement...`
+  );
   await handler.handleCandidateAuctions(auctions);
 
   const signerAddress = await signer.getAddress();
@@ -248,7 +250,9 @@ export async function tryReactiveSettlement({
   const bondsUnlocked = locked.eq(0);
 
   if (bondsUnlocked) {
-    logger.info(`Reactive settlement successful - bonds unlocked in ${pool.name}`);
+    logger.info(
+      `Reactive settlement successful - bonds unlocked in ${pool.name}`
+    );
   } else {
     logger.warn(
       `Reactive settlement completed but bonds still locked in ${pool.name}`

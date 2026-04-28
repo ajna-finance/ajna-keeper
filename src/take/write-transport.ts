@@ -48,8 +48,13 @@ async function waitForReceiptWithTimeout(params: {
     timeoutMs,
     `Transaction confirmation timeout for ${txHash}`
   ).catch((error) => {
-    if (error instanceof Error && error.message.startsWith('Transaction confirmation timeout for')) {
-      throw new Error(`Transaction confirmation timeout after ${timeoutMs}ms for ${txHash}`);
+    if (
+      error instanceof Error &&
+      error.message.startsWith('Transaction confirmation timeout for')
+    ) {
+      throw new Error(
+        `Transaction confirmation timeout after ${timeoutMs}ms for ${txHash}`
+      );
     }
     throw error;
   });
@@ -59,41 +64,16 @@ export function resolveTakeWriteTransport(
   signer: Signer,
   config?: TakeWriteTransportConfig
 ): TakeWriteTransport {
-  return config?.takeWriteTransport ?? createPublicRpcTakeWriteTransport(signer);
+  return (
+    config?.takeWriteTransport ?? createPublicRpcTakeWriteTransport(signer)
+  );
 }
 
 export function resolveTakeWriteConfig(
-  config: Pick<KeeperConfig, 'takeWrite' | 'takeWriteRpcUrl'>
+  config: Pick<KeeperConfig, 'writes'>
 ): TakeWriteConfig | undefined {
-  const hasTakeWriteRpcUrl =
-    Object.prototype.hasOwnProperty.call(config, 'takeWriteRpcUrl') &&
-    (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl !== undefined;
-  const shorthandRpcUrl = hasTakeWriteRpcUrl
-    ? (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl
-    : undefined;
-
-  if (config.takeWrite && hasTakeWriteRpcUrl) {
-    throw new Error(
-      'Configure only one of takeWrite or takeWriteRpcUrl, not both'
-    );
-  }
-
-  if (config.takeWrite) {
-    return config.takeWrite;
-  }
-
-  if (hasTakeWriteRpcUrl) {
-    if (
-      typeof shorthandRpcUrl !== 'string' ||
-      shorthandRpcUrl.trim().length === 0
-    ) {
-      throw new Error('takeWriteRpcUrl cannot be blank');
-    }
-
-    return {
-      mode: TakeWriteTransportMode.PRIVATE_RPC,
-      rpcUrl: shorthandRpcUrl.trim(),
-    };
+  if (config.writes?.take) {
+    return config.writes.take;
   }
 
   return undefined;
@@ -101,7 +81,7 @@ export function resolveTakeWriteConfig(
 
 export async function createTakeWriteTransport(params: {
   signer: Wallet;
-  config: Pick<KeeperConfig, 'takeWrite' | 'takeWriteRpcUrl'>;
+  config: Pick<KeeperConfig, 'writes'>;
   expectedChainId: number;
 }): Promise<TakeWriteTransport> {
   const normalizedConfig = resolveTakeWriteConfig(params.config);
@@ -121,9 +101,7 @@ export async function createTakeWriteTransport(params: {
 
     case TakeWriteTransportMode.PRIVATE_RPC:
       if (!normalizedConfig.rpcUrl) {
-        throw new Error(
-          'takeWrite.mode=private_rpc requires takeWrite.rpcUrl'
-        );
+        throw new Error('takeWrite.mode=private_rpc requires takeWrite.rpcUrl');
       }
       return await createPrivateRpcTakeWriteTransport({
         signer: params.signer,
@@ -170,9 +148,9 @@ function resolveExplicitNonce(
 function getAcceptedSubmissionNonceFloorExpiryMs(
   receiptTimeoutMs: number = DEFAULT_TAKE_RECEIPT_TIMEOUT_MS
 ): number {
-  return Date.now() + Math.max(
-    receiptTimeoutMs,
-    DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_TTL_MS
+  return (
+    Date.now() +
+    Math.max(receiptTimeoutMs, DEFAULT_ACCEPTED_PRIVATE_RPC_NONCE_FLOOR_TTL_MS)
   );
 }
 
@@ -337,11 +315,13 @@ async function createRelayTakeWriteTransport(params: {
       }
 
       const nonce = ethers.BigNumber.from(populatedTx.nonce).toNumber();
-      const relayMethod =
-        params.relay.sendMethod ?? DEFAULT_RELAY_SEND_METHOD;
+      const relayMethod = params.relay.sendMethod ?? DEFAULT_RELAY_SEND_METHOD;
       const relaySupportsBlockExpiry =
         relayMethodSupportsBlockExpiry(relayMethod);
-      if (!relaySupportsBlockExpiry && params.relay.maxBlockNumberOffset !== undefined) {
+      if (
+        !relaySupportsBlockExpiry &&
+        params.relay.maxBlockNumberOffset !== undefined
+      ) {
         logger.warn(
           `Relay sendMethod=${relayMethod} does not support maxBlockNumberOffset; applying only a local durable nonce expiry`
         );
@@ -604,8 +584,13 @@ function relayErrorResponseMayHideAcceptedTransaction(error: unknown): boolean {
   return relayResponseMayHideAcceptedTransaction(error.response.data);
 }
 
-function relayResponseMayHideAcceptedTransaction(responseData: unknown): boolean {
-  if (!hasRelayResultPayload(responseData) || hasExplicitRelayError(responseData)) {
+function relayResponseMayHideAcceptedTransaction(
+  responseData: unknown
+): boolean {
+  if (
+    !hasRelayResultPayload(responseData) ||
+    hasExplicitRelayError(responseData)
+  ) {
     return false;
   }
 
@@ -669,7 +654,10 @@ function normalizeValidatedRelayTxHash(
   return fallbackTxHash;
 }
 
-function extractRelayTxHash(responseData: unknown, fallbackTxHash: string): string {
+function extractRelayTxHash(
+  responseData: unknown,
+  fallbackTxHash: string
+): string {
   if (hasExplicitRelayError(responseData)) {
     throw new Error(
       `Relay submission failed: ${JSON.stringify(

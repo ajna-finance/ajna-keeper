@@ -121,7 +121,9 @@ describe('UniswapV3QuoteProvider', () => {
       };
 
       const provider = new UniswapV3QuoteProvider(mockSigner, hemiConfig);
-      expect(provider.getQuoterAddress()).to.equal('0xcBa55304013187D49d4012F4d7e4B63a04405cd5');
+      expect(provider.getQuoterAddress()).to.equal(
+        '0xcBa55304013187D49d4012F4d7e4B63a04405cd5'
+      );
     });
 
     it('should return undefined when QuoterV2 address is not configured', () => {
@@ -208,7 +210,9 @@ describe('UniswapV3QuoteProvider', () => {
 
       // Should proceed to contract call (would fail without mocking, but validates config)
       expect(provider.isAvailable()).to.be.true;
-      expect(provider.getQuoterAddress()).to.equal('0xcBa55304013187D49d4012F4d7e4B63a04405cd5');
+      expect(provider.getQuoterAddress()).to.equal(
+        '0xcBa55304013187D49d4012F4d7e4B63a04405cd5'
+      );
     });
   });
 
@@ -234,7 +238,7 @@ describe('UniswapV3QuoteProvider', () => {
       },
     ];
 
-    chainConfigs.forEach(chain => {
+    chainConfigs.forEach((chain) => {
       it(`should handle ${chain.name} configuration correctly`, () => {
         const config = {
           universalRouterAddress: chain.universalRouter,
@@ -245,7 +249,7 @@ describe('UniswapV3QuoteProvider', () => {
         };
 
         const provider = new UniswapV3QuoteProvider(mockSigner, config);
-        
+
         expect(provider.isAvailable()).to.be.true;
         expect(provider.getQuoterAddress()).to.equal(chain.quoterV2);
       });
@@ -260,8 +264,11 @@ describe('UniswapV3QuoteProvider', () => {
         // Missing quoterV2Address - chain not supported
       };
 
-      const provider = new UniswapV3QuoteProvider(mockSigner, unsupportedChainConfig as any);
-      
+      const provider = new UniswapV3QuoteProvider(
+        mockSigner,
+        unsupportedChainConfig as any
+      );
+
       expect(provider.isAvailable()).to.be.false;
       expect(provider.getQuoterAddress()).to.be.undefined;
     });
@@ -270,11 +277,11 @@ describe('UniswapV3QuoteProvider', () => {
   describe('Configuration Validation Edge Cases', () => {
     it('should validate fee tier configuration', () => {
       const configs = [
-        { feeTier: 100, valid: true },     // 0.01% - Valid Uniswap V3 fee tier
-        { feeTier: 500, valid: true },     // 0.05% - Valid Uniswap V3 fee tier
-        { feeTier: 3000, valid: true },    // 0.3% - Most common Uniswap V3 fee tier
-        { feeTier: 10000, valid: true },   // 1.0% - Valid Uniswap V3 fee tier
-        { feeTier: 0, valid: false },      // Invalid - 0 is not a valid Uniswap V3 fee tier
+        { feeTier: 100, valid: true }, // 0.01% - Valid Uniswap V3 fee tier
+        { feeTier: 500, valid: true }, // 0.05% - Valid Uniswap V3 fee tier
+        { feeTier: 3000, valid: true }, // 0.3% - Most common Uniswap V3 fee tier
+        { feeTier: 10000, valid: true }, // 1.0% - Valid Uniswap V3 fee tier
+        { feeTier: 0, valid: false }, // Invalid - 0 is not a valid Uniswap V3 fee tier
       ];
 
       const baseConfig = {
@@ -287,8 +294,11 @@ describe('UniswapV3QuoteProvider', () => {
       configs.forEach(({ feeTier, valid }) => {
         const config = { ...baseConfig, defaultFeeTier: feeTier };
         const provider = new UniswapV3QuoteProvider(mockSigner, config);
-        
-        expect(provider.isAvailable()).to.equal(valid, `Fee tier ${feeTier} should be ${valid ? 'valid' : 'invalid'}`);
+
+        expect(provider.isAvailable()).to.equal(
+          valid,
+          `Fee tier ${feeTier} should be ${valid ? 'valid' : 'invalid'}`
+        );
       });
     });
 
@@ -304,11 +314,16 @@ describe('UniswapV3QuoteProvider', () => {
         defaultSlippage: 0.5,
       };
 
-      const provider = new UniswapV3QuoteProvider(mockSigner, completeHemiConfig);
-      
+      const provider = new UniswapV3QuoteProvider(
+        mockSigner,
+        completeHemiConfig
+      );
+
       // Should work even with extra fields
       expect(provider.isAvailable()).to.be.true;
-      expect(provider.getQuoterAddress()).to.equal('0xcBa55304013187D49d4012F4d7e4B63a04405cd5');
+      expect(provider.getQuoterAddress()).to.equal(
+        '0xcBa55304013187D49d4012F4d7e4B63a04405cd5'
+      );
     });
   });
 
@@ -330,7 +345,7 @@ describe('UniswapV3QuoteProvider', () => {
       // Test with real production values
       const realProductionParams = {
         srcToken: '0x1f0d51a052aa79527fffaf3108fb4440d3f53ce6', // USD_T1
-        dstToken: '0x91e1a2966408d434cfc1c0790df4a1ce08dc73d8', // USD_T2  
+        dstToken: '0x91e1a2966408d434cfc1c0790df4a1ce08dc73d8', // USD_T2
         amount: BigNumber.from('100000000000000000'), // 0.1 token (matches minCollateral)
         feeTier: 3000,
       };
@@ -352,15 +367,18 @@ describe('UniswapV3QuoteProvider', () => {
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
       };
 
-      const provider = new UniswapV3QuoteProvider(mockSigner, mixedStrategyConfig);
+      const provider = new UniswapV3QuoteProvider(
+        mockSigner,
+        mixedStrategyConfig
+      );
 
       // Should be available for external takes
       expect(provider.isAvailable()).to.be.true;
-      
+
       // Should work alongside arbTake configuration (arbTake doesn't need QuoterV2)
       const hasExternalTakeSupport = provider.isAvailable();
       const supportsArbTake = true; // ArbTake doesn't depend on QuoterV2
-      
+
       expect(hasExternalTakeSupport).to.be.true;
       expect(supportsArbTake).to.be.true;
     });

@@ -26,14 +26,14 @@ function createCustomLogger(logLevel: string = 'debug'): Logger {
     format: () => {
       const now = new Date();
       return now.toISOString().replace('T', ' ').slice(0, 19); // Simple YYYY-MM-DD HH:MM:SS
-    }
+    },
   });
 
   // For file logging, we can use a custom format that makes the timestamp appear first
   const fileFormat = format.printf(({ level, message, timestamp }) => {
     return `${timestamp} [${level}]: ${message}`;
   });
-  
+
   return createLogger({
     level: logLevel,
     format: format.combine(
@@ -53,8 +53,8 @@ function createCustomLogger(logLevel: string = 'debug'): Logger {
         options: { mode: 0o600 },
         format: format.combine(
           timestampFormat,
-          fileFormat  // Use our custom format for files
-        )
+          fileFormat // Use our custom format for files
+        ),
       }),
       new transports.File({
         filename: `${LOGS_FOLDER}/info.log`,
@@ -62,7 +62,7 @@ function createCustomLogger(logLevel: string = 'debug'): Logger {
         format: format.combine(
           timestampFormat,
           format((info) => (info.level === 'info' ? info : false))(),
-          fileFormat  // Use our custom format for files
+          fileFormat // Use our custom format for files
         ),
         options: { mode: 0o600 },
       }),
@@ -72,7 +72,7 @@ function createCustomLogger(logLevel: string = 'debug'): Logger {
         format: format.combine(
           timestampFormat,
           format((info) => (info.level === 'error' ? info : false))(),
-          fileFormat  // Use our custom format for files
+          fileFormat // Use our custom format for files
         ),
         options: { mode: 0o600 },
       }),
@@ -82,8 +82,8 @@ function createCustomLogger(logLevel: string = 'debug'): Logger {
 
 export let logger: Logger = createCustomLogger('debug');
 
-export function setLoggerConfig(config: { logLevel?: string }) {
-  logger = createCustomLogger(config.logLevel || 'debug');
+export function setLoggerConfig(config: { runtime?: { logLevel?: string } }) {
+  logger = createCustomLogger(config.runtime?.logLevel || 'debug');
 }
 
 export function setLogsFolderPermissions() {}

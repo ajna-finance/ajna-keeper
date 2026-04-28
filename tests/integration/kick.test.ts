@@ -19,7 +19,11 @@ import {
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { makeGetLoansFromSdk, overrideGetLoans } from './subgraph-mock';
 import { expect } from 'chai';
-import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../../src/utils';
+import {
+  arrayFromAsync,
+  decimaledToWei,
+  weiToDecimaled,
+} from '../../src/utils';
 import { constants, Contract, Wallet } from 'ethers';
 import { getAllowanceOfErc20, getBalanceOfErc20 } from '../../src/erc20';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
@@ -28,10 +32,16 @@ import { clearIdleBondCache } from '../../src/rewards';
 
 const WETH_ABI = ['function deposit() payable'];
 
-async function createFundedQuoteWallet(amount: ReturnType<typeof decimaledToWei>) {
+async function createFundedQuoteWallet(
+  amount: ReturnType<typeof decimaledToWei>
+) {
   const wallet = Wallet.createRandom().connect(getProvider());
   await setBalance(wallet.address, decimaledToWei(100).toHexString());
-  const weth = new Contract(MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress, WETH_ABI, wallet);
+  const weth = new Contract(
+    MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress,
+    WETH_ABI,
+    wallet
+  );
   const tx = await weth.deposit({ value: amount });
   await tx.wait();
   return wallet;
@@ -72,7 +82,8 @@ describe('getLoansToKick', function () {
     );
     const prices = await pool.getPrices();
     expect(loan.debt.gt(constants.Zero), 'Loan should have debt').to.be.true;
-    expect(loan.collateral.gt(constants.Zero), 'Loan should have collateral').to.be.true;
+    expect(loan.collateral.gt(constants.Zero), 'Loan should have collateral').to
+      .be.true;
     expect(
       loan.thresholdPrice.lt(prices.lup),
       `TP (${weiToDecimaled(loan.thresholdPrice)}) should be below LUP (${weiToDecimaled(prices.lup)})`
@@ -137,7 +148,10 @@ describe('getLoansToKick', function () {
       MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress
     );
     // Verify kick data is populated correctly
-    expect(loansToKick[0].liquidationBond.gt(constants.Zero), 'Bond should be > 0').to.be.true;
+    expect(
+      loansToKick[0].liquidationBond.gt(constants.Zero),
+      'Bond should be > 0'
+    ).to.be.true;
     expect(loansToKick[0].limitPrice).to.be.greaterThan(0);
   });
 
@@ -285,7 +299,8 @@ describe('kick', function () {
     // Verify kicker's bond is locked (per Ajna: kicker must post bond)
     const signerAddress = await signer.getAddress();
     const { claimable, locked } = await pool.kickerInfo(signerAddress);
-    expect(locked.gt(constants.Zero), 'Kicker bond should be locked').to.be.true;
+    expect(locked.gt(constants.Zero), 'Kicker bond should be locked').to.be
+      .true;
 
     // Verify auction was created with valid state
     const liquidation = pool.getLiquidation(
@@ -293,7 +308,8 @@ describe('kick', function () {
     );
     const status = await liquidation.getStatus();
     // Auction price starts at 256 * max(HTP, NP, ReferencePrice) — should be > 0
-    expect(status.price.gt(constants.Zero), 'Auction price should be > 0').to.be.true;
+    expect(status.price.gt(constants.Zero), 'Auction price should be > 0').to.be
+      .true;
     // Collateral should still be in the auction (not yet taken)
     expect(weiToDecimaled(status.collateral)).to.equal(14);
   });
@@ -349,7 +365,8 @@ describe('kick', function () {
     // No bond should be locked
     const signerAddress = await signer.getAddress();
     const { locked } = await pool.kickerInfo(signerAddress);
-    expect(locked.eq(constants.Zero), 'No bond should be locked in dryRun').to.be.true;
+    expect(locked.eq(constants.Zero), 'No bond should be locked in dryRun').to
+      .be.true;
   });
 });
 
@@ -415,8 +432,12 @@ describe('approveBalanceForLoanToKick', () => {
     );
     expect(approved, 'approval returns true').to.be.true;
     // Balance (20) < estimatedRemaining (50), so approves single bond (10) + 1% margin = 10.1
-    expect(allowance.gte(decimaledToWei(10)), 'Allowance should be >= 10 WETH').to.be.true;
-    expect(allowance.lte(decimaledToWei(11)), 'Allowance should be <= 11 WETH (bond + margin)').to.be.true;
+    expect(allowance.gte(decimaledToWei(10)), 'Allowance should be >= 10 WETH')
+      .to.be.true;
+    expect(
+      allowance.lte(decimaledToWei(11)),
+      'Allowance should be <= 11 WETH (bond + margin)'
+    ).to.be.true;
   });
 
   it('Approves full estimated remaining + margin when balance is sufficient', async () => {
@@ -445,8 +466,10 @@ describe('approveBalanceForLoanToKick', () => {
     );
     expect(approved, 'approval returns true').to.be.true;
     // Balance (60) >= estimatedRemaining (50), so approves 50 + 1% margin = 50.5
-    expect(allowance.gte(decimaledToWei(50)), 'Allowance should be >= 50 WETH').to.be.true;
-    expect(allowance.lt(decimaledToWei(51)), 'Allowance should be < 51 WETH').to.be.true;
+    expect(allowance.gte(decimaledToWei(50)), 'Allowance should be >= 50 WETH')
+      .to.be.true;
+    expect(allowance.lt(decimaledToWei(51)), 'Allowance should be < 51 WETH').to
+      .be.true;
   });
 });
 

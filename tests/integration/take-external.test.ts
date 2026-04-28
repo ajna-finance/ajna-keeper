@@ -12,7 +12,11 @@ import { configureAjna, LiquiditySource } from '../../src/config';
 import { SECONDS_PER_DAY } from '../../src/constants';
 import { getLoansToKick, kick } from '../../src/kick';
 import { getLiquidationsToTake, takeLiquidation } from '../../src/take';
-import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../../src/utils';
+import {
+  arrayFromAsync,
+  decimaledToWei,
+  weiToDecimaled,
+} from '../../src/utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import './subgraph-mock';
 import {
@@ -110,8 +114,8 @@ describe('External Take with MockSwapRouter', function () {
     // So numerator=75e15, denominator=1e9 → output = input * 75e15 / 1e9
     const mockRouterFactory = new MockSwapRouter__factory(signer);
     const mockRouter = await mockRouterFactory.deploy(
-      utils.parseUnits('75', 15),  // 75e15
-      utils.parseUnits('1', 9)     // 1e9
+      utils.parseUnits('75', 15), // 75e15
+      utils.parseUnits('1', 9) // 1e9
     );
     await mockRouter.deployed();
     mockRouterAddress = mockRouter.address;
@@ -135,30 +139,28 @@ describe('External Take with MockSwapRouter', function () {
 
     // Stub convertSwapApiResponseToDetails to produce valid ABI data
     // pointing at the MockSwapRouter
-    sinon
-      .stub(oneInch, 'convertSwapApiResponseToDetails')
-      .callsFake(() => {
-        const latestSwapCall = axiosGetStub
-          .getCalls()
-          .reverse()
-          .find((call) => String(call.args[0]).includes('/swap'));
-        const requestedCollateralAmount =
-          latestSwapCall?.args[1]?.params?.amount ?? '14000000000';
-        const details = {
-          aggregationExecutor: mockRouterAddress, // not used by mock but must be valid address
-          swapDescription: {
-            srcToken: pool.collateralAddress,      // SOL (collateral)
-            dstToken: pool.quoteAddress,           // WETH (quote)
-            srcReceiver: mockRouterAddress,         // router receives collateral
-            dstReceiver: keeperTakerAddress,        // keeper receives quote tokens
-            amount: BigNumber.from(requestedCollateralAmount),
-            minReturnAmount: BigNumber.from('500000000000000000'), // 0.5 WETH minimum
-            flags: BigNumber.from('0'),
-          },
-          opaqueData: '0x', // empty — mock doesn't use it
-        };
-        return details as any;
-      });
+    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').callsFake(() => {
+      const latestSwapCall = axiosGetStub
+        .getCalls()
+        .reverse()
+        .find((call) => String(call.args[0]).includes('/swap'));
+      const requestedCollateralAmount =
+        latestSwapCall?.args[1]?.params?.amount ?? '14000000000';
+      const details = {
+        aggregationExecutor: mockRouterAddress, // not used by mock but must be valid address
+        swapDescription: {
+          srcToken: pool.collateralAddress, // SOL (collateral)
+          dstToken: pool.quoteAddress, // WETH (quote)
+          srcReceiver: mockRouterAddress, // router receives collateral
+          dstReceiver: keeperTakerAddress, // keeper receives quote tokens
+          amount: BigNumber.from(requestedCollateralAmount),
+          minReturnAmount: BigNumber.from('500000000000000000'), // 0.5 WETH minimum
+          flags: BigNumber.from('0'),
+        },
+        opaqueData: '0x', // empty — mock doesn't use it
+      };
+      return details as any;
+    });
 
     // Set up the loan and kick it
     await depositQuoteToken({
@@ -271,9 +273,7 @@ describe('External Take with MockSwapRouter', function () {
     ).to.be.true;
 
     // Verify: collateral should be consumed
-    const liquidationStatus = await pool
-      .getLiquidation(borrower)
-      .getStatus();
+    const liquidationStatus = await pool.getLiquidation(borrower).getStatus();
     expect(weiToDecimaled(liquidationStatus.collateral)).to.equal(0);
   });
 
@@ -372,7 +372,9 @@ describe('Real Uniswap V3 External Take', function () {
     // This prevents cryptic reverts if the fork block is updated.
     const uniV3Quoter = new Contract(
       '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6', // Uniswap V3 Quoter V1
-      ['function quoteExactInputSingle(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn, uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)'],
+      [
+        'function quoteExactInputSingle(address tokenIn, address tokenOut, uint24 fee, uint256 amountIn, uint160 sqrtPriceLimitX96) external returns (uint256 amountOut)',
+      ],
       forkProvider
     );
     try {
@@ -389,7 +391,7 @@ describe('Real Uniswap V3 External Take', function () {
     } catch (e: any) {
       throw new Error(
         `Real Uniswap V3 test requires SOL/WETH liquidity at the fork block. ` +
-        `Update the fork block in hardhat.config.ts or skip this test. Error: ${e.message}`
+          `Update the fork block in hardhat.config.ts or skip this test. Error: ${e.message}`
       );
     }
   });
@@ -432,39 +434,35 @@ describe('Real Uniswap V3 External Take', function () {
 
     // Stub the 1inch API calls (for detection phase only — the actual swap uses real Uniswap)
     const axiosStub = sinon.stub(axios, 'get');
-    axiosStub
-      .withArgs(sinon.match(/\/quote$/), sinon.match.any)
-      .callsFake(() =>
-        Promise.resolve({
-          data: { dstAmount: '1000000000000000000' },
-        })
-      );
-    axiosStub
-      .withArgs(sinon.match(/\/swap$/), sinon.match.any)
-      .callsFake(() =>
-        Promise.resolve({
-          data: { tx: { to: adapterAddress, data: '0x00', value: '0', gas: '500000' } },
-        })
-      );
+    axiosStub.withArgs(sinon.match(/\/quote$/), sinon.match.any).callsFake(() =>
+      Promise.resolve({
+        data: { dstAmount: '1000000000000000000' },
+      })
+    );
+    axiosStub.withArgs(sinon.match(/\/swap$/), sinon.match.any).callsFake(() =>
+      Promise.resolve({
+        data: {
+          tx: { to: adapterAddress, data: '0x00', value: '0', gas: '500000' },
+        },
+      })
+    );
 
     // Override the swap encoding to produce valid data for the adapter
-    sinon
-      .stub(oneInch, 'convertSwapApiResponseToDetails')
-      .callsFake(() => {
-        return {
-          aggregationExecutor: adapterAddress,
-          swapDescription: {
-            srcToken: pool.collateralAddress,
-            dstToken: pool.quoteAddress,
-            srcReceiver: adapterAddress,
-            dstReceiver: keeperTakerAddress,
-            amount: BigNumber.from('14000000000'),
-            minReturnAmount: BigNumber.from('1'),
-            flags: BigNumber.from('0'),
-          },
-          opaqueData: '0x',
-        } as any;
-      });
+    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').callsFake(() => {
+      return {
+        aggregationExecutor: adapterAddress,
+        swapDescription: {
+          srcToken: pool.collateralAddress,
+          dstToken: pool.quoteAddress,
+          srcReceiver: adapterAddress,
+          dstReceiver: keeperTakerAddress,
+          amount: BigNumber.from('14000000000'),
+          minReturnAmount: BigNumber.from('1'),
+          flags: BigNumber.from('0'),
+        },
+        opaqueData: '0x',
+      } as any;
+    });
 
     // Set up loan, kick
     await depositQuoteToken({

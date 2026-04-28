@@ -4,6 +4,7 @@ import { BigNumber, constants, utils } from 'ethers';
 import { LP_REWARD_LOOKBACK_SECONDS_DEFAULT } from '../../src/rewards/collect-lp';
 import { makeSinglePoolLpCollector } from '../helpers/rewards';
 import { TokenToCollect } from '../../src/config';
+import * as transactions from '../../src/transactions';
 
 const FAKE_POOL_ADDRESS = '0xpool';
 
@@ -47,7 +48,9 @@ function makeCollector(opts: {
     quoteAddress: '0xquote',
     collateralAddress: '0xcollat',
     collateralSymbol: 'TCOL',
-    getBucketByIndex: sinon.stub().returns(opts.bucket ?? makeFakeBucket({ lpBalance: constants.Zero })),
+    getBucketByIndex: sinon
+      .stub()
+      .returns(opts.bucket ?? makeFakeBucket({ lpBalance: constants.Zero })),
   };
   const fakeSigner: any = {
     getAddress: sinon.stub().resolves(opts.signerAddress),
@@ -78,7 +81,14 @@ function makeCollector(opts: {
       minAmountQuote: 0,
       minAmountCollateral: 0,
     },
-    { dryRun: false },
+    {
+      runtime: {
+        logLevel: 'debug',
+        delayBetweenActions: 0,
+        delayBetweenRuns: 0,
+        dryRun: false,
+      },
+    },
     fakeTracker,
     fakeSubgraph
   );
@@ -102,6 +112,42 @@ describe('LpCollector stale-entry prune', () => {
 
     expect(collector.lpMap.has(2000)).to.be.false;
   });
+
+  it('deletes stale bucket entry when Ajna rejects LP redemption with stale-claim errors', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = utils.parseUnits('1', 18);
+    const staleErrorMarkers = [
+      'InvalidAmount',
+      'BucketBankruptcy',
+      'NoClaim',
+      'LPAmountTooLow',
+    ];
+    const removeQuoteStub = sinon.stub(transactions, 'bucketRemoveQuoteToken');
+    staleErrorMarkers.forEach((marker, index) => {
+      removeQuoteStub
+        .onCall(index)
+        .rejects(new Error(`execution reverted: ${marker}`));
+    });
+
+    for (let i = 0; i < staleErrorMarkers.length; i++) {
+      const bucketIndex = 2000 + i;
+      const bucket = makeFakeBucket({
+        lpBalance: rewardLp,
+        deposit: rewardLp,
+        depositRedeemable: rewardLp,
+      });
+      const collector = makeCollector({
+        signerAddress: signer,
+        getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+        bucket,
+      });
+
+      collector.lpMap.set(bucketIndex, rewardLp);
+      await collector.collectLpRewards();
+
+      expect(collector.lpMap.has(bucketIndex)).to.be.false;
+    }
+  });
 });
 
 describe('LpCollector cursor advancement', () => {
@@ -116,14 +162,22 @@ describe('LpCollector cursor advancement', () => {
           id: 't1',
           index: 2000,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '100',
         },
         {
           id: 't2',
           index: 2001,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '2.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '300',
         },
       ],
@@ -154,7 +208,11 @@ describe('LpCollector cursor advancement', () => {
           id: 't1',
           index: 2000,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '5000',
         },
       ],
@@ -239,7 +297,11 @@ describe('LpCollector cursor advancement', () => {
       id: 't-shared',
       index: 2000,
       taker: signer,
-      lpAwarded: { lpAwardedTaker: '1.5', lpAwardedKicker: '0', kicker: '0xdef' },
+      lpAwarded: {
+        lpAwardedTaker: '1.5',
+        lpAwardedKicker: '0',
+        kicker: '0xdef',
+      },
       blockTimestamp: '100',
     };
     const getAwards = sinon.stub();
@@ -283,7 +345,11 @@ describe('LpCollector parse failure quarantine', () => {
           id: 'take-valid',
           index: 5001,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '2.5', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '2.5',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '200',
         },
       ],
@@ -365,9 +431,11 @@ describe('LpCollector parse failure quarantine', () => {
 
     // All 5 events quarantined → threshold of 5 → one aggregate WARN.
     expect(
-      warnStub.getCalls().some((call) =>
-        String(call.args[0]).includes('Quarantined 5 BucketTake event(s)')
-      )
+      warnStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('Quarantined 5 BucketTake event(s)')
+        )
     ).to.equal(true);
     expect(collector.lpMap.size).to.equal(0);
   });
@@ -396,7 +464,11 @@ describe('LpCollector null-field defense', () => {
           id: 'take-ok',
           index: 7001,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '2.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '700',
         },
       ],
@@ -455,28 +527,44 @@ describe('LpCollector null-field defense', () => {
           id: 'take-bad-index-negative',
           index: -1,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '900',
         },
         {
           id: 'take-bad-index-too-big',
           index: 999_999,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '901',
         },
         {
           id: 'take-ok-index-0',
           index: 0,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '902',
         },
         {
           id: 'take-ok-index-max',
           index: 7388,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '2.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '903',
         },
       ],
@@ -507,14 +595,22 @@ describe('LpCollector null-field defense', () => {
           id: 'take-bad-ts',
           index: 5000,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: 'not-a-number',
         },
         {
           id: 'take-ok',
           index: 5001,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '2.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '800',
         },
       ],
@@ -551,7 +647,11 @@ describe('LpCollector null-field defense', () => {
           id: 'take-ok',
           index: 6001,
           taker: signer,
-          lpAwarded: { lpAwardedTaker: '3.0', lpAwardedKicker: '0', kicker: '0xdef' },
+          lpAwarded: {
+            lpAwardedTaker: '3.0',
+            lpAwardedKicker: '0',
+            kicker: '0xdef',
+          },
           blockTimestamp: '500',
         },
       ],

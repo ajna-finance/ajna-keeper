@@ -11,6 +11,14 @@ import { TokenToCollect } from '../../src/config';
 
 const POOL_A = '0xaaa0000000000000000000000000000000000001';
 const POOL_B = '0xbbb0000000000000000000000000000000000002';
+const REDEEMER_CONFIG = {
+  runtime: {
+    logLevel: 'debug',
+    delayBetweenActions: 0,
+    delayBetweenRuns: 0,
+    dryRun: false,
+  },
+};
 
 function makeFakeBucket() {
   return {
@@ -95,7 +103,7 @@ describe('LpManager chain-wide dispatch', () => {
         minAmountQuote: 0,
         minAmountCollateral: 0,
       },
-      { dryRun: false },
+      REDEEMER_CONFIG,
       fakeTracker
     );
     const redeemerB = new LpRedeemer(
@@ -106,7 +114,7 @@ describe('LpManager chain-wide dispatch', () => {
         minAmountQuote: 0,
         minAmountCollateral: 0,
       },
-      { dryRun: false },
+      REDEEMER_CONFIG,
       fakeTracker
     );
 
@@ -178,7 +186,7 @@ describe('LpManager chain-wide dispatch', () => {
         minAmountQuote: 0,
         minAmountCollateral: 0,
       },
-      { dryRun: false },
+      REDEEMER_CONFIG,
       fakeTracker
     );
 
@@ -257,7 +265,7 @@ describe('LpManager chain-wide dispatch', () => {
           minAmountQuote: 0,
           minAmountCollateral: 0,
         },
-        { dryRun: false },
+        REDEEMER_CONFIG,
         fakeTracker
       );
       cache.set(addr, r);
@@ -293,7 +301,11 @@ describe('LpManager chain-wide dispatch', () => {
           index: 1000,
           taker: signer,
           pool: { id: POOL_A },
-          lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xk' },
+          lpAwarded: {
+            lpAwardedTaker: '1.0',
+            lpAwardedKicker: '0',
+            kicker: '0xk',
+          },
           blockTimestamp: '100',
         },
         {
@@ -301,7 +313,11 @@ describe('LpManager chain-wide dispatch', () => {
           index: 2000,
           taker: signer,
           pool: { id: POOL_B },
-          lpAwarded: { lpAwardedTaker: '2.0', lpAwardedKicker: '0', kicker: '0xk' },
+          lpAwarded: {
+            lpAwardedTaker: '2.0',
+            lpAwardedKicker: '0',
+            kicker: '0xk',
+          },
           blockTimestamp: '200',
         },
       ],
@@ -321,7 +337,7 @@ describe('LpManager chain-wide dispatch', () => {
         minAmountQuote: 0,
         minAmountCollateral: 0,
       },
-      { dryRun: false },
+      REDEEMER_CONFIG,
       fakeTracker
     );
 

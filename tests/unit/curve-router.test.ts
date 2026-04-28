@@ -9,11 +9,11 @@ describe('Curve Router Module', () => {
   let swapStub: sinon.SinonStub;
   let mockSigner: any;
   let queueTransactionStub: sinon.SinonStub;
-  
+
   beforeEach(() => {
     // Reset sinon after each test
     sinon.restore();
-    
+
     // Create basic mocks - same pattern as sushiswap-router.test.ts
     mockSigner = {
       getAddress: sinon.stub().resolves('0xTestAddress'),
@@ -29,12 +29,14 @@ describe('Curve Router Module', () => {
         wait: sinon.stub().resolves({ transactionHash: '0xTestHash' }),
       }),
     };
-    
+
     // Mock NonceTracker - same pattern as sushiswap-router.test.ts
-    queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (signer, txFunc) => {
-      return await txFunc(10);
-    });
-    
+    queueTransactionStub = sinon
+      .stub(NonceTracker, 'queueTransaction')
+      .callsFake(async (signer, txFunc) => {
+        return await txFunc(10);
+      });
+
     // Stub the actual exported function
     swapStub = sinon.stub(curveRouterModule, 'swapWithCurveRouter');
   });
@@ -46,8 +48,11 @@ describe('Curve Router Module', () => {
   describe('swapWithCurveRouter', () => {
     it('should execute successful swap with STABLE pool type', async () => {
       // Return success to simulate a successful call
-      swapStub.resolves({ success: true, receipt: { transactionHash: '0xSuccess' } });
-      
+      swapStub.resolves({
+        success: true,
+        receipt: { transactionHash: '0xSuccess' },
+      });
+
       // Call the actual function with STABLE pool parameters
       const result = await curveRouterModule.swapWithCurveRouter(
         mockSigner,
@@ -59,7 +64,7 @@ describe('Curve Router Module', () => {
         CurvePoolType.STABLE,
         1.0 // defaultSlippage
       );
-      
+
       // Verify the function was called
       expect(swapStub.calledOnce).to.be.true;
       expect(result.success).to.be.true;
@@ -68,8 +73,11 @@ describe('Curve Router Module', () => {
 
     it('should execute successful swap with CRYPTO pool type', async () => {
       // Return success to simulate a successful call
-      swapStub.resolves({ success: true, receipt: { transactionHash: '0xCryptoSuccess' } });
-      
+      swapStub.resolves({
+        success: true,
+        receipt: { transactionHash: '0xCryptoSuccess' },
+      });
+
       // Call the actual function with CRYPTO pool parameters
       const result = await curveRouterModule.swapWithCurveRouter(
         mockSigner,
@@ -81,7 +89,7 @@ describe('Curve Router Module', () => {
         CurvePoolType.CRYPTO,
         2.0 // defaultSlippage
       );
-      
+
       // Verify the function was called
       expect(swapStub.calledOnce).to.be.true;
       expect(result.success).to.be.true;
@@ -90,8 +98,11 @@ describe('Curve Router Module', () => {
 
     it('should handle missing pool address validation', async () => {
       // Simulate a failed swap due to missing pool address
-      swapStub.resolves({ success: false, error: 'Curve pool address must be provided via configuration' });
-      
+      swapStub.resolves({
+        success: false,
+        error: 'Curve pool address must be provided via configuration',
+      });
+
       const result = await curveRouterModule.swapWithCurveRouter(
         mockSigner,
         '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
@@ -102,15 +113,20 @@ describe('Curve Router Module', () => {
         CurvePoolType.STABLE,
         1.0
       );
-      
+
       expect(result.success).to.be.false;
-      expect(result.error).to.equal('Curve pool address must be provided via configuration');
+      expect(result.error).to.equal(
+        'Curve pool address must be provided via configuration'
+      );
     });
 
     it('should handle missing pool type validation', async () => {
       // Simulate a failed swap due to missing pool type
-      swapStub.resolves({ success: false, error: 'Pool type must be provided via configuration' });
-      
+      swapStub.resolves({
+        success: false,
+        error: 'Pool type must be provided via configuration',
+      });
+
       const result = await curveRouterModule.swapWithCurveRouter(
         mockSigner,
         '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
@@ -121,15 +137,20 @@ describe('Curve Router Module', () => {
         undefined as any, // Missing pool type
         1.0
       );
-      
+
       expect(result.success).to.be.false;
-      expect(result.error).to.equal('Pool type must be provided via configuration');
+      expect(result.error).to.equal(
+        'Pool type must be provided via configuration'
+      );
     });
 
     it('should handle swap failure', async () => {
       // Simulate a failed swap
-      swapStub.resolves({ success: false, error: 'Token indices not found in pool. Cannot proceed with swap.' });
-      
+      swapStub.resolves({
+        success: false,
+        error: 'Token indices not found in pool. Cannot proceed with swap.',
+      });
+
       const result = await curveRouterModule.swapWithCurveRouter(
         mockSigner,
         '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
@@ -140,15 +161,17 @@ describe('Curve Router Module', () => {
         CurvePoolType.STABLE,
         1.0
       );
-      
+
       expect(result.success).to.be.false;
-      expect(result.error).to.equal('Token indices not found in pool. Cannot proceed with swap.');
+      expect(result.error).to.equal(
+        'Token indices not found in pool. Cannot proceed with swap.'
+      );
     });
 
     it('should handle exceptions during swap', async () => {
       // Simulate an exception
       swapStub.rejects(new Error('Transaction reverted'));
-      
+
       try {
         await curveRouterModule.swapWithCurveRouter(
           mockSigner,
@@ -172,15 +195,18 @@ describe('Curve Router Module', () => {
     it('should use NonceTracker.queueTransaction for transactions', async () => {
       // Restore the original method before this test
       swapStub.restore();
-          
+
       // Test the interaction with NonceTracker
       const dummyTxFunction = async (nonce: number) => {
         return { success: true, transactionHash: '0xTest' };
       };
-      
+
       // Call NonceTracker directly
-      const result = await NonceTracker.queueTransaction(mockSigner, dummyTxFunction);
-      
+      const result = await NonceTracker.queueTransaction(
+        mockSigner,
+        dummyTxFunction
+      );
+
       // Verify it was called and returned expected result
       expect(queueTransactionStub.calledOnce).to.be.true;
       expect(result.success).to.be.true;

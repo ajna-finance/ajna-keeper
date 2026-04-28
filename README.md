@@ -46,12 +46,13 @@ npm install --global yarn
 yarn --frozen-lockfile
 ```
 
-Note: If you encounter dependency conflicts or version mismatches, try:
+Note: If you encounter dependency conflicts or version mismatches, first reinstall from the committed lockfile:
 
 ```bash
-rm yarn.lock
-yarn install
+yarn install --frozen-lockfile
 ```
+
+Only regenerate `yarn.lock` intentionally when you are updating dependencies.
 
 Compile to generate types using TypeChain:
 
@@ -126,6 +127,10 @@ ONEINCH_API="https://api.1inch.dev/swap/v6.0"
 ONEINCH_API_KEY="????????????????????????????????????"
 ```
 
+Optional read/write routing and non-interactive unlock variables are listed in `.env.example`. Leave them unset unless you are configuring read failover, subgraph failover, private take submission, relay submission, or password-file based keystore unlock.
+
+Read RPC failover is configured with `network.readRpcUrls`; when set, it is the complete dedicated read endpoint list, so include `network.rpcUrl` there too if you want the primary RPC in the read rotation. Subgraph failover is configured separately with `network.subgraph.fallbackUrls`.
+
 ### Create a new config file
 
 Create a new `config.ts` file in the `ajna-keeper/` folder and copy the contents from `examples/example-config.ts` or `examples/example-base-config.ts`.
@@ -138,8 +143,8 @@ In `config.ts` for the section `ajna`, you will need to provide addresses for al
 
 ### Configure multicall
 
-In `config.ts` you may need to provide an address for `multicallAddress` for your specific chain. These addresses can be found here https://www.multicall3.com/deployments
-If you add `multicallAddress`, then you will also need to add `multicallBlock` which is the block that multicall was added.
+In `config.ts` you may need to provide `network.multicall.address` for your specific chain. These addresses can be found here https://www.multicall3.com/deployments
+If you add `network.multicall.address`, then you will also need to add `network.multicall.block` which is the block that multicall was added.
 
 ### Subgraph Setup
 
@@ -173,7 +178,7 @@ Keeper uses ethers [Encrypted JSON Wallet](https://docs.ethers.org/v5/api/signer
 
 The easiest way to create an encrypted JSON wallet is to use the create-keystore script provided in keeper:
 Run the script with `yarn create-keystore`. Then follow the onscreen prompts.
-Ensure that the generated wallet is saved in the directory specified by the `keeperKeystore` property in `config.ts`.
+Ensure that the generated wallet is saved in the directory specified by the `signer.keystore` property in `config.ts`.
 
 #### Supplying the keystore password
 
@@ -190,9 +195,10 @@ Setting both `KEYSTORE_PASSWORD_FILE` and `KEYSTORE_PASSWORD` is refused to avoi
 ```ini
 # /etc/systemd/system/ajna-keeper.service
 [Service]
+WorkingDirectory=/opt/ajna-keeper
 LoadCredential=keystore-password:/etc/ajna-keeper/keystore-password
 Environment=KEYSTORE_PASSWORD_FILE=%d/keystore-password
-ExecStart=/usr/bin/node /opt/ajna-keeper/dist/run.js /etc/ajna-keeper/config.ts
+ExecStart=/usr/bin/env yarn start --config /etc/ajna-keeper/config.ts
 ```
 
 `%d` expands to `/run/credentials/ajna-keeper.service/` at runtime; the credential file is owned by root and only readable by the service user, and is unmounted when the service stops.
@@ -228,6 +234,7 @@ make help           # Show all available commands
 make setup          # First-time setup
 make env-check      # Verify .env configuration
 make test-unit      # Run unit tests
+make test-integration  # Run Hardhat integration tests
 make test-prices    # Test price APIs
 make keystore       # Create new keystore
 make format         # Format code
@@ -250,7 +257,7 @@ Starts a liquidation when a loan's threshold price exceeds the lowest utilized p
 
 ### Take
 
-When auction price drops below a configured external-price threshold, the keeper can execute an external take by swapping collateral for quote token and repaying debt. Current external take paths support the manual 1inch atomic `keeperTaker` flow plus factory-based Uniswap V3, SushiSwap, and Curve integrations.
+When auction price drops below a configured external-price threshold, the keeper can execute an external take by swapping collateral for quote token and repaying debt. Current external take paths support the 1inch atomic taker flow plus factory-based Uniswap V3, SushiSwap, and Curve integrations.
 
 External takes usually require contract deployment. Take submission can also be routed through an optional dedicated private/write transport. See the contract deployment section below.
 
@@ -272,28 +279,31 @@ Discovery is subgraph-based: each cycle the keeper runs ONE chain-wide subgraph 
 
 **Enabling LP collection.** Two modes:
 
-1. **Chain-wide** (recommended): set `defaultLpReward` at the top level of `KeeperConfig`. Every pool the signer has activity in uses these defaults. Per-pool overrides via `pools[i].collectLpReward` are merged on top.
-2. **Legacy per-pool**: set `collectLpReward` on each pool in `pools[]` without a `defaultLpReward`. Only those pools are covered; auto-discovered pools are ignored.
+1. **Chain-wide** (recommended): set `rewards.defaultLpReward` in `KeeperConfig`. Every pool the signer has activity in uses these defaults. Per-pool overrides via `manual.pools[i].collectLpReward` are merged on top.
+2. **Legacy per-pool**: set `collectLpReward` on each pool in `manual.pools[]` without `rewards.defaultLpReward`. Only those pools are covered; auto-discovered pools are ignored.
 
 Example (chain-wide with one override):
 
 ```ts
 const config: KeeperConfig = {
   // ...
-  defaultLpReward: {
-    redeemFirst: TokenToCollect.QUOTE,
-    minAmountQuote: 10,
-    minAmountCollateral: 0,
-    rewardActionQuote: {
-      action: RewardActionLabel.EXCHANGE,
-      dexProvider: PostAuctionDex.UNISWAP_V3,
-      address: '0xquoteTokenAddress',
-      targetToken: 'weth',
-      slippage: 2,
-      fee: 3000,
+  rewards: {
+    defaultLpReward: {
+      redeemFirst: TokenToCollect.QUOTE,
+      minAmountQuote: 10,
+      minAmountCollateral: 0,
+      rewardActionQuote: {
+        action: RewardActionLabel.EXCHANGE,
+        dexProvider: PostAuctionDex.UNISWAP_V3,
+        address: '0xquoteTokenAddress',
+        targetToken: 'weth',
+        slippage: 2,
+        fee: 3000,
+      },
     },
   },
-  pools: [
+  manual: {
+    pools: [
     { address: '0xabc…', price: { … } }, // uses defaults
     {
       address: '0xdef…',
@@ -301,6 +311,7 @@ const config: KeeperConfig = {
       collectLpReward: { minAmountQuote: 100 }, // override: higher threshold for this pool
     },
   ],
+  },
 };
 ```
 
@@ -313,8 +324,8 @@ The conflict is with a signer that _also_ deposits quote as a lender. After a re
 **Operational notes:**
 
 - **Cold-start replay cost.** The first ingest after a restart queries from `blockTimestamp=0` and paginates up to 100 pages × 1000 events = 100,000 `BucketTake`s in the worst case (typical keeper signers have much less history). Subsequent cycles only query the small delta past the last observed timestamp and are fast. The first cycle also pays 2–3 RPC reads per unique pool the signer has activity in (one-time pool-handle construction + deployment validation, cached thereafter).
-- **Subgraph-down at startup.** If the subgraph is unreachable on the first cycle, the cursor stays at `0` and the next cycle re-runs the full historical query. The keeper does not persist cursor state to disk — reachability of the subgraph on first use matters. If you run against a flaky endpoint, configure `subgraphFallbackUrls` in `KeeperConfig`.
-- **Indexing-lag tolerance.** Each query is shifted back by `lpRewardLookbackSeconds` (default 60s, max 86 400s) so late-indexed events that land just under the previous cursor are still re-seen. Dedupe is handled in-memory by an event-id set scoped to that window. Chains where Goldsky lag regularly exceeds 60s should raise this.
+- **Subgraph-down at startup.** If the subgraph is unreachable on the first cycle, the cursor stays at `0` and the next cycle re-runs the full historical query. The keeper does not persist cursor state to disk — reachability of the subgraph on first use matters. If you run against a flaky endpoint, configure `network.subgraph.fallbackUrls` in `KeeperConfig`.
+- **Indexing-lag tolerance.** Each query is shifted back by `rewards.lpLookbackSeconds` (default 60s, max 86 400s) so late-indexed events that land just under the previous cursor are still re-seen. Dedupe is handled in-memory by an event-id set scoped to that window. Chains where Goldsky lag regularly exceeds 60s should raise this.
 - **Subgraph-ahead-of-RPC race.** If the read RPC is lagging the subgraph at the moment a newly-ingested BucketTake is swept (uncommon — subgraph usually trails chain head, not leads it — but possible on load-balanced RPC pools that temporarily route to a stale node), the keeper can see `lpBalance=0` on-chain for a bucket the subgraph has already credited. The lpMap entry is then dropped and the event's id stays in the dedupe set, so the keeper won't re-discover it in the current process. **The LP itself is safe on-chain** — Ajna LP doesn't expire and the signer's claim persists. The keeper will redeem it on either (a) a subsequent BucketTake on the same bucket (the fresh credit triggers a sweep that reads the accumulated on-chain balance) or (b) the next process restart (cursor resets to `0` and replay re-credits everything). No fund loss; worst case is a deferred redemption.
 
 ### Settlement
@@ -346,7 +357,7 @@ Settlement integrates seamlessly with other keeper operations - when bond collec
 
 ### Chain-Wide Auto-Discovery
 
-V1 autodiscovery can discover chain-wide `take` and `settlement` opportunities without listing every pool in `pools[]`.
+V1 autodiscovery can discover chain-wide `take` and `settlement` opportunities without listing every pool in `manual.pools[]`.
 
 - `take` and `settlement` have independent discovery policies and per-run limits.
 - Manual per-pool `take` and `settlement` config still wins over discovery defaults for the same pool.
@@ -407,37 +418,40 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 #### Configuring for 1inch
 
-To enable 1inch swaps, set up environment variables and add the 1inch router fields to config.ts. `oneInchDefaultSlippage` controls the external-take min-out slippage percentage for 1inch routes and defaults to `1.0` when unset. For discovered external takes, keep `delayBetweenActions` low and use `autoDiscover.take.oneInchQuoteTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound API latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. Long `delayBetweenActions` values are only appropriate for slow manual 1inch operation.
+To enable 1inch swaps, set up environment variables and add the 1inch router fields to `dex.oneInch` in `config.ts`. `dex.oneInch.defaultSlippage` controls the external-take min-out slippage percentage for 1inch routes and defaults to `1.0` when unset. For discovered external takes, keep `runtime.delayBetweenActions` low and use `discovery.take.oneInchQuoteTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound API latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. Long `runtime.delayBetweenActions` values are only appropriate for slow manual 1inch operation.
 
-Atomic 1inch takes validate the decoded swap payload before submission. The payload must swap the pool collateral token to the pool quote token, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured 1inch router or the decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `oneInchAggregationExecutorAllowlist` per chain to hard-restrict executors. If 1inch starts returning required non-zero flags for a target pair, use factory routing for that pool or open an issue before loosening this guard.
+Atomic 1inch takes validate the decoded swap payload before submission. The payload must swap the pool collateral token to the pool quote token, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured 1inch router or the decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `dex.oneInch.aggregationExecutorAllowlist` per chain to hard-restrict executors. If 1inch starts returning required non-zero flags for a target pair, use factory routing for that pool or open an issue before loosening this guard.
 
 If you want take transactions to go through a dedicated private/write path, set
-`takeWrite` in your keeper config:
+`writes.take` in your keeper config:
 
 ```ts
-takeWrite: {
-  mode: 'private_rpc',
-  rpcUrl: 'https://your-private-rpc',
-}
+writes: {
+  take: {
+    mode: 'private_rpc',
+    rpcUrl: 'https://your-private-rpc',
+  },
+},
 ```
 
 Or for JSON-RPC relay/private orderflow endpoints:
 
 ```ts
-takeWrite: {
-  mode: 'relay',
-  relay: {
-    url: 'https://your-relay-endpoint',
-    sendMethod: 'eth_sendPrivateTransaction',
-    maxBlockNumberOffset: 25,
-    receiptTimeoutMs: 120000,
+writes: {
+  take: {
+    mode: 'relay',
+    relay: {
+      url: 'https://your-relay-endpoint',
+      sendMethod: 'eth_sendPrivateTransaction',
+      maxBlockNumberOffset: 25,
+      receiptTimeoutMs: 120000,
+    },
   },
-}
+},
 ```
 
-`takeWriteRpcUrl` remains supported as a shorthand for the same `private_rpc`
-mode. This write path is currently scoped to `take` only; the rest of the
-keeper still uses `ethRpcUrl` for transaction submission. Relay mode persists
+This write path is currently scoped to `take` only; the rest of the keeper
+still uses `network.rpcUrl` for transaction submission. Relay mode persists
 accepted take nonces under `local/take-write-relay-state.json` so a process
 restart does not accidentally reuse a private nonce before the public provider
 can observe it.
@@ -473,17 +487,17 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 
 **For External Takes (Time-Sensitive):**
 
-- Uses `universalRouterOverrides.defaultFeeTier` or `sushiswapRouterOverrides.defaultFeeTier` as the preferred route
+- Uses `dex.uniswapV3.universalRouter.defaultFeeTier` or `dex.sushiswap.defaultFeeTier` as the preferred route
 - Auto-probes standard Uniswap V3 and SushiSwap fee tiers when `candidateFeeTiers` is unset
 - Applies the selected quote route to execution, including the selected fee tier
 - Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
 - Quotes budget-approved factory routes with bounded parallelism, then ranks them deterministically by expected net profit
 - Treats `allowedLiquiditySources`, when set, as the complete factory route allowlist. Include the default source in that list if it should remain eligible.
-- Can compare the best factory route against 1inch when `autoDiscover.take.allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`.
+- Can compare the best factory route against 1inch when `discovery.take.allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`.
 - In hybrid mode, `externalTakeProbeTimeoutMs` bounds each 1inch/factory path probe so one slow route cannot block another viable route. When unset, it defaults to `oneInchQuoteTimeoutMs + 1000ms`, capped at 5000ms. Explicit values from 1ms to 10000ms are allowed for slow infrastructure, but values above 5000ms directly trade hot-auction latency for provider tolerance.
-- Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` to probe factory first and skip 1inch when the factory path is approved without subsidy; subsidized factory approvals keep probing so a self-funding 1inch path can still win. The old `'cost_aware'` name is accepted as a deprecated alias for `'factory_first'`.
+- Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` to probe factory first and skip 1inch when the factory path is approved without subsidy; subsidized factory approvals keep probing so a self-funding 1inch path can still win.
 - `marketPriceFactor` remains the operator-facing early-take threshold. Use values below 1 for normal operation, for example `0.99` means take when auction price is below roughly 99% of market. Config validation rejects non-positive values and values above 2; this catches common typos like `99` instead of `0.99`.
-- `allowSubsidy` defaults to `false`. In that mode, an external take must clear the route-derived non-subsidized floor before execution. Set `autoDiscover.take.minExpectedProfitQuote: 0` if you want quote-normalized gas coverage with no extra profit floor.
+- `allowSubsidy` defaults to `false`. In that mode, an external take must clear the route-derived non-subsidized floor before execution. Set `discovery.take.minExpectedProfitQuote: 0` if you want quote-normalized gas coverage with no extra profit floor.
 - Use `allowSubsidy: true` only for manually reviewed defensive pools where the keeper may intentionally spend P&L to repay an auction earlier. Subsidized takes still enforce auction repayment and swap min-out safety, but they may execute below the gas/profit floor.
 - A low `takeRouteQuoteBudgetPerCandidate` reduces quote latency but can miss a more profitable route that was not probed.
 - No per-pool external-take fee override today
@@ -537,7 +551,7 @@ yarn compile
 yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 
 # Update your config with the deployed address
-# keeperTaker: '0x[deployed-address]'
+# takers: { oneInch: '0x[deployed-address]' }
 ```
 
 **Option B: Factory System (Multi-DEX Chains)**
@@ -554,8 +568,10 @@ yarn compile
 yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 # Update your config with deployed addresses:
-# keeperTakerFactory: '0x[factory-address]'
-# takerContracts: { 'UniswapV3': '0x[taker-address]', 'SushiSwap': '0x[taker-address]' }
+# takers: {
+#   factory: '0x[factory-address]',
+#   contracts: { UniswapV3: '0x[taker-address]', SushiSwap: '0x[taker-address]' },
+# }
 ```
 
 **Option C: No External Takes**
@@ -564,7 +580,7 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 - Use arbTake and settlement only
 - Still supports LP reward swapping (no contracts needed for LP rewards)
 
-> **Note**: LP reward swapping works with all approaches and doesn't require contracts for Uniswap V3 or SushiSwap (only 1inch requires contracts for LP rewards).
+> **Note**: LP reward swapping does not use taker contracts. 1inch LP rewards need `dex.oneInch.routers` plus the 1inch API environment variables, while Uniswap V3, SushiSwap, and Curve use direct DEX routing.
 
 ---
 
@@ -572,28 +588,28 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 V1 can auto-discover `take` and `settlement` opportunities across a chain while keeping `kick` manual.
 
-- `autoDiscover` defines shared discovery controls like allow/deny lists, dry-run behavior for pools not already listed in `pools[]`, and hydration cooldowns.
-- `autoDiscover.take` and `autoDiscover.settlement` carry independent per-action limits.
-- `discoveredDefaults` defines the default `take` and `settlement` behavior for discovered pools.
-- `pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
+- `discovery` defines shared discovery controls like allow/deny lists, dry-run behavior for pools not already listed in `manual.pools[]`, and hydration cooldowns.
+- `discovery.take` and `discovery.settlement` carry independent per-action limits.
+- `discovery.defaults` defines the default `take` and `settlement` behavior for discovered pools.
+- `manual.pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
-- `allowedExternalTakePaths: ['oneinch', 'factory']` enables top-level comparison between the 1inch aggregator path and the best factory path. If omitted, autodiscover preserves the single-path behavior from `discoveredDefaults.take.liquiditySource`.
+- `allowedExternalTakePaths: ['oneinch', 'factory']` enables top-level comparison between the 1inch aggregator path and the best factory path. If omitted, autodiscover preserves the single-path behavior from `discovery.defaults.take.liquiditySource`.
 - `allowedLiquiditySources` remains factory-only. Use it to restrict factory route selection to `UNISWAPV3`, `SUSHISWAP`, and/or `CURVE`; when set, it is the complete factory route allowlist and cannot include `ONEINCH`.
 - If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the factory taker path before hot loops begin.
 - Hybrid 1inch-plus-factory ranking requires a configured native-to-quote gas conversion path and wrapped native token address, because the keeper compares route net profit instead of gross quote output.
-- `externalTakeProbeTimeoutMs` bounds each hybrid path probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values from 1ms to 10000ms are accepted, but values above 5000ms should only be used when avoiding provider false-negatives is more important than tight take-loop latency. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a non-subsidized factory path is approved. Subsidized factory approvals continue probing remaining paths. `'cost_aware'` is still accepted for migration but should be replaced with `'factory_first'`.
-- `discoveredDefaults.take.allowSubsidy` should normally stay unset or `false`. Setting it to `true` permits subsidized external takes on every discovered pool that matches the defaults; reserve that for intentionally defensive deployments with a known blast radius.
+- `externalTakeProbeTimeoutMs` bounds each hybrid path probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values from 1ms to 10000ms are accepted, but values above 5000ms should only be used when avoiding provider false-negatives is more important than tight take-loop latency. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a non-subsidized factory path is approved. Subsidized factory approvals continue probing remaining paths.
+- `discovery.defaults.take.allowSubsidy` should normally stay unset or `false`. Setting it to `true` permits subsidized external takes on every discovered pool that matches the defaults; reserve that for intentionally defensive deployments with a known blast radius.
 - Route-derived subsidy policy is evaluated from the actual selected quote. Non-subsidized external takes must clear auction repayment plus route gas/profit floors when quote-normalized gas/profit inputs are configured or available; subsidized takes may skip that economic floor but never the repayment/min-out floor.
 - `marketPriceFactor` must be positive and no greater than 2. Values above 1 weaken market-factor protection and should be intentional; normal defensive settings are usually below 1.
 - `minProfitNative` is expressed in wei of the chain native gas token. To target an approximate USD floor, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18` and recalibrate as the native token price moves.
-- Once an auction has appeared in subgraph discovery, the keeper keeps it in a short-lived hot-auction cache so fast take loops can keep probing it even if a later subgraph refresh temporarily omits it. Tune with `autoDiscover.take.hotAuctionCandidateTtlMs` and `autoDiscover.take.maxHotAuctionCandidates`; set the TTL to `0` to disable the cache.
-- On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token. Override with `autoDiscover.take.l2GasCostBufferBasisPoints` only after measuring observed gas costs.
-- Gas-price freshness defaults are short for take profitability checks: 5 seconds on L1 and 15 seconds on common L2s. Override with `autoDiscover.take.l1GasPriceFreshnessTtlMs` and `autoDiscover.take.l2GasPriceFreshnessTtlMs` if your RPC conditions require it.
-- `autoDiscover.take.gasPriceDriftToleranceBasisPoints` optionally rejects final pre-submission approval when current gas is higher than the evaluation snapshot by more than the configured tolerance. Lower gas is favorable and does not reject.
-- `autoDiscover.take.oneInchQuoteTimeoutMs` defaults to 2000ms and applies to discovered 1inch quote and swap-data requests. `oneInchQuoteFailureThreshold` defaults to 2 retryable failures before cooldown; `oneInchQuoteFailureCooldownMs` defaults to 30000ms and is capped at 1 hour.
-- For live discovered external takes, `autoDiscover.take.externalTakeTransportPolicy` can be `allow_public`, `prefer_private_or_relay`, or `require_private_or_relay`. Use `require_private_or_relay` only when `takeWrite` is configured for `private_rpc` or `relay`; dry runs skip write submission but still warn if no private/relay transport is configured.
-- `autoDiscover.take.validateRouteDeployments: true` enables startup preflight checks for enabled external-take routers, takers, factory registry entries, and configured Curve pools.
+- Once an auction has appeared in subgraph discovery, the keeper keeps it in a short-lived hot-auction cache so fast take loops can keep probing it even if a later subgraph refresh temporarily omits it. Tune with `discovery.take.hotAuctionCandidateTtlMs` and `discovery.take.maxHotAuctionCandidates`; set the TTL to `0` to disable the cache.
+- On Base, Optimism, and Arbitrum-style L2s, quote-denominated gas policy applies a conservative 30% buffer to native gas cost to account for L1 data fees before converting into the pool quote token. Override with `discovery.take.l2GasCostBufferBasisPoints` only after measuring observed gas costs.
+- Gas-price freshness defaults are short for take profitability checks: 5 seconds on L1 and 15 seconds on common L2s. Override with `discovery.take.l1GasPriceFreshnessTtlMs` and `discovery.take.l2GasPriceFreshnessTtlMs` if your RPC conditions require it.
+- `discovery.take.gasPriceDriftToleranceBasisPoints` optionally rejects final pre-submission approval when current gas is higher than the evaluation snapshot by more than the configured tolerance. Lower gas is favorable and does not reject.
+- `discovery.take.oneInchQuoteTimeoutMs` defaults to 2000ms and applies to discovered 1inch quote and swap-data requests. `oneInchQuoteFailureThreshold` defaults to 2 retryable failures before cooldown; `oneInchQuoteFailureCooldownMs` defaults to 30000ms and is capped at 1 hour.
+- For live discovered external takes, `discovery.take.externalTakeTransportPolicy` can be `allow_public`, `prefer_private_or_relay`, or `require_private_or_relay`. Use `require_private_or_relay` only when `writes.take` is configured for `private_rpc` or `relay`; dry runs skip write submission but still warn if no private/relay transport is configured.
+- `discovery.take.validateRouteDeployments: true` enables startup preflight checks for enabled external-take routers, takers, factory registry entries, and configured Curve pools.
 - `dexGasOverrides` values are route execution gas estimates. Example: on Base, `dexGasOverrides: { [LiquiditySource.UNISWAPV3]: '450000' }` uses 450k as the DEX execution estimate, then the keeper applies its 30% L2 buffer separately.
 - Uniswap V3 and SushiSwap automatically probe standard fee tiers when `candidateFeeTiers` is unset. This adds up to three extra pool-existence checks per V3 factory candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`. Set `candidateFeeTiers: [defaultFeeTier]` to opt out of automatic standard-tier probing.
 
@@ -601,8 +617,13 @@ For a conservative first live rollout on Base, start from [`examples/example-bas
 
 ```typescript
 const config: KeeperConfig = {
-  dryRun: true,
-  autoDiscover: {
+  runtime: {
+    dryRun: true,
+    logLevel: 'info',
+    delayBetweenRuns: 10,
+    delayBetweenActions: 0,
+  },
+  discovery: {
     enabled: true,
     take: {
       enabled: true,
@@ -620,47 +641,49 @@ const config: KeeperConfig = {
     dryRunNewPools: true,
     logSkips: true,
     denyPools: ['0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
-  },
-  discoveredDefaults: {
-    take: {
-      minCollateral: 0.01,
-      hpbPriceFactor: 0.9,
-    },
-    settlement: {
-      enabled: true,
-      minAuctionAge: 18000,
-      maxBucketDepth: 50,
-      maxIterations: 10,
-      checkBotIncentive: true,
-    },
-  },
-  pools: [
-    {
-      name: 'wstETH / WETH',
-      address: '0x...',
-      price: { source: PriceOriginSource.FIXED, value: 1.15 },
-      kick: {
-        minDebt: 0.07,
-        priceFactor: 0.9,
-      },
-      // Manual take override for this pool only. If omitted,
-      // discoveredDefaults.take will be used when the pool is discovered.
+    defaults: {
       take: {
-        minCollateral: 0.02,
-        hpbPriceFactor: 0.97,
+        minCollateral: 0.01,
+        hpbPriceFactor: 0.9,
+      },
+      settlement: {
+        enabled: true,
+        minAuctionAge: 18000,
+        maxBucketDepth: 50,
+        maxIterations: 10,
+        checkBotIncentive: true,
       },
     },
-  ],
+  },
+  manual: {
+    pools: [
+      {
+        name: 'wstETH / WETH',
+        address: '0x...',
+        price: { source: PriceOriginSource.FIXED, value: 1.15 },
+        kick: {
+          minDebt: 0.07,
+          priceFactor: 0.9,
+        },
+        // Manual take override for this pool only. If omitted,
+        // discovery.defaults.take will be used when the pool is discovered.
+        take: {
+          minCollateral: 0.02,
+          hpbPriceFactor: 0.97,
+        },
+      },
+    ],
+  },
 };
 ```
 
 Discovery is auction-first, not pool-enumeration-first. The keeper queries chain-wide liquidation activity from the subgraph, groups live work by pool, hydrates only the pools that matter, and then runs the existing `take` and `settlement` execution paths behind the new policy checks.
 
-At runtime, discovered `take` refreshes the shared chain-wide auction snapshot when `autoDiscover.take` is enabled. Discovered `settlement` reuses that in-memory snapshot instead of issuing its own chain-wide fetch, so settlement no longer doubles discovery traffic in the common case. If you run settlement-only discovery, the settlement loop refreshes the snapshot on its own slower cadence. The snapshot is not persisted across restarts; after process restart, discovered settlement resumes after the next discovery refresh for the actions you enabled.
+At runtime, discovered `take` refreshes the shared chain-wide auction snapshot when `discovery.take` is enabled. Discovered `settlement` reuses that in-memory snapshot instead of issuing its own chain-wide fetch, so settlement no longer doubles discovery traffic in the common case. If you run settlement-only discovery, the settlement loop refreshes the snapshot on its own slower cadence. The snapshot is not persisted across restarts; after process restart, discovered settlement resumes after the next discovery refresh for the actions you enabled.
 
 Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh. No extra operator action is needed to discover 101 active auctions.
 
-`minExpectedProfitQuote` applies only under `autoDiscover.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. Set it to `0` when you want the route-derived policy to require quote-normalized gas coverage without adding an extra profit floor. `maxGasCostNative`, `maxGasCostQuote`, and `maxGasPriceGwei` are action-specific under `autoDiscover.take` and `autoDiscover.settlement`.
+`minExpectedProfitQuote` applies only under `discovery.take`, and only for discovered external `take` decisions. Do not combine it with arb-only discovered take defaults. Set it to `0` when you want the route-derived policy to require quote-normalized gas coverage without adding an extra profit floor. `maxGasCostNative`, `maxGasCostQuote`, and `maxGasPriceGwei` are action-specific under `discovery.take` and `discovery.settlement`.
 
 Prefer `maxGasCostNative` on L2s and mixed-quote deployments. It uses the RPC gas price directly and does not require an extra native-to-quote conversion fetch. `maxGasCostQuote` remains available as an explicit quote-denominated mode; when it is enabled the keeper may need to convert native gas cost into the pool quote token. If the pool collateral is already wrapped native, the keeper reuses the existing take quote instead of fetching a second conversion quote. All quote-denominated thresholds are per-pool quote token amounts.
 
@@ -676,7 +699,7 @@ External takes require contract deployment and specific configuration:
 
 #### 1inch Integration (Single Contract)
 
-**IMPORTANT:** 1inch contract deployment is required for 1inch external takes, and only required for LP reward swaps when `rewardActionQuote` or `rewardActionCollateral` uses `PostAuctionDex.ONEINCH`.
+**IMPORTANT:** 1inch contract deployment is required for 1inch external takes only. LP reward swaps that use `PostAuctionDex.ONEINCH` use `dex.oneInch.routers` and the 1inch API directly; they do not require `takers.oneInch`.
 
 **Contract Deployment:**
 
@@ -688,23 +711,31 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 
 ```typescript
 const config: KeeperConfig = {
-  // Required for 1inch external takes; only needed for LP rewards when they also use PostAuctionDex.ONEINCH
-  keeperTaker: '0x[deployed-address]',
-  oneInchRouters: {
-    1: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Ethereum
-    43114: '0x111111125421ca6dc452d289314280a0f8842a65', // Avalanche
-    8453: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Base
+  // Required for 1inch external takes only
+  takers: {
+    oneInch: '0x[deployed-address]',
   },
-
-  pools: [
-    {
-      take: {
-        liquiditySource: LiquiditySource.ONEINCH,
-        marketPriceFactor: 0.98, // Take when auction < market * 0.98
-        allowSubsidy: false, // Default: route must cover repayment plus configured gas/profit floors
+  dex: {
+    oneInch: {
+      routers: {
+        1: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Ethereum
+        43114: '0x111111125421ca6dc452d289314280a0f8842a65', // Avalanche
+        8453: '0x1111111254EEB25477B68fb85Ed929f73A960582', // Base
       },
     },
-  ],
+  },
+
+  manual: {
+    pools: [
+      {
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.98, // Take when auction < market * 0.98
+          allowSubsidy: false, // Default: route must cover repayment plus configured gas/profit floors
+        },
+      },
+    ],
+  },
 };
 ```
 
@@ -724,31 +755,39 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 ```typescript
 const config: KeeperConfig = {
   // Required for Uniswap V3 external takes
-  keeperTakerFactory: '0x[factory-address]',
-  takerContracts: {
-    UniswapV3: '0x[taker-address]',
+  takers: {
+    factory: '0x[factory-address]',
+    contracts: {
+      UniswapV3: '0x[taker-address]',
+    },
   },
-  universalRouterOverrides: {
-    universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
-    wethAddress: '0x4200000000000000000000000000000000000006',
-    permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
-    poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
-    quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-    defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    // Omit candidateFeeTiers to auto-probe standard V3 tiers.
-    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
-    defaultSlippage: 0.5,
-  },
-
-  pools: [
-    {
-      take: {
-        liquiditySource: LiquiditySource.UNISWAPV3,
-        marketPriceFactor: 0.99, // Take when auction < market * 0.99
-        allowSubsidy: false, // Set true only for intentionally defensive subsidized takes
+  dex: {
+    uniswapV3: {
+      universalRouter: {
+        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        wethAddress: '0x4200000000000000000000000000000000000006',
+        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
+        poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
+        quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
+        defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
+        // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
+        // candidateFeeTiers: [500, 10000],
+        defaultSlippage: 0.5,
       },
     },
-  ],
+  },
+
+  manual: {
+    pools: [
+      {
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99, // Take when auction < market * 0.99
+          allowSubsidy: false, // Set true only for intentionally defensive subsidized takes
+        },
+      },
+    ],
+  },
 };
 ```
 
@@ -779,29 +818,36 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 ```typescript
 const config: KeeperConfig = {
   // Required for SushiSwap external takes
-  keeperTakerFactory: '0x[factory-address]',
-  takerContracts: {
-    SushiSwap: '0x[taker-address]',
+  takers: {
+    factory: '0x[factory-address]',
+    contracts: {
+      SushiSwap: '0x[taker-address]',
+    },
   },
-  sushiswapRouterOverrides: {
-    swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD', //addresses for Hemi Chain
-    quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
-    factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
-    wethAddress: '0x4200000000000000000000000000000000000006',
-    defaultFeeTier: 500, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers
-    defaultSlippage: 10.0,
+  dex: {
+    sushiswap: {
+      swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD', //addresses for Hemi Chain
+      quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
+      factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
+      wethAddress: '0x4200000000000000000000000000000000000006',
+      defaultFeeTier: 500, // Preferred/default SushiSwap external-take route
+      // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
+      // candidateFeeTiers: [3000],
+      defaultSlippage: 10.0,
+    },
   },
 
-  pools: [
-    {
-      take: {
-        liquiditySource: LiquiditySource.SUSHISWAP,
-        marketPriceFactor: 0.99, // Take when auction < market * 0.99
-        allowSubsidy: false,
+  manual: {
+    pools: [
+      {
+        take: {
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          marketPriceFactor: 0.99, // Take when auction < market * 0.99
+          allowSubsidy: false,
+        },
       },
-    },
-  ],
+    ],
+  },
 };
 ```
 
@@ -832,46 +878,54 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 ```typescript
 const config: KeeperConfig = {
   // Required for Curve external takes
-  keeperTakerFactory: '0x[factory-address]',
-  takerContracts: {
-    Curve: '0x[curve-taker-address]',
-  },
-  curveRouterOverrides: {
-    poolConfigs: {
-      // Stablecoin pools (use STABLE pool type)
-      'usdc-usdt': {
-        address: '0x[CURVE_STABLE_POOL_ADDRESS]',
-        poolType: CurvePoolType.STABLE,
-      },
-      // Crypto pools (use CRYPTO pool type)
-      'weth-wbtc': {
-        address: '0x[CURVE_CRYPTO_POOL_ADDRESS]',
-        poolType: CurvePoolType.CRYPTO,
-      },
+  takers: {
+    factory: '0x[factory-address]',
+    contracts: {
+      Curve: '0x[curve-taker-address]',
     },
-    defaultSlippage: 1.0,
-    wethAddress: '0x4200000000000000000000000000000000000006',
-    // Optional: leave unset/0 for lowest-latency execution.
-    // Set only if a chain/provider needs extra Curve state propagation time.
-    executionDelayMs: 0,
+  },
+  dex: {
+    curve: {
+      poolConfigs: {
+        // Stablecoin pools (use STABLE pool type)
+        'usdc-usdt': {
+          address: '0x[CURVE_STABLE_POOL_ADDRESS]',
+          poolType: CurvePoolType.STABLE,
+        },
+        // Crypto pools (use CRYPTO pool type)
+        'weth-wbtc': {
+          address: '0x[CURVE_CRYPTO_POOL_ADDRESS]',
+          poolType: CurvePoolType.CRYPTO,
+        },
+      },
+      defaultSlippage: 1.0,
+      wethAddress: '0x4200000000000000000000000000000000000006',
+      // Optional: leave unset/0 for lowest-latency execution.
+      // Set only if a chain/provider needs extra Curve state propagation time.
+      executionDelayMs: 0,
+    },
   },
   // Required: Token symbol to address mapping
-  tokenAddresses: {
-    weth: '0x4200000000000000000000000000000000000006',
-    usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-    usdt: '0x[USDT_ADDRESS]',
-    wbtc: '0x[WBTC_ADDRESS]',
+  network: {
+    tokenAddresses: {
+      weth: '0x4200000000000000000000000000000000000006',
+      usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      usdt: '0x[USDT_ADDRESS]',
+      wbtc: '0x[WBTC_ADDRESS]',
+    },
   },
 
-  pools: [
-    {
-      take: {
-        liquiditySource: LiquiditySource.CURVE,
-        marketPriceFactor: 0.99, // Take when auction < market * 0.99
-        allowSubsidy: false,
+  manual: {
+    pools: [
+      {
+        take: {
+          liquiditySource: LiquiditySource.CURVE,
+          marketPriceFactor: 0.99, // Take when auction < market * 0.99
+          allowSubsidy: false,
+        },
       },
-    },
-  ],
+    ],
+  },
 };
 ```
 
@@ -892,32 +946,36 @@ const config: KeeperConfig = {
 **Step 3: Configure Token Address Mapping**
 
 ```typescript
-tokenAddresses: {
-  usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // Must match exact addresses
-  dai: '0x[DAI_ADDRESS]',
-  usdt: '0x[USDT_ADDRESS]',
-  weth: '0x4200000000000000000000000000000000000006',
+network: {
+  tokenAddresses: {
+    usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // Must match exact addresses
+    dai: '0x[DAI_ADDRESS]',
+    usdt: '0x[USDT_ADDRESS]',
+    weth: '0x4200000000000000000000000000000000000006',
+  },
 }
 ```
 
 **Step 4: Set Up Pool Configurations**
 
 ```typescript
-curveRouterOverrides: {
-  poolConfigs: {
-    // Use token symbols from tokenAddresses above
-    'usdc-dai': {
-      address: '0x[3POOL_ADDRESS]', // Same pool can serve multiple pairs
-      poolType: CurvePoolType.STABLE
+dex: {
+  curve: {
+    poolConfigs: {
+      // Use token symbols from network.tokenAddresses above
+      'usdc-dai': {
+        address: '0x[3POOL_ADDRESS]', // Same pool can serve multiple pairs
+        poolType: CurvePoolType.STABLE
+      },
+      'usdc-usdt': {
+        address: '0x[3POOL_ADDRESS]', // Same address if tokens are in same pool
+        poolType: CurvePoolType.STABLE
+      }
     },
-    'usdc-usdt': {
-      address: '0x[3POOL_ADDRESS]', // Same address if tokens are in same pool
-      poolType: CurvePoolType.STABLE
-    }
+    defaultSlippage: 1.0, // 1% for stable, 2-4% for crypto pairs
+    wethAddress: '0x4200000000000000000000000000000000000006',
+    executionDelayMs: 0, // Optional; keep 0 unless production testing shows a Curve propagation delay is needed
   },
-  defaultSlippage: 1.0, // 1% for stable, 2-4% for crypto pairs
-  wethAddress: '0x4200000000000000000000000000000000000006',
-  executionDelayMs: 0, // Optional; keep 0 unless production testing shows a Curve propagation delay is needed
 }
 ```
 
@@ -938,18 +996,26 @@ No manual selection needed - the bot chooses based on your config.
 ```typescript
 // examples/example-avalanche-config.ts shows 1inch external takes
 const config: KeeperConfig = {
-  keeperTaker: '0x[deployed-1inch-contract]',
-  oneInchRouters: { 43114: '0x111111125421ca6dc452d289314280a0f8842a65' },
-
-  pools: [
-    {
-      take: {
-        liquiditySource: LiquiditySource.ONEINCH,
-        marketPriceFactor: 0.98,
-        allowSubsidy: false,
-      },
+  takers: {
+    oneInch: '0x[deployed-1inch-contract]',
+  },
+  dex: {
+    oneInch: {
+      routers: { 43114: '0x111111125421ca6dc452d289314280a0f8842a65' },
     },
-  ],
+  },
+
+  manual: {
+    pools: [
+      {
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.98,
+          allowSubsidy: false,
+        },
+      },
+    ],
+  },
 };
 ```
 
@@ -958,31 +1024,39 @@ const config: KeeperConfig = {
 ```typescript
 // examples/example-hemi-config.ts shows factory external takes
 const config: KeeperConfig = {
-  keeperTakerFactory: '0x[factory-address]',
-  takerContracts: {
-    UniswapV3: '0x[taker-address]',
-    SushiSwap: '0x[taker-address]',
+  takers: {
+    factory: '0x[factory-address]',
+    contracts: {
+      UniswapV3: '0x[taker-address]',
+      SushiSwap: '0x[taker-address]',
+    },
   },
-  universalRouterOverrides: {
-    defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
-    candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers
-    /* other addresses */
-  },
-  sushiswapRouterOverrides: {
-    defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
-    candidateFeeTiers: [500], // Optional: narrow/customize probed tiers
-    /* other addresses */
-  },
-
-  pools: [
-    {
-      take: {
-        liquiditySource: LiquiditySource.SUSHISWAP, // or UNISWAPV3
-        marketPriceFactor: 0.99,
-        allowSubsidy: false,
+  dex: {
+    uniswapV3: {
+      universalRouter: {
+        defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
+        candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
+        /* other addresses */
       },
     },
-  ],
+    sushiswap: {
+      defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
+      candidateFeeTiers: [500], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
+      /* other addresses */
+    },
+  },
+
+  manual: {
+    pools: [
+      {
+        take: {
+          liquiditySource: LiquiditySource.SUSHISWAP, // or UNISWAPV3
+          marketPriceFactor: 0.99,
+          allowSubsidy: false,
+        },
+      },
+    ],
+  },
 };
 ```
 
@@ -994,16 +1068,11 @@ The following sections provide comprehensive examples for configuring LP reward 
 
 ##### 1inch LP Reward Configuration
 
-**IMPORTANT:** 1inch LP reward swaps require smart contract deployment, but LP rewards can also use Uniswap V3, SushiSwap, or Curve without the 1inch contract.
+**IMPORTANT:** 1inch LP reward swaps do not require smart contract deployment. Configure `dex.oneInch.routers` and the 1inch API environment variables; `takers.oneInch` is only for 1inch external takes.
 
-```bash
-# Deploy 1inch contract first (REQUIRED)
-yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
-```
+Edit `config.ts` to include these fields:
 
-Edit config.ts to include these fields:
-
-`oneInchRouters`:
+`dex.oneInch.routers`:
 
 A dictionary of 1inch router addresses for each chain ID you want to support.
 
@@ -1011,41 +1080,51 @@ A dictionary of 1inch router addresses for each chain ID you want to support.
 - Example:
 
 ```
-oneInchRouters: {
-  1: "0x1111111254EEB25477B68fb85Ed929f73A960582",    // Ethereum Mainnet
-  8453: "0x1111111254EEB25477B68fb85Ed929f73A960582", // Base
-  43114: "0x1111111254EEB25477B68fb85Ed929f73A960582" // Avalanche
+dex: {
+  oneInch: {
+    routers: {
+      1: "0x1111111254EEB25477B68fb85Ed929f73A960582",    // Ethereum Mainnet
+      8453: "0x1111111254EEB25477B68fb85Ed929f73A960582", // Base
+      43114: "0x1111111254EEB25477B68fb85Ed929f73A960582" // Avalanche
+    },
+  },
 },
 ```
 
-`tokenAddresses`:
+`network.tokenAddresses`:
 A dictionary of token addresses for swaps (required for Avalanche, optional otherwise).
 
 - Format: `{ [tokenName]: "token-address" }`
 - Example:
 
 ```
-tokenAddresses: {
-  weth: "0x4200000000000000000000000000000000000006", // WETH on Base
-  usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC on Base
-  avax: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"  // Native AVAX
+network: {
+  tokenAddresses: {
+    weth: "0x4200000000000000000000000000000000000006", // WETH on Base
+    usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC on Base
+    avax: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"  // Native AVAX
+  },
 },
 ```
 
-`connectorTokens` (Optional):
+`dex.oneInch.connectorTokens` (Optional):
 An array of token addresses used as intermediate connectors in 1inch swap routes. These tokens can facilitate multi-hop trades to optimize the swap path between the input and output tokens.
 
 - Format: `Array<string>`
 - Example:
 
 ```
-connectorTokens: [
-  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC on Ethereum
-  "0x6B175474E89094C44Da98b954EedeAC495271d0F"  // DAI on Ethereum
-],
+dex: {
+  oneInch: {
+    connectorTokens: [
+      "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC on Ethereum
+      "0x6B175474E89094C44Da98b954EedeAC495271d0F"  // DAI on Ethereum
+    ],
+  },
+},
 ```
 
-`pools.collectLpReward.rewardAction`:
+`manual.pools.collectLpReward.rewardAction`:
 LP in buckets can be reedemed for quote token and/or collateral, depending on what the bucket holds at time of redemption. `redeemFirst` controls the redemption strategy, favoring either quote token (most situations) or collateral (useful in shorting pools). To defer redeeming the second token, it's `minAmount` can be set to a sufficiently high value that manually swapping tokens on an exchange becomes practical.
 
 Separate reward actions may be assigned to quote token and collateral, allowing tokens to be swapped out as desired. For pools where you want to swap rewards with 1inch, set `dexProvider: PostAuctionDex.ONEINCH` in the `rewardAction`.
@@ -1053,7 +1132,8 @@ Separate reward actions may be assigned to quote token and collateral, allowing 
 - Example: Volatile-to-volatile pool, swap both tokens for stables
 
 ```
-pools: [
+manual: {
+  pools: [
   {
     name: "wstETH / WETH",
     address: "0x63a366fc5976ff72999c89f69366f388b7d233e8",
@@ -1068,7 +1148,7 @@ pools: [
         targetToken: "DAI",                                    // Desired token
         slippage: 1,                                           // Slippage percentage (0-100)
         dexProvider: PostAuctionDex.ONEINCH                    // Use enum
-      }
+      },
       rewardActionCollateral: {
         action: RewardActionLabel.EXCHANGE,
         address: "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", // Token to swap (wstETH)
@@ -1079,12 +1159,14 @@ pools: [
     },
   }
 ],
+},
 ```
 
 - Example: Stablecoin pool, swap collateral for quote token
 
 ```
-pools: [
+manual: {
+  pools: [
   {
       name: 'savUSD / USDC',
       address: '0x936e0fdec18d4dc5055b3e091fa063bc75d6215c',
@@ -1103,12 +1185,14 @@ pools: [
       },
   }
 ],
+},
 ```
 
 - Example: Shorting pool, no automated swapping
 
 ```
-pools: [
+manual: {
+  pools: [
   {
     name: "DAI / wSOL",
     address: "0x63a366fc5976ff72999c89f69366f388b7d233e8",
@@ -1120,48 +1204,55 @@ pools: [
     },
   }
 ],
+},
 
 ```
 
 ##### Notes
 
-- **Contract deployment is only required** for LP reward swaps that use `PostAuctionDex.ONEINCH`
-- If `dexProvider: PostAuctionDex.ONEINCH` but `keeperTaker` is missing, the script will fail.
+- 1inch LP reward swaps require `dex.oneInch.routers` and the 1inch API environment variables, not `takers.oneInch`.
+- `takers.oneInch` is only required for 1inch external takes.
 - Ensure the `.env` file is loaded (via `dotenv/config`) in your project.
 
 ##### Uniswap V3 LP Reward Configuration
 
 Edit `config.ts` to include these optional fields:
 
-`universalRouterOverrides`:
+`dex.uniswapV3.universalRouter`:
 Required for Uniswap V3 swaps. Provides addresses for Universal Router integration.
 
 - Format:
 
 ```
-universalRouterOverrides: {
-  universalRouterAddress: "0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B",
-  wethAddress: "0x4200000000000000000000000000000000000006",
-  permit2Address: "0xB952578f3520EE8Ea45b7914994dcf4702cEe578",
-  poolFactoryAddress: "0x346239972d1fa486FC4a521031BC81bFB7D6e8a4",
-  defaultFeeTier: 3000,
-  defaultSlippage: 0.5,
+dex: {
+  uniswapV3: {
+    universalRouter: {
+      universalRouterAddress: "0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B",
+      wethAddress: "0x4200000000000000000000000000000000000006",
+      permit2Address: "0xB952578f3520EE8Ea45b7914994dcf4702cEe578",
+      poolFactoryAddress: "0x346239972d1fa486FC4a521031BC81bFB7D6e8a4",
+      defaultFeeTier: 3000,
+      defaultSlippage: 0.5,
+    },
+  },
 }
 ```
 
-`tokenAddresses` (Optional):
-Useful for specifying target tokens (e.g., WETH) if not using `universalRouterOverrides`.
+`network.tokenAddresses` (Optional):
+Useful for specifying target tokens (e.g., WETH) if not using `dex.uniswapV3.universalRouter`.
 
 - Example:
 
 ```
-tokenAddresses: {
-  weth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // WETH on Ethereum
-  usdc: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"  // USDC on Ethereum
+network: {
+  tokenAddresses: {
+    weth: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // WETH on Ethereum
+    usdc: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"  // USDC on Ethereum
+  },
 },
 ```
 
-`pools.collectLpReward.rewardAction`:
+`manual.pools.collectLpReward.rewardAction`:
 For pools where you want to swap rewards with Uniswap V3, set `dexProvider: PostAuctionDex.UNISWAP_V3` and optionally add a `fee`.
 
 - Format:
@@ -1179,7 +1270,7 @@ For pools where you want to swap rewards with Uniswap V3, set `dexProvider: Post
       action: RewardActionLabel.EXCHANGE,
       address: "0xtokenAddress", // Token to swap (quote token here)
       targetToken: "weth",       // Target token (e.g., "weth", "usdc")
-      slippage: 1,               // Slippage (ignored for Uniswap)
+      slippage: 1,               // Slippage percentage
       dexProvider: PostAuctionDex.UNISWAP_V3,
       fee: 3000                  // Fee tier (500, 3000, 10000)
     }
@@ -1190,7 +1281,8 @@ For pools where you want to swap rewards with Uniswap V3, set `dexProvider: Post
 - Example:
 
 ```
-pools: [
+manual: {
+  pools: [
   {
     name: "WETH / USDC",
     address: "0x0b17159f2486f669a1f930926638008e2ccb4287",
@@ -1209,34 +1301,38 @@ pools: [
     }
   }
 ],
+},
 ```
 
 Note: LP reward swaps can use **different fee tiers** than external takes by specifying `fee: FeeAmount.LOW` (500), `fee: FeeAmount.MEDIUM` (3000), or `fee: FeeAmount.HIGH` (10000).
 
 ##### SushiSwap LP Reward Configuration
 
-For SushiSwap integration, add the `sushiswapRouterOverrides` configuration:
+For SushiSwap integration, add the `dex.sushiswap` configuration:
 
-`sushiswapRouterOverrides`:
+`dex.sushiswap`:
 Required for SushiSwap swaps. Provides addresses for SushiSwap router integration.
 
 - Format:
 
 ```
-sushiswapRouterOverrides: {
-  swapRouterAddress: "0x33d91116e0370970444B0281AB117e161fEbFcdD",
-  quoterV2Address: "0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C",
-  factoryAddress: "0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959",
-  wethAddress: "0x4200000000000000000000000000000000000006",
-  defaultFeeTier: 500,
-  defaultSlippage: 10.0,
+dex: {
+  sushiswap: {
+    swapRouterAddress: "0x33d91116e0370970444B0281AB117e161fEbFcdD",
+    quoterV2Address: "0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C",
+    factoryAddress: "0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959",
+    wethAddress: "0x4200000000000000000000000000000000000006",
+    defaultFeeTier: 500,
+    defaultSlippage: 10.0,
+  },
 }
 ```
 
 - Example:
 
 ```
-pools: [
+manual: {
+  pools: [
   {
     name: "USD_T1 / USD_T2",
     address: "0x600ca6e0b5cf41e3e4b4242a5b170f3b02ce3da7",
@@ -1255,6 +1351,7 @@ pools: [
     }
   }
 ],
+},
 ```
 
 Note: Like Uniswap V3, LP reward swaps can use **different fee tiers** than external takes for optimal routing.
@@ -1275,10 +1372,11 @@ Create a `.env` file with your API keys (see [Setup Environment Variables](#setu
 
 ```env
 ALCHEMY_API_KEY="your_alchemy_key"
+GRAPH_API_KEY="your_graph_key"
 COINGECKO_API_KEY="your_coingecko_key"
 ```
 
-**Note**: You will need to enable Ethereum mainnet in your Alchemy app since hardhat queries from mainnet for integration tests.
+**Note**: Enable Ethereum mainnet and Base in your Alchemy app. The fork-backed tests use pinned mainnet/Base blocks depending on `FORK_NETWORK`.
 
 ### Running tests
 
@@ -1298,31 +1396,34 @@ yarn unit-tests
 
 #### Integration tests
 
-In one terminal run a hardhat fork (defaults to Ethereum mainnet):
-
-```bash
-make fork-base
-# Or: npx hardhat node
-```
-
-To fork a different network, set the `FORK_NETWORK` environment variable:
-
-```bash
-FORK_NETWORK=base npx hardhat node    # fork Base
-FORK_NETWORK=avalanche npx hardhat node  # fork Avalanche
-```
-
-Or use the shorthand:
-
-```bash
-yarn fork-base
-```
-
-In a second terminal run:
+Hardhat integration tests run against an in-process fork; you do not need to start a separate node for the normal suite.
 
 ```bash
 make test-integration
 # Or: yarn integration-tests
+```
+
+To fork a specific network, set `FORK_NETWORK`:
+
+```bash
+FORK_NETWORK=base yarn integration-tests
+FORK_NETWORK=avalanche yarn integration-tests
+```
+
+Use `make fork-base` only when you want a long-running local Base fork for manual debugging.
+
+#### Production verification
+
+```bash
+npm run production-verification:mainnet
+npm run production-verification:base
+npm run production-verification
+```
+
+The live-liquidity E2E sweep is opt-in because it performs a pinned fork execution through real DEX liquidity:
+
+```bash
+npm run production-verification:live-liquidity:mainnet
 ```
 
 #### Price API tests
@@ -1331,6 +1432,9 @@ Test the Alchemy and CoinGecko price integrations:
 
 ```bash
 make test-prices
+npx ts-node scripts/price-diagnostics.ts alchemy
+npx ts-node scripts/price-diagnostics.ts fallback
+npx ts-node scripts/price-diagnostics.ts cana
 ```
 
 ## Disclaimer

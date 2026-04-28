@@ -79,11 +79,13 @@ describe('Take Factory', () => {
       };
 
       // Mock subgraph to return empty liquidations to avoid external calls
-      const subgraphStub = sinon.stub(require('../../src/subgraph'), 'default').value({
-        getLiquidations: sinon.stub().resolves({
-          pool: { hpb: 1000, hpbIndex: 0, liquidationAuctions: [] },
-        }),
-      });
+      const subgraphStub = sinon
+        .stub(require('../../src/subgraph'), 'default')
+        .value({
+          getLiquidations: sinon.stub().resolves({
+            pool: { hpb: 1000, hpbIndex: 0, liquidationAuctions: [] },
+          }),
+        });
 
       try {
         // This should complete without throwing, even with missing config
@@ -146,11 +148,13 @@ describe('Take Factory', () => {
       };
 
       // Mock subgraph to return empty liquidations
-      const subgraphStub = sinon.stub(require('../../src/subgraph'), 'default').value({
-        getLiquidations: sinon.stub().resolves({
-          pool: { hpb: 1000, hpbIndex: 0, liquidationAuctions: [] },
-        }),
-      });
+      const subgraphStub = sinon
+        .stub(require('../../src/subgraph'), 'default')
+        .value({
+          getLiquidations: sinon.stub().resolves({
+            pool: { hpb: 1000, hpbIndex: 0, liquidationAuctions: [] },
+          }),
+        });
 
       await processManualTakeCandidates({
         signer: mockSigner,

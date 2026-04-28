@@ -44,7 +44,11 @@ describe('Subgraph getBucketTakeLPAwards', () => {
       id: `take-${String(i).padStart(4, '0')}`,
       index: 2000 + i,
       taker: '0xabc',
-      lpAwarded: { lpAwardedTaker: '1.0', lpAwardedKicker: '0', kicker: '0xdef' },
+      lpAwarded: {
+        lpAwardedTaker: '1.0',
+        lpAwardedKicker: '0',
+        kicker: '0xdef',
+      },
       blockTimestamp: SAME_TS,
     }));
     const requestStub = sinon.stub(graphqlRequest, 'request');
@@ -159,9 +163,9 @@ describe('Subgraph getBucketTakeLPAwards', () => {
 
     expect(requestStub.callCount).to.equal(100);
     expect(
-      warnStub.getCalls().some((call) =>
-        String(call.args[0]).includes('reached maxPages')
-      )
+      warnStub
+        .getCalls()
+        .some((call) => String(call.args[0]).includes('reached maxPages'))
     ).to.equal(true);
   });
 
@@ -179,6 +183,8 @@ describe('Subgraph getBucketTakeLPAwards', () => {
     );
 
     expect(result.bucketTakes).to.deep.equal([]);
-    expect((requestStub.secondCall.args[0] as any).url).to.equal('http://fallback');
+    expect((requestStub.secondCall.args[0] as any).url).to.equal(
+      'http://fallback'
+    );
   });
 });

@@ -2,7 +2,12 @@ import { FeeAmount } from '@uniswap/v3-sdk';
 import { expect } from 'chai';
 import { BigNumber, Wallet } from 'ethers';
 import sinon, { SinonStub } from 'sinon';
-import { RewardAction, RewardActionLabel, KeeperConfig, PostAuctionDex } from '../../src/config';
+import {
+  RewardAction,
+  RewardActionLabel,
+  KeeperConfig,
+  PostAuctionDex,
+} from '../../src/config';
 import { DexRouter } from '../../src/dex/router';
 import { MAINNET_CONFIG } from '../integration/test-config';
 import {
@@ -12,19 +17,35 @@ import {
 import { decimaledToWei } from '../../src/utils';
 
 // Helper function to create a mock KeeperConfig for testing
-function createMockKeeperConfig(overrides: Partial<KeeperConfig> = {}): KeeperConfig {
+function createMockKeeperConfig(
+  overrides: Partial<KeeperConfig> = {}
+): KeeperConfig {
   return {
     // Required fields with mock values
-    ethRpcUrl: 'mock://rpc',
-    logLevel: 'info',
-    subgraphUrl: 'mock://subgraph',
-    keeperKeystore: '/path/to/mock-keystore.json',
-    keeperTaker: '0x0000000000000000000000000000000000000000',
-    delayBetweenRuns: 0,
-    delayBetweenActions: 0,
-    dryRun: true,
-    pools: [],
-    coinGeckoApiKey: 'mock-api-key',
+    network: {
+      rpcUrl: 'mock://rpc',
+      subgraph: {
+        url: 'mock://subgraph',
+      },
+    },
+    signer: {
+      keystore: '/path/to/mock-keystore.json',
+    },
+    runtime: {
+      logLevel: 'info',
+      delayBetweenRuns: 0,
+      delayBetweenActions: 0,
+      dryRun: true,
+    },
+    takers: {
+      oneInch: '0x0000000000000000000000000000000000000000',
+    },
+    manual: {
+      pools: [],
+    },
+    pricing: {
+      coinGeckoApiKey: 'mock-api-key',
+    },
     ajna: {
       erc20PoolFactory: '0x0000000000000000000000000000000000000000',
       erc721PoolFactory: '0x0000000000000000000000000000000000000000',
@@ -35,8 +56,14 @@ function createMockKeeperConfig(overrides: Partial<KeeperConfig> = {}): KeeperCo
       burnWrapper: '',
       lenderHelper: '',
     },
+    dex: {
+      oneInch: {},
+      uniswapV3: {
+        legacy: {},
+      },
+    },
     // Apply any test-specific overrides
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -73,9 +100,16 @@ describe('RewardActionTracker', () => {
     const et = new RewardActionTracker(
       signer,
       createMockKeeperConfig({
-        oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
-        tokenAddresses: { weth: wethAddress },
-        delayBetweenActions: 0,
+        network: {
+          rpcUrl: 'mock://rpc',
+          subgraph: { url: 'mock://subgraph' },
+          tokenAddresses: { weth: wethAddress },
+        },
+        dex: {
+          oneInch: {
+            routers: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
+          },
+        },
       }),
       dexRouter as unknown as DexRouter
     );
@@ -93,14 +127,14 @@ describe('RewardActionTracker', () => {
 
     await et.handleAllTokens();
     await et.handleAllTokens();
-    
+
     console.log('DexRouter swap call count:', dexRouter.swap.callCount);
-    
+
     // The swap should have been called
     expect(dexRouter.swap.callCount).to.be.greaterThan(0);
-    
+
     console.log('Actual call args:', dexRouter.swap.getCall(0).args);
-    
+
     expect(dexRouter.swap.calledOnce).to.be.true;
     const callArgs = dexRouter.swap.getCall(0).args;
     expect(callArgs[0]).to.equal(1); // chainId
@@ -112,7 +146,10 @@ describe('RewardActionTracker', () => {
     expect(callArgs[6]).to.equal(1); // slippage
     expect(callArgs[7]).to.equal(FeeAmount.MEDIUM); // feeAmount
     // Check the combinedSettings structure - will debug this based on console output
-    console.log('Combined settings (arg 8):', JSON.stringify(callArgs[8], null, 2));
+    console.log(
+      'Combined settings (arg 8):',
+      JSON.stringify(callArgs[8], null, 2)
+    );
   });
 
   it('Handles swap failure properly with retries', async () => {
@@ -130,9 +167,16 @@ describe('RewardActionTracker', () => {
     const et = new RewardActionTracker(
       signer,
       createMockKeeperConfig({
-        oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
-        tokenAddresses: { weth: wethAddress },
-        delayBetweenActions: 0,
+        network: {
+          rpcUrl: 'mock://rpc',
+          subgraph: { url: 'mock://subgraph' },
+          tokenAddresses: { weth: wethAddress },
+        },
+        dex: {
+          oneInch: {
+            routers: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
+          },
+        },
       }),
       dexRouter as unknown as DexRouter
     );

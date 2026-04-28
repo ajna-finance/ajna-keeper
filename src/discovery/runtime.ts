@@ -24,11 +24,12 @@ import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from './handlers';
-import { OneInchQuoteCircuitState } from './types';
+import { getDiscoveryExecutionConfig, OneInchQuoteCircuitState } from './types';
 import { logger } from '../logging';
 import {
   createDiscoveryReadTransports,
   DiscoveryReadTransports,
+  getDiscoveryReadTransportConfig,
 } from '../read-transports';
 import { handleSettlements } from '../settlement';
 import { ChainwideLiquidationAuction } from '../subgraph';
@@ -114,8 +115,8 @@ interface DiscoveryRpcCacheState {
 function createHotAuctionCandidateCacheForConfig(
   config: KeeperConfig
 ): HotAuctionCandidateCache | undefined {
-  const takePolicy = getAutoDiscoverTakePolicy(config.autoDiscover);
-  if (!config.autoDiscover?.enabled || !takePolicy) {
+  const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
+  if (!config.discovery?.enabled || !takePolicy) {
     return undefined;
   }
   const ttlMs =
@@ -151,8 +152,7 @@ function shouldRefreshDiscoverySnapshotOnTakeCycle(
   config: KeeperConfig
 ): boolean {
   return (
-    !!config.autoDiscover?.enabled &&
-    !!getAutoDiscoverTakePolicy(config.autoDiscover)
+    !!config.discovery?.enabled && !!getAutoDiscoverTakePolicy(config.discovery)
   );
 }
 
@@ -161,13 +161,13 @@ function shouldRefreshDiscoverySnapshotOnSettlementCycle(
   discoverySnapshotState?: DiscoverySnapshotState
 ): boolean {
   if (
-    !config.autoDiscover?.enabled ||
-    !getAutoDiscoverSettlementPolicy(config.autoDiscover)
+    !config.discovery?.enabled ||
+    !getAutoDiscoverSettlementPolicy(config.discovery)
   ) {
     return false;
   }
 
-  if (!getAutoDiscoverTakePolicy(config.autoDiscover)) {
+  if (!getAutoDiscoverTakePolicy(config.discovery)) {
     return true;
   }
 
@@ -184,7 +184,7 @@ async function refreshDiscoverySnapshot(
   state: BoundDiscoveryRuntimeState
 ): Promise<ChainwideLiquidationAuction[]> {
   const liquidationAuctions = await getChainwideLiquidationAuctionsShared(
-    state.config,
+    getDiscoveryReadTransportConfig(state.config),
     state.readTransports.subgraph
   );
   if (state.discoverySnapshotState) {
@@ -204,7 +204,7 @@ function getSnapshotAgeMs(
 }
 
 function getMaxDiscoverySnapshotFallbackAgeMs(config: KeeperConfig): number {
-  return Math.max(config.delayBetweenRuns * 5, 120) * 1000;
+  return Math.max(config.runtime.delayBetweenRuns * 5, 120) * 1000;
 }
 
 function getCachedDiscoverySnapshotForFallback(
@@ -234,7 +234,7 @@ function getCachedDiscoverySnapshotForFallback(
 }
 
 function requiresDedicatedTakeWriteTransport(config: KeeperConfig): boolean {
-  return !config.dryRun && resolveTakeWriteConfig(config) !== undefined;
+  return !config.runtime.dryRun && resolveTakeWriteConfig(config) !== undefined;
 }
 
 function isTakeWriteWalletSigner(signer: Signer): signer is Wallet {
@@ -427,7 +427,7 @@ async function ensureFreshDiscoveryGasPrice(params: {
     gasPriceAgeMs !== undefined &&
     gasPriceAgeMs <
       getDiscoveryGasPriceFreshnessTtlMs(
-        getAutoDiscoverTakePolicy(params.state.config.autoDiscover),
+        getAutoDiscoverTakePolicy(params.state.config.discovery),
         params.cache.chainId ?? params.state.chainId
       )
   ) {
@@ -580,17 +580,7 @@ async function executeEffectiveTakeTarget(params: {
       signer: state.signer,
       takeWriteTransport: state.takeWriteTransport,
       config: {
-        dryRun: state.config.dryRun,
-        delayBetweenActions: state.config.delayBetweenActions,
-        connectorTokens: state.config.connectorTokens,
-        oneInchRouters: state.config.oneInchRouters,
-        keeperTaker: state.config.keeperTaker,
-        keeperTakerFactory: state.config.keeperTakerFactory,
-        takerContracts: state.config.takerContracts,
-        universalRouterOverrides: state.config.universalRouterOverrides,
-        sushiswapRouterOverrides: state.config.sushiswapRouterOverrides,
-        curveRouterOverrides: state.config.curveRouterOverrides,
-        tokenAddresses: state.config.tokenAddresses,
+        ...getDiscoveryExecutionConfig(state.config),
         subgraph: state.readTransports.subgraph,
       },
     });
@@ -602,7 +592,7 @@ async function executeEffectiveTakeTarget(params: {
     signer: state.signer,
     takeWriteTransport: state.takeWriteTransport,
     target,
-    config: state.config,
+    config: getDiscoveryExecutionConfig(state.config),
     transports: state.readTransports,
     rpcCache,
     onCandidateInactive: createHotAuctionCandidateRemover(state),
@@ -622,8 +612,8 @@ async function executeEffectiveSettlementTarget(params: {
       poolConfig: target.poolConfig,
       signer: state.signer,
       config: {
-        dryRun: state.config.dryRun,
-        delayBetweenActions: state.config.delayBetweenActions,
+        dryRun: state.config.runtime.dryRun,
+        delayBetweenActions: state.config.runtime.delayBetweenActions,
         subgraph: state.readTransports.subgraph,
       },
     });
@@ -634,7 +624,7 @@ async function executeEffectiveSettlementTarget(params: {
     pool,
     signer: state.signer,
     target,
-    config: state.config,
+    config: getDiscoveryExecutionConfig(state.config),
     transports: state.readTransports,
     rpcCache,
   });
@@ -749,7 +739,7 @@ async function runTakeDiscoveryCycle(
           rpcCache,
         });
         stats.targetSuccesses += 1;
-        await delay(state.config.delayBetweenActions);
+        await delay(state.config.runtime.delayBetweenActions);
       } catch (error) {
         stats.targetFailures += 1;
         logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
@@ -847,7 +837,7 @@ async function runSettlementDiscoveryCycle(
           discoveredTargetSuccesses += 1;
         }
         logger.debug(`Settlement check completed for pool: ${pool.name}`);
-        await delay(state.config.delayBetweenActions);
+        await delay(state.config.runtime.delayBetweenActions);
       } catch (error) {
         stats.targetFailures += 1;
         logger.error(
@@ -900,13 +890,13 @@ async function runSettlementDiscoveryCycle(
 }
 
 function computeSettlementLoopIntervalSeconds(config: KeeperConfig): number {
-  return config.delayBetweenRuns;
+  return config.runtime.delayBetweenRuns;
 }
 
 function computeDiscoveredSettlementCheckIntervalSeconds(
   config: KeeperConfig
 ): number {
-  return Math.max(config.delayBetweenRuns * 5, 120);
+  return Math.max(config.runtime.delayBetweenRuns * 5, 120);
 }
 
 function computeDiscoveredSettlementFailureRetrySeconds(
@@ -914,7 +904,7 @@ function computeDiscoveredSettlementFailureRetrySeconds(
 ): number {
   return Math.min(
     computeDiscoveredSettlementCheckIntervalSeconds(config),
-    Math.max(config.delayBetweenRuns, 30)
+    Math.max(config.runtime.delayBetweenRuns, 30)
   );
 }
 
@@ -922,8 +912,8 @@ function shouldRunDiscoveredSettlementCycle(
   state: BoundDiscoveryRuntimeState
 ): boolean {
   if (
-    !state.config.autoDiscover?.enabled ||
-    !getAutoDiscoverSettlementPolicy(state.config.autoDiscover)
+    !state.config.discovery?.enabled ||
+    !getAutoDiscoverSettlementPolicy(state.config.discovery)
   ) {
     return false;
   }
@@ -960,7 +950,7 @@ export function createDiscoveryRuntime(
     factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
     oneInchQuoteCircuit: { failures: 0 },
     readTransports: createDiscoveryReadTransports(
-      params.config,
+      getDiscoveryReadTransportConfig(params.config),
       params.signer.provider,
       async () => await params.signer.getChainId()
     ),

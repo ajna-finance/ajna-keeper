@@ -1,5 +1,5 @@
 import { BigNumber, providers } from 'ethers';
-import { KeeperConfig } from './config';
+import type { ReadRpcTransportConfig } from './read-transports';
 import {
   EndpointKind,
   clearEndpointHealthState,
@@ -39,9 +39,7 @@ function inferProviderUrl(
   return (provider as any)?.connection?.url;
 }
 
-function getReadRpcEndpoints(
-  config: Pick<KeeperConfig, 'ethRpcUrl' | 'readRpcUrls'>
-): string[] {
+function getReadRpcEndpoints(config: ReadRpcTransportConfig): string[] {
   if (config.readRpcUrls && config.readRpcUrls.length > 0) {
     return uniqueEndpoints(config.readRpcUrls);
   }
@@ -78,7 +76,7 @@ async function getReadProviderChainId(
 }
 
 export async function getResilientReadGasPrice(params: {
-  config: Pick<KeeperConfig, 'ethRpcUrl' | 'readRpcUrls'>;
+  config: ReadRpcTransportConfig;
   primaryProvider?: providers.Provider;
   expectedChainId?: number;
 }): Promise<BigNumber> {

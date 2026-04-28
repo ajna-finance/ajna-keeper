@@ -1,14 +1,34 @@
-import { KeeperConfig, LiquiditySource, hasNonEmptyObject } from './schema';
-
-type LiquiditySourceConfig = Pick<
+import {
+  CurveRouterOverrides,
+  DiscoveredDefaultsConfig,
   KeeperConfig,
-  | 'curveRouterOverrides'
-  | 'discoveredDefaults'
-  | 'oneInchRouters'
-  | 'sushiswapRouterOverrides'
-  | 'tokenAddresses'
-  | 'universalRouterOverrides'
->;
+  LiquiditySource,
+  SushiswapRouterOverrides,
+  UniversalRouterOverrides,
+  hasNonEmptyObject,
+} from './schema';
+
+export interface LiquiditySourceConfig {
+  curveRouterOverrides?: CurveRouterOverrides;
+  discoveredDefaults?: DiscoveredDefaultsConfig;
+  oneInchRouters?: { [chainId: number]: string };
+  sushiswapRouterOverrides?: SushiswapRouterOverrides;
+  tokenAddresses?: { [tokenSymbol: string]: string };
+  universalRouterOverrides?: UniversalRouterOverrides;
+}
+
+export function getLiquiditySourceConfig(
+  config: KeeperConfig
+): LiquiditySourceConfig {
+  return {
+    curveRouterOverrides: config.dex?.curve,
+    discoveredDefaults: config.discovery?.defaults,
+    oneInchRouters: config.dex?.oneInch?.routers,
+    sushiswapRouterOverrides: config.dex?.sushiswap,
+    tokenAddresses: config.network.tokenAddresses,
+    universalRouterOverrides: config.dex?.uniswapV3?.universalRouter,
+  };
+}
 
 export const WRAPPED_NATIVE_TOKEN_SYMBOLS = [
   'weth',

@@ -1,6 +1,12 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import { RequireFields, weiToDecimaled } from '../utils';
-import { KeeperConfig, LiquiditySource, PoolConfig } from '../config';
+import {
+  CurveRouterOverrides,
+  LiquiditySource,
+  PoolConfig,
+  SushiswapRouterOverrides,
+  UniversalRouterOverrides,
+} from '../config';
 import { logger } from '../logging';
 import { SmartDexManager } from '../dex/manager';
 import {
@@ -48,21 +54,20 @@ export {
   createOneInchTakeAdapter,
 } from './one-inch-adapter';
 
-type HandleTakeConfigBase = Pick<
-  KeeperConfig,
-  | 'dryRun'
-  | 'delayBetweenActions'
-  | 'connectorTokens'
-  | 'oneInchRouters'
-  | 'oneInchAggregationExecutorAllowlist'
-  | 'keeperTaker'
-  | 'keeperTakerFactory'
-  | 'takerContracts'
-  | 'universalRouterOverrides'
-  | 'sushiswapRouterOverrides'
-  | 'curveRouterOverrides'
-  | 'tokenAddresses'
->;
+interface HandleTakeConfigBase {
+  dryRun?: boolean;
+  delayBetweenActions: number;
+  connectorTokens?: Array<string>;
+  oneInchRouters?: { [chainId: number]: string };
+  oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
+  keeperTaker?: string;
+  keeperTakerFactory?: string;
+  takerContracts?: { [source: string]: string };
+  universalRouterOverrides?: UniversalRouterOverrides;
+  sushiswapRouterOverrides?: SushiswapRouterOverrides;
+  curveRouterOverrides?: CurveRouterOverrides;
+  tokenAddresses?: { [tokenSymbol: string]: string };
+}
 
 type HandleTakeConfig = WithSubgraph<HandleTakeConfigBase>;
 type HandleTakeConfigInput = SubgraphConfigInput<HandleTakeConfigBase>;
@@ -249,11 +254,10 @@ async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
 interface GetLiquidationsToTakeParams
   extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
   config: SubgraphConfigInput<
-    Pick<
-      KeeperConfig,
-      'oneInchRouters' | 'oneInchDefaultSlippage' | 'connectorTokens'
-    > &
-      Partial<Pick<KeeperConfig, 'delayBetweenActions'>>
+    Pick<HandleTakeConfigBase, 'oneInchRouters' | 'connectorTokens'> &
+      Partial<Pick<HandleTakeConfigBase, 'delayBetweenActions'>> & {
+        oneInchDefaultSlippage?: number;
+      }
   >;
 }
 

@@ -4,6 +4,7 @@ import {
   configureAjna,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
+  getManualPools,
   KeeperConfig,
   PoolConfig,
   validateAutoDiscoverConfig,
@@ -39,7 +40,11 @@ import {
 } from './discovery/targets';
 import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery/runtime';
 import { validateAutoDiscoverRouteDeployments } from './discovery/route-preflight';
-import { createSubgraphReader, SubgraphReader } from './read-transports';
+import {
+  createSubgraphReader,
+  getSubgraphTransportConfig,
+  SubgraphReader,
+} from './read-transports';
 import {
   createTakeWriteTransport,
   TakeWriteTransport,
@@ -77,8 +82,8 @@ const SUBGRAPH_CHAIN_CONSISTENCY_MAX_SKEW_SECONDS = 60;
 
 /**
  * Pre-flight check: the subgraph endpoint must be indexing the same chain
- * as the connected RPC. Misconfigured `subgraphUrl` (pointing at a different
- * chain's Ajna deployment) is a silent failure mode — auto-discovery surfaces
+ * as the connected RPC. Misconfigured `network.subgraph.url` (pointing at a
+ * different chain's Ajna deployment) is a silent failure mode — auto-discovery surfaces
  * pool addresses that have no contract code on the actual chain, which
  * operators see as mysterious hydration errors.
  *
@@ -103,7 +108,7 @@ export async function assertSubgraphChainConsistency(params: {
   } catch (error) {
     throw new Error(
       `Subgraph chain-consistency pre-flight failed: could not fetch _meta from subgraph endpoint. ` +
-        `Verify subgraphUrl is reachable and the subgraph supports the _meta query. ` +
+        `Verify network.subgraph.url is reachable and the subgraph supports the _meta query. ` +
         `Underlying error: ${getErrorMessage(error)}`
     );
   }
@@ -115,7 +120,7 @@ export async function assertSubgraphChainConsistency(params: {
   if (!meta.block) {
     throw new Error(
       `Subgraph has no indexed blocks yet (deployment: ${meta.deployment}). ` +
-        `Wait for the subgraph to index at least one block, or verify subgraphUrl ` +
+        `Wait for the subgraph to index at least one block, or verify network.subgraph.url ` +
         `points at a healthy endpoint.`
     );
   }
@@ -129,14 +134,14 @@ export async function assertSubgraphChainConsistency(params: {
     // than "chain mismatch" when the RPC itself is the problem.
     throw new Error(
       `Subgraph chain-consistency pre-flight failed: RPC rejected getBlock(${meta.block.number}). ` +
-        `Verify ethRpcUrl is reachable. Underlying error: ${getErrorMessage(error)}`
+        `Verify network.rpcUrl is reachable. Underlying error: ${getErrorMessage(error)}`
     );
   }
   if (!rpcBlock) {
     throw new Error(
       `Subgraph reports syncing to block ${meta.block.number}, but that block does not exist on the connected RPC ` +
         `(chainId=${chainId}). Subgraph is almost certainly indexing a different chain than the keeper is running on. ` +
-        `Verify config.subgraphUrl matches the chain of config.ethRpcUrl.`
+        `Verify network.subgraph.url matches the chain of network.rpcUrl.`
     );
   }
 
@@ -146,7 +151,7 @@ export async function assertSubgraphChainConsistency(params: {
       `Subgraph chain-consistency mismatch: block ${meta.block.number} has timestamp ${rpcBlock.timestamp} ` +
         `on the connected RPC (chainId=${chainId}) but ${meta.block.timestamp} in the subgraph ` +
         `(${skew}s apart). This means the subgraph is indexing a different chain than the keeper is ` +
-        `running on. Verify config.subgraphUrl matches the chain of config.ethRpcUrl. ` +
+        `running on. Verify network.subgraph.url matches the chain of network.rpcUrl. ` +
         `(Subgraph deployment: ${meta.deployment})`
     );
   }
@@ -173,20 +178,22 @@ function isPermanentTakeWriteTransportInitializationError(
 }
 
 export function shouldRunTakeLoop(config: KeeperConfig): boolean {
-  const hasManualTakeTargets = config.pools.some(({ take }) => !!take);
+  const hasManualTakeTargets = getManualPools(config).some(
+    ({ take }) => !!take
+  );
   const hasDiscoveredTakeTargets =
-    !!config.autoDiscover?.enabled &&
-    !!getAutoDiscoverTakePolicy(config.autoDiscover);
+    !!config.discovery?.enabled &&
+    !!getAutoDiscoverTakePolicy(config.discovery);
   return hasManualTakeTargets || hasDiscoveredTakeTargets;
 }
 
 export function shouldRunSettlementLoop(config: KeeperConfig): boolean {
-  const hasManualSettlementTargets = config.pools.some(
+  const hasManualSettlementTargets = getManualPools(config).some(
     ({ settlement }) => settlement?.enabled === true
   );
   const hasDiscoveredSettlementTargets =
-    !!config.autoDiscover?.enabled &&
-    !!getAutoDiscoverSettlementPolicy(config.autoDiscover);
+    !!config.discovery?.enabled &&
+    !!getAutoDiscoverSettlementPolicy(config.discovery);
   return hasManualSettlementTargets || hasDiscoveredSettlementTargets;
 }
 
@@ -204,7 +211,7 @@ export async function initializeTakeLoop(params: {
   }
 
   validateTakeSettingsForChain(params.config, params.chainId);
-  if (params.config.dryRun) {
+  if (params.config.runtime.dryRun) {
     return { takeLoopEnabled: true };
   }
 
@@ -236,8 +243,8 @@ export async function initializeTakeLoop(params: {
 
 export async function startKeeperFromConfig(config: KeeperConfig) {
   const { provider, signer } = await getProviderAndSigner(
-    config.keeperKeystore,
-    config.ethRpcUrl
+    config.signer.keystore,
+    config.network.rpcUrl
   );
   const network = await provider.getNetwork();
   const chainId = network.chainId;
@@ -249,17 +256,15 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     signer,
     chainId,
   });
-  if (
-    getAutoDiscoverTakePolicy(config.autoDiscover)?.validateRouteDeployments
-  ) {
+  if (getAutoDiscoverTakePolicy(config.discovery)?.validateRouteDeployments) {
     await validateAutoDiscoverRouteDeployments({ config, provider, chainId });
   }
 
   // Subgraph chain-consistency check runs BEFORE any pool hydration so a
-  // misconfigured `subgraphUrl` (pointing at a different chain's Ajna
+  // misconfigured `network.subgraph.url` (pointing at a different chain's Ajna
   // deployment) surfaces immediately rather than after N × 2-3 RPC reads of
   // wasted static-pool hydration work.
-  const subgraph = createSubgraphReader(config);
+  const subgraph = createSubgraphReader(getSubgraphTransportConfig(config));
   await assertSubgraphChainConsistency({ subgraph, provider, chainId });
 
   const ajna = new AjnaSDK(provider);
@@ -300,7 +305,7 @@ async function getPoolsFromConfig(
   config: KeeperConfig
 ): Promise<PoolMap> {
   const pools: PoolMap = new Map();
-  for (const pool of config.pools) {
+  for (const pool of getManualPools(config)) {
     const name: string = pool.name ?? '(unnamed)';
     logger.info(`loading pool ${name.padStart(18)} at ${pool.address}`);
     const fungiblePool = await ajna.fungiblePoolFactory.getPoolByAddress(
@@ -321,7 +326,7 @@ async function kickPoolsLoop({
 }: KickLoopParams) {
   while (true) {
     await processKickCycle({ poolMap, config, signer, chainId, subgraph });
-    await delay(config.delayBetweenRuns);
+    await delay(config.runtime.delayBetweenRuns);
   }
 }
 
@@ -332,7 +337,7 @@ export async function processKickCycle({
   chainId,
   subgraph,
 }: KickLoopParams): Promise<void> {
-  const poolsWithKickSettings = config.pools.filter(hasKickSettings);
+  const poolsWithKickSettings = getManualPools(config).filter(hasKickSettings);
   for (const poolConfig of poolsWithKickSettings) {
     const pool = getAddressInsensitiveMapValue(poolMap, poolConfig.address)!;
     try {
@@ -341,16 +346,16 @@ export async function processKickCycle({
         poolConfig,
         signer,
         config: {
-          dryRun: config.dryRun,
-          delayBetweenActions: config.delayBetweenActions,
-          coinGeckoApiKey: config.coinGeckoApiKey,
-          ethRpcUrl: config.ethRpcUrl,
-          tokenAddresses: config.tokenAddresses,
+          dryRun: config.runtime.dryRun,
+          delayBetweenActions: config.runtime.delayBetweenActions,
+          coinGeckoApiKey: config.pricing?.coinGeckoApiKey,
+          ethRpcUrl: config.network.rpcUrl,
+          tokenAddresses: config.network.tokenAddresses,
           subgraph,
         },
         chainId,
       });
-      await delay(config.delayBetweenActions);
+      await delay(config.runtime.delayBetweenActions);
     } catch (error) {
       logger.error(`Failed to handle kicks for pool: ${pool.name}.`, error);
     }
@@ -379,7 +384,7 @@ export async function runTakeLoopIteration(
   try {
     await params.discoveryRuntime.runTakeCycle();
     return {
-      delaySeconds: params.config.delayBetweenRuns,
+      delaySeconds: params.config.runtime.delayBetweenRuns,
       recovered: false,
     };
   } catch (outerError) {
@@ -397,7 +402,7 @@ async function collectBondLoop({
   signer,
   subgraph,
 }: KeepPoolParams & { subgraph: SubgraphReader }) {
-  const poolsWithCollectBondSettings = config.pools.filter(
+  const poolsWithCollectBondSettings = getManualPools(config).filter(
     ({ collectBond }) => !!collectBond
   );
   while (true) {
@@ -409,17 +414,17 @@ async function collectBondLoop({
           signer,
           poolConfig,
           config: {
-            dryRun: config.dryRun,
-            delayBetweenActions: config.delayBetweenActions,
+            dryRun: config.runtime.dryRun,
+            delayBetweenActions: config.runtime.delayBetweenActions,
             subgraph,
           },
         });
-        await delay(config.delayBetweenActions);
+        await delay(config.runtime.delayBetweenActions);
       } catch (error) {
         logger.error(`Failed to collect bond from pool: ${pool.name}.`, error);
       }
     }
-    await delay(config.delayBetweenRuns);
+    await delay(config.runtime.delayBetweenRuns);
   }
 }
 
@@ -482,17 +487,17 @@ async function collectLpRewardsLoop({
   }
 
   const dexRouter = new DexRouter(signer, {
-    oneInchRouters: config?.oneInchRouters ?? {},
-    connectorTokens: config?.connectorTokens ?? [],
-    tokenAddresses: config.tokenAddresses,
+    oneInchRouters: config.dex?.oneInch?.routers ?? {},
+    connectorTokens: config.dex?.oneInch?.connectorTokens ?? [],
+    tokenAddresses: config.network.tokenAddresses,
   });
   const exchangeTracker = new RewardActionTracker(signer, config, dexRouter);
 
   // Memoized lowercase-address → PoolConfig lookup. Built once so both the
   // resolver and the AuctionNotCleared settlement-retry path do O(1) lookups
-  // instead of repeated O(n) linear scans over `config.pools`.
+  // instead of repeated O(n) linear scans over `manual.pools`.
   const poolConfigByAddress = new Map<string, PoolConfig>();
-  for (const p of config.pools) {
+  for (const p of getManualPools(config)) {
     poolConfigByAddress.set(normalizeAddress(p.address), p);
   }
 
@@ -521,7 +526,7 @@ async function collectLpRewardsLoop({
 
     const matchingConfig = poolConfigByAddress.get(normalized);
     const settings = resolveCollectLpRewardForPool(
-      config.defaultLpReward,
+      config.rewards?.defaultLpReward,
       matchingConfig?.collectLpReward,
       normalized
     );
@@ -567,7 +572,7 @@ async function collectLpRewardsLoop({
 
       try {
         await redeemer.sweep();
-        await delay(config.delayBetweenActions);
+        await delay(config.runtime.delayBetweenActions);
       } catch (error) {
         const errorMessage = getErrorMessage(error);
 
@@ -593,8 +598,8 @@ async function collectLpRewardsLoop({
               poolConfig,
               signer,
               config: {
-                dryRun: config.dryRun,
-                delayBetweenActions: config.delayBetweenActions,
+                dryRun: config.runtime.dryRun,
+                delayBetweenActions: config.runtime.delayBetweenActions,
                 subgraph,
               },
             });
@@ -605,7 +610,7 @@ async function collectLpRewardsLoop({
               );
               try {
                 await redeemer.sweep();
-                await delay(config.delayBetweenActions);
+                await delay(config.runtime.delayBetweenActions);
               } catch (retryError) {
                 const retryMessage =
                   retryError instanceof Error
@@ -656,6 +661,6 @@ async function collectLpRewardsLoop({
         error
       );
     }
-    await delay(config.delayBetweenRuns);
+    await delay(config.runtime.delayBetweenRuns);
   }
 }

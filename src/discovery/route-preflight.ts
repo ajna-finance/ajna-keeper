@@ -33,8 +33,8 @@ const TAKER_CONTRACT_KEYS: Record<LiquiditySource, string[]> = {
 function getEffectiveExternalTakePaths(
   config: KeeperConfig
 ): Set<ExternalTakePathKind> {
-  const takePolicy = getAutoDiscoverTakePolicy(config.autoDiscover);
-  const discoveredTake = config.discoveredDefaults?.take;
+  const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
+  const discoveredTake = config.discovery?.defaults?.take;
   return new Set(
     resolveExternalTakePaths({
       defaultLiquiditySource: discoveredTake?.liquiditySource,
@@ -104,9 +104,9 @@ async function retryRpcRead<T>(operation: () => Promise<T>): Promise<{
 }
 
 function getEffectiveFactorySources(config: KeeperConfig): LiquiditySource[] {
-  const takePolicy = getAutoDiscoverTakePolicy(config.autoDiscover);
+  const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
   return resolveFactoryRouteSelectionSources({
-    defaultLiquiditySource: config.discoveredDefaults?.take?.liquiditySource,
+    defaultLiquiditySource: config.discovery?.defaults?.take?.liquiditySource,
     allowedLiquiditySources: takePolicy?.allowedLiquiditySources,
     configuredDefaultFactoryLiquiditySource:
       takePolicy?.defaultFactoryLiquiditySource,
@@ -117,7 +117,7 @@ function getConfiguredTakerAddress(
   config: KeeperConfig,
   source: LiquiditySource
 ): string | undefined {
-  const takerContracts = config.takerContracts;
+  const takerContracts = config.takers?.contracts;
   if (!takerContracts) {
     return undefined;
   }
@@ -229,13 +229,13 @@ export async function validateAutoDiscoverRouteDeployments(params: {
     await requireContractCode({
       provider: params.provider,
       label: `1inch router for chain ${params.chainId}`,
-      address: params.config.oneInchRouters?.[params.chainId],
+      address: params.config.dex?.oneInch?.routers?.[params.chainId],
       errors,
     });
     await requireContractCode({
       provider: params.provider,
-      label: 'keeperTaker',
-      address: params.config.keeperTaker,
+      label: 'takers.oneInch',
+      address: params.config.takers?.oneInch,
       errors,
     });
   }
@@ -243,8 +243,8 @@ export async function validateAutoDiscoverRouteDeployments(params: {
   if (paths.has('factory')) {
     await requireContractCode({
       provider: params.provider,
-      label: 'keeperTakerFactory',
-      address: params.config.keeperTakerFactory,
+      label: 'takers.factory',
+      address: params.config.takers?.factory,
       errors,
     });
 
@@ -258,7 +258,7 @@ export async function validateAutoDiscoverRouteDeployments(params: {
       });
       await validateFactoryRegistry({
         provider: params.provider,
-        factoryAddress: params.config.keeperTakerFactory,
+        factoryAddress: params.config.takers?.factory,
         source,
         expectedTaker: takerAddress,
         errors,
@@ -269,31 +269,35 @@ export async function validateAutoDiscoverRouteDeployments(params: {
           provider: params.provider,
           label: 'Uniswap V3 universalRouterAddress',
           address:
-            params.config.universalRouterOverrides?.universalRouterAddress,
+            params.config.dex?.uniswapV3?.universalRouter
+              ?.universalRouterAddress,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'Uniswap V3 permit2Address',
-          address: params.config.universalRouterOverrides?.permit2Address,
+          address:
+            params.config.dex?.uniswapV3?.universalRouter?.permit2Address,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'Uniswap V3 poolFactoryAddress',
-          address: params.config.universalRouterOverrides?.poolFactoryAddress,
+          address:
+            params.config.dex?.uniswapV3?.universalRouter?.poolFactoryAddress,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'Uniswap V3 quoterV2Address',
-          address: params.config.universalRouterOverrides?.quoterV2Address,
+          address:
+            params.config.dex?.uniswapV3?.universalRouter?.quoterV2Address,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'Uniswap V3 wethAddress',
-          address: params.config.universalRouterOverrides?.wethAddress,
+          address: params.config.dex?.uniswapV3?.universalRouter?.wethAddress,
           errors,
         });
       }
@@ -302,25 +306,25 @@ export async function validateAutoDiscoverRouteDeployments(params: {
         await requireContractCode({
           provider: params.provider,
           label: 'SushiSwap swapRouterAddress',
-          address: params.config.sushiswapRouterOverrides?.swapRouterAddress,
+          address: params.config.dex?.sushiswap?.swapRouterAddress,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'SushiSwap factoryAddress',
-          address: params.config.sushiswapRouterOverrides?.factoryAddress,
+          address: params.config.dex?.sushiswap?.factoryAddress,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'SushiSwap quoterV2Address',
-          address: params.config.sushiswapRouterOverrides?.quoterV2Address,
+          address: params.config.dex?.sushiswap?.quoterV2Address,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'SushiSwap wethAddress',
-          address: params.config.sushiswapRouterOverrides?.wethAddress,
+          address: params.config.dex?.sushiswap?.wethAddress,
           errors,
         });
       }
@@ -329,11 +333,11 @@ export async function validateAutoDiscoverRouteDeployments(params: {
         await requireContractCode({
           provider: params.provider,
           label: 'Curve wethAddress',
-          address: params.config.curveRouterOverrides?.wethAddress,
+          address: params.config.dex?.curve?.wethAddress,
           errors,
         });
         for (const [pairName, poolConfig] of Object.entries(
-          params.config.curveRouterOverrides?.poolConfigs ?? {}
+          params.config.dex?.curve?.poolConfigs ?? {}
         )) {
           await requireContractCode({
             provider: params.provider,

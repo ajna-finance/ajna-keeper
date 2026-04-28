@@ -86,21 +86,32 @@ describe('resolveCollectLpRewardForPool', () => {
 
 describe('isLpCollectionEnabled', () => {
   const baseConfig: any = {
-    ethRpcUrl: 'https://rpc.invalid',
-    logLevel: 'info',
-    subgraphUrl: 'https://subgraph.invalid',
-    keeperKeystore: '/tmp/keeper.json',
+    network: {
+      rpcUrl: 'https://rpc.invalid',
+      subgraph: {
+        url: 'https://subgraph.invalid',
+      },
+    },
+    signer: {
+      keystore: '/tmp/keeper.json',
+    },
+    runtime: {
+      logLevel: 'info',
+      delayBetweenActions: 1,
+      delayBetweenRuns: 10,
+    },
     ajna: {},
-    delayBetweenActions: 1,
-    delayBetweenRuns: 10,
   };
 
   it('returns false when neither defaultLpReward nor any per-pool entry is set', () => {
-    expect(isLpCollectionEnabled({ ...baseConfig, pools: [] })).to.be.false;
+    expect(isLpCollectionEnabled({ ...baseConfig, manual: { pools: [] } })).to
+      .be.false;
     expect(
       isLpCollectionEnabled({
         ...baseConfig,
-        pools: [{ address: '0xa', price: {} }],
+        manual: {
+          pools: [{ address: '0xa', price: {} }],
+        },
       })
     ).to.be.false;
   });
@@ -109,10 +120,14 @@ describe('isLpCollectionEnabled', () => {
     expect(
       isLpCollectionEnabled({
         ...baseConfig,
-        pools: [],
-        defaultLpReward: {
-          minAmountQuote: 0,
-          minAmountCollateral: 0,
+        manual: {
+          pools: [],
+        },
+        rewards: {
+          defaultLpReward: {
+            minAmountQuote: 0,
+            minAmountCollateral: 0,
+          },
         },
       })
     ).to.be.true;
@@ -122,18 +137,20 @@ describe('isLpCollectionEnabled', () => {
     expect(
       isLpCollectionEnabled({
         ...baseConfig,
-        pools: [
-          { address: '0xa', price: {} },
-          {
-            address: '0xb',
-            price: {},
-            collectLpReward: {
-              redeemFirst: TokenToCollect.QUOTE,
-              minAmountQuote: 0,
-              minAmountCollateral: 0,
+        manual: {
+          pools: [
+            { address: '0xa', price: {} },
+            {
+              address: '0xb',
+              price: {},
+              collectLpReward: {
+                redeemFirst: TokenToCollect.QUOTE,
+                minAmountQuote: 0,
+                minAmountCollateral: 0,
+              },
             },
-          },
-        ],
+          ],
+        },
       })
     ).to.be.true;
   });

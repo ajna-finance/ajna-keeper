@@ -1,7 +1,10 @@
 import 'dotenv/config';
 
 import { PriceOriginSource } from '../src/config';
-import { getPriceFromAlchemy, getPoolPriceFromAlchemy } from '../src/pricing/alchemy';
+import {
+  getPriceFromAlchemy,
+  getPoolPriceFromAlchemy,
+} from '../src/pricing/alchemy';
 import { getPriceCoinGecko } from '../src/pricing/coingecko';
 
 type PriceDiagnostic = 'alchemy' | 'fallback' | 'cana';
@@ -25,7 +28,9 @@ function hasCoinGeckoApiKey(): boolean {
 function getRequestedDiagnostics(): PriceDiagnostic[] {
   const requested = process.argv.slice(2);
   if (requested.includes('--help') || requested.includes('-h')) {
-    console.log('Usage: npx ts-node scripts/price-diagnostics.ts [all|alchemy|fallback|cana]');
+    console.log(
+      'Usage: npx ts-node scripts/price-diagnostics.ts [all|alchemy|fallback|cana]'
+    );
     return [];
   }
 
@@ -34,7 +39,7 @@ function getRequestedDiagnostics(): PriceDiagnostic[] {
   }
 
   const invalid = requested.filter(
-    diagnostic => !ALL_DIAGNOSTICS.includes(diagnostic as PriceDiagnostic)
+    (diagnostic) => !ALL_DIAGNOSTICS.includes(diagnostic as PriceDiagnostic)
   );
   if (invalid.length > 0) {
     throw new Error(
@@ -73,7 +78,9 @@ async function testAlchemyPrices() {
       CHAIN_ID,
       rpcUrl
     );
-    console.log(`OK CANA/USDC Pool Price: ${poolPrice.toFixed(6)} USDC per CANA\n`);
+    console.log(
+      `OK CANA/USDC Pool Price: ${poolPrice.toFixed(6)} USDC per CANA\n`
+    );
   } catch {
     console.log('WARN CANA price not currently available in Alchemy');
     console.log('  Will use CoinGecko for CANA price instead.\n');
@@ -86,11 +93,15 @@ async function testAlchemyPrices() {
     CHAIN_ID,
     rpcUrl
   );
-  console.log(`OK WETH/USDC Pool Price: ${poolPrice.toFixed(2)} USDC per WETH\n`);
+  console.log(
+    `OK WETH/USDC Pool Price: ${poolPrice.toFixed(2)} USDC per WETH\n`
+  );
 
   console.log('OK Alchemy Prices API diagnostics passed!');
   console.log('Note: If a token is not available in Alchemy, the keeper will');
-  console.log('automatically fall back to CoinGecko API when a CoinGecko API key is provided.\n');
+  console.log(
+    'automatically fall back to CoinGecko API when a CoinGecko API key is provided.\n'
+  );
 }
 
 async function testPriceFallback() {
@@ -146,7 +157,9 @@ async function testPriceFallback() {
 
   console.log('OK price fallback diagnostics passed!');
   console.log('Summary:');
-  console.log('  - Tokens are sourced from CoinGecko or Alchemy based on availability');
+  console.log(
+    '  - Tokens are sourced from CoinGecko or Alchemy based on availability'
+  );
   console.log('  - Fallback system: CoinGecko, then Alchemy, then error');
   console.log('  - Both services support a wide range of tokens\n');
 }
@@ -192,7 +205,7 @@ async function main() {
   }
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error('Price diagnostic failed:', error);
   process.exit(1);
 });

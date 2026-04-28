@@ -145,16 +145,23 @@ describe('Smart DEX Routing Integration Tests', () => {
   describe('Take Settings Integration', () => {
     it('validates Uniswap V3 take settings with factory config', async () => {
       const factoryConfig = {
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
-        takerContracts: {
-          UniswapV3: '0x2234567890123456789012345678901234567890',
+        takers: {
+          factory: '0x1234567890123456789012345678901234567890',
+          contracts: {
+            UniswapV3: '0x2234567890123456789012345678901234567890',
+          },
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
-          quoterV2Address: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
-          permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
-          poolFactoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-          wethAddress: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+        dex: {
+          uniswapV3: {
+            universalRouter: {
+              universalRouterAddress:
+                '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+              quoterV2Address: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
+              permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+              poolFactoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
+              wethAddress: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+            },
+          },
         },
       };
 
@@ -173,9 +180,15 @@ describe('Smart DEX Routing Integration Tests', () => {
 
     it('validates 1inch take settings with keeperTaker config', async () => {
       const oneInchConfig = {
-        keeperTaker: '0x1234567890123456789012345678901234567890',
-        oneInchRouters: {
-          1: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+        takers: {
+          oneInch: '0x1234567890123456789012345678901234567890',
+        },
+        dex: {
+          oneInch: {
+            routers: {
+              1: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+            },
+          },
         },
       };
 

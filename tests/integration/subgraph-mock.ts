@@ -223,7 +223,8 @@ export function makeGetBucketTakeLPAwardsFromSdk(pool: FungiblePool) {
       }
       const [, , indexBn] = parsed.args as [string, boolean, BigNumber];
 
-      const id = `${evt.transactionHash}-${evt.logIndex.toString(16).padStart(6, '0')}`.toLowerCase();
+      const id =
+        `${evt.transactionHash}-${evt.logIndex.toString(16).padStart(6, '0')}`.toLowerCase();
 
       if (blockTimestamp.lt(cursorTs)) continue;
 

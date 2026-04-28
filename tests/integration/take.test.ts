@@ -2,7 +2,11 @@ import './subgraph-mock';
 import { getLoansToKick, handleKicks, kick } from '../../src/kick';
 import { AjnaSDK, ERC20Pool__factory, FungiblePool } from '@ajna-finance/sdk';
 import { MAINNET_CONFIG, USER1_MNEMONIC } from './test-config';
-import { configureAjna, LiquiditySource, TokenToCollect } from '../../src/config';
+import {
+  configureAjna,
+  LiquiditySource,
+  TokenToCollect,
+} from '../../src/config';
 import {
   getProvider,
   resetHardhat,
@@ -28,7 +32,11 @@ import {
 } from '../../src/take';
 import { arbTakeLiquidation } from '../../src/take/arb';
 import { BigNumber, constants, Wallet } from 'ethers';
-import { arrayFromAsync, decimaledToWei, weiToDecimaled } from '../../src/utils';
+import {
+  arrayFromAsync,
+  decimaledToWei,
+  weiToDecimaled,
+} from '../../src/utils';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
 import { NonceTracker } from '../../src/nonce';
@@ -187,7 +195,7 @@ describe('getLiquidationsToArbTake', () => {
     );
     // Should find the auction but NOT mark it as arb-takeable
     // (auction price after 30 min is still much higher than HPB * 0.01)
-    const arbTakeable = liquidations.filter(l => l.isArbTakeable);
+    const arbTakeable = liquidations.filter((l) => l.isArbTakeable);
     expect(arbTakeable).to.be.empty;
   });
 
@@ -204,7 +212,10 @@ describe('getLiquidationsToArbTake', () => {
 
     // After 4 days, auction price should have decayed to near-zero
     const auctionPrice = weiToDecimaled(status.price);
-    expect(auctionPrice).to.be.lessThan(0.001, 'Auction price should be near zero after 4 days');
+    expect(auctionPrice).to.be.lessThan(
+      0.001,
+      'Auction price should be near zero after 4 days'
+    );
 
     // Collateral should still exist (no one settled it)
     expect(weiToDecimaled(status.collateral)).to.be.greaterThan(0);
@@ -375,7 +386,9 @@ describe('processManualTakeCandidates', () => {
     await increaseTime(AUCTION_WAIT_TIME);
 
     // Record initial deposits for comparison
-    const bucket2DepositBefore = weiToDecimaled((await bucket2.getStatus()).deposit);
+    const bucket2DepositBefore = weiToDecimaled(
+      (await bucket2.getStatus()).deposit
+    );
 
     await processManualTakeCandidates({
       signer,
@@ -448,7 +461,9 @@ describe('ArbTake → LP Collection chain', () => {
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
           delayBetweenActions: 0,
-          pools: [],
+          manual: {
+            pools: [],
+          },
         } as any,
         dexRouter
       ),
@@ -543,7 +558,10 @@ describe('ArbTake → Settlement → Bond Collection chain', () => {
     // - claimable may be > 0 (bond returned) or 0 (bond forfeited if auction price > NP)
     const signerAddress = await signer.getAddress();
     const { claimable, locked } = await pool.kickerInfo(signerAddress);
-    expect(weiToDecimaled(locked)).to.equal(0, 'Bond should be unlocked after settlement');
+    expect(weiToDecimaled(locked)).to.equal(
+      0,
+      'Bond should be unlocked after settlement'
+    );
 
     // Attempt bond collection — this exercises the full collectBondFromPool path
     await collectBondFromPool({
@@ -569,8 +587,15 @@ describe('ArbTake → Settlement → Bond Collection chain', () => {
     // Verify: claimable should now be 0 regardless of path taken:
     // - If claimable was > 0: collectBondFromPool withdrew it → now 0
     // - If claimable was 0: nothing to withdraw → still 0
-    const { claimable: claimableAfter, locked: lockedAfter } = await pool.kickerInfo(signerAddress);
-    expect(weiToDecimaled(claimableAfter)).to.equal(0, 'Claimable bond should be 0 after collection');
-    expect(weiToDecimaled(lockedAfter)).to.equal(0, 'Locked bond should remain 0');
+    const { claimable: claimableAfter, locked: lockedAfter } =
+      await pool.kickerInfo(signerAddress);
+    expect(weiToDecimaled(claimableAfter)).to.equal(
+      0,
+      'Claimable bond should be 0 after collection'
+    );
+    expect(weiToDecimaled(lockedAfter)).to.equal(
+      0,
+      'Locked bond should remain 0'
+    );
   });
 });

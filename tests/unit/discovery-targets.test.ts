@@ -9,15 +9,29 @@ import {
   validateResolvedSettlementTarget,
   validateResolvedTakeTarget,
 } from '../../src/discovery/targets';
-import { KeeperConfig, LiquiditySource, PriceOriginSource } from '../../src/config';
+import {
+  KeeperConfig,
+  LiquiditySource,
+  PriceOriginSource,
+} from '../../src/config';
 import subgraph from '../../src/subgraph';
 import { logger } from '../../src/logging';
 
 const BASE_CONFIG: KeeperConfig = {
-  ethRpcUrl: 'http://localhost:8545',
-  logLevel: 'debug',
-  subgraphUrl: 'http://example-subgraph',
-  keeperKeystore: '/tmp/keeper.json',
+  network: {
+    rpcUrl: 'http://localhost:8545',
+    subgraph: {
+      url: 'http://example-subgraph',
+    },
+  },
+  signer: {
+    keystore: '/tmp/keeper.json',
+  },
+  runtime: {
+    logLevel: 'debug',
+    delayBetweenActions: 0,
+    delayBetweenRuns: 1,
+  },
   ajna: {
     erc20PoolFactory: '0x0000000000000000000000000000000000000001',
     erc721PoolFactory: '0x0000000000000000000000000000000000000002',
@@ -25,26 +39,26 @@ const BASE_CONFIG: KeeperConfig = {
     positionManager: '0x0000000000000000000000000000000000000004',
     ajnaToken: '0x0000000000000000000000000000000000000005',
   },
-  delayBetweenActions: 0,
-  delayBetweenRuns: 1,
-  pools: [],
-  autoDiscover: {
+  manual: {
+    pools: [],
+  },
+  discovery: {
     enabled: true,
     take: true,
     settlement: true,
     logSkips: true,
-  },
-  discoveredDefaults: {
-    take: {
-      minCollateral: 0.1,
-      hpbPriceFactor: 0.98,
-    },
-    settlement: {
-      enabled: true,
-      minAuctionAge: 3600,
-      maxBucketDepth: 50,
-      maxIterations: 5,
-      checkBotIncentive: true,
+    defaults: {
+      take: {
+        minCollateral: 0.1,
+        hpbPriceFactor: 0.98,
+      },
+      settlement: {
+        enabled: true,
+        minAuctionAge: 3600,
+        maxBucketDepth: 50,
+        maxIterations: 5,
+        checkBotIncentive: true,
+      },
     },
   },
 };
@@ -103,35 +117,37 @@ describe('Discovery Target Resolution', () => {
   it('respects per-action manual overrides while allowing missing actions to fall back to discovered defaults', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Take Pool',
-          address: '0x1111111111111111111111111111111111111111',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          take: {
-            minCollateral: 1,
-            hpbPriceFactor: 0.9,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0x1111111111111111111111111111111111111111',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 1,
+              hpbPriceFactor: 0.9,
+            },
           },
-        },
-        {
-          name: 'Kick Only Pool',
-          address: '0x2222222222222222222222222222222222222222',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          kick: {
-            minDebt: 1,
-            priceFactor: 0.9,
+          {
+            name: 'Kick Only Pool',
+            address: '0x2222222222222222222222222222222222222222',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            kick: {
+              minDebt: 1,
+              priceFactor: 0.9,
+            },
           },
-        },
-        {
-          name: 'Manual Settlement Pool',
-          address: '0x3333333333333333333333333333333333333333',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          settlement: {
-            enabled: true,
-            minAuctionAge: 60,
+          {
+            name: 'Manual Settlement Pool',
+            address: '0x3333333333333333333333333333333333333333',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            settlement: {
+              enabled: true,
+              minAuctionAge: 60,
+            },
           },
-        },
-      ],
+        ],
+      },
     };
 
     sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
@@ -196,23 +212,25 @@ describe('Discovery Target Resolution', () => {
   it('applies dryRunNewPools only to pools with no manual config entry', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      dryRun: false,
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover,
+      runtime: { ...BASE_CONFIG.runtime, dryRun: false },
+      discovery: {
+        ...BASE_CONFIG.discovery,
         enabled: true,
         dryRunNewPools: true,
       },
-      pools: [
-        {
-          name: 'Kick Only Pool',
-          address: '0x2222222222222222222222222222222222222222',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          kick: {
-            minDebt: 1,
-            priceFactor: 0.9,
+      manual: {
+        pools: [
+          {
+            name: 'Kick Only Pool',
+            address: '0x2222222222222222222222222222222222222222',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            kick: {
+              minDebt: 1,
+              priceFactor: 0.9,
+            },
           },
-        },
-      ],
+        ],
+      },
     };
 
     sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
@@ -484,11 +502,23 @@ describe('Discovery Target Resolution', () => {
 
     await buildDiscoveredTakeTargets({
       ...BASE_CONFIG,
-      subgraphFallbackUrls: ['http://fallback-a'],
+      network: {
+        ...BASE_CONFIG.network,
+        subgraph: {
+          ...BASE_CONFIG.network.subgraph,
+          fallbackUrls: ['http://fallback-a'],
+        },
+      },
     });
     await buildDiscoveredTakeTargets({
       ...BASE_CONFIG,
-      subgraphFallbackUrls: ['http://fallback-b'],
+      network: {
+        ...BASE_CONFIG.network,
+        subgraph: {
+          ...BASE_CONFIG.network.subgraph,
+          fallbackUrls: ['http://fallback-b'],
+        },
+      },
     });
 
     expect(discoveryStub.calledTwice).to.be.true;
@@ -497,8 +527,8 @@ describe('Discovery Target Resolution', () => {
   it('does not apply take quote budget to arb-only discovered take defaults', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover!,
+      discovery: {
+        ...BASE_CONFIG.discovery!,
         take: {
           enabled: true,
           takeQuoteBudgetPerRun: 1,
@@ -576,8 +606,8 @@ describe('Discovery Target Resolution', () => {
   it('preserves negative signs when ranking discovered take candidates', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover!,
+      discovery: {
+        ...BASE_CONFIG.discovery!,
         take: {
           enabled: true,
           takeQuoteBudgetPerRun: 1,
@@ -623,8 +653,8 @@ describe('Discovery Target Resolution', () => {
   it('treats zero kickTime as too new to bypass settlement age filtering', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover!,
+      discovery: {
+        ...BASE_CONFIG.discovery!,
         take: false,
         settlement: {
           enabled: true,
@@ -669,8 +699,8 @@ describe('Discovery Target Resolution', () => {
   it('uses a deterministic fallback ordering for invalid discovered kickTime values', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover!,
+      discovery: {
+        ...BASE_CONFIG.discovery!,
         take: false,
         settlement: {
           enabled: true,
@@ -721,24 +751,33 @@ describe('Discovery Target Resolution', () => {
   it('uses precise decimal ranking when enforcing discovered take quote budgets', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      keeperTaker: '0x1234567890123456789012345678901234567890',
-      oneInchRouters: {
-        1: '0x1111111111111111111111111111111111111111',
+      takers: {
+        ...BASE_CONFIG.takers,
+        oneInch: '0x1234567890123456789012345678901234567890',
       },
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover!,
+      dex: {
+        ...BASE_CONFIG.dex,
+        oneInch: {
+          ...BASE_CONFIG.dex?.oneInch,
+          routers: {
+            1: '0x1111111111111111111111111111111111111111',
+          },
+        },
+      },
+      discovery: {
+        ...BASE_CONFIG.discovery!,
         take: {
           enabled: true,
           takeQuoteBudgetPerRun: 1,
           maxPoolsPerRun: 1,
         },
         settlement: false,
-      },
-      discoveredDefaults: {
-        ...BASE_CONFIG.discoveredDefaults!,
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.99,
+        defaults: {
+          ...BASE_CONFIG.discovery!.defaults!,
+          take: {
+            liquiditySource: LiquiditySource.ONEINCH,
+            marketPriceFactor: 0.99,
+          },
         },
       },
     };
@@ -780,8 +819,8 @@ describe('Discovery Target Resolution', () => {
   it('prioritizes larger discovered settlement debt before auction age', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover!,
+      discovery: {
+        ...BASE_CONFIG.discovery!,
         take: false,
         settlement: {
           enabled: true,
@@ -826,8 +865,8 @@ describe('Discovery Target Resolution', () => {
   it('uses older kickTime as the settlement tiebreaker when debt is equal', async () => {
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover!,
+      discovery: {
+        ...BASE_CONFIG.discovery!,
         take: false,
         settlement: {
           enabled: true,
@@ -936,8 +975,8 @@ describe('Discovery Target Resolution', () => {
 
     const targets = await buildDiscoveredSettlementTargets({
       ...BASE_CONFIG,
-      autoDiscover: {
-        ...BASE_CONFIG.autoDiscover!,
+      discovery: {
+        ...BASE_CONFIG.discovery!,
         take: false,
         settlement: true,
       },

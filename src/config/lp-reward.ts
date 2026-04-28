@@ -4,24 +4,22 @@ import type {
   KeeperConfig,
   PoolConfig,
 } from './schema';
+import { getManualPools } from './schema';
 
 /**
- * Shared type guard for `lpRewardLookbackSeconds`. Used by both the config
+ * Shared type guard for `rewards.lpLookbackSeconds`. Used by both the config
  * validator (which throws on invalid input) and the `LpIngester` constructor
  * (which falls back to the default on invalid input for defense-in-depth).
  */
 export function isValidLookbackSeconds(v: unknown): v is number {
   return (
-    typeof v === 'number' &&
-    Number.isFinite(v) &&
-    Number.isInteger(v) &&
-    v >= 0
+    typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v) && v >= 0
   );
 }
 
 /**
- * Merge `defaultLpReward` with a per-pool override (if any) and return a
- * fully-specified `CollectLpRewardSettings`.
+ * Merge `rewards.defaultLpReward` with a per-pool override (if any) and return
+ * a fully-specified `CollectLpRewardSettings`.
  *
  * Semantics:
  * - If BOTH default and override are undefined: returns `undefined`, signalling
@@ -51,8 +49,9 @@ export function resolveCollectLpRewardForPool(
     ) {
       throw new Error(
         `pool ${poolAddressForErrors} sets collectLpReward without a ` +
-          `KeeperConfig.defaultLpReward to inherit from; minAmountQuote and ` +
-          `minAmountCollateral are required on the per-pool entry in this mode.`
+          `KeeperConfig.rewards.defaultLpReward to inherit from; ` +
+          `minAmountQuote and minAmountCollateral are required on the ` +
+          `per-pool entry in this mode.`
       );
     }
     // Spread (not hand-rolled field list) so a future field added to
@@ -98,8 +97,8 @@ export function resolveCollectLpRewardForPool(
  * is set, or at least one pool has a per-pool override.
  */
 export function isLpCollectionEnabled(config: KeeperConfig): boolean {
-  if (config.defaultLpReward) return true;
-  return config.pools.some(
+  if (config.rewards?.defaultLpReward) return true;
+  return getManualPools(config).some(
     (pool: PoolConfig) => pool.collectLpReward !== undefined
   );
 }

@@ -3,11 +3,13 @@ import { quoteTokenScale } from '@ajna-finance/sdk/dist/contracts/pool';
 import { BigNumber, ethers } from 'ethers';
 import {
   DEFAULT_FEE_TIER_BY_SOURCE,
-  KeeperConfig,
+  CurveRouterOverrides,
   LiquiditySource,
   LiquiditySourceMap,
   PoolConfig,
+  SushiswapRouterOverrides,
   STANDARD_V3_FEE_TIERS,
+  UniversalRouterOverrides,
   formatLiquiditySource,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
@@ -89,17 +91,16 @@ export interface FactoryRouteProfitabilityContext {
   gasPolicyEvaluatedAt?: number;
 }
 
-type FactoryTakeConfigBase = Pick<
-  KeeperConfig,
-  | 'dryRun'
-  | 'delayBetweenActions'
-  | 'keeperTakerFactory'
-  | 'takerContracts'
-  | 'universalRouterOverrides'
-  | 'sushiswapRouterOverrides'
-  | 'curveRouterOverrides'
-  | 'tokenAddresses'
->;
+export interface FactoryTakeConfigBase {
+  dryRun?: boolean;
+  delayBetweenActions: number;
+  keeperTakerFactory?: string;
+  takerContracts?: { [source: string]: string };
+  universalRouterOverrides?: UniversalRouterOverrides;
+  sushiswapRouterOverrides?: SushiswapRouterOverrides;
+  curveRouterOverrides?: CurveRouterOverrides;
+  tokenAddresses?: { [tokenSymbol: string]: string };
+}
 
 export type FactoryTakeConfig = WithSubgraph<FactoryTakeConfigBase>;
 export type FactoryTakeConfigInput = SubgraphConfigInput<FactoryTakeConfigBase>;

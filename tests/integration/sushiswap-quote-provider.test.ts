@@ -14,7 +14,7 @@ describe('SushiSwap Quote Provider', () => {
   beforeEach(() => {
     // Reset sinon after each test
     sinon.restore();
-    
+
     // Use REAL wallet from test mnemonic (same pattern as your working tests)
     const wallet = Wallet.fromMnemonic(USER1_MNEMONIC);
     mockSigner = wallet.connect(getProvider());
@@ -31,21 +31,24 @@ describe('SushiSwap Quote Provider', () => {
 
   it('should create SushiSwap quote provider with valid configuration', async () => {
     quoteProvider = new SushiSwapQuoteProvider(mockSigner, validConfig);
-    
+
     expect(quoteProvider).to.be.instanceOf(SushiSwapQuoteProvider);
-    expect(quoteProvider.getQuoterAddress()).to.equal(validConfig.quoterV2Address);
+    expect(quoteProvider.getQuoterAddress()).to.equal(
+      validConfig.quoterV2Address
+    );
   });
 
   it('should initialize successfully with valid contracts', async () => {
     quoteProvider = new SushiSwapQuoteProvider(mockSigner, validConfig);
-    
+
     try {
       const initialized = await quoteProvider.initialize();
       // May succeed or fail depending on contract existence, but should not crash
       expect(typeof initialized).to.equal('boolean');
     } catch (error) {
       // Expected to fail due to no real contracts in test environment
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       expect(errorMessage.length).to.be.greaterThan(0);
     }
   });
@@ -55,14 +58,14 @@ describe('SushiSwap Quote Provider', () => {
       ...validConfig,
       quoterV2Address: undefined,
     };
-    
+
     quoteProvider = new SushiSwapQuoteProvider(mockSigner, configWithoutQuoter);
     expect(quoteProvider.getQuoterAddress()).to.be.undefined;
   });
 
   it('should handle quote requests gracefully', async () => {
     quoteProvider = new SushiSwapQuoteProvider(mockSigner, validConfig);
-    
+
     // Don't initialize - test constructor and basic functionality
     const result = await quoteProvider.getQuote(
       BigNumber.from('1000000000000000000'), // 1 ETH
@@ -70,7 +73,7 @@ describe('SushiSwap Quote Provider', () => {
       '0x4200000000000000000000000000000000000006', // WETH
       500 // 0.05% fee tier
     );
-    
+
     // Since we can't mock the full contract interaction, expect it to fail gracefully
     expect(result.success).to.be.false;
     expect(result.error).to.be.a('string');
@@ -78,14 +81,14 @@ describe('SushiSwap Quote Provider', () => {
 
   it('should handle zero amount input', async () => {
     quoteProvider = new SushiSwapQuoteProvider(mockSigner, validConfig);
-    
+
     const result = await quoteProvider.getQuote(
       BigNumber.from('0'),
       '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
       '0x4200000000000000000000000000000000000006',
       500
     );
-    
+
     expect(result.success).to.be.false;
     expect(result.error).to.be.a('string');
   });
@@ -94,21 +97,25 @@ describe('SushiSwap Quote Provider', () => {
     // Create a wallet with a provider that will fail
     const failingWallet = Wallet.fromMnemonic(USER1_MNEMONIC);
     // Don't connect to provider - will cause issues
-    
+
     try {
-      const newProvider = new SushiSwapQuoteProvider(failingWallet, validConfig);
+      const newProvider = new SushiSwapQuoteProvider(
+        failingWallet,
+        validConfig
+      );
       // May fail during construction or later
       expect(newProvider).to.be.instanceOf(SushiSwapQuoteProvider);
     } catch (error) {
       // Expected to fail due to missing provider
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       expect(errorMessage.length).to.be.greaterThan(0);
     }
   });
 
   it('should check pool existence for token pairs', async () => {
     quoteProvider = new SushiSwapQuoteProvider(mockSigner, validConfig);
-    
+
     try {
       // Can't fully test without real contract, but test the method exists
       const exists = await quoteProvider.poolExists(
@@ -116,12 +123,13 @@ describe('SushiSwap Quote Provider', () => {
         '0x4200000000000000000000000000000000000006',
         500
       );
-      
+
       // Should return boolean
       expect(typeof exists).to.equal('boolean');
     } catch (error) {
       // Expected to fail due to no real contracts
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       expect(errorMessage.length).to.be.greaterThan(0);
     }
   });
@@ -130,8 +138,10 @@ describe('SushiSwap Quote Provider', () => {
     it('should handle different chain configurations', async () => {
       // Test Hemi configuration
       const hemiProvider = new SushiSwapQuoteProvider(mockSigner, validConfig);
-      expect(hemiProvider.getQuoterAddress()).to.equal(validConfig.quoterV2Address);
-      
+      expect(hemiProvider.getQuoterAddress()).to.equal(
+        validConfig.quoterV2Address
+      );
+
       // Test Mainnet-style configuration
       const mainnetConfig = {
         swapRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
@@ -140,16 +150,21 @@ describe('SushiSwap Quote Provider', () => {
         defaultFeeTier: 3000,
         wethAddress: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
       };
-      
-      const mainnetProvider = new SushiSwapQuoteProvider(mockSigner, mainnetConfig);
-      expect(mainnetProvider.getQuoterAddress()).to.equal(mainnetConfig.quoterV2Address);
+
+      const mainnetProvider = new SushiSwapQuoteProvider(
+        mockSigner,
+        mainnetConfig
+      );
+      expect(mainnetProvider.getQuoterAddress()).to.equal(
+        mainnetConfig.quoterV2Address
+      );
     });
 
     it('should handle different fee tiers', async () => {
       quoteProvider = new SushiSwapQuoteProvider(mockSigner, validConfig);
-      
+
       const feeTiers = [500, 3000, 10000]; // Common SushiSwap fee tiers
-      
+
       for (const feeTier of feeTiers) {
         try {
           const result = await quoteProvider.getQuote(
@@ -158,13 +173,14 @@ describe('SushiSwap Quote Provider', () => {
             '0x4200000000000000000000000000000000000006',
             feeTier
           );
-          
+
           // Should handle different fee tiers without parameter errors
           expect(result).to.have.property('success');
           expect(result).to.have.property('error');
         } catch (error) {
           // Expected to fail due to no real contracts, but not due to parameter validation
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
           expect(errorMessage).to.not.include('invalid fee tier');
           expect(errorMessage).to.not.include('invalid parameters');
         }
@@ -173,10 +189,13 @@ describe('SushiSwap Quote Provider', () => {
 
     it('should provide interface compatible with factory take logic', async () => {
       quoteProvider = new SushiSwapQuoteProvider(mockSigner, validConfig);
-      
+
       // Test the methods that factory takes would use
-      expect(typeof quoteProvider.getQuoterAddress()).to.be.oneOf(['string', 'undefined']);
-      
+      expect(typeof quoteProvider.getQuoterAddress()).to.be.oneOf([
+        'string',
+        'undefined',
+      ]);
+
       // Test quote method signature exists and returns correct structure
       const quotePromise = quoteProvider.getQuote(
         BigNumber.from('1000000000000000000'),
@@ -184,9 +203,9 @@ describe('SushiSwap Quote Provider', () => {
         '0x4200000000000000000000000000000000000006',
         500
       );
-      
+
       expect(quotePromise).to.be.instanceOf(Promise);
-      
+
       const result = await quotePromise;
       expect(result).to.have.property('success');
       expect(result).to.have.property('error');

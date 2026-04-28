@@ -12,18 +12,20 @@ describe('Curve Router Module', () => {
   let swapStub: sinon.SinonStub;
   let mockSigner: any;
   let queueTransactionStub: sinon.SinonStub;
-  
+
   beforeEach(() => {
     // Use REAL wallet from test mnemonic (same pattern as working tests)
     const wallet = Wallet.fromMnemonic(USER1_MNEMONIC);
     mockSigner = wallet.connect(getProvider());
-    
+
     // Mock key dependencies
-    queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (signer, txFunc) => {
-      // Just execute the function with nonce 10
-      return await txFunc(10);
-    });
-    
+    queueTransactionStub = sinon
+      .stub(NonceTracker, 'queueTransaction')
+      .callsFake(async (signer, txFunc) => {
+        // Just execute the function with nonce 10
+        return await txFunc(10);
+      });
+
     // Create a spy for swapWithCurveRouter
     swapStub = sinon.stub(curveRouterModule, 'swapWithCurveRouter');
   });
@@ -40,10 +42,13 @@ describe('Curve Router Module', () => {
     const poolAddress = '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb'; // STABLE pool from Base config
     const poolType = CurvePoolType.STABLE;
     const defaultSlippage = 1.0;
-    
+
     // Return success to simulate a successful call
-    swapStub.resolves({ success: true, receipt: { transactionHash: '0xStableSuccess' } });
-    
+    swapStub.resolves({
+      success: true,
+      receipt: { transactionHash: '0xStableSuccess' },
+    });
+
     // Call the function
     const result = await curveRouterModule.swapWithCurveRouter(
       mockSigner as any,
@@ -55,7 +60,7 @@ describe('Curve Router Module', () => {
       poolType,
       defaultSlippage
     );
-    
+
     // Verify the function was called with correct parameters
     expect(swapStub.calledOnce).to.be.true;
     expect(swapStub.firstCall.args[0]).to.equal(mockSigner);
@@ -66,7 +71,7 @@ describe('Curve Router Module', () => {
     expect(swapStub.firstCall.args[5]).to.equal(poolAddress);
     expect(swapStub.firstCall.args[6]).to.equal(poolType);
     expect(swapStub.firstCall.args[7]).to.equal(defaultSlippage);
-    
+
     // Verify the result
     expect(result.success).to.be.true;
     expect(result.receipt.transactionHash).to.equal('0xStableSuccess');
@@ -80,10 +85,13 @@ describe('Curve Router Module', () => {
     const poolAddress = '0x6e53131F68a034873b6bFA15502aF094Ef0c5854'; // CRYPTO pool from Base config
     const poolType = CurvePoolType.CRYPTO;
     const defaultSlippage = 2.0;
-    
+
     // Return success to simulate a successful call
-    swapStub.resolves({ success: true, receipt: { transactionHash: '0xCryptoSuccess' } });
-    
+    swapStub.resolves({
+      success: true,
+      receipt: { transactionHash: '0xCryptoSuccess' },
+    });
+
     // Call the function
     const result = await curveRouterModule.swapWithCurveRouter(
       mockSigner as any,
@@ -95,12 +103,12 @@ describe('Curve Router Module', () => {
       poolType,
       defaultSlippage
     );
-    
+
     // Verify the function was called with correct parameters
     expect(swapStub.calledOnce).to.be.true;
     expect(swapStub.firstCall.args[5]).to.equal(poolAddress);
     expect(swapStub.firstCall.args[6]).to.equal(CurvePoolType.CRYPTO);
-    
+
     // Verify the result
     expect(result.success).to.be.true;
     expect(result.receipt.transactionHash).to.equal('0xCryptoSuccess');
@@ -108,8 +116,11 @@ describe('Curve Router Module', () => {
 
   it('should handle Curve-specific validation errors', async () => {
     // Test missing pool address
-    swapStub.resolves({ success: false, error: 'Curve pool address must be provided via configuration' });
-    
+    swapStub.resolves({
+      success: false,
+      error: 'Curve pool address must be provided via configuration',
+    });
+
     const result = await curveRouterModule.swapWithCurveRouter(
       mockSigner as any,
       '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
@@ -120,7 +131,7 @@ describe('Curve Router Module', () => {
       CurvePoolType.STABLE,
       1.0
     );
-    
+
     expect(result.success).to.be.false;
     expect(result.error).to.include('Curve pool address must be provided');
   });
@@ -128,7 +139,7 @@ describe('Curve Router Module', () => {
   it('should handle exceptions during Curve swap', async () => {
     // Simulate an exception
     swapStub.rejects(new Error('Curve transaction reverted'));
-    
+
     try {
       await curveRouterModule.swapWithCurveRouter(
         mockSigner as any,
@@ -156,22 +167,25 @@ describe('Curve Router Module', () => {
         poolType: CurvePoolType.STABLE,
         tokenIn: '0x53Be558aF29cC65126ED0E585119FAC748FeB01B', // USDC_T
         tokenOut: '0xf0c44a9f24159E1f2A0D9Ba3203172f528d224CA', // USD_T1
-        slippage: 1.0
+        slippage: 1.0,
       },
       {
-        name: 'CRYPTO', 
+        name: 'CRYPTO',
         poolAddress: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
         poolType: CurvePoolType.CRYPTO,
         tokenIn: '0x236aa50979D5f3De3Bd1Eeb40E81137F22ab794b', // tBTC
         tokenOut: '0x4200000000000000000000000000000000000006', // WETH
-        slippage: 3.0
-      }
+        slippage: 3.0,
+      },
     ];
 
     for (const config of poolConfigurations) {
       swapStub.resetHistory();
-      swapStub.resolves({ success: true, receipt: { transactionHash: `0x${config.name}Success` } });
-      
+      swapStub.resolves({
+        success: true,
+        receipt: { transactionHash: `0x${config.name}Success` },
+      });
+
       const result = await curveRouterModule.swapWithCurveRouter(
         mockSigner as any,
         config.tokenIn,
@@ -182,7 +196,7 @@ describe('Curve Router Module', () => {
         config.poolType,
         config.slippage
       );
-      
+
       expect(swapStub.calledOnce).to.be.true;
       expect(swapStub.firstCall.args[5]).to.equal(config.poolAddress);
       expect(swapStub.firstCall.args[6]).to.equal(config.poolType);
@@ -195,21 +209,21 @@ describe('Curve Router Module', () => {
     it('should use NonceTracker.queueTransaction for transactions', async () => {
       // IMPORTANT: Restore the original method before this test
       swapStub.restore();
-          
+
       // Instead of calling swapWithCurveRouter, directly test the interaction with NonceTracker
       try {
         // Create a simple mock function that NonceTracker.queueTransaction would call
         const dummyTxFunction = async (nonce: number) => {
           return { success: true };
         };
-        
-        // Call NonceTracker directly with our test function 
+
+        // Call NonceTracker directly with our test function
         await NonceTracker.queueTransaction(mockSigner, dummyTxFunction);
-        
+
         // Now verify it was called
         expect(queueTransactionStub.calledOnce).to.be.true;
       } catch (error) {
-        console.error("Curve test error:", error);
+        console.error('Curve test error:', error);
         throw error;
       }
     });
@@ -219,17 +233,17 @@ describe('Curve Router Module', () => {
       expect(mockSigner).to.have.property('address');
       expect(mockSigner).to.have.property('provider');
       expect(mockSigner.provider).to.not.be.null;
-      
+
       // Test async methods exist
       expect(typeof mockSigner.getAddress).to.equal('function');
       expect(typeof mockSigner.getChainId).to.equal('function');
       expect(typeof mockSigner.signMessage).to.equal('function');
       expect(typeof mockSigner.signTransaction).to.equal('function');
-      
+
       // Test async methods work
       const address = await mockSigner.getAddress();
       expect(address).to.match(/^0x[a-fA-F0-9]{40}$/);
-      
+
       const chainId = await mockSigner.getChainId();
       expect(typeof chainId).to.equal('number');
     });
@@ -241,18 +255,21 @@ describe('Curve Router Module', () => {
       const walletPatterns = [
         {
           name: 'Connected Wallet',
-          wallet: Wallet.fromMnemonic(USER1_MNEMONIC).connect(getProvider())
+          wallet: Wallet.fromMnemonic(USER1_MNEMONIC).connect(getProvider()),
         },
         {
           name: 'Unconnected Wallet',
-          wallet: Wallet.fromMnemonic(USER1_MNEMONIC)
-        }
+          wallet: Wallet.fromMnemonic(USER1_MNEMONIC),
+        },
       ];
 
       for (const pattern of walletPatterns) {
         swapStub.resetHistory();
-        swapStub.resolves({ success: true, receipt: { transactionHash: `0x${pattern.name}` } });
-        
+        swapStub.resolves({
+          success: true,
+          receipt: { transactionHash: `0x${pattern.name}` },
+        });
+
         try {
           const result = await curveRouterModule.swapWithCurveRouter(
             pattern.wallet as any,
@@ -264,14 +281,15 @@ describe('Curve Router Module', () => {
             CurvePoolType.STABLE,
             1.0
           );
-          
+
           if (pattern.name === 'Connected Wallet') {
             expect(result.success).to.be.true;
           }
         } catch (error) {
           if (pattern.name === 'Unconnected Wallet') {
             // Expected to potentially fail without provider
-            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorMessage =
+              error instanceof Error ? error.message : String(error);
             expect(errorMessage.length).to.be.greaterThan(0);
           } else {
             throw error;

@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, constants } from 'ethers';
-import { KeeperConfig, PoolConfig, PriceOriginSource } from './config';
+import { PoolConfig, PriceOriginSource } from './config';
 import {
   getAllowanceOfErc20,
   getBalanceOfErc20,
@@ -24,14 +24,13 @@ import {
 } from './read-transports';
 import { invalidateIdleBondCache } from './rewards/collect-bond';
 
-type KickConfigBase = Pick<
-  KeeperConfig,
-  | 'dryRun'
-  | 'delayBetweenActions'
-  | 'coinGeckoApiKey'
-  | 'tokenAddresses'
-> &
-  Partial<Pick<KeeperConfig, 'ethRpcUrl'>>;
+interface KickConfigBase {
+  dryRun?: boolean;
+  delayBetweenActions: number;
+  coinGeckoApiKey?: string;
+  tokenAddresses?: { [tokenSymbol: string]: string };
+  ethRpcUrl?: string;
+}
 
 type KickConfig = WithSubgraph<KickConfigBase>;
 type KickConfigInput = SubgraphConfigInput<KickConfigBase>;
@@ -109,8 +108,7 @@ interface LoanToKick {
 interface GetLoansToKickParams
   extends Pick<HandleKickParams, 'pool' | 'poolConfig' | 'chainId'> {
   config: SubgraphConfigInput<
-    Pick<KeeperConfig, 'coinGeckoApiKey' | 'tokenAddresses'> &
-      Partial<Pick<KeeperConfig, 'ethRpcUrl'>>
+    Pick<KickConfigBase, 'coinGeckoApiKey' | 'tokenAddresses' | 'ethRpcUrl'>
   >;
 }
 
@@ -260,8 +258,14 @@ export async function approveBalanceForLoanToKick({
     const amountWithMargin = amountToApprove.add(margin);
     // Get quote token details for human-readable logging
     const quoteDecimals = await getDecimalsErc20(signer, pool.quoteAddress);
-    const amountInNativeDecimals = convertWadToTokenDecimals(amountWithMargin, quoteDecimals);
-    const readableAmount = weiToDecimaled(amountInNativeDecimals, quoteDecimals);
+    const amountInNativeDecimals = convertWadToTokenDecimals(
+      amountWithMargin,
+      quoteDecimals
+    );
+    const readableAmount = weiToDecimaled(
+      amountInNativeDecimals,
+      quoteDecimals
+    );
     try {
       logger.debug(
         `Approving quote. pool: ${pool.name}, amount: ${amountWithMargin} WAD (${readableAmount} quote tokens)`
@@ -285,7 +289,7 @@ export async function approveBalanceForLoanToKick({
 
 interface KickParams extends Pick<HandleKickParams, 'pool' | 'signer'> {
   loanToKick: LoanToKick;
-  config: Pick<KeeperConfig, 'dryRun'>;
+  config: Pick<KickConfigBase, 'dryRun'>;
 }
 
 export async function kick({ pool, signer, config, loanToKick }: KickParams) {

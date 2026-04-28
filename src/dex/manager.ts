@@ -19,7 +19,6 @@ interface SmartDexConfig {
   keeperTakerFactory?: string;
   takerContracts?: { [source: string]: string };
   oneInchRouters?: { [chainId: number]: string };
-  [key: string]: unknown;
 }
 
 function isFactoryLiquiditySource(liquiditySource?: LiquiditySource): boolean {

@@ -4,15 +4,15 @@ import path from 'path';
 import axios from 'axios';
 import { BigNumber, Wallet, ethers } from 'ethers';
 import { JsonRpcProvider } from '../../src/provider';
-import {
-  TakeWriteTransportMode,
-} from '../../src/config';
+import { TakeWriteTransportMode } from '../../src/config';
 import {
   createTakeWriteTransport,
   resolveTakeWriteConfig,
   submitTakeTransaction,
 } from '../../src/take/write-transport';
 import { NonceTracker, isNonceConsumedTransactionError } from '../../src/nonce';
+
+const withTakeWrite = (take: any) => ({ writes: { take } });
 
 describe('take write transport', () => {
   let durableStatePath: string;
@@ -33,23 +33,18 @@ describe('take write transport', () => {
     NonceTracker.clearDurableNonceStateForTests();
   });
 
-  it('normalizes legacy takeWriteRpcUrl to private_rpc mode', () => {
+  it('uses explicit private_rpc take write config', () => {
     expect(
-      resolveTakeWriteConfig({
-        takeWriteRpcUrl: 'http://private-rpc',
-      } as any)
+      resolveTakeWriteConfig(
+        withTakeWrite({
+          mode: TakeWriteTransportMode.PRIVATE_RPC,
+          rpcUrl: 'http://private-rpc',
+        })
+      )
     ).to.deep.equal({
       mode: TakeWriteTransportMode.PRIVATE_RPC,
       rpcUrl: 'http://private-rpc',
     });
-  });
-
-  it('rejects a blank legacy takeWriteRpcUrl shorthand', () => {
-    expect(() =>
-      resolveTakeWriteConfig({
-        takeWriteRpcUrl: '   ',
-      } as any)
-    ).to.throw('takeWriteRpcUrl cannot be blank');
   });
 
   it('rejects unknown take write transport modes', async () => {
@@ -58,12 +53,10 @@ describe('take write transport', () => {
     try {
       await createTakeWriteTransport({
         signer,
-        config: {
-          takeWrite: {
-            mode: 'private-rpc',
-            rpcUrl: 'http://private-rpc',
-          },
-        } as any,
+        config: withTakeWrite({
+          mode: 'private-rpc',
+          rpcUrl: 'http://private-rpc',
+        }) as any,
         expectedChainId: 1,
       });
       expect.fail('Expected unknown take write mode to throw');
@@ -99,12 +92,10 @@ describe('take write transport', () => {
 
       const transport = await createTakeWriteTransport({
         signer,
-        config: {
-          takeWrite: {
-            mode: TakeWriteTransportMode.PUBLIC_RPC,
-            receiptTimeoutMs: 25,
-          },
-        } as any,
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.PUBLIC_RPC,
+          receiptTimeoutMs: 25,
+        }) as any,
         expectedChainId: 1,
       });
 
@@ -131,7 +122,6 @@ describe('take write transport', () => {
     }
   });
 
-
   it('times out a hung private_rpc network probe', async () => {
     const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     try {
@@ -142,12 +132,10 @@ describe('take write transport', () => {
 
       const createPromise = createTakeWriteTransport({
         signer,
-        config: {
-          takeWrite: {
-            mode: TakeWriteTransportMode.PRIVATE_RPC,
-            rpcUrl: 'http://private-rpc',
-          },
-        } as any,
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.PRIVATE_RPC,
+          rpcUrl: 'http://private-rpc',
+        }) as any,
         expectedChainId: 1,
       }).then(
         () => {
@@ -175,12 +163,10 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.PRIVATE_RPC,
-          rpcUrl: 'http://private-rpc',
-        },
-      } as any,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.PRIVATE_RPC,
+        rpcUrl: 'http://private-rpc',
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -216,13 +202,11 @@ describe('take write transport', () => {
 
       const transport = await createTakeWriteTransport({
         signer,
-        config: {
-          takeWrite: {
-            mode: TakeWriteTransportMode.PRIVATE_RPC,
-            rpcUrl: 'http://private-rpc',
-            receiptTimeoutMs: 25,
-          },
-        } as any,
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.PRIVATE_RPC,
+          rpcUrl: 'http://private-rpc',
+          receiptTimeoutMs: 25,
+        }) as any,
         expectedChainId: 1,
       });
 
@@ -292,14 +276,12 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -372,17 +354,15 @@ describe('take write transport', () => {
 
       const transport = await createTakeWriteTransport({
         signer,
-        config: {
-          takeWrite: {
-            mode: TakeWriteTransportMode.RELAY,
-            relay: {
-              url: 'https://relay.example',
-              sendMethod: 'eth_sendRawTransactionConditional',
-              maxBlockNumberOffset: 25,
-              receiptTimeoutMs: 25,
-            },
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+            sendMethod: 'eth_sendRawTransactionConditional',
+            maxBlockNumberOffset: 25,
+            receiptTimeoutMs: 25,
           },
-        } as any,
+        }) as any,
         expectedChainId: 1,
       });
 
@@ -439,14 +419,12 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -498,14 +476,12 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -558,14 +534,12 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -604,14 +578,12 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -661,14 +633,12 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -683,15 +653,12 @@ describe('take write transport', () => {
       expect.fail('Expected relay durable nonce persistence failure');
     } catch (error) {
       expect(isNonceConsumedTransactionError(error)).to.equal(true);
-      expect((error as Error).message).to.include(
-        'Relay accepted transaction'
-      );
+      expect((error as Error).message).to.include('Relay accepted transaction');
     }
 
     const nextNonce = await NonceTracker.getNonce(signer);
     expect(nextNonce).to.equal(8);
   });
-
 
   it('does not preserve the nonce for ordinary relay HTTP error bodies without a result payload', async () => {
     const signer = {
@@ -728,14 +695,12 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -747,7 +712,9 @@ describe('take write transport', () => {
           nonce,
         });
       });
-      expect.fail('Expected relay HTTP error to bubble without consuming the nonce');
+      expect.fail(
+        'Expected relay HTTP error to bubble without consuming the nonce'
+      );
     } catch (error) {
       expect(isNonceConsumedTransactionError(error)).to.equal(false);
       expect((error as Error).message).to.equal('bad gateway');
@@ -789,14 +756,12 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 
@@ -848,16 +813,14 @@ describe('take write transport', () => {
 
     const transport = await createTakeWriteTransport({
       signer,
-      config: {
-        takeWrite: {
-          mode: TakeWriteTransportMode.RELAY,
-          relay: {
-            url: 'https://relay.example',
-            requestTimeoutMs: 750,
-            receiptTimeoutMs: 1000,
-          },
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
+          requestTimeoutMs: 750,
+          receiptTimeoutMs: 1000,
         },
-      } as any,
+      }) as any,
       expectedChainId: 1,
     });
 

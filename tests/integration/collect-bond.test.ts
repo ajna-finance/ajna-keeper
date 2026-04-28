@@ -82,9 +82,9 @@ describe('collectBondFromPool', () => {
     const signer = await impersonateSigner(
       MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
     );
-    await collectBondFromPool({ 
-      signer, 
-      pool, 
+    await collectBondFromPool({
+      signer,
+      pool,
       poolConfig: {
         ...MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
         settlement: {
@@ -99,7 +99,7 @@ describe('collectBondFromPool', () => {
         dryRun: false,
         subgraphUrl: '',
         delayBetweenActions: 0,
-      }
+      },
     });
     const amtWithdraw = await getAmountWithdrawn(pool, signer);
     expect(amtWithdraw).equals(0);
@@ -122,25 +122,25 @@ describe('collectBondFromPool', () => {
       },
     });
 
-    await collectBondFromPool({ 
-      signer, 
-      pool, 
+    await collectBondFromPool({
+      signer,
+      pool,
       poolConfig: {
         ...MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
         settlement: {
           enabled: true,
           minAuctionAge: 3600,
-          maxBucketDepth: 50, 
-          maxIterations: 10, 
+          maxBucketDepth: 50,
+          maxIterations: 10,
           checkBotIncentive: false,
-        },  
-      },  
+        },
+      },
       config: {
         dryRun: false,
-        subgraphUrl: '', 
+        subgraphUrl: '',
         delayBetweenActions: 0,
-      }   
-    }); 
+      },
+    });
 
     const amtWithdraw = await getAmountWithdrawn(pool, signer);
     expect(amtWithdraw).equals(0);
@@ -181,25 +181,25 @@ describe('collectBondFromPool', () => {
     await settleTx.verifyAndSubmit();
     await NonceTracker.getNonce(signer);
 
-    await collectBondFromPool({ 
-      signer, 
-      pool, 
+    await collectBondFromPool({
+      signer,
+      pool,
       poolConfig: {
         ...MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
         settlement: {
           enabled: true,
           minAuctionAge: 3600,
-          maxBucketDepth: 50, 
-          maxIterations: 10, 
+          maxBucketDepth: 50,
+          maxIterations: 10,
           checkBotIncentive: false,
-        },  
-      },  
+        },
+      },
       config: {
         dryRun: false,
-        subgraphUrl: '', 
+        subgraphUrl: '',
         delayBetweenActions: 0,
-      }   
-    }); 
+      },
+    });
 
     const amtWithdrawn = await getAmountWithdrawn(pool, signer);
     expect(amtWithdrawn).greaterThan(0);

@@ -12,7 +12,9 @@ describe('SushiSwap Quote Provider', () => {
       getAddress: sinon.stub().resolves('0xTestAddress'),
       getChainId: sinon.stub().resolves(43111),
       provider: {
-        getNetwork: sinon.stub().resolves({ chainId: 43111, name: 'hemi-test' }),
+        getNetwork: sinon
+          .stub()
+          .resolves({ chainId: 43111, name: 'hemi-test' }),
         getCode: sinon.stub().resolves('0x123456'),
       },
     };
@@ -38,7 +40,9 @@ describe('SushiSwap Quote Provider', () => {
       };
 
       // Test without trying to instantiate with ethers contracts
-      expect(config.quoterV2Address).to.equal('0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C');
+      expect(config.quoterV2Address).to.equal(
+        '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C'
+      );
       expect(ethers.utils.isAddress(config.quoterV2Address)).to.be.true;
     });
 
@@ -86,8 +90,13 @@ describe('SushiSwap Quote Provider', () => {
       };
 
       Object.entries(hemiAddresses).forEach(([name, address]) => {
-        expect(ethers.utils.isAddress(address), `${name} should be valid address`).to.be.true;
-        expect(address, `${name} should not be zero address`).to.not.equal('0x0000000000000000000000000000000000000000');
+        expect(
+          ethers.utils.isAddress(address),
+          `${name} should be valid address`
+        ).to.be.true;
+        expect(address, `${name} should not be zero address`).to.not.equal(
+          '0x0000000000000000000000000000000000000000'
+        );
       });
     });
 
@@ -95,11 +104,11 @@ describe('SushiSwap Quote Provider', () => {
       const validFeeTiers = [100, 500, 3000, 10000];
       const invalidFeeTiers = [0, 50, 999];
 
-      validFeeTiers.forEach(feeTier => {
+      validFeeTiers.forEach((feeTier) => {
         expect([100, 500, 3000, 10000]).to.include(feeTier);
       });
 
-      invalidFeeTiers.forEach(feeTier => {
+      invalidFeeTiers.forEach((feeTier) => {
         expect([100, 500, 3000, 10000]).to.not.include(feeTier);
       });
     });
@@ -138,8 +147,10 @@ describe('SushiSwap Quote Provider', () => {
 
       // Test the logic that would be used to detect pool existence
       const poolExists = (address: string) => {
-        return address !== '0x0000000000000000000000000000000000000000' &&
-               ethers.utils.isAddress(address);
+        return (
+          address !== '0x0000000000000000000000000000000000000000' &&
+          ethers.utils.isAddress(address)
+        );
       };
 
       expect(poolExists(validPoolAddress)).to.be.true;
@@ -153,7 +164,7 @@ describe('SushiSwap Quote Provider', () => {
 
       // Test logic for valid token pairs
       expect(tokenA).to.not.equal(tokenB); // Valid pair
-      expect(tokenA).to.equal(sameToken);   // Invalid pair (same token)
+      expect(tokenA).to.equal(sameToken); // Invalid pair (same token)
       expect(ethers.utils.isAddress(tokenA)).to.be.true;
       expect(ethers.utils.isAddress(tokenB)).to.be.true;
     });
@@ -162,11 +173,11 @@ describe('SushiSwap Quote Provider', () => {
   describe('Market Price Calculation Logic', () => {
     it('should calculate market price correctly', () => {
       // Test the math that would be used in getMarketPrice
-      const inputAmount = 1000000;  // 1 token with 6 decimals
-      const outputAmount = 980000;  // 0.98 token with 6 decimals
-      
+      const inputAmount = 1000000; // 1 token with 6 decimals
+      const outputAmount = 980000; // 0.98 token with 6 decimals
+
       const marketPrice = outputAmount / inputAmount;
-      
+
       expect(marketPrice).to.equal(0.98);
       expect(marketPrice).to.be.lessThan(1.0);
       expect(marketPrice).to.be.greaterThan(0.0);
@@ -175,10 +186,10 @@ describe('SushiSwap Quote Provider', () => {
     it('should handle zero amounts properly', () => {
       const inputAmount = 1000000;
       const zeroOutput = 0;
-      
+
       const priceWithZeroOutput = zeroOutput / inputAmount;
       const zeroInputPrice = inputAmount / 0; // This would be Infinity
-      
+
       expect(priceWithZeroOutput).to.equal(0);
       expect(zeroInputPrice).to.equal(Infinity);
       expect(Number.isFinite(priceWithZeroOutput)).to.be.true;
@@ -193,13 +204,13 @@ describe('SushiSwap Quote Provider', () => {
       const dataErrors = ['Zero output from SushiSwap quoter'];
 
       const categorizeError = (error: string) => {
-        if (liquidityErrors.some(pattern => error.includes(pattern))) {
+        if (liquidityErrors.some((pattern) => error.includes(pattern))) {
           return 'liquidity';
         }
-        if (configErrors.some(pattern => error.includes(pattern))) {
+        if (configErrors.some((pattern) => error.includes(pattern))) {
           return 'config';
         }
-        if (dataErrors.some(pattern => error.includes(pattern))) {
+        if (dataErrors.some((pattern) => error.includes(pattern))) {
           return 'data';
         }
         return 'unknown';
@@ -207,7 +218,9 @@ describe('SushiSwap Quote Provider', () => {
 
       expect(categorizeError('INSUFFICIENT_LIQUIDITY')).to.equal('liquidity');
       expect(categorizeError('QuoterV2 not available')).to.equal('config');
-      expect(categorizeError('Zero output from SushiSwap quoter')).to.equal('data');
+      expect(categorizeError('Zero output from SushiSwap quoter')).to.equal(
+        'data'
+      );
       expect(categorizeError('Random error')).to.equal('unknown');
     });
   });

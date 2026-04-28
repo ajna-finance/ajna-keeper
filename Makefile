@@ -1,4 +1,4 @@
-.PHONY: help install compile build test test-unit test-integration test-prices clean clean-test format start start-dry keystore fork-base env-check setup
+.PHONY: help install compile build test test-unit test-integration test-prices clean format start start-dry keystore fork-base env-check setup
 
 # Default target
 .DEFAULT_GOAL := help
@@ -97,11 +97,6 @@ clean:
 	@rm -rf cache
 	@rm -rf typechain-types
 	@echo "Clean complete!"
-
-## clean-test: Remove test artifacts only
-clean-test:
-	@echo "Cleaning test artifacts..."
-	@echo "No generated test artifacts configured."
 
 ## env-check: Verify .env configuration
 env-check:

@@ -2,9 +2,14 @@ import './subgraph-mock';
 import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
 import { expect } from 'chai';
 import { BigNumber, constants } from 'ethers';
-import { configureAjna, KeeperConfig, PoolConfig } from '../../src/config';
+import { configureAjna, PoolConfig } from '../../src/config';
 import { NonceTracker } from '../../src/nonce';
-import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../../src/settlement';
+import {
+  SettlementConfigInput,
+  SettlementHandler,
+  tryReactiveSettlement,
+  handleSettlements,
+} from '../../src/settlement';
 import { collectBondFromPool, RewardActionTracker } from '../../src/rewards';
 import { makeSinglePoolLpCollector } from './lp-test-helpers';
 import { DexRouter } from '../../src/dex/router';
@@ -38,7 +43,7 @@ import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
  * Integration tests for settlement functionality focusing on real blockchain interactions
  * and end-to-end workflows. These tests complement the unit tests by testing actual
  * transaction flows and integration with other keeper components.
- * 
+ *
  * Test Categories:
  * 1. Real Settlement Scenarios - Create loans, kick them, manipulate to bad debt state
  * 2. Integration with LP Collection - Test reactive settlement when LP collection fails
@@ -52,12 +57,12 @@ describe('Settlement Integration Tests', () => {
   let pool: FungiblePool;
   let settlementHandler: SettlementHandler;
   let poolConfig: PoolConfig;
-  let keeperConfig: Pick<KeeperConfig, 'dryRun' | 'subgraphUrl' | 'delayBetweenActions'>;
+  let keeperConfig: SettlementConfigInput;
 
   beforeEach(async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
-    
+
     // Configure Ajna SDK
     configureAjna(MAINNET_CONFIG.AJNA_CONFIG);
     ajna = new AjnaSDK(getProvider());
@@ -96,7 +101,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should detect and settle auction with bad debt', async () => {
       console.log('\n=== Testing Bad Debt Settlement ===');
-      
+
       // Setup: Impersonate accounts with funds
       const lenderSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress
@@ -115,14 +120,14 @@ describe('Settlement Integration Tests', () => {
         amount: 1, // 1 WETH
         price: 0.07, // Price per SOL
       });
-      
+
       await drawDebt({
         pool,
         owner: MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress,
         amountToBorrow: 0.9, // 0.9 WETH
         collateralToPledge: 14, // 14 SOL
       });
-      
+
       // Age the loan to make it kickable
       await increaseTime(SECONDS_PER_YEAR * 2);
       console.log('Loan aged for 2 years to become kickable');
@@ -136,7 +141,8 @@ describe('Settlement Integration Tests', () => {
       }
 
       // Kick the loan to start liquidation
-      const borrowerAddress = MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress;
+      const borrowerAddress =
+        MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress;
       await handleKicks({
         pool,
         poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
@@ -169,7 +175,10 @@ describe('Settlement Integration Tests', () => {
         });
         console.log('Take handling completed');
       } catch (error) {
-        console.log('Take handling result:', error instanceof Error ? error.message : String(error));
+        console.log(
+          'Take handling result:',
+          error instanceof Error ? error.message : String(error)
+        );
       }
 
       // Test settlement functionality
@@ -181,35 +190,40 @@ describe('Settlement Integration Tests', () => {
       );
 
       // Check if settlement is needed
-      const settlementCheck = await settlementHandler.needsSettlement(borrowerAddress);
+      const settlementCheck =
+        await settlementHandler.needsSettlement(borrowerAddress);
       console.log('Settlement check result:', {
         needs: settlementCheck.needs,
         reason: settlementCheck.reason,
         debtRemaining: settlementCheck.details?.debtRemaining?.toString(),
-        collateralRemaining: settlementCheck.details?.collateralRemaining?.toString()
+        collateralRemaining:
+          settlementCheck.details?.collateralRemaining?.toString(),
       });
 
       // Test settlement execution (if needed)
       if (settlementCheck.needs) {
         console.log('Executing settlement...');
-        
-        const settlementResult = await settlementHandler.settleAuctionCompletely(borrowerAddress);
+
+        const settlementResult =
+          await settlementHandler.settleAuctionCompletely(borrowerAddress);
         console.log('Settlement result:', {
           success: settlementResult.success,
           completed: settlementResult.completed,
           iterations: settlementResult.iterations,
-          reason: settlementResult.reason
+          reason: settlementResult.reason,
         });
 
         expect(settlementResult.success).to.be.true;
-        
+
         // Verify auction state after settlement
         if (settlementResult.completed) {
           const auctionInfo = await pool.contract.auctionInfo(borrowerAddress);
           expect(auctionInfo.kickTime_.eq(constants.Zero)).to.be.true; // Use BigNumber comparison
         }
       } else {
-        console.log('Settlement not needed - this may be expected depending on auction state');
+        console.log(
+          'Settlement not needed - this may be expected depending on auction state'
+        );
         // Not necessarily a test failure - the auction might be healthy or fully liquidated
       }
 
@@ -218,7 +232,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should handle auctions that do not need settlement', async () => {
       console.log('\n=== Testing Healthy Auction (No Settlement Needed) ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -237,11 +251,12 @@ describe('Settlement Integration Tests', () => {
 
       // Test with a random address that has no auction
       const randomBorrower = '0x1234567890123456789012345678901234567890';
-      
-      const settlementCheck = await settlementHandler.needsSettlement(randomBorrower);
+
+      const settlementCheck =
+        await settlementHandler.needsSettlement(randomBorrower);
       console.log('Settlement check for non-existent auction:', {
         needs: settlementCheck.needs,
-        reason: settlementCheck.reason
+        reason: settlementCheck.reason,
       });
 
       expect(settlementCheck.needs).to.be.false;
@@ -259,7 +274,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should trigger reactive settlement when LP collection fails with AuctionNotCleared', async () => {
       console.log('\n=== Testing Reactive Settlement from LP Collection ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -275,7 +290,7 @@ describe('Settlement Integration Tests', () => {
       });
       const exchangeTracker = new RewardActionTracker(
         kickerSigner,
-        { tokenAddresses: {} } as any,
+        { network: { tokenAddresses: {} } } as any,
         dexRouter
       );
 
@@ -283,7 +298,14 @@ describe('Settlement Integration Tests', () => {
         pool,
         kickerSigner,
         (poolConfig as any).collectLpReward,
-        keeperConfig,
+        {
+          runtime: {
+            logLevel: 'debug',
+            delayBetweenActions: keeperConfig.delayBetweenActions,
+            delayBetweenRuns: 0,
+            dryRun: keeperConfig.dryRun,
+          },
+        },
         exchangeTracker,
         createSubgraphReader({ subgraphUrl: 'mock://' })
       );
@@ -294,11 +316,14 @@ describe('Settlement Integration Tests', () => {
         await lpCollector.collectLpRewards();
         console.log('LP collection succeeded (no settlement trigger needed)');
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
         console.log('LP collection error:', errorMessage);
 
         if (errorMessage.includes('AuctionNotCleared')) {
-          console.log('AuctionNotCleared detected - testing reactive settlement');
+          console.log(
+            'AuctionNotCleared detected - testing reactive settlement'
+          );
 
           const settlementSuccess = await tryReactiveSettlement({
             pool,
@@ -325,8 +350,10 @@ describe('Settlement Integration Tests', () => {
      */
 
     it('should unlock bonds through settlement for bond collection', async () => {
-      console.log('\n=== Testing Settlement Integration with Bond Collection ===');
-      
+      console.log(
+        '\n=== Testing Settlement Integration with Bond Collection ==='
+      );
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -345,20 +372,27 @@ describe('Settlement Integration Tests', () => {
         });
         console.log('Bond collection completed successfully');
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.log('Bond collection error (expected in test environment):', errorMessage);
-        
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.log(
+          'Bond collection error (expected in test environment):',
+          errorMessage
+        );
+
         // In a real scenario with locked bonds, this would trigger reactive settlement
-        if (errorMessage.includes('AuctionNotCleared') || errorMessage.includes('BondNotReward')) {
+        if (
+          errorMessage.includes('AuctionNotCleared') ||
+          errorMessage.includes('BondNotReward')
+        ) {
           console.log('Testing settlement unlock scenario');
-          
+
           const unlocked = await tryReactiveSettlement({
             pool,
             poolConfig,
             signer: kickerSigner,
             config: keeperConfig,
           });
-          
+
           console.log('Settlement unlock result:', unlocked);
           expect(typeof unlocked).to.equal('boolean');
         }
@@ -376,7 +410,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should cache subgraph queries and filter by auction age', async () => {
       console.log('\n=== Testing Settlement Caching and Age Filtering ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -402,33 +436,39 @@ describe('Settlement Integration Tests', () => {
       );
 
       console.log('Testing auction discovery with high age filter...');
-      
+
       // First call - should query subgraph
       const startTime = Date.now();
       const auctions1 = await settlementHandler.findSettleableAuctions();
       const firstCallTime = Date.now() - startTime;
-      
-      console.log(`First call found ${auctions1.length} auctions in ${firstCallTime}ms`);
+
+      console.log(
+        `First call found ${auctions1.length} auctions in ${firstCallTime}ms`
+      );
 
       // Second call - should use cache (if no auctions found)
       const cacheStartTime = Date.now();
       const auctions2 = await settlementHandler.findSettleableAuctions();
       const cacheCallTime = Date.now() - cacheStartTime;
-      
-      console.log(`Cached call found ${auctions2.length} auctions in ${cacheCallTime}ms`);
+
+      console.log(
+        `Cached call found ${auctions2.length} auctions in ${cacheCallTime}ms`
+      );
 
       // Verify results are consistent
       expect(auctions1.length).to.equal(auctions2.length);
-      
+
       // Cache should be faster (though in test environment this might not always be true)
-      console.log(`Cache performance: ${firstCallTime}ms -> ${cacheCallTime}ms`);
+      console.log(
+        `Cache performance: ${firstCallTime}ms -> ${cacheCallTime}ms`
+      );
 
       console.log('Caching and age filtering test completed');
     });
 
     it('should handle concurrent settlement attempts with locking', async () => {
       console.log('\n=== Testing Concurrent Settlement Locking ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -444,7 +484,7 @@ describe('Settlement Integration Tests', () => {
         poolConfig as any,
         keeperConfig
       );
-      
+
       const handler2 = new SettlementHandler(
         pool,
         kickerSigner,
@@ -454,15 +494,15 @@ describe('Settlement Integration Tests', () => {
 
       // Test concurrent settlement discovery
       console.log('Testing concurrent settlement discovery...');
-      
+
       const [auctions1, auctions2] = await Promise.all([
         handler1.findSettleableAuctions(),
         handler2.findSettleableAuctions(),
       ]);
-      
+
       console.log(`Handler 1 found ${auctions1.length} auctions`);
       console.log(`Handler 2 found ${auctions2.length} auctions`);
-      
+
       // Both should find the same auctions
       expect(auctions1.length).to.equal(auctions2.length);
 
@@ -484,7 +524,10 @@ describe('Settlement Integration Tests', () => {
         ]);
         console.log('Concurrent settlement handling completed');
       } catch (error) {
-        console.log('Expected error in concurrent settlement:', error instanceof Error ? error.message : String(error));
+        console.log(
+          'Expected error in concurrent settlement:',
+          error instanceof Error ? error.message : String(error)
+        );
       }
 
       console.log('Concurrent settlement locking test completed');
@@ -499,7 +542,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should respect checkBotIncentive configuration', async () => {
       console.log('\n=== Testing Bot Incentive Configuration ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -526,11 +569,12 @@ describe('Settlement Integration Tests', () => {
 
       // Test incentive check with random borrower
       const randomBorrower = '0x1234567890123456789012345678901234567890';
-      const incentiveResult = await incentiveHandler.checkBotIncentive(randomBorrower);
-      
+      const incentiveResult =
+        await incentiveHandler.checkBotIncentive(randomBorrower);
+
       console.log('Bot incentive check result:', {
         hasIncentive: incentiveResult.hasIncentive,
-        reason: incentiveResult.reason
+        reason: incentiveResult.reason,
       });
 
       // Should return false for non-existent auction
@@ -541,7 +585,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should respect iteration and bucket depth limits', async () => {
       console.log('\n=== Testing Settlement Limits Configuration ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -576,12 +620,14 @@ describe('Settlement Integration Tests', () => {
         dryRunConfig
       );
 
-      const dryRunResult = await dryRunHandler.settleAuctionCompletely('0x1234567890123456789012345678901234567890');
-      
+      const dryRunResult = await dryRunHandler.settleAuctionCompletely(
+        '0x1234567890123456789012345678901234567890'
+      );
+
       console.log('Dry run with limited config:', {
         success: dryRunResult.success,
         iterations: dryRunResult.iterations,
-        reason: dryRunResult.reason
+        reason: dryRunResult.reason,
       });
 
       expect(dryRunResult.success).to.be.true;
@@ -599,7 +645,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should handle subgraph network errors gracefully', async () => {
       console.log('\n=== Testing Network Error Recovery ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -622,11 +668,13 @@ describe('Settlement Integration Tests', () => {
       );
 
       console.log('Testing settlement discovery with invalid subgraph URL...');
-      
+
       // Should handle error gracefully and return empty array
       const auctions = await errorHandler.findSettleableAuctions();
-      
-      console.log(`Settlement discovery with network error returned ${auctions.length} auctions`);
+
+      console.log(
+        `Settlement discovery with network error returned ${auctions.length} auctions`
+      );
       expect(auctions).to.be.an('array');
       expect(auctions.length).to.equal(0);
 
@@ -635,7 +683,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should handle invalid auction states', async () => {
       console.log('\n=== Testing Invalid Auction State Handling ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -660,20 +708,26 @@ describe('Settlement Integration Tests', () => {
 
       for (const borrower of invalidBorrowers) {
         try {
-          console.log(`Testing settlement check for invalid borrower: ${borrower}`);
-          
+          console.log(
+            `Testing settlement check for invalid borrower: ${borrower}`
+          );
+
           const result = await settlementHandler.needsSettlement(borrower);
-          
+
           console.log(`Result for ${borrower}:`, {
             needs: result.needs,
-            reason: result.reason.substring(0, 50) + '...'
+            reason: result.reason.substring(0, 50) + '...',
           });
-          
+
           // Should handle gracefully without throwing
           expect(result.needs).to.be.false;
-          
         } catch (error) {
-          console.log(`Expected error for ${borrower}:`, error instanceof Error ? error.message.substring(0, 50) + '...' : String(error));
+          console.log(
+            `Expected error for ${borrower}:`,
+            error instanceof Error
+              ? error.message.substring(0, 50) + '...'
+              : String(error)
+          );
           // Errors are acceptable for truly invalid addresses
         }
       }
@@ -690,7 +744,7 @@ describe('Settlement Integration Tests', () => {
 
     it('should provide accurate settlement status information', async () => {
       console.log('\n=== Testing Settlement Status Reporting ===');
-      
+
       const kickerSigner = await impersonateSigner(
         MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress2
       );
@@ -708,24 +762,29 @@ describe('Settlement Integration Tests', () => {
 
       // Test status for non-existent borrower
       const randomBorrower = '0x1234567890123456789012345678901234567890';
-      
+
       try {
-        const status = await settlementHandler.getSettlementStatus(randomBorrower);
-        
+        const status =
+          await settlementHandler.getSettlementStatus(randomBorrower);
+
         console.log('Settlement status for non-existent borrower:', {
           auctionExists: status.auctionExists,
           bondsLocked: status.bondsLocked,
           bondsClaimable: status.bondsClaimable,
           needsSettlement: status.needsSettlement,
-          canWithdrawBonds: status.canWithdrawBonds
+          canWithdrawBonds: status.canWithdrawBonds,
         });
 
         expect(status.auctionExists).to.be.false;
         expect(typeof status.bondsLocked).to.equal('boolean');
         expect(typeof status.bondsClaimable).to.equal('boolean');
-        
       } catch (error) {
-        console.log('Status check error (may be expected):', error instanceof Error ? error.message.substring(0, 50) + '...' : String(error));
+        console.log(
+          'Status check error (may be expected):',
+          error instanceof Error
+            ? error.message.substring(0, 50) + '...'
+            : String(error)
+        );
         // Status check may fail for non-existent borrowers in some implementations
       }
 

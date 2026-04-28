@@ -37,29 +37,33 @@ export async function readConfigFile(filePath: string): Promise<KeeperConfig> {
 export function assertIsValidConfig(
   config: Partial<KeeperConfig>
 ): asserts config is KeeperConfig {
-  expectProperty(config, 'ethRpcUrl');
-  expectProperty(config, 'logLevel');
-  expectProperty(config, 'subgraphUrl');
-  expectProperty(config, 'keeperKeystore');
+  expectProperty(config, 'network');
+  expectProperty(config.network, 'rpcUrl', 'network');
+  expectProperty(config.network?.subgraph, 'url', 'network.subgraph');
+  expectProperty(config, 'signer');
+  expectProperty(config.signer, 'keystore', 'signer');
+  expectProperty(config, 'runtime');
+  expectProperty(config.runtime, 'logLevel', 'runtime');
+  expectProperty(config.runtime, 'delayBetweenActions', 'runtime');
+  expectProperty(config.runtime, 'delayBetweenRuns', 'runtime');
   expectProperty(config, 'ajna');
-  expectProperty(config, 'delayBetweenActions');
-  expectProperty(config, 'delayBetweenRuns');
-  expectProperty(config, 'pools');
+  expectProperty(config, 'manual');
+  expectProperty(config.manual, 'pools', 'manual');
 
   // Optional field; only validate if the operator set it. Values flow into
   // BigNumber arithmetic for the subgraph cursor — negative, fractional, or
   // non-finite inputs silently corrupt the cursor or disable dedupe.
-  if (config.lpRewardLookbackSeconds !== undefined) {
-    const v = config.lpRewardLookbackSeconds;
+  if (config.rewards?.lpLookbackSeconds !== undefined) {
+    const v = config.rewards.lpLookbackSeconds;
     const hardMaxSeconds = 86_400; // 1 day
     if (!isValidLookbackSeconds(v)) {
       throw new Error(
-        `lpRewardLookbackSeconds must be a non-negative integer (number), got: ${JSON.stringify(v)} (typeof ${typeof v})`
+        `rewards.lpLookbackSeconds must be a non-negative integer (number), got: ${JSON.stringify(v)} (typeof ${typeof v})`
       );
     }
     if (v > hardMaxSeconds) {
       throw new Error(
-        `lpRewardLookbackSeconds must not exceed ${hardMaxSeconds} (1 day), got: ${v}. ` +
+        `rewards.lpLookbackSeconds must not exceed ${hardMaxSeconds} (1 day), got: ${v}. ` +
           'Larger values cause near-full historical replay every cycle; ' +
           'if your subgraph really lags this much, fix the indexer instead.'
       );
@@ -68,12 +72,12 @@ export function assertIsValidConfig(
     // misconfiguration surfaces in the log without blocking it.
     if (v === 0) {
       logger.warn(
-        'lpRewardLookbackSeconds=0 disables the indexing-lag overlap; ' +
+        'rewards.lpLookbackSeconds=0 disables the indexing-lag overlap; ' +
           'any late-indexed event will be permanently missed.'
       );
     } else if (v > 3600) {
       logger.warn(
-        `lpRewardLookbackSeconds=${v} is unusually large (>1h). Each query ` +
+        `rewards.lpLookbackSeconds=${v} is unusually large (>1h). Each query ` +
           'shifts the cursor back by this amount; on a pool with steady ' +
           'BucketTake flow, this produces a near-full historical replay ' +
           'every cycle. Verify your subgraph really lags this much.'
@@ -84,24 +88,27 @@ export function assertIsValidConfig(
     // between cycles can fall off the subgraph query's floor before the
     // next cycle gets to see them. Legal but almost never intentional.
     if (
-      typeof config.delayBetweenRuns === 'number' &&
-      Number.isFinite(config.delayBetweenRuns) &&
+      typeof config.runtime?.delayBetweenRuns === 'number' &&
+      Number.isFinite(config.runtime.delayBetweenRuns) &&
       v > 0 &&
-      v < config.delayBetweenRuns
+      v < config.runtime.delayBetweenRuns
     ) {
       logger.warn(
-        `lpRewardLookbackSeconds=${v} is less than delayBetweenRuns=${config.delayBetweenRuns}. ` +
+        `rewards.lpLookbackSeconds=${v} is less than runtime.delayBetweenRuns=${config.runtime.delayBetweenRuns}. ` +
           'Events indexed between cycles may fall off the query floor before the next ingest sees them. ' +
-          `Recommended: lpRewardLookbackSeconds >= delayBetweenRuns + 30 (so ~${config.delayBetweenRuns + 30}).`
+          `Recommended: rewards.lpLookbackSeconds >= runtime.delayBetweenRuns + 30 (so ~${config.runtime.delayBetweenRuns + 30}).`
       );
     }
   }
 
-  // `defaultLpReward`, when set, must specify the two mandatory min-amount
-  // fields. Without those, the redemption layer has no floor and would
-  // attempt to redeem rounding-dust every cycle.
-  if (config.defaultLpReward !== undefined) {
-    validateCollectLpRewardSettings(config.defaultLpReward, 'defaultLpReward');
+  // `rewards.defaultLpReward`, when set, must specify the two mandatory
+  // min-amount fields. Without those, the redemption layer has no floor and
+  // would attempt to redeem rounding-dust every cycle.
+  if (config.rewards?.defaultLpReward !== undefined) {
+    validateCollectLpRewardSettings(
+      config.rewards.defaultLpReward,
+      'rewards.defaultLpReward'
+    );
   }
 
   // Dry-run the per-pool override merge for every pool so config errors
@@ -109,18 +116,18 @@ export function assertIsValidConfig(
   // mandatory fields) surface at startup rather than mid-loop in a
   // resolver throw. An undefined return just means "no LP collection for
   // this pool" — not an error.
-  if (config.pools) {
-    for (const pool of config.pools) {
+  if (config.manual?.pools) {
+    for (const pool of config.manual.pools) {
       try {
         const merged = resolveCollectLpRewardForPool(
-          config.defaultLpReward,
+          config.rewards?.defaultLpReward,
           pool.collectLpReward,
           pool.address
         );
         if (merged) {
           validateCollectLpRewardSettings(
             merged,
-            `pools[${pool.address}].collectLpReward (merged)`
+            `manual.pools[${pool.address}].collectLpReward (merged)`
           );
         }
       } catch (error) {
@@ -244,9 +251,13 @@ function validateRewardAction(action: RewardAction, path: string): void {
   }
 }
 
-function expectProperty<T, K extends keyof T>(config: T, key: K): void {
-  if (!(config as object).hasOwnProperty(key)) {
-    throw new Error(`Missing ${String(key)} key from config`);
+function expectProperty(config: unknown, key: string, path = 'config'): void {
+  if (
+    config === null ||
+    typeof config !== 'object' ||
+    !Object.prototype.hasOwnProperty.call(config, key)
+  ) {
+    throw new Error(`Missing ${path}.${key} key from config`);
   }
 }
 

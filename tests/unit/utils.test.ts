@@ -94,8 +94,16 @@ describe('overrideMulticall', () => {
     } as unknown as FungiblePool;
 
     mockChainConfig = {
-      multicallAddress: mockAddress,
-      multicallBlock: 100,
+      network: {
+        rpcUrl: 'mock://rpc',
+        subgraph: {
+          url: 'mock://subgraph',
+        },
+        multicall: {
+          address: mockAddress,
+          block: 100,
+        },
+      },
     } as KeeperConfig;
   });
 
@@ -103,8 +111,8 @@ describe('overrideMulticall', () => {
     overrideMulticall(mockFungiblePool, mockChainConfig);
 
     expect(mockFungiblePool.ethcallProvider.multicall3).deep.equal({
-      address: mockChainConfig.multicallAddress,
-      block: mockChainConfig.multicallBlock,
+      address: mockChainConfig.network.multicall!.address,
+      block: mockChainConfig.network.multicall!.block,
     });
   });
 
@@ -112,7 +120,14 @@ describe('overrideMulticall', () => {
     const originalMulticall = {
       ...mockFungiblePool.ethcallProvider.multicall3,
     };
-    overrideMulticall(mockFungiblePool, {} as KeeperConfig);
+    overrideMulticall(mockFungiblePool, {
+      network: {
+        rpcUrl: 'mock://rpc',
+        subgraph: {
+          url: 'mock://subgraph',
+        },
+      },
+    } as KeeperConfig);
 
     expect(mockFungiblePool.ethcallProvider.multicall3).deep.equal(
       originalMulticall

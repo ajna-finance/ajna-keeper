@@ -159,29 +159,40 @@ export class NonceTracker {
     // runs atomically in a single microtask.
     const previous = this.queues.get(address) || Promise.resolve();
 
-    const done = previous.catch(() => {}).then(async () => {
-      const nonce = await this.getNonce(signer);
-      logger.debug(`Executing transaction with nonce ${nonce}`);
+    const done = previous
+      .catch(() => {})
+      .then(async () => {
+        const nonce = await this.getNonce(signer);
+        logger.debug(`Executing transaction with nonce ${nonce}`);
 
-      try {
-        const result = await txFunction(nonce);
+        try {
+          const result = await txFunction(nonce);
 
-        // Universal RPC cache refresh delay after every transaction
-        logger.debug(`Transaction with nonce ${nonce} completed, adding ${NonceTracker.RPC_CACHE_REFRESH_DELAY}ms RPC cache refresh delay`);
-        await this.delay(NonceTracker.RPC_CACHE_REFRESH_DELAY);
+          // Universal RPC cache refresh delay after every transaction
+          logger.debug(
+            `Transaction with nonce ${nonce} completed, adding ${NonceTracker.RPC_CACHE_REFRESH_DELAY}ms RPC cache refresh delay`
+          );
+          await this.delay(NonceTracker.RPC_CACHE_REFRESH_DELAY);
 
-        logger.debug(`Transaction with nonce ${nonce} completed successfully`);
-        return result;
-      } catch (txError) {
-        logger.error(`Transaction with nonce ${nonce} failed: ${txError}`);
-        if (isNonceConsumedTransactionError(txError)) {
-          await this.reconcileConsumedNonce(signer, address, nonce, txError.txHash);
+          logger.debug(
+            `Transaction with nonce ${nonce} completed successfully`
+          );
+          return result;
+        } catch (txError) {
+          logger.error(`Transaction with nonce ${nonce} failed: ${txError}`);
+          if (isNonceConsumedTransactionError(txError)) {
+            await this.reconcileConsumedNonce(
+              signer,
+              address,
+              nonce,
+              txError.txHash
+            );
+            throw txError;
+          }
+          await this.handleFailedNonce(signer, address, nonce);
           throw txError;
         }
-        await this.handleFailedNonce(signer, address, nonce);
-        throw txError;
-      }
-    });
+      });
 
     // Store a caught version so the chain never breaks.
     // Clean up the entry when it settles to prevent unbounded growth.
@@ -206,7 +217,11 @@ export class NonceTracker {
    * - If pendingNonce <= nonce: the tx never made it to the mempool. Reset
    *   to the network value so the nonce can be reused.
    */
-  private async handleFailedNonce(signer: Signer, address: string, nonce: number) {
+  private async handleFailedNonce(
+    signer: Signer,
+    address: string,
+    nonce: number
+  ) {
     try {
       const pendingNonce = await this.getPendingNonce(signer, address);
       if (pendingNonce > nonce) {
@@ -227,10 +242,11 @@ export class NonceTracker {
       // If we can't query the network, preserve the incremented nonce.
       // A skipped nonce is recoverable (next cycle resyncs), but a reused
       // nonce after broadcast risks replacing a live transaction.
-      logger.warn(`Failed to check pending nonce for ${address}, preserving incremented nonce: ${rpcError}`);
+      logger.warn(
+        `Failed to check pending nonce for ${address}, preserving incremented nonce: ${rpcError}`
+      );
     }
   }
-
 
   private async reconcileConsumedNonce(
     signer: Signer,
@@ -238,7 +254,10 @@ export class NonceTracker {
     nonce: number,
     txHash?: string
   ) {
-    const preservedNextNonce = Math.max(this.nonces.get(address) ?? nonce + 1, nonce + 1);
+    const preservedNextNonce = Math.max(
+      this.nonces.get(address) ?? nonce + 1,
+      nonce + 1
+    );
 
     try {
       const pendingNonce = await this.getPendingNonce(signer, address);
@@ -265,12 +284,13 @@ export class NonceTracker {
       }
     }
     this.nonceReaders.set(address, merged);
-    logger.debug(
-      `Registered ${merged.length} nonce reader(s) for ${address}`
-    );
+    logger.debug(`Registered ${merged.length} nonce reader(s) for ${address}`);
   }
 
-  private async getPendingNonce(signer: Signer, address: string): Promise<number> {
+  private async getPendingNonce(
+    signer: Signer,
+    address: string
+  ): Promise<number> {
     const readers = this.nonceReaders.get(address) ?? [signer];
     const pendingNonces = await Promise.all(
       readers.map((reader) => this.getPendingNonceFromReader(reader, address))
@@ -379,10 +399,7 @@ export class NonceTracker {
       return observedPendingNonce;
     }
 
-    if (
-      durableFloor.expiresAtBlock !== undefined &&
-      signer.provider != null
-    ) {
+    if (durableFloor.expiresAtBlock !== undefined && signer.provider != null) {
       try {
         const currentBlock = await signer.provider.getBlockNumber();
         if (currentBlock > durableFloor.expiresAtBlock) {
@@ -411,6 +428,6 @@ export class NonceTracker {
    * Simple delay function
    */
   private async delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

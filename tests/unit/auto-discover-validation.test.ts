@@ -12,50 +12,67 @@ import {
 import { logger } from '../../src/logging';
 
 describe('auto-discover validation', () => {
-  const baseConfig = (): KeeperConfig =>
-    ({
-      ethRpcUrl: 'http://localhost:8545',
-      logLevel: 'debug',
-      subgraphUrl: 'http://example-subgraph',
-      keeperKeystore: '/tmp/keeper.json',
-      ajna: {
-        erc20PoolFactory: '0x0000000000000000000000000000000000000001',
-        erc721PoolFactory: '0x0000000000000000000000000000000000000002',
-        poolUtils: '0x0000000000000000000000000000000000000003',
-        positionManager: '0x0000000000000000000000000000000000000004',
-        ajnaToken: '0x0000000000000000000000000000000000000005',
+  const baseConfig = (): KeeperConfig => ({
+    network: {
+      rpcUrl: 'http://localhost:8545',
+      subgraph: {
+        url: 'http://example-subgraph',
       },
+    },
+    signer: {
+      keystore: '/tmp/keeper.json',
+    },
+    runtime: {
+      logLevel: 'debug',
       delayBetweenActions: 0,
       delayBetweenRuns: 1,
+    },
+    ajna: {
+      erc20PoolFactory: '0x0000000000000000000000000000000000000001',
+      erc721PoolFactory: '0x0000000000000000000000000000000000000002',
+      poolUtils: '0x0000000000000000000000000000000000000003',
+      positionManager: '0x0000000000000000000000000000000000000004',
+      ajnaToken: '0x0000000000000000000000000000000000000005',
+    },
+    manual: {
       pools: [],
-      autoDiscover: {
-        enabled: true,
-        take: true,
-        settlement: false,
-      },
-      discoveredDefaults: {
+    },
+    writes: {},
+    discovery: {
+      enabled: true,
+      take: true,
+      settlement: false,
+      defaults: {
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.99,
         },
       },
-      keeperTakerFactory: '0x1234567890123456789012345678901234567890',
-      takerContracts: {
+    },
+    takers: {
+      factory: '0x1234567890123456789012345678901234567890',
+      contracts: {
         UniswapV3: '0x3333333333333333333333333333333333333333',
       },
-      universalRouterOverrides: {
-        universalRouterAddress: '0x5555555555555555555555555555555555555555',
-        permit2Address: '0x6666666666666666666666666666666666666666',
-        poolFactoryAddress: '0x7777777777777777777777777777777777777777',
-        quoterV2Address: '0x1212121212121212121212121212121212121212',
-        wethAddress: '0x4200000000000000000000000000000000000006',
-        defaultFeeTier: 3000,
+    },
+    dex: {
+      oneInch: {},
+      uniswapV3: {
+        universalRouter: {
+          universalRouterAddress: '0x5555555555555555555555555555555555555555',
+          permit2Address: '0x6666666666666666666666666666666666666666',
+          poolFactoryAddress: '0x7777777777777777777777777777777777777777',
+          quoterV2Address: '0x1212121212121212121212121212121212121212',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+        },
       },
-    }) as KeeperConfig;
+    },
+  });
 
   it('rejects 1inch gas overrides unless discovered takes use 1inch', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       dexGasOverrides: {
         [LiquiditySource.ONEINCH]: '700000',
@@ -69,18 +86,18 @@ describe('auto-discover validation', () => {
 
   it('accepts 1inch gas overrides for 1inch discovered takes', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       dexGasOverrides: {
         [LiquiditySource.ONEINCH]: '900000',
       },
     };
-    config.discoveredDefaults!.take = {
+    config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.keeperTaker = '0x1234567890123456789012345678901234567890';
-    config.oneInchRouters = {
+    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
 
@@ -89,7 +106,7 @@ describe('auto-discover validation', () => {
 
   it('accepts hybrid 1inch plus factory autodiscover take paths', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedExternalTakePaths: ['oneinch', 'factory'],
       defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -100,12 +117,12 @@ describe('auto-discover validation', () => {
         [LiquiditySource.UNISWAPV3]: '900000',
       },
     };
-    config.discoveredDefaults!.take = {
+    config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.keeperTaker = '0x1234567890123456789012345678901234567890';
-    config.oneInchRouters = {
+    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
 
@@ -114,50 +131,50 @@ describe('auto-discover validation', () => {
 
   it('validates optional 1inch aggregation executor allowlists', () => {
     const config = baseConfig();
-    config.oneInchAggregationExecutorAllowlist = {
+    config.dex!.oneInch!.aggregationExecutorAllowlist = {
       1: ['0x1111111111111111111111111111111111111111'],
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
 
-    config.oneInchAggregationExecutorAllowlist = {
+    config.dex!.oneInch!.aggregationExecutorAllowlist = {
       1: [
         '0x1111111111111111111111111111111111111111',
         '0x1111111111111111111111111111111111111111',
       ],
     };
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'oneInchAggregationExecutorAllowlist.1 cannot contain duplicate addresses'
+      'dex.oneInch.aggregationExecutorAllowlist.1 cannot contain duplicate addresses'
     );
 
-    config.oneInchAggregationExecutorAllowlist = {
+    config.dex!.oneInch!.aggregationExecutorAllowlist = {
       1: ['not-an-address'],
     };
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'oneInchAggregationExecutorAllowlist.1 contains invalid address not-an-address'
+      'dex.oneInch.aggregationExecutorAllowlist.1 contains invalid address not-an-address'
     );
 
-    config.oneInchAggregationExecutorAllowlist = {
+    config.dex!.oneInch!.aggregationExecutorAllowlist = {
       '01': ['0x1111111111111111111111111111111111111111'],
     } as any;
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'oneInchAggregationExecutorAllowlist entries must use canonical positive integer chain ID keys'
+      'dex.oneInch.aggregationExecutorAllowlist entries must use canonical positive integer chain ID keys'
     );
 
-    config.oneInchAggregationExecutorAllowlist = {
+    config.dex!.oneInch!.aggregationExecutorAllowlist = {
       1: Array.from(
         { length: 65 },
         (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`
       ),
     };
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'oneInchAggregationExecutorAllowlist.1 cannot contain more than 64 addresses'
+      'dex.oneInch.aggregationExecutorAllowlist.1 cannot contain more than 64 addresses'
     );
   });
 
   it('validates hybrid probe timeout and route selection mode', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedExternalTakePaths: ['oneinch', 'factory'],
       defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -166,52 +183,48 @@ describe('auto-discover validation', () => {
       externalTakeProbeTimeoutMs: 1500,
       externalTakeRouteSelectionMode: 'factory_first',
     };
-    config.discoveredDefaults!.take = {
+    config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.keeperTaker = '0x1234567890123456789012345678901234567890';
-    config.oneInchRouters = {
+    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
 
-    config.autoDiscover!.take.externalTakeRouteSelectionMode = 'cost_aware';
-    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
-
-    (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 0;
+    (config.discovery!.take as any).externalTakeProbeTimeoutMs = 0;
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be an integer between 1 and 10000'
     );
 
-    (config.autoDiscover!.take as any).externalTakeProbeTimeoutMs = 1500;
-    (config.autoDiscover!.take as any).externalTakeRouteSelectionMode =
-      'fastest';
+    (config.discovery!.take as any).externalTakeProbeTimeoutMs = 1500;
+    (config.discovery!.take as any).externalTakeRouteSelectionMode = 'fastest';
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit, factory_first, or deprecated cost_aware'
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
     );
   });
 
   it('requires quote-denominated gas conversion config for hybrid route ranking', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedExternalTakePaths: ['oneinch', 'factory'],
       defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
       validateRouteDeployments: true,
     };
-    config.discoveredDefaults!.take = {
+    config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.keeperTaker = '0x1234567890123456789012345678901234567890';
-    config.oneInchRouters = {
+    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
-    config.universalRouterOverrides = {
-      ...config.universalRouterOverrides!,
+    config.dex!.uniswapV3!.universalRouter = {
+      ...config.dex!.uniswapV3!.universalRouter!,
       wethAddress: undefined as unknown as string,
     };
 
@@ -222,18 +235,18 @@ describe('auto-discover validation', () => {
 
   it('requires deployment preflight for hybrid oneinch plus factory defaults', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedExternalTakePaths: ['oneinch', 'factory'],
       defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
     };
-    config.discoveredDefaults!.take = {
+    config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.keeperTaker = '0x1234567890123456789012345678901234567890';
-    config.oneInchRouters = {
+    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
 
@@ -244,26 +257,26 @@ describe('auto-discover validation', () => {
 
   it('requires the factory allowlist to include the default hybrid factory source', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedExternalTakePaths: ['oneinch', 'factory'],
       defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
       validateRouteDeployments: true,
     };
-    config.discoveredDefaults!.take = {
+    config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.keeperTaker = '0x1234567890123456789012345678901234567890';
-    config.oneInchRouters = {
+    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
-    config.takerContracts = {
+    config.takers!.contracts = {
       UniswapV3: '0x3333333333333333333333333333333333333333',
       SushiSwap: '0x4444444444444444444444444444444444444444',
     };
-    config.sushiswapRouterOverrides = {
+    config.dex!.sushiswap = {
       swapRouterAddress: '0x5555555555555555555555555555555555555555',
       factoryAddress: '0x7777777777777777777777777777777777777777',
       quoterV2Address: '0x1212121212121212121212121212121212121212',
@@ -357,7 +370,7 @@ describe('auto-discover validation', () => {
 
   it('warns when per-pool config allows subsidized external takes', () => {
     const config = baseConfig();
-    config.pools = [
+    config.manual.pools = [
       {
         name: 'Reviewed Defensive Pool',
         address: '0x0000000000000000000000000000000000000001',
@@ -384,7 +397,7 @@ describe('auto-discover validation', () => {
 
   it('warns when autodiscovery defaults allow subsidized external takes', () => {
     const config = baseConfig();
-    config.discoveredDefaults!.take = {
+    config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.UNISWAPV3,
       marketPriceFactor: 0.99,
       allowSubsidy: true,
@@ -396,7 +409,7 @@ describe('auto-discover validation', () => {
       expect(
         warnStub.calledWithMatch(
           sinon.match(
-            'AutoDiscoverConfig: discoveredDefaults.take.allowSubsidy=true can subsidize external takes'
+            'AutoDiscoverConfig: discovery.defaults.take.allowSubsidy=true can subsidize external takes'
           )
         )
       ).to.equal(true);
@@ -414,7 +427,7 @@ describe('auto-discover validation', () => {
 
   it('rejects malformed numeric auto-discover policy values', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       maxPoolsPerRun: Number.NaN,
     };
@@ -423,12 +436,12 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: maxPoolsPerRun must be a positive integer'
     );
 
-    config.autoDiscover!.take = false;
-    config.autoDiscover!.settlement = {
+    config.discovery!.take = false;
+    config.discovery!.settlement = {
       enabled: true,
       maxGasCostNative: '0.01' as unknown as number,
     };
-    config.discoveredDefaults!.settlement = {
+    config.discovery!.defaults!.settlement = {
       enabled: true,
     };
 
@@ -439,7 +452,7 @@ describe('auto-discover validation', () => {
 
   it('validates hot-auction cache and gas control policy values', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       hotAuctionCandidateTtlMs: -1,
     };
@@ -448,7 +461,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: hotAuctionCandidateTtlMs cannot be negative'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       maxHotAuctionCandidates: 0,
     };
@@ -457,7 +470,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: maxHotAuctionCandidates must be a positive integer'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       l1GasPriceFreshnessTtlMs: -1,
     };
@@ -466,7 +479,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: l1GasPriceFreshnessTtlMs cannot be negative'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       l2GasCostBufferBasisPoints: 9_999,
     };
@@ -475,7 +488,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: l2GasCostBufferBasisPoints must be an integer between 10000 and 30000'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       gasPriceDriftToleranceBasisPoints: -1,
     };
@@ -484,7 +497,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 5000'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       gasPriceDriftToleranceBasisPoints: 5_001,
     };
@@ -493,7 +506,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: gasPriceDriftToleranceBasisPoints must be an integer between 0 and 5000'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       oneInchQuoteTimeoutMs: 0,
     };
@@ -502,7 +515,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be an integer between 1 and 10000'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       oneInchQuoteTimeoutMs: 10_001,
     };
@@ -511,7 +524,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: oneInchQuoteTimeoutMs must be an integer between 1 and 10000'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       externalTakeProbeTimeoutMs: 10_001,
     };
@@ -520,7 +533,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: externalTakeProbeTimeoutMs must be an integer between 1 and 10000'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       oneInchQuoteFailureCooldownMs: 0,
     };
@@ -529,7 +542,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: oneInchQuoteFailureCooldownMs must be greater than 0'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       oneInchQuoteFailureThreshold: 1.5,
     };
@@ -538,7 +551,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: oneInchQuoteFailureThreshold must be an integer between 1 and 100'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       validateRouteDeployments: 'yes' as unknown as boolean,
     };
@@ -547,7 +560,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: validateRouteDeployments must be a boolean'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       takeQuoteBudgetPerRun: 1.5,
     };
@@ -556,7 +569,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be a positive integer'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       takeRouteQuoteBudgetPerCandidate: 0.5,
     };
@@ -568,7 +581,7 @@ describe('auto-discover validation', () => {
 
   it('validates external take write transport policy', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       externalTakeTransportPolicy: 'strict' as any,
     };
@@ -577,31 +590,31 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: externalTakeTransportPolicy must be allow_public, prefer_private_or_relay, or require_private_or_relay'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       externalTakeTransportPolicy: 'require_private_or_relay',
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: externalTakeTransportPolicy=require_private_or_relay requires takeWrite private_rpc, relay, or takeWriteRpcUrl'
+      'AutoDiscoverConfig.take: externalTakeTransportPolicy=require_private_or_relay requires writes.take.mode private_rpc or relay'
     );
 
-    config.takeWrite = {
+    config.writes!.take = {
       mode: TakeWriteTransportMode.PRIVATE_RPC,
       rpcUrl: 'http://private-rpc',
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
 
-    delete config.takeWrite;
-    config.dryRun = true;
+    delete config.writes!.take;
+    config.runtime.dryRun = true;
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
   it('validates allowed external take path names, empties, and duplicates', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedExternalTakePaths: [] as any,
     };
@@ -610,7 +623,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: allowedExternalTakePaths must be non-empty'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedExternalTakePaths: ['oneinch', 'bogus'] as any,
     };
@@ -619,7 +632,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch and factory'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedExternalTakePaths: ['factory', 'factory'] as any,
     };
@@ -631,7 +644,7 @@ describe('auto-discover validation', () => {
 
   it('rejects non-string native profit and gas override integer values', () => {
     const config = baseConfig();
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       minProfitNative: 1 as unknown as string,
     };
@@ -640,7 +653,7 @@ describe('auto-discover validation', () => {
       'AutoDiscoverConfig.take: minProfitNative must be a non-negative decimal integer string'
     );
 
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       dexGasOverrides: {
         [LiquiditySource.UNISWAPV3]: 900000 as unknown as string,
@@ -654,18 +667,18 @@ describe('auto-discover validation', () => {
 
   it('treats allowedLiquiditySources as authoritative for source validation', () => {
     const config = baseConfig();
-    delete config.universalRouterOverrides;
-    config.takerContracts = {
+    delete config.dex!.uniswapV3!.universalRouter;
+    config.takers!.contracts = {
       SushiSwap: '0x4444444444444444444444444444444444444444',
     };
-    config.sushiswapRouterOverrides = {
+    config.dex!.sushiswap = {
       swapRouterAddress: '0x5555555555555555555555555555555555555555',
       factoryAddress: '0x7777777777777777777777777777777777777777',
       quoterV2Address: '0x1212121212121212121212121212121212121212',
       wethAddress: '0x4200000000000000000000000000000000000006',
       defaultFeeTier: 500,
     };
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
     };
@@ -675,18 +688,18 @@ describe('auto-discover validation', () => {
 
   it('rejects gas overrides for factory sources outside the explicit allowlist', () => {
     const config = baseConfig();
-    config.takerContracts = {
+    config.takers!.contracts = {
       UniswapV3: '0x3333333333333333333333333333333333333333',
       SushiSwap: '0x4444444444444444444444444444444444444444',
     };
-    config.sushiswapRouterOverrides = {
+    config.dex!.sushiswap = {
       swapRouterAddress: '0x5555555555555555555555555555555555555555',
       factoryAddress: '0x7777777777777777777777777777777777777777',
       quoterV2Address: '0x1212121212121212121212121212121212121212',
       wethAddress: '0x4200000000000000000000000000000000000006',
       defaultFeeTier: 500,
     };
-    config.autoDiscover!.take = {
+    config.discovery!.take = {
       enabled: true,
       allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
       dexGasOverrides: {
@@ -701,13 +714,13 @@ describe('auto-discover validation', () => {
 
   it('rejects malformed numeric take-write timeouts', () => {
     const config = baseConfig();
-    config.takeWrite = {
+    config.writes!.take = {
       mode: TakeWriteTransportMode.PUBLIC_RPC,
       receiptTimeoutMs: Number.POSITIVE_INFINITY,
     };
 
     expect(() => validateTakeWriteConfig(config)).to.throw(
-      'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+      'KeeperConfig.writes.take: receiptTimeoutMs must be greater than 0 when provided'
     );
   });
 });
