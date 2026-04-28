@@ -46,12 +46,13 @@ npm install --global yarn
 yarn --frozen-lockfile
 ```
 
-Note: If you encounter dependency conflicts or version mismatches, try:
+Note: If you encounter dependency conflicts or version mismatches, first reinstall from the committed lockfile:
 
 ```bash
-rm yarn.lock
-yarn install
+yarn install --frozen-lockfile
 ```
+
+Only regenerate `yarn.lock` intentionally when you are updating dependencies.
 
 Compile to generate types using TypeChain:
 
@@ -127,6 +128,8 @@ ONEINCH_API_KEY="????????????????????????????????????"
 ```
 
 Optional read/write routing and non-interactive unlock variables are listed in `.env.example`. Leave them unset unless you are configuring read failover, subgraph failover, private take submission, relay submission, or password-file based keystore unlock.
+
+Read RPC failover is configured with `network.readRpcUrls`; when set, it is the complete dedicated read endpoint list, so include `network.rpcUrl` there too if you want the primary RPC in the read rotation. Subgraph failover is configured separately with `network.subgraph.fallbackUrls`.
 
 ### Create a new config file
 
@@ -1145,7 +1148,7 @@ manual: {
         targetToken: "DAI",                                    // Desired token
         slippage: 1,                                           // Slippage percentage (0-100)
         dexProvider: PostAuctionDex.ONEINCH                    // Use enum
-      }
+      },
       rewardActionCollateral: {
         action: RewardActionLabel.EXCHANGE,
         address: "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", // Token to swap (wstETH)

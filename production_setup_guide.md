@@ -257,6 +257,8 @@ const config: KeeperConfig = {
           minCollateral: 0.01, // Minimum collateral to attempt take
         },
         collectLpReward: {
+          minAmountQuote: 0.01,
+          minAmountCollateral: 0.01,
           rewardActionCollateral: {
             action: RewardActionLabel.EXCHANGE,
             address: '0x[collateral-token-address]',
@@ -349,8 +351,11 @@ const config: KeeperConfig = {
           minCollateral: 0.01, // Minimum collateral to attempt take
         },
         collectLpReward: {
+          minAmountQuote: 0.01,
+          minAmountCollateral: 0.01,
           rewardActionCollateral: {
             action: RewardActionLabel.EXCHANGE,
+            address: '0x[collateral-token-address]',
             targetToken: 'usdc_t',
             slippage: 2,
             dexProvider: PostAuctionDex.SUSHISWAP, // or UNISWAP_V3
@@ -395,8 +400,11 @@ const config: KeeperConfig = {
           // NO liquiditySource or marketPriceFactor
         },
         collectLpReward: {
+          minAmountQuote: 0.01,
+          minAmountCollateral: 0.01,
           rewardActionCollateral: {
             action: RewardActionLabel.EXCHANGE,
+            address: '0x[collateral-token-address]',
             targetToken: 'usdc',
             slippage: 1,
             dexProvider: PostAuctionDex.SUSHISWAP, // LP rewards work without contracts
@@ -475,11 +483,12 @@ The recommended approach uses the [BuiltByMom/Ajna-subgraph](https://github.com/
    git clone https://github.com/BuiltByMom/Ajna-subgraph.git
    cd Ajna-subgraph
    git checkout develop  # Latest network configurations
-   npm install
+   yarn install
 
    # Configure for your network (e.g., avalanche, base, arbitrum, hemi)
-   npm run prepare:[network]
-   npm run build
+   export ETH_NETWORK='[network]:https://your-rpc-url'
+   yarn codegen
+   yarn build --network [network]
 
    # Deploy to Goldsky
    goldsky subgraph deploy ajna-[network]/1.0.0 --path .
@@ -724,13 +733,21 @@ dex: {
 
 **Step 2: Override Per Pool for LP Rewards**
 
+Per-pool LP reward overrides are shallow. If you override `rewardActionCollateral` or `rewardActionQuote`, restate the full action instead of only the fee or DEX provider.
+
 ```typescript
 manual: {
   pools: [
     {
       name: 'Stablecoin Pool (USDC/DAI)',
       collectLpReward: {
+        minAmountQuote: 0.01,
+        minAmountCollateral: 0.01,
         rewardActionCollateral: {
+          action: RewardActionLabel.EXCHANGE,
+          address: '0x[collateral-token-address]',
+          targetToken: 'usdc',
+          slippage: 1,
           fee: FeeAmount.LOW, // 0.05% - better for stables
           dexProvider: PostAuctionDex.UNISWAP_V3,
         },
@@ -740,7 +757,13 @@ manual: {
       name: 'Volatile Pool (WETH/WBTC)',
       // No fee override = uses defaultFeeTier (3000)
       collectLpReward: {
+        minAmountQuote: 0.01,
+        minAmountCollateral: 0.01,
         rewardActionCollateral: {
+          action: RewardActionLabel.EXCHANGE,
+          address: '0x[collateral-token-address]',
+          targetToken: 'weth',
+          slippage: 1,
           dexProvider: PostAuctionDex.UNISWAP_V3, // Uses global default
         },
       },
@@ -876,6 +899,8 @@ const config: KeeperConfig = {
         },
         // LP reward swapping via 1inch (requires router config and API credentials)
         collectLpReward: {
+          minAmountQuote: 0.01,
+          minAmountCollateral: 0.05,
           rewardActionCollateral: {
             action: RewardActionLabel.EXCHANGE,
             address: '0x06d47F3fb376649c3A9Dafe069B3D6E35572219E', // savUSD
@@ -996,46 +1021,51 @@ const config: KeeperConfig = {
     // ... other addresses
   },
 
-  pools: [
-    {
-      name: 'usd_t1 / usdc_t',
-      address: '0xf4a658cfaf358efdf5c2420fac783b160ae9b9e4',
-      price: {
-        source: PriceOriginSource.FIXED,
-        value: 1.0,
-      },
-      kick: {
-        minDebt: 0.1,
-        priceFactor: 0.99,
-      },
-      settlement: {
-        enabled: true,
-        minAuctionAge: 18000,
-        maxBucketDepth: 50,
-        maxIterations: 10,
-        checkBotIncentive: false,
-      },
-      take: {
-        // External take via SushiSwap (uses this keeper's configured 0.3% default)
-        liquiditySource: LiquiditySource.SUSHISWAP,
-        marketPriceFactor: 0.99,
-        allowSubsidy: false,
-        minCollateral: 0.01,
-        // ArbTake as backup
-        hpbPriceFactor: 0.985,
-      },
-      // LP reward swapping via SushiSwap (can override fee tier)
-      collectLpReward: {
-        rewardActionCollateral: {
-          action: RewardActionLabel.EXCHANGE,
-          targetToken: 'usdc_t',
-          dexProvider: PostAuctionDex.SUSHISWAP,
-          fee: FeeAmount.MEDIUM, // Can use different tier than external takes!
-          slippage: 3,
+  manual: {
+    pools: [
+      {
+        name: 'usd_t1 / usdc_t',
+        address: '0xf4a658cfaf358efdf5c2420fac783b160ae9b9e4',
+        price: {
+          source: PriceOriginSource.FIXED,
+          value: 1.0,
+        },
+        kick: {
+          minDebt: 0.1,
+          priceFactor: 0.99,
+        },
+        settlement: {
+          enabled: true,
+          minAuctionAge: 18000,
+          maxBucketDepth: 50,
+          maxIterations: 10,
+          checkBotIncentive: false,
+        },
+        take: {
+          // External take via SushiSwap (uses this keeper's configured 0.3% default)
+          liquiditySource: LiquiditySource.SUSHISWAP,
+          marketPriceFactor: 0.99,
+          allowSubsidy: false,
+          minCollateral: 0.01,
+          // ArbTake as backup
+          hpbPriceFactor: 0.985,
+        },
+        // LP reward swapping via SushiSwap (can override fee tier)
+        collectLpReward: {
+          minAmountQuote: 0.01,
+          minAmountCollateral: 0.01,
+          rewardActionCollateral: {
+            action: RewardActionLabel.EXCHANGE,
+            address: '0x1f0d51a052aa79527fffaf3108fb4440d3f53ce6', // USD_T1
+            targetToken: 'usdc_t',
+            dexProvider: PostAuctionDex.SUSHISWAP,
+            fee: FeeAmount.MEDIUM, // Can use different tier than external takes!
+            slippage: 3,
+          },
         },
       },
-    },
-  ],
+    ],
+  },
 
   pricing: {
     coinGeckoApiKey: 'YOUR_COINGECKO_API_KEY',
@@ -1120,6 +1150,8 @@ const config: KeeperConfig = {
           hpbPriceFactor: 0.98, // ArbTake backup
         },
         collectLpReward: {
+          minAmountQuote: 0.01,
+          minAmountCollateral: 0.01,
           rewardActionCollateral: {
             action: RewardActionLabel.EXCHANGE,
             address: '0x53Be558aF29cCC65126ED0E585119FAC748FeB01B', // USDC_T
@@ -1345,7 +1377,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 yarn ts-node scripts/query-1inch.ts --config config.ts --action quote --poolName "Pool Name" --amount 1
 
 # Verify factory deployment
-grep "Type: factory, Valid: true" logs/keeper.log
+grep "Type: factory, Valid: true" logs/debug.log
 
 # Check configured fee tiers
 rg "defaultFeeTier|fee:" config.ts
@@ -1356,13 +1388,14 @@ rg "defaultFeeTier|fee:" config.ts
 ### Dependency Issues
 
 **Yarn Lock Conflicts:**
-If you encounter dependency version conflicts or installation errors:
+If you encounter dependency version conflicts or installation errors, first reinstall from the committed lockfile:
 
 ```bash
-rm yarn.lock
-yarn install
+yarn install --frozen-lockfile
 yarn compile
 ```
+
+Only regenerate `yarn.lock` intentionally when you are updating dependencies.
 
 **Why this happens:**
 This is typically caused by:
