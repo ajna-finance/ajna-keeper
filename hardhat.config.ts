@@ -13,6 +13,7 @@ const forkConfigs: Record<string, { url: string; blockNumber?: number }> = {
   },
   base: {
     url: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+    blockNumber: Number(process.env.BASE_FORK_BLOCK ?? 30000000),
   },
   avalanche: {
     url: `https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
@@ -40,7 +41,7 @@ const config: HardhatUserConfig = {
     },
   },
   paths: {
-    tests: './src/integration-tests',
+    tests: './tests/integration',
   },
   networks: {
     hardhat: {

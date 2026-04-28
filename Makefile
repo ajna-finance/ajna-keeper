@@ -42,14 +42,8 @@ test-integration:
 
 ## test-prices: Test price APIs (Alchemy and CoinGecko)
 test-prices:
-	@echo "Testing Alchemy Prices API..."
-	@npx ts-node test-alchemy-prices.ts
-	@echo ""
-	@echo "Testing price fallback system..."
-	@npx ts-node test-price-fallback.ts
-	@echo ""
-	@echo "Testing CANA price..."
-	@npx ts-node test-cana-price.ts
+	@echo "Testing price APIs..."
+	@npx ts-node scripts/price-diagnostics.ts
 
 ## start: Start keeper with specified config (e.g., make start examples/example-base-config.ts)
 start:
@@ -107,8 +101,7 @@ clean:
 ## clean-test: Remove test artifacts only
 clean-test:
 	@echo "Cleaning test artifacts..."
-	@rm -f test-*.ts
-	@echo "Test artifacts removed!"
+	@echo "No generated test artifacts configured."
 
 ## env-check: Verify .env configuration
 env-check:
