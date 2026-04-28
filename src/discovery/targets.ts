@@ -7,6 +7,7 @@ import {
   TakeSettings,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
+  getManualPools,
   hasExternalTakeSettings,
   validateSettlementSettings,
   validateTakeSettings,
@@ -14,6 +15,7 @@ import {
 import { logger } from '../logging';
 import {
   createSubgraphReader,
+  getSubgraphTransportConfig,
   SubgraphReader,
   SubgraphTransportConfig,
 } from '../read-transports';
@@ -143,14 +145,14 @@ function cachePool(
 
 function buildPoolIndex(config: KeeperConfig): Map<string, PoolConfig> {
   const poolIndex = new Map<string, PoolConfig>();
-  for (const poolConfig of config.pools) {
+  for (const poolConfig of getManualPools(config)) {
     poolIndex.set(normalizeAddress(poolConfig.address), poolConfig);
   }
   return poolIndex;
 }
 
 function logDiscoverySkip(config: KeeperConfig, message: string): void {
-  if (config.autoDiscover?.logSkips) {
+  if (config.discovery?.logSkips) {
     logger.info(`Discovery skip: ${message}`);
   } else {
     logger.debug(`Discovery skip: ${message}`);
@@ -158,7 +160,7 @@ function logDiscoverySkip(config: KeeperConfig, message: string): void {
 }
 
 function poolAllowed(config: KeeperConfig, poolAddress: string): boolean {
-  const autoDiscover = config.autoDiscover;
+  const autoDiscover = config.discovery;
   if (!autoDiscover?.enabled) {
     return false;
   }
@@ -704,7 +706,7 @@ export async function getChainwideLiquidationAuctionsShared(
 }
 
 export function getManualTakeTargets(config: KeeperConfig): ManualTakeTarget[] {
-  return config.pools
+  return getManualPools(config)
     .filter(
       (poolConfig): poolConfig is RequireFields<PoolConfig, 'take'> =>
         !!poolConfig.take
@@ -713,7 +715,7 @@ export function getManualTakeTargets(config: KeeperConfig): ManualTakeTarget[] {
       source: 'manual' as const,
       poolAddress: poolConfig.address,
       name: poolConfig.name,
-      dryRun: !!config.dryRun,
+      dryRun: !!config.runtime.dryRun,
       poolConfig,
     }));
 }
@@ -721,7 +723,7 @@ export function getManualTakeTargets(config: KeeperConfig): ManualTakeTarget[] {
 export function getManualSettlementTargets(
   config: KeeperConfig
 ): ManualSettlementTarget[] {
-  return config.pools
+  return getManualPools(config)
     .filter(
       (poolConfig): poolConfig is RequireFields<PoolConfig, 'settlement'> =>
         !!poolConfig.settlement?.enabled
@@ -730,7 +732,7 @@ export function getManualSettlementTargets(
       source: 'manual' as const,
       poolAddress: poolConfig.address,
       name: poolConfig.name,
-      dryRun: !!config.dryRun,
+      dryRun: !!config.runtime.dryRun,
       poolConfig,
     }));
 }
@@ -738,10 +740,12 @@ export function getManualSettlementTargets(
 export async function buildDiscoveredTakeTargets(
   config: KeeperConfig,
   liquidationAuctionsInput?: ChainwideLiquidationAuction[],
-  subgraphReader: SubgraphReader = createSubgraphReader(config),
+  subgraphReader: SubgraphReader = createSubgraphReader(
+    getSubgraphTransportConfig(config)
+  ),
   options: BuildDiscoveredTakeTargetsOptions = {}
 ): Promise<ResolvedTakeTarget[]> {
-  const autoDiscover = config.autoDiscover;
+  const autoDiscover = config.discovery;
   const takePolicy = getAutoDiscoverTakePolicy(autoDiscover);
   if (!autoDiscover?.enabled || !takePolicy) {
     return [];
@@ -749,14 +753,17 @@ export async function buildDiscoveredTakeTargets(
 
   const poolIndex = buildPoolIndex(config);
   const manualTakePools = new Set(
-    config.pools
+    getManualPools(config)
       .filter((poolConfig) => !!poolConfig.take)
       .map((poolConfig) => normalizeAddress(poolConfig.address))
   );
 
   const liquidationAuctions =
     liquidationAuctionsInput ??
-    (await getChainwideLiquidationAuctionsShared(config, subgraphReader));
+    (await getChainwideLiquidationAuctionsShared(
+      getSubgraphTransportConfig(config),
+      subgraphReader
+    ));
 
   const freshTakeCandidates = dedupeCandidates(
     liquidationAuctions
@@ -828,7 +835,7 @@ export async function buildDiscoveredTakeTargets(
 
   takeCandidates.sort(compareTakeCandidates);
 
-  const discoveredTakeDefaults = config.discoveredDefaults?.take;
+  const discoveredTakeDefaults = config.discovery?.defaults?.take;
   const appliesQuoteBudget =
     discoveredTakeDefaults !== undefined &&
     hasExternalTakeSettings(discoveredTakeDefaults);
@@ -860,11 +867,11 @@ export async function buildDiscoveredTakeTargets(
     maxPoolsPerRun
   )) {
     const manualPool = poolIndex.get(poolAddress);
-    const takeConfig = manualPool?.take ?? config.discoveredDefaults?.take;
+    const takeConfig = manualPool?.take ?? config.discovery?.defaults?.take;
     if (!takeConfig) {
       logDiscoverySkip(
         config,
-        `take discovery found ${poolAddress} but no discoveredDefaults.take was configured`
+        `take discovery found ${poolAddress} but no discovery.defaults.take was configured`
       );
       continue;
     }
@@ -873,7 +880,9 @@ export async function buildDiscoveredTakeTargets(
       source: 'discovered',
       poolAddress,
       name: manualPool?.name ?? `discovered:${poolAddress}`,
-      dryRun: !!config.dryRun || (!!autoDiscover.dryRunNewPools && !manualPool),
+      dryRun:
+        !!config.runtime.dryRun ||
+        (!!autoDiscover.dryRunNewPools && !manualPool),
       take: takeConfig,
       candidates,
     };
@@ -894,9 +903,11 @@ export async function buildDiscoveredTakeTargets(
 export async function buildDiscoveredSettlementTargets(
   config: KeeperConfig,
   liquidationAuctionsInput?: ChainwideLiquidationAuction[],
-  subgraphReader: SubgraphReader = createSubgraphReader(config)
+  subgraphReader: SubgraphReader = createSubgraphReader(
+    getSubgraphTransportConfig(config)
+  )
 ): Promise<ResolvedSettlementTarget[]> {
-  const autoDiscover = config.autoDiscover;
+  const autoDiscover = config.discovery;
   const settlementPolicy = getAutoDiscoverSettlementPolicy(autoDiscover);
   if (!autoDiscover?.enabled || !settlementPolicy) {
     return [];
@@ -904,14 +915,17 @@ export async function buildDiscoveredSettlementTargets(
 
   const poolIndex = buildPoolIndex(config);
   const manualSettlementPools = new Set(
-    config.pools
+    getManualPools(config)
       .filter((poolConfig) => !!poolConfig.settlement?.enabled)
       .map((poolConfig) => normalizeAddress(poolConfig.address))
   );
 
   const liquidationAuctions =
     liquidationAuctionsInput ??
-    (await getChainwideLiquidationAuctionsShared(config, subgraphReader));
+    (await getChainwideLiquidationAuctionsShared(
+      getSubgraphTransportConfig(config),
+      subgraphReader
+    ));
 
   const settlementCandidates = dedupeCandidates(
     liquidationAuctions
@@ -953,11 +967,11 @@ export async function buildDiscoveredSettlementTargets(
   )) {
     const manualPool = poolIndex.get(poolAddress);
     const settlementConfig =
-      manualPool?.settlement ?? config.discoveredDefaults?.settlement;
+      manualPool?.settlement ?? config.discovery?.defaults?.settlement;
     if (!settlementConfig?.enabled) {
       logDiscoverySkip(
         config,
-        `settlement discovery found ${poolAddress} but no enabled discoveredDefaults.settlement was configured`
+        `settlement discovery found ${poolAddress} but no enabled discovery.defaults.settlement was configured`
       );
       continue;
     }
@@ -966,7 +980,9 @@ export async function buildDiscoveredSettlementTargets(
       source: 'discovered',
       poolAddress,
       name: manualPool?.name ?? `discovered:${poolAddress}`,
-      dryRun: !!config.dryRun || (!!autoDiscover.dryRunNewPools && !manualPool),
+      dryRun:
+        !!config.runtime.dryRun ||
+        (!!autoDiscover.dryRunNewPools && !manualPool),
       settlement: settlementConfig,
       candidates,
     };
@@ -1097,8 +1113,8 @@ export async function ensurePoolLoaded(params: {
     return pool;
   } catch (error) {
     const cooldownSeconds =
-      params.config.autoDiscover?.hydrateCooldownSec ??
-      params.config.delayBetweenRuns;
+      params.config.discovery?.hydrateCooldownSec ??
+      params.config.runtime.delayBetweenRuns;
     params.hydrationCooldowns.set(
       normalizedPool,
       Date.now() + cooldownSeconds * 1000

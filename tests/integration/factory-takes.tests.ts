@@ -4,7 +4,12 @@ import { AjnaSDK, FungiblePool, Signer } from '@ajna-finance/sdk';
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
 import sinon from 'sinon';
-import { configureAjna, LiquiditySource, KeeperConfig, PoolConfig } from '../../src/config';
+import {
+  configureAjna,
+  LiquiditySource,
+  KeeperConfig,
+  PoolConfig,
+} from '../../src/config';
 import { processManualTakeCandidates } from '../../src/take';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import { handleKicks } from '../../src/kick';
@@ -31,10 +36,10 @@ import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
 
 /**
  * Integration tests for factory take implementation and quote provider.
- * 
+ *
  * Purpose: Ensure take/factory and UniswapV3QuoteProvider work together correctly.
  * Critical for: Future developers modifying factory take logic or quote providers.
- * 
+ *
  * Focus Areas:
  * 1. Factory take workflow execution
  * 2. Quote provider integration with take decisions
@@ -58,14 +63,14 @@ describe('Factory Takes Integration Tests', function () {
       amount: 1, // 1 WETH
       price: 0.07, // Price per SOL
     });
-    
+
     await drawDebt({
       pool,
       owner: MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress,
       amountToBorrow: 0.9, // 0.9 WETH
       collateralToPledge: 14, // 14 SOL
     });
-    
+
     // Age the loan to make it kickable
     await increaseTime(SECONDS_PER_YEAR * 2);
     borrowerAddress = MAINNET_CONFIG.SOL_WETH_POOL.collateralWhaleAddress;
@@ -90,7 +95,7 @@ describe('Factory Takes Integration Tests', function () {
   const setupForkContext = async () => {
     await resetHardhat();
     NonceTracker.clearNonces();
-    
+
     // Configure Ajna SDK
     configureAjna(MAINNET_CONFIG.AJNA_CONFIG);
     ajna = new AjnaSDK(getProvider());
@@ -133,7 +138,7 @@ describe('Factory Takes Integration Tests', function () {
 
     it('should execute factory take workflow with valid Hemi configuration', async () => {
       await setupFactoryTakeScenario();
-      
+
       // Based on your working hemi-conf-settlement.ts
       const hemiFactoryConfig = {
         dryRun: true, // Test workflow without external transactions
@@ -141,7 +146,7 @@ describe('Factory Takes Integration Tests', function () {
         delayBetweenActions: 100,
         keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
-          'UniswapV3': '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
+          UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
@@ -151,7 +156,7 @@ describe('Factory Takes Integration Tests', function () {
           defaultSlippage: 0.5,
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        }
+        },
       };
 
       const poolConfigWithUniswap: PoolConfig = {
@@ -160,8 +165,8 @@ describe('Factory Takes Integration Tests', function () {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
-          hpbPriceFactor: 0.98
-        }
+          hpbPriceFactor: 0.98,
+        },
       };
 
       // Should execute factory take workflow without throwing
@@ -171,21 +176,21 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: poolConfigWithUniswap as any,
         config: hemiFactoryConfig as any,
       });
-      
+
       // If we get here, factory workflow executed correctly
       expect(true).to.be.true;
     });
 
     it('should handle factory take with both external and arbTake strategies', async () => {
       await setupFactoryTakeScenario();
-      
+
       const factoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
@@ -194,7 +199,7 @@ describe('Factory Takes Integration Tests', function () {
           defaultFeeTier: 3000,
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        }
+        },
       };
 
       const combinedPoolConfig: PoolConfig = {
@@ -203,8 +208,8 @@ describe('Factory Takes Integration Tests', function () {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3, // External take
           marketPriceFactor: 0.95,
-          hpbPriceFactor: 0.98 // ArbTake also available
-        }
+          hpbPriceFactor: 0.98, // ArbTake also available
+        },
       };
 
       // Should handle both external and arbTake strategies
@@ -214,26 +219,26 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: combinedPoolConfig as any,
         config: factoryConfig as any,
       });
-      
+
       expect(true).to.be.true;
     });
 
     it('should handle factory take with minimal valid configuration', async () => {
       await setupFactoryTakeScenario();
-      
+
       const minimalFactoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
           // Minimal required fields only
-        }
+        },
       };
 
       const minimalPoolConfig: PoolConfig = {
@@ -241,9 +246,9 @@ describe('Factory Takes Integration Tests', function () {
         take: {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95
+          marketPriceFactor: 0.95,
           // No hpbPriceFactor - external take only
-        }
+        },
       };
 
       // Should work with minimal valid configuration
@@ -253,7 +258,7 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: minimalPoolConfig as any,
         config: minimalFactoryConfig as any,
       });
-      
+
       expect(true).to.be.true;
     });
   });
@@ -275,10 +280,15 @@ describe('Factory Takes Integration Tests', function () {
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
       };
 
-      const quoteProvider = new UniswapV3QuoteProvider(signer, validQuoteConfig);
-      
+      const quoteProvider = new UniswapV3QuoteProvider(
+        signer,
+        validQuoteConfig
+      );
+
       expect(quoteProvider.isAvailable()).to.be.true;
-      expect(quoteProvider.getQuoterAddress()).to.equal(validQuoteConfig.quoterV2Address);
+      expect(quoteProvider.getQuoterAddress()).to.equal(
+        validQuoteConfig.quoterV2Address
+      );
     });
 
     it('should handle quote provider with different fee tiers', async () => {
@@ -291,9 +301,9 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       const quoteProvider = new UniswapV3QuoteProvider(signer, quoteConfig);
-      
+
       expect(quoteProvider.isAvailable()).to.be.true;
-      
+
       // Test with different fee tiers
       const testParams = {
         srcAmount: BigNumber.from('1000000000000000000'), // 1 ETH
@@ -302,7 +312,7 @@ describe('Factory Takes Integration Tests', function () {
       };
 
       const feeTiers = [500, 3000, 10000];
-      
+
       for (const feeTier of feeTiers) {
         try {
           // This will fail due to no real contract, but tests parameter handling
@@ -314,7 +324,8 @@ describe('Factory Takes Integration Tests', function () {
           );
         } catch (error) {
           // Expected to fail due to no real contract
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
           // Should not be parameter validation errors
           expect(errorMessage).to.not.include('invalid fee tier');
           expect(errorMessage).to.not.include('invalid parameters');
@@ -331,8 +342,11 @@ describe('Factory Takes Integration Tests', function () {
         // Missing quoterV2Address
       };
 
-      const quoteProvider = new UniswapV3QuoteProvider(signer, invalidQuoteConfig as any);
-      
+      const quoteProvider = new UniswapV3QuoteProvider(
+        signer,
+        invalidQuoteConfig as any
+      );
+
       expect(quoteProvider.isAvailable()).to.be.false;
       expect(quoteProvider.getQuoterAddress()).to.be.undefined;
     });
@@ -361,7 +375,7 @@ describe('Factory Takes Integration Tests', function () {
           srcAmount: BigNumber.from('1000000000000000000'),
           srcToken: '0x4200000000000000000000000000000000000006',
           dstToken: '0x4200000000000000000000000000000000000006',
-        }
+        },
       ];
 
       for (const testCase of invalidParams) {
@@ -374,7 +388,8 @@ describe('Factory Takes Integration Tests', function () {
           // May not throw for some cases
         } catch (error) {
           // Error handling is implementation-dependent
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
           expect(errorMessage.length).to.be.greaterThan(0);
         }
       }
@@ -391,7 +406,7 @@ describe('Factory Takes Integration Tests', function () {
 
     it('should handle Hemi-specific Uniswap V3 configuration', async () => {
       await setupFactoryTakeScenario();
-      
+
       // Hemi-specific addresses from your config
       const hemiUniswapConfig = {
         dryRun: true,
@@ -399,7 +414,7 @@ describe('Factory Takes Integration Tests', function () {
         delayBetweenActions: 100,
         keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
-          'UniswapV3': '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
+          UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B', // Hemi address
@@ -409,7 +424,7 @@ describe('Factory Takes Integration Tests', function () {
           defaultSlippage: 0.5,
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4', // Hemi factory
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5', // Hemi QuoterV2
-        }
+        },
       };
 
       const hemiPoolConfig: PoolConfig = {
@@ -418,8 +433,8 @@ describe('Factory Takes Integration Tests', function () {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
-          hpbPriceFactor: 0.98
-        }
+          hpbPriceFactor: 0.98,
+        },
       };
 
       // Should handle Hemi-specific configuration
@@ -429,13 +444,13 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: hemiPoolConfig as any,
         config: hemiUniswapConfig as any,
       });
-      
+
       expect(true).to.be.true;
     });
 
     it('should handle mainnet-style Uniswap V3 configuration', async () => {
       await setupFactoryTakeScenario();
-      
+
       // Mainnet-style addresses
       const mainnetUniswapConfig = {
         dryRun: true,
@@ -443,7 +458,7 @@ describe('Factory Takes Integration Tests', function () {
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Mainnet address
@@ -453,7 +468,7 @@ describe('Factory Takes Integration Tests', function () {
           defaultSlippage: 0.5,
           poolFactoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984', // Mainnet factory
           quoterV2Address: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', // Mainnet QuoterV2
-        }
+        },
       };
 
       const mainnetPoolConfig: PoolConfig = {
@@ -461,8 +476,8 @@ describe('Factory Takes Integration Tests', function () {
         take: {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95
-        }
+          marketPriceFactor: 0.95,
+        },
       };
 
       // Should handle mainnet-style configuration
@@ -472,17 +487,17 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: mainnetPoolConfig as any,
         config: mainnetUniswapConfig as any,
       });
-      
+
       expect(true).to.be.true;
     });
 
     it('should handle different fee tier configurations', async () => {
       await setupFactoryTakeScenario();
-      
+
       const feeTierConfigs = [
         { tier: 500, name: '0.05%' },
         { tier: 3000, name: '0.3%' },
-        { tier: 10000, name: '1%' }
+        { tier: 10000, name: '1%' },
       ];
 
       for (const feeConfig of feeTierConfigs) {
@@ -492,16 +507,17 @@ describe('Factory Takes Integration Tests', function () {
           delayBetweenActions: 100,
           keeperTakerFactory: '0x1234567890123456789012345678901234567890',
           takerContracts: {
-            'UniswapV3': '0x2234567890123456789012345678901234567890'
+            UniswapV3: '0x2234567890123456789012345678901234567890',
           },
           universalRouterOverrides: {
-            universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+            universalRouterAddress:
+              '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
             wethAddress: '0x4200000000000000000000000000000000000006',
             permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
             defaultFeeTier: feeConfig.tier, // Different fee tier
             poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
             quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-          }
+          },
         };
 
         const poolConfig: PoolConfig = {
@@ -509,8 +525,8 @@ describe('Factory Takes Integration Tests', function () {
           take: {
             minCollateral: 0.1,
             liquiditySource: LiquiditySource.UNISWAPV3,
-            marketPriceFactor: 0.95
-          }
+            marketPriceFactor: 0.95,
+          },
         };
 
         // Should handle different fee tiers
@@ -521,7 +537,7 @@ describe('Factory Takes Integration Tests', function () {
           config: factoryConfig as any,
         });
       }
-      
+
       expect(true).to.be.true;
     });
   });
@@ -536,7 +552,7 @@ describe('Factory Takes Integration Tests', function () {
 
     it('should handle missing factory configuration gracefully', async () => {
       await setupFactoryTakeScenario();
-      
+
       const incompleteConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
@@ -550,8 +566,8 @@ describe('Factory Takes Integration Tests', function () {
         take: {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95
-        }
+          marketPriceFactor: 0.95,
+        },
       };
 
       // Should handle incomplete config gracefully
@@ -561,21 +577,21 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: poolConfig as any,
         config: incompleteConfig as any,
       });
-      
+
       // Should not crash - may log errors but continue
       expect(true).to.be.true;
     });
 
     it('should handle missing universalRouterOverrides', async () => {
       await setupFactoryTakeScenario();
-      
+
       const configWithoutRouterOverrides = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         // Missing universalRouterOverrides
       };
@@ -585,8 +601,8 @@ describe('Factory Takes Integration Tests', function () {
         take: {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95
-        }
+          marketPriceFactor: 0.95,
+        },
       };
 
       // Should handle missing router overrides gracefully
@@ -596,25 +612,25 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: poolConfig as any,
         config: configWithoutRouterOverrides as any,
       });
-      
+
       expect(true).to.be.true;
     });
 
     it('should handle invalid liquiditySource for factory', async () => {
       await setupFactoryTakeScenario();
-      
+
       const validFactoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        }
+        },
       };
 
       const invalidPoolConfig: PoolConfig = {
@@ -622,8 +638,8 @@ describe('Factory Takes Integration Tests', function () {
         take: {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.ONEINCH, // Wrong for factory
-          marketPriceFactor: 0.95
-        }
+          marketPriceFactor: 0.95,
+        },
       };
 
       // Should handle wrong liquiditySource gracefully
@@ -633,26 +649,26 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: invalidPoolConfig as any,
         config: validFactoryConfig as any,
       });
-      
+
       // Should not crash - may skip external takes
       expect(true).to.be.true;
     });
 
     it('should handle concurrent factory take requests', async () => {
       await setupFactoryTakeScenario();
-      
+
       const factoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        }
+        },
       };
 
       const poolConfig: PoolConfig = {
@@ -660,8 +676,8 @@ describe('Factory Takes Integration Tests', function () {
         take: {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95
-        }
+          marketPriceFactor: 0.95,
+        },
       };
 
       // Test concurrent factory take requests
@@ -681,19 +697,19 @@ describe('Factory Takes Integration Tests', function () {
 
     it('should handle pool configuration without take settings', async () => {
       await setupFactoryTakeScenario();
-      
+
       const factoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        }
+        },
       };
 
       const poolConfigWithoutTake: PoolConfig = {
@@ -712,7 +728,8 @@ describe('Factory Takes Integration Tests', function () {
         expect(true).to.be.true;
       } catch (error) {
         // May throw error for missing required config
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
         expect(errorMessage.length).to.be.greaterThan(0);
       }
     });
@@ -729,19 +746,19 @@ describe('Factory Takes Integration Tests', function () {
     it('should integrate with existing kick functionality', async () => {
       // Setup scenario and kick
       await setupFactoryTakeScenario(); // This includes kicking
-      
+
       const factoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        }
+        },
       };
 
       const poolConfig: PoolConfig = {
@@ -750,8 +767,8 @@ describe('Factory Takes Integration Tests', function () {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
-          hpbPriceFactor: 0.98
-        }
+          hpbPriceFactor: 0.98,
+        },
       };
 
       // Factory takes should work after kick
@@ -761,25 +778,25 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: poolConfig as any,
         config: factoryConfig as any,
       });
-      
+
       expect(true).to.be.true;
     });
 
     it('should handle dry run mode consistently', async () => {
       await setupFactoryTakeScenario();
-      
+
       const dryRunConfig = {
         dryRun: true, // Critical: dry run mode
         subgraphUrl: 'http://test-url',
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        }
+        },
       };
 
       const poolConfig: PoolConfig = {
@@ -787,8 +804,8 @@ describe('Factory Takes Integration Tests', function () {
         take: {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95
-        }
+          marketPriceFactor: 0.95,
+        },
       };
 
       // Dry run should complete without external transactions
@@ -798,17 +815,17 @@ describe('Factory Takes Integration Tests', function () {
         poolConfig: poolConfig as any,
         config: dryRunConfig as any,
       });
-      
+
       expect(true).to.be.true;
     });
 
     it('should work with different subgraph configurations', async () => {
       await setupFactoryTakeScenario();
-      
+
       const subgraphConfigs = [
         'http://test-url',
         'https://api.goldsky.com/api/public/project_test/subgraphs/ajna-hemi/1.0.0/gn',
-        'http://invalid-url-that-should-fail'
+        'http://invalid-url-that-should-fail',
       ];
 
       const factoryConfig = {
@@ -816,12 +833,12 @@ describe('Factory Takes Integration Tests', function () {
         delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
-          'UniswapV3': '0x2234567890123456789012345678901234567890'
+          UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        }
+        },
       };
 
       const poolConfig: PoolConfig = {
@@ -829,15 +846,15 @@ describe('Factory Takes Integration Tests', function () {
         take: {
           minCollateral: 0.1,
           liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95
-        }
+          marketPriceFactor: 0.95,
+        },
       };
 
       // Should handle different subgraph URLs gracefully
       for (const subgraphUrl of subgraphConfigs) {
         const configWithSubgraph = {
           ...factoryConfig,
-          subgraphUrl
+          subgraphUrl,
         };
 
         await processManualTakeCandidates({
@@ -847,7 +864,7 @@ describe('Factory Takes Integration Tests', function () {
           config: configWithSubgraph as any,
         });
       }
-      
+
       expect(true).to.be.true;
     });
   });

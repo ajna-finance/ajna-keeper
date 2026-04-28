@@ -102,7 +102,9 @@ describe('LpCollector ingest', () => {
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
           delayBetweenActions: 0,
-          pools: [],
+          manual: {
+            pools: [],
+          },
         } as any,
         dexRouter
       ),
@@ -146,7 +148,9 @@ describe('LpCollector ingest', () => {
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
           delayBetweenActions: 0,
-          pools: [],
+          manual: {
+            pools: [],
+          },
         } as any,
         dexRouter
       ),
@@ -193,7 +197,9 @@ describe('LpCollector ingest', () => {
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
           delayBetweenActions: 0,
-          pools: [],
+          manual: {
+            pools: [],
+          },
         } as any,
         dexRouter
       ),
@@ -249,7 +255,9 @@ describe('LpCollector collections', () => {
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
           delayBetweenActions: 0,
-          pools: [],
+          manual: {
+            pools: [],
+          },
         } as any,
         dexRouter
       ),
@@ -314,7 +322,9 @@ describe('LpCollector collections', () => {
               uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
             },
             delayBetweenActions: 0,
-            pools: [],
+            manual: {
+              pools: [],
+            },
           } as any,
           dexRouter
         ),

@@ -75,8 +75,7 @@ export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
 export type ExternalTakePathKind = 'oneinch' | 'factory';
 export type ExternalTakeRouteSelectionMode =
   | 'maximize_profit'
-  | 'factory_first'
-  | 'cost_aware';
+  | 'factory_first';
 export type ExternalTakeTransportPolicy =
   | 'allow_public'
   | 'prefer_private_or_relay'
@@ -105,7 +104,7 @@ export interface CollectSettings {
   collectBonds: boolean;
 }
 
-interface DexConfig {
+interface PoolDexConfig {
   fee: FeeAmount;
 }
 
@@ -153,10 +152,11 @@ export interface CollectLpRewardSettings {
 /**
  * Per-pool override shape. All fields optional at the type level because the
  * `resolveCollectLpRewardForPool` merger fills required fields from
- * `defaultLpReward` when it's set.
+ * `rewards.defaultLpReward` when it's set.
  *
- * **Runtime contract (legacy mode only):** when `KeeperConfig.defaultLpReward`
- * is NOT set, a per-pool `collectLpReward` entry must still supply
+ * **Runtime contract (legacy mode only):** when
+ * `KeeperConfig.rewards.defaultLpReward` is NOT set, a per-pool
+ * `collectLpReward` entry must still supply
  * `minAmountQuote` AND `minAmountCollateral`. The startup validator
  * (`assertIsValidConfig` in `config/load.ts`) rejects any legacy-mode entry
  * missing these fields. The type stays `Partial` to keep chain-wide mode
@@ -210,11 +210,11 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   /**
    * External take execution paths eligible for discovered liquidation takes.
    * When omitted, autodiscover preserves the single-path behavior from
-   * discoveredDefaults.take.liquiditySource.
+   * discovery.defaults.take.liquiditySource.
    */
   allowedExternalTakePaths?: ExternalTakePathKind[];
   /**
-   * Factory path to use when discoveredDefaults.take.liquiditySource is 1inch
+   * Factory path to use when discovery.defaults.take.liquiditySource is 1inch
    * but allowedExternalTakePaths also enables the factory execution path.
    */
   defaultFactoryLiquiditySource?: LiquiditySource;
@@ -261,7 +261,6 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    * picks the best net-profit route. factory_first probes factory before
    * 1inch and stops at the first non-subsidized approved path to reduce 1inch
    * API use; subsidized approvals keep probing remaining paths.
-   * cost_aware is a deprecated alias for factory_first.
    */
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
   /**
@@ -276,7 +275,7 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   validateRouteDeployments?: boolean;
   /**
    * Maximum factory-route quote probes per liquidation candidate. Only applies
-   * when discoveredDefaults.take.liquiditySource is a factory route source.
+   * when discovery.defaults.take.liquiditySource is a factory route source.
    */
   takeRouteQuoteBudgetPerCandidate?: number;
   /**
@@ -350,6 +349,10 @@ export interface DiscoveredDefaultsConfig {
   settlement?: SettlementConfig;
 }
 
+export interface DiscoveryConfig extends AutoDiscoverConfig {
+  defaults?: DiscoveredDefaultsConfig;
+}
+
 export interface PoolConfig {
   name?: string;
   address: string;
@@ -357,14 +360,18 @@ export interface PoolConfig {
   take?: TakeSettings;
   collect?: CollectSettings;
   collectBond?: boolean;
-  // When `defaultLpReward` is set at the KeeperConfig level, per-pool
+  // When `rewards.defaultLpReward` is set at the KeeperConfig level, per-pool
   // entries act as overrides and can omit any field. When there's no
   // default, the per-pool entry must still supply `minAmountQuote` and
   // `minAmountCollateral` — enforced by `resolveCollectLpRewardForPool`.
   collectLpReward?: CollectLpRewardOverride;
   settlement?: SettlementConfig;
   price: PriceOrigin;
-  dex?: DexConfig;
+  dex?: PoolDexConfig;
+}
+
+export interface ManualConfig {
+  pools: PoolConfig[];
 }
 
 export interface UniswapV3Overrides {
@@ -436,55 +443,103 @@ export interface TakeWriteConfig {
   receiptTimeoutMs?: number;
 }
 
-export interface KeeperConfig {
-  ethRpcUrl: string;
-  takeWriteRpcUrl?: string;
-  takeWrite?: TakeWriteConfig;
+export interface NetworkConfig {
+  rpcUrl: string;
   readRpcUrls?: string[];
-  logLevel: string;
-  subgraphUrl: string;
-  subgraphFallbackUrls?: string[];
-  keeperKeystore: string;
-  keeperTaker?: string;
-  keeperTakerFactory?: string;
-  takerContracts?: {
-    [source: string]: string;
+  subgraph: {
+    url: string;
+    fallbackUrls?: string[];
   };
-  dryRun?: boolean;
-  multicallAddress?: string;
-  multicallBlock?: number;
-  ajna: AjnaConfigParams;
-  coinGeckoApiKey?: string;
-  pools: PoolConfig[];
-  autoDiscover?: AutoDiscoverConfig;
-  discoveredDefaults?: DiscoveredDefaultsConfig;
-  uniswapOverrides?: UniswapV3Overrides;
+  multicall?: {
+    address: string;
+    block: number;
+  };
+  tokenAddresses?: { [tokenSymbol: string]: string };
+}
+
+export interface KeeperIdentityConfig {
+  keystore: string;
+}
+
+export interface RuntimeConfig {
+  logLevel: string;
   delayBetweenActions: number;
   delayBetweenRuns: number;
-  oneInchRouters?: { [chainId: number]: string };
+  dryRun?: boolean;
+}
+
+export interface WritesConfig {
+  take?: TakeWriteConfig;
+}
+
+export interface OneInchDexConfig {
+  routers?: { [chainId: number]: string };
   /** Default 1inch external-take slippage percentage. Defaults to 1.0 when unset. */
-  oneInchDefaultSlippage?: number;
+  defaultSlippage?: number;
   /**
    * Optional per-chain allowlist for decoded 1inch aggregationExecutor
    * addresses. When omitted, executors are logged but not hard-rejected.
    * Each chain may list up to 64 executor addresses.
    */
-  oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
-  tokenAddresses?: { [tokenSymbol: string]: string };
+  aggregationExecutorAllowlist?: { [chainId: number]: string[] };
   connectorTokens?: Array<string>;
-  universalRouterOverrides?: UniversalRouterOverrides;
-  sushiswapRouterOverrides?: SushiswapRouterOverrides;
-  curveRouterOverrides?: CurveRouterOverrides;
+}
+
+export interface UniswapV3DexConfig {
+  legacy?: UniswapV3Overrides;
+  universalRouter?: UniversalRouterOverrides;
+}
+
+export interface DexConfig {
+  oneInch?: OneInchDexConfig;
+  uniswapV3?: UniswapV3DexConfig;
+  sushiswap?: SushiswapRouterOverrides;
+  curve?: CurveRouterOverrides;
+}
+
+export interface TakersConfig {
+  oneInch?: string;
+  factory?: string;
+  contracts?: {
+    [source: string]: string;
+  };
+}
+
+export interface PricingConfig {
+  coinGeckoApiKey?: string;
+}
+
+export interface RewardsConfig {
   // Seconds subtracted from the LP-reward subgraph cursor before each query,
   // so late-indexed events that land just below the previous cursor are still
   // re-fetched. Raise on chains where subgraph indexing lag exceeds the
   // default (e.g. heavily congested L2s). The in-memory dedupe set is scoped
   // to this window, so larger values grow per-pool memory roughly linearly
   // with event rate × window. Defaults to 60.
-  lpRewardLookbackSeconds?: number;
+  lpLookbackSeconds?: number;
   // Default LP-reward redemption settings applied to every pool the signer
   // has activity in (including auto-discovered pools), unless a per-pool
   // `collectLpReward` entry overrides it. Setting this enables chain-wide
   // LP reward coverage; omitting it keeps the legacy per-pool-only mode.
   defaultLpReward?: CollectLpRewardSettings;
+}
+
+export interface KeeperConfig {
+  network: NetworkConfig;
+  keeper: KeeperIdentityConfig;
+  runtime: RuntimeConfig;
+  writes?: WritesConfig;
+  ajna: AjnaConfigParams;
+  manual: ManualConfig;
+  discovery?: DiscoveryConfig;
+  dex?: DexConfig;
+  takers?: TakersConfig;
+  pricing?: PricingConfig;
+  rewards?: RewardsConfig;
+}
+
+export function getManualPools(
+  config: Pick<KeeperConfig, 'manual'>
+): PoolConfig[] {
+  return config.manual.pools;
 }

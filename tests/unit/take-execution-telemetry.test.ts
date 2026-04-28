@@ -39,13 +39,13 @@ describe('take execution telemetry', () => {
     expect(warnStub.called).to.be.false;
     expect(debugStub.calledOnce).to.be.true;
     const message = String(debugStub.firstCall.args[0]);
-    expect(message).to.include(
-      `version=${TAKE_EXECUTION_TELEMETRY_VERSION}`
-    );
+    expect(message).to.include(`version=${TAKE_EXECUTION_TELEMETRY_VERSION}`);
     expect(message).to.include('path=factory');
     expect(message).to.include('source=UNISWAPV3');
     expect(message).to.include('borrowerHash=0x');
-    expect(message).to.not.include('borrower=0x2222222222222222222222222222222222222222');
+    expect(message).to.not.include(
+      'borrower=0x2222222222222222222222222222222222222222'
+    );
     expect(message).to.include('gasDivergenceBps=2000');
     expect(message).to.include('approvedMinOutRaw=90');
     expect(message).to.include('expectedShortfallRaw=0');

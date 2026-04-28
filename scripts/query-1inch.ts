@@ -6,7 +6,7 @@ import { ContractFactory, ethers } from 'ethers';
 import { promises as fs } from 'fs';
 import { exit } from 'process';
 
-import { configureAjna, readConfigFile } from '../src/config';
+import { configureAjna, getManualPools, readConfigFile } from '../src/config';
 import { approveErc20, getAllowanceOfErc20, transferErc20 } from '../src/erc20';
 import { DexRouter } from '../src/dex';
 import { getProviderAndSigner } from '../src/utils';
@@ -55,8 +55,8 @@ async function main() {
   // read config file and unlock keystore
   const config = await readConfigFile(argv.config);
   const { provider, signer } = await getProviderAndSigner(
-    config.keeperKeystore,
-    config.ethRpcUrl
+    config.keeper.keystore,
+    config.network.rpcUrl
   );
   const chainId = await signer.getChainId();
 
@@ -72,13 +72,15 @@ async function main() {
     );
     await keeperTaker.deployed();
     console.log('AjnaKeeperTaker deployed to:', keeperTaker.address);
-    console.log('Update config.keeperTaker with this address');
+    console.log('Update config.takers.oneInch with this address');
 
     exit(0);
   }
 
   // load pool from SDK
-  const poolConfig = config.pools.find((pool) => pool.name === argv.poolName);
+  const poolConfig = getManualPools(config).find(
+    (pool) => pool.name === argv.poolName
+  );
   if (!poolConfig)
     throw new Error(`Pool with name ${argv.poolName} not found in config`);
   configureAjna(config.ajna);
@@ -96,8 +98,8 @@ async function main() {
     pool.quoteAddress
   );
   const dexRouter = new DexRouter(signer, {
-    oneInchRouters: config?.oneInchRouters ?? {},
-    connectorTokens: config?.connectorTokens ?? [],
+    oneInchRouters: config.dex?.oneInch?.routers ?? {},
+    connectorTokens: config.dex?.oneInch?.connectorTokens ?? [],
   });
   //const amount = ethers.utils.parseEther(argv.amount!.toString());
   const collateralDecimals = await getDecimalsErc20(
@@ -172,18 +174,18 @@ async function main() {
       pool.quoteAddress
     );
     console.log('Quote:', quote);
-  } else if (argv.action === 'send' && pool && config.keeperTaker) {
+  } else if (argv.action === 'send' && pool && config.takers?.oneInch) {
     try {
       console.log(
         'Sending',
         amount.toString(),
         'to keeperTaker at',
-        config.keeperTaker
+        config.takers.oneInch
       );
       await transferErc20(
         signer,
         pool.collateralAddress,
-        config.keeperTaker,
+        config.takers.oneInch,
         amount
       );
     } catch (error) {
@@ -193,7 +195,7 @@ async function main() {
     argv.action === 'swap' &&
     pool &&
     dexRouter &&
-    config.keeperTaker
+    config.takers?.oneInch
   ) {
     const swapData = await dexRouter.getSwapDataFromOneInch(
       chainId,
@@ -201,17 +203,17 @@ async function main() {
       pool.collateralAddress,
       pool.quoteAddress,
       1,
-      config.keeperTaker,
+      config.takers.oneInch,
       true
     );
 
-    if (config.keeperTaker) {
+    if (config.takers.oneInch) {
       console.log(
         'Attempting to transact with keeperTaker at',
-        config.keeperTaker
+        config.takers.oneInch
       );
       const keeperTaker = AjnaKeeperTaker__factory.connect(
-        config.keeperTaker,
+        config.takers.oneInch,
         signer
       );
       const tx = await keeperTaker.testOneInchSwapBytes(

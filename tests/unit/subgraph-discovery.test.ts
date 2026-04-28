@@ -45,7 +45,6 @@ describe('Subgraph Discovery Pagination', () => {
     });
   });
 
-
   it('paginates pool liquidation discovery until the final short page', async () => {
     const requestStub = sinon.stub(graphqlRequest, 'request');
     requestStub.onCall(0).resolves({

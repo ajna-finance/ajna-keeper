@@ -18,7 +18,7 @@ export interface TokenConfig {
   address: string;
   targetToken: string;
   slippage: number;
-  dexProvider: PostAuctionDex; 
+  dexProvider: PostAuctionDex;
   feeAmount?: FeeAmount;
 }
 
@@ -74,9 +74,9 @@ export class RewardActionTracker {
     const address = await this.signer.getAddress();
 
     const targetAddress =
-      targetToken in (this.config.tokenAddresses || {})
-        ? this.config.tokenAddresses![targetToken]
-        : this.config.uniswapOverrides?.wethAddress;
+      targetToken in (this.config.network.tokenAddresses || {})
+        ? this.config.network.tokenAddresses![targetToken]
+        : this.config.dex?.uniswapV3?.legacy?.wethAddress;
 
     if (!targetAddress) {
       logger.error(
@@ -90,11 +90,11 @@ export class RewardActionTracker {
     // Combine all DEX settings into a structured object
     const combinedSettings = {
       uniswap: {
-        ...this.config.uniswapOverrides,
-        ...this.config.universalRouterOverrides
+        ...this.config.dex?.uniswapV3?.legacy,
+        ...this.config.dex?.uniswapV3?.universalRouter,
       },
-      sushiswap: this.config.sushiswapRouterOverrides,
-      curve: this.config.curveRouterOverrides
+      sushiswap: this.config.dex?.sushiswap,
+      curve: this.config.dex?.curve,
     };
     const result = await this.dexRouter.swap(
       chainId,
@@ -105,7 +105,7 @@ export class RewardActionTracker {
       dexProvider,
       slippage,
       feeAmount,
-      combinedSettings, 
+      combinedSettings
     );
     return result;
   }
@@ -113,21 +113,23 @@ export class RewardActionTracker {
   public async handleAllTokens(): Promise<void> {
     // Define maximum number of retry attempts
     const MAX_RETRY_COUNT = 3;
-    
+
     // Get all non-zero token entries
     const nonZeroEntries = Array.from(this.feeTokenAmountMap.entries()).filter(
       ([_, amountWad]) => amountWad.gt(constants.Zero)
     );
-    
+
     for (const [key, amountWad] of nonZeroEntries) {
       const { rewardAction, token } = deserializeRewardAction(key);
-      
+
       // Get current retry count for this token (default to 0 if not present)
       const retryCount = this.retryCountMap.get(key) || 0;
-      
+
       // Skip if we've already tried too many times
       if (retryCount >= MAX_RETRY_COUNT) {
-        logger.warn(`Skipping token ${token} after ${MAX_RETRY_COUNT} failed swap attempts - removing from queue`);
+        logger.warn(
+          `Skipping token ${token} after ${MAX_RETRY_COUNT} failed swap attempts - removing from queue`
+        );
         this.removeToken(rewardAction, token, amountWad);
         this.retryCountMap.delete(key); // Clean up retry counter
         continue;
@@ -154,33 +156,40 @@ export class RewardActionTracker {
               tokenConfig?.targetToken ??
               (rewardAction as ExchangeReward).targetToken ??
               'weth';
-            const dexProvider = tokenConfig?.dexProvider ?? (rewardAction as ExchangeReward).dexProvider;
+            const dexProvider =
+              tokenConfig?.dexProvider ??
+              (rewardAction as ExchangeReward).dexProvider;
 
             const feeAmount =
               (rewardAction as ExchangeReward).fee ?? tokenConfig?.feeAmount;
 
-	    // Validate that dexProvider is specified
+            // Validate that dexProvider is specified
             if (!dexProvider) {
-              logger.error(`dexProvider is required for EXCHANGE action on token ${token}`);
+              logger.error(
+                `dexProvider is required for EXCHANGE action on token ${token}`
+              );
               this.removeToken(rewardAction, token, amountWad);
               continue;
             }
 
-	    // Validate the DEX configuration before attempting swap
+            // Validate the DEX configuration before attempting swap
             try {
               validatePostAuctionDex(dexProvider, this.config);
             } catch (validationError) {
-              logger.error(`Configuration validation failed for ${dexProvider} on token ${token}: ${validationError}`);
+              logger.error(
+                `Configuration validation failed for ${dexProvider} on token ${token}: ${validationError}`
+              );
               this.removeToken(rewardAction, token, amountWad);
               continue;
             }
 
-
             // If not the first attempt, log that we're retrying
             if (retryCount > 0) {
-              logger.info(`Retry attempt ${retryCount + 1}/${MAX_RETRY_COUNT} for swapping ${weiToDecimaled(amountWad)} of ${token} via ${dexProvider}`);
+              logger.info(
+                `Retry attempt ${retryCount + 1}/${MAX_RETRY_COUNT} for swapping ${weiToDecimaled(amountWad)} of ${token} via ${dexProvider}`
+              );
             }
-            
+
             // Attempt the swap
             const swapResult = await this.swapToken(
               await this.signer.getChainId(),
@@ -191,26 +200,28 @@ export class RewardActionTracker {
               slippage,
               feeAmount
             );
-            
+
             if (swapResult.success) {
               // Success: remove token and clear retry count
               this.removeToken(rewardAction, token, amountWad);
               this.retryCountMap.delete(key);
               logger.info(
-               `Successfully swapped ${weiToDecimaled(amountWad)} of ${token} to ${targetToken} via ${dexProvider}`
+                `Successfully swapped ${weiToDecimaled(amountWad)} of ${token} to ${targetToken} via ${dexProvider}`
               );
             } else {
               // Failure: increment retry count
               const newRetryCount = retryCount + 1;
               this.retryCountMap.set(key, newRetryCount);
-              
+
               logger.error(
-               `Failed to swap ${weiToDecimaled(amountWad)} of ${token} via ${dexProvider} (attempt ${newRetryCount}/${MAX_RETRY_COUNT}): ${swapResult.error}`
+                `Failed to swap ${weiToDecimaled(amountWad)} of ${token} via ${dexProvider} (attempt ${newRetryCount}/${MAX_RETRY_COUNT}): ${swapResult.error}`
               );
-              
+
               // If we've reached max retries, remove the token
               if (newRetryCount >= MAX_RETRY_COUNT) {
-                logger.warn(`Max retry count reached for ${token} via ${dexProvider} - removing from queue`);
+                logger.warn(
+                  `Max retry count reached for ${token} via ${dexProvider} - removing from queue`
+                );
                 this.removeToken(rewardAction, token, amountWad);
                 this.retryCountMap.delete(key);
               }
@@ -224,22 +235,24 @@ export class RewardActionTracker {
       } catch (error) {
         // Handle unexpected errors
         logger.error(`Error processing reward action for ${token}:`, error);
-        
+
         // Increment retry count for the next attempt
         const newRetryCount = retryCount + 1;
         this.retryCountMap.set(key, newRetryCount);
-        
+
         // Remove token if max retries reached
         if (newRetryCount >= MAX_RETRY_COUNT) {
-          logger.warn(`Removing token ${token} after ${MAX_RETRY_COUNT} failed attempts due to errors`);
+          logger.warn(
+            `Removing token ${token} after ${MAX_RETRY_COUNT} failed attempts due to errors`
+          );
           this.removeToken(rewardAction, token, amountWad);
           this.retryCountMap.delete(key);
         }
       }
-      
-      // The config.delayBetweenActions provides
+
+      // The runtime delay provides
       // natural spacing between actions and retry attempts
-      await delay(this.config.delayBetweenActions);
+      await delay(this.config.runtime.delayBetweenActions);
     }
   }
 

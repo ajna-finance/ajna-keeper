@@ -1,4 +1,3 @@
-import { KeeperConfig } from '../config';
 import {
   resolveSubgraphConfig,
   SubgraphConfigInput,
@@ -46,13 +45,14 @@ export interface SettlementIncentiveResult {
   reason: string;
 }
 
-export type SettlementReadConfig = WithSubgraph<
-  Pick<KeeperConfig, 'dryRun' | 'delayBetweenActions'>
->;
+interface SettlementConfigBase {
+  dryRun?: boolean;
+  delayBetweenActions: number;
+}
 
-export type SettlementConfigInput = SubgraphConfigInput<
-  Pick<KeeperConfig, 'dryRun' | 'delayBetweenActions'>
->;
+export type SettlementReadConfig = WithSubgraph<SettlementConfigBase>;
+
+export type SettlementConfigInput = SubgraphConfigInput<SettlementConfigBase>;
 
 export function resolveSettlementReadConfig(
   config: SettlementConfigInput

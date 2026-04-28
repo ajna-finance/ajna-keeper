@@ -58,7 +58,7 @@ import { normalizeAddress } from '../discovery/targets';
 // query, so late-indexed events that land just under the previous cursor
 // boundary are still re-seen. Any event already processed is filtered out
 // by the seen-id set. Fits typical Goldsky lag (~5–30s); operators on slower
-// chains can raise via `KeeperConfig.lpRewardLookbackSeconds`.
+// chains can raise via `KeeperConfig.rewards.lpLookbackSeconds`.
 export const LP_REWARD_LOOKBACK_SECONDS_DEFAULT = 60;
 
 // Advisory threshold for the dedupe set. Memory is hard-bounded by
@@ -136,21 +136,21 @@ export class LpIngester {
   constructor(
     private signer: Signer,
     private subgraph: SubgraphReader,
-    config: Pick<KeeperConfig, 'lpRewardLookbackSeconds'>
+    config: Pick<KeeperConfig, 'rewards'>
   ) {
     this.signerAddressPromise = resolveSignerAddressWithLoggingCatch(
       this.signer,
       'LP ingester'
     );
 
-    // Defense-in-depth beyond `load.ts` validation: if `lpRewardLookbackSeconds`
-    // somehow arrives non-finite (e.g. a caller that bypassed the schema
+    // Defense-in-depth beyond `load.ts` validation: if
+    // `rewards.lpLookbackSeconds` somehow arrives non-finite (e.g. a caller
+    // that bypassed the schema
     // validator), fall back to the default rather than letting NaN/Infinity
     // propagate into BigNumber arithmetic and silently break cursor math.
-    this.lookbackSeconds = isValidLookbackSeconds(
-      config.lpRewardLookbackSeconds
-    )
-      ? config.lpRewardLookbackSeconds
+    const configuredLookbackSeconds = config.rewards?.lpLookbackSeconds;
+    this.lookbackSeconds = isValidLookbackSeconds(configuredLookbackSeconds)
+      ? configuredLookbackSeconds
       : LP_REWARD_LOOKBACK_SECONDS_DEFAULT;
   }
 
@@ -387,7 +387,7 @@ export class LpRedeemer {
     public readonly pool: FungiblePool,
     private signer: Signer,
     private settings: CollectLpRewardSettings,
-    private config: Pick<KeeperConfig, 'dryRun'>,
+    private config: Pick<KeeperConfig, 'runtime'>,
     private exchangeTracker: RewardActionTracker
   ) {
     this.signerAddressPromise = resolveSignerAddressWithLoggingCatch(
@@ -555,7 +555,7 @@ export class LpRedeemer {
     quoteToWithdraw: BigNumber,
     rewardActionQuote?: RewardAction
   ): Promise<BigNumber> {
-    if (this.config.dryRun) {
+    if (this.config.runtime.dryRun) {
       logger.info(
         `DryRun - Would collect LP reward as ${quoteToWithdraw.toNumber()} quote. pool: ${this.pool.name}`
       );
@@ -626,7 +626,7 @@ export class LpRedeemer {
     collateralToWithdraw: BigNumber,
     rewardActionCollateral?: RewardAction
   ): Promise<BigNumber> {
-    if (this.config.dryRun) {
+    if (this.config.runtime.dryRun) {
       logger.info(
         `DryRun - Would collect LP reward as ${collateralToWithdraw.toNumber()} collateral. pool: ${this.pool.name}`
       );

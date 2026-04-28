@@ -54,7 +54,9 @@ function getStateLockPath(): string {
   return `${stateFilePath}.lock`;
 }
 
-async function getStateFileSignature(): Promise<StateFileSignature | undefined> {
+async function getStateFileSignature(): Promise<
+  StateFileSignature | undefined
+> {
   try {
     const stat = await fsPromises.stat(stateFilePath);
     return {
@@ -171,7 +173,9 @@ async function acquireStateLock() {
   }
 }
 
-async function releaseStateLock(lockHandle: Awaited<ReturnType<typeof fsPromises.open>>): Promise<void> {
+async function releaseStateLock(
+  lockHandle: Awaited<ReturnType<typeof fsPromises.open>>
+): Promise<void> {
   try {
     await lockHandle.close();
   } finally {
@@ -259,9 +263,7 @@ export async function clearDurableNonceFloor(
   });
 }
 
-export function setDurableNonceStateFilePathForTests(
-  filePath?: string
-): void {
+export function setDurableNonceStateFilePathForTests(filePath?: string): void {
   stateFilePath = path.resolve(filePath ?? DEFAULT_STATE_FILE);
   loaded = false;
   loadPromise = undefined;

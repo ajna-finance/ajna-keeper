@@ -20,7 +20,7 @@ async function main() {
   const config = await readConfigFile(argv.config);
   setLoggerConfig(config);
   logger.info(
-    `Starting keeper with...  ETH_RPC_URL: ${config.ethRpcUrl}, SUBGRAPH_URL: ${config.subgraphUrl}`
+    `Starting keeper with...  ETH_RPC_URL: ${config.network.rpcUrl}, SUBGRAPH_URL: ${config.network.subgraph.url}`
   );
   await startKeeperFromConfig(config);
 }

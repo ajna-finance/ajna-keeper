@@ -76,7 +76,9 @@ export async function getPriceFromAlchemy(
   };
 
   try {
-    logger.debug(`Fetching price from Alchemy for ${tokenAddress} on ${network}`);
+    logger.debug(
+      `Fetching price from Alchemy for ${tokenAddress} on ${network}`
+    );
 
     const response = await fetch(url, {
       method: 'POST',
@@ -87,7 +89,9 @@ export async function getPriceFromAlchemy(
     });
 
     if (!response.ok) {
-      throw new Error(`Alchemy API request failed: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Alchemy API request failed: ${response.status} ${response.statusText}`
+      );
     }
 
     const data: AlchemyPriceResponse = await response.json();
@@ -99,18 +103,23 @@ export async function getPriceFromAlchemy(
     const tokenData = data.data[0];
 
     if (tokenData.error) {
-      const errorMsg = typeof tokenData.error === 'string'
-        ? tokenData.error
-        : JSON.stringify(tokenData.error);
+      const errorMsg =
+        typeof tokenData.error === 'string'
+          ? tokenData.error
+          : JSON.stringify(tokenData.error);
       throw new Error(`Alchemy API error: ${errorMsg}`);
     }
 
     if (!tokenData.prices || tokenData.prices.length === 0) {
-      throw new Error(`No price information available from Alchemy for ${tokenAddress}`);
+      throw new Error(
+        `No price information available from Alchemy for ${tokenAddress}`
+      );
     }
 
     // Get USD price
-    const usdPrice = tokenData.prices.find(p => p.currency.toLowerCase() === 'usd');
+    const usdPrice = tokenData.prices.find(
+      (p) => p.currency.toLowerCase() === 'usd'
+    );
     if (!usdPrice) {
       throw new Error('USD price not available from Alchemy');
     }
@@ -120,7 +129,10 @@ export async function getPriceFromAlchemy(
 
     return price;
   } catch (error) {
-    logger.error(`Error fetching price from Alchemy for ${tokenAddress}:`, error);
+    logger.error(
+      `Error fetching price from Alchemy for ${tokenAddress}:`,
+      error
+    );
     throw error;
   }
 }

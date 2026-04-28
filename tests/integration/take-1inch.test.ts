@@ -76,34 +76,32 @@ describe('Take with 1inch Integration', () => {
         })
       );
 
-    sinon
-      .stub(oneInch, 'convertSwapApiResponseToDetails')
-      .callsFake(() => {
-        const latestSwapCall = axiosGetStub
-          .getCalls()
-          .reverse()
-          .find((call) => String(call.args[0]).includes('/swap'));
-        const requestedCollateralAmount =
-          latestSwapCall?.args[1]?.params?.amount ?? '14000000000';
-        const expectedOutputAmount = BigNumber.from(requestedCollateralAmount)
-          .mul(utils.parseUnits('75', 15))
-          .div(utils.parseUnits('1', 9));
-        const details = {
-          aggregationExecutor: mockRouterAddress,
-          swapDescription: {
-            srcToken: '0xD31a59c85aE9D8edEFeC411D448f90841571b89c',
-            dstToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-            srcReceiver: mockRouterAddress,
-            dstReceiver: keeperTakerAddress,
-            amount: BigNumber.from(requestedCollateralAmount),
-            minReturnAmount: expectedOutputAmount.mul(99).div(100),
-            flags: BigNumber.from('0'),
-          },
-          opaqueData:
-            '0xa9059cbb000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000de0b6b3a7640000',
-        };
-        return details as any;
-      });
+    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').callsFake(() => {
+      const latestSwapCall = axiosGetStub
+        .getCalls()
+        .reverse()
+        .find((call) => String(call.args[0]).includes('/swap'));
+      const requestedCollateralAmount =
+        latestSwapCall?.args[1]?.params?.amount ?? '14000000000';
+      const expectedOutputAmount = BigNumber.from(requestedCollateralAmount)
+        .mul(utils.parseUnits('75', 15))
+        .div(utils.parseUnits('1', 9));
+      const details = {
+        aggregationExecutor: mockRouterAddress,
+        swapDescription: {
+          srcToken: '0xD31a59c85aE9D8edEFeC411D448f90841571b89c',
+          dstToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+          srcReceiver: mockRouterAddress,
+          dstReceiver: keeperTakerAddress,
+          amount: BigNumber.from(requestedCollateralAmount),
+          minReturnAmount: expectedOutputAmount.mul(99).div(100),
+          flags: BigNumber.from('0'),
+        },
+        opaqueData:
+          '0xa9059cbb000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000de0b6b3a7640000',
+      };
+      return details as any;
+    });
 
     configureAjna(MAINNET_CONFIG.AJNA_CONFIG);
     const ajna = new AjnaSDK(provider);

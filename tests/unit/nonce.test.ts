@@ -138,7 +138,7 @@ describe('NonceTracker', () => {
     // Queue two transactions concurrently — they should execute sequentially
     const tx1 = NonceTracker.queueTransaction(signer, async (nonce) => {
       executionOrder.push(nonce);
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
       return `tx-${nonce}`;
     });
 
@@ -298,7 +298,10 @@ describe('NonceTracker', () => {
     sinon.stub(signer, 'getTransactionCount').resolves(10);
 
     // tx1: success (nonce 10)
-    const r1 = await NonceTracker.queueTransaction(signer, async (nonce) => nonce);
+    const r1 = await NonceTracker.queueTransaction(
+      signer,
+      async (nonce) => nonce
+    );
     expect(r1).to.equal(10);
 
     // tx2: pre-broadcast failure (nonce 11 attempted, not consumed, resets to 10)
@@ -306,11 +309,16 @@ describe('NonceTracker', () => {
       await NonceTracker.queueTransaction(signer, async () => {
         throw new Error('insufficient funds');
       });
-    } catch (e) { /* expected */ }
+    } catch (e) {
+      /* expected */
+    }
 
     // tx3: success — should reuse nonce 10 (since tx2 never consumed it)
     // but getTransactionCount still returns 10, so reset landed at 10
-    const r3 = await NonceTracker.queueTransaction(signer, async (nonce) => nonce);
+    const r3 = await NonceTracker.queueTransaction(
+      signer,
+      async (nonce) => nonce
+    );
     expect(r3).to.equal(10);
   });
 
@@ -353,7 +361,9 @@ describe('NonceTracker', () => {
       await NonceTracker.queueTransaction(signer, async () => {
         throw new Error('gas estimation failed');
       });
-    } catch (e) { /* expected */ }
+    } catch (e) {
+      /* expected */
+    }
 
     // pendingNonce (10) == used nonce (10), so <= is true → resets to 10
     const nextNonce = await NonceTracker.getNonce(signer);
@@ -367,10 +377,13 @@ describe('NonceTracker', () => {
     await NonceTracker.queueTransaction(signer, async () => 'done');
 
     // Allow microtask for cleanup to run
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Queue should be cleaned up — next call should work without chaining
-    const result = await NonceTracker.queueTransaction(signer, async (nonce) => nonce);
+    const result = await NonceTracker.queueTransaction(
+      signer,
+      async (nonce) => nonce
+    );
     expect(result).to.equal(11);
   });
 });

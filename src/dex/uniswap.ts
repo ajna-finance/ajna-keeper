@@ -232,8 +232,8 @@ export async function swapToWeth(
   const signerAddress = await signer.getAddress();
 
   logger.debug(
-      `Swapping to WETH for token: ${tokenToSwap.symbol}, amount: ${weiToDecimaled(amount, tokenToSwap.decimals)}`
-    );
+    `Swapping to WETH for token: ${tokenToSwap.symbol}, amount: ${weiToDecimaled(amount, tokenToSwap.decimals)}`
+  );
 
   try {
     await NonceTracker.queueTransaction(signer, async (nonce: number) => {
@@ -252,7 +252,7 @@ export async function swapToWeth(
       );
       return await tx.wait();
     });
-    
+
     logger.info(
       `Swap to WETH successful for token: ${tokenToSwap.symbol}, amount: ${weiToDecimaled(amount, tokenToSwap.decimals)}`
     );

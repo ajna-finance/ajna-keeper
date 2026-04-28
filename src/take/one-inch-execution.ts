@@ -1,7 +1,7 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { AjnaKeeperTaker__factory } from '../../typechain-types';
-import { KeeperConfig, LiquiditySource } from '../config';
+import { LiquiditySource } from '../config';
 import { DexRouter } from '../dex/router';
 import {
   convertSwapApiResponseToDetails,

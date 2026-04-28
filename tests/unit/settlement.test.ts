@@ -1,8 +1,13 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { SettlementHandler, tryReactiveSettlement, handleSettlements } from '../../src/settlement';
-import { KeeperConfig, PoolConfig } from '../../src/config';
+import {
+  SettlementConfigInput,
+  SettlementHandler,
+  tryReactiveSettlement,
+  handleSettlements,
+} from '../../src/settlement';
+import { PoolConfig } from '../../src/config';
 import subgraph from '../../src/subgraph';
 import * as transactions from '../../src/transactions';
 import { clearSharedSettlementScannerCache } from '../../src/settlement/scanner';
@@ -14,7 +19,7 @@ import { clearSharedSettlementScannerCache } from '../../src/settlement/scanner'
  * - Auction age filtering and discovery
  * - Multi-iteration settlement execution
  * - Reactive settlement for bond unlock scenarios
- * 
+ *
  * Key business logic tested:
  * - Only settle auctions with bad debt (collateral=0, debt>0)
  * - Respect minimum auction age requirements
@@ -48,8 +53,8 @@ describe('Settlement Module Tests', () => {
   let mockPool: MockPool;
   let mockSigner: MockSigner;
   let poolConfig: PoolConfig;
-  let config: Pick<KeeperConfig, 'dryRun' | 'subgraphUrl' | 'delayBetweenActions'>;
-  
+  let config: SettlementConfigInput;
+
   // External dependency stubs
   let getUnsettledAuctionsStub: sinon.SinonStub;
   let poolSettleStub: sinon.SinonStub;
@@ -76,7 +81,9 @@ describe('Settlement Module Tests', () => {
 
     // Create mock signer with consistent address
     mockSigner = {
-      getAddress: sinon.stub().resolves('0xBotAddress123456789012345678901234567890'),
+      getAddress: sinon
+        .stub()
+        .resolves('0xBotAddress123456789012345678901234567890'),
       getTransactionCount: sinon.stub().resolves(42),
     };
 
@@ -87,10 +94,10 @@ describe('Settlement Module Tests', () => {
       price: { source: 'fixed' as any, value: 1 },
       settlement: {
         enabled: true,
-        minAuctionAge: 3600,        // 1 hour minimum
-        maxBucketDepth: 50,         // 50 buckets per settlement
-        maxIterations: 5,           // 5 max iterations
-        checkBotIncentive: true,    // Require bot incentive
+        minAuctionAge: 3600, // 1 hour minimum
+        maxBucketDepth: 50, // 50 buckets per settlement
+        maxIterations: 5, // 5 max iterations
+        checkBotIncentive: true, // Require bot incentive
       },
     } as any;
 
@@ -138,7 +145,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check settlement need
       const result = await handler.needsSettlement('0xBorrower123');
-      
+
       // Verify: Should not need settlement
       expect(result.needs).to.be.false;
       expect(result.reason).to.include('No active auction');
@@ -168,7 +175,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check settlement need
       const result = await handler.needsSettlement('0xBorrower123');
-      
+
       // Verify: Should not need settlement when live debt is zero
       expect(result.needs).to.be.false;
       expect(result.reason).to.include('No debt remaining');
@@ -198,7 +205,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check settlement need
       const result = await handler.needsSettlement('0xBorrower123');
-      
+
       // Verify: Should not settle while collateral exists
       expect(result.needs).to.be.false;
       expect(result.reason).to.include('Still has');
@@ -229,8 +236,9 @@ describe('Settlement Module Tests', () => {
 
       await handler.needsSettlement('0xBorrower123');
 
-      expect(mockPool.contract.callStatic.settle.calledWith('0xBorrower123', 50)).to.be
-        .true;
+      expect(
+        mockPool.contract.callStatic.settle.calledWith('0xBorrower123', 50)
+      ).to.be.true;
     });
 
     it('should return true for bad debt scenario (collateral=0, debt>0)', async () => {
@@ -260,13 +268,15 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check settlement need
       const result = await handler.needsSettlement('0xBorrower123');
-      
+
       // Verify: Should need settlement for bad debt using the live debt amount
       expect(result.needs).to.be.true;
       expect(result.reason).to.include('Bad debt detected');
       expect(result.reason).to.include('2');
       expect(result.reason).to.not.include('9');
-      expect(result.details?.debtRemaining.toString()).to.equal('2000000000000000000');
+      expect(result.details?.debtRemaining.toString()).to.equal(
+        '2000000000000000000'
+      );
     });
 
     it('should return false when settlement call would fail', async () => {
@@ -284,7 +294,9 @@ describe('Settlement Module Tests', () => {
       });
 
       // Mock settlement call to fail
-      mockPool.contract.callStatic.settle.rejects(new Error('Cannot read properties of undefined (reading \'eq\')'));
+      mockPool.contract.callStatic.settle.rejects(
+        new Error("Cannot read properties of undefined (reading 'eq')")
+      );
 
       const handler = new SettlementHandler(
         mockPool as any,
@@ -295,7 +307,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check settlement need
       const result = await handler.needsSettlement('0xBorrower123');
-      
+
       // Verify: Should not settle if call would fail
       expect(result.needs).to.be.false;
       expect(result.reason).to.include('Settlement call would fail');
@@ -343,7 +355,7 @@ describe('Settlement Module Tests', () => {
     it('should return true when bot is the kicker with claimable bonds', async () => {
       // Setup: Bot address matches kicker address
       const botAddress = await mockSigner.getAddress();
-      
+
       mockPool.contract.auctionInfo.resolves({
         kicker_: botAddress, // Bot is the kicker
       });
@@ -361,7 +373,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check bot incentive
       const result = await handler.checkBotIncentive('0xBorrower123');
-      
+
       // Verify: Should have incentive as kicker
       expect(result.hasIncentive).to.be.true;
       expect(result.reason).to.include('Bot is kicker');
@@ -383,7 +395,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check bot incentive
       const result = await handler.checkBotIncentive('0xBorrower123');
-      
+
       // Verify: Should not have incentive when not kicker
       expect(result.hasIncentive).to.be.false;
       expect(result.reason).to.include('Not the kicker');
@@ -393,7 +405,7 @@ describe('Settlement Module Tests', () => {
     it('should return true when bot is kicker but cannot check claimable amount', async () => {
       // Setup: Bot is kicker but kickerInfo call fails
       const botAddress = await mockSigner.getAddress();
-      
+
       mockPool.contract.auctionInfo.resolves({
         kicker_: botAddress,
       });
@@ -409,7 +421,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check bot incentive
       const result = await handler.checkBotIncentive('0xBorrower123');
-      
+
       // Verify: Should still have incentive if bot is kicker
       expect(result.hasIncentive).to.be.true;
       expect(result.reason).to.include('Bot is kicker');
@@ -426,26 +438,26 @@ describe('Settlement Module Tests', () => {
     it('should filter out auctions that do not actually need settlement', async () => {
       // Setup: Mock subgraph returning 2 auctions (1 settleable, 1 not)
       const oldKickTime = Math.floor(Date.now() / 1000) - 7200; // 2 hours ago
-      
+
       getUnsettledAuctionsStub.resolves({
         liquidationAuctions: [
-          { 
+          {
             borrower: '0xBorrower1',
             kickTime: oldKickTime.toString(),
             debtRemaining: '1.0',
             collateralRemaining: '0.5', // Has collateral - should not settle
             neutralPrice: '0.06',
             debt: '1.0',
-            collateral: '0.5'
+            collateral: '0.5',
           },
-          { 
+          {
             borrower: '0xBorrower2',
             kickTime: oldKickTime.toString(),
             debtRemaining: '2.0',
             collateralRemaining: '0.0', // No collateral - should settle
             neutralPrice: '0.05',
             debt: '2.0',
-            collateral: '0.0'
+            collateral: '0.0',
           },
         ],
       });
@@ -460,7 +472,7 @@ describe('Settlement Module Tests', () => {
         kickTime_: BigNumber.from(oldKickTime),
         debtToCollateral_: BigNumber.from('1000000000000000000'),
       });
-      
+
       getLiquidationStub.withArgs('0xBorrower1').returns({
         getStatus: async () => ({
           collateral: BigNumber.from('500000000000000000'), // Has collateral
@@ -473,7 +485,7 @@ describe('Settlement Module Tests', () => {
         kickTime_: BigNumber.from(oldKickTime),
         debtToCollateral_: BigNumber.from('2000000000000000000'),
       });
-      
+
       getLiquidationStub.withArgs('0xBorrower2').returns({
         getStatus: async () => ({
           collateral: BigNumber.from(0), // No collateral
@@ -482,7 +494,9 @@ describe('Settlement Module Tests', () => {
       });
 
       // Mock settlement feasibility checks
-      settleCallStub.withArgs('0xBorrower1', 5).rejects(new Error('Has collateral'));
+      settleCallStub
+        .withArgs('0xBorrower1', 5)
+        .rejects(new Error('Has collateral'));
       settleCallStub.withArgs('0xBorrower2', 5).resolves(); // Should succeed
 
       // Apply mocks to pool
@@ -499,11 +513,13 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Find settleable auctions
       const result = await handler.findSettleableAuctions();
-      
+
       // Verify: Should only return auction that actually needs settlement
       expect(result).to.have.length(1);
       expect(result[0].borrower).to.equal('0xBorrower2');
-      expect(result[0].debtRemaining.toString()).to.equal('2000000000000000000');
+      expect(result[0].debtRemaining.toString()).to.equal(
+        '2000000000000000000'
+      );
     });
 
     it('should return empty array when no auctions need settlement', async () => {
@@ -521,7 +537,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Find settleable auctions
       const result = await handler.findSettleableAuctions();
-      
+
       // Verify: Should return empty array
       expect(result).to.be.empty;
     });
@@ -529,17 +545,17 @@ describe('Settlement Module Tests', () => {
     it('should skip auctions that are too young (age filtering)', async () => {
       // Setup: Mock auction that is too young (30 minutes < 1 hour requirement)
       const youngKickTime = Math.floor(Date.now() / 1000) - 1800; // 30 minutes ago
-      
+
       getUnsettledAuctionsStub.resolves({
         liquidationAuctions: [
-          { 
+          {
             borrower: '0xYoungBorrower',
             kickTime: youngKickTime.toString(),
             debtRemaining: '1.0',
             collateralRemaining: '0.0', // Would need settlement if old enough
             neutralPrice: '0.05',
             debt: '1.0',
-            collateral: '0.0'
+            collateral: '0.0',
           },
         ],
       });
@@ -553,13 +569,12 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Find settleable auctions
       const result = await handler.findSettleableAuctions();
-      
+
       // Verify: Should skip young auction
       expect(result).to.be.empty;
       // Verify on-chain checks were skipped (performance optimization)
       expect(mockPool.contract.auctionInfo.called).to.be.false;
     });
-
 
     it('falls back to the on-chain kickTime when subgraph kickTime is malformed', async () => {
       const onchainKickTime = Math.floor(Date.now() / 1000) - 7200;
@@ -606,7 +621,8 @@ describe('Settlement Module Tests', () => {
       expect(result).to.have.length(1);
       expect(result[0].borrower).to.equal('0xFallbackBorrower');
       expect(result[0].kickTime).to.equal(onchainKickTime * 1000);
-      expect(mockPool.contract.auctionInfo.calledOnceWith('0xFallbackBorrower')).to.be.true;
+      expect(mockPool.contract.auctionInfo.calledOnceWith('0xFallbackBorrower'))
+        .to.be.true;
     });
 
     it('should handle subgraph network errors gracefully', async () => {
@@ -622,7 +638,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Find settleable auctions should not throw
       const result = await handler.findSettleableAuctions();
-      
+
       // Verify: Should return empty array on network error
       expect(result).to.be.empty;
     });
@@ -656,9 +672,7 @@ describe('Settlement Module Tests', () => {
         }),
       });
 
-      mockPool.contract.callStatic.settle
-        .withArgs('0xBorrower2', 5)
-        .resolves();
+      mockPool.contract.callStatic.settle.withArgs('0xBorrower2', 5).resolves();
 
       const handler = new SettlementHandler(
         mockPool as any,
@@ -694,7 +708,6 @@ describe('Settlement Module Tests', () => {
       expect(secondResult).to.be.empty;
       expect(getUnsettledAuctionsStub.calledOnce).to.be.true;
     });
-
 
     it('reuses empty settlement scans across handler instances within the cache window', async () => {
       getUnsettledAuctionsStub.resolves({
@@ -808,8 +821,12 @@ describe('Settlement Module Tests', () => {
         }),
       });
 
-      mockPool.contract.callStatic.settle.withArgs('0xBorrowerBad', 50).resolves();
-      mockPool.contract.callStatic.settle.withArgs('0xBorrowerGood', 50).resolves();
+      mockPool.contract.callStatic.settle
+        .withArgs('0xBorrowerBad', 50)
+        .resolves();
+      mockPool.contract.callStatic.settle
+        .withArgs('0xBorrowerGood', 50)
+        .resolves();
 
       const handler = new SettlementHandler(
         mockPool as any,
@@ -886,18 +903,20 @@ describe('Settlement Module Tests', () => {
         poolConfig as any,
         config
       );
-      const needsSettlementStub = sinon.stub(handler, 'needsSettlement').rejects(
-        new Error('should not recheck needsSettlement')
-      );
-      const incentiveStub = sinon.stub(handler, 'checkBotIncentive').rejects(
-        new Error('should not recheck incentives')
-      );
+      const needsSettlementStub = sinon
+        .stub(handler, 'needsSettlement')
+        .rejects(new Error('should not recheck needsSettlement'));
+      const incentiveStub = sinon
+        .stub(handler, 'checkBotIncentive')
+        .rejects(new Error('should not recheck incentives'));
       sinon.stub(handler, 'isAuctionOldEnough').returns(true);
-      const settleStub = sinon.stub(handler, 'settleAuctionCompletely').resolves({
-        success: true,
-        completed: true,
-        iterations: 1,
-      } as any);
+      const settleStub = sinon
+        .stub(handler, 'settleAuctionCompletely')
+        .resolves({
+          success: true,
+          completed: true,
+          iterations: 1,
+        } as any);
 
       await handler.handleCandidateAuctions(
         [
@@ -926,7 +945,7 @@ describe('Settlement Module Tests', () => {
     it('should perform dry run without actual settlement transaction', async () => {
       // Setup: Enable dry run mode
       const dryRunConfig = { ...config, dryRun: true };
-      
+
       const handler = new SettlementHandler(
         mockPool as any,
         mockSigner as any,
@@ -936,7 +955,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Attempt settlement in dry run mode
       const result = await handler.settleAuctionCompletely('0xBorrower123');
-      
+
       // Verify: Should complete dry run without calling actual settlement
       expect(result.success).to.be.true;
       expect(result.completed).to.be.true;
@@ -947,7 +966,7 @@ describe('Settlement Module Tests', () => {
     it('should settle successfully in single iteration', async () => {
       // Setup: Mock settlement to succeed immediately
       poolSettleStub.resolves();
-      
+
       // Mock auctionInfo check after settlement (kickTime = 0 means settled)
       mockPool.contract.auctionInfo.resolves({ kickTime_: BigNumber.from(0) });
 
@@ -960,7 +979,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Settle auction
       const result = await handler.settleAuctionCompletely('0xBorrower123');
-      
+
       // Verify: Should complete in single iteration
       expect(result.success).to.be.true;
       expect(result.completed).to.be.true;
@@ -971,15 +990,15 @@ describe('Settlement Module Tests', () => {
     it('should handle partial settlement requiring multiple iterations', async () => {
       // Setup: Mock settlement requiring 3 iterations to complete
       poolSettleStub.resolves();
-      
+
       const auctionInfoStub = sinon.stub();
       // After iteration 1: auction still exists
       auctionInfoStub.onCall(0).resolves({ kickTime_: BigNumber.from(123) });
-      // After iteration 2: auction still exists  
+      // After iteration 2: auction still exists
       auctionInfoStub.onCall(1).resolves({ kickTime_: BigNumber.from(123) });
       // After iteration 3: auction settled (kickTime = 0)
       auctionInfoStub.onCall(2).resolves({ kickTime_: BigNumber.from(0) });
-      
+
       mockPool.contract.auctionInfo = auctionInfoStub;
 
       const handler = new SettlementHandler(
@@ -991,7 +1010,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Settle auction
       const result = await handler.settleAuctionCompletely('0xBorrower123');
-      
+
       // Verify: Should complete after 3 iterations
       expect(result.success).to.be.true;
       expect(result.completed).to.be.true;
@@ -1001,7 +1020,9 @@ describe('Settlement Module Tests', () => {
 
     it('should handle settlement transaction failure', async () => {
       // Setup: Mock settlement transaction to fail
-      poolSettleStub.rejects(new Error('Transaction reverted: Insufficient gas'));
+      poolSettleStub.rejects(
+        new Error('Transaction reverted: Insufficient gas')
+      );
 
       const handler = new SettlementHandler(
         mockPool as any,
@@ -1012,7 +1033,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Attempt settlement
       const result = await handler.settleAuctionCompletely('0xBorrower123');
-      
+
       // Verify: Should handle failure gracefully
       expect(result.success).to.be.false;
       expect(result.completed).to.be.false;
@@ -1024,7 +1045,9 @@ describe('Settlement Module Tests', () => {
     it('should give up after reaching maximum iterations', async () => {
       // Setup: Mock settlement to never complete (always partial)
       poolSettleStub.resolves();
-      mockPool.contract.auctionInfo.resolves({ kickTime_: BigNumber.from(123) });
+      mockPool.contract.auctionInfo.resolves({
+        kickTime_: BigNumber.from(123),
+      });
 
       // Use limited iteration config
       const limitedConfig = {
@@ -1041,7 +1064,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Attempt settlement
       const result = await handler.settleAuctionCompletely('0xBorrower123');
-      
+
       // Verify: Should give up after max iterations
       expect(result.success).to.be.true;
       expect(result.completed).to.be.false;
@@ -1075,7 +1098,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check auction age
       const result = (handler as any).isAuctionOldEnough(oldAuction);
-      
+
       // Verify: Should be old enough
       expect(result).to.be.true;
     });
@@ -1098,7 +1121,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check auction age
       const result = (handler as any).isAuctionOldEnough(youngAuction);
-      
+
       // Verify: Should be too young
       expect(result).to.be.false;
     });
@@ -1126,7 +1149,7 @@ describe('Settlement Module Tests', () => {
 
       // Execute: Check auction age against 2-hour requirement
       const result = (handler as any).isAuctionOldEnough(auction);
-      
+
       // Verify: 1 hour should be too young for 2-hour requirement
       expect(result).to.be.false;
     });
@@ -1206,24 +1229,26 @@ describe('Settlement Module Tests', () => {
 
       expect(result).to.be.true;
       expect(findStub.calledOnce).to.equal(true);
-      expect(handleCandidateStub.calledOnceWithExactly(auctions)).to.equal(true);
+      expect(handleCandidateStub.calledOnceWithExactly(auctions)).to.equal(
+        true
+      );
       expect(handleSettlementsStub.called).to.equal(false);
     });
 
     it('should return true when bonds are unlocked after successful settlement', async () => {
       // Setup: Mock settleable auction and successful settlement
       const oldKickTime = Math.floor(Date.now() / 1000) - 7200; // 2 hours ago
-      
+
       getUnsettledAuctionsStub.resolves({
         liquidationAuctions: [
-          { 
-            borrower: '0xBorrower1', 
+          {
+            borrower: '0xBorrower1',
             kickTime: oldKickTime.toString(),
-            debtRemaining: '1.0', 
+            debtRemaining: '1.0',
             collateralRemaining: '0.0',
             neutralPrice: '0.05',
             debt: '1.0',
-            collateral: '0.0'
+            collateral: '0.0',
           },
         ],
       });
@@ -1237,7 +1262,7 @@ describe('Settlement Module Tests', () => {
       });
       // Settlement completion check
       auctionInfoStub.onCall(1).resolves({ kickTime_: BigNumber.from(0) }); // Settled
-      
+
       mockPool.contract.auctionInfo = auctionInfoStub;
 
       // Mock liquidation status check
@@ -1249,13 +1274,15 @@ describe('Settlement Module Tests', () => {
       });
 
       // Mock settlement feasibility and execution
-      mockPool.contract.callStatic.settle.withArgs('0xBorrower1', 50).resolves();
+      mockPool.contract.callStatic.settle
+        .withArgs('0xBorrower1', 50)
+        .resolves();
       poolSettleStub.resolves();
 
       // Mock bonds to be unlocked after settlement
-      mockPool.kickerInfo.resolves({ 
-        locked: BigNumber.from(0),           // Unlocked after settlement
-        claimable: BigNumber.from('1000000') 
+      mockPool.kickerInfo.resolves({
+        locked: BigNumber.from(0), // Unlocked after settlement
+        claimable: BigNumber.from('1000000'),
       });
 
       // Execute: Attempt reactive settlement
@@ -1273,17 +1300,17 @@ describe('Settlement Module Tests', () => {
     it('should return false when bonds remain locked after settlement attempt', async () => {
       // Setup: Mock settlement that doesn't unlock bonds
       const oldKickTime = Math.floor(Date.now() / 1000) - 7200;
-      
+
       getUnsettledAuctionsStub.resolves({
         liquidationAuctions: [
-          { 
-            borrower: '0xBorrower1', 
+          {
+            borrower: '0xBorrower1',
             kickTime: oldKickTime.toString(),
-            debtRemaining: '1.0', 
+            debtRemaining: '1.0',
             collateralRemaining: '0.0',
             neutralPrice: '0.05',
             debt: '1.0',
-            collateral: '0.0'
+            collateral: '0.0',
           },
         ],
       });
@@ -1295,7 +1322,7 @@ describe('Settlement Module Tests', () => {
         debtToCollateral_: BigNumber.from('1000000000000000000'),
       });
       auctionInfoStub.onCall(1).resolves({ kickTime_: BigNumber.from(0) });
-      
+
       mockPool.contract.auctionInfo = auctionInfoStub;
       mockPool.getLiquidation.withArgs('0xBorrower1').returns({
         getStatus: async () => ({
@@ -1307,9 +1334,9 @@ describe('Settlement Module Tests', () => {
       poolSettleStub.resolves();
 
       // Mock bonds to remain locked even after settlement
-      mockPool.kickerInfo.resolves({ 
-        locked: BigNumber.from('1000000'),    // Still locked
-        claimable: BigNumber.from('500000') 
+      mockPool.kickerInfo.resolves({
+        locked: BigNumber.from('1000000'), // Still locked
+        claimable: BigNumber.from('500000'),
       });
 
       // Execute: Attempt reactive settlement
@@ -1334,26 +1361,26 @@ describe('Settlement Module Tests', () => {
     it('should process multiple auctions requiring settlement', async () => {
       // Setup: Mock multiple auctions needing settlement
       const oldKickTime = Math.floor(Date.now() / 1000) - 7200;
-      
+
       getUnsettledAuctionsStub.resolves({
         liquidationAuctions: [
-          { 
+          {
             borrower: '0xBorrower1',
             kickTime: oldKickTime.toString(),
             debtRemaining: '1.0',
             collateralRemaining: '0.0',
             neutralPrice: '0.05',
             debt: '1.0',
-            collateral: '0.0'
+            collateral: '0.0',
           },
-          { 
+          {
             borrower: '0xBorrower2',
             kickTime: oldKickTime.toString(),
             debtRemaining: '2.0',
             collateralRemaining: '0.0',
             neutralPrice: '0.04',
             debt: '2.0',
-            collateral: '0.0'
+            collateral: '0.0',
           },
         ],
       });
@@ -1364,20 +1391,20 @@ describe('Settlement Module Tests', () => {
       const settleCallStub = sinon.stub();
 
       // Mock both auctions as needing settlement
-      ['0xBorrower1', '0xBorrower2'].forEach(borrower => {
+      ['0xBorrower1', '0xBorrower2'].forEach((borrower) => {
         // needsSettlement checks - these happen during findSettleableAuctions
         auctionInfoStub.withArgs(borrower).resolves({
           kickTime_: BigNumber.from(oldKickTime),
           debtToCollateral_: BigNumber.from('1000000000000000000'),
         });
-        
+
         getLiquidationStub.withArgs(borrower).returns({
           getStatus: async () => ({
             collateral: BigNumber.from(0),
             price: BigNumber.from('1000000000000'),
           }),
         });
-        
+
         settleCallStub.withArgs(borrower, 5).resolves();
       });
 
@@ -1394,7 +1421,7 @@ describe('Settlement Module Tests', () => {
 
       // Mock settlement execution and post-settlement checks
       poolSettleStub.resolves();
-      
+
       // For settleAuctionCompletely - mock that auction is settled after one iteration
       const postSettlementStub = sinon.stub();
       postSettlementStub.resolves({ kickTime_: BigNumber.from(0) }); // Auction settled

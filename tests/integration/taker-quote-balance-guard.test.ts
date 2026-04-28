@@ -28,11 +28,13 @@ const QUOTE_TOKEN_SCALE = BigNumber.from(1);
 const DEADLINE = 4_102_444_800;
 const ZERO_FACTORY = constants.AddressZero;
 
-const ONE_INCH_DETAILS_TYPE = '(address,(address,address,address,address,uint256,uint256,uint256),bytes)';
+const ONE_INCH_DETAILS_TYPE =
+  '(address,(address,address,address,address,uint256,uint256,uint256),bytes)';
 const ONE_INCH_CALLBACK_DATA_TYPE = '(uint8,address,bytes)';
 const UNISWAP_DETAILS_TYPE = '(address,address,address,uint24,uint256,uint256)';
 const SUSHI_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
-const CURVE_DETAILS_TYPE = '(address,address,address,uint8,uint8,uint8,uint256,uint256)';
+const CURVE_DETAILS_TYPE =
+  '(address,address,address,uint8,uint8,uint8,uint256,uint256)';
 
 function getProvider() {
   return new providers.Web3Provider(network.provider as any);
@@ -93,8 +95,11 @@ describe('Taker quote balance guards', () => {
   }
 
   it('rejects 1inch atomic routes that redirect output away from the taker', async () => {
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
-    const taker = await new AjnaKeeperTaker__factory(owner).deploy(poolDeployer.address);
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
+    const taker = await new AjnaKeeperTaker__factory(owner).deploy(
+      poolDeployer.address
+    );
     await taker.deployed();
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
@@ -104,19 +109,21 @@ describe('Taker quote balance guards', () => {
 
     const oneInchDetails = utils.defaultAbiCoder.encode(
       [ONE_INCH_DETAILS_TYPE],
-      [[
-        router.address,
+      [
         [
-          collateralToken.address,
-          quoteToken.address,
           router.address,
-          owner.address,
-          COLLATERAL_AMOUNT,
-          0,
-          0,
+          [
+            collateralToken.address,
+            quoteToken.address,
+            router.address,
+            owner.address,
+            COLLATERAL_AMOUNT,
+            0,
+            0,
+          ],
+          '0x',
         ],
-        '0x',
-      ]]
+      ]
     );
     const callbackData = utils.defaultAbiCoder.encode(
       [ONE_INCH_CALLBACK_DATA_TYPE],
@@ -135,8 +142,11 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects 1inch atomic swaps that rely on preexisting quote balance', async () => {
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
-    const taker = await new AjnaKeeperTaker__factory(owner).deploy(poolDeployer.address);
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
+    const taker = await new AjnaKeeperTaker__factory(owner).deploy(
+      poolDeployer.address
+    );
     await taker.deployed();
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
@@ -147,19 +157,21 @@ describe('Taker quote balance guards', () => {
 
     const oneInchDetails = utils.defaultAbiCoder.encode(
       [ONE_INCH_DETAILS_TYPE],
-      [[
-        router.address,
+      [
         [
-          collateralToken.address,
-          quoteToken.address,
           router.address,
-          taker.address,
-          COLLATERAL_AMOUNT,
-          0,
-          0,
+          [
+            collateralToken.address,
+            quoteToken.address,
+            router.address,
+            taker.address,
+            COLLATERAL_AMOUNT,
+            0,
+            0,
+          ],
+          '0x',
         ],
-        '0x',
-      ]]
+      ]
     );
     const callbackData = utils.defaultAbiCoder.encode(
       [ONE_INCH_CALLBACK_DATA_TYPE],
@@ -178,15 +190,18 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects 1inch atomic swaps that underdeliver versus the scaled minReturnAmount', async () => {
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
-    const taker = await new AjnaKeeperTaker__factory(owner).deploy(poolDeployer.address);
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
+    const taker = await new AjnaKeeperTaker__factory(owner).deploy(
+      poolDeployer.address
+    );
     await taker.deployed();
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
 
-    const router = await new MockOneInchUnderdeliveryRouter__factory(owner).deploy(
-      QUOTE_AMOUNT_DUE
-    );
+    const router = await new MockOneInchUnderdeliveryRouter__factory(
+      owner
+    ).deploy(QUOTE_AMOUNT_DUE);
     await router.deployed();
     await quoteToken.mint(router.address, QUOTE_AMOUNT_DUE);
 
@@ -194,19 +209,21 @@ describe('Taker quote balance guards', () => {
     const quotedMinReturnAmount = utils.parseEther('12');
     const oneInchDetails = utils.defaultAbiCoder.encode(
       [ONE_INCH_DETAILS_TYPE],
-      [[
-        router.address,
+      [
         [
-          collateralToken.address,
-          quoteToken.address,
           router.address,
-          taker.address,
-          quotedCollateralAmount,
-          quotedMinReturnAmount,
-          0,
+          [
+            collateralToken.address,
+            quoteToken.address,
+            router.address,
+            taker.address,
+            quotedCollateralAmount,
+            quotedMinReturnAmount,
+            0,
+          ],
+          '0x',
         ],
-        '0x',
-      ]]
+      ]
     );
     const callbackData = utils.defaultAbiCoder.encode(
       [ONE_INCH_CALLBACK_DATA_TYPE],
@@ -225,7 +242,8 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects uniswap callbacks that do not increase quote balance', async () => {
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
     const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
       poolDeployer.address,
       ZERO_FACTORY
@@ -261,7 +279,8 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects sushiswap callbacks that do not increase quote balance', async () => {
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
     const taker = await new SushiSwapKeeperTaker__factory(owner).deploy(
       poolDeployer.address,
       ZERO_FACTORY
@@ -291,7 +310,8 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects curve callbacks that trust forged return values without quote balance increase', async () => {
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } = await deployBase();
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
     const taker = await new CurveKeeperTaker__factory(owner).deploy(
       poolDeployer.address,
       ZERO_FACTORY
@@ -309,16 +329,18 @@ describe('Taker quote balance guards', () => {
 
     const callbackData = utils.defaultAbiCoder.encode(
       [CURVE_DETAILS_TYPE],
-      [[
-        curvePool.address,
-        collateralToken.address,
-        quoteToken.address,
-        0,
-        0,
-        1,
-        0,
-        DEADLINE,
-      ]]
+      [
+        [
+          curvePool.address,
+          collateralToken.address,
+          quoteToken.address,
+          0,
+          0,
+          1,
+          0,
+          DEADLINE,
+        ],
+      ]
     );
 
     await expectCustomError(

@@ -29,9 +29,9 @@ describe('parseBigDecimalToWad', () => {
   });
 
   it('parses a canonical 18-decimal value into WAD BigNumber', () => {
-    expect(
-      parseBigDecimalToWad('123.456000000000000000').toString()
-    ).to.equal(utils.parseUnits('123.456', 18).toString());
+    expect(parseBigDecimalToWad('123.456000000000000000').toString()).to.equal(
+      utils.parseUnits('123.456', 18).toString()
+    );
   });
 
   it('parses an integer string without decimal point', () => {

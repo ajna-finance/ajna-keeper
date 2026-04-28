@@ -1,4 +1,10 @@
-import { LiquiditySource, KeeperConfig, PoolConfig } from '../config';
+import {
+  CurveRouterOverrides,
+  LiquiditySource,
+  PoolConfig,
+  SushiswapRouterOverrides,
+  UniversalRouterOverrides,
+} from '../config';
 import { RequireFields } from '../utils';
 import { ArbTakeStrategy, createArbTakeStrategy } from './arb-strategy';
 import {
@@ -15,30 +21,28 @@ import { OneInchExecutionConfig } from './one-inch-types';
 import { TakeWriteTransportConfig } from './write-transport';
 import { TakeActionConfig } from './types';
 
-type ManualTakeCommonContextConfig = Pick<
-  KeeperConfig,
-  'dryRun' | 'delayBetweenActions'
->;
+interface ManualTakeCommonContextConfig {
+  dryRun?: boolean;
+  delayBetweenActions: number;
+}
 
-export type ManualOneInchContextConfig = ManualTakeCommonContextConfig &
-  Pick<
-    KeeperConfig,
-    | 'connectorTokens'
-    | 'oneInchDefaultSlippage'
-    | 'oneInchRouters'
-    | 'oneInchAggregationExecutorAllowlist'
-    | 'keeperTaker'
-  >;
+export interface ManualOneInchContextConfig
+  extends ManualTakeCommonContextConfig {
+  connectorTokens?: Array<string>;
+  oneInchDefaultSlippage?: number;
+  oneInchRouters?: { [chainId: number]: string };
+  oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
+  keeperTaker?: string;
+}
 
-export type ManualFactoryContextConfig = ManualTakeCommonContextConfig &
-  Pick<
-    KeeperConfig,
-    | 'keeperTakerFactory'
-    | 'universalRouterOverrides'
-    | 'sushiswapRouterOverrides'
-    | 'curveRouterOverrides'
-    | 'tokenAddresses'
-  >;
+export interface ManualFactoryContextConfig
+  extends ManualTakeCommonContextConfig {
+  keeperTakerFactory?: string;
+  universalRouterOverrides?: UniversalRouterOverrides;
+  sushiswapRouterOverrides?: SushiswapRouterOverrides;
+  curveRouterOverrides?: CurveRouterOverrides;
+  tokenAddresses?: { [tokenSymbol: string]: string };
+}
 
 export interface ManualTakeContext<TExecutionConfig> {
   externalTakeAdapter: ExternalTakeAdapter<TakeActionConfig, TExecutionConfig>;

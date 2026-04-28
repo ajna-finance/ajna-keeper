@@ -81,7 +81,10 @@ async function waitForBalance(
   expectedBalance: bigint
 ) {
   for (let attempt = 0; attempt < TEST_RPC_SYNC_RETRIES; attempt++) {
-    const balanceHex = await provider.send('eth_getBalance', [address, 'latest']);
+    const balanceHex = await provider.send('eth_getBalance', [
+      address,
+      'latest',
+    ]);
     if (BigInt(balanceHex) >= expectedBalance) {
       return;
     }

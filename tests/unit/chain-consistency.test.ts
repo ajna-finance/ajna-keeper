@@ -141,7 +141,7 @@ describe('assertSubgraphChainConsistency', () => {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       expect(msg).to.include('RPC rejected getBlock');
-      expect(msg).to.include('Verify ethRpcUrl');
+      expect(msg).to.include('Verify network.rpcUrl');
       expect(msg).to.include('RPC 500 internal error');
     }
   });

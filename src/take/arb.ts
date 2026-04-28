@@ -75,7 +75,9 @@ export async function checkIfArbTakeable(
   }
 
   const hmbIndex = buckets[0].bucketIndex;
-  const hmbPrice = Number(weiToDecimaled(pool.getBucketByIndex(hmbIndex).price));
+  const hmbPrice = Number(
+    weiToDecimaled(pool.getBucketByIndex(hmbIndex).price)
+  );
   const maxArbPrice = hmbPrice * poolConfig.take.hpbPriceFactor;
   const arbTakeable = price < maxArbPrice;
 

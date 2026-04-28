@@ -8,7 +8,10 @@ import {
 import { BigNumber, ethers } from 'ethers';
 import { MAX_FENWICK_INDEX, MAX_UINT_256 } from './constants';
 import { NonceTracker } from './nonce';
-import { submitTakeTransaction, TakeWriteTransport } from './take/write-transport';
+import {
+  submitTakeTransaction,
+  TakeWriteTransport,
+} from './take/write-transport';
 import { Bucket } from '@ajna-finance/sdk/dist/classes/Bucket';
 import {
   removeCollateral,
@@ -16,21 +19,30 @@ import {
 } from '@ajna-finance/sdk/dist/contracts/erc20-pool';
 import { Liquidation } from '@ajna-finance/sdk/dist/classes/Liquidation';
 import { settle } from '@ajna-finance/sdk/dist/contracts/pool';
-import { getAllowanceOfErc20, getDecimalsErc20, convertWadToTokenDecimals } from './erc20';
+import {
+  getAllowanceOfErc20,
+  getDecimalsErc20,
+  convertWadToTokenDecimals,
+} from './erc20';
 import { weiToDecimaled } from './utils';
 import { logger } from './logging';
 import { estimateGasWithBuffer } from './utils';
 
 const quoteScaleCache = new Map<string, BigNumber>();
 
-async function getQuoteTokenScaleFromDecimals(pool: FungiblePool): Promise<BigNumber> {
+async function getQuoteTokenScaleFromDecimals(
+  pool: FungiblePool
+): Promise<BigNumber> {
   const cacheKey = pool.quoteAddress.toLowerCase();
   const cachedScale = quoteScaleCache.get(cacheKey);
   if (cachedScale) {
     return cachedScale;
   }
 
-  const quoteDecimals = await getDecimalsErc20(pool.contract.provider, pool.quoteAddress);
+  const quoteDecimals = await getDecimalsErc20(
+    pool.contract.provider,
+    pool.quoteAddress
+  );
   if (quoteDecimals > 18) {
     throw new Error(
       `Unsupported quote token decimals for ${pool.name}: expected <= 18, got ${quoteDecimals}`
@@ -56,7 +68,9 @@ export async function poolWithdrawBonds(pool: FungiblePool, signer: Signer) {
       }
     );
     const receipt = await tx.verifyAndSubmit();
-    logger.info(`Withdrew bonds from pool ${pool.name} | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Withdrew bonds from pool ${pool.name} | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }
@@ -75,7 +89,9 @@ export async function bucketRemoveQuoteToken(
       { nonce: nonce.toString() }
     );
     const receipt = await tx.verifyAndSubmit();
-    logger.info(`Removed quote token from bucket ${bucket.index} | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Removed quote token from bucket ${bucket.index} | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }
@@ -94,7 +110,9 @@ export async function bucketRemoveCollateralToken(
       { nonce: nonce.toString() }
     );
     const receipt = await tx.verifyAndSubmit();
-    logger.info(`Removed collateral from bucket ${bucket.index} | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Removed collateral from bucket ${bucket.index} | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }
@@ -107,7 +125,7 @@ export async function poolQuoteApprove(
   const denormalizedAllowance = allowance.div(
     await getQuoteTokenScaleFromDecimals(pool)
   );
-  
+
   await NonceTracker.queueTransaction(signer, async (nonce) => {
     const tx = await approve(
       signer,
@@ -117,11 +135,12 @@ export async function poolQuoteApprove(
       { nonce: nonce.toString() }
     );
     const receipt = await tx.verifyAndSubmit();
-    logger.info(`Approved quote token for pool ${pool.name}, allowance: ${weiToDecimaled(allowance)} | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Approved quote token for pool ${pool.name}, allowance: ${weiToDecimaled(allowance)} | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }
-
 
 export async function poolKick(
   pool: FungiblePool,
@@ -135,7 +154,9 @@ export async function poolKick(
       nonce: nonce.toString(),
     });
     const receipt = await tx.verifyAndSubmit();
-    logger.info(`Kicked borrower ${borrower.slice(0, 8)} in pool ${pool.name} | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Kicked borrower ${borrower.slice(0, 8)} in pool ${pool.name} | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }
@@ -162,8 +183,13 @@ export async function liquidationArbTake(
           gasLimit,
           nonce: nonce.toString(),
         });
-      const receipt = await submitTakeTransaction(takeWriteTransport, txRequest);
-      logger.info(`Arb take on borrower ${liquidation.borrowerAddress.slice(0, 8)} at bucket ${bucketIndex} | tx: ${receipt.transactionHash}`);
+      const receipt = await submitTakeTransaction(
+        takeWriteTransport,
+        txRequest
+      );
+      logger.info(
+        `Arb take on borrower ${liquidation.borrowerAddress.slice(0, 8)} at bucket ${bucketIndex} | tx: ${receipt.transactionHash}`
+      );
       return receipt;
     }
 
@@ -177,31 +203,30 @@ export async function liquidationArbTake(
       }
     );
     const receipt = await tx.verifyAndSubmit();
-    logger.info(`Arb take on borrower ${liquidation.borrowerAddress.slice(0, 8)} at bucket ${bucketIndex} | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Arb take on borrower ${liquidation.borrowerAddress.slice(0, 8)} at bucket ${bucketIndex} | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }
 
 export async function poolSettle(
-  pool: FungiblePool, 
-  signer: Signer, 
-  borrower: string, 
+  pool: FungiblePool,
+  signer: Signer,
+  borrower: string,
   bucketDepth: number = 50
 ) {
   const contractPoolWithSigner = pool.contract.connect(signer);
-  
+
   await NonceTracker.queueTransaction(signer, async (nonce) => {
-    const tx = await settle(
-      contractPoolWithSigner,
-      borrower,
-      bucketDepth,
-      {
-        nonce: nonce.toString(),
-        gasLimit: 800000 // Conservative gas limit for settlement
-      }
-    );
+    const tx = await settle(contractPoolWithSigner, borrower, bucketDepth, {
+      nonce: nonce.toString(),
+      gasLimit: 800000, // Conservative gas limit for settlement
+    });
     const receipt = await tx.verifyAndSubmit();
-    logger.info(`Settled borrower ${borrower.slice(0, 8)} in pool ${pool.name} (depth: ${bucketDepth}) | tx: ${receipt.transactionHash}`);
+    logger.info(
+      `Settled borrower ${borrower.slice(0, 8)} in pool ${pool.name} (depth: ${bucketDepth}) | tx: ${receipt.transactionHash}`
+    );
     return receipt;
   });
 }

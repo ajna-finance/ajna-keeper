@@ -40,24 +40,34 @@ describe('RewardActionTracker', () => {
     const uniswapV3Router = MAINNET_CONFIG.UNISWAP_V3_ROUTER;
     const dexRouter = new DexRouter(signer);
     const config: KeeperConfig = {
-      ethRpcUrl: '',
-      logLevel: 'debug',
-      subgraphUrl: '',
-      keeperKeystore: '',
-      ajna: MAINNET_CONFIG.AJNA_CONFIG,
-      uniswapOverrides: {
-        wethAddress: wethAddress,
-        uniswapV3Router: uniswapV3Router,
+      network: {
+        rpcUrl: '',
+        subgraph: {
+          url: '',
+        },
       },
-      delayBetweenActions: 0,
-      delayBetweenRuns: 0,
-      pools: [],
+      keeper: {
+        keystore: '',
+      },
+      runtime: {
+        logLevel: 'debug',
+        delayBetweenActions: 0,
+        delayBetweenRuns: 0,
+      },
+      ajna: MAINNET_CONFIG.AJNA_CONFIG,
+      dex: {
+        uniswapV3: {
+          legacy: {
+            wethAddress: wethAddress,
+            uniswapV3Router: uniswapV3Router,
+          },
+        },
+      },
+      manual: {
+        pools: [],
+      },
     };
-    const et = new RewardActionTracker(
-      signer,
-      config,
-      dexRouter
-    );
+    const et = new RewardActionTracker(signer, config, dexRouter);
     et.addToken(
       { action: RewardActionLabel.TRANSFER, to: receiver.address },
       tokenToSwap,

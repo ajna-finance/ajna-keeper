@@ -12,6 +12,7 @@ import {
   UniversalRouterOverrides,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
+  getManualPools,
   hasExternalTakeSettings,
   hasNonEmptyObject,
 } from './schema';
@@ -25,6 +26,7 @@ import {
 } from './route-policy';
 import {
   formatLiquiditySource,
+  getLiquiditySourceConfig,
   hasConfiguredWrappedNativeAddress,
   resolveConfiguredGasQuoteLiquiditySource,
   STANDARD_V3_FEE_TIERS,
@@ -63,12 +65,16 @@ function validateQuoteDenominatedGasPolicy(
   fieldName: string,
   chainId?: number
 ): void {
-  if (resolveConfiguredGasQuoteLiquiditySource(config, chainId) === undefined) {
+  const liquiditySourceConfig = getLiquiditySourceConfig(config);
+  if (
+    resolveConfiguredGasQuoteLiquiditySource(liquiditySourceConfig, chainId) ===
+    undefined
+  ) {
     throw new Error(
       `${fieldName} requires a configured native-to-quote liquidity source`
     );
   }
-  if (!hasConfiguredWrappedNativeAddress(config)) {
+  if (!hasConfiguredWrappedNativeAddress(liquiditySourceConfig)) {
     throw new Error(
       `${fieldName} requires a configured wrapped native token address`
     );
@@ -206,15 +212,15 @@ function isValidFactoryFeeTier(tier: number): boolean {
 
 function validateRouterFeeTiers(config: KeeperConfig): void {
   const uniswapConfig: UniversalRouterOverrides | undefined =
-    config.universalRouterOverrides;
+    config.dex?.uniswapV3?.universalRouter;
   const sushiConfig: SushiswapRouterOverrides | undefined =
-    config.sushiswapRouterOverrides;
+    config.dex?.sushiswap;
   requireOptionalPercentage(
-    config.oneInchDefaultSlippage,
-    'KeeperConfig: oneInchDefaultSlippage must be a number between 0 and 100'
+    config.dex?.oneInch?.defaultSlippage,
+    'KeeperConfig.dex.oneInch.defaultSlippage must be a number between 0 and 100'
   );
   requireOptionalIntegerRange(
-    config.curveRouterOverrides?.executionDelayMs,
+    config.dex?.curve?.executionDelayMs,
     0,
     VALIDATION_BOUNDS.maxCurveExecutionDelayMs,
     `CurveRouterOverrides: executionDelayMs must be an integer between 0 and ${VALIDATION_BOUNDS.maxCurveExecutionDelayMs}`
@@ -332,12 +338,7 @@ function validateExternalTakeRouteSelectionMode(
   }
   if (!EXTERNAL_TAKE_ROUTE_SELECTION_MODES.has(mode)) {
     throw new Error(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit, factory_first, or deprecated cost_aware'
-    );
-  }
-  if (mode === 'cost_aware') {
-    logger.warn(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode=cost_aware is deprecated; treating it as factory_first'
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
     );
   }
 }
@@ -345,7 +346,7 @@ function validateExternalTakeRouteSelectionMode(
 function validateOneInchAggregationExecutorAllowlist(
   config: KeeperConfig
 ): void {
-  const allowlist = config.oneInchAggregationExecutorAllowlist;
+  const allowlist = config.dex?.oneInch?.aggregationExecutorAllowlist;
   if (allowlist === undefined) {
     return;
   }
@@ -355,7 +356,7 @@ function validateOneInchAggregationExecutorAllowlist(
     Array.isArray(allowlist)
   ) {
     throw new Error(
-      'KeeperConfig: oneInchAggregationExecutorAllowlist must be an object keyed by chainId'
+      'KeeperConfig.dex.oneInch.aggregationExecutorAllowlist must be an object keyed by chainId'
     );
   }
 
@@ -370,7 +371,7 @@ function validateOneInchAggregationExecutorAllowlist(
       executors.length === 0
     ) {
       throw new Error(
-        'KeeperConfig: oneInchAggregationExecutorAllowlist entries must use canonical positive integer chain ID keys and non-empty address arrays'
+        'KeeperConfig.dex.oneInch.aggregationExecutorAllowlist entries must use canonical positive integer chain ID keys and non-empty address arrays'
       );
     }
     if (
@@ -378,7 +379,7 @@ function validateOneInchAggregationExecutorAllowlist(
       VALIDATION_BOUNDS.maxOneInchAggregationExecutorAllowlistEntries
     ) {
       throw new Error(
-        `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} cannot contain more than ${VALIDATION_BOUNDS.maxOneInchAggregationExecutorAllowlistEntries} addresses`
+        `KeeperConfig.dex.oneInch.aggregationExecutorAllowlist.${chainId} cannot contain more than ${VALIDATION_BOUNDS.maxOneInchAggregationExecutorAllowlistEntries} addresses`
       );
     }
 
@@ -386,7 +387,7 @@ function validateOneInchAggregationExecutorAllowlist(
     for (const executor of executors) {
       if (typeof executor !== 'string' || !ethers.utils.isAddress(executor)) {
         throw new Error(
-          `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} contains invalid address ${String(executor)}`
+          `KeeperConfig.dex.oneInch.aggregationExecutorAllowlist.${chainId} contains invalid address ${String(executor)}`
         );
       }
       const normalizedExecutor = ethers.utils
@@ -394,7 +395,7 @@ function validateOneInchAggregationExecutorAllowlist(
         .toLowerCase();
       if (seenExecutors.has(normalizedExecutor)) {
         throw new Error(
-          `KeeperConfig: oneInchAggregationExecutorAllowlist.${chainId} cannot contain duplicate addresses`
+          `KeeperConfig.dex.oneInch.aggregationExecutorAllowlist.${chainId} cannot contain duplicate addresses`
         );
       }
       seenExecutors.add(normalizedExecutor);
@@ -405,13 +406,10 @@ function validateOneInchAggregationExecutorAllowlist(
 function getConfiguredTakeWriteMode(
   config: KeeperConfig
 ): TakeWriteTransportMode | undefined {
-  if (config.takeWrite) {
-    return config.takeWrite.mode;
+  if (config.writes?.take) {
+    return config.writes.take.mode;
   }
-  const hasTakeWriteRpcUrl =
-    Object.prototype.hasOwnProperty.call(config, 'takeWriteRpcUrl') &&
-    (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl !== undefined;
-  return hasTakeWriteRpcUrl ? TakeWriteTransportMode.PRIVATE_RPC : undefined;
+  return undefined;
 }
 
 function isPrivateOrRelayTakeWriteMode(
@@ -429,30 +427,30 @@ export function validatePostAuctionDex(
 ): void {
   switch (dexProvider) {
     case PostAuctionDex.ONEINCH:
-      if (!config.oneInchRouters) {
+      if (!config.dex?.oneInch?.routers) {
         throw new Error(
-          'PostAuctionDex.ONEINCH requires oneInchRouters configuration'
+          'PostAuctionDex.ONEINCH requires dex.oneInch.routers configuration'
         );
       }
       return;
     case PostAuctionDex.UNISWAP_V3:
-      if (!config.universalRouterOverrides) {
+      if (!config.dex?.uniswapV3?.universalRouter) {
         throw new Error(
-          'PostAuctionDex.UNISWAP_V3 requires universalRouterOverrides configuration'
+          'PostAuctionDex.UNISWAP_V3 requires dex.uniswapV3.universalRouter configuration'
         );
       }
       return;
     case PostAuctionDex.SUSHISWAP:
-      if (!config.sushiswapRouterOverrides) {
+      if (!config.dex?.sushiswap) {
         throw new Error(
-          'PostAuctionDex.SUSHISWAP requires sushiswapRouterOverrides configuration'
+          'PostAuctionDex.SUSHISWAP requires dex.sushiswap configuration'
         );
       }
       return;
     case PostAuctionDex.CURVE:
-      if (!config.curveRouterOverrides) {
+      if (!config.dex?.curve) {
         throw new Error(
-          'PostAuctionDex.CURVE requires curveRouterOverrides configuration'
+          'PostAuctionDex.CURVE requires dex.curve configuration'
         );
       }
       return;
@@ -518,46 +516,46 @@ export function validateTakeSettings(
     );
 
     if (config.liquiditySource === LiquiditySource.ONEINCH) {
-      if (!keeperConfig.keeperTaker) {
+      if (!keeperConfig.takers?.oneInch) {
         throw new Error(
-          'TakeSettings: keeperTaker required when liquiditySource is ONEINCH'
+          'TakeSettings: takers.oneInch required when liquiditySource is ONEINCH'
         );
       }
       if (
-        !keeperConfig.oneInchRouters ||
-        Object.keys(keeperConfig.oneInchRouters).length === 0
+        !keeperConfig.dex?.oneInch?.routers ||
+        Object.keys(keeperConfig.dex.oneInch.routers).length === 0
       ) {
         throw new Error(
-          'TakeSettings: oneInchRouters required when liquiditySource is ONEINCH'
+          'TakeSettings: dex.oneInch.routers required when liquiditySource is ONEINCH'
         );
       }
-      if (chainId !== undefined && !keeperConfig.oneInchRouters[chainId]) {
+      if (chainId !== undefined && !keeperConfig.dex.oneInch.routers[chainId]) {
         throw new Error(
-          `TakeSettings: oneInchRouters missing router for chain ${chainId}`
+          `TakeSettings: dex.oneInch.routers missing router for chain ${chainId}`
         );
       }
     }
 
     if (config.liquiditySource === LiquiditySource.UNISWAPV3) {
-      if (!keeperConfig.keeperTakerFactory) {
+      if (!keeperConfig.takers?.factory) {
         throw new Error(
-          'TakeSettings: keeperTakerFactory required when liquiditySource is UNISWAPV3'
+          'TakeSettings: takers.factory required when liquiditySource is UNISWAPV3'
         );
       }
       if (
-        !keeperConfig.takerContracts ||
-        !keeperConfig.takerContracts['UniswapV3']
+        !keeperConfig.takers.contracts ||
+        !keeperConfig.takers.contracts['UniswapV3']
       ) {
         throw new Error(
-          'TakeSettings: takerContracts.UniswapV3 required when liquiditySource is UNISWAPV3'
+          'TakeSettings: takers.contracts.UniswapV3 required when liquiditySource is UNISWAPV3'
         );
       }
-      if (!keeperConfig.universalRouterOverrides) {
+      if (!keeperConfig.dex?.uniswapV3?.universalRouter) {
         throw new Error(
-          'TakeSettings: universalRouterOverrides required when liquiditySource is UNISWAPV3'
+          'TakeSettings: dex.uniswapV3.universalRouter required when liquiditySource is UNISWAPV3'
         );
       }
-      const routerOverrides = keeperConfig.universalRouterOverrides;
+      const routerOverrides = keeperConfig.dex.uniswapV3.universalRouter;
       if (
         !routerOverrides.universalRouterAddress ||
         !routerOverrides.permit2Address ||
@@ -566,31 +564,31 @@ export function validateTakeSettings(
         !routerOverrides.quoterV2Address
       ) {
         throw new Error(
-          'TakeSettings: universalRouterOverrides.universalRouterAddress, permit2Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
+          'TakeSettings: dex.uniswapV3.universalRouter.universalRouterAddress, permit2Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
         );
       }
     }
 
     if (config.liquiditySource === LiquiditySource.SUSHISWAP) {
-      if (!keeperConfig.keeperTakerFactory) {
+      if (!keeperConfig.takers?.factory) {
         throw new Error(
-          'TakeSettings: keeperTakerFactory required when liquiditySource is SUSHISWAP'
+          'TakeSettings: takers.factory required when liquiditySource is SUSHISWAP'
         );
       }
       if (
-        !keeperConfig.takerContracts ||
-        !keeperConfig.takerContracts['SushiSwap']
+        !keeperConfig.takers.contracts ||
+        !keeperConfig.takers.contracts['SushiSwap']
       ) {
         throw new Error(
-          'TakeSettings: takerContracts.SushiSwap required when liquiditySource is SUSHISWAP'
+          'TakeSettings: takers.contracts.SushiSwap required when liquiditySource is SUSHISWAP'
         );
       }
-      if (!keeperConfig.sushiswapRouterOverrides) {
+      if (!keeperConfig.dex?.sushiswap) {
         throw new Error(
-          'TakeSettings: sushiswapRouterOverrides required when liquiditySource is SUSHISWAP'
+          'TakeSettings: dex.sushiswap required when liquiditySource is SUSHISWAP'
         );
       }
-      const routerOverrides = keeperConfig.sushiswapRouterOverrides;
+      const routerOverrides = keeperConfig.dex.sushiswap;
       if (
         !routerOverrides.swapRouterAddress ||
         !routerOverrides.factoryAddress ||
@@ -598,45 +596,45 @@ export function validateTakeSettings(
         !routerOverrides.quoterV2Address
       ) {
         throw new Error(
-          'TakeSettings: sushiswapRouterOverrides.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
+          'TakeSettings: dex.sushiswap.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
         );
       }
     }
 
     if (config.liquiditySource === LiquiditySource.CURVE) {
-      if (!keeperConfig.keeperTakerFactory) {
+      if (!keeperConfig.takers?.factory) {
         throw new Error(
-          'TakeSettings: keeperTakerFactory required when liquiditySource is CURVE'
+          'TakeSettings: takers.factory required when liquiditySource is CURVE'
         );
       }
       if (
-        !keeperConfig.takerContracts ||
-        !keeperConfig.takerContracts['Curve']
+        !keeperConfig.takers.contracts ||
+        !keeperConfig.takers.contracts['Curve']
       ) {
         throw new Error(
-          'TakeSettings: takerContracts.Curve required when liquiditySource is CURVE'
+          'TakeSettings: takers.contracts.Curve required when liquiditySource is CURVE'
         );
       }
-      if (!keeperConfig.curveRouterOverrides) {
+      if (!keeperConfig.dex?.curve) {
         throw new Error(
-          'TakeSettings: curveRouterOverrides required when liquiditySource is CURVE'
+          'TakeSettings: dex.curve required when liquiditySource is CURVE'
         );
       }
-      const routerOverrides = keeperConfig.curveRouterOverrides;
+      const routerOverrides = keeperConfig.dex.curve;
       if (
         !hasNonEmptyObject(routerOverrides.poolConfigs) ||
         !routerOverrides.wethAddress
       ) {
         throw new Error(
-          'TakeSettings: curveRouterOverrides.poolConfigs and wethAddress required when liquiditySource is CURVE'
+          'TakeSettings: dex.curve.poolConfigs and wethAddress required when liquiditySource is CURVE'
         );
       }
       if (
-        !keeperConfig.tokenAddresses ||
-        Object.keys(keeperConfig.tokenAddresses).length === 0
+        !keeperConfig.network.tokenAddresses ||
+        Object.keys(keeperConfig.network.tokenAddresses).length === 0
       ) {
         throw new Error(
-          'TakeSettings: tokenAddresses required when liquiditySource is CURVE'
+          'TakeSettings: network.tokenAddresses required when liquiditySource is CURVE'
         );
       }
     }
@@ -681,7 +679,7 @@ export function validateAutoDiscoverConfig(
   validateRouterFeeTiers(config);
   validateOneInchAggregationExecutorAllowlist(config);
 
-  const autoDiscover = config.autoDiscover;
+  const autoDiscover = config.discovery;
   if (!autoDiscover?.enabled) {
     return;
   }
@@ -777,21 +775,21 @@ export function validateAutoDiscoverConfig(
     if (
       takePolicy.externalTakeTransportPolicy === 'require_private_or_relay' &&
       !isPrivateOrRelayTakeWriteMode(getConfiguredTakeWriteMode(config)) &&
-      !config.dryRun
+      !config.runtime.dryRun
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: externalTakeTransportPolicy=require_private_or_relay requires takeWrite private_rpc, relay, or takeWriteRpcUrl'
+        'AutoDiscoverConfig.take: externalTakeTransportPolicy=require_private_or_relay requires writes.take.mode private_rpc or relay'
       );
     }
     if (
       (takePolicy.externalTakeTransportPolicy === 'prefer_private_or_relay' ||
         (takePolicy.externalTakeTransportPolicy ===
           'require_private_or_relay' &&
-          config.dryRun)) &&
+          config.runtime.dryRun)) &&
       !isPrivateOrRelayTakeWriteMode(getConfiguredTakeWriteMode(config))
     ) {
       logger.warn(
-        `AutoDiscoverConfig.take: externalTakeTransportPolicy=${takePolicy.externalTakeTransportPolicy} is set but no private_rpc/relay take write transport is configured; discovered external takes may use public RPC fallback`
+        `AutoDiscoverConfig.take: externalTakeTransportPolicy=${takePolicy.externalTakeTransportPolicy} is set but no private_rpc/relay writes.take transport is configured; discovered external takes may use public RPC fallback`
       );
     }
     requireOptionalNonNegative(
@@ -816,8 +814,7 @@ export function validateAutoDiscoverConfig(
       }
     }
     if (
-      (takePolicy.externalTakeRouteSelectionMode === 'factory_first' ||
-        takePolicy.externalTakeRouteSelectionMode === 'cost_aware') &&
+      takePolicy.externalTakeRouteSelectionMode === 'factory_first' &&
       (takePolicy.minExpectedProfitQuote !== undefined ||
         takePolicy.minProfitNative !== undefined)
     ) {
@@ -838,15 +835,15 @@ export function validateAutoDiscoverConfig(
       'AutoDiscoverConfig.take: maxGasCostQuote cannot be negative'
     );
 
-    const discoveredTake = config.discoveredDefaults?.take;
+    const discoveredTake = config.discovery?.defaults?.take;
     if (!discoveredTake) {
       throw new Error(
-        'AutoDiscoverConfig: discoveredDefaults.take required when autoDiscover.take is enabled'
+        'AutoDiscoverConfig: discovery.defaults.take required when discovery.take is enabled'
       );
     }
     if (discoveredTake.allowSubsidy === true) {
       logger.warn(
-        'AutoDiscoverConfig: discoveredDefaults.take.allowSubsidy=true can subsidize external takes on every discovered pool that matches this policy; prefer enabling it only on manually reviewed defensive pools'
+        'AutoDiscoverConfig: discovery.defaults.take.allowSubsidy=true can subsidize external takes on every discovered pool that matches this policy; prefer enabling it only on manually reviewed defensive pools'
       );
       if (
         takePolicy.minExpectedProfitQuote === undefined &&
@@ -881,7 +878,7 @@ export function validateAutoDiscoverConfig(
       effectiveDefaultFactoryLiquiditySource === undefined
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource required when allowedExternalTakePaths includes factory and discoveredDefaults.take.liquiditySource is not a factory source'
+        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource required when allowedExternalTakePaths includes factory and discovery.defaults.take.liquiditySource is not a factory source'
       );
     }
     if (
@@ -895,18 +892,19 @@ export function validateAutoDiscoverConfig(
     }
     if (externalTakePaths.has('oneinch')) {
       if (
-        !config.oneInchAggregationExecutorAllowlist ||
-        Object.keys(config.oneInchAggregationExecutorAllowlist).length === 0
+        !config.dex?.oneInch?.aggregationExecutorAllowlist ||
+        Object.keys(config.dex.oneInch.aggregationExecutorAllowlist).length ===
+          0
       ) {
         logger.warn(
-          'AutoDiscoverConfig.take: oneInchAggregationExecutorAllowlist is not configured; decoded 1inch aggregationExecutor addresses will be logged but not hard-restricted'
+          'AutoDiscoverConfig.take: dex.oneInch.aggregationExecutorAllowlist is not configured; decoded 1inch aggregationExecutor addresses will be logged but not hard-restricted'
         );
       } else if (
         chainId !== undefined &&
-        !config.oneInchAggregationExecutorAllowlist[chainId]
+        !config.dex.oneInch.aggregationExecutorAllowlist[chainId]
       ) {
         logger.warn(
-          `AutoDiscoverConfig.take: oneInchAggregationExecutorAllowlist has no entry for chain ${chainId}; decoded 1inch aggregationExecutor addresses will be logged but not hard-restricted`
+          `AutoDiscoverConfig.take: dex.oneInch.aggregationExecutorAllowlist has no entry for chain ${chainId}; decoded 1inch aggregationExecutor addresses will be logged but not hard-restricted`
         );
       }
     }
@@ -1015,7 +1013,7 @@ export function validateAutoDiscoverConfig(
       externalTakePaths
     );
     if (
-      config.universalRouterOverrides?.candidateFeeTiers !== undefined &&
+      config.dex?.uniswapV3?.universalRouter?.candidateFeeTiers !== undefined &&
       !effectiveFactorySources.has(LiquiditySource.UNISWAPV3)
     ) {
       logger.warn(
@@ -1023,7 +1021,7 @@ export function validateAutoDiscoverConfig(
       );
     }
     if (
-      config.sushiswapRouterOverrides?.candidateFeeTiers !== undefined &&
+      config.dex?.sushiswap?.candidateFeeTiers !== undefined &&
       !effectiveFactorySources.has(LiquiditySource.SUSHISWAP)
     ) {
       logger.warn(
@@ -1096,7 +1094,7 @@ export function validateAutoDiscoverConfig(
         discoveredTake.marketPriceFactor === undefined)
     ) {
       throw new Error(
-        'AutoDiscoverConfig: quote-normalized profit floors require discoveredDefaults.take to configure an external take path'
+        'AutoDiscoverConfig: quote-normalized profit floors require discovery.defaults.take to configure an external take path'
       );
     }
     if (takePolicy.minExpectedProfitQuote !== undefined) {
@@ -1133,10 +1131,10 @@ export function validateAutoDiscoverConfig(
       );
     }
 
-    const discoveredSettlement = config.discoveredDefaults?.settlement;
+    const discoveredSettlement = config.discovery?.defaults?.settlement;
     if (!discoveredSettlement?.enabled) {
       throw new Error(
-        'AutoDiscoverConfig: enabled discoveredDefaults.settlement required when autoDiscover.settlement is enabled'
+        'AutoDiscoverConfig: enabled discovery.defaults.settlement required when discovery.settlement is enabled'
       );
     }
     validateSettlementSettings(discoveredSettlement);
@@ -1144,76 +1142,55 @@ export function validateAutoDiscoverConfig(
 }
 
 export function validateTakeWriteConfig(config: KeeperConfig): void {
-  const hasTakeWriteRpcUrl =
-    Object.prototype.hasOwnProperty.call(config, 'takeWriteRpcUrl') &&
-    (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl !== undefined;
-  const shorthandRpcUrl = hasTakeWriteRpcUrl
-    ? (config as { takeWriteRpcUrl?: unknown }).takeWriteRpcUrl
-    : undefined;
-
-  if (config.takeWrite && hasTakeWriteRpcUrl) {
-    throw new Error(
-      'KeeperConfig: configure only one of takeWrite or takeWriteRpcUrl'
-    );
-  }
-
-  if (hasTakeWriteRpcUrl) {
-    if (
-      typeof shorthandRpcUrl !== 'string' ||
-      shorthandRpcUrl.trim().length === 0
-    ) {
-      throw new Error('KeeperConfig: takeWriteRpcUrl cannot be blank');
-    }
-  }
-
-  if (!config.takeWrite) {
+  const takeWrite = config.writes?.take;
+  if (!takeWrite) {
     return;
   }
 
-  switch (config.takeWrite.mode) {
+  switch (takeWrite.mode) {
     case TakeWriteTransportMode.PUBLIC_RPC:
       requireOptionalPositive(
-        config.takeWrite.receiptTimeoutMs,
-        'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+        takeWrite.receiptTimeoutMs,
+        'KeeperConfig.writes.take: receiptTimeoutMs must be greater than 0 when provided'
       );
       return;
     case TakeWriteTransportMode.PRIVATE_RPC:
-      if (!config.takeWrite.rpcUrl) {
+      if (!takeWrite.rpcUrl) {
         throw new Error(
-          'KeeperConfig.takeWrite: rpcUrl required when mode is private_rpc'
+          'KeeperConfig.writes.take: rpcUrl required when mode is private_rpc'
         );
       }
       requireOptionalPositive(
-        config.takeWrite.receiptTimeoutMs,
-        'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+        takeWrite.receiptTimeoutMs,
+        'KeeperConfig.writes.take: receiptTimeoutMs must be greater than 0 when provided'
       );
       return;
     case TakeWriteTransportMode.RELAY:
-      if (!config.takeWrite.relay?.url) {
+      if (!takeWrite.relay?.url) {
         throw new Error(
-          'KeeperConfig.takeWrite: relay.url required when mode is relay'
+          'KeeperConfig.writes.take: relay.url required when mode is relay'
         );
       }
       requireOptionalPositive(
-        config.takeWrite.relay.maxBlockNumberOffset,
-        'KeeperConfig.takeWrite: relay.maxBlockNumberOffset must be greater than 0 when provided'
+        takeWrite.relay.maxBlockNumberOffset,
+        'KeeperConfig.writes.take: relay.maxBlockNumberOffset must be greater than 0 when provided'
       );
       requireOptionalPositive(
-        config.takeWrite.relay.requestTimeoutMs,
-        'KeeperConfig.takeWrite: relay.requestTimeoutMs must be greater than 0 when provided'
+        takeWrite.relay.requestTimeoutMs,
+        'KeeperConfig.writes.take: relay.requestTimeoutMs must be greater than 0 when provided'
       );
       requireOptionalPositive(
-        config.takeWrite.receiptTimeoutMs,
-        'KeeperConfig.takeWrite: receiptTimeoutMs must be greater than 0 when provided'
+        takeWrite.receiptTimeoutMs,
+        'KeeperConfig.writes.take: receiptTimeoutMs must be greater than 0 when provided'
       );
       requireOptionalPositive(
-        config.takeWrite.relay.receiptTimeoutMs,
-        'KeeperConfig.takeWrite: relay.receiptTimeoutMs must be greater than 0 when provided'
+        takeWrite.relay.receiptTimeoutMs,
+        'KeeperConfig.writes.take: relay.receiptTimeoutMs must be greater than 0 when provided'
       );
       return;
     default:
       throw new Error(
-        `KeeperConfig.takeWrite: unsupported mode ${String(config.takeWrite.mode)}`
+        `KeeperConfig.writes.take: unsupported mode ${String(takeWrite.mode)}`
       );
   }
 }
@@ -1225,7 +1202,7 @@ export function validateTakeSettingsForChain(
   validateRouterFeeTiers(config);
   validateOneInchAggregationExecutorAllowlist(config);
 
-  for (const poolConfig of config.pools) {
+  for (const poolConfig of getManualPools(config)) {
     if (poolConfig.take) {
       if (poolConfig.take.allowSubsidy === true) {
         logger.warn(
@@ -1236,8 +1213,8 @@ export function validateTakeSettingsForChain(
     }
   }
 
-  const discoveredTake = config.discoveredDefaults?.take;
-  if (discoveredTake && getAutoDiscoverTakePolicy(config.autoDiscover)) {
+  const discoveredTake = config.discovery?.defaults?.take;
+  if (discoveredTake && getAutoDiscoverTakePolicy(config.discovery)) {
     validateTakeSettings(discoveredTake, config, chainId);
   }
 }

@@ -63,7 +63,7 @@ export async function collectBondFromPool({
   }
   const { claimable, locked } = await pool.kickerInfo(signerAddress);
 
-    // Case 1: Bonds ready to withdraw (optimal case)
+  // Case 1: Bonds ready to withdraw (optimal case)
   if (locked.eq(constants.Zero) && claimable.gt(constants.Zero)) {
     if (!!config.dryRun) {
       logger.info(
@@ -90,21 +90,20 @@ export async function collectBondFromPool({
     logger.debug(
       `Bonds locked in pool ${pool.name}: locked=${weiToDecimaled(locked)}, claimable=${weiToDecimaled(claimable)}`
     );
-    
+
     if (poolConfig.settlement?.enabled) {
-  
       const settlementSuccessful = await tryReactiveSettlement({
-         pool,
-         poolConfig,
-         signer,
-         config
+        pool,
+        poolConfig,
+        signer,
+        config,
       });
-  
-      
+
       if (settlementSuccessful) {
         // Try withdrawing bonds again after settlement
-        const { claimable: newClaimable, locked: newLocked } = await pool.kickerInfo(signerAddress);
-        
+        const { claimable: newClaimable, locked: newLocked } =
+          await pool.kickerInfo(signerAddress);
+
         if (newLocked.eq(constants.Zero) && newClaimable.gt(constants.Zero)) {
           if (!!config.dryRun) {
             logger.info(
@@ -117,23 +116,34 @@ export async function collectBondFromPool({
                 `Withdrew bond after settlement. pool: ${pool.name}. bondSize: ${weiToDecimaled(newClaimable)}`
               );
             } catch (error) {
-              logger.error(`Failed to withdraw bond after settlement. pool: ${pool.name}.`, error);
+              logger.error(
+                `Failed to withdraw bond after settlement. pool: ${pool.name}.`,
+                error
+              );
             }
           }
         } else {
-          logger.warn(`Settlement completed but bonds still not withdrawable in pool: ${pool.name}`);
+          logger.warn(
+            `Settlement completed but bonds still not withdrawable in pool: ${pool.name}`
+          );
         }
       } else {
-        logger.warn(`Bonds remain locked in pool: ${pool.name} - no settlements needed`);
+        logger.warn(
+          `Bonds remain locked in pool: ${pool.name} - no settlements needed`
+        );
       }
     } else {
-      logger.debug(`Settlement not enabled for pool ${pool.name}, bonds remain locked`);
+      logger.debug(
+        `Settlement not enabled for pool ${pool.name}, bonds remain locked`
+      );
     }
     return;
   }
-  
+
   // Case 3: No bonds to withdraw — cache idle state to skip kickerInfo for the next cycles.
   // Invalidated externally when this keeper kicks a loan (which locks a bond).
   idleBondStateCache.set(cacheKey, IDLE_BOND_CACHE_CYCLES);
-  logger.debug(`No bonds to withdraw in pool ${pool.name}: locked=${weiToDecimaled(locked)}, claimable=${weiToDecimaled(claimable)}`);
+  logger.debug(
+    `No bonds to withdraw in pool ${pool.name}: locked=${weiToDecimaled(locked)}, claimable=${weiToDecimaled(claimable)}`
+  );
 }

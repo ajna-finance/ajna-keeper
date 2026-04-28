@@ -12,11 +12,21 @@ import {
   validateTakeSettingsForChain,
 } from '../../src/config';
 
-const BASE_CONFIG = {
-  ethRpcUrl: 'https://example-rpc.invalid',
-  logLevel: 'info',
-  subgraphUrl: 'https://example-subgraph.invalid',
-  keeperKeystore: '/tmp/keeper.json',
+const BASE_CONFIG: KeeperConfig = {
+  network: {
+    rpcUrl: 'https://example-rpc.invalid',
+    subgraph: {
+      url: 'https://example-subgraph.invalid',
+    },
+  },
+  keeper: {
+    keystore: '/tmp/keeper.json',
+  },
+  runtime: {
+    logLevel: 'info',
+    delayBetweenActions: 1,
+    delayBetweenRuns: 10,
+  },
   ajna: {
     erc20PoolFactory: '0x1111111111111111111111111111111111111111',
     erc721PoolFactory: '0x2222222222222222222222222222222222222222',
@@ -24,34 +34,43 @@ const BASE_CONFIG = {
     positionManager: '0x4444444444444444444444444444444444444444',
     ajnaToken: '0x5555555555555555555555555555555555555555',
   },
-  delayBetweenActions: 1,
-  delayBetweenRuns: 10,
-  pools: [],
+  manual: {
+    pools: [],
+  },
 };
 
-describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
+describe('assertIsValidConfig rewards.lpLookbackSeconds', () => {
   it('accepts omission (defaults applied downstream)', () => {
     expect(() => assertIsValidConfig({ ...BASE_CONFIG })).to.not.throw();
   });
 
   it('accepts non-negative integers', () => {
     expect(() =>
-      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: 0 })
+      assertIsValidConfig({ ...BASE_CONFIG, rewards: { lpLookbackSeconds: 0 } })
     ).to.not.throw();
     expect(() =>
-      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: 300 })
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        rewards: { lpLookbackSeconds: 300 },
+      })
     ).to.not.throw();
   });
 
   it('rejects negative values (would invert cursor math)', () => {
     expect(() =>
-      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: -30 })
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        rewards: { lpLookbackSeconds: -30 },
+      })
     ).to.throw(/non-negative integer/);
   });
 
   it('rejects fractional values', () => {
     expect(() =>
-      assertIsValidConfig({ ...BASE_CONFIG, lpRewardLookbackSeconds: 0.5 })
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        rewards: { lpLookbackSeconds: 0.5 },
+      })
     ).to.throw(/non-negative integer/);
   });
 
@@ -59,7 +78,7 @@ describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        lpRewardLookbackSeconds: '60' as any,
+        rewards: { lpLookbackSeconds: '60' as any },
       })
     ).to.throw(/typeof string/);
   });
@@ -68,13 +87,13 @@ describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        lpRewardLookbackSeconds: Number.NaN,
+        rewards: { lpLookbackSeconds: Number.NaN },
       })
     ).to.throw(/non-negative integer/);
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        lpRewardLookbackSeconds: Number.POSITIVE_INFINITY,
+        rewards: { lpLookbackSeconds: Number.POSITIVE_INFINITY },
       })
     ).to.throw(/non-negative integer/);
   });
@@ -83,7 +102,7 @@ describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        lpRewardLookbackSeconds: 86_401,
+        rewards: { lpLookbackSeconds: 86_401 },
       })
     ).to.throw(/must not exceed 86400/);
   });
@@ -92,7 +111,7 @@ describe('assertIsValidConfig lpRewardLookbackSeconds', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        lpRewardLookbackSeconds: 86_400,
+        rewards: { lpLookbackSeconds: 86_400 },
       })
     ).to.not.throw();
   });
@@ -107,7 +126,10 @@ describe('assertIsValidConfig defaultLpReward shape', () => {
 
   it('accepts a minimal valid defaultLpReward', () => {
     expect(() =>
-      assertIsValidConfig({ ...BASE_CONFIG, defaultLpReward: validDefault })
+      assertIsValidConfig({
+        ...BASE_CONFIG,
+        rewards: { defaultLpReward: validDefault },
+      })
     ).to.not.throw();
   });
 
@@ -115,7 +137,9 @@ describe('assertIsValidConfig defaultLpReward shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: { ...validDefault, minAmountQuote: -1 },
+        rewards: {
+          defaultLpReward: { ...validDefault, minAmountQuote: -1 },
+        },
       })
     ).to.throw(/minAmountQuote.*non-negative/);
   });
@@ -124,7 +148,12 @@ describe('assertIsValidConfig defaultLpReward shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: { ...validDefault, minAmountCollateral: '0' as any },
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            minAmountCollateral: '0' as any,
+          },
+        },
       })
     ).to.throw(/minAmountCollateral.*non-negative/);
   });
@@ -152,7 +181,12 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: { ...validDefault, rewardActionQuote: validExchange },
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionQuote: validExchange,
+          },
+        },
       })
     ).to.not.throw();
   });
@@ -161,9 +195,11 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: {
-          ...validDefault,
-          rewardActionCollateral: validTransfer,
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionCollateral: validTransfer,
+          },
         },
       })
     ).to.not.throw();
@@ -173,9 +209,14 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: {
-          ...validDefault,
-          rewardActionQuote: { ...validExchange, dexProvider: 'bogus' as any },
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionQuote: {
+              ...validExchange,
+              dexProvider: 'bogus' as any,
+            },
+          },
         },
       })
     ).to.throw(/dexProvider must be one of/);
@@ -185,9 +226,11 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: {
-          ...validDefault,
-          rewardActionQuote: { ...validExchange, address: 'not-an-address' },
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionQuote: { ...validExchange, address: 'not-an-address' },
+          },
         },
       })
     ).to.throw(/address must be a 0x-prefixed/);
@@ -197,9 +240,11 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: {
-          ...validDefault,
-          rewardActionQuote: { ...validExchange, targetToken: '' },
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionQuote: { ...validExchange, targetToken: '' },
+          },
         },
       })
     ).to.throw(/targetToken/);
@@ -209,9 +254,11 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: {
-          ...validDefault,
-          rewardActionQuote: { ...validExchange, slippage: -1 },
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionQuote: { ...validExchange, slippage: -1 },
+          },
         },
       })
     ).to.throw(/slippage.*non-negative/);
@@ -221,9 +268,11 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: {
-          ...validDefault,
-          rewardActionQuote: { ...validExchange, fee: 0.5 },
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionQuote: { ...validExchange, fee: 0.5 },
+          },
         },
       })
     ).to.throw(/fee.*non-negative integer/);
@@ -233,9 +282,11 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: {
-          ...validDefault,
-          rewardActionCollateral: { ...validTransfer, to: '0xabc' },
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionCollateral: { ...validTransfer, to: '0xabc' },
+          },
         },
       })
     ).to.throw(/to must be a 0x-prefixed/);
@@ -245,12 +296,14 @@ describe('assertIsValidConfig rewardAction shape', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: {
-          ...validDefault,
-          rewardActionQuote: {
-            action: 'unknown',
-            to: '0x1234567890123456789012345678901234567890',
-          } as any,
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionQuote: {
+              action: 'unknown',
+              to: '0x1234567890123456789012345678901234567890',
+            } as any,
+          },
         },
       })
     ).to.throw(/action must be/);
@@ -263,8 +316,10 @@ describe('validateTakeSettingsForChain Curve execution delay', () => {
       validateTakeSettingsForChain(
         {
           ...BASE_CONFIG,
-          curveRouterOverrides: {
-            executionDelayMs: 60_000,
+          dex: {
+            curve: {
+              executionDelayMs: 60_000,
+            },
           },
         } as KeeperConfig,
         1
@@ -277,8 +332,10 @@ describe('validateTakeSettingsForChain Curve execution delay', () => {
       validateTakeSettingsForChain(
         {
           ...BASE_CONFIG,
-          curveRouterOverrides: {
-            executionDelayMs: 60_001,
+          dex: {
+            curve: {
+              executionDelayMs: 60_001,
+            },
           },
         } as KeeperConfig,
         1
@@ -308,19 +365,26 @@ describe('assertIsValidConfig pool-override startup dry-run', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        defaultLpReward: { ...validDefault, rewardActionQuote: validExchange },
-        pools: [
-          {
-            address: '0x9999999999999999999999999999999999999999',
-            price: {} as any,
-            collectLpReward: {
-              rewardActionQuote: {
-                ...validExchange,
-                dexProvider: 'not-a-dex' as any,
+        rewards: {
+          defaultLpReward: {
+            ...validDefault,
+            rewardActionQuote: validExchange,
+          },
+        },
+        manual: {
+          pools: [
+            {
+              address: '0x9999999999999999999999999999999999999999',
+              price: {} as any,
+              collectLpReward: {
+                rewardActionQuote: {
+                  ...validExchange,
+                  dexProvider: 'not-a-dex' as any,
+                },
               },
-            },
-          } as any,
-        ],
+            } as any,
+          ],
+        },
       })
     ).to.throw(/Invalid LP reward config for pool 0x9999/);
   });
@@ -329,16 +393,18 @@ describe('assertIsValidConfig pool-override startup dry-run', () => {
     expect(() =>
       assertIsValidConfig({
         ...BASE_CONFIG,
-        pools: [
-          {
-            address: '0x8888888888888888888888888888888888888888',
-            price: {} as any,
-            collectLpReward: {
-              redeemFirst: TokenToCollect.QUOTE,
-              // no minAmountQuote, no minAmountCollateral
+        manual: {
+          pools: [
+            {
+              address: '0x8888888888888888888888888888888888888888',
+              price: {} as any,
+              collectLpReward: {
+                redeemFirst: TokenToCollect.QUOTE,
+                // no minAmountQuote, no minAmountCollateral
+              } as any,
             } as any,
-          } as any,
-        ],
+          ],
+        },
       })
     ).to.throw(/Invalid LP reward config for pool 0x8888/);
   });
@@ -351,10 +417,20 @@ describe('config-load', () => {
     );
     const configPath = path.join(tempDir, 'config.ts');
     const configSource = `export default {
-  ethRpcUrl: 'https://example-rpc.invalid',
-  logLevel: 'info',
-  subgraphUrl: 'https://example-subgraph.invalid',
-  keeperKeystore: '/tmp/keeper.json',
+  network: {
+    rpcUrl: 'https://example-rpc.invalid',
+    subgraph: {
+      url: 'https://example-subgraph.invalid',
+    },
+  },
+  keeper: {
+    keystore: '/tmp/keeper.json',
+  },
+  runtime: {
+    logLevel: 'info',
+    delayBetweenActions: 1,
+    delayBetweenRuns: 10,
+  },
   ajna: {
     erc20PoolFactory: '0x1111111111111111111111111111111111111111',
     erc721PoolFactory: '0x2222222222222222222222222222222222222222',
@@ -362,9 +438,9 @@ describe('config-load', () => {
     positionManager: '0x4444444444444444444444444444444444444444',
     ajnaToken: '0x5555555555555555555555555555555555555555',
   },
-  delayBetweenActions: 1,
-  delayBetweenRuns: 10,
-  pools: [],
+  manual: {
+    pools: [],
+  },
 };`;
 
     await fs.writeFile(configPath, configSource, 'utf8');
@@ -373,11 +449,13 @@ describe('config-load', () => {
       const cwdRelativePath = path.relative(process.cwd(), configPath);
       const loadedConfig = await readConfigFile(cwdRelativePath);
 
-      expect(loadedConfig.ethRpcUrl).to.equal('https://example-rpc.invalid');
-      expect(loadedConfig.subgraphUrl).to.equal(
+      expect(loadedConfig.network.rpcUrl).to.equal(
+        'https://example-rpc.invalid'
+      );
+      expect(loadedConfig.network.subgraph.url).to.equal(
         'https://example-subgraph.invalid'
       );
-      expect(loadedConfig.pools).to.deep.equal([]);
+      expect(loadedConfig.manual.pools).to.deep.equal([]);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -389,10 +467,20 @@ describe('config-load', () => {
     );
     const configPath = path.join(tempDir, 'absolute-config.ts');
     const configSource = `export default {
-  ethRpcUrl: 'https://absolute-rpc.invalid',
-  logLevel: 'debug',
-  subgraphUrl: 'https://absolute-subgraph.invalid',
-  keeperKeystore: '/tmp/keeper.json',
+  network: {
+    rpcUrl: 'https://absolute-rpc.invalid',
+    subgraph: {
+      url: 'https://absolute-subgraph.invalid',
+    },
+  },
+  keeper: {
+    keystore: '/tmp/keeper.json',
+  },
+  runtime: {
+    logLevel: 'debug',
+    delayBetweenActions: 2,
+    delayBetweenRuns: 20,
+  },
   ajna: {
     erc20PoolFactory: '0x1111111111111111111111111111111111111111',
     erc721PoolFactory: '0x2222222222222222222222222222222222222222',
@@ -400,17 +488,19 @@ describe('config-load', () => {
     positionManager: '0x4444444444444444444444444444444444444444',
     ajnaToken: '0x5555555555555555555555555555555555555555',
   },
-  delayBetweenActions: 2,
-  delayBetweenRuns: 20,
-  pools: [],
+  manual: {
+    pools: [],
+  },
 };`;
 
     await fs.writeFile(configPath, configSource, 'utf8');
 
     try {
       const loadedConfig = await readConfigFile(configPath);
-      expect(loadedConfig.logLevel).to.equal('debug');
-      expect(loadedConfig.ethRpcUrl).to.equal('https://absolute-rpc.invalid');
+      expect(loadedConfig.runtime.logLevel).to.equal('debug');
+      expect(loadedConfig.network.rpcUrl).to.equal(
+        'https://absolute-rpc.invalid'
+      );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

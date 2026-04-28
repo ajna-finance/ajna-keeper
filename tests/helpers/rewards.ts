@@ -5,6 +5,8 @@ import { SubgraphReader } from '../../src/read-transports';
 import { RewardActionTracker } from '../../src/rewards/action-tracker';
 import { LpIngester, LpRedeemer } from '../../src/rewards/collect-lp';
 
+type LpCollectorTestConfig = Partial<Pick<KeeperConfig, 'runtime' | 'rewards'>>;
+
 /**
  * Test-only facade that mirrors the pre-refactor `LpCollector` API for
  * single-pool tests (integration against a hardhat-fork pool, or unit
@@ -24,16 +26,28 @@ export function makeSinglePoolLpCollector(
   pool: FungiblePool,
   signer: Signer,
   settings: CollectLpRewardSettings,
-  config: Pick<KeeperConfig, 'dryRun' | 'lpRewardLookbackSeconds'>,
+  config: LpCollectorTestConfig,
   exchangeTracker: RewardActionTracker,
   subgraph: SubgraphReader
 ) {
-  const ingester = new LpIngester(signer, subgraph, config);
+  const ingesterConfig: Pick<KeeperConfig, 'rewards'> = {
+    rewards: config.rewards,
+  };
+  const redeemerConfig: Pick<KeeperConfig, 'runtime'> = {
+    runtime: {
+      logLevel: 'debug',
+      delayBetweenActions: 0,
+      delayBetweenRuns: 0,
+      dryRun: false,
+      ...config.runtime,
+    },
+  };
+  const ingester = new LpIngester(signer, subgraph, ingesterConfig);
   const redeemer = new LpRedeemer(
     pool,
     signer,
     settings,
-    config,
+    redeemerConfig,
     exchangeTracker
   );
   const poolAddress = normalizeAddress(pool.poolAddress);

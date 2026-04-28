@@ -11,15 +11,15 @@ import subgraph, {
   SubgraphMeta,
 } from './subgraph';
 
-export type SubgraphTransportConfig = Pick<
-  KeeperConfig,
-  'subgraphUrl' | 'subgraphFallbackUrls'
->;
+export interface SubgraphTransportConfig {
+  subgraphUrl: string;
+  subgraphFallbackUrls?: string[];
+}
 
-export type ReadRpcTransportConfig = Pick<
-  KeeperConfig,
-  'ethRpcUrl' | 'readRpcUrls'
->;
+export interface ReadRpcTransportConfig {
+  ethRpcUrl: string;
+  readRpcUrls?: string[];
+}
 
 export type DiscoveryReadTransportConfig = SubgraphTransportConfig &
   ReadRpcTransportConfig;
@@ -37,7 +37,9 @@ export interface SubgraphReader {
     poolAddress: string,
     minDeposit: string
   ): Promise<GetMeaningfulBucketResponse>;
-  getUnsettledAuctions(poolAddress: string): Promise<GetUnsettledAuctionsResponse>;
+  getUnsettledAuctions(
+    poolAddress: string
+  ): Promise<GetUnsettledAuctionsResponse>;
   getChainwideLiquidationAuctions(
     pageSize?: number,
     maxPages?: number
@@ -65,6 +67,33 @@ export type WithSubgraph<T extends object> = T & {
 export type SubgraphConfigInput<T extends object> =
   | WithSubgraph<T>
   | (T & SubgraphTransportConfig);
+
+export function getSubgraphTransportConfig(
+  config: Pick<KeeperConfig, 'network'>
+): SubgraphTransportConfig {
+  return {
+    subgraphUrl: config.network.subgraph.url,
+    subgraphFallbackUrls: config.network.subgraph.fallbackUrls,
+  };
+}
+
+export function getReadRpcTransportConfig(
+  config: Pick<KeeperConfig, 'network'>
+): ReadRpcTransportConfig {
+  return {
+    ethRpcUrl: config.network.rpcUrl,
+    readRpcUrls: config.network.readRpcUrls,
+  };
+}
+
+export function getDiscoveryReadTransportConfig(
+  config: Pick<KeeperConfig, 'network'>
+): DiscoveryReadTransportConfig {
+  return {
+    ...getSubgraphTransportConfig(config),
+    ...getReadRpcTransportConfig(config),
+  };
+}
 
 function getSubgraphCacheKey(config: SubgraphTransportConfig): string {
   return `${config.subgraphUrl}|${(config.subgraphFallbackUrls ?? []).join(',')}`;

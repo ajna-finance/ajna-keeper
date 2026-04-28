@@ -34,12 +34,12 @@ describe('Curve Quote Provider', () => {
         poolConfigs: {
           'tbtc-weth': {
             address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
-            poolType: CurvePoolType.CRYPTO
+            poolType: CurvePoolType.CRYPTO,
           },
           'usdc_t-usd_t1': {
             address: '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb',
-            poolType: CurvePoolType.STABLE
-          }
+            poolType: CurvePoolType.STABLE,
+          },
         },
         defaultSlippage: 1.0,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -47,15 +47,22 @@ describe('Curve Quote Provider', () => {
           weth: '0x4200000000000000000000000000000000000006',
           usdc_t: '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
           usd_t1: '0xf0c44a9f24159E1f2A0D9Ba3203172f528d224CA',
-          tbtc: '0x236aa50979D5f3De3Bd1Eeb40E81137F22ab794b'
-        }
+          tbtc: '0x236aa50979D5f3De3Bd1Eeb40E81137F22ab794b',
+        },
       };
 
       // Test pool configuration structure
-      expect(config.poolConfigs['tbtc-weth'].address).to.equal('0x6e53131F68a034873b6bFA15502aF094Ef0c5854');
-      expect(config.poolConfigs['tbtc-weth'].poolType).to.equal(CurvePoolType.CRYPTO);
-      expect(config.poolConfigs['usdc_t-usd_t1'].poolType).to.equal(CurvePoolType.STABLE);
-      expect(ethers.utils.isAddress(config.poolConfigs['tbtc-weth'].address)).to.be.true;
+      expect(config.poolConfigs['tbtc-weth'].address).to.equal(
+        '0x6e53131F68a034873b6bFA15502aF094Ef0c5854'
+      );
+      expect(config.poolConfigs['tbtc-weth'].poolType).to.equal(
+        CurvePoolType.CRYPTO
+      );
+      expect(config.poolConfigs['usdc_t-usd_t1'].poolType).to.equal(
+        CurvePoolType.STABLE
+      );
+      expect(ethers.utils.isAddress(config.poolConfigs['tbtc-weth'].address)).to
+        .be.true;
     });
 
     it('should handle missing tokenAddresses in configuration', () => {
@@ -63,8 +70,8 @@ describe('Curve Quote Provider', () => {
         poolConfigs: {
           'usdc_t-usd_t1': {
             address: '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb',
-            poolType: CurvePoolType.STABLE
-          }
+            poolType: CurvePoolType.STABLE,
+          },
         },
         defaultSlippage: 1.0,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -85,8 +92,13 @@ describe('Curve Quote Provider', () => {
       };
 
       Object.entries(basePoolAddresses).forEach(([name, address]) => {
-        expect(ethers.utils.isAddress(address), `${name} should be valid address`).to.be.true;
-        expect(address, `${name} should not be zero address`).to.not.equal('0x0000000000000000000000000000000000000000');
+        expect(
+          ethers.utils.isAddress(address),
+          `${name} should be valid address`
+        ).to.be.true;
+        expect(address, `${name} should not be zero address`).to.not.equal(
+          '0x0000000000000000000000000000000000000000'
+        );
       });
     });
 
@@ -105,11 +117,13 @@ describe('Curve Quote Provider', () => {
         weth: '0x4200000000000000000000000000000000000006',
         usdc_t: '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
         usd_t1: '0xf0c44a9f24159E1f2A0D9Ba3203172f528d224CA',
-        tbtc: '0x236aa50979D5f3De3Bd1Eeb40E81137F22ab794b'
+        tbtc: '0x236aa50979D5f3De3Bd1Eeb40E81137F22ab794b',
       };
 
       // Test symbol lookup logic
-      const findSymbolForAddress = (targetAddress: string): string | undefined => {
+      const findSymbolForAddress = (
+        targetAddress: string
+      ): string | undefined => {
         for (const [symbol, address] of Object.entries(tokenAddresses)) {
           if (address.toLowerCase() === targetAddress.toLowerCase()) {
             return symbol;
@@ -118,8 +132,12 @@ describe('Curve Quote Provider', () => {
         return undefined;
       };
 
-      expect(findSymbolForAddress('0x4200000000000000000000000000000000000006')).to.equal('weth');
-      expect(findSymbolForAddress('0x53Be558aF29cC65126ED0E585119FAC748FeB01B')).to.equal('usdc_t');
+      expect(
+        findSymbolForAddress('0x4200000000000000000000000000000000000006')
+      ).to.equal('weth');
+      expect(
+        findSymbolForAddress('0x53Be558aF29cC65126ED0E585119FAC748FeB01B')
+      ).to.equal('usdc_t');
       expect(findSymbolForAddress('0xInvalidAddress')).to.be.undefined;
     });
   });
@@ -150,15 +168,17 @@ describe('Curve Quote Provider', () => {
 
   describe('Pool Discovery Logic', () => {
     it('should identify valid token pair matching', () => {
-      const poolConfigs: { [key: string]: { address: string; poolType: CurvePoolType } } = {
+      const poolConfigs: {
+        [key: string]: { address: string; poolType: CurvePoolType };
+      } = {
         'tbtc-weth': {
           address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
-          poolType: CurvePoolType.CRYPTO
+          poolType: CurvePoolType.CRYPTO,
         },
         'usdc_t-usd_t1': {
           address: '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb',
-          poolType: CurvePoolType.STABLE
-        }
+          poolType: CurvePoolType.STABLE,
+        },
       };
 
       // Test pool discovery logic (both directions)
@@ -185,12 +205,19 @@ describe('Curve Quote Provider', () => {
 
       // Test ETH/WETH conversion logic
       const normalizeAddress = (address: string, wethAddr: string): string => {
-        return address.toLowerCase() === ethAddress.toLowerCase() ? wethAddr : address;
+        return address.toLowerCase() === ethAddress.toLowerCase()
+          ? wethAddr
+          : address;
       };
 
       expect(normalizeAddress(ethAddress, wethAddress)).to.equal(wethAddress);
       expect(normalizeAddress(wethAddress, wethAddress)).to.equal(wethAddress);
-      expect(normalizeAddress('0x53Be558aF29cC65126ED0E585119FAC748FeB01B', wethAddress)).to.equal('0x53Be558aF29cC65126ED0E585119FAC748FeB01B');
+      expect(
+        normalizeAddress(
+          '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
+          wethAddress
+        )
+      ).to.equal('0x53Be558aF29cC65126ED0E585119FAC748FeB01B');
     });
 
     it('falls back to address-based matching when token symbol casing differs from pool config keys', async () => {
@@ -198,17 +225,19 @@ describe('Curve Quote Provider', () => {
         poolConfigs: {
           'weth-usdc': {
             address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
-            poolType: CurvePoolType.CRYPTO
-          }
+            poolType: CurvePoolType.CRYPTO,
+          },
         },
         defaultSlippage: 1.0,
         wethAddress: '0x4200000000000000000000000000000000000006',
         tokenAddresses: {
           WETH: '0x4200000000000000000000000000000000000006',
-          USDC: '0x53Be558aF29cC65126ED0E585119FAC748FeB01B'
-        }
+          USDC: '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
+        },
       });
-      const checkTokensStub = sinon.stub(provider, 'checkTokensInPool').resolves(true);
+      const checkTokensStub = sinon
+        .stub(provider, 'checkTokensInPool')
+        .resolves(true);
 
       const poolConfig = await provider.findPoolForTokenPair(
         '0x4200000000000000000000000000000000000006',
@@ -217,7 +246,7 @@ describe('Curve Quote Provider', () => {
 
       expect(poolConfig).to.deep.equal({
         address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
-        poolType: CurvePoolType.CRYPTO
+        poolType: CurvePoolType.CRYPTO,
       });
       expect(checkTokensStub.calledOnce).to.be.true;
     });
@@ -226,11 +255,11 @@ describe('Curve Quote Provider', () => {
   describe('Market Price Calculation Logic', () => {
     it('should calculate market price correctly', () => {
       // Test the math that would be used in getMarketPrice
-      const inputAmount = 1000000;  // 1 token with 6 decimals
-      const outputAmount = 995000;  // 0.995 token with 6 decimals (typical stable swap)
-      
+      const inputAmount = 1000000; // 1 token with 6 decimals
+      const outputAmount = 995000; // 0.995 token with 6 decimals (typical stable swap)
+
       const marketPrice = outputAmount / inputAmount;
-      
+
       expect(marketPrice).to.equal(0.995);
       expect(marketPrice).to.be.lessThan(1.0);
       expect(marketPrice).to.be.greaterThan(0.0);
@@ -239,17 +268,18 @@ describe('Curve Quote Provider', () => {
     it('should handle zero amounts and invalid scenarios', () => {
       const inputAmount = 1000000;
       const zeroOutput = 0;
-      
+
       const priceWithZeroOutput = zeroOutput / inputAmount;
       const zeroInputPrice = inputAmount / 0; // This would be Infinity
-      
+
       expect(priceWithZeroOutput).to.equal(0);
       expect(zeroInputPrice).to.equal(Infinity);
       expect(Number.isFinite(priceWithZeroOutput)).to.be.true;
       expect(Number.isFinite(zeroInputPrice)).to.be.false;
-      
+
       // Test validation logic for invalid amounts
-      const isValidAmount = (amount: number) => amount > 0 && Number.isFinite(amount);
+      const isValidAmount = (amount: number) =>
+        amount > 0 && Number.isFinite(amount);
       expect(isValidAmount(inputAmount)).to.be.true;
       expect(isValidAmount(zeroOutput)).to.be.false;
       expect(isValidAmount(zeroInputPrice)).to.be.false;
@@ -259,30 +289,44 @@ describe('Curve Quote Provider', () => {
   describe('Error Message Categorization', () => {
     it('should categorize different Curve error types', () => {
       const poolErrors = ['No Curve pool configured', 'No pool found'];
-      const tokenErrors = ['Tokens not found in Curve pool', 'Token indices not found'];
-      const liquidityErrors = ['Zero output from Curve pool', 'Insufficient liquidity'];
+      const tokenErrors = [
+        'Tokens not found in Curve pool',
+        'Token indices not found',
+      ];
+      const liquidityErrors = [
+        'Zero output from Curve pool',
+        'Insufficient liquidity',
+      ];
       const configErrors = ['Quote provider not available'];
 
       const categorizeError = (error: string) => {
-        if (poolErrors.some(pattern => error.includes(pattern))) {
+        if (poolErrors.some((pattern) => error.includes(pattern))) {
           return 'pool';
         }
-        if (tokenErrors.some(pattern => error.includes(pattern))) {
+        if (tokenErrors.some((pattern) => error.includes(pattern))) {
           return 'token';
         }
-        if (liquidityErrors.some(pattern => error.includes(pattern))) {
+        if (liquidityErrors.some((pattern) => error.includes(pattern))) {
           return 'liquidity';
         }
-        if (configErrors.some(pattern => error.includes(pattern))) {
+        if (configErrors.some((pattern) => error.includes(pattern))) {
           return 'config';
         }
         return 'unknown';
       };
 
-      expect(categorizeError('No Curve pool configured for tokenA/tokenB')).to.equal('pool');
-      expect(categorizeError('Tokens not found in Curve pool')).to.equal('token');
-      expect(categorizeError('Zero output from Curve pool')).to.equal('liquidity');
-      expect(categorizeError('Quote provider not available')).to.equal('config');
+      expect(
+        categorizeError('No Curve pool configured for tokenA/tokenB')
+      ).to.equal('pool');
+      expect(categorizeError('Tokens not found in Curve pool')).to.equal(
+        'token'
+      );
+      expect(categorizeError('Zero output from Curve pool')).to.equal(
+        'liquidity'
+      );
+      expect(categorizeError('Quote provider not available')).to.equal(
+        'config'
+      );
       expect(categorizeError('Random curve error')).to.equal('unknown');
     });
   });

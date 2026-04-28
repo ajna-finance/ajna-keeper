@@ -9,10 +9,8 @@ export type FactoryLiquiditySource =
   | LiquiditySource.SUSHISWAP
   | LiquiditySource.CURVE;
 
-export type ActiveExternalTakeRouteSelectionMode = Exclude<
-  ExternalTakeRouteSelectionMode,
-  'cost_aware'
->;
+export type ActiveExternalTakeRouteSelectionMode =
+  ExternalTakeRouteSelectionMode;
 
 export const FACTORY_DYNAMIC_SOURCES: readonly FactoryLiquiditySource[] = [
   LiquiditySource.UNISWAPV3,
@@ -26,11 +24,7 @@ export const EXTERNAL_TAKE_PATHS = new Set<ExternalTakePathKind>([
 ]);
 
 export const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
-  new Set<ExternalTakeRouteSelectionMode>([
-    'maximize_profit',
-    'factory_first',
-    'cost_aware',
-  ]);
+  new Set<ExternalTakeRouteSelectionMode>(['maximize_profit', 'factory_first']);
 
 export const DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE: ActiveExternalTakeRouteSelectionMode =
   'maximize_profit';
@@ -47,9 +41,6 @@ export function isFactoryDynamicSource(
 export function normalizeExternalTakeRouteSelectionMode(
   mode: ExternalTakeRouteSelectionMode | undefined
 ): ActiveExternalTakeRouteSelectionMode {
-  if (mode === 'cost_aware') {
-    return 'factory_first';
-  }
   return mode ?? DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE;
 }
 

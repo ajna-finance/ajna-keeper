@@ -2,7 +2,11 @@ import { expect } from 'chai';
 import { BigNumber, constants, ethers, providers, utils, Wallet } from 'ethers';
 import { network } from 'hardhat';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
-import { MockAllowanceCheckingPool__factory, MockERC20__factory, MockPoolDeployer__factory } from '../../typechain-types/factories/contracts/mocks';
+import {
+  MockAllowanceCheckingPool__factory,
+  MockERC20__factory,
+  MockPoolDeployer__factory,
+} from '../../typechain-types/factories/contracts/mocks';
 
 const WAD = ethers.constants.WeiPerEther;
 const ERC20_NON_SUBSET_HASH = utils.keccak256(
@@ -113,7 +117,9 @@ describe('AjnaKeeperTaker quote approval rounding', () => {
 
     const quoteTokenScale = BigNumber.from(10).pow(12);
     const auctionPrice = WAD;
-    const invalidPool = await new MockAllowanceCheckingPool__factory(owner).deploy(
+    const invalidPool = await new MockAllowanceCheckingPool__factory(
+      owner
+    ).deploy(
       collateralToken.address,
       quoteToken.address,
       quoteTokenScale,
@@ -145,7 +151,9 @@ describe('AjnaKeeperTaker quote approval rounding', () => {
 
     expect(error).to.be.instanceOf(Error);
     expect((error as Error).message).to.contain('InvalidPool');
-    expect((await quoteToken.balanceOf(invalidPool.address)).isZero()).to.be.true;
-    expect((await quoteToken.balanceOf(keeperTaker.address)).eq(1_000_000)).to.be.true;
+    expect((await quoteToken.balanceOf(invalidPool.address)).isZero()).to.be
+      .true;
+    expect((await quoteToken.balanceOf(keeperTaker.address)).eq(1_000_000)).to
+      .be.true;
   });
 });

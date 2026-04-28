@@ -1,6 +1,10 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { KeeperConfig, PriceOriginSource, TakeWriteTransportMode } from '../../src/config';
+import {
+  KeeperConfig,
+  PriceOriginSource,
+  TakeWriteTransportMode,
+} from '../../src/config';
 import {
   initializeTakeLoop,
   shouldRunSettlementLoop,
@@ -10,10 +14,20 @@ import {
 import * as takeWriteTransportModule from '../../src/take/write-transport';
 
 const BASE_CONFIG: KeeperConfig = {
-  ethRpcUrl: 'http://localhost:8545',
-  logLevel: 'debug',
-  subgraphUrl: 'http://example-subgraph',
-  keeperKeystore: '/tmp/keeper.json',
+  network: {
+    rpcUrl: 'http://localhost:8545',
+    subgraph: {
+      url: 'http://example-subgraph',
+    },
+  },
+  keeper: {
+    keystore: '/tmp/keeper.json',
+  },
+  runtime: {
+    logLevel: 'debug',
+    delayBetweenActions: 0,
+    delayBetweenRuns: 1,
+  },
   ajna: {
     erc20PoolFactory: '0x0000000000000000000000000000000000000001',
     erc721PoolFactory: '0x0000000000000000000000000000000000000002',
@@ -21,10 +35,23 @@ const BASE_CONFIG: KeeperConfig = {
     positionManager: '0x0000000000000000000000000000000000000004',
     ajnaToken: '0x0000000000000000000000000000000000000005',
   },
-  delayBetweenActions: 0,
-  delayBetweenRuns: 1,
-  pools: [],
+  manual: {
+    pools: [],
+  },
 };
+
+const withTakeWrite = (take: any): Pick<KeeperConfig, 'writes'> => ({
+  writes: { take },
+});
+
+const withRuntime = (
+  runtime: Partial<KeeperConfig['runtime']>
+): Pick<KeeperConfig, 'runtime'> => ({
+  runtime: {
+    ...BASE_CONFIG.runtime,
+    ...runtime,
+  },
+});
 
 describe('run startup gating', () => {
   afterEach(() => {
@@ -37,32 +64,34 @@ describe('run startup gating', () => {
     expect(
       shouldRunTakeLoop({
         ...BASE_CONFIG,
-        takeWrite: {
+        ...withTakeWrite({
           mode: TakeWriteTransportMode.PRIVATE_RPC,
           rpcUrl: 'http://127.0.0.1:1',
-        },
+        }),
       })
     ).to.equal(false);
     expect(
       shouldRunTakeLoop({
         ...BASE_CONFIG,
-        pools: [
-          {
-            name: 'Manual Take Pool',
-            address: '0x1111111111111111111111111111111111111111',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            take: {
-              minCollateral: 0.1,
-              hpbPriceFactor: 0.98,
+        manual: {
+          pools: [
+            {
+              name: 'Manual Take Pool',
+              address: '0x1111111111111111111111111111111111111111',
+              price: { source: PriceOriginSource.FIXED, value: 1 },
+              take: {
+                minCollateral: 0.1,
+                hpbPriceFactor: 0.98,
+              },
             },
-          },
-        ],
+          ],
+        },
       })
     ).to.equal(true);
     expect(
       shouldRunTakeLoop({
         ...BASE_CONFIG,
-        autoDiscover: {
+        discovery: {
           enabled: true,
           take: true,
         },
@@ -71,38 +100,42 @@ describe('run startup gating', () => {
     expect(
       shouldRunSettlementLoop({
         ...BASE_CONFIG,
-        pools: [
-          {
-            name: 'Manual Settlement Pool',
-            address: '0x2222222222222222222222222222222222222222',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            settlement: {
-              enabled: true,
-              minAuctionAge: 60,
+        manual: {
+          pools: [
+            {
+              name: 'Manual Settlement Pool',
+              address: '0x2222222222222222222222222222222222222222',
+              price: { source: PriceOriginSource.FIXED, value: 1 },
+              settlement: {
+                enabled: true,
+                minAuctionAge: 60,
+              },
             },
-          },
-        ],
+          ],
+        },
       })
     ).to.equal(true);
     expect(
       shouldRunSettlementLoop({
         ...BASE_CONFIG,
-        pools: [
-          {
-            name: 'Disabled Settlement Pool',
-            address: '0x3333333333333333333333333333333333333333',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            settlement: {
-              enabled: false,
+        manual: {
+          pools: [
+            {
+              name: 'Disabled Settlement Pool',
+              address: '0x3333333333333333333333333333333333333333',
+              price: { source: PriceOriginSource.FIXED, value: 1 },
+              settlement: {
+                enabled: false,
+              },
             },
-          },
-        ],
+          ],
+        },
       })
     ).to.equal(false);
     expect(
       shouldRunSettlementLoop({
         ...BASE_CONFIG,
-        autoDiscover: {
+        discovery: {
           enabled: true,
           settlement: true,
         },
@@ -118,21 +151,23 @@ describe('run startup gating', () => {
     const result = await initializeTakeLoop({
       config: {
         ...BASE_CONFIG,
-        takeWrite: {
+        ...withTakeWrite({
           mode: TakeWriteTransportMode.PRIVATE_RPC,
           rpcUrl: 'http://127.0.0.1:1',
-        },
-        pools: [
-          {
-            name: 'Manual Take Pool',
-            address: '0x1111111111111111111111111111111111111111',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            take: {
-              minCollateral: 0.1,
-              hpbPriceFactor: 0.98,
+        }),
+        manual: {
+          pools: [
+            {
+              name: 'Manual Take Pool',
+              address: '0x1111111111111111111111111111111111111111',
+              price: { source: PriceOriginSource.FIXED, value: 1 },
+              take: {
+                minCollateral: 0.1,
+                hpbPriceFactor: 0.98,
+              },
             },
-          },
-        ],
+          ],
+        },
       },
       signer: {} as any,
       chainId: 1,
@@ -156,28 +191,32 @@ describe('run startup gating', () => {
       await initializeTakeLoop({
         config: {
           ...BASE_CONFIG,
-          takeWrite: {
+          ...withTakeWrite({
             mode: TakeWriteTransportMode.PRIVATE_RPC,
             rpcUrl: 'http://127.0.0.1:1',
-          },
-          pools: [
-            {
-              name: 'Manual Take Pool',
-              address: '0x1111111111111111111111111111111111111111',
-              price: { source: PriceOriginSource.FIXED, value: 1 },
-              take: {
-                minCollateral: 0.1,
-                hpbPriceFactor: 0.98,
+          }),
+          manual: {
+            pools: [
+              {
+                name: 'Manual Take Pool',
+                address: '0x1111111111111111111111111111111111111111',
+                price: { source: PriceOriginSource.FIXED, value: 1 },
+                take: {
+                  minCollateral: 0.1,
+                  hpbPriceFactor: 0.98,
+                },
               },
-            },
-          ],
+            ],
+          },
         },
         signer: {} as any,
         chainId: 1,
       });
       expect.fail('Expected chain mismatch to throw');
     } catch (error) {
-      expect((error as Error).message).to.include('does not match keeper chainId');
+      expect((error as Error).message).to.include(
+        'does not match keeper chainId'
+      );
     }
 
     expect(createTakeWriteTransportStub.calledOnce).to.equal(true);
@@ -192,22 +231,24 @@ describe('run startup gating', () => {
     const result = await initializeTakeLoop({
       config: {
         ...BASE_CONFIG,
-        dryRun: true,
-        takeWrite: {
+        ...withRuntime({ dryRun: true }),
+        ...withTakeWrite({
           mode: TakeWriteTransportMode.RELAY,
           relay: {} as any,
-        },
-        pools: [
-          {
-            name: 'Manual Take Pool',
-            address: '0x1111111111111111111111111111111111111111',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            take: {
-              minCollateral: 0.1,
-              hpbPriceFactor: 0.98,
+        }),
+        manual: {
+          pools: [
+            {
+              name: 'Manual Take Pool',
+              address: '0x1111111111111111111111111111111111111111',
+              price: { source: PriceOriginSource.FIXED, value: 1 },
+              take: {
+                minCollateral: 0.1,
+                hpbPriceFactor: 0.98,
+              },
             },
-          },
-        ],
+          ],
+        },
       },
       signer: {} as any,
       chainId: 1,
@@ -228,21 +269,23 @@ describe('run startup gating', () => {
       await initializeTakeLoop({
         config: {
           ...BASE_CONFIG,
-          takeWrite: {
+          ...withTakeWrite({
             mode: TakeWriteTransportMode.RELAY,
             relay: {} as any,
-          },
-          pools: [
-            {
-              name: 'Manual Take Pool',
-              address: '0x1111111111111111111111111111111111111111',
-              price: { source: PriceOriginSource.FIXED, value: 1 },
-              take: {
-                minCollateral: 0.1,
-                hpbPriceFactor: 0.98,
+          }),
+          manual: {
+            pools: [
+              {
+                name: 'Manual Take Pool',
+                address: '0x1111111111111111111111111111111111111111',
+                price: { source: PriceOriginSource.FIXED, value: 1 },
+                take: {
+                  minCollateral: 0.1,
+                  hpbPriceFactor: 0.98,
+                },
               },
-            },
-          ],
+            ],
+          },
         },
         signer: {} as any,
         chainId: 1,
@@ -265,21 +308,23 @@ describe('run startup gating', () => {
       await initializeTakeLoop({
         config: {
           ...BASE_CONFIG,
-          takeWrite: {
+          ...withTakeWrite({
             mode: 'private-rpc' as any,
             rpcUrl: 'http://127.0.0.1:1',
-          },
-          pools: [
-            {
-              name: 'Manual Take Pool',
-              address: '0x1111111111111111111111111111111111111111',
-              price: { source: PriceOriginSource.FIXED, value: 1 },
-              take: {
-                minCollateral: 0.1,
-                hpbPriceFactor: 0.98,
+          }),
+          manual: {
+            pools: [
+              {
+                name: 'Manual Take Pool',
+                address: '0x1111111111111111111111111111111111111111',
+                price: { source: PriceOriginSource.FIXED, value: 1 },
+                take: {
+                  minCollateral: 0.1,
+                  hpbPriceFactor: 0.98,
+                },
               },
-            },
-          ],
+            ],
+          },
         },
         signer: {} as any,
         chainId: 1,

@@ -11,21 +11,23 @@ describe('SushiSwap Router Module', () => {
   let swapStub: sinon.SinonStub;
   let mockSigner: any;
   let queueTransactionStub: sinon.SinonStub;
-  
+
   beforeEach(() => {
     // Reset sinon after each test
     sinon.restore();
-    
+
     // Use REAL wallet from test mnemonic (same pattern as working tests)
     const wallet = Wallet.fromMnemonic(USER1_MNEMONIC);
     mockSigner = wallet.connect(getProvider());
-    
+
     // Mock key dependencies
-    queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (signer, txFunc) => {
-      // Just execute the function with nonce 10
-      return await txFunc(10);
-    });
-    
+    queueTransactionStub = sinon
+      .stub(NonceTracker, 'queueTransaction')
+      .callsFake(async (signer, txFunc) => {
+        // Just execute the function with nonce 10
+        return await txFunc(10);
+      });
+
     // Create a spy for swapWithSushiswapRouter
     swapStub = sinon.stub(sushiswapRouterModule, 'swapWithSushiswapRouter');
   });
@@ -39,10 +41,13 @@ describe('SushiSwap Router Module', () => {
     const quoterV2Address = '0xQuoterV2Address';
     const feeTier = 500; // 0.05% - typical SushiSwap fee
     const factoryAddress = '0xSushiFactoryAddress';
-    
+
     // Return success to simulate a successful call
-    swapStub.resolves({ success: true, receipt: { transactionHash: '0xSuccess' } });
-    
+    swapStub.resolves({
+      success: true,
+      receipt: { transactionHash: '0xSuccess' },
+    });
+
     // Call the function
     const result = await sushiswapRouterModule.swapWithSushiswapRouter(
       mockSigner as any,
@@ -55,7 +60,7 @@ describe('SushiSwap Router Module', () => {
       feeTier,
       factoryAddress
     );
-    
+
     // Verify the function was called with correct parameters
     expect(swapStub.calledOnce).to.be.true;
     expect(swapStub.firstCall.args[0]).to.equal(mockSigner);
@@ -67,7 +72,7 @@ describe('SushiSwap Router Module', () => {
     expect(swapStub.firstCall.args[6]).to.equal(quoterV2Address);
     expect(swapStub.firstCall.args[7]).to.equal(feeTier);
     expect(swapStub.firstCall.args[8]).to.equal(factoryAddress);
-    
+
     // Verify the result
     expect(result.success).to.be.true;
     expect(result.receipt.transactionHash).to.equal('0xSuccess');
@@ -76,7 +81,7 @@ describe('SushiSwap Router Module', () => {
   it('should handle errors during SushiSwap swap', async () => {
     // Simulate a failed swap
     swapStub.resolves({ success: false, error: 'SushiSwap swap failed' });
-    
+
     const result = await sushiswapRouterModule.swapWithSushiswapRouter(
       mockSigner as any,
       '0xTokenAddress',
@@ -88,7 +93,7 @@ describe('SushiSwap Router Module', () => {
       500,
       '0xSushiFactoryAddress'
     );
-    
+
     expect(result.success).to.be.false;
     expect(result.error).to.equal('SushiSwap swap failed');
   });
@@ -96,7 +101,7 @@ describe('SushiSwap Router Module', () => {
   it('should handle exceptions during SushiSwap swap', async () => {
     // Simulate an exception
     swapStub.rejects(new Error('SushiSwap transaction reverted'));
-    
+
     try {
       await sushiswapRouterModule.swapWithSushiswapRouter(
         mockSigner as any,
@@ -118,8 +123,11 @@ describe('SushiSwap Router Module', () => {
 
   it('should work without optional factory address', async () => {
     // Test without factoryAddress parameter (optional)
-    swapStub.resolves({ success: true, receipt: { transactionHash: '0xSuccessNoFactory' } });
-    
+    swapStub.resolves({
+      success: true,
+      receipt: { transactionHash: '0xSuccessNoFactory' },
+    });
+
     const result = await sushiswapRouterModule.swapWithSushiswapRouter(
       mockSigner as any,
       '0xTokenAddress',
@@ -131,11 +139,11 @@ describe('SushiSwap Router Module', () => {
       500
       // No factoryAddress - testing optional parameter
     );
-    
+
     // Verify the function was called with correct parameters (including undefined factory)
     expect(swapStub.calledOnce).to.be.true;
     expect(swapStub.firstCall.args[8]).to.be.undefined; // factoryAddress should be undefined
-    
+
     // Verify the result
     expect(result.success).to.be.true;
     expect(result.receipt.transactionHash).to.equal('0xSuccessNoFactory');
@@ -144,11 +152,14 @@ describe('SushiSwap Router Module', () => {
   it('should handle different SushiSwap fee tiers', async () => {
     // Test with different fee tiers commonly used by SushiSwap
     const feeTiers = [500, 3000, 10000]; // 0.05%, 0.3%, 1%
-    
+
     for (const feeTier of feeTiers) {
       swapStub.resetHistory();
-      swapStub.resolves({ success: true, receipt: { transactionHash: `0xSuccess${feeTier}` } });
-      
+      swapStub.resolves({
+        success: true,
+        receipt: { transactionHash: `0xSuccess${feeTier}` },
+      });
+
       const result = await sushiswapRouterModule.swapWithSushiswapRouter(
         mockSigner as any,
         '0xTokenAddress',
@@ -160,7 +171,7 @@ describe('SushiSwap Router Module', () => {
         feeTier,
         '0xSushiFactoryAddress'
       );
-      
+
       expect(swapStub.calledOnce).to.be.true;
       expect(swapStub.firstCall.args[7]).to.equal(feeTier);
       expect(result.success).to.be.true;
@@ -172,29 +183,32 @@ describe('SushiSwap Router Module', () => {
     it('should use NonceTracker.queueTransaction for transactions', async () => {
       // IMPORTANT: Restore the original method before this test
       swapStub.restore();
-          
+
       // Instead of calling swapWithSushiswapRouter, directly test the interaction with NonceTracker
       try {
         // Create a simple mock function that NonceTracker.queueTransaction would call
         const dummyTxFunction = async (nonce: number) => {
           return { success: true };
         };
-        
-        // Call NonceTracker directly with our test function 
+
+        // Call NonceTracker directly with our test function
         await NonceTracker.queueTransaction(mockSigner, dummyTxFunction);
-        
+
         // Now verify it was called
         expect(queueTransactionStub.calledOnce).to.be.true;
       } catch (error) {
-        console.error("SushiSwap test error:", error);
+        console.error('SushiSwap test error:', error);
         throw error;
       }
     });
 
     it('should handle SushiSwap-specific configuration validation', async () => {
       // Test parameter validation scenarios specific to SushiSwap
-      swapStub.resolves({ success: false, error: 'SushiSwap Router address must be provided via configuration' });
-      
+      swapStub.resolves({
+        success: false,
+        error: 'SushiSwap Router address must be provided via configuration',
+      });
+
       const result = await sushiswapRouterModule.swapWithSushiswapRouter(
         mockSigner as any,
         '0xTokenAddress',
@@ -206,9 +220,11 @@ describe('SushiSwap Router Module', () => {
         500,
         '0xSushiFactoryAddress'
       );
-      
+
       expect(result.success).to.be.false;
-      expect(result.error).to.include('SushiSwap Router address must be provided');
+      expect(result.error).to.include(
+        'SushiSwap Router address must be provided'
+      );
     });
 
     it('should handle real signer address and provider correctly', async () => {
@@ -216,11 +232,11 @@ describe('SushiSwap Router Module', () => {
       expect(typeof mockSigner.getAddress).to.equal('function');
       expect(typeof mockSigner.getChainId).to.equal('function');
       expect(mockSigner.provider).to.not.be.null;
-      
+
       // Test async methods work
       const address = await mockSigner.getAddress();
       expect(address).to.match(/^0x[a-fA-F0-9]{40}$/);
-      
+
       const chainId = await mockSigner.getChainId();
       expect(typeof chainId).to.equal('number');
     });
@@ -232,18 +248,21 @@ describe('SushiSwap Router Module', () => {
       const walletPatterns = [
         {
           name: 'Connected Wallet',
-          wallet: Wallet.fromMnemonic(USER1_MNEMONIC).connect(getProvider())
+          wallet: Wallet.fromMnemonic(USER1_MNEMONIC).connect(getProvider()),
         },
         {
           name: 'Unconnected Wallet',
-          wallet: Wallet.fromMnemonic(USER1_MNEMONIC)
-        }
+          wallet: Wallet.fromMnemonic(USER1_MNEMONIC),
+        },
       ];
 
       for (const pattern of walletPatterns) {
         swapStub.resetHistory();
-        swapStub.resolves({ success: true, receipt: { transactionHash: `0x${pattern.name}` } });
-        
+        swapStub.resolves({
+          success: true,
+          receipt: { transactionHash: `0x${pattern.name}` },
+        });
+
         try {
           const result = await sushiswapRouterModule.swapWithSushiswapRouter(
             pattern.wallet as any,
@@ -256,14 +275,15 @@ describe('SushiSwap Router Module', () => {
             500,
             '0xSushiFactoryAddress'
           );
-          
+
           if (pattern.name === 'Connected Wallet') {
             expect(result.success).to.be.true;
           }
         } catch (error) {
           if (pattern.name === 'Unconnected Wallet') {
             // Expected to potentially fail without provider
-            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorMessage =
+              error instanceof Error ? error.message : String(error);
             expect(errorMessage.length).to.be.greaterThan(0);
           } else {
             throw error;
@@ -277,7 +297,7 @@ describe('SushiSwap Router Module', () => {
       expect(mockSigner).to.have.property('address');
       expect(mockSigner).to.have.property('provider');
       expect(mockSigner.provider).to.not.be.null;
-      
+
       // Test async methods exist
       expect(typeof mockSigner.getAddress).to.equal('function');
       expect(typeof mockSigner.getChainId).to.equal('function');

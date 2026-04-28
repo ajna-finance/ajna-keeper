@@ -18,13 +18,26 @@ import * as discoveryHandlers from '../../src/discovery/handlers';
 import * as takeWriteTransportModule from '../../src/take/write-transport';
 import subgraph from '../../src/subgraph';
 import { logger } from '../../src/logging';
-import { createSubgraphReader } from '../../src/read-transports';
+import {
+  createSubgraphReader,
+  getSubgraphTransportConfig,
+} from '../../src/read-transports';
 
 const BASE_CONFIG: KeeperConfig = {
-  ethRpcUrl: 'http://localhost:8545',
-  logLevel: 'debug',
-  subgraphUrl: 'http://example-subgraph',
-  keeperKeystore: '/tmp/keeper.json',
+  network: {
+    rpcUrl: 'http://localhost:8545',
+    subgraph: {
+      url: 'http://example-subgraph',
+    },
+  },
+  keeper: {
+    keystore: '/tmp/keeper.json',
+  },
+  runtime: {
+    logLevel: 'debug',
+    delayBetweenActions: 0,
+    delayBetweenRuns: 1,
+  },
   ajna: {
     erc20PoolFactory: '0x0000000000000000000000000000000000000001',
     erc721PoolFactory: '0x0000000000000000000000000000000000000002',
@@ -32,9 +45,9 @@ const BASE_CONFIG: KeeperConfig = {
     positionManager: '0x0000000000000000000000000000000000000004',
     ajnaToken: '0x0000000000000000000000000000000000000005',
   },
-  delayBetweenActions: 0,
-  delayBetweenRuns: 1,
-  pools: [],
+  manual: {
+    pools: [],
+  },
 };
 
 function createTestDiscoveryRuntime(params: {
@@ -109,17 +122,19 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Take Pool',
-          address: '0x1111111111111111111111111111111111111111',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          take: {
-            minCollateral: 0.1,
-            hpbPriceFactor: 0.98,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0x1111111111111111111111111111111111111111',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
           },
-        },
-      ],
+        ],
+      },
     };
     const pool = {
       name: 'Manual Take Pool',
@@ -128,7 +143,7 @@ describe('Run Loop Discovery Integration', () => {
 
     await createTestDiscoveryRuntime({
       config,
-      poolMap: new Map([[config.pools[0].address, pool as any]]),
+      poolMap: new Map([[config.manual.pools[0].address, pool as any]]),
     }).runTakeCycle();
 
     expect(handleTakesStub.calledOnce).to.be.true;
@@ -149,17 +164,19 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Take Pool',
-          address: '0x1111111111111111111111111111111111111111',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          take: {
-            minCollateral: 0.1,
-            hpbPriceFactor: 0.98,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0x1111111111111111111111111111111111111111',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
           },
-        },
-      ],
+        ],
+      },
     };
     const pool = {
       name: 'Manual Take Pool',
@@ -168,7 +185,7 @@ describe('Run Loop Discovery Integration', () => {
 
     await createTestDiscoveryRuntime({
       config,
-      poolMap: new Map([[config.pools[0].address, pool as any]]),
+      poolMap: new Map([[config.manual.pools[0].address, pool as any]]),
       takeWriteTransport: takeWriteTransport as any,
     }).runTakeCycle();
 
@@ -202,21 +219,25 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      takeWrite: {
-        mode: TakeWriteTransportMode.PRIVATE_RPC,
-        rpcUrl: 'http://127.0.0.1:1',
-      },
-      pools: [
-        {
-          name: 'Manual Take Pool',
-          address: '0x1111111111111111111111111111111111111111',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          take: {
-            minCollateral: 0.1,
-            hpbPriceFactor: 0.98,
-          },
+      writes: {
+        take: {
+          mode: TakeWriteTransportMode.PRIVATE_RPC,
+          rpcUrl: 'http://127.0.0.1:1',
         },
-      ],
+      },
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0x1111111111111111111111111111111111111111',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        ],
+      },
     };
     const pool = {
       name: 'Manual Take Pool',
@@ -225,7 +246,7 @@ describe('Run Loop Discovery Integration', () => {
 
     const runtime = createTestDiscoveryRuntime({
       config,
-      poolMap: new Map([[config.pools[0].address, pool as any]]),
+      poolMap: new Map([[config.manual.pools[0].address, pool as any]]),
       signer: {
         getChainId: sinon.stub().resolves(1),
         connect: sinon.stub(),
@@ -255,17 +276,19 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Settlement Pool',
-          address: '0x2222222222222222222222222222222222222222',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          settlement: {
-            enabled: true,
-            minAuctionAge: 60,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Settlement Pool',
+            address: '0x2222222222222222222222222222222222222222',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            settlement: {
+              enabled: true,
+              minAuctionAge: 60,
+            },
           },
-        },
-      ],
+        ],
+      },
     };
     const pool = {
       name: 'Manual Settlement Pool',
@@ -274,7 +297,7 @@ describe('Run Loop Discovery Integration', () => {
 
     await createTestDiscoveryRuntime({
       config,
-      poolMap: new Map([[config.pools[0].address, pool as any]]),
+      poolMap: new Map([[config.manual.pools[0].address, pool as any]]),
     }).runSettlementCycle();
 
     expect(handleSettlementsStub.calledOnce).to.be.true;
@@ -285,17 +308,19 @@ describe('Run Loop Discovery Integration', () => {
     const handleKicksStub = sinon.stub(kickModule, 'handleKicks').resolves();
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Kick Pool',
-          address: '0x3333333333333333333333333333333333333333',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          kick: {
-            minDebt: 1,
-            priceFactor: 0.9,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Kick Pool',
+            address: '0x3333333333333333333333333333333333333333',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            kick: {
+              minDebt: 1,
+              priceFactor: 0.9,
+            },
           },
-        },
-      ],
+        ],
+      },
     };
     const pool = {
       name: 'Manual Kick Pool',
@@ -303,11 +328,11 @@ describe('Run Loop Discovery Integration', () => {
     };
 
     await processKickCycle({
-      poolMap: new Map([[config.pools[0].address, pool as any]]),
+      poolMap: new Map([[config.manual.pools[0].address, pool as any]]),
       config,
       signer: {} as any,
       chainId: 1,
-      subgraph: createSubgraphReader(config),
+      subgraph: createSubgraphReader(getSubgraphTransportConfig(config)),
     });
 
     expect(handleKicksStub.calledOnce).to.be.true;
@@ -360,24 +385,24 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: true,
         settlement: true,
         dryRunNewPools: true,
         logSkips: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
-        },
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -467,14 +492,14 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
+        defaults: {
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
         },
       },
     };
@@ -539,14 +564,14 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
+        defaults: {
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
         },
       },
     };
@@ -653,17 +678,17 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: {
           enabled: true,
           l1GasPriceFreshnessTtlMs: 1_000,
         },
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
+        defaults: {
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
         },
       },
     };
@@ -775,14 +800,14 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
+        defaults: {
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
         },
       },
     };
@@ -853,15 +878,18 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      readRpcUrls: ['http://read-rpc-a', 'http://read-rpc-b'],
-      autoDiscover: {
+      network: {
+        ...BASE_CONFIG.network,
+        readRpcUrls: ['http://read-rpc-a', 'http://read-rpc-b'],
+      },
+      discovery: {
         enabled: true,
         take: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
+        defaults: {
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
         },
       },
     };
@@ -904,25 +932,27 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Take Pool',
-          address: '0x1111111111111111111111111111111111111111',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0x1111111111111111111111111111111111111111',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        ],
+      },
+      discovery: {
+        enabled: true,
+        take: true,
+        defaults: {
           take: {
             minCollateral: 0.1,
             hpbPriceFactor: 0.98,
           },
-        },
-      ],
-      autoDiscover: {
-        enabled: true,
-        take: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
         },
       },
     };
@@ -946,10 +976,10 @@ describe('Run Loop Discovery Integration', () => {
       } as any,
       poolMap: new Map([
         [
-          config.pools[0].address,
+          config.manual.pools[0].address,
           {
             name: 'Manual Take Pool',
-            poolAddress: config.pools[0].address,
+            poolAddress: config.manual.pools[0].address,
           } as any,
         ],
       ]),
@@ -1011,18 +1041,18 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: false,
         settlement: true,
-      },
-      discoveredDefaults: {
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1085,22 +1115,22 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: true,
         settlement: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
-        },
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1196,18 +1226,18 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: false,
         settlement: true,
-      },
-      discoveredDefaults: {
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1329,18 +1359,18 @@ describe('Run Loop Discovery Integration', () => {
     };
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: false,
         settlement: true,
-      },
-      discoveredDefaults: {
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1394,29 +1424,31 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Settlement Pool',
-          address: '0x2222222222222222222222222222222222222222',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          settlement: {
-            enabled: true,
-            minAuctionAge: 60,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Settlement Pool',
+            address: '0x2222222222222222222222222222222222222222',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            settlement: {
+              enabled: true,
+              minAuctionAge: 60,
+            },
           },
-        },
-      ],
-      autoDiscover: {
+        ],
+      },
+      discovery: {
         enabled: true,
         take: false,
         settlement: true,
-      },
-      discoveredDefaults: {
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1443,10 +1475,10 @@ describe('Run Loop Discovery Integration', () => {
       } as any,
       poolMap: new Map([
         [
-          config.pools[0].address,
+          config.manual.pools[0].address,
           {
             name: 'Manual Settlement Pool',
-            poolAddress: config.pools[0].address,
+            poolAddress: config.manual.pools[0].address,
           } as any,
         ],
       ]),
@@ -1499,29 +1531,31 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Settlement Pool',
-          address: '0x2222222222222222222222222222222222222222',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          settlement: {
-            enabled: true,
-            minAuctionAge: 60,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Settlement Pool',
+            address: '0x2222222222222222222222222222222222222222',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            settlement: {
+              enabled: true,
+              minAuctionAge: 60,
+            },
           },
-        },
-      ],
-      autoDiscover: {
+        ],
+      },
+      discovery: {
         enabled: true,
         take: false,
         settlement: true,
-      },
-      discoveredDefaults: {
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1548,10 +1582,10 @@ describe('Run Loop Discovery Integration', () => {
       } as any,
       poolMap: new Map([
         [
-          config.pools[0].address,
+          config.manual.pools[0].address,
           {
             name: 'Manual Settlement Pool',
-            poolAddress: config.pools[0].address,
+            poolAddress: config.manual.pools[0].address,
           } as any,
         ],
       ]),
@@ -1605,29 +1639,31 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Settlement Pool',
-          address: '0x2222222222222222222222222222222222222222',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          settlement: {
-            enabled: true,
-            minAuctionAge: 60,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Settlement Pool',
+            address: '0x2222222222222222222222222222222222222222',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            settlement: {
+              enabled: true,
+              minAuctionAge: 60,
+            },
           },
-        },
-      ],
-      autoDiscover: {
+        ],
+      },
+      discovery: {
         enabled: true,
         take: false,
         settlement: true,
-      },
-      discoveredDefaults: {
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1654,10 +1690,10 @@ describe('Run Loop Discovery Integration', () => {
       } as any,
       poolMap: new Map([
         [
-          config.pools[0].address,
+          config.manual.pools[0].address,
           {
             name: 'Manual Settlement Pool',
-            poolAddress: config.pools[0].address,
+            poolAddress: config.manual.pools[0].address,
           } as any,
         ],
       ]),
@@ -1698,29 +1734,31 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Settlement Pool',
-          address: '0x2222222222222222222222222222222222222222',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          settlement: {
-            enabled: true,
-            minAuctionAge: 60,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Settlement Pool',
+            address: '0x2222222222222222222222222222222222222222',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            settlement: {
+              enabled: true,
+              minAuctionAge: 60,
+            },
           },
-        },
-      ],
-      autoDiscover: {
+        ],
+      },
+      discovery: {
         enabled: true,
         take: false,
         settlement: true,
-      },
-      discoveredDefaults: {
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1729,10 +1767,10 @@ describe('Run Loop Discovery Integration', () => {
       config,
       poolMap: new Map([
         [
-          config.pools[0].address,
+          config.manual.pools[0].address,
           {
             name: 'Manual Settlement Pool',
-            poolAddress: config.pools[0].address,
+            poolAddress: config.manual.pools[0].address,
           } as any,
         ],
       ]),
@@ -1787,29 +1825,31 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Settlement Pool',
-          address: '0x2222222222222222222222222222222222222222',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          settlement: {
-            enabled: true,
-            minAuctionAge: 60,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Settlement Pool',
+            address: '0x2222222222222222222222222222222222222222',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            settlement: {
+              enabled: true,
+              minAuctionAge: 60,
+            },
           },
-        },
-      ],
-      autoDiscover: {
+        ],
+      },
+      discovery: {
         enabled: true,
         take: false,
         settlement: true,
-      },
-      discoveredDefaults: {
-        settlement: {
-          enabled: true,
-          minAuctionAge: 60,
-          maxBucketDepth: 50,
-          maxIterations: 5,
-          checkBotIncentive: true,
+        defaults: {
+          settlement: {
+            enabled: true,
+            minAuctionAge: 60,
+            maxBucketDepth: 50,
+            maxIterations: 5,
+            checkBotIncentive: true,
+          },
         },
       },
     };
@@ -1836,10 +1876,10 @@ describe('Run Loop Discovery Integration', () => {
       } as any,
       poolMap: new Map([
         [
-          config.pools[0].address,
+          config.manual.pools[0].address,
           {
             name: 'Manual Settlement Pool',
-            poolAddress: config.pools[0].address,
+            poolAddress: config.manual.pools[0].address,
           } as any,
         ],
       ]),
@@ -1865,17 +1905,19 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Take Pool',
-          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
-          take: {
-            minCollateral: 0.1,
-            hpbPriceFactor: 0.98,
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
           },
-        },
-      ],
+        ],
+      },
     };
     const pool = {
       name: 'Manual Take Pool',
@@ -1884,7 +1926,7 @@ describe('Run Loop Discovery Integration', () => {
 
     await createTestDiscoveryRuntime({
       config,
-      poolMap: new Map([[config.pools[0].address, pool as any]]),
+      poolMap: new Map([[config.manual.pools[0].address, pool as any]]),
     }).runTakeCycle();
 
     expect(handleTakesStub.calledOnce).to.be.true;
@@ -1914,25 +1956,27 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Take Pool',
-          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        ],
+      },
+      discovery: {
+        enabled: true,
+        take: true,
+        defaults: {
           take: {
             minCollateral: 0.1,
             hpbPriceFactor: 0.98,
           },
-        },
-      ],
-      autoDiscover: {
-        enabled: true,
-        take: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
         },
       },
     };
@@ -1941,10 +1985,10 @@ describe('Run Loop Discovery Integration', () => {
       config,
       poolMap: new Map([
         [
-          config.pools[0].address,
+          config.manual.pools[0].address,
           {
             name: 'Manual Take Pool',
-            poolAddress: config.pools[0].address,
+            poolAddress: config.manual.pools[0].address,
           } as any,
         ],
       ]),
@@ -1973,25 +2017,27 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      pools: [
-        {
-          name: 'Manual Take Pool',
-          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          price: { source: PriceOriginSource.FIXED, value: 1 },
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        ],
+      },
+      discovery: {
+        enabled: true,
+        take: true,
+        defaults: {
           take: {
             minCollateral: 0.1,
             hpbPriceFactor: 0.98,
           },
-        },
-      ],
-      autoDiscover: {
-        enabled: true,
-        take: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
         },
       },
     };
@@ -2000,10 +2046,10 @@ describe('Run Loop Discovery Integration', () => {
       config,
       poolMap: new Map([
         [
-          config.pools[0].address,
+          config.manual.pools[0].address,
           {
             name: 'Manual Take Pool',
-            poolAddress: config.pools[0].address,
+            poolAddress: config.manual.pools[0].address,
           } as any,
         ],
       ]),
@@ -2040,14 +2086,14 @@ describe('Run Loop Discovery Integration', () => {
 
     const config: KeeperConfig = {
       ...BASE_CONFIG,
-      autoDiscover: {
+      discovery: {
         enabled: true,
         take: true,
-      },
-      discoveredDefaults: {
-        take: {
-          minCollateral: 0.1,
-          hpbPriceFactor: 0.98,
+        defaults: {
+          take: {
+            minCollateral: 0.1,
+            hpbPriceFactor: 0.98,
+          },
         },
       },
     };
