@@ -92,7 +92,7 @@ describe('isLpCollectionEnabled', () => {
         url: 'https://subgraph.invalid',
       },
     },
-    keeper: {
+    signer: {
       keystore: '/tmp/keeper.json',
     },
     runtime: {

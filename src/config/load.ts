@@ -40,8 +40,8 @@ export function assertIsValidConfig(
   expectProperty(config, 'network');
   expectProperty(config.network, 'rpcUrl', 'network');
   expectProperty(config.network?.subgraph, 'url', 'network.subgraph');
-  expectProperty(config, 'keeper');
-  expectProperty(config.keeper, 'keystore', 'keeper');
+  expectProperty(config, 'signer');
+  expectProperty(config.signer, 'keystore', 'signer');
   expectProperty(config, 'runtime');
   expectProperty(config.runtime, 'logLevel', 'runtime');
   expectProperty(config.runtime, 'delayBetweenActions', 'runtime');

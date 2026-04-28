@@ -16,7 +16,7 @@ describe('route deployment preflight', () => {
         url: 'http://example-subgraph',
       },
     },
-    keeper: {
+    signer: {
       keystore: '/tmp/keeper.json',
     },
     runtime: {

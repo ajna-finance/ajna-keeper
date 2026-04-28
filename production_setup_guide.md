@@ -787,7 +787,7 @@ const config: KeeperConfig = {
       usdc: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
     },
   },
-  keeper: {
+  signer: {
     keystore: 'PUT_YOUR_FULL_PATH_HERE/keystore.json',
   },
   runtime: {
@@ -923,7 +923,7 @@ const config: KeeperConfig = {
       usdc_t: '0x37eBf9aC1C05c023D329095B0b17A812ae9C66F6',
     },
   },
-  keeper: {
+  signer: {
     keystore: 'PUT_YOUR_FULL_PATH_HERE/keystore.json',
   },
   runtime: {

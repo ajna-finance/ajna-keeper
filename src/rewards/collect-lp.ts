@@ -81,6 +81,10 @@ const QUARANTINE_ALARM_THRESHOLD = 5;
 // that actually redeems anything.
 const MAX_CONSECUTIVE_BELOW_THRESHOLD_ATTEMPTS = 20;
 
+function isStaleLpRedemptionError(message: string): boolean {
+  return message.includes('InvalidAmount');
+}
+
 /**
  * Kick off `signer.getAddress()` at construction time and attach a no-op
  * logging catch so a rejection doesn't become an unhandled rejection at
@@ -461,6 +465,14 @@ export class LpRedeemer {
         if (errorMessage.includes('AuctionNotCleared')) {
           throw error;
         }
+        if (isStaleLpRedemptionError(errorMessage)) {
+          logger.warn(
+            `Dropping stale LP reward entry after redemption amount was rejected. pool: ${this.pool.name}, bucketIndex: ${bucketIndex}`
+          );
+          this.lpMap.delete(bucketIndex);
+          this.belowThresholdAttempts.delete(bucketIndex);
+          continue;
+        }
         logger.error(
           `Failed to collect LP reward from bucket; continuing with remaining buckets. pool: ${this.pool.name}, bucketIndex: ${bucketIndex}`,
           error
@@ -486,12 +498,22 @@ export class LpRedeemer {
     const signerAddress = await this.signerAddressPromise;
     const bucket = this.pool.getBucketByIndex(bucketIndex);
     let { deposit, collateral } = await bucket.getStatus();
-    const { lpBalance, depositRedeemable, collateralRedeemable } =
+    let { lpBalance, depositRedeemable, collateralRedeemable } =
       await bucket.getPosition(signerAddress);
     if (lpBalance.lt(rewardLp)) rewardLp = lpBalance;
     // Tracked reward must be stale (already redeemed or never minted) — drop
     // the entry so subsequent cycles don't re-query this bucket.
     if (rewardLp.eq(constants.Zero)) {
+      this.lpMap.delete(bucketIndex);
+      return constants.Zero;
+    }
+    // A replayed historical reward can leave residual LP accounting with no
+    // currently redeemable assets. Drop it now instead of retrying a bucket
+    // that cannot produce quote or collateral for this signer.
+    if (
+      depositRedeemable.eq(constants.Zero) &&
+      collateralRedeemable.eq(constants.Zero)
+    ) {
       this.lpMap.delete(bucketIndex);
       return constants.Zero;
     }
@@ -509,13 +531,18 @@ export class LpRedeemer {
           )
         );
         ({ deposit, collateral } = await bucket.getStatus());
+        ({ depositRedeemable, collateralRedeemable } =
+          await bucket.getPosition(signerAddress));
       }
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
         return reedemed;
       }
       const remainingQuote = await bucket.lpToQuoteTokens(remainingLp);
-      const quoteToWithdraw = min(remainingQuote, deposit);
+      const quoteToWithdraw = min(
+        min(remainingQuote, deposit),
+        depositRedeemable
+      );
       if (quoteToWithdraw.gt(decimaledToWei(minAmountQuote))) {
         reedemed = reedemed.add(
           await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)
@@ -528,13 +555,18 @@ export class LpRedeemer {
           await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)
         );
         ({ deposit, collateral } = await bucket.getStatus());
+        ({ depositRedeemable, collateralRedeemable } =
+          await bucket.getPosition(signerAddress));
       }
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
         return reedemed;
       }
       const remainingCollateral = await bucket.lpToCollateral(remainingLp);
-      const collateralToWithdraw = min(remainingCollateral, collateral);
+      const collateralToWithdraw = min(
+        min(remainingCollateral, collateral),
+        collateralRedeemable
+      );
       if (collateralToWithdraw.gt(decimaledToWei(minAmountCollateral))) {
         reedemed = reedemed.add(
           await this.redeemCollateral(
@@ -593,6 +625,9 @@ export class LpRedeemer {
         logger.debug(
           `Re-throwing AuctionNotCleared error from ${this.pool.name} to trigger reactive settlement`
         );
+        throw error;
+      }
+      if (isStaleLpRedemptionError(errorMessage)) {
         throw error;
       }
       logger.error(
@@ -669,6 +704,9 @@ export class LpRedeemer {
         logger.debug(
           `Re-throwing AuctionNotCleared error from ${this.pool.name} to trigger reactive settlement`
         );
+        throw error;
+      }
+      if (isStaleLpRedemptionError(errorMessage)) {
         throw error;
       }
       logger.error(

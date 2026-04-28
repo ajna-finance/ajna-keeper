@@ -20,7 +20,7 @@ const BASE_CONFIG: KeeperConfig = {
       url: 'http://example-subgraph',
     },
   },
-  keeper: {
+  signer: {
     keystore: '/tmp/keeper.json',
   },
   runtime: {

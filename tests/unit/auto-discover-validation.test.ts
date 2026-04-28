@@ -19,7 +19,7 @@ describe('auto-discover validation', () => {
         url: 'http://example-subgraph',
       },
     },
-    keeper: {
+    signer: {
       keystore: '/tmp/keeper.json',
     },
     runtime: {

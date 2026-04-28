@@ -28,7 +28,7 @@ function createMockKeeperConfig(
         url: 'mock://subgraph',
       },
     },
-    keeper: {
+    signer: {
       keystore: '/path/to/mock-keystore.json',
     },
     runtime: {

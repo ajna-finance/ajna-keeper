@@ -457,7 +457,7 @@ export interface NetworkConfig {
   tokenAddresses?: { [tokenSymbol: string]: string };
 }
 
-export interface KeeperIdentityConfig {
+export interface SignerConfig {
   keystore: string;
 }
 
@@ -526,7 +526,7 @@ export interface RewardsConfig {
 
 export interface KeeperConfig {
   network: NetworkConfig;
-  keeper: KeeperIdentityConfig;
+  signer: SignerConfig;
   runtime: RuntimeConfig;
   writes?: WritesConfig;
   ajna: AjnaConfigParams;

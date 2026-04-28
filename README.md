@@ -175,7 +175,7 @@ Keeper uses ethers [Encrypted JSON Wallet](https://docs.ethers.org/v5/api/signer
 
 The easiest way to create an encrypted JSON wallet is to use the create-keystore script provided in keeper:
 Run the script with `yarn create-keystore`. Then follow the onscreen prompts.
-Ensure that the generated wallet is saved in the directory specified by the `keeper.keystore` property in `config.ts`.
+Ensure that the generated wallet is saved in the directory specified by the `signer.keystore` property in `config.ts`.
 
 #### Supplying the keystore password
 

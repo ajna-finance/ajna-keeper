@@ -19,7 +19,7 @@ const BASE_CONFIG: KeeperConfig = {
       url: 'https://example-subgraph.invalid',
     },
   },
-  keeper: {
+  signer: {
     keystore: '/tmp/keeper.json',
   },
   runtime: {
@@ -423,7 +423,7 @@ describe('config-load', () => {
       url: 'https://example-subgraph.invalid',
     },
   },
-  keeper: {
+  signer: {
     keystore: '/tmp/keeper.json',
   },
   runtime: {
@@ -473,7 +473,7 @@ describe('config-load', () => {
       url: 'https://absolute-subgraph.invalid',
     },
   },
-  keeper: {
+  signer: {
     keystore: '/tmp/keeper.json',
   },
   runtime: {

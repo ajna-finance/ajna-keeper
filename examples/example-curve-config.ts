@@ -27,7 +27,7 @@ const config: KeeperConfig = {
       wbtc: '0x[YOUR_WBTC_ADDRESS]', // Replace with your WBTC
     },
   },
-  keeper: {
+  signer: {
     keystore: '/path/to/your/keystore.json',
   },
   runtime: {

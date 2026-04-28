@@ -665,7 +665,7 @@ async function main() {
 
     // Step 3: Load wallet from keystore
     console.log('\n🔐 Loading wallet from keystore...');
-    const keystoreJson = readFileSync(config.keeper.keystore, 'utf8');
+    const keystoreJson = readFileSync(config.signer.keystore, 'utf8');
     const pswd = await getKeystorePassword();
 
     const wallet = await ethers.Wallet.fromEncryptedJson(keystoreJson, pswd);

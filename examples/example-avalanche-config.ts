@@ -28,7 +28,7 @@ const config: KeeperConfig = {
       usd_t2: '0xAD47a9b2Bc081D074EC25A0953DDC11E650b1784', // Your USD_T2 token
     },
   },
-  keeper: {
+  signer: {
     keystore: '/path/to/your/keystore.json',
   },
   runtime: {

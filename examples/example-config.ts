@@ -26,7 +26,7 @@ const config: KeeperConfig = {
       weth: '0x4200000000000000000000000000000000000006',
     },
   },
-  keeper: {
+  signer: {
     keystore: '/path/to/your/keystore.json',
   },
   runtime: {

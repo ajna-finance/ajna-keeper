@@ -27,7 +27,7 @@ const config: KeeperConfig = {
       usd_t4: '0x00b2fee99fe3fc9aab91d1b249c99c9ffbb1ccde', // Your USD_T4 token
     },
   },
-  keeper: {
+  signer: {
     keystore: '/path/to/your/keystore.json',
   },
   runtime: {

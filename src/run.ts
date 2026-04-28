@@ -243,7 +243,7 @@ export async function initializeTakeLoop(params: {
 
 export async function startKeeperFromConfig(config: KeeperConfig) {
   const { provider, signer } = await getProviderAndSigner(
-    config.keeper.keystore,
+    config.signer.keystore,
     config.network.rpcUrl
   );
   const network = await provider.getNetwork();

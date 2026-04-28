@@ -46,7 +46,7 @@ describe('RewardActionTracker', () => {
           url: '',
         },
       },
-      keeper: {
+      signer: {
         keystore: '',
       },
       runtime: {

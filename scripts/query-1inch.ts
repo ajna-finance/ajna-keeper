@@ -55,7 +55,7 @@ async function main() {
   // read config file and unlock keystore
   const config = await readConfigFile(argv.config);
   const { provider, signer } = await getProviderAndSigner(
-    config.keeper.keystore,
+    config.signer.keystore,
     config.network.rpcUrl
   );
   const chainId = await signer.getChainId();
