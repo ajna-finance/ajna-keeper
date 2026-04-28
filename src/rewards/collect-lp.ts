@@ -81,8 +81,17 @@ const QUARANTINE_ALARM_THRESHOLD = 5;
 // that actually redeems anything.
 const MAX_CONSECUTIVE_BELOW_THRESHOLD_ATTEMPTS = 20;
 
+const STALE_LP_REDEMPTION_ERROR_MARKERS = [
+  'InvalidAmount',
+  'BucketBankruptcy',
+  'NoClaim',
+  'LPAmountTooLow',
+];
+
 function isStaleLpRedemptionError(message: string): boolean {
-  return message.includes('InvalidAmount');
+  return STALE_LP_REDEMPTION_ERROR_MARKERS.some((marker) =>
+    message.includes(marker)
+  );
 }
 
 /**
@@ -450,8 +459,7 @@ export class LpRedeemer {
             logger.warn(
               `Bucket ${bucketIndex} in pool ${this.pool.name} stayed below minAmount thresholds for ${attempts} consecutive cycles; dropping lpMap entry. A future BucketTake will re-credit if the bucket later clears the threshold.`
             );
-            this.lpMap.delete(bucketIndex);
-            this.belowThresholdAttempts.delete(bucketIndex);
+            this.dropRewardEntry(bucketIndex);
           } else {
             this.belowThresholdAttempts.set(bucketIndex, attempts);
           }
@@ -469,8 +477,7 @@ export class LpRedeemer {
           logger.warn(
             `Dropping stale LP reward entry after redemption amount was rejected. pool: ${this.pool.name}, bucketIndex: ${bucketIndex}`
           );
-          this.lpMap.delete(bucketIndex);
-          this.belowThresholdAttempts.delete(bucketIndex);
+          this.dropRewardEntry(bucketIndex);
           continue;
         }
         logger.error(
@@ -497,14 +504,18 @@ export class LpRedeemer {
     } = this.settings;
     const signerAddress = await this.signerAddressPromise;
     const bucket = this.pool.getBucketByIndex(bucketIndex);
-    let { deposit, collateral } = await bucket.getStatus();
-    let { lpBalance, depositRedeemable, collateralRedeemable } =
-      await bucket.getPosition(signerAddress);
+    let {
+      deposit,
+      collateral,
+      lpBalance,
+      depositRedeemable,
+      collateralRedeemable,
+    } = await this.readBucketState(bucket, signerAddress);
     if (lpBalance.lt(rewardLp)) rewardLp = lpBalance;
     // Tracked reward must be stale (already redeemed or never minted) — drop
     // the entry so subsequent cycles don't re-query this bucket.
     if (rewardLp.eq(constants.Zero)) {
-      this.lpMap.delete(bucketIndex);
+      this.dropRewardEntry(bucketIndex);
       return constants.Zero;
     }
     // A replayed historical reward can leave residual LP accounting with no
@@ -514,7 +525,7 @@ export class LpRedeemer {
       depositRedeemable.eq(constants.Zero) &&
       collateralRedeemable.eq(constants.Zero)
     ) {
-      this.lpMap.delete(bucketIndex);
+      this.dropRewardEntry(bucketIndex);
       return constants.Zero;
     }
     let reedemed = constants.Zero;
@@ -530,19 +541,15 @@ export class LpRedeemer {
             rewardActionCollateral
           )
         );
-        ({ deposit, collateral } = await bucket.getStatus());
-        ({ depositRedeemable, collateralRedeemable } =
-          await bucket.getPosition(signerAddress));
+        ({ deposit, collateral, depositRedeemable, collateralRedeemable } =
+          await this.readBucketState(bucket, signerAddress));
       }
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
         return reedemed;
       }
       const remainingQuote = await bucket.lpToQuoteTokens(remainingLp);
-      const quoteToWithdraw = min(
-        min(remainingQuote, deposit),
-        depositRedeemable
-      );
+      const quoteToWithdraw = min(remainingQuote, depositRedeemable);
       if (quoteToWithdraw.gt(decimaledToWei(minAmountQuote))) {
         reedemed = reedemed.add(
           await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)
@@ -554,9 +561,8 @@ export class LpRedeemer {
         reedemed = reedemed.add(
           await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)
         );
-        ({ deposit, collateral } = await bucket.getStatus());
-        ({ depositRedeemable, collateralRedeemable } =
-          await bucket.getPosition(signerAddress));
+        ({ deposit, collateral, depositRedeemable, collateralRedeemable } =
+          await this.readBucketState(bucket, signerAddress));
       }
       const remainingLp = rewardLp.sub(reedemed);
       if (remainingLp.lte(constants.Zero)) {
@@ -564,7 +570,7 @@ export class LpRedeemer {
       }
       const remainingCollateral = await bucket.lpToCollateral(remainingLp);
       const collateralToWithdraw = min(
-        min(remainingCollateral, collateral),
+        remainingCollateral,
         collateralRedeemable
       );
       if (collateralToWithdraw.gt(decimaledToWei(minAmountCollateral))) {
@@ -580,6 +586,14 @@ export class LpRedeemer {
     }
 
     return reedemed;
+  }
+
+  private async readBucketState(bucket: FungibleBucket, signerAddress: string) {
+    const [status, position] = await Promise.all([
+      bucket.getStatus(),
+      bucket.getPosition(signerAddress),
+    ]);
+    return { ...status, ...position };
   }
 
   private async redeemQuote(
@@ -751,10 +765,15 @@ export class LpRedeemer {
     const prevReward = this.lpMap.get(bucketIndex) ?? constants.Zero;
     const newReward = prevReward.sub(lp);
     if (newReward.lte(constants.Zero)) {
-      this.lpMap.delete(bucketIndex);
+      this.dropRewardEntry(bucketIndex);
     } else {
       this.lpMap.set(bucketIndex, newReward);
     }
+  }
+
+  private dropRewardEntry(bucketIndex: number): void {
+    this.lpMap.delete(bucketIndex);
+    this.belowThresholdAttempts.delete(bucketIndex);
   }
 }
 

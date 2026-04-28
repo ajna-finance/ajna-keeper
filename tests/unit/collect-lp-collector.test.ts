@@ -4,6 +4,7 @@ import { BigNumber, constants, utils } from 'ethers';
 import { LP_REWARD_LOOKBACK_SECONDS_DEFAULT } from '../../src/rewards/collect-lp';
 import { makeSinglePoolLpCollector } from '../helpers/rewards';
 import { TokenToCollect } from '../../src/config';
+import * as transactions from '../../src/transactions';
 
 const FAKE_POOL_ADDRESS = '0xpool';
 
@@ -110,6 +111,42 @@ describe('LpCollector stale-entry prune', () => {
     await collector.collectLpRewards();
 
     expect(collector.lpMap.has(2000)).to.be.false;
+  });
+
+  it('deletes stale bucket entry when Ajna rejects LP redemption with stale-claim errors', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = utils.parseUnits('1', 18);
+    const staleErrorMarkers = [
+      'InvalidAmount',
+      'BucketBankruptcy',
+      'NoClaim',
+      'LPAmountTooLow',
+    ];
+    const removeQuoteStub = sinon.stub(transactions, 'bucketRemoveQuoteToken');
+    staleErrorMarkers.forEach((marker, index) => {
+      removeQuoteStub
+        .onCall(index)
+        .rejects(new Error(`execution reverted: ${marker}`));
+    });
+
+    for (let i = 0; i < staleErrorMarkers.length; i++) {
+      const bucketIndex = 2000 + i;
+      const bucket = makeFakeBucket({
+        lpBalance: rewardLp,
+        deposit: rewardLp,
+        depositRedeemable: rewardLp,
+      });
+      const collector = makeCollector({
+        signerAddress: signer,
+        getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+        bucket,
+      });
+
+      collector.lpMap.set(bucketIndex, rewardLp);
+      await collector.collectLpRewards();
+
+      expect(collector.lpMap.has(bucketIndex)).to.be.false;
+    }
   });
 });
 

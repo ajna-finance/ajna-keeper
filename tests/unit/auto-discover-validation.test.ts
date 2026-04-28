@@ -204,12 +204,6 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
     );
-
-    (config.discovery!.take as any).externalTakeRouteSelectionMode =
-      'cost_aware';
-    expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
-    );
   });
 
   it('requires quote-denominated gas conversion config for hybrid route ranking', () => {

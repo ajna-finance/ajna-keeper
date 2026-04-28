@@ -223,17 +223,17 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
     config.dex?.curve?.executionDelayMs,
     0,
     VALIDATION_BOUNDS.maxCurveExecutionDelayMs,
-    `CurveRouterOverrides: executionDelayMs must be an integer between 0 and ${VALIDATION_BOUNDS.maxCurveExecutionDelayMs}`
+    `KeeperConfig.dex.curve.executionDelayMs must be an integer between 0 and ${VALIDATION_BOUNDS.maxCurveExecutionDelayMs}`
   );
   validateCandidateFeeTiers(
     uniswapConfig?.candidateFeeTiers,
     uniswapConfig?.defaultFeeTier,
-    'UniversalRouterOverrides'
+    'KeeperConfig.dex.uniswapV3.universalRouter'
   );
   validateCandidateFeeTiers(
     sushiConfig?.candidateFeeTiers,
     sushiConfig?.defaultFeeTier,
-    'SushiswapRouterOverrides'
+    'KeeperConfig.dex.sushiswap'
   );
 }
 
@@ -1017,7 +1017,7 @@ export function validateAutoDiscoverConfig(
       !effectiveFactorySources.has(LiquiditySource.UNISWAPV3)
     ) {
       logger.warn(
-        'UniversalRouterOverrides: candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
+        'KeeperConfig.dex.uniswapV3.universalRouter.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
       );
     }
     if (
@@ -1025,7 +1025,7 @@ export function validateAutoDiscoverConfig(
       !effectiveFactorySources.has(LiquiditySource.SUSHISWAP)
     ) {
       logger.warn(
-        'SushiswapRouterOverrides: candidateFeeTiers configured but SUSHISWAP is not an enabled autodiscover factory route source'
+        'KeeperConfig.dex.sushiswap.candidateFeeTiers configured but SUSHISWAP is not an enabled autodiscover factory route source'
       );
     }
 
