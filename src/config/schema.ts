@@ -284,6 +284,12 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    */
   maxConcurrentCandidateEvaluations?: number;
   /**
+   * Maximum successful take/arbTake executions for one discovered pool in a
+   * single take cycle. Defaults to 1 so same-pool cascades are retried on the
+   * next cycle unless explicitly opted into deeper per-cycle execution.
+   */
+  maxExecutionsPerPoolPerRun?: number;
+  /**
    * Global cap on concurrent route/API/RPC probes used only when candidate
    * evaluation concurrency is greater than 1.
    */

@@ -589,6 +589,15 @@ describe('auto-discover validation', () => {
 
     config.discovery!.take = {
       enabled: true,
+      maxExecutionsPerPoolPerRun: 11,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxExecutionsPerPoolPerRun must be an integer between 1 and 10'
+    );
+
+    config.discovery!.take = {
+      enabled: true,
       maxInFlightRouteProbes: 17,
     };
 

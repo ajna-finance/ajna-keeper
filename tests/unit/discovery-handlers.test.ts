@@ -205,6 +205,95 @@ describe('Discovery Handlers', () => {
     );
   });
 
+  it('can execute multiple discovered candidates in one same-pool cascade when configured', async () => {
+    const takeLiquidationStub = sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        quoteAmount: 10,
+        collateralAmount: 1,
+        marketPrice: 10,
+        takeablePrice: 12,
+      });
+    const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
+    const statusCalls: string[] = [];
+    const pool = {
+      name: 'Discovered Same Pool Cascade',
+      poolAddress: '0x1111111111111111111111111111111111111113',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().callsFake((borrower: string) => ({
+        getStatus: sinon.stub().callsFake(async () => {
+          statusCalls.push(borrower);
+          return {
+            collateral: ethers.utils.parseEther('1'),
+            price: ethers.utils.parseEther('1'),
+          };
+        }),
+      })),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: borrowers.map((borrower) => ({
+          poolAddress: pool.poolAddress,
+          borrower,
+          kickTime: Date.now(),
+          debtRemaining: '1',
+          collateralRemaining: '1',
+          neutralPrice: '1',
+          debt: '1',
+          collateral: '1',
+          heuristicScore: 1,
+        })),
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxConcurrentCandidateEvaluations: 2,
+            maxExecutionsPerPoolPerRun: 2,
+          },
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(),
+    });
+
+    expect(takeLiquidationStub.callCount).to.equal(2);
+    expect(
+      takeLiquidationStub
+        .getCalls()
+        .map((call) => call.args[0].liquidation.borrower)
+    ).to.deep.equal(borrowers.slice(0, 2));
+    expect(statusCalls).to.deep.equal([
+      borrowers[0],
+      borrowers[0],
+      borrowers[1],
+      borrowers[1],
+    ]);
+  });
+
   it('removes hot-cache candidates when the approved quote is stale after auction price increases', async () => {
     const takeLiquidationStub = sinon
       .stub(oneInchExecutionModule, 'takeLiquidation')

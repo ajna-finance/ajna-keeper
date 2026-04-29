@@ -59,6 +59,7 @@ const VALIDATION_BOUNDS = {
   maxOneInchQuoteTimeoutMs: 10_000,
   maxExternalTakeProbeTimeoutMs: 10_000,
   maxConcurrentCandidateEvaluations: 4,
+  maxExecutionsPerPoolPerRun: 10,
   maxInFlightRouteProbes: 16,
   maxOneInchAggregationExecutorAllowlistEntries: 64,
 };
@@ -726,6 +727,12 @@ export function validateAutoDiscoverConfig(
       1,
       VALIDATION_BOUNDS.maxConcurrentCandidateEvaluations,
       `AutoDiscoverConfig.take: maxConcurrentCandidateEvaluations must be an integer between 1 and ${VALIDATION_BOUNDS.maxConcurrentCandidateEvaluations}`
+    );
+    requireOptionalIntegerRange(
+      takePolicy.maxExecutionsPerPoolPerRun,
+      1,
+      VALIDATION_BOUNDS.maxExecutionsPerPoolPerRun,
+      `AutoDiscoverConfig.take: maxExecutionsPerPoolPerRun must be an integer between 1 and ${VALIDATION_BOUNDS.maxExecutionsPerPoolPerRun}`
     );
     requireOptionalIntegerRange(
       takePolicy.maxInFlightRouteProbes,

@@ -387,6 +387,15 @@ function getMaxConcurrentCandidateEvaluations(
     : 1;
 }
 
+function getMaxExecutionsPerPoolPerRun(
+  takePolicy: AutoDiscoverTakePolicyRuntime
+): number {
+  const configured = takePolicy?.maxExecutionsPerPoolPerRun;
+  return configured !== undefined && Number.isFinite(configured)
+    ? Math.max(1, Math.floor(configured))
+    : 1;
+}
+
 function getMaxInFlightRouteProbes(
   takePolicy: AutoDiscoverTakePolicyRuntime
 ): number {
@@ -2368,8 +2377,12 @@ export async function handleDiscoveredTakeTarget(
     rpcCache.stats.factory ??= {};
   }
   const takePolicy = getAutoDiscoverTakePolicy(params.config.autoDiscover);
+  const maxExecutionsPerPoolPerRun =
+    getMaxExecutionsPerPoolPerRun(takePolicy);
   const maxConcurrentCandidateEvaluations =
-    getMaxConcurrentCandidateEvaluations(takePolicy);
+    maxExecutionsPerPoolPerRun > 1
+      ? 1
+      : getMaxConcurrentCandidateEvaluations(takePolicy);
   const routeProbeLimiter = createDiscoveryRouteProbeLimiter({
     takePolicy,
     rpcCache,
@@ -2576,7 +2589,9 @@ export async function handleDiscoveredTakeTarget(
           signer: params.signer,
           poolConfig: params.target,
           candidates,
-          stopAfterExecution: true,
+          stopAfterExecution: maxExecutionsPerPoolPerRun <= 1,
+          maxExecutions: maxExecutionsPerPoolPerRun,
+          stopAfterAttemptedSubmissionFailure: true,
           maxConcurrentCandidateEvaluations,
           resetExternalTakeAttemptSubmission: () => {
             externalTakeAttemptedSubmission = false;

@@ -167,6 +167,8 @@ interface ProcessTakeCandidatesParams<
   candidates: TakeBorrowerCandidate[];
   candidateStatuses?: Map<string, TakeAuctionStatus>;
   stopAfterExecution?: boolean;
+  maxExecutions?: number;
+  stopAfterAttemptedSubmissionFailure?: boolean;
   maxConcurrentCandidateEvaluations?: number;
   resetExternalTakeAttemptSubmission?: () => void;
   didExternalTakeAttemptSubmission?: () => boolean;
@@ -666,6 +668,8 @@ export async function processTakeCandidates<
   takeAuctionStatusReader,
   candidateStatuses,
   stopAfterExecution,
+  maxExecutions,
+  stopAfterAttemptedSubmissionFailure,
   maxConcurrentCandidateEvaluations,
   resetExternalTakeAttemptSubmission,
   didExternalTakeAttemptSubmission,
@@ -694,6 +698,11 @@ export async function processTakeCandidates<
     requestedCandidateEvaluationConcurrency >= 1
       ? Math.floor(requestedCandidateEvaluationConcurrency)
       : 1;
+  const maxSuccessfulExecutions =
+    maxExecutions !== undefined && Number.isFinite(maxExecutions)
+      ? Math.max(1, Math.floor(maxExecutions))
+      : undefined;
+  let successfulExecutionCount = 0;
   let preloadedStatusesValid = true;
   const readCandidateWindowStatuses = async (
     candidateWindow: TakeBorrowerCandidate[]
@@ -835,6 +844,15 @@ export async function processTakeCandidates<
           onExecuted,
           takeWriteTransport,
         });
+        if (executionResult.executedTake || executionResult.executedArbTake) {
+          successfulExecutionCount += 1;
+          if (
+            maxSuccessfulExecutions !== undefined &&
+            successfulExecutionCount >= maxSuccessfulExecutions
+          ) {
+            return;
+          }
+        }
         if (executionResult.poolStateMayHaveChanged) {
           preloadedStatusesValid = false;
           if (stopAfterExecution) {
@@ -851,7 +869,7 @@ export async function processTakeCandidates<
         });
         if (!dryRun && didExternalTakeAttemptSubmission?.()) {
           preloadedStatusesValid = false;
-          if (stopAfterExecution) {
+          if (stopAfterExecution || stopAfterAttemptedSubmissionFailure) {
             return;
           }
           break;

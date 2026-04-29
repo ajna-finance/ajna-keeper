@@ -848,6 +848,128 @@ describe('shared arbTake helpers', () => {
     expect(statusReader.read.firstCall.args[0].borrower).to.equal(borrowers[2]);
   });
 
+  it('continues same-pool execution until maxExecutions is reached', async () => {
+    const borrowers = [
+      '0xBorrowerA',
+      '0xBorrowerB',
+      '0xBorrowerC',
+    ];
+    const statusReader = {
+      read: sinon.stub().callsFake(async ({ borrower }) => ({
+        borrower,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+      })),
+    };
+    const executionOrder: string[] = [];
+
+    await processTakeCandidates({
+      pool: {
+        name: 'Same Pool Cascade',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+      } as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Same Pool Cascade',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: borrowers.map((borrower) => ({ borrower })),
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(100),
+          takeablePrice: 1,
+        }),
+        executeExternalTake: sinon.stub().callsFake(async ({ liquidation }) => {
+          executionOrder.push(liquidation.borrower);
+          return true;
+        }),
+      } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      takeAuctionStatusReader: statusReader as any,
+      maxConcurrentCandidateEvaluations: 1,
+      stopAfterExecution: false,
+      maxExecutions: 2,
+    });
+
+    expect(executionOrder).to.deep.equal(borrowers.slice(0, 2));
+    expect(
+      statusReader.read.getCalls().map((call) => call.args[0].borrower)
+    ).to.deep.equal(borrowers.slice(0, 2));
+  });
+
+  it('stops after an ambiguous attempted submission even when multi-execution is enabled', async () => {
+    const borrowers = ['0xBorrowerA', '0xBorrowerB'];
+    let attemptedSubmission = false;
+    const statusReader = {
+      read: sinon.stub().callsFake(async ({ borrower }) => ({
+        borrower,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+      })),
+    };
+    const executeExternalTake = sinon.stub().callsFake(async () => {
+      attemptedSubmission = true;
+      throw new Error('post-submit receipt failed');
+    });
+    const onSkip = sinon.stub();
+
+    await processTakeCandidates({
+      pool: {
+        name: 'Ambiguous Multi Pool',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+      } as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Ambiguous Multi Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: borrowers.map((borrower) => ({ borrower })),
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(100),
+          takeablePrice: 1,
+        }),
+        executeExternalTake,
+      } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      takeAuctionStatusReader: statusReader as any,
+      maxConcurrentCandidateEvaluations: 1,
+      stopAfterExecution: false,
+      stopAfterAttemptedSubmissionFailure: true,
+      maxExecutions: 2,
+      resetExternalTakeAttemptSubmission: () => {
+        attemptedSubmission = false;
+      },
+      didExternalTakeAttemptSubmission: () => attemptedSubmission,
+      onSkip,
+    });
+
+    expect(executeExternalTake.calledOnce).to.equal(true);
+    expect(statusReader.read.calledOnce).to.equal(true);
+    expect(onSkip.calledOnce).to.equal(true);
+    expect(onSkip.firstCall.args[0].candidate.borrower).to.equal(borrowers[0]);
+  });
+
   it('stops after an ambiguous post-submission external take failure', async () => {
     const borrowers = ['0xBorrowerA', '0xBorrowerB'];
     let attemptedSubmission = false;
