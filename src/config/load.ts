@@ -44,7 +44,6 @@ export function assertIsValidConfig(
   expectProperty(config.signer, 'keystore', 'signer');
   expectProperty(config, 'runtime');
   expectProperty(config.runtime, 'logLevel', 'runtime');
-  expectProperty(config.runtime, 'delayBetweenActions', 'runtime');
   expectProperty(config.runtime, 'delayBetweenRuns', 'runtime');
   expectProperty(config, 'ajna');
   expectProperty(config, 'manual');

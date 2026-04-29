@@ -592,12 +592,11 @@ The keeper is configured with conservative timing to respect rate limits:
 {
   runtime: {
     delayBetweenRuns: 10,      // 10 seconds between hot take cycles
-    delayBetweenActions: 0,    // do not add intentional delay inside hot discovered take execution
   },
 }
 ```
 
-For discovered external takes, use `discovery.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` instead of a long `runtime.delayBetweenActions`. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. A 31-61 second action delay is appropriate only for slow manual/single-contract 1inch operation; it is too slow for the short window where liquidation auctions are below market. Upgrade API tiers when you need lower timeout/cooldown values without hitting provider limits.
+For discovered external takes, use `discovery.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound 1inch latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. The keeper does not add an intra-cycle action delay, so upgrade API tiers, reduce quote budgets, or prefer factory routing when provider limits are too tight for hot liquidation windows.
 
 ### Auto-Discovery Rollout (V1)
 
@@ -647,7 +646,6 @@ External take latency and API-cost controls:
 | Config field                                      | Default                                           | Use                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `runtime.delayBetweenRuns`                        | Operator-configured                               | Sets the global take loop cadence. `10` seconds is reasonable for hot liquidation monitoring.                                                                                                                                                                                                                                                                                                                                                |
-| `runtime.delayBetweenActions`                     | Operator-configured                               | Keep `0` for hot discovered takes; use long delays only for slow manual 1inch operation.                                                                                                                                                                                                                                                                                                                                                     |
 | `discovery.take.takeQuoteBudgetPerRun`            | unset                                             | Caps total discovered take quote work per run.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `discovery.take.takeRouteQuoteBudgetPerCandidate` | unset                                             | Caps factory route candidates quoted per liquidation. Lower values reduce RPC/API work but can miss a better route.                                                                                                                                                                                                                                                                                                                          |
 | `discovery.take.maxConcurrentCandidateEvaluations` | `1`                                               | Evaluates up to 4 same-pool candidates concurrently. Execution is still one decision at a time with final revalidation, so this reduces quote latency without concurrent take submission.                                                                                                                                                                                                                                                     |
@@ -823,7 +821,6 @@ const config: KeeperConfig = {
     dryRun: false,
     logLevel: 'debug',
     delayBetweenRuns: 2,
-    delayBetweenActions: 31,
   },
   // Optional: private/write RPC used only for take submissions
   // writes: {
@@ -963,7 +960,6 @@ const config: KeeperConfig = {
     dryRun: false,
     logLevel: 'debug',
     delayBetweenRuns: 2,
-    delayBetweenActions: 31,
   },
   // Optional: private/write RPC used only for take submissions
   // writes: {
@@ -1301,8 +1297,8 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 **1inch Rate Limiting:**
 
 - Free tier: 1 req/sec, 100K/month
-- For hot discovered takes, keep `delayBetweenActions` low and rely on bounded 1inch request timeouts plus cooldowns
-- For slow manual/single-contract 1inch-only operation, increase `delayBetweenActions` if your API tier requires it
+- For hot discovered takes, rely on bounded 1inch request timeouts plus cooldowns instead of intra-cycle sleeps
+- If your API tier cannot handle the required quote rate, reduce quote budgets, use a paid tier, or prefer factory routing for those pools
 - Consider paid tier for faster operation
 
 **Uniswap V3 Gas Optimization:**

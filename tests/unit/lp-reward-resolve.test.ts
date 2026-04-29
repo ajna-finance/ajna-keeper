@@ -97,7 +97,6 @@ describe('isLpCollectionEnabled', () => {
     },
     runtime: {
       logLevel: 'info',
-      delayBetweenActions: 1,
       delayBetweenRuns: 10,
     },
     ajna: {},

@@ -28,7 +28,6 @@ const config: KeeperConfig = {
     dryRun: false,
     logLevel: 'info',
     delayBetweenRuns: 45,
-    delayBetweenActions: 3,
   },
   pricing: {
     coinGeckoApiKey: process.env.COINGECKO_API_KEY,

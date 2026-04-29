@@ -14,7 +14,6 @@ const POOL_B = '0xbbb0000000000000000000000000000000000002';
 const REDEEMER_CONFIG = {
   runtime: {
     logLevel: 'debug',
-    delayBetweenActions: 0,
     delayBetweenRuns: 0,
     dryRun: false,
   },

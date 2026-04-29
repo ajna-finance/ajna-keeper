@@ -418,7 +418,7 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 #### Configuring for 1inch
 
-To enable 1inch swaps, set up environment variables and add the 1inch router fields to `dex.oneInch` in `config.ts`. `dex.oneInch.defaultSlippage` controls the external-take min-out slippage percentage for 1inch routes and defaults to `1.0` when unset. For discovered external takes, keep `runtime.delayBetweenActions` low and use `discovery.take.oneInchQuoteTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound API latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. Long `runtime.delayBetweenActions` values are only appropriate for slow manual 1inch operation.
+To enable 1inch swaps, set up environment variables and add the 1inch router fields to `dex.oneInch` in `config.ts`. `dex.oneInch.defaultSlippage` controls the external-take min-out slippage percentage for 1inch routes and defaults to `1.0` when unset. For discovered external takes, use `discovery.take.oneInchQuoteTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound API latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown.
 
 Atomic 1inch takes validate the decoded swap payload before submission. The payload must swap the pool collateral token to the pool quote token, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured 1inch router or the decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `dex.oneInch.aggregationExecutorAllowlist` per chain to hard-restrict executors. If 1inch starts returning required non-zero flags for a target pair, use factory routing for that pool or open an issue before loosening this guard.
 
@@ -622,7 +622,6 @@ const config: KeeperConfig = {
     dryRun: true,
     logLevel: 'info',
     delayBetweenRuns: 10,
-    delayBetweenActions: 0,
   },
   discovery: {
     enabled: true,

@@ -859,7 +859,6 @@ type OneInchPathQuoteFn = (
 type DiscoveryOneInchQuoteOptions = {
   oneInchRequestTimeoutMs: number;
   oneInchRequestAbortSignal?: AbortSignal;
-  skipOneInchRateLimitDelay: true;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
 };
@@ -912,7 +911,6 @@ type DiscoveryExternalExecutionConfig = Pick<
   DiscoveryExecutionConfig,
   | 'connectorTokens'
   | 'curveRouterOverrides'
-  | 'delayBetweenActions'
   | 'dryRun'
   | 'keeperTaker'
   | 'keeperTakerFactory'
@@ -926,7 +924,6 @@ type DiscoveryExternalExecutionConfig = Pick<
   takeWriteTransport?: TakeWriteTransport;
   runtimeCache?: DiscoveryRpcCache['factoryQuoteProviders'];
   oneInchRequestTimeoutMs?: number;
-  skipOneInchRateLimitDelay?: boolean;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
   onOneInchSwapDataResult?: (result: {
@@ -1640,7 +1637,6 @@ async function quoteOneInchForDiscovery(
               await params.evaluate({
                 oneInchRequestTimeoutMs,
                 oneInchRequestAbortSignal: signal,
-                skipOneInchRateLimitDelay: true,
                 chainId: params.rpcCache?.chainId,
                 tokenDecimalsCache: getDiscoveryTokenDecimalsCache(
                   params.rpcCache
@@ -1720,7 +1716,6 @@ async function quoteOneInchPathForDiscovery(
         params.poolConfig,
         {
           ...quoteOptions,
-          delayBetweenActions: params.config.delayBetweenActions,
           oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
         },
         params.signer,
@@ -1749,7 +1744,6 @@ async function quoteKeeperTakerOneInchTakeForDiscovery(
         params.poolConfig,
         {
           ...quoteOptions,
-          delayBetweenActions: params.config.delayBetweenActions,
           oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
         },
         params.signer,
@@ -2506,7 +2500,6 @@ export async function handleDiscoveredTakeTarget(
 
   const externalExecutionConfig = {
     dryRun: params.target.dryRun,
-    delayBetweenActions: params.config.delayBetweenActions,
     connectorTokens: params.config.connectorTokens,
     oneInchAggregationExecutorAllowlist:
       params.config.oneInchAggregationExecutorAllowlist,
@@ -2521,7 +2514,6 @@ export async function handleDiscoveredTakeTarget(
     takeWriteTransport: params.takeWriteTransport,
     runtimeCache: rpcCache?.factoryQuoteProviders,
     oneInchRequestTimeoutMs: getOneInchQuoteTimeoutMs(takePolicy),
-    skipOneInchRateLimitDelay: true,
     chainId: rpcCache?.chainId,
     tokenDecimalsCache: getDiscoveryTokenDecimalsCache(rpcCache),
     onOneInchSwapDataResult: (result: {
@@ -2604,7 +2596,6 @@ export async function handleDiscoveredTakeTarget(
           takeAuctionStatusReader,
           externalExecutionConfig,
           dryRun: params.target.dryRun,
-          delayBetweenActions: params.config.delayBetweenActions,
           takeWriteTransport: params.takeWriteTransport,
           revalidateBeforeExecution: true,
           approveExternalTake: async ({

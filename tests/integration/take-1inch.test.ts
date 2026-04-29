@@ -250,7 +250,6 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -277,7 +276,6 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -301,7 +299,6 @@ describe('Take with 1inch Integration', () => {
         oneInchRouters: { 31337: mockRouterAddress },
         connectorTokens: [],
         keeperTaker: keeperTakerAddress,
-        delayBetweenActions: 0,
       },
     });
 
@@ -361,7 +358,6 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -386,7 +382,6 @@ describe('Take with 1inch Integration', () => {
         oneInchRouters: { 31337: mockRouterAddress },
         connectorTokens: [],
         keeperTaker: keeperTakerAddress,
-        delayBetweenActions: 0,
       },
     });
 

@@ -103,7 +103,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -191,7 +190,6 @@ describe('Discovery Handlers', () => {
             maxConcurrentCandidateEvaluations: 2,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -274,7 +272,6 @@ describe('Discovery Handlers', () => {
             maxExecutionsPerPoolPerRun: 2,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -370,7 +367,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -453,7 +449,6 @@ describe('Discovery Handlers', () => {
             externalTakeTransportPolicy: 'require_private_or_relay',
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -549,7 +544,6 @@ describe('Discovery Handlers', () => {
             enabled: true,
             take: true,
           },
-          delayBetweenActions: 0,
           subgraphUrl: 'http://example-subgraph',
           keeperTaker: '0x4444444444444444444444444444444444444444',
           oneInchRouters: {
@@ -650,7 +644,6 @@ describe('Discovery Handlers', () => {
             oneInchQuoteFailureThreshold: 2,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
         keeperTaker: '0x4444444444444444444444444444444444444444',
         oneInchRouters: {
@@ -740,7 +733,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
         keeperTaker: '0x4444444444444444444444444444444444444444',
         oneInchRouters: {
@@ -826,7 +818,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -932,7 +923,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1095,7 +1085,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1231,7 +1220,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
         keeperTaker: '0x4444444444444444444444444444444444444444',
         oneInchRouters: {
@@ -1371,7 +1359,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
         keeperTaker: '0x4444444444444444444444444444444444444444',
         oneInchRouters: {
@@ -1482,7 +1469,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1591,7 +1577,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1705,7 +1690,6 @@ describe('Discovery Handlers', () => {
         oneInchRouters: {
           1: '0x1111111111111111111111111111111111111111',
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1836,7 +1820,6 @@ describe('Discovery Handlers', () => {
         oneInchRouters: {
           1: '0x1111111111111111111111111111111111111111',
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1930,7 +1913,6 @@ describe('Discovery Handlers', () => {
             defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -2150,7 +2132,6 @@ describe('Discovery Handlers', () => {
             enabled: true,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -2244,7 +2225,6 @@ describe('Discovery Handlers', () => {
             defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -2348,7 +2328,6 @@ describe('Discovery Handlers', () => {
             defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -2490,7 +2469,6 @@ describe('Discovery Handlers', () => {
               oneInchQuoteFailureThreshold: 2,
             },
           },
-          delayBetweenActions: 0,
           subgraphUrl: 'http://example-subgraph',
         } as any,
         transports,
@@ -2600,7 +2578,6 @@ describe('Discovery Handlers', () => {
               externalTakeProbeTimeoutMs: 50,
             },
           },
-          delayBetweenActions: 0,
           subgraphUrl: 'http://example-subgraph',
         } as any,
         transports,
@@ -2718,7 +2695,6 @@ describe('Discovery Handlers', () => {
             maxGasPriceGwei: 1.5,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -2814,7 +2790,6 @@ describe('Discovery Handlers', () => {
             maxGasPriceGwei: 1.5,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -2911,7 +2886,6 @@ describe('Discovery Handlers', () => {
             maxGasPriceGwei: 3,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -2993,7 +2967,6 @@ describe('Discovery Handlers', () => {
             maxGasPriceGwei: 5,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -3067,7 +3040,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           settlement: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3143,7 +3115,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           settlement: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3216,7 +3187,6 @@ describe('Discovery Handlers', () => {
             minExpectedProfitQuote: 9999,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3291,7 +3261,6 @@ describe('Discovery Handlers', () => {
             maxGasCostNative: 0.01,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -3386,7 +3355,6 @@ describe('Discovery Handlers', () => {
         oneInchRouters: {
           8453: '0x1111111111111111111111111111111111111111',
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -3475,7 +3443,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(BigNumber.from(0)),
@@ -3564,7 +3531,6 @@ describe('Discovery Handlers', () => {
             maxGasCostNative: 1,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -3663,7 +3629,6 @@ describe('Discovery Handlers', () => {
             maxGasCostNative: 1,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -3753,7 +3718,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3850,7 +3814,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3939,7 +3902,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           settlement: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -4015,7 +3977,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           settlement: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),

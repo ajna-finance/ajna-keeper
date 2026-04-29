@@ -34,7 +34,6 @@ const config: KeeperConfig = {
     dryRun: false,
     logLevel: 'debug',
     delayBetweenRuns: 15,
-    delayBetweenActions: 35,
   },
   dex: {
     curve: {

@@ -327,7 +327,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
         connectorTokens: [],
         oneInchDefaultSlippage: 2.5,
         oneInchRouters: {
@@ -399,8 +398,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
-        skipOneInchRateLimitDelay: true,
         connectorTokens: [],
         oneInchRouters: {},
         keeperTaker: '0x00000000000000000000000000000000000000dd',
@@ -457,7 +454,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: true,
-        delayBetweenActions: 0,
         connectorTokens: [],
       },
     });
@@ -558,7 +554,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
         connectorTokens: [],
         oneInchRouters: {
           1: '0x00000000000000000000000000000000000000cc',
@@ -648,7 +643,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
         connectorTokens: [],
         oneInchRouters: {
           1: '0x00000000000000000000000000000000000000cc',
@@ -732,7 +726,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
         connectorTokens: [],
         oneInchRouters: {
           1: '0x00000000000000000000000000000000000000cc',

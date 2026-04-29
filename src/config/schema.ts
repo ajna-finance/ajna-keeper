@@ -479,7 +479,6 @@ export interface SignerConfig {
 
 export interface RuntimeConfig {
   logLevel: string;
-  delayBetweenActions: number;
   delayBetweenRuns: number;
   dryRun?: boolean;
 }

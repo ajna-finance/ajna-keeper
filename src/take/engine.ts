@@ -3,7 +3,6 @@ import { BigNumber } from 'ethers';
 import { logger } from '../logging';
 import { SubgraphReader } from '../read-transports';
 import {
-  delay,
   getErrorMessage,
   mapWithConcurrencyPreservingOrder,
   weiToDecimaled,
@@ -121,7 +120,6 @@ interface ExecuteTakeDecisionParams<
   externalExecutionConfig: TExecutionConfig;
   subgraph: SubgraphReader;
   dryRun: boolean;
-  delayBetweenActions: number;
   arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   takeAuctionStatusReader?: TakeAuctionStatusReader;
   revalidateBeforeExecution?: boolean;
@@ -158,7 +156,6 @@ interface ProcessTakeCandidatesParams<
       ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>,
       | 'externalExecutionConfig'
       | 'dryRun'
-      | 'delayBetweenActions'
       | 'revalidateBeforeExecution'
       | 'onSkip'
       | 'onExecuted'
@@ -441,7 +438,6 @@ export async function executeTakeDecision<
   externalExecutionConfig,
   subgraph,
   dryRun,
-  delayBetweenActions,
   arbTakeStrategy,
   revalidateBeforeExecution,
   reapproveExternalTakeBeforeExecution,
@@ -587,8 +583,6 @@ export async function executeTakeDecision<
     poolStateMayHaveChanged = !dryRun;
 
     if (approvedArbTake) {
-      await delay(delayBetweenActions);
-
       try {
         const postTakeRevalidated = await revalidateTakeDecision({
           pool,
@@ -660,7 +654,6 @@ export async function processTakeCandidates<
   arbTakeStrategy,
   externalExecutionConfig,
   dryRun,
-  delayBetweenActions,
   approveExternalTake,
   approveArbTake,
   reapproveExternalTakeBeforeExecution,
@@ -835,7 +828,6 @@ export async function processTakeCandidates<
           externalExecutionConfig,
           subgraph,
           dryRun,
-          delayBetweenActions,
           arbTakeStrategy,
           takeAuctionStatusReader,
           revalidateBeforeExecution,

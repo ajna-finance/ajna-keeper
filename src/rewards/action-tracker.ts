@@ -12,7 +12,7 @@ import {
 import { DexRouter } from '../dex/router';
 import { getDecimalsErc20, transferErc20 } from '../erc20';
 import { logger } from '../logging';
-import { delay, tokenChangeDecimals, weiToDecimaled } from '../utils';
+import { tokenChangeDecimals, weiToDecimaled } from '../utils';
 
 export interface TokenConfig {
   address: string;
@@ -249,10 +249,6 @@ export class RewardActionTracker {
           this.retryCountMap.delete(key);
         }
       }
-
-      // The runtime delay provides
-      // natural spacing between actions and retry attempts
-      await delay(this.config.runtime.delayBetweenActions);
     }
   }
 

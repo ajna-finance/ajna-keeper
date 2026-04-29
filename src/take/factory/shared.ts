@@ -103,7 +103,6 @@ export interface FactoryRouteProfitabilityContext {
 
 export interface FactoryTakeConfigBase {
   dryRun?: boolean;
-  delayBetweenActions: number;
   keeperTakerFactory?: string;
   takerContracts?: { [source: string]: string };
   universalRouterOverrides?: UniversalRouterOverrides;

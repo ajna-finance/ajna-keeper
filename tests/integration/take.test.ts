@@ -379,7 +379,6 @@ describe('processManualTakeCandidates', () => {
       config: {
         subgraphUrl: '',
         coinGeckoApiKey: '',
-        delayBetweenActions: 0,
       },
     });
     const AUCTION_WAIT_TIME = 60 * 20 * 6 + 2 * 2 * 60 * 60 + 50 * 60;
@@ -396,7 +395,6 @@ describe('processManualTakeCandidates', () => {
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       config: {
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
 
@@ -412,7 +410,6 @@ describe('processManualTakeCandidates', () => {
       poolConfig: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
       config: {
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
 
@@ -460,7 +457,6 @@ describe('ArbTake → LP Collection chain', () => {
             wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
-          delayBetweenActions: 0,
           manual: {
             pools: [],
           },
@@ -478,7 +474,6 @@ describe('ArbTake → LP Collection chain', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
 
@@ -533,7 +528,6 @@ describe('ArbTake → Settlement → Bond Collection chain', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
 
@@ -580,7 +574,6 @@ describe('ArbTake → Settlement → Bond Collection chain', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
 

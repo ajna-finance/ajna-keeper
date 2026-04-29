@@ -24,7 +24,6 @@ const BASE_CONFIG: KeeperConfig = {
   },
   runtime: {
     logLevel: 'info',
-    delayBetweenActions: 1,
     delayBetweenRuns: 10,
   },
   ajna: {
@@ -428,7 +427,6 @@ describe('config-load', () => {
   },
   runtime: {
     logLevel: 'info',
-    delayBetweenActions: 1,
     delayBetweenRuns: 10,
   },
   ajna: {
@@ -478,7 +476,6 @@ describe('config-load', () => {
   },
   runtime: {
     logLevel: 'debug',
-    delayBetweenActions: 2,
     delayBetweenRuns: 20,
   },
   ajna: {

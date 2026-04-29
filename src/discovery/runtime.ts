@@ -613,7 +613,6 @@ async function executeEffectiveSettlementTarget(params: {
       signer: state.signer,
       config: {
         dryRun: state.config.runtime.dryRun,
-        delayBetweenActions: state.config.runtime.delayBetweenActions,
         subgraph: state.readTransports.subgraph,
       },
     });
@@ -773,7 +772,6 @@ async function runTakeDiscoveryCycle(
           rpcCache,
         });
         stats.targetSuccesses += 1;
-        await delay(state.config.runtime.delayBetweenActions);
       } catch (error) {
         stats.targetFailures += 1;
         logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
@@ -875,7 +873,6 @@ async function runSettlementDiscoveryCycle(
           discoveredTargetSuccesses += 1;
         }
         logger.debug(`Settlement check completed for pool: ${pool.name}`);
-        await delay(state.config.runtime.delayBetweenActions);
       } catch (error) {
         stats.targetFailures += 1;
         logger.error(

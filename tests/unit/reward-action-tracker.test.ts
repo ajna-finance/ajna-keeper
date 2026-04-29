@@ -34,7 +34,6 @@ function createMockKeeperConfig(
     runtime: {
       logLevel: 'info',
       delayBetweenRuns: 0,
-      delayBetweenActions: 0,
       dryRun: true,
     },
     takers: {

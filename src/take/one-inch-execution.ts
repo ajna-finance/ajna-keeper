@@ -16,7 +16,6 @@ import {
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import {
-  delay,
   decimaledToWei,
   estimateGasWithBuffer,
   getErrorMessage,
@@ -231,11 +230,6 @@ export async function getOneInchPathQuoteEvaluation(
         isTakeable: false,
         reason: `missing 1inch router for chain ${chainId}`,
       };
-    }
-
-    if (!config.skipOneInchRateLimitDelay) {
-      // Manual 1inch mode still honors operator pacing.
-      await delay(config.delayBetweenActions ?? 0);
     }
 
     const dexRouter = new DexRouter(signer, {
@@ -494,11 +488,9 @@ export async function takeLiquidation({
         liquidation.collateral,
         poolConfig,
         {
-          delayBetweenActions: config.delayBetweenActions,
           oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
           oneInchRequestAbortSignal: config.oneInchRequestAbortSignal,
           oneInchDefaultSlippage: config.oneInchDefaultSlippage,
-          skipOneInchRateLimitDelay: config.skipOneInchRateLimitDelay,
           chainId: config.chainId,
           tokenDecimalsCache: config.tokenDecimalsCache,
         },
@@ -549,11 +541,6 @@ export async function takeLiquidation({
         `1inch atomic take cannot request swap data for ${pool.name}/${borrower}: ${error}`
       );
       return false;
-    }
-
-    if (!config.skipOneInchRateLimitDelay) {
-      // Manual 1inch mode still honors operator pacing.
-      await delay(config.delayBetweenActions ?? 0);
     }
 
     const collateralDecimals = await getOneInchTokenDecimals({

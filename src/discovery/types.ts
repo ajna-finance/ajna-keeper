@@ -21,7 +21,6 @@ export interface DiscoveryExecutionConfig {
   autoDiscover?: AutoDiscoverConfig;
   connectorTokens?: Array<string>;
   curveRouterOverrides?: CurveRouterOverrides;
-  delayBetweenActions: number;
   dryRun?: boolean;
   discoveredDefaults?: DiscoveredDefaultsConfig;
   keeperTaker?: string;
@@ -45,7 +44,6 @@ export function getDiscoveryExecutionConfig(
     autoDiscover: config.discovery,
     connectorTokens: config.dex?.oneInch?.connectorTokens,
     curveRouterOverrides: config.dex?.curve,
-    delayBetweenActions: config.runtime.delayBetweenActions,
     dryRun: config.runtime.dryRun,
     discoveredDefaults: config.discovery?.defaults,
     keeperTaker: config.takers?.oneInch,

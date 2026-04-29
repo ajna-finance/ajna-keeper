@@ -52,7 +52,6 @@ async function quoteWithSlippage(
     {
       chainId: CHAIN_ID,
       oneInchDefaultSlippage,
-      skipOneInchRateLimitDelay: true,
       tokenDecimalsCache: makeTokenDecimalsCache(),
     },
     signer,
@@ -112,7 +111,6 @@ describe('1inch external take slippage', () => {
     };
     const config = {
       chainId: CHAIN_ID,
-      skipOneInchRateLimitDelay: true,
       tokenDecimalsCache: makeTokenDecimalsCache(),
     };
 
@@ -176,7 +174,6 @@ describe('1inch external take slippage', () => {
       {
         chainId: CHAIN_ID,
         oneInchRequestAbortSignal: controller.signal,
-        skipOneInchRateLimitDelay: true,
         tokenDecimalsCache: makeTokenDecimalsCache(),
       },
       signer,

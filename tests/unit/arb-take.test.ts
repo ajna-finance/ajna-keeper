@@ -223,7 +223,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       takeWriteTransport: takeWriteTransport as any,
     });
 
@@ -286,7 +285,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       revalidateBeforeExecution: true,
       onSkip,
     });
@@ -348,7 +346,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       revalidateBeforeExecution: true,
       onSkip,
     });
@@ -413,7 +410,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       revalidateBeforeExecution: true,
       onSkip,
     });
@@ -486,7 +482,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       approveArbTake: sinon.stub().resolves({ approved: true }),
       onExecuted,
     });
@@ -548,7 +543,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       onSkip,
       onFound,
       onExecuted,
@@ -644,7 +638,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: true,
-      delayBetweenActions: 0,
       takeAuctionStatusReader: statusReader as any,
       maxConcurrentCandidateEvaluations: 2,
       onFound,
@@ -707,7 +700,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       takeAuctionStatusReader: statusReader as any,
       maxConcurrentCandidateEvaluations: 2,
     });
@@ -768,7 +760,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       takeAuctionStatusReader: { read, readMany } as any,
       maxConcurrentCandidateEvaluations: 2,
       stopAfterExecution: true,
@@ -838,7 +829,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       takeAuctionStatusReader: statusReader as any,
       maxConcurrentCandidateEvaluations: 2,
     });
@@ -894,7 +884,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       takeAuctionStatusReader: statusReader as any,
       maxConcurrentCandidateEvaluations: 1,
       stopAfterExecution: false,
@@ -951,7 +940,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       takeAuctionStatusReader: statusReader as any,
       maxConcurrentCandidateEvaluations: 1,
       stopAfterExecution: false,
@@ -1019,7 +1007,6 @@ describe('shared arbTake helpers', () => {
       arbTakeStrategy: createArbTakeStrategy(),
       externalExecutionConfig: {} as any,
       dryRun: false,
-      delayBetweenActions: 0,
       maxConcurrentCandidateEvaluations: 2,
       stopAfterExecution: true,
       resetExternalTakeAttemptSubmission: () => {

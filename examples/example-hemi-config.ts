@@ -34,7 +34,6 @@ const config: KeeperConfig = {
     dryRun: false,
     logLevel: 'debug',
     delayBetweenRuns: 2,
-    delayBetweenActions: 31,
   },
   dex: {
     uniswapV3: {

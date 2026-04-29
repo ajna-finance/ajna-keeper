@@ -1,7 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { logger } from '../logging';
 import { poolSettle } from '../transactions';
-import { delay, getErrorMessage } from '../utils';
+import { getErrorMessage } from '../utils';
 import { SettlementReadConfig, SettlementResult } from './model';
 import { SettlementActionConfig } from './types';
 
@@ -56,10 +56,6 @@ export async function settleAuctionCompletely(params: {
           iteration + 1
         }`
       );
-
-      if (iteration < maxIterations) {
-        await delay(params.config.delayBetweenActions);
-      }
     } catch (error) {
       logger.error(
         `Settlement iteration ${iteration} failed for ${params.borrower.slice(0, 8)}:`,

@@ -23,7 +23,6 @@ import { TakeActionConfig } from './types';
 
 interface ManualTakeCommonContextConfig {
   dryRun?: boolean;
-  delayBetweenActions: number;
 }
 
 export interface ManualOneInchContextConfig
@@ -84,7 +83,6 @@ export function createManualOneInchTakeContext(params: {
     externalTakeAdapter:
       params.poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
         ? createOneInchTakeAdapter({
-            delayBetweenActions: params.config.delayBetweenActions ?? 0,
             oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
             oneInchRouters: params.config.oneInchRouters,
             connectorTokens: params.config.connectorTokens,
@@ -93,7 +91,6 @@ export function createManualOneInchTakeContext(params: {
     arbTakeStrategy: createArbTakeStrategy(),
     externalExecutionConfig: {
       dryRun: params.config.dryRun,
-      delayBetweenActions: params.config.delayBetweenActions ?? 0,
       connectorTokens: params.config.connectorTokens,
       oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
       oneInchRouters: params.config.oneInchRouters,

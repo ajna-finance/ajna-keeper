@@ -77,8 +77,6 @@ describe('Take Factory', () => {
       const config = {
         dryRun: false,
         subgraphUrl: 'http://localhost:8000/subgraphs/name/ajna-test',
-        delayBetweenActions: 1000,
-        // Missing keeperTakerFactory and universalRouterOverrides (testing graceful degradation)
       };
 
       // Mock subgraph to return empty liquidations to avoid external calls
@@ -134,7 +132,6 @@ describe('Take Factory', () => {
       const config = {
         dryRun: true, // Use dryRun to avoid actual transactions
         subgraphUrl: 'http://localhost:8000/subgraphs/name/ajna-test',
-        delayBetweenActions: 35,
         keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',

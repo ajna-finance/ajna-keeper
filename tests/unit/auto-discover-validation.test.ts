@@ -24,7 +24,6 @@ describe('auto-discover validation', () => {
     },
     runtime: {
       logLevel: 'debug',
-      delayBetweenActions: 0,
       delayBetweenRuns: 1,
     },
     ajna: {

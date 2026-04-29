@@ -44,7 +44,6 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      delayBetweenActions: 0,
       keeperTakerFactory: '0x1234567890123456789012345678901234567890',
       takerContracts: {
         UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -93,7 +92,6 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      delayBetweenActions: 0,
       keeperTaker: '0x1234567890123456789012345678901234567890',
       oneInchRouters: {
         1: '0x1111111254EEB25477B68fb85Ed929f73A960582',
@@ -143,7 +141,6 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      delayBetweenActions: 0,
     };
 
     await handleTakes({
@@ -176,7 +173,6 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      delayBetweenActions: 0,
       keeperTaker: '0x1111111111111111111111111111111111111111',
       oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
       keeperTakerFactory: '0x2222222222222222222222222222222222222222',
@@ -231,7 +227,6 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      delayBetweenActions: 0,
       keeperTakerFactory: '0x1234567890123456789012345678901234567890',
     };
 
