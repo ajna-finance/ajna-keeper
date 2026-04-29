@@ -597,4 +597,50 @@ describe('RouteProbeLimiter', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(queuedStarted).to.equal(false);
   });
+
+  it('abandons active limited operations when the caller times out', async () => {
+    const abandoned: string[] = [];
+    const limiter = new RouteProbeLimiter({
+      maxConcurrent: 1,
+      maxAbandoned: 1,
+      hardPermitHoldMs: 1000,
+      onAbandoned: (label) => {
+        abandoned.push(label);
+      },
+    });
+    let releaseActiveProbe!: () => void;
+    const activeProbe = new Promise<void>((resolve) => {
+      releaseActiveProbe = resolve;
+    });
+
+    await expect(
+      withTimeoutAbort(
+        async (signal) =>
+          await limiter.run(
+            'active',
+            async () => {
+              await activeProbe;
+              return 'active';
+            },
+            { signal }
+          ),
+        10,
+        'active route probe'
+      )
+    ).to.be.rejectedWith('active route probe timed out after 10ms');
+    expect(abandoned).to.deep.equal(['active']);
+
+    let secondStarted = false;
+    const second = limiter.run('second', async () => {
+      secondStarted = true;
+      return 'second';
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(secondStarted).to.equal(false);
+
+    releaseActiveProbe();
+    expect(await second).to.equal('second');
+    expect(secondStarted).to.equal(true);
+  });
 });

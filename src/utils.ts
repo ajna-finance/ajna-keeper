@@ -117,7 +117,21 @@ export class RouteProbeLimiter implements AsyncOperationLimiter {
 
     let permitReleased = false;
     let hardCapReleased = false;
+    let operationSettled = false;
     let hardCapTimer: ReturnType<typeof setTimeout> | undefined;
+    let abortHandler: (() => void) | undefined;
+    let rejectAbandonedProbe: ((error: Error) => void) | undefined;
+    const signal = options?.signal;
+    const getAbortError = (): Error =>
+      signal?.reason instanceof Error
+        ? signal.reason
+        : new Error(`route probe ${label} cancelled after start`);
+    const cleanupActiveAbort = (): void => {
+      if (abortHandler) {
+        signal?.removeEventListener('abort', abortHandler);
+        abortHandler = undefined;
+      }
+    };
     const releasePermit = (): void => {
       if (permitReleased) {
         return;
@@ -133,37 +147,62 @@ export class RouteProbeLimiter implements AsyncOperationLimiter {
       this.abandonedUnsettled = Math.max(0, this.abandonedUnsettled - 1);
       this.drain();
     };
+    const abandonProbe = (error: Error): void => {
+      if (operationSettled || hardCapReleased) {
+        return;
+      }
+      hardCapReleased = true;
+      this.abandonedUnsettled += 1;
+      if (hardCapTimer) {
+        clearTimeout(hardCapTimer);
+      }
+      cleanupActiveAbort();
+      this.options.onAbandoned?.(label, error);
+      releasePermit();
+      rejectAbandonedProbe?.(error);
+    };
 
+    if (signal?.aborted) {
+      throw getAbortError();
+    }
     const operationPromise = Promise.resolve().then(operation);
     operationPromise.then(
       () => {
+        operationSettled = true;
         if (hardCapTimer) {
           clearTimeout(hardCapTimer);
         }
+        cleanupActiveAbort();
         releasePermit();
         settleAbandonedProbe();
       },
       () => {
+        operationSettled = true;
         if (hardCapTimer) {
           clearTimeout(hardCapTimer);
         }
+        cleanupActiveAbort();
         releasePermit();
         settleAbandonedProbe();
       }
     );
 
     const hardCapPromise = new Promise<never>((_, reject) => {
+      rejectAbandonedProbe = reject;
       hardCapTimer = setTimeout(() => {
-        hardCapReleased = true;
-        this.abandonedUnsettled += 1;
-        const error = new Error(
-          `route probe pressure budget hard cap exceeded for ${label} after ${this.options.hardPermitHoldMs}ms`
+        abandonProbe(
+          new Error(
+            `route probe pressure budget hard cap exceeded for ${label} after ${this.options.hardPermitHoldMs}ms`
+          )
         );
-        this.options.onAbandoned?.(label, error);
-        releasePermit();
-        reject(error);
       }, this.options.hardPermitHoldMs);
       hardCapTimer.unref?.();
+      if (signal) {
+        abortHandler = () => {
+          abandonProbe(getAbortError());
+        };
+        signal.addEventListener('abort', abortHandler, { once: true });
+      }
     });
 
     return await Promise.race([operationPromise, hardCapPromise]);

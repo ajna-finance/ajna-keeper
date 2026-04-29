@@ -788,6 +788,7 @@ interface FactoryPathQuoteInput {
   poolConfig: ResolvedTakeTarget;
   auctionPrice: BigNumber;
   collateral: BigNumber;
+  routeProbeAbortSignal?: AbortSignal;
 }
 
 interface OneInchPathQuoteInput extends FactoryPathQuoteInput {
@@ -1584,6 +1585,7 @@ async function quoteFactoryPathForDiscovery(
       routeQuoteBudgetPerCandidate:
         params.takePolicy?.takeRouteQuoteBudgetPerCandidate,
       routeProbeLimiter: params.routeProbeLimiter,
+      routeProbeAbortSignal: params.routeProbeAbortSignal,
       routeProfitabilityContextFactory,
     }
   );
@@ -1793,6 +1795,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
   };
   type ProbeControl = {
     abandoned: boolean;
+    abortController: AbortController;
   };
   const getOneInchCircuitOutcome = (
     evaluation: ExternalTakeQuoteEvaluation
@@ -1828,6 +1831,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
               poolConfig: params.poolConfig,
               auctionPrice: params.auctionPrice,
               collateral: params.collateral,
+              routeProbeAbortSignal: control?.abortController.signal,
             });
       if (control?.abandoned) {
         return {
@@ -1889,7 +1893,10 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     path: ExternalTakePathKind
   ): Promise<ProbeResult> => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const control: ProbeControl = { abandoned: false };
+    const control: ProbeControl = {
+      abandoned: false,
+      abortController: new AbortController(),
+    };
     const probe = probeExternalTakePath(path, control);
     probe.catch(() => undefined);
     try {
@@ -1898,6 +1905,9 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
         new Promise<ProbeResult>((resolve) => {
           timeout = setTimeout(() => {
             control.abandoned = true;
+            control.abortController.abort(
+              new Error(`probe timed out after ${params.probeTimeoutMs}ms`)
+            );
             resolve({
               path,
               durationMs: params.probeTimeoutMs,
@@ -2653,7 +2663,7 @@ export async function handleDiscoveredTakeTarget(
 
             return { approved: true };
           },
-          onFound: (decision) => {
+          onExecutionAttempt: (decision) => {
             if (decision.approvedTake) {
               stats.approvedTakeDecisions += 1;
             }

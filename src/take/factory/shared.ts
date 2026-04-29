@@ -73,6 +73,7 @@ export interface FactoryRouteSelectionOptions {
   allowedLiquiditySources?: LiquiditySource[];
   routeQuoteBudgetPerCandidate?: number;
   routeProbeLimiter?: AsyncOperationLimiter;
+  routeProbeAbortSignal?: AbortSignal;
   routeProfitabilityContext?: FactoryRouteProfitabilityContext;
   routeProfitabilityContextFactory?: (
     sources: LiquiditySource[]
@@ -231,6 +232,18 @@ function getProviderInitFailureRetryMs(): number {
 
 interface InitializableQuoteProvider {
   initialize(): Promise<boolean>;
+}
+
+export function throwIfRouteProbeAborted(
+  signal?: AbortSignal,
+  label: string = 'factory route probe'
+): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error(`${label} aborted`);
 }
 
 async function initializeQuoteProviderWithCooldown<
@@ -998,17 +1011,26 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
   availableRoutes: FactoryRouteCandidate[];
   unavailableRoutes: FactoryRouteAvailabilitySkip[];
 }> {
+  throwIfRouteProbeAborted(
+    params.routeProbeAbortSignal,
+    'factory route availability'
+  );
   const availableRoutes: FactoryRouteCandidate[] = [];
   const unavailableRoutes: FactoryRouteAvailabilitySkip[] = [];
   const availabilityResults = await mapWithConcurrencyPreservingOrder(
     params.routes,
     FACTORY_ROUTE_AVAILABILITY_CONCURRENCY,
     async (route) => {
-      const checkAvailability = async () =>
-        await checkFactoryRouteCandidateAvailability({
+      const checkAvailability = async () => {
+        throwIfRouteProbeAborted(
+          params.routeProbeAbortSignal,
+          `factory availability ${formatFactoryRouteCandidate(route)}`
+        );
+        return await checkFactoryRouteCandidateAvailability({
           ...params,
           route,
         });
+      };
       return params.routeProbeLimiter
         ? await params.routeProbeLimiter.run(
             `factory availability ${formatFactoryRouteCandidate(route)}`,

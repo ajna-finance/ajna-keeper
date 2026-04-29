@@ -1856,6 +1856,59 @@ describe('Take Factory', () => {
       expect(maxInFlight).to.equal(1);
     });
 
+    it('does not start factory route work when the route probe signal is already aborted', async () => {
+      const poolExistsStub = sinon.stub(
+        UniswapV3QuoteProvider.prototype,
+        'poolExists'
+      );
+      const uniswapQuoteStub = sinon.stub(
+        UniswapV3QuoteProvider.prototype,
+        'getQuote'
+      );
+      const controller = new AbortController();
+      controller.abort(new Error('candidate probe timed out'));
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        {
+          name: 'Aborted Route Pool',
+          collateralAddress: '0x1111111111111111111111111111111111111111',
+          quoteAddress: '0x2222222222222222222222222222222222222222',
+          contract: {
+            quoteTokenScale: sinon.stub(),
+          },
+        } as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        {
+          name: 'Aborted Route Pool',
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.99,
+          },
+        } as any,
+        {
+          universalRouterOverrides: {
+            universalRouterAddress:
+              '0x3333333333333333333333333333333333333333',
+            poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+            defaultFeeTier: 3000,
+            wethAddress: '0x5555555555555555555555555555555555555555',
+            quoterV2Address: '0x6666666666666666666666666666666666666666',
+          },
+        } as any,
+        {} as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        {
+          routeProbeAbortSignal: controller.signal,
+        }
+      );
+
+      expect(evaluation.isTakeable).to.equal(false);
+      expect(evaluation.reason).to.equal('candidate probe timed out');
+      expect(poolExistsStub.called).to.equal(false);
+      expect(uniswapQuoteStub.called).to.equal(false);
+    });
+
     it('uses recent successful routes to improve budget-limited probing', async () => {
       sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
       sinon

@@ -33,6 +33,7 @@ import {
   orderFactoryRouteCandidates,
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
+  throwIfRouteProbeAborted,
 } from './shared';
 import { evaluateCurveFactoryQuote, executeCurveFactoryTake } from './curve';
 import {
@@ -146,6 +147,10 @@ export async function getFactoryTakeQuoteEvaluation(
       poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP ||
       poolConfig.take.liquiditySource === LiquiditySource.CURVE
     ) {
+      throwIfRouteProbeAborted(
+        routeSelection?.routeProbeAbortSignal,
+        'factory route evaluation'
+      );
       const routeContext = await buildFactoryRouteEvaluationContext({
         pool,
         signer,
@@ -154,6 +159,10 @@ export async function getFactoryTakeQuoteEvaluation(
         marketPriceFactor: poolConfig.take.marketPriceFactor!,
         runtimeCache,
       });
+      throwIfRouteProbeAborted(
+        routeSelection?.routeProbeAbortSignal,
+        'factory route evaluation context'
+      );
       const routes = orderFactoryRouteCandidates({
         routes: getFactoryRouteCandidates({
           defaultLiquiditySource: poolConfig.take.liquiditySource,
@@ -200,6 +209,7 @@ export async function getFactoryTakeQuoteEvaluation(
           config,
           runtimeCache,
           routeProbeLimiter: routeSelection?.routeProbeLimiter,
+          routeProbeAbortSignal: routeSelection?.routeProbeAbortSignal,
         });
       if (unavailableRoutes.length > 0) {
         logger.debug(
@@ -220,6 +230,10 @@ export async function getFactoryTakeQuoteEvaluation(
           new Set(availableRoutes.map((route) => route.liquiditySource))
         );
         if (availableSources.length > 0) {
+          throwIfRouteProbeAborted(
+            routeSelection?.routeProbeAbortSignal,
+            'factory route profitability context'
+          );
           routeProfitabilityContext =
             await routeSelection.routeProfitabilityContextFactory(
               availableSources
@@ -293,6 +307,10 @@ export async function getFactoryTakeQuoteEvaluation(
         route: FactoryRouteCandidate;
         evaluation: ExternalTakeQuoteEvaluation;
       }> => {
+        throwIfRouteProbeAborted(
+          routeSelection?.routeProbeAbortSignal,
+          `factory quote ${formatFactoryRouteCandidate(route)}`
+        );
         const rawEvaluation =
           route.liquiditySource === LiquiditySource.UNISWAPV3
             ? await checkUniswapV3Quote(
@@ -349,7 +367,8 @@ export async function getFactoryTakeQuoteEvaluation(
           routeSelection?.routeProbeLimiter
             ? await routeSelection.routeProbeLimiter.run(
                 `factory quote ${formatFactoryRouteCandidate(route)}`,
-                async () => await evaluateFactoryRoute(route)
+                async () => await evaluateFactoryRoute(route),
+                { signal: routeSelection.routeProbeAbortSignal }
               )
             : await evaluateFactoryRoute(route)
       );

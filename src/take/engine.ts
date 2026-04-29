@@ -185,6 +185,7 @@ interface ProcessTakeCandidatesParams<
     TExecutionConfig
   >['reapproveExternalTakeBeforeExecution'];
   onFound?: (decision: TakeDecision) => void;
+  onExecutionAttempt?: (decision: TakeDecision) => void;
 }
 
 export async function getTakeBorrowerCandidates(params: {
@@ -671,6 +672,7 @@ export async function processTakeCandidates<
   onSkip,
   onExecuted,
   onFound,
+  onExecutionAttempt,
   takeWriteTransport,
 }: ProcessTakeCandidatesParams<TPoolConfig, TExecutionConfig>): Promise<void> {
   type CandidateEvaluationOutcome =
@@ -769,6 +771,7 @@ export async function processTakeCandidates<
       const { candidate, decision } = outcome;
       onFound?.(decision);
       resetExternalTakeAttemptSubmission?.();
+      onExecutionAttempt?.(decision);
       try {
         const executionResult = await executeTakeDecision({
           pool,
