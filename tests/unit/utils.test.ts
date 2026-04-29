@@ -598,6 +598,35 @@ describe('RouteProbeLimiter', () => {
     expect(queuedStarted).to.equal(false);
   });
 
+  it('releases an acquired permit when the caller aborts before operation registration', async () => {
+    const limiter = new RouteProbeLimiter({
+      maxConcurrent: 1,
+      maxAbandoned: 1,
+      hardPermitHoldMs: 1000,
+    });
+    const controller = new AbortController();
+
+    const first = limiter.run(
+      'first',
+      async () => {
+        throw new Error('should not start');
+      },
+      { signal: controller.signal }
+    );
+    controller.abort(new Error('cancelled after acquire'));
+
+    await expect(first).to.be.rejectedWith('cancelled after acquire');
+
+    let secondStarted = false;
+    const second = limiter.run('second', async () => {
+      secondStarted = true;
+      return 'second';
+    });
+
+    expect(await second).to.equal('second');
+    expect(secondStarted).to.equal(true);
+  });
+
   it('abandons active limited operations when the caller times out', async () => {
     const abandoned: string[] = [];
     const limiter = new RouteProbeLimiter({

@@ -716,6 +716,75 @@ describe('shared arbTake helpers', () => {
     expect(executionOrder).to.deep.equal([borrowers[0], borrowers[2]]);
   });
 
+  it('preloads only the active candidate window before stopping after execution', async () => {
+    const borrowers = [
+      '0xBorrowerA',
+      '0xBorrowerB',
+      '0xBorrowerC',
+      '0xBorrowerD',
+    ];
+    const readMany = sinon.stub().callsFake(async ({ borrowers }) => {
+      return new Map(
+        borrowers.map((borrower: string) => [
+          borrower.toLowerCase(),
+          {
+            borrower,
+            collateral: ethers.utils.parseEther('1'),
+            auctionPrice: ethers.utils.parseEther('1'),
+          },
+        ])
+      );
+    });
+    const read = sinon
+      .stub()
+      .rejects(new Error('single status reads should not be needed'));
+    const executeExternalTake = sinon.stub().resolves(true);
+
+    await processTakeCandidates({
+      pool: {
+        name: 'Window Preload Pool',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+      } as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Window Preload Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: borrowers.map((borrower) => ({ borrower })),
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(100),
+          takeablePrice: 1,
+        }),
+        executeExternalTake,
+      } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      takeAuctionStatusReader: { read, readMany } as any,
+      maxConcurrentCandidateEvaluations: 2,
+      stopAfterExecution: true,
+    });
+
+    expect(readMany.calledOnce).to.equal(true);
+    expect(readMany.firstCall.args[0].borrowers).to.deep.equal(
+      borrowers.slice(0, 2)
+    );
+    expect(read.notCalled).to.equal(true);
+    expect(executeExternalTake.calledOnce).to.equal(true);
+    expect(
+      executeExternalTake.firstCall.args[0].liquidation.borrower
+    ).to.equal(borrowers[0]);
+  });
+
   it('does not reuse preloaded evaluation statuses after a state-changing execution when continuing', async () => {
     const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
     const statusReader = {

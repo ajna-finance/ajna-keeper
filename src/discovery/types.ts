@@ -4,6 +4,7 @@ import {
   CurveRouterOverrides,
   DiscoveredDefaultsConfig,
   KeeperConfig,
+  LiquiditySource,
   SushiswapRouterOverrides,
   UniversalRouterOverrides,
 } from '../config';
@@ -102,4 +103,5 @@ export interface GasQuoteConversionCacheEntry {
   value: BigNumber;
   createdAtMs: number;
   gasPrice: BigNumber;
+  liquiditySource: LiquiditySource;
 }

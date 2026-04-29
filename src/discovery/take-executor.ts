@@ -70,8 +70,6 @@ import {
 import { convertWadToTokenDecimalsCeil, getDecimalsErc20 } from '../erc20';
 import {
   createTakeAuctionStatusReader,
-  TakeAuctionStatus,
-  TakeAuctionStatusReader,
 } from '../take/liquidation-status';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import {
@@ -405,6 +403,47 @@ function incrementDiscoveryRouteProbeAbandonedCount(
   }
   rpcCache.stats.routeProbeAbandonedCount =
     (rpcCache.stats.routeProbeAbandonedCount ?? 0) + 1;
+}
+
+async function withCombinedAbortSignal<T>(
+  signals: Array<AbortSignal | undefined>,
+  fn: (signal?: AbortSignal) => Promise<T>
+): Promise<T> {
+  const activeSignals = signals.filter(
+    (signal): signal is AbortSignal => signal !== undefined
+  );
+  if (activeSignals.length === 0) {
+    return await fn();
+  }
+  if (activeSignals.length === 1) {
+    return await fn(activeSignals[0]);
+  }
+
+  const controller = new AbortController();
+  const cleanup: Array<() => void> = [];
+  const abortFrom = (signal: AbortSignal): void => {
+    if (!controller.signal.aborted) {
+      controller.abort(signal.reason);
+    }
+  };
+
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abortFrom(signal);
+      break;
+    }
+    const listener = () => abortFrom(signal);
+    signal.addEventListener('abort', listener, { once: true });
+    cleanup.push(() => signal.removeEventListener('abort', listener));
+  }
+
+  try {
+    return await fn(controller.signal);
+  } finally {
+    for (const removeListener of cleanup) {
+      removeListener();
+    }
+  }
 }
 
 function createDiscoveryRouteProbeLimiter(params: {
@@ -809,6 +848,7 @@ type OneInchPathQuoteFn = (
 
 type DiscoveryOneInchQuoteOptions = {
   oneInchRequestTimeoutMs: number;
+  oneInchRequestAbortSignal?: AbortSignal;
   skipOneInchRateLimitDelay: true;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
@@ -914,31 +954,6 @@ function logDiscoveredTakeTargetSummary(params: {
   logger.info(
     `Discovered take target summary: pool=${params.pool.poolAddress} name="${params.target.name}" source=${params.target.take.liquiditySource ?? 'none'} dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} approvedTakeDecisions=${params.stats.approvedTakeDecisions} approvedArbTakeDecisions=${params.stats.approvedArbTakeDecisions} evaluationSkips=${params.stats.evaluationSkips} revalidationSkips=${params.stats.revalidationSkips} executionSkips=${params.stats.executionSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} profitFloorRejects=${params.stats.profitFloorRejects} arbProfitUnavailableRejects=${params.stats.arbProfitUnavailableRejects} executedExternalTakes=${params.stats.executedExternalTakes} executedArbTakes=${params.stats.executedArbTakes}`
   );
-}
-
-async function preloadDiscoveredTakeCandidateStatuses(params: {
-  takeAuctionStatusReader: TakeAuctionStatusReader;
-  pool: FungiblePool;
-  borrowers: string[];
-}): Promise<Map<string, TakeAuctionStatus> | undefined> {
-  if (
-    params.borrowers.length === 0 ||
-    !params.takeAuctionStatusReader.readMany
-  ) {
-    return undefined;
-  }
-
-  try {
-    return await params.takeAuctionStatusReader.readMany({
-      pool: params.pool,
-      borrowers: params.borrowers,
-    });
-  } catch (error) {
-    logger.warn(
-      `Discovered take status preload failed for ${params.pool.name}; falling back to per-candidate reads: ${getErrorMessage(error)}`
-    );
-    return undefined;
-  }
 }
 
 const INACTIVE_AUCTION_SKIP_REASONS = new Set<string>([
@@ -1625,22 +1640,35 @@ async function quoteOneInchForDiscovery(
   let evaluation: ExternalTakeQuoteEvaluation;
   const oneInchRequestTimeoutMs = getOneInchQuoteTimeoutMs(params.takePolicy);
   try {
-    const evaluateOneInchQuote = async () =>
-      await params.evaluate({
-        oneInchRequestTimeoutMs,
-        skipOneInchRateLimitDelay: true,
-        chainId: params.rpcCache?.chainId,
-        tokenDecimalsCache: getDiscoveryTokenDecimalsCache(params.rpcCache),
-      });
     evaluation = await withTimeoutAbort(
-      async (signal) =>
-        params.routeProbeLimiter
-          ? await params.routeProbeLimiter.run(
-              `1inch quote ${params.pool.name}`,
-              evaluateOneInchQuote,
-              { signal }
-            )
-          : await evaluateOneInchQuote(),
+      async (timeoutSignal) =>
+        await withCombinedAbortSignal(
+          [timeoutSignal, params.routeProbeAbortSignal],
+          async (signal) => {
+            if (signal?.aborted) {
+              throw signal.reason instanceof Error
+                ? signal.reason
+                : new Error('1inch external take quote aborted');
+            }
+            const evaluateOneInchQuote = async () =>
+              await params.evaluate({
+                oneInchRequestTimeoutMs,
+                oneInchRequestAbortSignal: signal,
+                skipOneInchRateLimitDelay: true,
+                chainId: params.rpcCache?.chainId,
+                tokenDecimalsCache: getDiscoveryTokenDecimalsCache(
+                  params.rpcCache
+                ),
+              });
+            return params.routeProbeLimiter
+              ? await params.routeProbeLimiter.run(
+                  `1inch quote ${params.pool.name}`,
+                  evaluateOneInchQuote,
+                  { signal }
+                )
+              : await evaluateOneInchQuote();
+          }
+        ),
       getExternalTakeProbeTimeoutMs(params.takePolicy),
       '1inch external take quote'
     );
@@ -1824,6 +1852,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
               price: params.price,
               auctionPrice: params.auctionPrice,
               collateral: params.collateral,
+              routeProbeAbortSignal: control?.abortController.signal,
             })
           : await params.quoteFactoryPath({
               pool: params.pool,
@@ -1904,6 +1933,8 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
         probe,
         new Promise<ProbeResult>((resolve) => {
           timeout = setTimeout(() => {
+            // Keep the flag as a backstop for any late probe work that has not
+            // reached an abort-aware RPC/API checkpoint yet.
             control.abandoned = true;
             control.abortController.abort(
               new Error(`probe timed out after ${params.probeTimeoutMs}ms`)
@@ -2557,12 +2588,6 @@ export async function handleDiscoveredTakeTarget(
                 ),
               })
             : undefined;
-        const candidateStatuses =
-          await preloadDiscoveredTakeCandidateStatuses({
-            takeAuctionStatusReader,
-            pool: params.pool,
-            borrowers: candidates.map(({ borrower }) => borrower),
-          });
         if (prewarmFactoryRoutes) {
           await prewarmFactoryRoutes;
         }
@@ -2574,7 +2599,6 @@ export async function handleDiscoveredTakeTarget(
           signer: params.signer,
           poolConfig: params.target,
           candidates,
-          candidateStatuses,
           stopAfterExecution: true,
           maxConcurrentCandidateEvaluations,
           resetExternalTakeAttemptSubmission: () => {

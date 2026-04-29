@@ -57,6 +57,7 @@ export const DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS = 13_000;
 export const DEFAULT_L1_DISCOVERY_GAS_PRICE_TTL_MS = 5 * 1000;
 export const DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS = 15 * 1000;
 const GAS_QUOTE_CONVERSION_CACHE_TTL_MS = 30 * 1000;
+const FALLBACK_GAS_QUOTE_CONVERSION_CACHE_TTL_MS = 5 * 1000;
 const MAX_GAS_QUOTE_CONVERSION_CACHE_ENTRIES = 256;
 
 interface L2ChainProfile {
@@ -549,6 +550,19 @@ function pruneGasQuoteConversionCache(
     }
     cache.delete(oldestKey);
   }
+}
+
+function getGasQuoteConversionCacheTtlMs(params: {
+  cachedLiquiditySource: LiquiditySource;
+  preferredLiquiditySource?: LiquiditySource;
+}): number {
+  if (
+    params.preferredLiquiditySource !== undefined &&
+    params.cachedLiquiditySource !== params.preferredLiquiditySource
+  ) {
+    return FALLBACK_GAS_QUOTE_CONVERSION_CACHE_TTL_MS;
+  }
+  return GAS_QUOTE_CONVERSION_CACHE_TTL_MS;
 }
 
 function logGasQuoteFallback(params: {
@@ -1131,11 +1145,17 @@ async function quoteExactNativeAmountToQuote(params: {
   pruneGasQuoteConversionCache(params.rpcCache, nowMs);
   if (conversionCacheKey && params.rpcCache?.gasQuoteConversions) {
     const cached = params.rpcCache.gasQuoteConversions.get(conversionCacheKey);
+    const cacheTtlMs = cached
+      ? getGasQuoteConversionCacheTtlMs({
+          cachedLiquiditySource: cached.liquiditySource,
+          preferredLiquiditySource: params.preferredLiquiditySource,
+        })
+      : GAS_QUOTE_CONVERSION_CACHE_TTL_MS;
     if (
       cached &&
       params.gasPrice &&
       cached.gasPrice.eq(params.gasPrice) &&
-      nowMs - cached.createdAtMs <= GAS_QUOTE_CONVERSION_CACHE_TTL_MS
+      nowMs - cached.createdAtMs <= cacheTtlMs
     ) {
       params.rpcCache.gasQuoteConversions.delete(conversionCacheKey);
       params.rpcCache.gasQuoteConversions.set(conversionCacheKey, cached);
@@ -1166,6 +1186,7 @@ async function quoteExactNativeAmountToQuote(params: {
       value: quotedAmount.amountOut,
       createdAtMs,
       gasPrice: params.gasPrice ?? BigNumber.from(0),
+      liquiditySource: quotedAmount.liquiditySource,
     });
     pruneGasQuoteConversionCache(params.rpcCache, createdAtMs);
   }

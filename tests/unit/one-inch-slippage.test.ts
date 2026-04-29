@@ -142,4 +142,53 @@ describe('1inch external take slippage', () => {
     expect(getChainId.calledOnce).to.equal(true);
     expect(quoteStub.calledTwice).to.equal(true);
   });
+
+  it('passes the configured abort signal to 1inch quote requests', async () => {
+    const controller = new AbortController();
+    const quoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('120', 6).toString(),
+      });
+    const pool = {
+      name: '1inch Abort Signal Pool',
+      poolAddress: '0x4444444444444444444444444444444444444444',
+      collateralAddress: COLLATERAL_ADDRESS,
+      quoteAddress: QUOTE_ADDRESS,
+    } as unknown as FungiblePool;
+    const signer = {
+      getChainId: async () => CHAIN_ID,
+      provider: {},
+    } as unknown as Signer;
+    const poolConfig: TakeActionConfig = {
+      take: {
+        liquiditySource: LiquiditySource.ONEINCH,
+        marketPriceFactor: 0.99,
+      },
+    };
+
+    await getOneInchPathQuoteEvaluation(
+      pool,
+      100,
+      ethers.utils.parseEther('1'),
+      poolConfig,
+      {
+        chainId: CHAIN_ID,
+        oneInchRequestAbortSignal: controller.signal,
+        skipOneInchRateLimitDelay: true,
+        tokenDecimalsCache: makeTokenDecimalsCache(),
+      },
+      signer,
+      { [CHAIN_ID]: ROUTER_ADDRESS },
+      undefined,
+      ethers.utils.parseEther('100')
+    );
+
+    expect(quoteStub.calledOnce).to.equal(true);
+    expect(quoteStub.firstCall.args[4]).to.deep.equal({
+      timeoutMs: undefined,
+      signal: controller.signal,
+    });
+  });
 });

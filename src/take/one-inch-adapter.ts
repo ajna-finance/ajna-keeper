@@ -36,6 +36,7 @@ export function createOneInchTakeAdapter(
         {
           delayBetweenActions: quoteConfig.delayBetweenActions,
           oneInchRequestTimeoutMs: quoteConfig.oneInchRequestTimeoutMs,
+          oneInchRequestAbortSignal: quoteConfig.oneInchRequestAbortSignal,
           oneInchDefaultSlippage: quoteConfig.oneInchDefaultSlippage,
           skipOneInchRateLimitDelay: quoteConfig.skipOneInchRateLimitDelay,
         },

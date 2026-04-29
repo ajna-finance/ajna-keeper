@@ -27,6 +27,7 @@ import {
 
 export interface OneInchRequestOptions {
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface OneInchApiResult {
@@ -36,6 +37,21 @@ export interface OneInchApiResult {
   error?: string;
   retryable?: boolean;
   errorCode?: number | string;
+}
+
+function getOneInchAxiosOptions(
+  params: Record<string, string | number | boolean | undefined>,
+  options: OneInchRequestOptions
+) {
+  return {
+    params,
+    timeout: options.timeoutMs,
+    ...(options.signal ? { signal: options.signal } : {}),
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
+    },
+  };
 }
 
 function validateOneInchApiEnv(): { baseUrl?: string; error?: string } {
@@ -230,14 +246,10 @@ export class DexRouter {
     );
 
     try {
-      const response = await axios.get(url, {
-        params,
-        timeout: options.timeoutMs,
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
-        },
-      });
+      const response = await axios.get(
+        url,
+        getOneInchAxiosOptions(params, options)
+      );
       const normalizedDstAmount = normalizeOneInchUintAmount(
         response.data.dstAmount,
         'dstAmount'
@@ -319,14 +331,10 @@ export class DexRouter {
     );
 
     try {
-      const response = await axios.get(url, {
-        params,
-        timeout: options.timeoutMs,
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
-        },
-      });
+      const response = await axios.get(
+        url,
+        getOneInchAxiosOptions(params, options)
+      );
 
       if (!response.data.tx || !response.data.tx.to || !response.data.tx.data) {
         logger.error('No valid transaction received from 1inch');

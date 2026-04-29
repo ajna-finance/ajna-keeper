@@ -9,6 +9,7 @@ export interface OneInchExecutionConfig extends TakeWriteTransportConfig {
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   keeperTaker?: string;
   oneInchRequestTimeoutMs?: number;
+  oneInchRequestAbortSignal?: AbortSignal;
   skipOneInchRateLimitDelay?: boolean;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
@@ -30,6 +31,7 @@ export interface OneInchQuoteConfig {
   oneInchRouters?: { [chainId: number]: string };
   connectorTokens?: Array<string>;
   oneInchRequestTimeoutMs?: number;
+  oneInchRequestAbortSignal?: AbortSignal;
   skipOneInchRateLimitDelay?: boolean;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;

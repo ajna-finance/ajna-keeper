@@ -146,6 +146,18 @@ function getQuoteAmountDueRawFromDecimals(params: {
   return convertWadToTokenDecimalsCeil(quoteDueWad, params.quoteDecimals);
 }
 
+function getOneInchRequestOptions(config: Partial<OneInchQuoteConfig>): {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+} {
+  return {
+    timeoutMs: config.oneInchRequestTimeoutMs,
+    ...(config.oneInchRequestAbortSignal
+      ? { signal: config.oneInchRequestAbortSignal }
+      : {}),
+  };
+}
+
 export async function getOneInchTakeQuoteEvaluation(
   pool: FungiblePool,
   price: number,
@@ -247,7 +259,7 @@ export async function getOneInchPathQuoteEvaluation(
       collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
-      { timeoutMs: config.oneInchRequestTimeoutMs }
+      getOneInchRequestOptions(config)
     );
 
     if (!quoteResult.success) {
@@ -499,6 +511,7 @@ export async function takeLiquidation({
         {
           delayBetweenActions: config.delayBetweenActions,
           oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
+          oneInchRequestAbortSignal: config.oneInchRequestAbortSignal,
           oneInchDefaultSlippage: config.oneInchDefaultSlippage,
           skipOneInchRateLimitDelay: config.skipOneInchRateLimitDelay,
           chainId: config.chainId,
@@ -577,7 +590,7 @@ export async function takeLiquidation({
       config.oneInchDefaultSlippage ?? 1,
       keeperTaker.address,
       true,
-      { timeoutMs: config.oneInchRequestTimeoutMs }
+      getOneInchRequestOptions(config)
     );
     if (!swapData.success || !swapData.data) {
       config.onOneInchSwapDataResult?.({

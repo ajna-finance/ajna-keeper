@@ -212,7 +212,10 @@ describe('Discovery Handlers', () => {
       config: {
         autoDiscover: {
           enabled: true,
-          take: true,
+          take: {
+            enabled: true,
+            maxConcurrentCandidateEvaluations: 2,
+          },
         },
         delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',

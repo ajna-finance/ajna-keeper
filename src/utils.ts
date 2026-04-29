@@ -163,6 +163,7 @@ export class RouteProbeLimiter implements AsyncOperationLimiter {
     };
 
     if (signal?.aborted) {
+      releasePermit();
       throw getAbortError();
     }
     const operationPromise = Promise.resolve().then(operation);

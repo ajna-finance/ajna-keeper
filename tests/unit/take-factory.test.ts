@@ -1865,6 +1865,9 @@ describe('Take Factory', () => {
         UniswapV3QuoteProvider.prototype,
         'getQuote'
       );
+      const decimalsStub = sinon
+        .stub(erc20, 'getDecimalsErc20')
+        .throws(new Error('decimals should not be read after route abort'));
       const controller = new AbortController();
       controller.abort(new Error('candidate probe timed out'));
 
@@ -1905,6 +1908,7 @@ describe('Take Factory', () => {
 
       expect(evaluation.isTakeable).to.equal(false);
       expect(evaluation.reason).to.equal('candidate probe timed out');
+      expect(decimalsStub.called).to.equal(false);
       expect(poolExistsStub.called).to.equal(false);
       expect(uniswapQuoteStub.called).to.equal(false);
     });

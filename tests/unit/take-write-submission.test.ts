@@ -753,6 +753,8 @@ describe('take write submission', () => {
   });
 
   it('uses the configured take write transport for Curve factory take submission without reselecting the pool', async () => {
+    // Deadline reads stay on the read signer; private/relay write transports
+    // should only see transaction submission and nonce reads.
     const readSigner = {
       provider: {
         getBlock: sinon.stub().resolves({ timestamp: 123 }),

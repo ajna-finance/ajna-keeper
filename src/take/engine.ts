@@ -695,8 +695,49 @@ export async function processTakeCandidates<
       ? Math.floor(requestedCandidateEvaluationConcurrency)
       : 1;
   let preloadedStatusesValid = true;
+  const readCandidateWindowStatuses = async (
+    candidateWindow: TakeBorrowerCandidate[]
+  ): Promise<Map<string, TakeAuctionStatus> | undefined> => {
+    if (!preloadedStatusesValid) {
+      return undefined;
+    }
+
+    const statuses = new Map<string, TakeAuctionStatus>();
+    const missingBorrowers: string[] = [];
+    for (const candidate of candidateWindow) {
+      const borrowerKey = normalizeBorrowerKey(candidate.borrower);
+      const preloadedStatus = candidateStatuses?.get(borrowerKey);
+      if (preloadedStatus) {
+        statuses.set(borrowerKey, preloadedStatus);
+      } else {
+        missingBorrowers.push(candidate.borrower);
+      }
+    }
+
+    if (
+      missingBorrowers.length > 1 &&
+      takeAuctionStatusReader?.readMany !== undefined
+    ) {
+      try {
+        const windowStatuses = await takeAuctionStatusReader.readMany({
+          pool,
+          borrowers: missingBorrowers,
+        });
+        for (const [borrower, status] of Array.from(windowStatuses)) {
+          statuses.set(normalizeBorrowerKey(borrower), status);
+        }
+      } catch (error) {
+        logger.warn(
+          `Take candidate status window preload failed for ${pool.name}; falling back to per-candidate reads: ${getErrorMessage(error)}`
+        );
+      }
+    }
+
+    return statuses.size > 0 ? statuses : undefined;
+  };
   const evaluateCandidate = async (
-    candidate: TakeBorrowerCandidate
+    candidate: TakeBorrowerCandidate,
+    windowCandidateStatuses?: Map<string, TakeAuctionStatus>
   ): Promise<CandidateEvaluationOutcome> => {
     try {
       const decision = await evaluateTakeDecision({
@@ -709,7 +750,7 @@ export async function processTakeCandidates<
         arbTakeStrategy,
         takeAuctionStatusReader,
         auctionStatus: preloadedStatusesValid
-          ? candidateStatuses?.get(normalizeBorrowerKey(candidate.borrower))
+          ? windowCandidateStatuses?.get(normalizeBorrowerKey(candidate.borrower))
           : undefined,
         approveExternalTake,
         approveArbTake,
@@ -751,10 +792,13 @@ export async function processTakeCandidates<
       windowStart,
       windowStart + candidateEvaluationConcurrency
     );
+    const windowCandidateStatuses =
+      await readCandidateWindowStatuses(candidateWindow);
     const evaluationOutcomes = await mapWithConcurrencyPreservingOrder(
       candidateWindow,
       candidateEvaluationConcurrency,
-      evaluateCandidate
+      async (candidate) =>
+        await evaluateCandidate(candidate, windowCandidateStatuses)
     );
 
     for (const outcome of evaluationOutcomes) {
