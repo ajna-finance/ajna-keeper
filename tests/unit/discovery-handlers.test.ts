@@ -23,6 +23,19 @@ import {
   createDiscoveryTransports,
 } from '../helpers/discovery';
 
+function getDiscoveredTakeSummary(loggerInfoStub: sinon.SinonStub): string {
+  const summaryLog = loggerInfoStub
+    .getCalls()
+    .map((call) => call.args[0])
+    .find(
+      (message: any) =>
+        typeof message === 'string' &&
+        message.includes('Discovered take target summary:')
+    );
+  expect(summaryLog).to.be.a('string');
+  return summaryLog as string;
+}
+
 describe('Discovery Handlers', () => {
   afterEach(() => {
     sinon.restore();
@@ -195,8 +208,9 @@ describe('Discovery Handlers', () => {
       transports: createDiscoveryTransports(),
     });
 
-    expect(statusCalls.filter((borrower) => borrower === borrowers[0]).length)
-      .to.be.greaterThan(1);
+    expect(
+      statusCalls.filter((borrower) => borrower === borrowers[0]).length
+    ).to.be.greaterThan(1);
     expect(takeLiquidationStub.calledOnce).to.be.true;
     expect(takeLiquidationStub.firstCall.args[0].liquidation.borrower).to.equal(
       borrowers[0]
@@ -1104,9 +1118,15 @@ describe('Discovery Handlers', () => {
   });
 
   it('falls back to factory after a hybrid 1inch pre-broadcast execution failure', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
     const takeLiquidationStub = sinon
       .stub(oneInchExecutionModule, 'takeLiquidation')
       .callsFake(async ({ config }: any) => {
+        config.onOneInchSwapDataResult?.({
+          success: false,
+          retryable: true,
+          error: 'swap data unavailable',
+        });
         config.onOneInchExecutionFailure?.({
           preBroadcast: true,
           error: 'gas estimation failed',
@@ -1245,9 +1265,19 @@ describe('Discovery Handlers', () => {
         ethers.utils.parseEther('95')
       )
     ).to.be.true;
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).to.include('approvedOneInchTakeDecisions=1');
+    expect(summaryLog).to.include('executedOneInchTakes=0');
+    expect(summaryLog).to.include('executedFactoryTakes=1');
+    expect(summaryLog).to.include('executedUniswapV3Takes=1');
+    expect(summaryLog).to.include('oneInchSwapDataFailures=1');
+    expect(summaryLog).to.include('oneInchPreBroadcastFailures=1');
+    expect(summaryLog).to.include('hybridFallbackAttempts=1');
+    expect(summaryLog).to.include('hybridFallbackSuccesses=1');
   });
 
   it('falls back to 1inch after a hybrid factory pre-broadcast execution failure', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
     const takeLiquidationStub = sinon
       .stub(oneInchExecutionModule, 'takeLiquidation')
       .resolves(true);
@@ -1379,6 +1409,14 @@ describe('Discovery Handlers', () => {
 
     expect(takeLiquidationFactoryStub.calledOnce).to.be.true;
     expect(takeLiquidationStub.calledOnce).to.be.true;
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).to.include('approvedFactoryTakeDecisions=1');
+    expect(summaryLog).to.include('approvedUniswapV3TakeDecisions=1');
+    expect(summaryLog).to.include('executedFactoryTakes=0');
+    expect(summaryLog).to.include('executedOneInchTakes=1');
+    expect(summaryLog).to.include('factoryPreBroadcastFailures=1');
+    expect(summaryLog).to.include('hybridFallbackAttempts=1');
+    expect(summaryLog).to.include('hybridFallbackSuccesses=1');
   });
 
   it('falls back to factory when the hybrid 1inch probe times out', async () => {

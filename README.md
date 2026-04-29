@@ -1446,6 +1446,6 @@ User assumes all risk of data presented and transactions placed by this keeper; 
 
 You can ask an AI about this GitHub repo on DeepWiki. It is indexed weekly, so it may lag the current branch.
 
-[https://deepwiki.com/mitakash/ajna-keeper](https://deepwiki.com/mitakash/ajna-keeper)
+[https://deepwiki.com/ajna-finance/ajna-keeper](https://deepwiki.com/ajna-finance/ajna-keeper)
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mitakash/ajna-keeper)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ajna-finance/ajna-keeper)

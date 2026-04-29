@@ -69,9 +69,7 @@ import {
   withTimeoutAbort,
 } from '../utils';
 import { convertWadToTokenDecimalsCeil, getDecimalsErc20 } from '../erc20';
-import {
-  createTakeAuctionStatusReader,
-} from '../take/liquidation-status';
+import { createTakeAuctionStatusReader } from '../take/liquidation-status';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import {
   getOneInchCircuitOpenReason,
@@ -803,6 +801,11 @@ interface DiscoveredTakeTargetStats {
   candidateCount: number;
   approvedTakeDecisions: number;
   approvedArbTakeDecisions: number;
+  approvedOneInchTakeDecisions: number;
+  approvedFactoryTakeDecisions: number;
+  approvedUniswapV3TakeDecisions: number;
+  approvedSushiswapTakeDecisions: number;
+  approvedCurveTakeDecisions: number;
   evaluationSkips: number;
   revalidationSkips: number;
   executionSkips: number;
@@ -811,7 +814,38 @@ interface DiscoveredTakeTargetStats {
   arbProfitUnavailableRejects: number;
   executedExternalTakes: number;
   executedArbTakes: number;
+  executedOneInchTakes: number;
+  executedFactoryTakes: number;
+  executedUniswapV3Takes: number;
+  executedSushiswapTakes: number;
+  executedCurveTakes: number;
+  oneInchSwapDataFailures: number;
+  oneInchPreBroadcastFailures: number;
+  oneInchPostSubmissionFailures: number;
+  factoryPreBroadcastFailures: number;
+  factoryPostSubmissionFailures: number;
+  hybridFallbackAttempts: number;
+  hybridFallbackSuccesses: number;
+  hotAuctionCandidateRemovals: number;
 }
+
+type ExecutedExternalTakeRouteStats = Pick<
+  DiscoveredTakeTargetStats,
+  | 'executedOneInchTakes'
+  | 'executedFactoryTakes'
+  | 'executedUniswapV3Takes'
+  | 'executedSushiswapTakes'
+  | 'executedCurveTakes'
+>;
+
+type HybridExternalTakeRuntimeStats = Pick<
+  DiscoveredTakeTargetStats,
+  | 'gasPolicyRejects'
+  | 'profitFloorRejects'
+  | 'hybridFallbackAttempts'
+  | 'hybridFallbackSuccesses'
+> &
+  ExecutedExternalTakeRouteStats;
 
 interface ExternalTakeApprovalInput {
   price: number;
@@ -894,7 +928,7 @@ interface HandleDiscoveredTakeTargetParamsBase {
   onCandidateInactive?: (candidate: {
     poolAddress: string;
     borrower: string;
-  }) => void;
+  }) => boolean | void;
 }
 
 export type HandleDiscoveredTakeTargetParams =
@@ -958,9 +992,110 @@ function logDiscoveredTakeTargetSummary(params: {
   target: ResolvedTakeTarget;
   stats: DiscoveredTakeTargetStats;
 }): void {
-  logger.info(
-    `Discovered take target summary: pool=${params.pool.poolAddress} name="${params.target.name}" source=${params.target.take.liquiditySource ?? 'none'} dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} approvedTakeDecisions=${params.stats.approvedTakeDecisions} approvedArbTakeDecisions=${params.stats.approvedArbTakeDecisions} evaluationSkips=${params.stats.evaluationSkips} revalidationSkips=${params.stats.revalidationSkips} executionSkips=${params.stats.executionSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} profitFloorRejects=${params.stats.profitFloorRejects} arbProfitUnavailableRejects=${params.stats.arbProfitUnavailableRejects} executedExternalTakes=${params.stats.executedExternalTakes} executedArbTakes=${params.stats.executedArbTakes}`
+  const stats = params.stats;
+  const fields = [
+    `pool=${params.pool.poolAddress}`,
+    `name="${params.target.name}"`,
+    `source=${params.target.take.liquiditySource ?? 'none'}`,
+    `dryRun=${params.target.dryRun}`,
+    `candidates=${stats.candidateCount}`,
+    `approvedTakeDecisions=${stats.approvedTakeDecisions}`,
+    `approvedArbTakeDecisions=${stats.approvedArbTakeDecisions}`,
+    `approvedOneInchTakeDecisions=${stats.approvedOneInchTakeDecisions}`,
+    `approvedFactoryTakeDecisions=${stats.approvedFactoryTakeDecisions}`,
+    `approvedUniswapV3TakeDecisions=${stats.approvedUniswapV3TakeDecisions}`,
+    `approvedSushiswapTakeDecisions=${stats.approvedSushiswapTakeDecisions}`,
+    `approvedCurveTakeDecisions=${stats.approvedCurveTakeDecisions}`,
+    `evaluationSkips=${stats.evaluationSkips}`,
+    `revalidationSkips=${stats.revalidationSkips}`,
+    `executionSkips=${stats.executionSkips}`,
+    `gasPolicyRejects=${stats.gasPolicyRejects}`,
+    `profitFloorRejects=${stats.profitFloorRejects}`,
+    `arbProfitUnavailableRejects=${stats.arbProfitUnavailableRejects}`,
+    `executedExternalTakes=${stats.executedExternalTakes}`,
+    `executedArbTakes=${stats.executedArbTakes}`,
+    `executedOneInchTakes=${stats.executedOneInchTakes}`,
+    `executedFactoryTakes=${stats.executedFactoryTakes}`,
+    `executedUniswapV3Takes=${stats.executedUniswapV3Takes}`,
+    `executedSushiswapTakes=${stats.executedSushiswapTakes}`,
+    `executedCurveTakes=${stats.executedCurveTakes}`,
+    `oneInchSwapDataFailures=${stats.oneInchSwapDataFailures}`,
+    `oneInchPreBroadcastFailures=${stats.oneInchPreBroadcastFailures}`,
+    `oneInchPostSubmissionFailures=${stats.oneInchPostSubmissionFailures}`,
+    `factoryPreBroadcastFailures=${stats.factoryPreBroadcastFailures}`,
+    `factoryPostSubmissionFailures=${stats.factoryPostSubmissionFailures}`,
+    `hybridFallbackAttempts=${stats.hybridFallbackAttempts}`,
+    `hybridFallbackSuccesses=${stats.hybridFallbackSuccesses}`,
+    `hotAuctionCandidateRemovals=${stats.hotAuctionCandidateRemovals}`,
+  ];
+  logger.info(`Discovered take target summary: ${fields.join(' ')}`);
+}
+
+function isOneInchExternalTakeRoute(
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): boolean {
+  return (
+    quoteEvaluation?.externalTakePath === 'oneinch' ||
+    quoteEvaluation?.selectedLiquiditySource === LiquiditySource.ONEINCH
   );
+}
+
+function isFactoryExternalTakeRoute(
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): boolean {
+  const source = quoteEvaluation?.selectedLiquiditySource;
+  return (
+    quoteEvaluation?.externalTakePath === 'factory' ||
+    (source !== undefined && isFactoryDynamicSource(source))
+  );
+}
+
+function incrementApprovedExternalTakeRouteStats(
+  stats: DiscoveredTakeTargetStats,
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): void {
+  if (isOneInchExternalTakeRoute(quoteEvaluation)) {
+    stats.approvedOneInchTakeDecisions += 1;
+  }
+  if (isFactoryExternalTakeRoute(quoteEvaluation)) {
+    stats.approvedFactoryTakeDecisions += 1;
+  }
+
+  switch (quoteEvaluation?.selectedLiquiditySource) {
+    case LiquiditySource.UNISWAPV3:
+      stats.approvedUniswapV3TakeDecisions += 1;
+      break;
+    case LiquiditySource.SUSHISWAP:
+      stats.approvedSushiswapTakeDecisions += 1;
+      break;
+    case LiquiditySource.CURVE:
+      stats.approvedCurveTakeDecisions += 1;
+      break;
+  }
+}
+
+function incrementExecutedExternalTakeRouteStats(
+  stats: ExecutedExternalTakeRouteStats,
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): void {
+  if (isOneInchExternalTakeRoute(quoteEvaluation)) {
+    stats.executedOneInchTakes += 1;
+  }
+  if (isFactoryExternalTakeRoute(quoteEvaluation)) {
+    stats.executedFactoryTakes += 1;
+  }
+
+  switch (quoteEvaluation?.selectedLiquiditySource) {
+    case LiquiditySource.UNISWAPV3:
+      stats.executedUniswapV3Takes += 1;
+      break;
+    case LiquiditySource.SUSHISWAP:
+      stats.executedSushiswapTakes += 1;
+      break;
+    case LiquiditySource.CURVE:
+      stats.executedCurveTakes += 1;
+      break;
+  }
 }
 
 const INACTIVE_AUCTION_SKIP_REASONS = new Set<string>([
@@ -2035,10 +2170,7 @@ function createExternalTakeAdapterForDiscovery(params: {
   quoteFactoryPath: FactoryPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
   recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
-  stats: Pick<
-    DiscoveredTakeTargetStats,
-    'gasPolicyRejects' | 'profitFloorRejects'
-  >;
+  stats: HybridExternalTakeRuntimeStats;
   config: DiscoveryExecutionConfig;
 }): ExternalTakeAdapter<ResolvedTakeTarget, DiscoveryExternalExecutionConfig> {
   if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
@@ -2100,9 +2232,14 @@ function createExternalTakeAdapterForDiscovery(params: {
             continue;
           }
 
+          const isFallbackCandidate = index > 0;
+          if (isFallbackCandidate) {
+            params.stats.hybridFallbackAttempts += 1;
+          }
+
           let approvedEvaluation = candidateEvaluation;
           let executionLiquidation = liquidation;
-          if (index > 0) {
+          if (isFallbackCandidate) {
             // The primary path already passed the engine's final approval hook.
             // Fallbacks are selected inside this executor, so refresh and
             // reapprove them immediately before attempting execution.
@@ -2194,6 +2331,13 @@ function createExternalTakeAdapterForDiscovery(params: {
                 config: oneInchConfig,
               });
             if (oneInchSucceeded) {
+              incrementExecutedExternalTakeRouteStats(
+                params.stats,
+                approvedEvaluation
+              );
+              if (isFallbackCandidate) {
+                params.stats.hybridFallbackSuccesses += 1;
+              }
               return true;
             }
             if (
@@ -2239,6 +2383,13 @@ function createExternalTakeAdapterForDiscovery(params: {
               config: factoryConfig,
             });
           if (factorySucceeded) {
+            incrementExecutedExternalTakeRouteStats(
+              params.stats,
+              approvedEvaluation
+            );
+            if (isFallbackCandidate) {
+              params.stats.hybridFallbackSuccesses += 1;
+            }
             return true;
           }
           if (
@@ -2286,14 +2437,22 @@ function createExternalTakeAdapterForDiscovery(params: {
         poolConfig,
         liquidation,
         config,
-      }) =>
-        oneInchExecutionModule.takeLiquidation({
+      }) => {
+        const succeeded = await oneInchExecutionModule.takeLiquidation({
           pool,
           signer,
           poolConfig,
           liquidation,
           config,
-        }),
+        });
+        if (succeeded) {
+          incrementExecutedExternalTakeRouteStats(
+            params.stats,
+            liquidation.externalTakeQuoteEvaluation
+          );
+        }
+        return succeeded;
+      },
     };
   }
 
@@ -2320,14 +2479,22 @@ function createExternalTakeAdapterForDiscovery(params: {
         poolConfig,
         liquidation,
         config,
-      }) =>
-        takeFactoryModule.takeLiquidationFactory({
+      }) => {
+        const succeeded = await takeFactoryModule.takeLiquidationFactory({
           pool,
           signer,
           poolConfig,
           liquidation,
           config,
-        }),
+        });
+        if (succeeded) {
+          incrementExecutedExternalTakeRouteStats(
+            params.stats,
+            liquidation.externalTakeQuoteEvaluation
+          );
+        }
+        return succeeded;
+      },
     };
   }
 
@@ -2350,6 +2517,11 @@ export async function handleDiscoveredTakeTarget(
     candidateCount: params.target.candidates.length,
     approvedTakeDecisions: 0,
     approvedArbTakeDecisions: 0,
+    approvedOneInchTakeDecisions: 0,
+    approvedFactoryTakeDecisions: 0,
+    approvedUniswapV3TakeDecisions: 0,
+    approvedSushiswapTakeDecisions: 0,
+    approvedCurveTakeDecisions: 0,
     evaluationSkips: 0,
     revalidationSkips: 0,
     executionSkips: 0,
@@ -2358,6 +2530,19 @@ export async function handleDiscoveredTakeTarget(
     arbProfitUnavailableRejects: 0,
     executedExternalTakes: 0,
     executedArbTakes: 0,
+    executedOneInchTakes: 0,
+    executedFactoryTakes: 0,
+    executedUniswapV3Takes: 0,
+    executedSushiswapTakes: 0,
+    executedCurveTakes: 0,
+    oneInchSwapDataFailures: 0,
+    oneInchPreBroadcastFailures: 0,
+    oneInchPostSubmissionFailures: 0,
+    factoryPreBroadcastFailures: 0,
+    factoryPostSubmissionFailures: 0,
+    hybridFallbackAttempts: 0,
+    hybridFallbackSuccesses: 0,
+    hotAuctionCandidateRemovals: 0,
   };
   const rpcCache =
     params.rpcCache ??
@@ -2371,8 +2556,7 @@ export async function handleDiscoveredTakeTarget(
     rpcCache.stats.factory ??= {};
   }
   const takePolicy = getAutoDiscoverTakePolicy(params.config.autoDiscover);
-  const maxExecutionsPerPoolPerRun =
-    getMaxExecutionsPerPoolPerRun(takePolicy);
+  const maxExecutionsPerPoolPerRun = getMaxExecutionsPerPoolPerRun(takePolicy);
   const maxConcurrentCandidateEvaluations =
     maxExecutionsPerPoolPerRun > 1
       ? 1
@@ -2474,13 +2658,25 @@ export async function handleDiscoveredTakeTarget(
     });
   };
   let externalTakeAttemptedSubmission = false;
-  const recordExternalTakeExecutionFailure = (result: {
-    preBroadcast: boolean;
-  }): void => {
-    if (!result.preBroadcast) {
-      externalTakeAttemptedSubmission = true;
-    }
-  };
+  const recordExternalTakeExecutionFailure =
+    (path: 'oneinch' | 'factory') =>
+    (result: { preBroadcast: boolean; error?: string }): void => {
+      if (path === 'oneinch') {
+        if (result.preBroadcast) {
+          stats.oneInchPreBroadcastFailures += 1;
+        } else {
+          stats.oneInchPostSubmissionFailures += 1;
+        }
+      } else if (result.preBroadcast) {
+        stats.factoryPreBroadcastFailures += 1;
+      } else {
+        stats.factoryPostSubmissionFailures += 1;
+      }
+
+      if (!result.preBroadcast) {
+        externalTakeAttemptedSubmission = true;
+      }
+    };
   const externalTakeAdapter = createExternalTakeAdapterForDiscovery({
     target: params.target,
     takePolicy,
@@ -2526,12 +2722,13 @@ export async function handleDiscoveredTakeTarget(
         recordOneInchCircuitOutcome('success');
         return;
       }
+      stats.oneInchSwapDataFailures += 1;
       if (result.retryable !== false) {
         recordOneInchCircuitOutcome('failure');
       }
     },
-    onOneInchExecutionFailure: recordExternalTakeExecutionFailure,
-    onFactoryExecutionFailure: recordExternalTakeExecutionFailure,
+    onOneInchExecutionFailure: recordExternalTakeExecutionFailure('oneinch'),
+    onFactoryExecutionFailure: recordExternalTakeExecutionFailure('factory'),
   };
 
   try {
@@ -2673,6 +2870,10 @@ export async function handleDiscoveredTakeTarget(
           onExecutionAttempt: (decision) => {
             if (decision.approvedTake) {
               stats.approvedTakeDecisions += 1;
+              incrementApprovedExternalTakeRouteStats(
+                stats,
+                decision.quoteEvaluation
+              );
             }
             if (decision.approvedArbTake) {
               stats.approvedArbTakeDecisions += 1;
@@ -2680,10 +2881,13 @@ export async function handleDiscoveredTakeTarget(
           },
           onSkip: ({ candidate, stage, reason }) => {
             if (isInactiveAuctionSkipReason(reason)) {
-              params.onCandidateInactive?.({
+              const removed = params.onCandidateInactive?.({
                 poolAddress: params.target.poolAddress,
                 borrower: candidate.borrower,
               });
+              if (removed === true) {
+                stats.hotAuctionCandidateRemovals += 1;
+              }
             }
             if (stage === 'revalidation') {
               stats.revalidationSkips += 1;

@@ -546,7 +546,7 @@ async function resolveEffectiveTargetPool(
 function createHotAuctionCandidateRemover(
   state: BoundDiscoveryRuntimeState
 ):
-  | ((candidate: { poolAddress: string; borrower: string }) => void)
+  | ((candidate: { poolAddress: string; borrower: string }) => boolean)
   | undefined {
   if (!state.hotAuctionCandidateCache || state.chainId === undefined) {
     return undefined;
@@ -562,6 +562,7 @@ function createHotAuctionCandidateRemover(
         `Removed inactive hot take candidate ${candidate.poolAddress}/${candidate.borrower} from cache`
       );
     }
+    return removed === true;
   };
 }
 
@@ -688,9 +689,7 @@ function logDiscoveryRpcStats(params: {
   if (parts.length === 0) {
     return;
   }
-  logger.debug(
-    `Discovery ${params.cycleType} rpc stats: ${parts.join(' ')}`
-  );
+  logger.debug(`Discovery ${params.cycleType} rpc stats: ${parts.join(' ')}`);
 }
 
 function logDiscoveryCycleFailure(params: {
