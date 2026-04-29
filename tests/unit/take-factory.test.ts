@@ -12,8 +12,10 @@ import * as erc20 from '../../src/erc20';
 import {
   applyFactoryRouteProfitabilityPolicy,
   ceilDiv,
+  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
   filterFactoryRouteCandidatesByAvailability,
   getCurveQuoteProvider,
+  getCachedFactoryTokenDecimals,
   getFactoryRouteCandidates,
   getMarketPriceFactorUnits,
   getSushiSwapQuoteProvider,
@@ -448,6 +450,88 @@ describe('Take Factory', () => {
   });
 
   describe('Quote Provider Reuse', () => {
+    it('uses an address-only decimals cache key when chainId lookup times out without skipping decimals', async () => {
+      const clock = sinon.useFakeTimers();
+      const tokenAddress = '0x1111111111111111111111111111111111111111';
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      const neverResolves = new Promise<number>(() => {});
+      mockSigner.getChainId = sinon.stub().returns(neverResolves);
+      const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const decimalsPromise = getCachedFactoryTokenDecimals(
+        mockSigner,
+        tokenAddress,
+        runtimeCache
+      );
+      await clock.tickAsync(DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS);
+
+      const decimals = await decimalsPromise;
+
+      expect(decimals).to.equal(6);
+      expect(decimalsStub.calledOnceWith(mockSigner, tokenAddress, undefined))
+        .to.be.true;
+      expect(runtimeCache.tokenDecimals?.get(`unknown:${tokenAddress}`)).to.equal(
+        6
+      );
+    });
+
+    it('migrates address-only decimals cache entries once chainId resolves later', async () => {
+      const clock = sinon.useFakeTimers();
+      const tokenAddress = '0x2222222222222222222222222222222222222222';
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      let resolveChainId!: (chainId: number) => void;
+      const chainIdPromise = new Promise<number>((resolve) => {
+        resolveChainId = resolve;
+      });
+      mockSigner.getChainId = sinon.stub().returns(chainIdPromise);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+
+      const decimalsPromise = getCachedFactoryTokenDecimals(
+        mockSigner,
+        tokenAddress,
+        runtimeCache
+      );
+      await clock.tickAsync(DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS);
+
+      expect(await decimalsPromise).to.equal(18);
+      expect(runtimeCache.tokenDecimals?.get(`unknown:${tokenAddress}`)).to.equal(
+        18
+      );
+
+      const inflight = runtimeCache.chainIdInflight;
+      resolveChainId(8453);
+      await inflight;
+
+      expect(runtimeCache.chainId).to.equal(8453);
+      expect(runtimeCache.tokenDecimals?.has(`unknown:${tokenAddress}`)).to.be
+        .false;
+      expect(runtimeCache.tokenDecimals?.get(`8453:${tokenAddress}`)).to.equal(
+        18
+      );
+    });
+
+    it('reuses migrated address-only decimals entries without a second decimals read', async () => {
+      const tokenAddress = '0x3333333333333333333333333333333333333333';
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.tokenDecimals = new Map([[`unknown:${tokenAddress}`, 8]]);
+      mockSigner.getChainId = sinon.stub().resolves(8453);
+      const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+
+      const decimals = await getCachedFactoryTokenDecimals(
+        mockSigner,
+        tokenAddress,
+        runtimeCache
+      );
+
+      expect(decimals).to.equal(8);
+      expect(decimalsStub.notCalled).to.be.true;
+      expect(runtimeCache.tokenDecimals?.has(`unknown:${tokenAddress}`)).to.be
+        .false;
+      expect(runtimeCache.tokenDecimals?.get(`8453:${tokenAddress}`)).to.equal(
+        8
+      );
+    });
+
     it('reuses a shared Uniswap V3 quote provider cache across quote evaluations', async () => {
       sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
       sinon.stub(UniswapV3QuoteProvider.prototype, 'getQuote').resolves({

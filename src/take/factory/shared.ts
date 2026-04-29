@@ -214,6 +214,8 @@ const FACTORY_ROUTE_AVAILABILITY_CONCURRENCY = 3;
 const PROVIDER_INIT_FAILURE_RETRY_MS = 30_000;
 const PROVIDER_INIT_FAILURE_RETRY_JITTER_BPS = 2_000;
 export const DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS = 2_000;
+const FACTORY_TOKEN_DECIMALS_CHAIN_ID_TIMEOUT_MS =
+  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS;
 
 function getProviderInitFailureRetryMs(): number {
   const jitterRangeMs = Math.floor(
@@ -1334,29 +1336,19 @@ export async function getCachedFactoryTokenDecimals(
   tokenAddress: string,
   runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<number> {
-  let chainId = runtimeCache?.chainId;
-  if (
-    runtimeCache &&
-    chainId === undefined &&
-    typeof signer.getChainId === 'function'
-  ) {
-    try {
-      runtimeCache.chainIdInflight ??= signer.getChainId().catch((error) => {
-        logger.debug(
-          `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${getErrorMessage(error)}`
-        );
-        return undefined;
-      });
-      const resolvedChainId = await runtimeCache.chainIdInflight;
-      if (resolvedChainId !== undefined) {
-        chainId = resolvedChainId;
-        runtimeCache.chainId = resolvedChainId;
-      }
-    } finally {
-      runtimeCache.chainIdInflight = undefined;
-    }
+  const normalizedTokenAddress = tokenAddress.toLowerCase();
+  let chainId = await resolveFactoryTokenDecimalsChainId({
+    signer,
+    runtimeCache,
+  });
+  if (runtimeCache?.chainId !== undefined) {
+    chainId = runtimeCache.chainId;
   }
-  const cacheKey = `${chainId ?? 'unknown'}:${tokenAddress.toLowerCase()}`;
+
+  const cacheKey = getFactoryTokenDecimalsCacheKey(
+    normalizedTokenAddress,
+    chainId
+  );
   const cached = runtimeCache?.tokenDecimals?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
@@ -1367,13 +1359,117 @@ export async function getCachedFactoryTokenDecimals(
     if (!runtimeCache.tokenDecimals) {
       runtimeCache.tokenDecimals = new Map();
     }
-    runtimeCache.tokenDecimals.set(cacheKey, decimals);
+    const storeChainId = runtimeCache.chainId ?? chainId;
+    const storeCacheKey = getFactoryTokenDecimalsCacheKey(
+      normalizedTokenAddress,
+      storeChainId
+    );
+    runtimeCache.tokenDecimals.set(storeCacheKey, decimals);
+    if (storeChainId !== undefined) {
+      runtimeCache.tokenDecimals.delete(
+        getFactoryTokenDecimalsCacheKey(normalizedTokenAddress, undefined)
+      );
+    }
     pruneMapToMaxSize(
       runtimeCache.tokenDecimals,
       MAX_TOKEN_DECIMAL_CACHE_ENTRIES
     );
   }
   return decimals;
+}
+
+function getFactoryTokenDecimalsCacheKey(
+  normalizedTokenAddress: string,
+  chainId: number | undefined
+): string {
+  return `${chainId ?? 'unknown'}:${normalizedTokenAddress}`;
+}
+
+function migrateUnknownFactoryTokenDecimals(
+  runtimeCache: FactoryQuoteProviderRuntimeCache,
+  chainId: number
+): void {
+  const tokenDecimals = runtimeCache.tokenDecimals;
+  if (!tokenDecimals) {
+    return;
+  }
+
+  for (const [key, decimals] of Array.from(tokenDecimals.entries())) {
+    if (!key.startsWith('unknown:')) {
+      continue;
+    }
+    const normalizedTokenAddress = key.slice('unknown:'.length);
+    const chainKey = getFactoryTokenDecimalsCacheKey(
+      normalizedTokenAddress,
+      chainId
+    );
+    if (!tokenDecimals.has(chainKey)) {
+      tokenDecimals.set(chainKey, decimals);
+    }
+    tokenDecimals.delete(key);
+  }
+}
+
+function startFactoryTokenDecimalsChainIdResolution(params: {
+  signer: Signer;
+  runtimeCache: FactoryQuoteProviderRuntimeCache;
+}): Promise<number | undefined> {
+  const pending = Promise.resolve()
+    .then(() => params.signer.getChainId())
+    .then((resolvedChainId) => {
+      params.runtimeCache.chainId = resolvedChainId;
+      migrateUnknownFactoryTokenDecimals(params.runtimeCache, resolvedChainId);
+      return resolvedChainId;
+    })
+    .catch((error) => {
+      logger.debug(
+        `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${getErrorMessage(error)}`
+      );
+      return undefined;
+    })
+    .finally(() => {
+      if (params.runtimeCache.chainIdInflight === pending) {
+        params.runtimeCache.chainIdInflight = undefined;
+      }
+    });
+  params.runtimeCache.chainIdInflight = pending;
+  return pending;
+}
+
+async function resolveFactoryTokenDecimalsChainId(params: {
+  signer: Signer;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): Promise<number | undefined> {
+  const runtimeCache = params.runtimeCache;
+  if (!runtimeCache) {
+    return undefined;
+  }
+  if (runtimeCache.chainId !== undefined) {
+    migrateUnknownFactoryTokenDecimals(runtimeCache, runtimeCache.chainId);
+    return runtimeCache.chainId;
+  }
+  if (typeof params.signer.getChainId !== 'function') {
+    return undefined;
+  }
+
+  const pending =
+    runtimeCache.chainIdInflight ??
+    startFactoryTokenDecimalsChainIdResolution({
+      signer: params.signer,
+      runtimeCache,
+    });
+  try {
+    return await withTimeout(
+      pending,
+      FACTORY_TOKEN_DECIMALS_CHAIN_ID_TIMEOUT_MS,
+      'Factory token decimals chainId'
+    );
+  } catch (error) {
+    logger.debug(
+      `Factory token decimals cache chainId lookup timed out; using address-only fallback key: ${getErrorMessage(error)}`
+    );
+    return undefined;
+  }
 }
 
 async function getCachedQuoteTokenScale(
