@@ -58,6 +58,7 @@ import {
   applyExternalTakeRoutePolicy,
   compareExternalTakeBySubsidyThenRank,
   isSubsidizedExternalTakeQuote,
+  mergeRoutePolicyIntoEvaluation,
 } from '../take/external-take-policy';
 import {
   AsyncOperationLimiter,
@@ -1206,38 +1207,14 @@ function applyDiscoveryApprovalProfitabilityPolicy(params: {
         stats: params.stats,
       });
     }
-    const approvedQuoteEvaluation: ExternalTakeQuoteEvaluation = {
-      ...params.quoteEvaluation,
-      routeMinOutRaw: policy.routeMinOutRaw,
-      profitMinOutRaw: policy.profitMinOutRaw,
-      approvedMinOutRaw: policy.approvedMinOutRaw,
-      takeablePrice:
-        params.quoteEvaluation.marketPrice !== undefined
-          ? params.quoteEvaluation.marketPrice *
-            policy.effectiveMarketPriceFactor
-          : params.quoteEvaluation.takeablePrice,
-      routeProfitability: {
-        ...params.quoteEvaluation.routeProfitability,
-        auctionRepayRequirementQuoteRaw: auctionCostQuoteRaw,
-        routeExecutionCostQuoteRaw: gasCostQuoteRaw,
-        nativeProfitFloorQuoteRaw:
-          params.gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
-        configuredProfitFloorQuoteRaw: params.minExpectedProfitQuoteRaw,
-        configuredMarketPriceFactor,
-        marketFactorFloorQuoteRaw,
-        requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
-        requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
-        requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
-        expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
-        expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
-        surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
-        routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
-        effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
-        subsidyAllowed: policy.subsidyAllowed,
-        expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
-        ...gasTelemetryFields,
-      },
-    };
+    const approvedQuoteEvaluation = mergeRoutePolicyIntoEvaluation({
+      evaluation: params.quoteEvaluation,
+      policy,
+      auctionRepayRequirementQuoteRaw: auctionCostQuoteRaw,
+      configuredMarketPriceFactor,
+      marketFactorFloorQuoteRaw,
+      routeProfitabilityExtras: gasTelemetryFields,
+    });
     return { approved: true, quoteEvaluation: approvedQuoteEvaluation };
   }
 

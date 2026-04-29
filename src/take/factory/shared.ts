@@ -41,6 +41,7 @@ import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
   compareExternalTakeBySubsidyThenRank,
+  mergeRoutePolicyIntoEvaluation,
 } from '../external-take-policy';
 import {
   BASIS_POINTS_DENOMINATOR,
@@ -1685,47 +1686,27 @@ export async function buildFactoryQuoteEvaluation(params: {
     routeMinOutRaw,
   });
 
-  return {
-    isTakeable: policy.isEconomicallyExecutable,
-    externalTakePath: 'factory',
-    marketPrice: params.quoteAmount / collateralAmount,
-    takeablePrice:
-      (params.quoteAmount / collateralAmount) *
-      policy.effectiveMarketPriceFactor,
-    quoteAmount: params.quoteAmount,
-    quoteAmountRaw: params.quoteAmountRaw,
-    selectedLiquiditySource: params.selectedLiquiditySource,
-    selectedFeeTier: params.selectedFeeTier,
-    routeMinOutRaw: policy.routeMinOutRaw,
-    profitMinOutRaw: policy.profitMinOutRaw,
-    approvedMinOutRaw: policy.approvedMinOutRaw,
-    collateralAmount,
-    quotedAuctionPriceWad: params.auctionPriceWad,
-    quotedCollateralWad: params.collateral,
-    routeProfitability: {
-      auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
-      routeExecutionCostQuoteRaw: policy.routeExecutionCostQuoteRaw,
-      nativeProfitFloorQuoteRaw: policy.nativeProfitFloorQuoteRaw,
-      configuredProfitFloorQuoteRaw: policy.configuredProfitFloorQuoteRaw,
-      slippageRiskBufferQuoteRaw: policy.slippageRiskBufferQuoteRaw,
-      configuredMarketPriceFactor: marketPriceFactor,
-      marketFactorFloorQuoteRaw,
-      requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
-      requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
-      requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
-      expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
-      expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
-      surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
-      routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
-      effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
-      subsidyAllowed: policy.subsidyAllowed,
-      expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
-      routeGasLimit: undefined,
+  return mergeRoutePolicyIntoEvaluation({
+    evaluation: {
+      isTakeable: policy.isEconomicallyExecutable,
+      externalTakePath: 'factory',
+      marketPrice: params.quoteAmount / collateralAmount,
+      quoteAmount: params.quoteAmount,
+      quoteAmountRaw: params.quoteAmountRaw,
+      selectedLiquiditySource: params.selectedLiquiditySource,
+      selectedFeeTier: params.selectedFeeTier,
+      collateralAmount,
+      quotedAuctionPriceWad: params.auctionPriceWad,
+      quotedCollateralWad: params.collateral,
+      reason: policy.isEconomicallyExecutable
+        ? params.successReason
+        : (policy.rejectionReason ?? params.failureReason),
     },
-    reason: policy.isEconomicallyExecutable
-      ? params.successReason
-      : (policy.rejectionReason ?? params.failureReason),
-  };
+    policy,
+    auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
+    configuredMarketPriceFactor: marketPriceFactor,
+    marketFactorFloorQuoteRaw,
+  });
 }
 
 export function applyFactoryRouteProfitabilityPolicy(params: {
@@ -1787,10 +1768,6 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       auctionRepayRequirementQuoteRaw.mul(MARKET_FACTOR_SCALE),
       BigNumber.from(getMarketPriceFactorUnits(configuredMarketPriceFactor))
     );
-  const requiredProfitFloorQuoteRaw = maxBigNumber(
-    nativeProfitFloorQuoteRaw,
-    configuredProfitFloorQuoteRaw
-  );
   const quoteAmountRaw = params.evaluation.quoteAmountRaw;
   const routeMinOutRaw =
     params.evaluation.routeMinOutRaw ??
@@ -1812,39 +1789,20 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
   const isTakeable =
     params.evaluation.isTakeable && policy.isEconomicallyExecutable;
 
-  return {
-    ...params.evaluation,
-    isTakeable,
-    reason: isTakeable
-      ? params.evaluation.reason
-      : (policy.rejectionReason ??
-        EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor),
-    routeMinOutRaw: policy.routeMinOutRaw,
-    profitMinOutRaw: policy.profitMinOutRaw,
-    approvedMinOutRaw: policy.approvedMinOutRaw,
-    takeablePrice:
-      params.evaluation.marketPrice !== undefined
-        ? params.evaluation.marketPrice * policy.effectiveMarketPriceFactor
-        : params.evaluation.takeablePrice,
-    routeProfitability: {
-      ...routeProfitability,
-      auctionRepayRequirementQuoteRaw,
-      routeExecutionCostQuoteRaw,
-      nativeProfitFloorQuoteRaw,
-      configuredProfitFloorQuoteRaw,
-      slippageRiskBufferQuoteRaw,
-      configuredMarketPriceFactor,
-      marketFactorFloorQuoteRaw,
-      requiredProfitFloorQuoteRaw,
-      requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
-      requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
-      expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
-      expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
-      surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
-      routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
-      effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
-      subsidyAllowed: policy.subsidyAllowed,
-      expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
+  return mergeRoutePolicyIntoEvaluation({
+    evaluation: {
+      ...params.evaluation,
+      isTakeable,
+      reason: isTakeable
+        ? params.evaluation.reason
+        : (policy.rejectionReason ??
+          EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor),
+    },
+    policy,
+    auctionRepayRequirementQuoteRaw,
+    configuredMarketPriceFactor,
+    marketFactorFloorQuoteRaw,
+    routeProfitabilityExtras: {
       routeGasLimit,
       gasPriceWei: params.context.gasPriceWei,
       gasPriceGwei: params.context.gasPriceGwei,
@@ -1853,5 +1811,5 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       l2GasCostBufferBasisPoints: params.context.l2GasCostBufferBasisPoints,
       gasPolicyEvaluatedAt: params.context.gasPolicyEvaluatedAt,
     },
-  };
+  });
 }

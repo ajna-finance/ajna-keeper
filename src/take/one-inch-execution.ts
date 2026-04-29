@@ -38,6 +38,7 @@ import {
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
+  mergeRoutePolicyIntoEvaluation,
 } from './external-take-policy';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
@@ -332,44 +333,28 @@ export async function getOneInchPathQuoteEvaluation(
       `Take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor}, effectiveFactor=${policy.effectiveMarketPriceFactor.toFixed(6)}, subsidy=${policy.expectedSubsidyQuoteRaw.gt(0) ? policy.expectedSubsidyQuoteRaw.toString() : '0'} → ${policy.isEconomicallyExecutable ? 'TAKEABLE' : 'skip'}`
     );
 
-    return {
-      isTakeable: policy.isEconomicallyExecutable,
-      externalTakePath: 'oneinch',
-      marketPrice,
-      takeablePrice,
-      quoteAmount,
-      quoteAmountRaw: amountOut,
-      selectedLiquiditySource: LiquiditySource.ONEINCH,
-      collateralAmount,
-      routeMinOutRaw: policy.routeMinOutRaw,
-      profitMinOutRaw: policy.profitMinOutRaw,
-      approvedMinOutRaw: policy.approvedMinOutRaw,
-      routeProfitability: {
-        auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
-        routeExecutionCostQuoteRaw: policy.routeExecutionCostQuoteRaw,
-        nativeProfitFloorQuoteRaw: policy.nativeProfitFloorQuoteRaw,
-        configuredProfitFloorQuoteRaw: policy.configuredProfitFloorQuoteRaw,
-        slippageRiskBufferQuoteRaw: policy.slippageRiskBufferQuoteRaw,
-        configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
-        marketFactorFloorQuoteRaw,
-        requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
-        requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
-        requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
-        expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
-        expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
-        surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
-        routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
-        effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
-        subsidyAllowed: policy.subsidyAllowed,
-        expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
+    return mergeRoutePolicyIntoEvaluation({
+      evaluation: {
+        isTakeable: policy.isEconomicallyExecutable,
+        externalTakePath: 'oneinch',
+        marketPrice,
+        takeablePrice,
+        quoteAmount,
+        quoteAmountRaw: amountOut,
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        collateralAmount,
+        quotedCollateralWad: collateral,
+        quotedAuctionPriceWad: effectiveAuctionPriceWad,
+        reason: policy.isEconomicallyExecutable
+          ? undefined
+          : (policy.rejectionReason ??
+            EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold),
       },
-      quotedCollateralWad: collateral,
-      quotedAuctionPriceWad: effectiveAuctionPriceWad,
-      reason: policy.isEconomicallyExecutable
-        ? undefined
-        : (policy.rejectionReason ??
-          EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold),
-    };
+      policy,
+      auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
+      configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
+      marketFactorFloorQuoteRaw,
+    });
   } catch (error) {
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);
     return {

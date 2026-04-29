@@ -1,6 +1,10 @@
 import { BigNumber } from 'ethers';
 import { MARKET_FACTOR_SCALE, ZERO_BN } from '../constants';
 import { maxBigNumber } from '../utils';
+import type {
+  ExternalTakeQuoteEvaluation,
+  RouteProfitabilityBreakdown,
+} from './types';
 
 export const EXTERNAL_TAKE_REJECTION_REASONS = {
   auctionPriceAboveThreshold: 'auction price above external take threshold',
@@ -63,6 +67,19 @@ export interface ExternalTakeRoutePolicyResult {
   expectedSubsidyQuoteRaw: BigNumber;
   rejectionReason?: string;
 }
+
+export type RoutePolicyProfitabilityExtras = Partial<
+  Pick<
+    RouteProfitabilityBreakdown,
+    | 'routeGasLimit'
+    | 'gasPriceWei'
+    | 'gasPriceGwei'
+    | 'gasPriceAgeMs'
+    | 'gasPriceFreshnessTtlMs'
+    | 'l2GasCostBufferBasisPoints'
+    | 'gasPolicyEvaluatedAt'
+  >
+>;
 
 /**
  * Central external-take policy gate.
@@ -173,6 +190,70 @@ export function applyExternalTakeRoutePolicy(
     subsidyAllowed: params.allowSubsidy,
     expectedSubsidyQuoteRaw,
     rejectionReason,
+  };
+}
+
+export function mergeRoutePolicyIntoProfitability(params: {
+  existing?: RouteProfitabilityBreakdown;
+  policy: ExternalTakeRoutePolicyResult;
+  auctionRepayRequirementQuoteRaw: BigNumber;
+  configuredMarketPriceFactor: number;
+  marketFactorFloorQuoteRaw: BigNumber;
+  extras?: RoutePolicyProfitabilityExtras;
+}): RouteProfitabilityBreakdown {
+  return {
+    ...params.existing,
+    auctionRepayRequirementQuoteRaw: params.auctionRepayRequirementQuoteRaw,
+    routeExecutionCostQuoteRaw: params.policy.routeExecutionCostQuoteRaw,
+    nativeProfitFloorQuoteRaw: params.policy.nativeProfitFloorQuoteRaw,
+    configuredProfitFloorQuoteRaw:
+      params.policy.configuredProfitFloorQuoteRaw,
+    slippageRiskBufferQuoteRaw: params.policy.slippageRiskBufferQuoteRaw,
+    configuredMarketPriceFactor: params.configuredMarketPriceFactor,
+    marketFactorFloorQuoteRaw: params.marketFactorFloorQuoteRaw,
+    requiredProfitFloorQuoteRaw: params.policy.requiredProfitFloorQuoteRaw,
+    requiredNonSubsidizedOutputRaw:
+      params.policy.requiredNonSubsidizedOutputRaw,
+    requiredOutputFloorQuoteRaw: params.policy.requiredOutputFloorQuoteRaw,
+    expectedNetProfitQuoteRaw: params.policy.expectedNetProfitQuoteRaw,
+    expectedShortfallQuoteRaw: params.policy.expectedShortfallQuoteRaw,
+    surplusOverFloorQuoteRaw: params.policy.surplusOverFloorQuoteRaw,
+    routeBreakEvenMarketPriceFactor:
+      params.policy.routeBreakEvenMarketPriceFactor,
+    effectiveMarketPriceFactor: params.policy.effectiveMarketPriceFactor,
+    subsidyAllowed: params.policy.subsidyAllowed,
+    expectedSubsidyQuoteRaw: params.policy.expectedSubsidyQuoteRaw,
+    ...params.extras,
+  };
+}
+
+export function mergeRoutePolicyIntoEvaluation(params: {
+  evaluation: ExternalTakeQuoteEvaluation;
+  policy: ExternalTakeRoutePolicyResult;
+  auctionRepayRequirementQuoteRaw: BigNumber;
+  configuredMarketPriceFactor: number;
+  marketFactorFloorQuoteRaw: BigNumber;
+  routeProfitabilityExtras?: RoutePolicyProfitabilityExtras;
+}): ExternalTakeQuoteEvaluation {
+  return {
+    ...params.evaluation,
+    routeMinOutRaw: params.policy.routeMinOutRaw,
+    profitMinOutRaw: params.policy.profitMinOutRaw,
+    approvedMinOutRaw: params.policy.approvedMinOutRaw,
+    takeablePrice:
+      params.evaluation.marketPrice !== undefined
+        ? params.evaluation.marketPrice *
+          params.policy.effectiveMarketPriceFactor
+        : params.evaluation.takeablePrice,
+    routeProfitability: mergeRoutePolicyIntoProfitability({
+      existing: params.evaluation.routeProfitability,
+      policy: params.policy,
+      auctionRepayRequirementQuoteRaw:
+        params.auctionRepayRequirementQuoteRaw,
+      configuredMarketPriceFactor: params.configuredMarketPriceFactor,
+      marketFactorFloorQuoteRaw: params.marketFactorFloorQuoteRaw,
+      extras: params.routeProfitabilityExtras,
+    }),
   };
 }
 
