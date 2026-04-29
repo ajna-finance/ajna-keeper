@@ -279,6 +279,24 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    */
   takeRouteQuoteBudgetPerCandidate?: number;
   /**
+   * Opt-in bounded parallel liquidation candidate evaluation. Defaults to 1,
+   * which preserves sequential evaluation and execution behavior.
+   */
+  maxConcurrentCandidateEvaluations?: number;
+  /**
+   * Maximum successful borrower/candidate decisions for one discovered pool in
+   * a single take cycle. A candidate that executes both an external take and a
+   * follow-up arbTake counts once. Defaults to 1 so same-pool cascades are
+   * retried on the next cycle unless explicitly opted into deeper per-cycle
+   * execution. Values above 1 force sequential same-pool candidate evaluation.
+   */
+  maxExecutionsPerPoolPerRun?: number;
+  /**
+   * Global cap on concurrent route/API/RPC probes used only when candidate
+   * evaluation concurrency is greater than 1.
+   */
+  maxInFlightRouteProbes?: number;
+  /**
    * Factory-route sources eligible for dynamic route selection. 1inch is not
    * supported here because it uses a separate aggregator execution path.
    */
@@ -463,7 +481,6 @@ export interface SignerConfig {
 
 export interface RuntimeConfig {
   logLevel: string;
-  delayBetweenActions: number;
   delayBetweenRuns: number;
   dryRun?: boolean;
 }

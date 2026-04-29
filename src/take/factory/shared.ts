@@ -11,21 +11,28 @@ import {
   STANDARD_V3_FEE_TIERS,
   UniversalRouterOverrides,
   formatLiquiditySource,
+  getEffectiveV3FeeTiers,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
 import {
+  AsyncOperationLimiter,
+  ceilDivBigNumber,
   getErrorMessage,
+  maxBigNumber,
+  pruneMapToMaxSize,
   RequireFields,
   mapWithConcurrencyPreservingOrder,
   withTimeout,
+  withTimeoutAbort,
 } from '../../utils';
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
 import {
   ApprovedFactoryQuoteEvaluation,
+  TakeActionConfig,
   ExternalTakeQuoteEvaluation,
   TakeLiquidationPlan,
 } from '../types';
@@ -34,11 +41,11 @@ import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
   compareExternalTakeBySubsidyThenRank,
+  mergeRoutePolicyIntoEvaluation,
 } from '../external-take-policy';
 import {
   BASIS_POINTS_DENOMINATOR,
   MARKET_FACTOR_SCALE,
-  MAX_UINT24_FEE_TIER,
   WAD,
   ZERO_BN,
 } from '../../constants';
@@ -47,6 +54,7 @@ export {
   MARKET_FACTOR_SCALE,
   WAD,
 } from '../../constants';
+export { maxBigNumber } from '../../utils';
 
 export interface FactoryRouteCandidate {
   liquiditySource: LiquiditySource;
@@ -69,6 +77,8 @@ export interface FactoryRouteEvaluationContext {
 export interface FactoryRouteSelectionOptions {
   allowedLiquiditySources?: LiquiditySource[];
   routeQuoteBudgetPerCandidate?: number;
+  routeProbeLimiter?: AsyncOperationLimiter;
+  routeProbeAbortSignal?: AbortSignal;
   routeProfitabilityContext?: FactoryRouteProfitabilityContext;
   routeProfitabilityContextFactory?: (
     sources: LiquiditySource[]
@@ -93,7 +103,6 @@ export interface FactoryRouteProfitabilityContext {
 
 export interface FactoryTakeConfigBase {
   dryRun?: boolean;
-  delayBetweenActions: number;
   keeperTakerFactory?: string;
   takerContracts?: { [source: string]: string };
   universalRouterOverrides?: UniversalRouterOverrides;
@@ -152,10 +161,54 @@ export interface FactoryQuoteProviderRuntimeCache {
   quoteTokenScales?: Map<string, BigNumber>;
   /** Success timestamps keyed by route; refreshed only after successful execution. */
   recentRouteSuccesses?: Map<string, number>;
+  stats?: FactoryQuoteProviderRuntimeStats;
+  swapDeadline?: FactorySwapDeadlineCacheEntry;
+}
+
+export interface FactoryQuoteProviderRuntimeStats {
+  swapDeadlineCacheHits?: number;
+  swapDeadlineCacheMisses?: number;
+  routeAvailabilityPrewarmCount?: number;
+  routeAvailabilityPrewarmFailureCount?: number;
+}
+
+interface FactorySwapDeadlineCacheEntry {
+  fetchedAtMs: number;
+  blockTimestamp: number;
+  deadline: number;
+  ttlSeconds: number;
 }
 
 export function createFactoryQuoteProviderRuntimeCache(): FactoryQuoteProviderRuntimeCache {
   return {};
+}
+
+export function incrementFactoryRuntimeStat(
+  stats: FactoryQuoteProviderRuntimeStats | undefined,
+  key: keyof FactoryQuoteProviderRuntimeStats,
+  amount: number = 1
+): void {
+  if (!stats) {
+    return;
+  }
+  stats[key] = (stats[key] ?? 0) + amount;
+}
+
+export async function withFactoryRuntimeStats<T>(
+  runtimeCache: FactoryQuoteProviderRuntimeCache | undefined,
+  stats: FactoryQuoteProviderRuntimeStats | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (!runtimeCache || !stats) {
+    return await fn();
+  }
+  const previousStats = runtimeCache.stats;
+  runtimeCache.stats = stats;
+  try {
+    return await fn();
+  } finally {
+    runtimeCache.stats = previousStats;
+  }
 }
 
 const ZERO = ZERO_BN;
@@ -166,6 +219,8 @@ const FACTORY_ROUTE_AVAILABILITY_CONCURRENCY = 3;
 const PROVIDER_INIT_FAILURE_RETRY_MS = 30_000;
 const PROVIDER_INIT_FAILURE_RETRY_JITTER_BPS = 2_000;
 export const DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS = 2_000;
+const FACTORY_TOKEN_DECIMALS_CHAIN_ID_TIMEOUT_MS =
+  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS;
 
 function getProviderInitFailureRetryMs(): number {
   const jitterRangeMs = Math.floor(
@@ -181,6 +236,18 @@ function getProviderInitFailureRetryMs(): number {
 
 interface InitializableQuoteProvider {
   initialize(): Promise<boolean>;
+}
+
+export function throwIfRouteProbeAborted(
+  signal?: AbortSignal,
+  label: string = 'factory route probe'
+): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error(`${label} aborted`);
 }
 
 async function initializeQuoteProviderWithCooldown<
@@ -268,26 +335,12 @@ async function initializeQuoteProviderWithCooldown<
   return quoteProvider ?? undefined;
 }
 
-function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
-  while (map.size > maxSize) {
-    const oldestKey = map.keys().next().value;
-    map.delete(oldestKey);
-  }
-}
-
 export function ceilWmul(x: BigNumber, y: BigNumber): BigNumber {
   return x.mul(y).add(WAD.sub(1)).div(WAD);
 }
 
 export function ceilDiv(x: BigNumber, y: BigNumber): BigNumber {
-  return x.add(y).sub(1).div(y);
-}
-
-export function maxBigNumber(...values: BigNumber[]): BigNumber {
-  return values.reduce(
-    (max, value) => (value.gt(max) ? value : max),
-    values[0]
-  );
+  return ceilDivBigNumber(x, y);
 }
 
 export function deriveApprovedMinOutRaw(params: {
@@ -311,6 +364,46 @@ export async function getSwapDeadline(
   const latestBlock = await signer.provider?.getBlock('latest');
   const baseTimestamp = latestBlock?.timestamp ?? Math.floor(Date.now() / 1000);
   return baseTimestamp + ttlSeconds;
+}
+
+export async function getSwapDeadlineCached(params: {
+  signer: Signer;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  ttlSeconds?: number;
+  freshnessMs?: number;
+}): Promise<number> {
+  const ttlSeconds = params.ttlSeconds ?? 1800;
+  const freshnessMs = params.freshnessMs ?? 1500;
+  const now = Date.now();
+  const cached = params.runtimeCache?.swapDeadline;
+  if (
+    cached &&
+    cached.ttlSeconds === ttlSeconds &&
+    now - cached.fetchedAtMs <= freshnessMs
+  ) {
+    incrementFactoryRuntimeStat(
+      params.runtimeCache?.stats,
+      'swapDeadlineCacheHits'
+    );
+    return cached.deadline;
+  }
+
+  incrementFactoryRuntimeStat(
+    params.runtimeCache?.stats,
+    'swapDeadlineCacheMisses'
+  );
+  const latestBlock = await params.signer.provider?.getBlock('latest');
+  const baseTimestamp = latestBlock?.timestamp ?? Math.floor(now / 1000);
+  const deadline = baseTimestamp + ttlSeconds;
+  if (params.runtimeCache) {
+    params.runtimeCache.swapDeadline = {
+      fetchedAtMs: now,
+      blockTimestamp: baseTimestamp,
+      deadline,
+      ttlSeconds,
+    };
+  }
+  return deadline;
 }
 
 export function getMarketPriceFactorUnits(marketPriceFactor: number): number {
@@ -344,16 +437,12 @@ export function getEffectiveFactoryFeeTiers(
   candidateFeeTiers?: number[],
   automaticCandidateFeeTiers?: readonly number[]
 ): number[] {
-  const tiers =
-    candidateFeeTiers !== undefined
-      ? candidateFeeTiers
-      : (automaticCandidateFeeTiers ?? [defaultFeeTier]);
-  const effective = [defaultFeeTier, ...tiers].filter(isValidFactoryFeeTier);
-  return Array.from(new Set(effective));
-}
-
-function isValidFactoryFeeTier(tier: number): boolean {
-  return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
+  return getEffectiveV3FeeTiers({
+    defaultFeeTier,
+    candidateFeeTiers,
+    automaticCandidateFeeTiers,
+    filterInvalid: true,
+  });
 }
 
 function isDynamicFactorySource(source: LiquiditySource): boolean {
@@ -902,20 +991,40 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
   signer: Signer;
   config: FactoryQuoteConfig;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  routeProbeLimiter?: AsyncOperationLimiter;
+  routeProbeAbortSignal?: AbortSignal;
 }): Promise<{
   availableRoutes: FactoryRouteCandidate[];
   unavailableRoutes: FactoryRouteAvailabilitySkip[];
 }> {
+  throwIfRouteProbeAborted(
+    params.routeProbeAbortSignal,
+    'factory route availability'
+  );
   const availableRoutes: FactoryRouteCandidate[] = [];
   const unavailableRoutes: FactoryRouteAvailabilitySkip[] = [];
   const availabilityResults = await mapWithConcurrencyPreservingOrder(
     params.routes,
     FACTORY_ROUTE_AVAILABILITY_CONCURRENCY,
-    async (route) =>
-      await checkFactoryRouteCandidateAvailability({
-        ...params,
-        route,
-      })
+    async (route) => {
+      const checkAvailability = async () => {
+        throwIfRouteProbeAborted(
+          params.routeProbeAbortSignal,
+          `factory availability ${formatFactoryRouteCandidate(route)}`
+        );
+        return await checkFactoryRouteCandidateAvailability({
+          ...params,
+          route,
+        });
+      };
+      return params.routeProbeLimiter
+        ? await params.routeProbeLimiter.run(
+            `factory availability ${formatFactoryRouteCandidate(route)}`,
+            checkAvailability,
+            { signal: params.routeProbeAbortSignal }
+          )
+        : await checkAvailability();
+    }
   );
 
   for (const availability of availabilityResults) {
@@ -930,6 +1039,83 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
   }
 
   return { availableRoutes, unavailableRoutes };
+}
+
+export async function prewarmFactoryRouteAvailability(params: {
+  pool: Pick<
+    FungiblePool,
+    'name' | 'collateralAddress' | 'quoteAddress' | 'poolAddress'
+  >;
+  signer: Signer;
+  poolConfig: TakeActionConfig;
+  quoteConfig: FactoryQuoteConfig;
+  routeSelection?: FactoryRouteSelectionOptions;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  timeoutMs?: number;
+}): Promise<void> {
+  const defaultLiquiditySource = params.poolConfig.take.liquiditySource;
+  if (
+    defaultLiquiditySource === undefined ||
+    !isDynamicFactorySource(defaultLiquiditySource)
+  ) {
+    return;
+  }
+
+  const routes = orderFactoryRouteCandidates({
+    routes: getFactoryRouteCandidates({
+      defaultLiquiditySource,
+      config: params.quoteConfig,
+      selection: params.routeSelection,
+    }),
+    defaultLiquiditySource,
+    config: params.quoteConfig,
+    pool: params.pool,
+    runtimeCache: params.runtimeCache,
+  });
+  if (routes.length === 0) {
+    return;
+  }
+
+  incrementFactoryRuntimeStat(
+    params.runtimeCache?.stats,
+    'routeAvailabilityPrewarmCount'
+  );
+
+  try {
+    if (params.timeoutMs !== undefined) {
+      await withTimeoutAbort(
+        async (signal) =>
+          await filterFactoryRouteCandidatesByAvailability({
+            routes,
+            pool: params.pool,
+            signer: params.signer,
+            config: params.quoteConfig,
+            runtimeCache: params.runtimeCache,
+            routeProbeLimiter: params.routeSelection?.routeProbeLimiter,
+            routeProbeAbortSignal: signal,
+          }),
+        params.timeoutMs,
+        'factory route availability prewarm'
+      );
+    } else {
+      await filterFactoryRouteCandidatesByAvailability({
+        routes,
+        pool: params.pool,
+        signer: params.signer,
+        config: params.quoteConfig,
+        runtimeCache: params.runtimeCache,
+        routeProbeLimiter: params.routeSelection?.routeProbeLimiter,
+      });
+    }
+  } catch (error) {
+    incrementFactoryRuntimeStat(
+      params.runtimeCache?.stats,
+      'routeAvailabilityPrewarmFailureCount'
+    );
+    logger.debug(
+      `Factory: route availability prewarm skipped for ${params.pool.name}: ${getErrorMessage(error)}`
+    );
+  }
 }
 
 export interface FactoryRouteEvaluationResult {
@@ -1158,29 +1344,45 @@ export async function getCachedFactoryTokenDecimals(
   tokenAddress: string,
   runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<number> {
-  let chainId = runtimeCache?.chainId;
-  if (
-    runtimeCache &&
-    chainId === undefined &&
-    typeof signer.getChainId === 'function'
-  ) {
-    try {
-      runtimeCache.chainIdInflight ??= signer.getChainId().catch((error) => {
-        logger.debug(
-          `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${getErrorMessage(error)}`
-        );
-        return undefined;
+  const normalizedTokenAddress = tokenAddress.toLowerCase();
+  const unknownCacheKey = getFactoryTokenDecimalsCacheKey(
+    normalizedTokenAddress,
+    undefined
+  );
+  if (runtimeCache?.chainId !== undefined) {
+    migrateUnknownFactoryTokenDecimals(runtimeCache, runtimeCache.chainId);
+    const cached = runtimeCache.tokenDecimals?.get(
+      getFactoryTokenDecimalsCacheKey(
+        normalizedTokenAddress,
+        runtimeCache.chainId
+      )
+    );
+    if (cached !== undefined) {
+      return cached;
+    }
+  } else {
+    const cached = runtimeCache?.tokenDecimals?.get(unknownCacheKey);
+    if (cached !== undefined) {
+      startFactoryTokenDecimalsChainIdResolutionIfPossible({
+        signer,
+        runtimeCache,
       });
-      const resolvedChainId = await runtimeCache.chainIdInflight;
-      if (resolvedChainId !== undefined) {
-        chainId = resolvedChainId;
-        runtimeCache.chainId = resolvedChainId;
-      }
-    } finally {
-      runtimeCache.chainIdInflight = undefined;
+      return cached;
     }
   }
-  const cacheKey = `${chainId ?? 'unknown'}:${tokenAddress.toLowerCase()}`;
+
+  let chainId = await resolveFactoryTokenDecimalsChainId({
+    signer,
+    runtimeCache,
+  });
+  if (runtimeCache?.chainId !== undefined) {
+    chainId = runtimeCache.chainId;
+  }
+
+  const cacheKey = getFactoryTokenDecimalsCacheKey(
+    normalizedTokenAddress,
+    chainId
+  );
   const cached = runtimeCache?.tokenDecimals?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
@@ -1191,13 +1393,134 @@ export async function getCachedFactoryTokenDecimals(
     if (!runtimeCache.tokenDecimals) {
       runtimeCache.tokenDecimals = new Map();
     }
-    runtimeCache.tokenDecimals.set(cacheKey, decimals);
+    const storeChainId = runtimeCache.chainId ?? chainId;
+    const storeCacheKey = getFactoryTokenDecimalsCacheKey(
+      normalizedTokenAddress,
+      storeChainId
+    );
+    runtimeCache.tokenDecimals.set(storeCacheKey, decimals);
+    if (storeChainId !== undefined) {
+      runtimeCache.tokenDecimals.delete(unknownCacheKey);
+    }
     pruneMapToMaxSize(
       runtimeCache.tokenDecimals,
       MAX_TOKEN_DECIMAL_CACHE_ENTRIES
     );
   }
   return decimals;
+}
+
+function getFactoryTokenDecimalsCacheKey(
+  normalizedTokenAddress: string,
+  chainId: number | undefined
+): string {
+  return `${chainId ?? 'unknown'}:${normalizedTokenAddress}`;
+}
+
+function migrateUnknownFactoryTokenDecimals(
+  runtimeCache: FactoryQuoteProviderRuntimeCache,
+  chainId: number
+): void {
+  const tokenDecimals = runtimeCache.tokenDecimals;
+  if (!tokenDecimals) {
+    return;
+  }
+
+  for (const [key, decimals] of Array.from(tokenDecimals.entries())) {
+    if (!key.startsWith('unknown:')) {
+      continue;
+    }
+    const normalizedTokenAddress = key.slice('unknown:'.length);
+    const chainKey = getFactoryTokenDecimalsCacheKey(
+      normalizedTokenAddress,
+      chainId
+    );
+    if (!tokenDecimals.has(chainKey)) {
+      tokenDecimals.set(chainKey, decimals);
+    }
+    tokenDecimals.delete(key);
+  }
+}
+
+function startFactoryTokenDecimalsChainIdResolution(params: {
+  signer: Signer;
+  runtimeCache: FactoryQuoteProviderRuntimeCache;
+}): Promise<number | undefined> {
+  const pending = Promise.resolve()
+    .then(() => params.signer.getChainId())
+    .then((resolvedChainId) => {
+      params.runtimeCache.chainId = resolvedChainId;
+      migrateUnknownFactoryTokenDecimals(params.runtimeCache, resolvedChainId);
+      return resolvedChainId;
+    })
+    .catch((error) => {
+      logger.debug(
+        `Factory token decimals cache could not resolve chainId; using address-only fallback key: ${getErrorMessage(error)}`
+      );
+      return undefined;
+    })
+    .finally(() => {
+      if (params.runtimeCache.chainIdInflight === pending) {
+        params.runtimeCache.chainIdInflight = undefined;
+      }
+    });
+  params.runtimeCache.chainIdInflight = pending;
+  return pending;
+}
+
+function startFactoryTokenDecimalsChainIdResolutionIfPossible(params: {
+  signer: Signer;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): void {
+  const runtimeCache = params.runtimeCache;
+  if (
+    !runtimeCache ||
+    runtimeCache.chainId !== undefined ||
+    runtimeCache.chainIdInflight ||
+    typeof params.signer.getChainId !== 'function'
+  ) {
+    return;
+  }
+  startFactoryTokenDecimalsChainIdResolution({
+    signer: params.signer,
+    runtimeCache,
+  });
+}
+
+async function resolveFactoryTokenDecimalsChainId(params: {
+  signer: Signer;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): Promise<number | undefined> {
+  const runtimeCache = params.runtimeCache;
+  if (!runtimeCache) {
+    return undefined;
+  }
+  if (runtimeCache.chainId !== undefined) {
+    migrateUnknownFactoryTokenDecimals(runtimeCache, runtimeCache.chainId);
+    return runtimeCache.chainId;
+  }
+  if (typeof params.signer.getChainId !== 'function') {
+    return undefined;
+  }
+
+  const pending =
+    runtimeCache.chainIdInflight ??
+    startFactoryTokenDecimalsChainIdResolution({
+      signer: params.signer,
+      runtimeCache,
+    });
+  try {
+    return await withTimeout(
+      pending,
+      FACTORY_TOKEN_DECIMALS_CHAIN_ID_TIMEOUT_MS,
+      'Factory token decimals chainId'
+    );
+  } catch (error) {
+    logger.debug(
+      `Factory token decimals cache chainId lookup timed out; using address-only fallback key: ${getErrorMessage(error)}`
+    );
+    return undefined;
+  }
 }
 
 async function getCachedQuoteTokenScale(
@@ -1362,47 +1685,27 @@ export async function buildFactoryQuoteEvaluation(params: {
     routeMinOutRaw,
   });
 
-  return {
-    isTakeable: policy.isEconomicallyExecutable,
-    externalTakePath: 'factory',
-    marketPrice: params.quoteAmount / collateralAmount,
-    takeablePrice:
-      (params.quoteAmount / collateralAmount) *
-      policy.effectiveMarketPriceFactor,
-    quoteAmount: params.quoteAmount,
-    quoteAmountRaw: params.quoteAmountRaw,
-    selectedLiquiditySource: params.selectedLiquiditySource,
-    selectedFeeTier: params.selectedFeeTier,
-    routeMinOutRaw: policy.routeMinOutRaw,
-    profitMinOutRaw: policy.profitMinOutRaw,
-    approvedMinOutRaw: policy.approvedMinOutRaw,
-    collateralAmount,
-    quotedAuctionPriceWad: params.auctionPriceWad,
-    quotedCollateralWad: params.collateral,
-    routeProfitability: {
-      auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
-      routeExecutionCostQuoteRaw: policy.routeExecutionCostQuoteRaw,
-      nativeProfitFloorQuoteRaw: policy.nativeProfitFloorQuoteRaw,
-      configuredProfitFloorQuoteRaw: policy.configuredProfitFloorQuoteRaw,
-      slippageRiskBufferQuoteRaw: policy.slippageRiskBufferQuoteRaw,
-      configuredMarketPriceFactor: marketPriceFactor,
-      marketFactorFloorQuoteRaw,
-      requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
-      requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
-      requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
-      expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
-      expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
-      surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
-      routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
-      effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
-      subsidyAllowed: policy.subsidyAllowed,
-      expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
-      routeGasLimit: undefined,
+  return mergeRoutePolicyIntoEvaluation({
+    evaluation: {
+      isTakeable: policy.isEconomicallyExecutable,
+      externalTakePath: 'factory',
+      marketPrice: params.quoteAmount / collateralAmount,
+      quoteAmount: params.quoteAmount,
+      quoteAmountRaw: params.quoteAmountRaw,
+      selectedLiquiditySource: params.selectedLiquiditySource,
+      selectedFeeTier: params.selectedFeeTier,
+      collateralAmount,
+      quotedAuctionPriceWad: params.auctionPriceWad,
+      quotedCollateralWad: params.collateral,
+      reason: policy.isEconomicallyExecutable
+        ? params.successReason
+        : (policy.rejectionReason ?? params.failureReason),
     },
-    reason: policy.isEconomicallyExecutable
-      ? params.successReason
-      : (policy.rejectionReason ?? params.failureReason),
-  };
+    policy,
+    auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
+    configuredMarketPriceFactor: marketPriceFactor,
+    marketFactorFloorQuoteRaw,
+  });
 }
 
 export function applyFactoryRouteProfitabilityPolicy(params: {
@@ -1464,10 +1767,6 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       auctionRepayRequirementQuoteRaw.mul(MARKET_FACTOR_SCALE),
       BigNumber.from(getMarketPriceFactorUnits(configuredMarketPriceFactor))
     );
-  const requiredProfitFloorQuoteRaw = maxBigNumber(
-    nativeProfitFloorQuoteRaw,
-    configuredProfitFloorQuoteRaw
-  );
   const quoteAmountRaw = params.evaluation.quoteAmountRaw;
   const routeMinOutRaw =
     params.evaluation.routeMinOutRaw ??
@@ -1489,39 +1788,20 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
   const isTakeable =
     params.evaluation.isTakeable && policy.isEconomicallyExecutable;
 
-  return {
-    ...params.evaluation,
-    isTakeable,
-    reason: isTakeable
-      ? params.evaluation.reason
-      : (policy.rejectionReason ??
-        EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor),
-    routeMinOutRaw: policy.routeMinOutRaw,
-    profitMinOutRaw: policy.profitMinOutRaw,
-    approvedMinOutRaw: policy.approvedMinOutRaw,
-    takeablePrice:
-      params.evaluation.marketPrice !== undefined
-        ? params.evaluation.marketPrice * policy.effectiveMarketPriceFactor
-        : params.evaluation.takeablePrice,
-    routeProfitability: {
-      ...routeProfitability,
-      auctionRepayRequirementQuoteRaw,
-      routeExecutionCostQuoteRaw,
-      nativeProfitFloorQuoteRaw,
-      configuredProfitFloorQuoteRaw,
-      slippageRiskBufferQuoteRaw,
-      configuredMarketPriceFactor,
-      marketFactorFloorQuoteRaw,
-      requiredProfitFloorQuoteRaw,
-      requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
-      requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
-      expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
-      expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
-      surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
-      routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
-      effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
-      subsidyAllowed: policy.subsidyAllowed,
-      expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
+  return mergeRoutePolicyIntoEvaluation({
+    evaluation: {
+      ...params.evaluation,
+      isTakeable,
+      reason: isTakeable
+        ? params.evaluation.reason
+        : (policy.rejectionReason ??
+          EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor),
+    },
+    policy,
+    auctionRepayRequirementQuoteRaw,
+    configuredMarketPriceFactor,
+    marketFactorFloorQuoteRaw,
+    routeProfitabilityExtras: {
       routeGasLimit,
       gasPriceWei: params.context.gasPriceWei,
       gasPriceGwei: params.context.gasPriceGwei,
@@ -1530,5 +1810,5 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       l2GasCostBufferBasisPoints: params.context.l2GasCostBufferBasisPoints,
       gasPolicyEvaluatedAt: params.context.gasPolicyEvaluatedAt,
     },
-  };
+  });
 }

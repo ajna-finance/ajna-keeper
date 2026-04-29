@@ -7,10 +7,7 @@ import { LiquiditySource, formatLiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
 import {
-  ApprovedCurveFactoryQuoteEvaluation,
   ApprovedFactoryQuoteEvaluation,
-  ApprovedSushiSwapFactoryQuoteEvaluation,
-  ApprovedUniswapV3FactoryQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -21,7 +18,6 @@ import {
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
   FactoryRouteCandidate,
-  FactoryRouteEvaluationContext,
   FactoryRouteSelectionOptions,
   FactoryTakeParams,
   applyFactoryRouteProfitabilityPolicy,
@@ -33,6 +29,7 @@ import {
   orderFactoryRouteCandidates,
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
+  throwIfRouteProbeAborted,
 } from './shared';
 import { evaluateCurveFactoryQuote, executeCurveFactoryTake } from './curve';
 import {
@@ -50,6 +47,7 @@ export type {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
+  FactoryQuoteProviderRuntimeStats,
   FactoryRouteProfitabilityContext,
   FactoryRouteSelectionOptions,
   FactoryTakeParams,
@@ -57,6 +55,7 @@ export type {
 export {
   computeFactoryAmountOutMinimum,
   createFactoryQuoteProviderRuntimeCache,
+  prewarmFactoryRouteAvailability,
 } from './shared';
 
 export function createFactoryTakeAdapter(params: {
@@ -144,6 +143,10 @@ export async function getFactoryTakeQuoteEvaluation(
       poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP ||
       poolConfig.take.liquiditySource === LiquiditySource.CURVE
     ) {
+      throwIfRouteProbeAborted(
+        routeSelection?.routeProbeAbortSignal,
+        'factory route evaluation'
+      );
       const routeContext = await buildFactoryRouteEvaluationContext({
         pool,
         signer,
@@ -152,6 +155,10 @@ export async function getFactoryTakeQuoteEvaluation(
         marketPriceFactor: poolConfig.take.marketPriceFactor!,
         runtimeCache,
       });
+      throwIfRouteProbeAborted(
+        routeSelection?.routeProbeAbortSignal,
+        'factory route evaluation context'
+      );
       const routes = orderFactoryRouteCandidates({
         routes: getFactoryRouteCandidates({
           defaultLiquiditySource: poolConfig.take.liquiditySource,
@@ -197,6 +204,8 @@ export async function getFactoryTakeQuoteEvaluation(
           signer,
           config,
           runtimeCache,
+          routeProbeLimiter: routeSelection?.routeProbeLimiter,
+          routeProbeAbortSignal: routeSelection?.routeProbeAbortSignal,
         });
       if (unavailableRoutes.length > 0) {
         logger.debug(
@@ -217,6 +226,10 @@ export async function getFactoryTakeQuoteEvaluation(
           new Set(availableRoutes.map((route) => route.liquiditySource))
         );
         if (availableSources.length > 0) {
+          throwIfRouteProbeAborted(
+            routeSelection?.routeProbeAbortSignal,
+            'factory route profitability context'
+          );
           routeProfitabilityContext =
             await routeSelection.routeProfitabilityContextFactory(
               availableSources
@@ -290,9 +303,13 @@ export async function getFactoryTakeQuoteEvaluation(
         route: FactoryRouteCandidate;
         evaluation: ExternalTakeQuoteEvaluation;
       }> => {
+        throwIfRouteProbeAborted(
+          routeSelection?.routeProbeAbortSignal,
+          `factory quote ${formatFactoryRouteCandidate(route)}`
+        );
         const rawEvaluation =
           route.liquiditySource === LiquiditySource.UNISWAPV3
-            ? await checkUniswapV3Quote(
+            ? await evaluateUniswapV3FactoryQuote({
                 pool,
                 auctionPriceWad,
                 collateral,
@@ -300,11 +317,11 @@ export async function getFactoryTakeQuoteEvaluation(
                 config,
                 signer,
                 runtimeCache,
-                route.feeTier,
-                routeContext
-              )
+                feeTier: route.feeTier,
+                routeContext,
+              })
             : route.liquiditySource === LiquiditySource.SUSHISWAP
-              ? await checkSushiSwapQuote(
+              ? await evaluateSushiSwapFactoryQuote({
                   pool,
                   auctionPriceWad,
                   collateral,
@@ -312,11 +329,11 @@ export async function getFactoryTakeQuoteEvaluation(
                   config,
                   signer,
                   runtimeCache,
-                  route.feeTier,
-                  routeContext
-                )
+                  feeTier: route.feeTier,
+                  routeContext,
+                })
               : route.liquiditySource === LiquiditySource.CURVE
-                ? await checkCurveQuote(
+                ? await evaluateCurveFactoryQuote({
                     pool,
                     auctionPriceWad,
                     collateral,
@@ -324,8 +341,8 @@ export async function getFactoryTakeQuoteEvaluation(
                     config,
                     signer,
                     runtimeCache,
-                    routeContext
-                  )
+                    routeContext,
+                  })
                 : {
                     isTakeable: false,
                     reason: `unsupported route source ${route.liquiditySource}`,
@@ -342,7 +359,14 @@ export async function getFactoryTakeQuoteEvaluation(
       const routeEvaluationResults = await mapWithConcurrencyPreservingOrder(
         routesToEvaluate,
         FACTORY_ROUTE_QUOTE_CONCURRENCY,
-        evaluateFactoryRoute
+        async (route) =>
+          routeSelection?.routeProbeLimiter
+            ? await routeSelection.routeProbeLimiter.run(
+                `factory quote ${formatFactoryRouteCandidate(route)}`,
+                async () => await evaluateFactoryRoute(route),
+                { signal: routeSelection.routeProbeAbortSignal }
+              )
+            : await evaluateFactoryRoute(route)
       );
 
       if (routeEvaluationResults.length > 1) {
@@ -408,90 +432,6 @@ export async function getFactoryTakeQuoteEvaluation(
       reason: getErrorMessage(error),
     };
   }
-}
-
-/**
- * PHASE 3: Real Uniswap V3 quote check using OFFICIAL QuoterV2 contract
- * Uses the same method as Uniswap's frontend - guaranteed accurate prices
- */
-async function checkUniswapV3Quote(
-  pool: FungiblePool,
-  auctionPriceWad: BigNumber,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  config: Pick<FactoryTakeParams['config'], 'universalRouterOverrides'>,
-  signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  feeTier?: number,
-  routeContext?: FactoryRouteEvaluationContext
-): Promise<ExternalTakeQuoteEvaluation> {
-  return evaluateUniswapV3FactoryQuote({
-    pool,
-    auctionPriceWad,
-    collateral,
-    poolConfig,
-    config,
-    signer,
-    runtimeCache,
-    feeTier,
-    routeContext,
-  });
-}
-
-/**
- * Check SushiSwap V3 profitability using official QuoterV2 contract
- */
-async function checkSushiSwapQuote(
-  pool: FungiblePool,
-  auctionPriceWad: BigNumber,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  config: Pick<FactoryTakeParams['config'], 'sushiswapRouterOverrides'>,
-  signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  feeTier?: number,
-  routeContext?: FactoryRouteEvaluationContext
-): Promise<ExternalTakeQuoteEvaluation> {
-  return evaluateSushiSwapFactoryQuote({
-    pool,
-    auctionPriceWad,
-    collateral,
-    poolConfig,
-    config,
-    signer,
-    runtimeCache,
-    feeTier,
-    routeContext,
-  });
-}
-
-/**
- * Check Curve profitability using CurveQuoteProvider
- * FIXED: Now passes tokenAddresses for reliable pool discovery
- */
-async function checkCurveQuote(
-  pool: FungiblePool,
-  auctionPriceWad: BigNumber,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  config: Pick<
-    FactoryTakeParams['config'],
-    'curveRouterOverrides' | 'tokenAddresses'
-  >,
-  signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  routeContext?: FactoryRouteEvaluationContext
-): Promise<ExternalTakeQuoteEvaluation> {
-  return evaluateCurveFactoryQuote({
-    pool,
-    auctionPriceWad,
-    collateral,
-    poolConfig,
-    config,
-    signer,
-    runtimeCache,
-    routeContext,
-  });
 }
 
 function failFactoryTakeExecution(message: string): false {
@@ -665,7 +605,7 @@ async function executeSelectedFactoryRoute(
     params;
 
   if (quoteEvaluation.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
-    await takeWithUniswapV3Factory({
+    await executeUniswapV3FactoryTake({
       pool,
       poolConfig,
       signer,
@@ -676,7 +616,7 @@ async function executeSelectedFactoryRoute(
   } else if (
     quoteEvaluation.selectedLiquiditySource === LiquiditySource.SUSHISWAP
   ) {
-    await takeWithSushiSwapFactory({
+    await executeSushiSwapFactoryTake({
       pool,
       poolConfig,
       signer,
@@ -685,7 +625,7 @@ async function executeSelectedFactoryRoute(
       config,
     });
   } else {
-    await takeWithCurveFactory({
+    await executeCurveFactoryTake({
       pool,
       poolConfig,
       signer,
@@ -773,111 +713,4 @@ export async function takeLiquidationFactory({
     );
     return false;
   }
-}
-
-/**
- * Execute Uniswap V3 take via factory using WAD auction amounts.
- */
-async function takeWithUniswapV3Factory({
-  pool,
-  poolConfig,
-  signer,
-  liquidation,
-  quoteEvaluation,
-  config,
-}: {
-  pool: FungiblePool;
-  poolConfig: TakeActionConfig;
-  signer: Signer;
-  liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation;
-  config: Pick<
-    FactoryTakeParams['config'],
-    'keeperTakerFactory' | 'universalRouterOverrides'
-  > & {
-    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
-    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
-  };
-}) {
-  await executeUniswapV3FactoryTake({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation,
-    config,
-  });
-}
-
-/**
- * Execute SushiSwap take via factory
- */
-
-/**
- * Execute SushiSwap take via factory using WAD auction amounts.
- */
-async function takeWithSushiSwapFactory({
-  pool,
-  poolConfig,
-  signer,
-  liquidation,
-  quoteEvaluation,
-  config,
-}: {
-  pool: FungiblePool;
-  poolConfig: TakeActionConfig;
-  signer: Signer;
-  liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ApprovedSushiSwapFactoryQuoteEvaluation;
-  config: Pick<
-    FactoryTakeParams['config'],
-    'keeperTakerFactory' | 'sushiswapRouterOverrides'
-  > & {
-    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
-    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
-  };
-}) {
-  await executeSushiSwapFactoryTake({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation,
-    config,
-  });
-}
-
-/**
- * Execute Curve take via factory
- * FIXED: Now uses the same address→symbol→config lookup pattern as working Phase 1
- */
-async function takeWithCurveFactory({
-  pool,
-  poolConfig,
-  signer,
-  liquidation,
-  quoteEvaluation,
-  config,
-}: {
-  pool: FungiblePool;
-  poolConfig: TakeActionConfig;
-  signer: Signer;
-  liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ApprovedCurveFactoryQuoteEvaluation;
-  config: Pick<
-    FactoryTakeParams['config'],
-    'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'
-  > & {
-    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
-    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
-  };
-}) {
-  await executeCurveFactoryTake({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation,
-    config,
-  });
 }

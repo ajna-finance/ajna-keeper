@@ -250,7 +250,6 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -277,7 +276,6 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -301,7 +299,6 @@ describe('Take with 1inch Integration', () => {
         oneInchRouters: { 31337: mockRouterAddress },
         connectorTokens: [],
         keeperTaker: keeperTakerAddress,
-        delayBetweenActions: 0,
       },
     });
 
@@ -330,16 +327,23 @@ describe('Take with 1inch Integration', () => {
       })
     );
 
-    sinon.stub(pool, 'getLiquidation').returns({
-      getStatus: async () => ({
-        price: BigNumber.from('5215788124770'),
-        collateral: mutatedCollateral,
-      }),
-    } as any);
+    const mutatedPool = new Proxy(pool as any, {
+      get(target, prop, receiver) {
+        if (prop === 'poolInfoContractUtils') {
+          return {
+            auctionStatus: async () => ({
+              price_: BigNumber.from('5215788124770'),
+              collateral_: mutatedCollateral,
+            }),
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    }) as FungiblePool;
 
     const liquidations = await arrayFromAsync(
       getLiquidationsToTake({
-        pool,
+        pool: mutatedPool,
         poolConfig: {
           ...MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
           take: {
@@ -354,7 +358,6 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -363,7 +366,7 @@ describe('Take with 1inch Integration', () => {
 
     const initialBalance = await quoteToken.balanceOf(signer.address);
     await takeLiquidation({
-      pool,
+      pool: mutatedPool,
       poolConfig: {
         ...MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
         take: {
@@ -379,7 +382,6 @@ describe('Take with 1inch Integration', () => {
         oneInchRouters: { 31337: mockRouterAddress },
         connectorTokens: [],
         keeperTaker: keeperTakerAddress,
-        delayBetweenActions: 0,
       },
     });
 

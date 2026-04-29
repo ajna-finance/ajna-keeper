@@ -67,7 +67,6 @@ const setup = async () => {
       dryRun: false,
       subgraphUrl: '',
       coinGeckoApiKey: '',
-      delayBetweenActions: 0,
     },
   });
   await increaseTime(SECONDS_PER_DAY * 1.5);
@@ -101,7 +100,6 @@ describe('LpCollector ingest', () => {
             wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
-          delayBetweenActions: 0,
           manual: {
             pools: [],
           },
@@ -117,7 +115,6 @@ describe('LpCollector ingest', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
     await lpCollector.ingestNewAwardsFromSubgraph();
@@ -147,7 +144,6 @@ describe('LpCollector ingest', () => {
             wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
-          delayBetweenActions: 0,
           manual: {
             pools: [],
           },
@@ -166,7 +162,6 @@ describe('LpCollector ingest', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
     await lpCollector.ingestNewAwardsFromSubgraph();
@@ -196,7 +191,6 @@ describe('LpCollector ingest', () => {
             wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
-          delayBetweenActions: 0,
           manual: {
             pools: [],
           },
@@ -215,7 +209,6 @@ describe('LpCollector ingest', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
     await lpCollector.ingestNewAwardsFromSubgraph();
@@ -254,7 +247,6 @@ describe('LpCollector collections', () => {
             wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
             uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
           },
-          delayBetweenActions: 0,
           manual: {
             pools: [],
           },
@@ -270,7 +262,6 @@ describe('LpCollector collections', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
     const liquidation = pool.getLiquidation(
@@ -321,7 +312,6 @@ describe('LpCollector collections', () => {
               wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
               uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
             },
-            delayBetweenActions: 0,
             manual: {
               pools: [],
             },
@@ -340,7 +330,6 @@ describe('LpCollector collections', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
     const liquidation = pool.getLiquidation(

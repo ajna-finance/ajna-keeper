@@ -29,7 +29,6 @@ describe('manual take context helpers', () => {
       } as any,
       config: {
         dryRun: true,
-        delayBetweenActions: 123,
         connectorTokens: ['0xconnector'],
         oneInchRouters: { 1: '0xrouter' },
         keeperTaker: '0xkeeper',
@@ -45,7 +44,6 @@ describe('manual take context helpers', () => {
       } as any,
       config: {
         dryRun: true,
-        delayBetweenActions: 123,
         connectorTokens: ['0xconnector'],
         oneInchRouters: { 1: '0xrouter' },
         keeperTaker: '0xkeeper',
@@ -59,7 +57,6 @@ describe('manual take context helpers', () => {
     const context = createManualFactoryTakeContext({
       config: {
         dryRun: true,
-        delayBetweenActions: 0,
         keeperTakerFactory: '0xfactory',
         universalRouterOverrides: { universalRouterAddress: '0xuniversal' },
         sushiswapRouterOverrides: { swapRouterAddress: '0xsushi' },

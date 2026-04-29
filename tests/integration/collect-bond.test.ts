@@ -98,7 +98,6 @@ describe('collectBondFromPool', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
     const amtWithdraw = await getAmountWithdrawn(pool, signer);
@@ -118,7 +117,6 @@ describe('collectBondFromPool', () => {
         dryRun: false,
         subgraphUrl: '',
         coinGeckoApiKey: '',
-        delayBetweenActions: 0,
       },
     });
 
@@ -138,7 +136,6 @@ describe('collectBondFromPool', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
 
@@ -159,7 +156,6 @@ describe('collectBondFromPool', () => {
         dryRun: false,
         subgraphUrl: '',
         coinGeckoApiKey: '',
-        delayBetweenActions: 0,
       },
     });
     await increaseTime(SECONDS_PER_DAY * 2);
@@ -170,7 +166,6 @@ describe('collectBondFromPool', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
     await increaseTime(SECONDS_PER_DAY * 2);
@@ -197,7 +192,6 @@ describe('collectBondFromPool', () => {
       config: {
         dryRun: false,
         subgraphUrl: '',
-        delayBetweenActions: 0,
       },
     });
 

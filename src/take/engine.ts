@@ -2,7 +2,11 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import { logger } from '../logging';
 import { SubgraphReader } from '../read-transports';
-import { delay, getErrorMessage, weiToDecimaled } from '../utils';
+import {
+  getErrorMessage,
+  mapWithConcurrencyPreservingOrder,
+  weiToDecimaled,
+} from '../utils';
 import { ArbTakeStrategy } from './arb-strategy';
 import { TakeWriteTransport } from './write-transport';
 import {
@@ -12,8 +16,15 @@ import {
   TakeActionConfig,
   TakeBorrowerCandidate,
   TakeDecision,
+  TakeExecutionResult,
   TakeLiquidationPlan,
 } from './types';
+import {
+  TakeAuctionStatus,
+  TakeAuctionStatusReader,
+  defaultTakeAuctionStatusReader,
+  normalizeBorrowerKey,
+} from './liquidation-status';
 
 export const TAKE_SKIP_REASONS = {
   auctionInactive: 'auction no longer has collateral onchain',
@@ -73,6 +84,8 @@ interface EvaluateTakeDecisionParams<
   subgraph: SubgraphReader;
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
   arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
+  takeAuctionStatusReader?: TakeAuctionStatusReader;
+  auctionStatus?: TakeAuctionStatus;
   approveExternalTake?: (params: {
     pool: FungiblePool;
     signer: Signer;
@@ -107,8 +120,8 @@ interface ExecuteTakeDecisionParams<
   externalExecutionConfig: TExecutionConfig;
   subgraph: SubgraphReader;
   dryRun: boolean;
-  delayBetweenActions: number;
   arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
+  takeAuctionStatusReader?: TakeAuctionStatusReader;
   revalidateBeforeExecution?: boolean;
   reapproveExternalTakeBeforeExecution?: EvaluateTakeDecisionParams<
     TPoolConfig,
@@ -143,13 +156,19 @@ interface ProcessTakeCandidatesParams<
       ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>,
       | 'externalExecutionConfig'
       | 'dryRun'
-      | 'delayBetweenActions'
       | 'revalidateBeforeExecution'
       | 'onSkip'
       | 'onExecuted'
       | 'takeWriteTransport'
     > {
   candidates: TakeBorrowerCandidate[];
+  candidateStatuses?: Map<string, TakeAuctionStatus>;
+  stopAfterExecution?: boolean;
+  maxExecutions?: number;
+  stopAfterAttemptedSubmissionFailure?: boolean;
+  maxConcurrentCandidateEvaluations?: number;
+  resetExternalTakeAttemptSubmission?: () => void;
+  didExternalTakeAttemptSubmission?: () => boolean;
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
   arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   approveExternalTake?: EvaluateTakeDecisionParams<
@@ -165,6 +184,7 @@ interface ProcessTakeCandidatesParams<
     TExecutionConfig
   >['reapproveExternalTakeBeforeExecution'];
   onFound?: (decision: TakeDecision) => void;
+  onExecutionAttempt?: (decision: TakeDecision) => void;
 }
 
 export async function getTakeBorrowerCandidates(params: {
@@ -191,6 +211,7 @@ export async function revalidateTakeDecision<
   subgraph: SubgraphReader;
   poolConfig: TPoolConfig;
   arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
+  takeAuctionStatusReader?: TakeAuctionStatusReader;
   takeablePrice?: number;
   hpbIndex?: number;
   maxArbTakePrice?: number;
@@ -202,17 +223,20 @@ export async function revalidateTakeDecision<
   hpbIndex: number;
   maxArbTakePrice?: number;
 }> {
-  const liquidationStatus = await params.pool
-    .getLiquidation(params.borrower)
-    .getStatus();
-  const currentPrice = Number(weiToDecimaled(liquidationStatus.price));
+  const statusReader =
+    params.takeAuctionStatusReader ?? defaultTakeAuctionStatusReader;
+  const liquidationStatus = await statusReader.read({
+    pool: params.pool,
+    borrower: params.borrower,
+  });
+  const currentPrice = Number(weiToDecimaled(liquidationStatus.auctionPrice));
   const collateral = liquidationStatus.collateral;
   if (!collateral.gt(0)) {
     return {
       approvedTake: false,
       approvedArbTake: false,
       collateral,
-      auctionPrice: liquidationStatus.price,
+      auctionPrice: liquidationStatus.auctionPrice,
       hpbIndex: 0,
     };
   }
@@ -231,7 +255,7 @@ export async function revalidateTakeDecision<
       poolConfig: params.poolConfig,
       subgraph: params.subgraph,
       price: currentPrice,
-      auctionPrice: liquidationStatus.price,
+      auctionPrice: liquidationStatus.auctionPrice,
       collateral,
     });
 
@@ -246,7 +270,7 @@ export async function revalidateTakeDecision<
       currentPrice <= params.takeablePrice,
     approvedArbTake,
     collateral,
-    auctionPrice: liquidationStatus.price,
+    auctionPrice: liquidationStatus.auctionPrice,
     hpbIndex,
     maxArbTakePrice,
   };
@@ -263,17 +287,23 @@ export async function evaluateTakeDecision<
   subgraph,
   externalTakeAdapter,
   arbTakeStrategy,
+  takeAuctionStatusReader,
+  auctionStatus,
   approveExternalTake,
   approveArbTake,
 }: EvaluateTakeDecisionParams<
   TPoolConfig,
   TExecutionConfig
 >): Promise<TakeDecision> {
-  const liquidationStatus = await pool
-    .getLiquidation(candidate.borrower)
-    .getStatus();
+  const statusReader = takeAuctionStatusReader ?? defaultTakeAuctionStatusReader;
+  const liquidationStatus =
+    auctionStatus ??
+    (await statusReader.read({
+      pool,
+      borrower: candidate.borrower,
+    }));
   const collateral = liquidationStatus.collateral;
-  const auctionPrice = liquidationStatus.price;
+  const auctionPrice = liquidationStatus.auctionPrice;
   const price = Number(weiToDecimaled(auctionPrice));
 
   if (!collateral.gt(0)) {
@@ -408,14 +438,17 @@ export async function executeTakeDecision<
   externalExecutionConfig,
   subgraph,
   dryRun,
-  delayBetweenActions,
   arbTakeStrategy,
   revalidateBeforeExecution,
   reapproveExternalTakeBeforeExecution,
   onSkip,
   onExecuted,
   takeWriteTransport,
-}: ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>): Promise<void> {
+  takeAuctionStatusReader,
+}: ExecuteTakeDecisionParams<
+  TPoolConfig,
+  TExecutionConfig
+>): Promise<TakeExecutionResult> {
   let approvedTake = decision.approvedTake;
   let approvedArbTake = decision.approvedArbTake;
   let collateral = decision.collateral;
@@ -424,6 +457,14 @@ export async function executeTakeDecision<
   let maxArbTakePrice = decision.maxArbTakePrice;
   let executedTake = false;
   let executedArbTake = false;
+  let submittedTransaction = false;
+  let poolStateMayHaveChanged = false;
+  const getExecutionResult = (): TakeExecutionResult => ({
+    executedTake,
+    executedArbTake,
+    submittedTransaction,
+    poolStateMayHaveChanged,
+  });
 
   if (revalidateBeforeExecution) {
     const revalidated = await revalidateTakeDecision({
@@ -433,6 +474,7 @@ export async function executeTakeDecision<
       subgraph,
       poolConfig,
       arbTakeStrategy,
+      takeAuctionStatusReader,
       takeablePrice: decision.takeablePrice,
       hpbIndex,
       maxArbTakePrice,
@@ -454,7 +496,7 @@ export async function executeTakeDecision<
           : TAKE_SKIP_REASONS.auctionStateChanged,
         decision,
       });
-      return;
+      return getExecutionResult();
     }
 
     const quoteEvaluation = decision.quoteEvaluation;
@@ -466,7 +508,7 @@ export async function executeTakeDecision<
           reason: TAKE_SKIP_REASONS.quoteCollateralMismatch,
           decision,
         });
-        return;
+        return getExecutionResult();
       }
     }
     if (approvedTake && quoteEvaluation?.quotedAuctionPriceWad) {
@@ -477,7 +519,7 @@ export async function executeTakeDecision<
           reason: TAKE_SKIP_REASONS.quoteAuctionPriceStale,
           decision,
         });
-        return;
+        return getExecutionResult();
       }
     }
 
@@ -505,7 +547,7 @@ export async function executeTakeDecision<
             'approved external take failed final pre-submission policy check',
           decision,
         });
-        return;
+        return getExecutionResult();
       }
       if (approval.quoteEvaluation) {
         decision.quoteEvaluation = approval.quoteEvaluation;
@@ -537,10 +579,10 @@ export async function executeTakeDecision<
       );
     }
     executedTake = true;
+    submittedTransaction = !dryRun;
+    poolStateMayHaveChanged = !dryRun;
 
     if (approvedArbTake) {
-      await delay(delayBetweenActions);
-
       try {
         const postTakeRevalidated = await revalidateTakeDecision({
           pool,
@@ -549,6 +591,7 @@ export async function executeTakeDecision<
           subgraph,
           poolConfig,
           arbTakeStrategy,
+          takeAuctionStatusReader,
           hpbIndex,
           maxArbTakePrice,
         });
@@ -584,6 +627,10 @@ export async function executeTakeDecision<
       dryRun,
       takeWriteTransport,
     });
+    if (executedArbTake && !dryRun) {
+      submittedTransaction = true;
+      poolStateMayHaveChanged = true;
+    }
   }
 
   onExecuted?.({
@@ -591,6 +638,7 @@ export async function executeTakeDecision<
     executedTake,
     executedArbTake,
   });
+  return getExecutionResult();
 }
 
 export async function processTakeCandidates<
@@ -606,22 +654,95 @@ export async function processTakeCandidates<
   arbTakeStrategy,
   externalExecutionConfig,
   dryRun,
-  delayBetweenActions,
   approveExternalTake,
   approveArbTake,
   reapproveExternalTakeBeforeExecution,
   revalidateBeforeExecution,
+  takeAuctionStatusReader,
+  candidateStatuses,
+  stopAfterExecution,
+  maxExecutions,
+  stopAfterAttemptedSubmissionFailure,
+  maxConcurrentCandidateEvaluations,
+  resetExternalTakeAttemptSubmission,
+  didExternalTakeAttemptSubmission,
   onSkip,
   onExecuted,
   onFound,
+  onExecutionAttempt,
   takeWriteTransport,
 }: ProcessTakeCandidatesParams<TPoolConfig, TExecutionConfig>): Promise<void> {
-  for (const candidate of candidates) {
-    let decision: TakeDecision | undefined;
-    let stage: 'evaluation' | 'execution' = 'evaluation';
+  type CandidateEvaluationOutcome =
+    | {
+        kind: 'approved';
+        candidate: TakeBorrowerCandidate;
+        decision: TakeDecision;
+      }
+    | {
+        kind: 'skipped';
+        candidate: TakeBorrowerCandidate;
+        decision?: TakeDecision;
+        reason: string;
+      };
+  const requestedCandidateEvaluationConcurrency =
+    maxConcurrentCandidateEvaluations ?? 1;
+  const candidateEvaluationConcurrency =
+    Number.isFinite(requestedCandidateEvaluationConcurrency) &&
+    requestedCandidateEvaluationConcurrency >= 1
+      ? Math.floor(requestedCandidateEvaluationConcurrency)
+      : 1;
+  const maxSuccessfulExecutions =
+    maxExecutions !== undefined && Number.isFinite(maxExecutions)
+      ? Math.max(1, Math.floor(maxExecutions))
+      : undefined;
+  let successfulExecutionCount = 0;
+  let preloadedStatusesValid = true;
+  const readCandidateWindowStatuses = async (
+    candidateWindow: TakeBorrowerCandidate[]
+  ): Promise<Map<string, TakeAuctionStatus> | undefined> => {
+    if (!preloadedStatusesValid) {
+      return undefined;
+    }
 
+    const statuses = new Map<string, TakeAuctionStatus>();
+    const missingBorrowers: string[] = [];
+    for (const candidate of candidateWindow) {
+      const borrowerKey = normalizeBorrowerKey(candidate.borrower);
+      const preloadedStatus = candidateStatuses?.get(borrowerKey);
+      if (preloadedStatus) {
+        statuses.set(borrowerKey, preloadedStatus);
+      } else {
+        missingBorrowers.push(candidate.borrower);
+      }
+    }
+
+    if (
+      missingBorrowers.length > 1 &&
+      takeAuctionStatusReader?.readMany !== undefined
+    ) {
+      try {
+        const windowStatuses = await takeAuctionStatusReader.readMany({
+          pool,
+          borrowers: missingBorrowers,
+        });
+        for (const [borrower, status] of Array.from(windowStatuses)) {
+          statuses.set(normalizeBorrowerKey(borrower), status);
+        }
+      } catch (error) {
+        logger.warn(
+          `Take candidate status window preload failed for ${pool.name}; falling back to per-candidate reads: ${getErrorMessage(error)}`
+        );
+      }
+    }
+
+    return statuses.size > 0 ? statuses : undefined;
+  };
+  const evaluateCandidate = async (
+    candidate: TakeBorrowerCandidate,
+    windowCandidateStatuses?: Map<string, TakeAuctionStatus>
+  ): Promise<CandidateEvaluationOutcome> => {
     try {
-      decision = await evaluateTakeDecision({
+      const decision = await evaluateTakeDecision({
         pool,
         signer,
         poolConfig,
@@ -629,51 +750,123 @@ export async function processTakeCandidates<
         subgraph,
         externalTakeAdapter,
         arbTakeStrategy,
+        takeAuctionStatusReader,
+        auctionStatus: preloadedStatusesValid
+          ? windowCandidateStatuses?.get(normalizeBorrowerKey(candidate.borrower))
+          : undefined,
         approveExternalTake,
         approveArbTake,
       });
 
       if (!decision.approvedTake && !decision.approvedArbTake) {
-        onSkip?.({
+        return {
+          kind: 'skipped',
           candidate,
-          stage: 'evaluation',
           reason:
             decision.reason ??
             `auction price ${Number(
               weiToDecimaled(decision.auctionPrice)
             ).toFixed(6)} did not satisfy configured take policies`,
           decision,
+        };
+      }
+
+      return {
+        kind: 'approved',
+        candidate,
+        decision,
+      };
+    } catch (error) {
+      return {
+        kind: 'skipped',
+        candidate,
+        reason: getErrorMessage(error),
+      };
+    }
+  };
+
+  for (
+    let windowStart = 0;
+    windowStart < candidates.length;
+    windowStart += candidateEvaluationConcurrency
+  ) {
+    const candidateWindow = candidates.slice(
+      windowStart,
+      windowStart + candidateEvaluationConcurrency
+    );
+    const windowCandidateStatuses =
+      await readCandidateWindowStatuses(candidateWindow);
+    const evaluationOutcomes = await mapWithConcurrencyPreservingOrder(
+      candidateWindow,
+      candidateEvaluationConcurrency,
+      async (candidate) =>
+        await evaluateCandidate(candidate, windowCandidateStatuses)
+    );
+
+    for (const outcome of evaluationOutcomes) {
+      if (outcome.kind === 'skipped') {
+        onSkip?.({
+          candidate: outcome.candidate,
+          stage: 'evaluation',
+          reason: outcome.reason,
+          decision: outcome.decision,
         });
         continue;
       }
 
+      const { candidate, decision } = outcome;
       onFound?.(decision);
-      stage = 'execution';
-
-      await executeTakeDecision({
-        pool,
-        signer,
-        poolConfig,
-        decision,
-        externalTakeAdapter,
-        externalExecutionConfig,
-        subgraph,
-        dryRun,
-        delayBetweenActions,
-        arbTakeStrategy,
-        revalidateBeforeExecution,
-        reapproveExternalTakeBeforeExecution,
-        onSkip,
-        onExecuted,
-        takeWriteTransport,
-      });
-    } catch (error) {
-      onSkip?.({
-        candidate,
-        stage,
-        reason: getErrorMessage(error),
-        decision,
-      });
+      resetExternalTakeAttemptSubmission?.();
+      onExecutionAttempt?.(decision);
+      try {
+        const executionResult = await executeTakeDecision({
+          pool,
+          signer,
+          poolConfig,
+          decision,
+          externalTakeAdapter,
+          externalExecutionConfig,
+          subgraph,
+          dryRun,
+          arbTakeStrategy,
+          takeAuctionStatusReader,
+          revalidateBeforeExecution,
+          reapproveExternalTakeBeforeExecution,
+          onSkip,
+          onExecuted,
+          takeWriteTransport,
+        });
+        if (executionResult.executedTake || executionResult.executedArbTake) {
+          successfulExecutionCount += 1;
+          if (
+            maxSuccessfulExecutions !== undefined &&
+            successfulExecutionCount >= maxSuccessfulExecutions
+          ) {
+            return;
+          }
+        }
+        if (executionResult.poolStateMayHaveChanged) {
+          preloadedStatusesValid = false;
+          if (stopAfterExecution) {
+            return;
+          }
+          break;
+        }
+      } catch (error) {
+        onSkip?.({
+          candidate,
+          stage: 'execution',
+          reason: getErrorMessage(error),
+          decision,
+        });
+        if (!dryRun && didExternalTakeAttemptSubmission?.()) {
+          preloadedStatusesValid = false;
+          if (stopAfterExecution || stopAfterAttemptedSubmissionFailure) {
+            return;
+          }
+          break;
+        }
+      }
     }
   }
 }

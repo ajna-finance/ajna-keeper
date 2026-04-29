@@ -22,6 +22,9 @@ describe('take write transport', () => {
       '/tmp',
       `ajna-keeper-take-write-${Date.now()}-${Math.random()}.json`
     );
+    sinon
+      .stub(JsonRpcProvider.prototype, 'detectNetwork')
+      .resolves({ chainId: 1, name: 'unknown' } as any);
     NonceTracker.clearNonces();
     NonceTracker.setDurableNonceStateFilePathForTests(durableStatePath);
     NonceTracker.clearDurableNonceStateForTests();

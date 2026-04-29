@@ -12,8 +12,10 @@ import * as erc20 from '../../src/erc20';
 import {
   applyFactoryRouteProfitabilityPolicy,
   ceilDiv,
+  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
   filterFactoryRouteCandidatesByAvailability,
   getCurveQuoteProvider,
+  getCachedFactoryTokenDecimals,
   getFactoryRouteCandidates,
   getMarketPriceFactorUnits,
   getSushiSwapQuoteProvider,
@@ -21,6 +23,7 @@ import {
   selectBestFactoryRouteEvaluation,
   MARKET_FACTOR_SCALE,
 } from '../../src/take/factory/shared';
+import { RouteProbeLimiter } from '../../src/utils';
 
 describe('Take Factory', () => {
   let mockSigner: any;
@@ -74,8 +77,6 @@ describe('Take Factory', () => {
       const config = {
         dryRun: false,
         subgraphUrl: 'http://localhost:8000/subgraphs/name/ajna-test',
-        delayBetweenActions: 1000,
-        // Missing keeperTakerFactory and universalRouterOverrides (testing graceful degradation)
       };
 
       // Mock subgraph to return empty liquidations to avoid external calls
@@ -131,7 +132,6 @@ describe('Take Factory', () => {
       const config = {
         dryRun: true, // Use dryRun to avoid actual transactions
         subgraphUrl: 'http://localhost:8000/subgraphs/name/ajna-test',
-        delayBetweenActions: 35,
         keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
@@ -447,6 +447,114 @@ describe('Take Factory', () => {
   });
 
   describe('Quote Provider Reuse', () => {
+    it('uses an address-only decimals cache key when chainId lookup times out without skipping decimals', async () => {
+      const clock = sinon.useFakeTimers();
+      const tokenAddress = '0x1111111111111111111111111111111111111111';
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      const neverResolves = new Promise<number>(() => {});
+      mockSigner.getChainId = sinon.stub().returns(neverResolves);
+      const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const decimalsPromise = getCachedFactoryTokenDecimals(
+        mockSigner,
+        tokenAddress,
+        runtimeCache
+      );
+      await clock.tickAsync(DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS);
+
+      const decimals = await decimalsPromise;
+
+      expect(decimals).to.equal(6);
+      expect(decimalsStub.calledOnceWith(mockSigner, tokenAddress, undefined))
+        .to.be.true;
+      expect(runtimeCache.tokenDecimals?.get(`unknown:${tokenAddress}`)).to.equal(
+        6
+      );
+    });
+
+    it('returns an address-only decimals cache hit without waiting for a pending chainId lookup', async () => {
+      const tokenAddress = '0x1111111111111111111111111111111111111112';
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.tokenDecimals = new Map([[`unknown:${tokenAddress}`, 6]]);
+      mockSigner.getChainId = sinon
+        .stub()
+        .returns(new Promise<number>(() => {}));
+      const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+
+      let result: number | undefined;
+      await getCachedFactoryTokenDecimals(
+        mockSigner,
+        tokenAddress,
+        runtimeCache
+      ).then((decimals) => {
+        result = decimals;
+      });
+
+      expect(result).to.equal(6);
+      expect(decimalsStub.notCalled).to.be.true;
+      expect(mockSigner.getChainId.calledOnce).to.be.true;
+      expect(runtimeCache.chainIdInflight).to.exist;
+    });
+
+    it('migrates address-only decimals cache entries once chainId resolves later', async () => {
+      const clock = sinon.useFakeTimers();
+      const tokenAddress = '0x2222222222222222222222222222222222222222';
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      let resolveChainId!: (chainId: number) => void;
+      const chainIdPromise = new Promise<number>((resolve) => {
+        resolveChainId = resolve;
+      });
+      mockSigner.getChainId = sinon.stub().returns(chainIdPromise);
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+
+      const decimalsPromise = getCachedFactoryTokenDecimals(
+        mockSigner,
+        tokenAddress,
+        runtimeCache
+      );
+      await clock.tickAsync(DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS);
+
+      expect(await decimalsPromise).to.equal(18);
+      expect(runtimeCache.tokenDecimals?.get(`unknown:${tokenAddress}`)).to.equal(
+        18
+      );
+
+      const inflight = runtimeCache.chainIdInflight;
+      resolveChainId(8453);
+      await inflight;
+
+      expect(runtimeCache.chainId).to.equal(8453);
+      expect(runtimeCache.tokenDecimals?.has(`unknown:${tokenAddress}`)).to.be
+        .false;
+      expect(runtimeCache.tokenDecimals?.get(`8453:${tokenAddress}`)).to.equal(
+        18
+      );
+    });
+
+    it('reuses migrated address-only decimals entries without a second decimals read', async () => {
+      const tokenAddress = '0x3333333333333333333333333333333333333333';
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.tokenDecimals = new Map([[`unknown:${tokenAddress}`, 8]]);
+      mockSigner.getChainId = sinon.stub().resolves(8453);
+      const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+
+      const decimals = await getCachedFactoryTokenDecimals(
+        mockSigner,
+        tokenAddress,
+        runtimeCache
+      );
+
+      expect(decimals).to.equal(8);
+      expect(decimalsStub.notCalled).to.be.true;
+      expect(runtimeCache.chainIdInflight).to.exist;
+      await runtimeCache.chainIdInflight;
+      expect(runtimeCache.tokenDecimals?.has(`unknown:${tokenAddress}`)).to.be
+        .false;
+      expect(runtimeCache.tokenDecimals?.get(`8453:${tokenAddress}`)).to.equal(
+        8
+      );
+    });
+
     it('reuses a shared Uniswap V3 quote provider cache across quote evaluations', async () => {
       sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
       sinon.stub(UniswapV3QuoteProvider.prototype, 'getQuote').resolves({
@@ -1668,6 +1776,138 @@ describe('Take Factory', () => {
       expect(uniswapQuoteStub.callCount).to.equal(4);
       expect(maxInFlight).to.be.greaterThan(1);
       expect(maxInFlight).to.be.at.most(3);
+    });
+
+    it('applies a shared route probe limiter to factory quote probes', async () => {
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+      sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
+        .returns('0x7777777777777777777777777777777777777777');
+      sinon.stub(UniswapV3QuoteProvider.prototype, 'poolExists').resolves(true);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const uniswapQuoteStub = sinon
+        .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+        .callsFake(async (_amountIn, _tokenIn, _tokenOut, feeTier?: number) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          inFlight -= 1;
+          return {
+            success: true,
+            dstAmount: ethers.utils.parseUnits(
+              feeTier === 10_000 ? '125' : '112',
+              6
+            ),
+          } as any;
+        });
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        {
+          name: 'Limited Quote Pool',
+          collateralAddress: '0x1111111111111111111111111111111111111111',
+          quoteAddress: '0x2222222222222222222222222222222222222222',
+          contract: {
+            quoteTokenScale: sinon
+              .stub()
+              .resolves(BigNumber.from('1000000000000')),
+          },
+        } as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        {
+          name: 'Limited Quote Pool',
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.99,
+          },
+        } as any,
+        {
+          universalRouterOverrides: {
+            universalRouterAddress:
+              '0x3333333333333333333333333333333333333333',
+            poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+            defaultFeeTier: 3000,
+            candidateFeeTiers: [500, 100, 10_000],
+            wethAddress: '0x5555555555555555555555555555555555555555',
+            quoterV2Address: '0x6666666666666666666666666666666666666666',
+          },
+        } as any,
+        ethers.Wallet.createRandom().connect(
+          new ethers.providers.JsonRpcProvider()
+        ) as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        {
+          routeProbeLimiter: new RouteProbeLimiter({
+            maxConcurrent: 1,
+            maxAbandoned: 1,
+            hardPermitHoldMs: 1000,
+          }),
+        }
+      );
+
+      expect(evaluation.isTakeable).to.be.true;
+      expect(evaluation.selectedFeeTier).to.equal(10_000);
+      expect(uniswapQuoteStub.callCount).to.equal(4);
+      expect(maxInFlight).to.equal(1);
+    });
+
+    it('does not start factory route work when the route probe signal is already aborted', async () => {
+      const poolExistsStub = sinon.stub(
+        UniswapV3QuoteProvider.prototype,
+        'poolExists'
+      );
+      const uniswapQuoteStub = sinon.stub(
+        UniswapV3QuoteProvider.prototype,
+        'getQuote'
+      );
+      const decimalsStub = sinon
+        .stub(erc20, 'getDecimalsErc20')
+        .throws(new Error('decimals should not be read after route abort'));
+      const controller = new AbortController();
+      controller.abort(new Error('candidate probe timed out'));
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        {
+          name: 'Aborted Route Pool',
+          collateralAddress: '0x1111111111111111111111111111111111111111',
+          quoteAddress: '0x2222222222222222222222222222222222222222',
+          contract: {
+            quoteTokenScale: sinon.stub(),
+          },
+        } as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        {
+          name: 'Aborted Route Pool',
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.99,
+          },
+        } as any,
+        {
+          universalRouterOverrides: {
+            universalRouterAddress:
+              '0x3333333333333333333333333333333333333333',
+            poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+            defaultFeeTier: 3000,
+            wethAddress: '0x5555555555555555555555555555555555555555',
+            quoterV2Address: '0x6666666666666666666666666666666666666666',
+          },
+        } as any,
+        {} as any,
+        takeFactory.createFactoryQuoteProviderRuntimeCache(),
+        {
+          routeProbeAbortSignal: controller.signal,
+        }
+      );
+
+      expect(evaluation.isTakeable).to.equal(false);
+      expect(evaluation.reason).to.equal('candidate probe timed out');
+      expect(decimalsStub.called).to.equal(false);
+      expect(poolExistsStub.called).to.equal(false);
+      expect(uniswapQuoteStub.called).to.equal(false);
     });
 
     it('uses recent successful routes to improve budget-limited probing', async () => {

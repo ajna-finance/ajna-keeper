@@ -28,12 +28,13 @@ import {
   formatLiquiditySource,
   getLiquiditySourceConfig,
   hasConfiguredWrappedNativeAddress,
+  isValidFactoryFeeTier,
   resolveConfiguredGasQuoteLiquiditySource,
   STANDARD_V3_FEE_TIERS,
 } from './liquidity-source';
 import { logger } from '../logging';
 import { ethers } from 'ethers';
-import { MARKET_FACTOR_SCALE, MAX_UINT24_FEE_TIER } from '../constants';
+import { MARKET_FACTOR_SCALE } from '../constants';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -57,6 +58,9 @@ const VALIDATION_BOUNDS = {
   maxCurveExecutionDelayMs: 60_000,
   maxOneInchQuoteTimeoutMs: 10_000,
   maxExternalTakeProbeTimeoutMs: 10_000,
+  maxConcurrentCandidateEvaluations: 4,
+  maxExecutionsPerPoolPerRun: 10,
+  maxInFlightRouteProbes: 16,
   maxOneInchAggregationExecutorAllowlistEntries: 64,
 };
 
@@ -204,10 +208,6 @@ function validateCandidateFeeTiers(
     }
     seen.add(tier);
   }
-}
-
-function isValidFactoryFeeTier(tier: number): boolean {
-  return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
 }
 
 function validateRouterFeeTiers(config: KeeperConfig): void {
@@ -722,6 +722,40 @@ export function validateAutoDiscoverConfig(
       takePolicy.takeRouteQuoteBudgetPerCandidate,
       'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be a positive integer'
     );
+    requireOptionalIntegerRange(
+      takePolicy.maxConcurrentCandidateEvaluations,
+      1,
+      VALIDATION_BOUNDS.maxConcurrentCandidateEvaluations,
+      `AutoDiscoverConfig.take: maxConcurrentCandidateEvaluations must be an integer between 1 and ${VALIDATION_BOUNDS.maxConcurrentCandidateEvaluations}`
+    );
+    requireOptionalIntegerRange(
+      takePolicy.maxExecutionsPerPoolPerRun,
+      1,
+      VALIDATION_BOUNDS.maxExecutionsPerPoolPerRun,
+      `AutoDiscoverConfig.take: maxExecutionsPerPoolPerRun must be an integer between 1 and ${VALIDATION_BOUNDS.maxExecutionsPerPoolPerRun}`
+    );
+    requireOptionalIntegerRange(
+      takePolicy.maxInFlightRouteProbes,
+      1,
+      VALIDATION_BOUNDS.maxInFlightRouteProbes,
+      `AutoDiscoverConfig.take: maxInFlightRouteProbes must be an integer between 1 and ${VALIDATION_BOUNDS.maxInFlightRouteProbes}`
+    );
+    if (
+      takePolicy.maxInFlightRouteProbes !== undefined &&
+      (takePolicy.maxConcurrentCandidateEvaluations ?? 1) <= 1
+    ) {
+      logger.warn(
+        'AutoDiscoverConfig.take: maxInFlightRouteProbes is configured but maxConcurrentCandidateEvaluations is 1; the global route probe limiter is only enforced for parallel candidate evaluation'
+      );
+    }
+    if (
+      (takePolicy.maxExecutionsPerPoolPerRun ?? 1) > 1 &&
+      (takePolicy.maxConcurrentCandidateEvaluations ?? 1) > 1
+    ) {
+      logger.warn(
+        'AutoDiscoverConfig.take: maxExecutionsPerPoolPerRun > 1 forces sequential same-pool candidate evaluation; maxConcurrentCandidateEvaluations is ignored for those pools'
+      );
+    }
     requireOptionalNonNegative(
       takePolicy.l1GasPriceFreshnessTtlMs,
       'AutoDiscoverConfig.take: l1GasPriceFreshnessTtlMs cannot be negative'

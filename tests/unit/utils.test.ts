@@ -12,6 +12,8 @@ import {
   overrideMulticall,
   decimaledToWei,
   mapWithConcurrencyPreservingOrder,
+  RouteProbeLimiter,
+  withTimeoutAbort,
   weiToDecimaled,
   tokenChangeDecimals,
   waitForConditionToBeTrue,
@@ -469,5 +471,205 @@ describe('mapWithConcurrencyPreservingOrder', () => {
     expect(visited).to.have.members([1, 2]);
     expect(visited).to.not.include(3);
     expect(visited).to.not.include(4);
+  });
+});
+
+describe('RouteProbeLimiter', () => {
+  it('limits concurrent operations and preserves queued work', async () => {
+    const limiter = new RouteProbeLimiter({
+      maxConcurrent: 2,
+      maxAbandoned: 2,
+      hardPermitHoldMs: 1000,
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    const results = await Promise.all(
+      [1, 2, 3, 4].map((value) =>
+        limiter.run(`probe-${value}`, async () => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          inFlight -= 1;
+          return value;
+        })
+      )
+    );
+
+    expect(results).to.deep.equal([1, 2, 3, 4]);
+    expect(maxInFlight).to.equal(2);
+  });
+
+  it('releases permits at the hard hold cap and records abandoned probes', async () => {
+    const abandoned: string[] = [];
+    const limiter = new RouteProbeLimiter({
+      maxConcurrent: 1,
+      maxAbandoned: 1,
+      hardPermitHoldMs: 10,
+      onAbandoned: (label) => {
+        abandoned.push(label);
+      },
+    });
+    let releaseHungProbe!: () => void;
+    const hungProbe = new Promise<void>((resolve) => {
+      releaseHungProbe = resolve;
+    });
+
+    await expect(
+      limiter.run('hung', async () => {
+        await hungProbe;
+      })
+    ).to.be.rejectedWith(
+      'route probe pressure budget hard cap exceeded for hung after 10ms'
+    );
+    expect(abandoned).to.deep.equal(['hung']);
+
+    releaseHungProbe();
+    const result = await limiter.run('after-hung', async () => 'ok');
+    expect(result).to.equal('ok');
+  });
+
+  it('blocks new probe starts while abandoned probes are still unsettled', async () => {
+    const limiter = new RouteProbeLimiter({
+      maxConcurrent: 1,
+      maxAbandoned: 1,
+      hardPermitHoldMs: 10,
+    });
+    let releaseHungProbe!: () => void;
+    const hungProbe = new Promise<void>((resolve) => {
+      releaseHungProbe = resolve;
+    });
+    const hung = limiter.run('hung', async () => {
+      await hungProbe;
+    });
+
+    await expect(hung).to.be.rejectedWith(
+      'route probe pressure budget hard cap exceeded for hung after 10ms'
+    );
+
+    let secondStarted = false;
+    const second = limiter.run('second', async () => {
+      secondStarted = true;
+      return 'second';
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(secondStarted).to.equal(false);
+
+    releaseHungProbe();
+    expect(await second).to.equal('second');
+    expect(secondStarted).to.equal(true);
+  });
+
+  it('cancels queued limited operations before they start when the caller times out', async () => {
+    const limiter = new RouteProbeLimiter({
+      maxConcurrent: 1,
+      maxAbandoned: 1,
+      hardPermitHoldMs: 1000,
+    });
+    let releaseFirstProbe!: () => void;
+    const firstProbe = new Promise<void>((resolve) => {
+      releaseFirstProbe = resolve;
+    });
+    const first = limiter.run('first', async () => {
+      await firstProbe;
+    });
+
+    let queuedStarted = false;
+    await expect(
+      withTimeoutAbort(
+        async (signal) =>
+          await limiter.run(
+            'queued',
+            async () => {
+              queuedStarted = true;
+              return 'queued';
+            },
+            { signal }
+          ),
+        10,
+        'queued route probe'
+      )
+    ).to.be.rejectedWith('queued route probe timed out after 10ms');
+
+    releaseFirstProbe();
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(queuedStarted).to.equal(false);
+  });
+
+  it('releases an acquired permit when the caller aborts before operation registration', async () => {
+    const limiter = new RouteProbeLimiter({
+      maxConcurrent: 1,
+      maxAbandoned: 1,
+      hardPermitHoldMs: 1000,
+    });
+    const controller = new AbortController();
+
+    const first = limiter.run(
+      'first',
+      async () => {
+        throw new Error('should not start');
+      },
+      { signal: controller.signal }
+    );
+    controller.abort(new Error('cancelled after acquire'));
+
+    await expect(first).to.be.rejectedWith('cancelled after acquire');
+
+    let secondStarted = false;
+    const second = limiter.run('second', async () => {
+      secondStarted = true;
+      return 'second';
+    });
+
+    expect(await second).to.equal('second');
+    expect(secondStarted).to.equal(true);
+  });
+
+  it('abandons active limited operations when the caller times out', async () => {
+    const abandoned: string[] = [];
+    const limiter = new RouteProbeLimiter({
+      maxConcurrent: 1,
+      maxAbandoned: 1,
+      hardPermitHoldMs: 1000,
+      onAbandoned: (label) => {
+        abandoned.push(label);
+      },
+    });
+    let releaseActiveProbe!: () => void;
+    const activeProbe = new Promise<void>((resolve) => {
+      releaseActiveProbe = resolve;
+    });
+
+    await expect(
+      withTimeoutAbort(
+        async (signal) =>
+          await limiter.run(
+            'active',
+            async () => {
+              await activeProbe;
+              return 'active';
+            },
+            { signal }
+          ),
+        10,
+        'active route probe'
+      )
+    ).to.be.rejectedWith('active route probe timed out after 10ms');
+    expect(abandoned).to.deep.equal(['active']);
+
+    let secondStarted = false;
+    const second = limiter.run('second', async () => {
+      secondStarted = true;
+      return 'second';
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(secondStarted).to.equal(false);
+
+    releaseActiveProbe();
+    expect(await second).to.equal('second');
+    expect(secondStarted).to.equal(true);
   });
 });

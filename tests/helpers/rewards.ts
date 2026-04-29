@@ -36,7 +36,6 @@ export function makeSinglePoolLpCollector(
   const redeemerConfig: Pick<KeeperConfig, 'runtime'> = {
     runtime: {
       logLevel: 'debug',
-      delayBetweenActions: 0,
       delayBetweenRuns: 0,
       dryRun: false,
       ...config.runtime,

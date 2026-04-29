@@ -418,7 +418,7 @@ The keeper supports four DEX integration approaches for external takes and LP re
 
 #### Configuring for 1inch
 
-To enable 1inch swaps, set up environment variables and add the 1inch router fields to `dex.oneInch` in `config.ts`. `dex.oneInch.defaultSlippage` controls the external-take min-out slippage percentage for 1inch routes and defaults to `1.0` when unset. For discovered external takes, keep `runtime.delayBetweenActions` low and use `discovery.take.oneInchQuoteTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound API latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. Long `runtime.delayBetweenActions` values are only appropriate for slow manual 1inch operation.
+To enable 1inch swaps, set up environment variables and add the 1inch router fields to `dex.oneInch` in `config.ts`. `dex.oneInch.defaultSlippage` controls the external-take min-out slippage percentage for 1inch routes and defaults to `1.0` when unset. For discovered external takes, use `discovery.take.oneInchQuoteTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound API latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown.
 
 Atomic 1inch takes validate the decoded swap payload before submission. The payload must swap the pool collateral token to the pool quote token, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured 1inch router or the decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `dex.oneInch.aggregationExecutorAllowlist` per chain to hard-restrict executors. If 1inch starts returning required non-zero flags for a target pair, use factory routing for that pool or open an issue before loosening this guard.
 
@@ -599,6 +599,8 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - If `allowedExternalTakePaths` includes both `'oneinch'` and `'factory'`, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the factory taker path before hot loops begin.
 - Hybrid 1inch-plus-factory ranking requires a configured native-to-quote gas conversion path and wrapped native token address, because the keeper compares route net profit instead of gross quote output.
 - `externalTakeProbeTimeoutMs` bounds each hybrid path probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow 1inch settings do not stall hot loops. Explicit values from 1ms to 10000ms are accepted, but values above 5000ms should only be used when avoiding provider false-negatives is more important than tight take-loop latency. `externalTakeRouteSelectionMode: 'maximize_profit'` preserves best-route ranking; `'factory_first'` reduces 1inch API use by trying factory first and stopping once a non-subsidized factory path is approved. Subsidized factory approvals continue probing remaining paths.
+- `maxConcurrentCandidateEvaluations` is opt-in and defaults to `1`, preserving sequential candidate evaluation. Values up to `4` evaluate a same-pool candidate window concurrently but still execute one decision at a time with fresh final revalidation. When this is greater than `1`, `maxInFlightRouteProbes` caps combined 1inch and factory route/API/RPC probes across the window; when unset it defaults to `3`. If `maxExecutionsPerPoolPerRun` is above `1`, same-pool candidate evaluation is forced back to sequential mode so each additional execution starts from fresh post-take state.
+- `maxExecutionsPerPoolPerRun` defaults to `1` and counts successful borrower/candidate decisions, not raw transaction count. A borrower that executes both an external take and a follow-up arbTake counts once.
 - `discovery.defaults.take.allowSubsidy` should normally stay unset or `false`. Setting it to `true` permits subsidized external takes on every discovered pool that matches the defaults; reserve that for intentionally defensive deployments with a known blast radius.
 - Route-derived subsidy policy is evaluated from the actual selected quote. Non-subsidized external takes must clear auction repayment plus route gas/profit floors when quote-normalized gas/profit inputs are configured or available; subsidized takes may skip that economic floor but never the repayment/min-out floor.
 - `marketPriceFactor` must be positive and no greater than 2. Values above 1 weaken market-factor protection and should be intentional; normal defensive settings are usually below 1.
@@ -621,7 +623,6 @@ const config: KeeperConfig = {
     dryRun: true,
     logLevel: 'info',
     delayBetweenRuns: 10,
-    delayBetweenActions: 0,
   },
   discovery: {
     enabled: true,
@@ -1420,7 +1421,7 @@ npm run production-verification:base
 npm run production-verification
 ```
 
-The live-liquidity E2E sweep is opt-in because it performs a pinned fork execution through real DEX liquidity:
+The live-liquidity E2E sweep is opt-in because it performs pinned fork executions through real DEX liquidity. It covers the single pinned Uniswap route and automatic Uniswap V3 fee-tier probing against multiple initialized real pools:
 
 ```bash
 npm run production-verification:live-liquidity:mainnet

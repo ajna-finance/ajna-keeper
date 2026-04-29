@@ -16,7 +16,6 @@ import {
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import {
-  delay,
   decimaledToWei,
   estimateGasWithBuffer,
   getErrorMessage,
@@ -38,6 +37,7 @@ import {
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
+  mergeRoutePolicyIntoEvaluation,
 } from './external-take-policy';
 
 const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
@@ -146,6 +146,18 @@ function getQuoteAmountDueRawFromDecimals(params: {
   return convertWadToTokenDecimalsCeil(quoteDueWad, params.quoteDecimals);
 }
 
+function getOneInchRequestOptions(config: Partial<OneInchQuoteConfig>): {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+} {
+  return {
+    timeoutMs: config.oneInchRequestTimeoutMs,
+    ...(config.oneInchRequestAbortSignal
+      ? { signal: config.oneInchRequestAbortSignal }
+      : {}),
+  };
+}
+
 export async function getOneInchTakeQuoteEvaluation(
   pool: FungiblePool,
   price: number,
@@ -220,11 +232,6 @@ export async function getOneInchPathQuoteEvaluation(
       };
     }
 
-    if (!config.skipOneInchRateLimitDelay) {
-      // Manual 1inch mode still honors operator pacing.
-      await delay(config.delayBetweenActions ?? 0);
-    }
-
     const dexRouter = new DexRouter(signer, {
       oneInchRouters: oneInchRouters ?? {},
       connectorTokens: connectorTokens ?? [],
@@ -247,7 +254,7 @@ export async function getOneInchPathQuoteEvaluation(
       collateralInTokenDecimals,
       pool.collateralAddress,
       pool.quoteAddress,
-      { timeoutMs: config.oneInchRequestTimeoutMs }
+      getOneInchRequestOptions(config)
     );
 
     if (!quoteResult.success) {
@@ -320,44 +327,28 @@ export async function getOneInchPathQuoteEvaluation(
       `Take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor}, effectiveFactor=${policy.effectiveMarketPriceFactor.toFixed(6)}, subsidy=${policy.expectedSubsidyQuoteRaw.gt(0) ? policy.expectedSubsidyQuoteRaw.toString() : '0'} → ${policy.isEconomicallyExecutable ? 'TAKEABLE' : 'skip'}`
     );
 
-    return {
-      isTakeable: policy.isEconomicallyExecutable,
-      externalTakePath: 'oneinch',
-      marketPrice,
-      takeablePrice,
-      quoteAmount,
-      quoteAmountRaw: amountOut,
-      selectedLiquiditySource: LiquiditySource.ONEINCH,
-      collateralAmount,
-      routeMinOutRaw: policy.routeMinOutRaw,
-      profitMinOutRaw: policy.profitMinOutRaw,
-      approvedMinOutRaw: policy.approvedMinOutRaw,
-      routeProfitability: {
-        auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
-        routeExecutionCostQuoteRaw: policy.routeExecutionCostQuoteRaw,
-        nativeProfitFloorQuoteRaw: policy.nativeProfitFloorQuoteRaw,
-        configuredProfitFloorQuoteRaw: policy.configuredProfitFloorQuoteRaw,
-        slippageRiskBufferQuoteRaw: policy.slippageRiskBufferQuoteRaw,
-        configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
-        marketFactorFloorQuoteRaw,
-        requiredProfitFloorQuoteRaw: policy.requiredProfitFloorQuoteRaw,
-        requiredNonSubsidizedOutputRaw: policy.requiredNonSubsidizedOutputRaw,
-        requiredOutputFloorQuoteRaw: policy.requiredOutputFloorQuoteRaw,
-        expectedNetProfitQuoteRaw: policy.expectedNetProfitQuoteRaw,
-        expectedShortfallQuoteRaw: policy.expectedShortfallQuoteRaw,
-        surplusOverFloorQuoteRaw: policy.surplusOverFloorQuoteRaw,
-        routeBreakEvenMarketPriceFactor: policy.routeBreakEvenMarketPriceFactor,
-        effectiveMarketPriceFactor: policy.effectiveMarketPriceFactor,
-        subsidyAllowed: policy.subsidyAllowed,
-        expectedSubsidyQuoteRaw: policy.expectedSubsidyQuoteRaw,
+    return mergeRoutePolicyIntoEvaluation({
+      evaluation: {
+        isTakeable: policy.isEconomicallyExecutable,
+        externalTakePath: 'oneinch',
+        marketPrice,
+        takeablePrice,
+        quoteAmount,
+        quoteAmountRaw: amountOut,
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        collateralAmount,
+        quotedCollateralWad: collateral,
+        quotedAuctionPriceWad: effectiveAuctionPriceWad,
+        reason: policy.isEconomicallyExecutable
+          ? undefined
+          : (policy.rejectionReason ??
+            EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold),
       },
-      quotedCollateralWad: collateral,
-      quotedAuctionPriceWad: effectiveAuctionPriceWad,
-      reason: policy.isEconomicallyExecutable
-        ? undefined
-        : (policy.rejectionReason ??
-          EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold),
-    };
+      policy,
+      auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
+      configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
+      marketFactorFloorQuoteRaw,
+    });
   } catch (error) {
     logger.error(`Failed to fetch quote data for pool ${pool.name}: ${error}`);
     return {
@@ -497,10 +488,9 @@ export async function takeLiquidation({
         liquidation.collateral,
         poolConfig,
         {
-          delayBetweenActions: config.delayBetweenActions,
           oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
+          oneInchRequestAbortSignal: config.oneInchRequestAbortSignal,
           oneInchDefaultSlippage: config.oneInchDefaultSlippage,
-          skipOneInchRateLimitDelay: config.skipOneInchRateLimitDelay,
           chainId: config.chainId,
           tokenDecimalsCache: config.tokenDecimalsCache,
         },
@@ -553,11 +543,6 @@ export async function takeLiquidation({
       return false;
     }
 
-    if (!config.skipOneInchRateLimitDelay) {
-      // Manual 1inch mode still honors operator pacing.
-      await delay(config.delayBetweenActions ?? 0);
-    }
-
     const collateralDecimals = await getOneInchTokenDecimals({
       signer,
       tokenAddress: pool.collateralAddress,
@@ -577,7 +562,7 @@ export async function takeLiquidation({
       config.oneInchDefaultSlippage ?? 1,
       keeperTaker.address,
       true,
-      { timeoutMs: config.oneInchRequestTimeoutMs }
+      getOneInchRequestOptions(config)
     );
     if (!swapData.success || !swapData.data) {
       config.onOneInchSwapDataResult?.({

@@ -11,7 +11,6 @@ import { logger } from './logging';
 import { getPrice } from './pricing';
 import {
   decimaledToWei,
-  delay,
   RequireFields,
   tokenChangeDecimals,
   weiToDecimaled,
@@ -26,7 +25,6 @@ import { invalidateIdleBondCache } from './rewards/collect-bond';
 
 interface KickConfigBase {
   dryRun?: boolean;
-  delayBetweenActions: number;
   coinGeckoApiKey?: string;
   tokenAddresses?: { [tokenSymbol: string]: string };
   ethRpcUrl?: string;
@@ -93,7 +91,6 @@ export async function handleKicks({
     chainId,
   })) {
     await kick({ signer, pool, loanToKick, config: resolvedConfig });
-    await delay(resolvedConfig.delayBetweenActions);
   }
   await clearAllowances({ pool, signer });
 }

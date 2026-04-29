@@ -2,14 +2,13 @@ import { TakeWriteTransportConfig } from './write-transport';
 
 export interface OneInchExecutionConfig extends TakeWriteTransportConfig {
   dryRun?: boolean;
-  delayBetweenActions: number;
   connectorTokens?: Array<string>;
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   keeperTaker?: string;
   oneInchRequestTimeoutMs?: number;
-  skipOneInchRateLimitDelay?: boolean;
+  oneInchRequestAbortSignal?: AbortSignal;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
   onOneInchSwapDataResult?: (result: {
@@ -25,12 +24,11 @@ export interface OneInchExecutionConfig extends TakeWriteTransportConfig {
 }
 
 export interface OneInchQuoteConfig {
-  delayBetweenActions: number;
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
   connectorTokens?: Array<string>;
   oneInchRequestTimeoutMs?: number;
-  skipOneInchRateLimitDelay?: boolean;
+  oneInchRequestAbortSignal?: AbortSignal;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
 }

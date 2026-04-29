@@ -35,7 +35,6 @@ const BASE_CONFIG: KeeperConfig = {
   },
   runtime: {
     logLevel: 'debug',
-    delayBetweenActions: 0,
     delayBetweenRuns: 1,
   },
   ajna: {

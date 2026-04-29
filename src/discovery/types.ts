@@ -4,10 +4,14 @@ import {
   CurveRouterOverrides,
   DiscoveredDefaultsConfig,
   KeeperConfig,
+  LiquiditySource,
   SushiswapRouterOverrides,
   UniversalRouterOverrides,
 } from '../config';
-import { FactoryQuoteProviderRuntimeCache } from '../take/factory';
+import {
+  FactoryQuoteProviderRuntimeCache,
+  FactoryQuoteProviderRuntimeStats,
+} from '../take/factory';
 import {
   DiscoveryReadTransportConfig,
   getDiscoveryReadTransportConfig,
@@ -17,7 +21,6 @@ export interface DiscoveryExecutionConfig {
   autoDiscover?: AutoDiscoverConfig;
   connectorTokens?: Array<string>;
   curveRouterOverrides?: CurveRouterOverrides;
-  delayBetweenActions: number;
   dryRun?: boolean;
   discoveredDefaults?: DiscoveredDefaultsConfig;
   keeperTaker?: string;
@@ -41,7 +44,6 @@ export function getDiscoveryExecutionConfig(
     autoDiscover: config.discovery,
     connectorTokens: config.dex?.oneInch?.connectorTokens,
     curveRouterOverrides: config.dex?.curve,
-    delayBetweenActions: config.runtime.delayBetweenActions,
     dryRun: config.runtime.dryRun,
     discoveredDefaults: config.discovery?.defaults,
     keeperTaker: config.takers?.oneInch,
@@ -78,6 +80,26 @@ export interface DiscoveryRpcCache {
   gasPriceFetchedAt?: number;
   gasPriceInflight?: Promise<BigNumber>;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
+  stats?: DiscoveryRpcCacheStats;
   gasQuoteFallbackWarningKeys?: Set<string>;
+  gasQuoteConversions?: Map<string, GasQuoteConversionCacheEntry>;
   oneInchQuoteCircuit?: OneInchQuoteCircuitState;
+}
+
+export interface DiscoveryRpcCacheStats {
+  takeStatusReadCount?: number;
+  takeStatusBatchReadCount?: number;
+  takeStatusBatchBorrowerCount?: number;
+  takeStatusBatchFallbackCount?: number;
+  gasQuoteConversionCacheHits?: number;
+  gasQuoteConversionCacheMisses?: number;
+  routeProbeAbandonedCount?: number;
+  factory?: FactoryQuoteProviderRuntimeStats;
+}
+
+export interface GasQuoteConversionCacheEntry {
+  value: BigNumber;
+  createdAtMs: number;
+  gasPrice: BigNumber;
+  liquiditySource: LiquiditySource;
 }

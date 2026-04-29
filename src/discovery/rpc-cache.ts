@@ -17,10 +17,15 @@ export async function createDiscoveryRpcCache(params: {
     return undefined;
   }
 
-  const chainId =
+  const chainIdInflight =
     typeof params.signer.getChainId === 'function'
-      ? await params.signer.getChainId()
-      : undefined;
+      ? params.signer.getChainId()
+      : Promise.resolve(undefined);
+  const gasPriceInflight = params.readRpc.getGasPrice();
+  const [chainId, gasPrice] = await Promise.all([
+    chainIdInflight,
+    gasPriceInflight,
+  ]);
   const factoryQuoteProviders = params.includeFactoryQuoteProviders
     ? (params.factoryQuoteProviders ?? createFactoryQuoteProviderRuntimeCache())
     : undefined;
@@ -30,8 +35,11 @@ export async function createDiscoveryRpcCache(params: {
 
   return {
     chainId,
-    gasPrice: await params.readRpc.getGasPrice(),
+    gasPrice,
     gasPriceFetchedAt: Date.now(),
+    stats: {
+      factory: {},
+    },
     ...(params.includeFactoryQuoteProviders
       ? {
           factoryQuoteProviders,

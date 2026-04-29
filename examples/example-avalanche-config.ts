@@ -35,7 +35,6 @@ const config: KeeperConfig = {
     dryRun: false,
     logLevel: 'debug',
     delayBetweenRuns: 15,
-    delayBetweenActions: 61,
   },
   dex: {
     oneInch: {

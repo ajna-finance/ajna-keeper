@@ -15,7 +15,7 @@ import {
 } from './checks';
 import { SettlementScanner } from './scanner';
 import { settleAuctionCompletely } from './execution';
-import { delay, RequireFields } from '../utils';
+import { RequireFields } from '../utils';
 
 export * from './model';
 export * from './types';
@@ -55,7 +55,6 @@ export class SettlementHandler {
 
     for (const auction of auctions) {
       await this.processAuction(auction);
-      await delay(this.config.delayBetweenActions);
     }
   }
 
@@ -65,7 +64,6 @@ export class SettlementHandler {
   ): Promise<void> {
     for (const auction of auctions) {
       await this.processAuction(auction, options);
-      await delay(this.config.delayBetweenActions);
     }
   }
 

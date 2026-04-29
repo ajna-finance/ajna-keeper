@@ -89,7 +89,6 @@ describe('Settlement Integration Tests', () => {
     keeperConfig = {
       dryRun: false,
       subgraphUrl: 'http://test-subgraph-url',
-      delayBetweenActions: 100, // Short delay for testing
     };
   });
 
@@ -151,7 +150,6 @@ describe('Settlement Integration Tests', () => {
           dryRun: false,
           subgraphUrl: '',
           coinGeckoApiKey: '',
-          delayBetweenActions: 0,
         },
       });
       console.log(`Loan kicked for borrower: ${borrowerAddress}`);
@@ -170,7 +168,6 @@ describe('Settlement Integration Tests', () => {
           config: {
             dryRun: false,
             subgraphUrl: '',
-            delayBetweenActions: 0,
           },
         });
         console.log('Take handling completed');
@@ -301,7 +298,6 @@ describe('Settlement Integration Tests', () => {
         {
           runtime: {
             logLevel: 'debug',
-            delayBetweenActions: keeperConfig.delayBetweenActions,
             delayBetweenRuns: 0,
             dryRun: keeperConfig.dryRun,
           },

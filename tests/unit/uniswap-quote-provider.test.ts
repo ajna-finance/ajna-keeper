@@ -151,7 +151,7 @@ describe('UniswapV3QuoteProvider', () => {
         wethAddress: '0xWeth123',
         quoterV2Address: '0xQuoter123',
       });
-      (provider as any).factoryContract = {
+      (provider as any).poolExistenceChecker.factoryContract = {
         getPool: getPoolStub,
       };
 

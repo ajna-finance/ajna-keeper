@@ -53,10 +53,14 @@ export {
   createNoExternalTakeAdapter,
   createOneInchTakeAdapter,
 } from './one-inch-adapter';
+export type { TakeAuctionStatus, TakeAuctionStatusReader } from './liquidation-status';
+export {
+  createTakeAuctionStatusReader,
+  defaultTakeAuctionStatusReader,
+} from './liquidation-status';
 
 interface HandleTakeConfigBase {
   dryRun?: boolean;
-  delayBetweenActions: number;
   connectorTokens?: Array<string>;
   oneInchRouters?: { [chainId: number]: string };
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
@@ -174,7 +178,6 @@ async function runResolvedManualTakeCandidates({
       poolConfig,
       candidates,
       subgraph: config.subgraph,
-      delayBetweenActions: config.delayBetweenActions ?? 0,
       dryRun: config.dryRun ?? false,
       takeWriteTransport,
       context,
@@ -196,7 +199,6 @@ async function runResolvedManualTakeCandidates({
     poolConfig,
     candidates,
     subgraph: config.subgraph,
-    delayBetweenActions: config.delayBetweenActions ?? 0,
     dryRun: config.dryRun ?? false,
     takeWriteTransport,
     context,
@@ -209,7 +211,6 @@ async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
   poolConfig: TakeActionConfig;
   candidates: TakeBorrowerCandidate[];
   subgraph: HandleTakeConfig['subgraph'];
-  delayBetweenActions: number;
   dryRun: boolean;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
   context: ManualTakeContext<TExecutionConfig>;
@@ -224,7 +225,6 @@ async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
     arbTakeStrategy: params.context.arbTakeStrategy,
     externalExecutionConfig: params.context.externalExecutionConfig,
     dryRun: params.dryRun,
-    delayBetweenActions: params.delayBetweenActions,
     takeWriteTransport: params.takeWriteTransport,
     onFound: (decision) => {
       const message = `Found liquidation to ${formatTakeStrategyLog(
@@ -254,10 +254,9 @@ async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
 interface GetLiquidationsToTakeParams
   extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
   config: SubgraphConfigInput<
-    Pick<HandleTakeConfigBase, 'oneInchRouters' | 'connectorTokens'> &
-      Partial<Pick<HandleTakeConfigBase, 'delayBetweenActions'>> & {
-        oneInchDefaultSlippage?: number;
-      }
+    Pick<HandleTakeConfigBase, 'oneInchRouters' | 'connectorTokens'> & {
+      oneInchDefaultSlippage?: number;
+    }
   >;
 }
 
@@ -276,7 +275,6 @@ export async function* getLiquidationsToTake({
   const externalTakeAdapter =
     poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
       ? createOneInchTakeAdapter({
-          delayBetweenActions: resolvedConfig.delayBetweenActions ?? 0,
           oneInchDefaultSlippage: resolvedConfig.oneInchDefaultSlippage,
           oneInchRouters: resolvedConfig.oneInchRouters,
           connectorTokens: resolvedConfig.connectorTokens,

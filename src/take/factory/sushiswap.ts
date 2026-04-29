@@ -31,7 +31,7 @@ import {
   formatFactoryTakeSubmissionLog,
   getSlippageFloorQuoteRaw,
   getSushiSwapQuoteProvider,
-  getSwapDeadline,
+  getSwapDeadlineCached,
 } from './shared';
 import {
   resolveTakeWriteTransport,
@@ -244,6 +244,7 @@ export async function executeSushiSwapFactoryTake({
     | 'keeperTakerFactory'
     | 'sushiswapRouterOverrides'
     | 'takeWriteTransport'
+    | 'runtimeCache'
     | 'onFactoryExecutionFailure'
   >;
 }): Promise<void> {
@@ -266,7 +267,10 @@ export async function executeSushiSwapFactoryTake({
       liquidation,
       quoteEvaluation,
     });
-    const deadline = await getSwapDeadline(signer);
+    const deadline = await getSwapDeadlineCached({
+      signer,
+      runtimeCache: config.runtimeCache,
+    });
 
     logger.debug(
       formatFactoryExecutionLog({

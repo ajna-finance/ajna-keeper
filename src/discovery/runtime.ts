@@ -613,7 +613,6 @@ async function executeEffectiveSettlementTarget(params: {
       signer: state.signer,
       config: {
         dryRun: state.config.runtime.dryRun,
-        delayBetweenActions: state.config.runtime.delayBetweenActions,
         subgraph: state.readTransports.subgraph,
       },
     });
@@ -657,6 +656,40 @@ function logDiscoveryCycleSummary(params: {
 }): void {
   logger.info(
     `Discovery ${params.cycleType} cycle summary: durationMs=${params.durationMs} snapshotRefreshed=${params.snapshotInfo.snapshotRefreshed} snapshotAgeMs=${params.snapshotInfo.snapshotAgeMs ?? -1} auctionCount=${params.snapshotInfo.liquidationAuctions?.length ?? 0} targets=${params.stats.targets} manualTargets=${params.stats.manualTargets} discoveredTargets=${params.stats.discoveredTargets} poolsUnavailable=${params.stats.poolsUnavailable} targetSuccesses=${params.stats.targetSuccesses} targetFailures=${params.stats.targetFailures}`
+  );
+}
+
+function getDiscoveryRpcStatParts(cache?: DiscoveryRpcCache): string[] {
+  const stats = cache?.stats;
+  if (!stats) {
+    return [];
+  }
+
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(stats)) {
+    if (key === 'factory' || typeof value !== 'number' || value === 0) {
+      continue;
+    }
+    parts.push(`${key}=${value}`);
+  }
+  for (const [key, value] of Object.entries(stats.factory ?? {})) {
+    if (typeof value === 'number' && value !== 0) {
+      parts.push(`factory.${key}=${value}`);
+    }
+  }
+  return parts;
+}
+
+function logDiscoveryRpcStats(params: {
+  cycleType: 'take' | 'settlement';
+  cache?: DiscoveryRpcCache;
+}): void {
+  const parts = getDiscoveryRpcStatParts(params.cache);
+  if (parts.length === 0) {
+    return;
+  }
+  logger.debug(
+    `Discovery ${params.cycleType} rpc stats: ${parts.join(' ')}`
   );
 }
 
@@ -739,13 +772,16 @@ async function runTakeDiscoveryCycle(
           rpcCache,
         });
         stats.targetSuccesses += 1;
-        await delay(state.config.runtime.delayBetweenActions);
       } catch (error) {
         stats.targetFailures += 1;
         logger.error(`Failed to handle take for pool: ${pool.name}.`, error);
       }
     }
 
+    logDiscoveryRpcStats({
+      cycleType: 'take',
+      cache: rpcCacheState.cache,
+    });
     logDiscoveryCycleSummary({
       cycleType: 'take',
       stats,
@@ -837,7 +873,6 @@ async function runSettlementDiscoveryCycle(
           discoveredTargetSuccesses += 1;
         }
         logger.debug(`Settlement check completed for pool: ${pool.name}`);
-        await delay(state.config.runtime.delayBetweenActions);
       } catch (error) {
         stats.targetFailures += 1;
         logger.error(

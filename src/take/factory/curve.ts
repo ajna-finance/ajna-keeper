@@ -31,7 +31,7 @@ import {
   formatFactoryTakeSubmissionLog,
   getCurveQuoteProvider,
   getSlippageFloorQuoteRaw,
-  getSwapDeadline,
+  getSwapDeadlineCached,
 } from './shared';
 import {
   resolveTakeWriteTransport,
@@ -234,6 +234,7 @@ export async function executeCurveFactoryTake({
     | 'curveRouterOverrides'
     | 'tokenAddresses'
     | 'takeWriteTransport'
+    | 'runtimeCache'
     | 'onFactoryExecutionFailure'
   >;
 }): Promise<void> {
@@ -261,7 +262,10 @@ export async function executeCurveFactoryTake({
       liquidation,
       quoteEvaluation,
     });
-    const deadline = await getSwapDeadline(signer);
+    const deadline = await getSwapDeadlineCached({
+      signer,
+      runtimeCache: config.runtimeCache,
+    });
 
     logger.debug(
       formatFactoryExecutionLog({

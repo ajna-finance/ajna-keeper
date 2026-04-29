@@ -347,7 +347,6 @@ export async function processKickCycle({
         signer,
         config: {
           dryRun: config.runtime.dryRun,
-          delayBetweenActions: config.runtime.delayBetweenActions,
           coinGeckoApiKey: config.pricing?.coinGeckoApiKey,
           ethRpcUrl: config.network.rpcUrl,
           tokenAddresses: config.network.tokenAddresses,
@@ -355,7 +354,6 @@ export async function processKickCycle({
         },
         chainId,
       });
-      await delay(config.runtime.delayBetweenActions);
     } catch (error) {
       logger.error(`Failed to handle kicks for pool: ${pool.name}.`, error);
     }
@@ -415,11 +413,9 @@ async function collectBondLoop({
           poolConfig,
           config: {
             dryRun: config.runtime.dryRun,
-            delayBetweenActions: config.runtime.delayBetweenActions,
             subgraph,
           },
         });
-        await delay(config.runtime.delayBetweenActions);
       } catch (error) {
         logger.error(`Failed to collect bond from pool: ${pool.name}.`, error);
       }
@@ -572,7 +568,6 @@ async function collectLpRewardsLoop({
 
       try {
         await redeemer.sweep();
-        await delay(config.runtime.delayBetweenActions);
       } catch (error) {
         const errorMessage = getErrorMessage(error);
 
@@ -599,7 +594,6 @@ async function collectLpRewardsLoop({
               signer,
               config: {
                 dryRun: config.runtime.dryRun,
-                delayBetweenActions: config.runtime.delayBetweenActions,
                 subgraph,
               },
             });
@@ -610,7 +604,6 @@ async function collectLpRewardsLoop({
               );
               try {
                 await redeemer.sweep();
-                await delay(config.runtime.delayBetweenActions);
               } catch (retryError) {
                 const retryMessage =
                   retryError instanceof Error

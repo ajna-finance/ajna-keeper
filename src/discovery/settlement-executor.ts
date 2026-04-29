@@ -121,7 +121,6 @@ export async function handleDiscoveredSettlementTarget(
     { settlement: params.target.settlement },
     {
       dryRun: params.target.dryRun,
-      delayBetweenActions: params.config.delayBetweenActions,
       subgraph: transports.subgraph,
     }
   );

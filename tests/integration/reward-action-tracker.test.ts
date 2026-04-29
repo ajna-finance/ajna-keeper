@@ -51,7 +51,6 @@ describe('RewardActionTracker', () => {
       },
       runtime: {
         logLevel: 'debug',
-        delayBetweenActions: 0,
         delayBetweenRuns: 0,
       },
       ajna: MAINNET_CONFIG.AJNA_CONFIG,

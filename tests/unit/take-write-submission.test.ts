@@ -327,7 +327,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
         connectorTokens: [],
         oneInchDefaultSlippage: 2.5,
         oneInchRouters: {
@@ -399,8 +398,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
-        skipOneInchRateLimitDelay: true,
         connectorTokens: [],
         oneInchRouters: {},
         keeperTaker: '0x00000000000000000000000000000000000000dd',
@@ -457,7 +454,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: true,
-        delayBetweenActions: 0,
         connectorTokens: [],
       },
     });
@@ -558,7 +554,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
         connectorTokens: [],
         oneInchRouters: {
           1: '0x00000000000000000000000000000000000000cc',
@@ -648,7 +643,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
         connectorTokens: [],
         oneInchRouters: {
           1: '0x00000000000000000000000000000000000000cc',
@@ -732,7 +726,6 @@ describe('take write submission', () => {
       },
       config: {
         dryRun: false,
-        delayBetweenActions: 0,
         connectorTokens: [],
         oneInchRouters: {
           1: '0x00000000000000000000000000000000000000cc',
@@ -753,15 +746,18 @@ describe('take write submission', () => {
   });
 
   it('uses the configured take write transport for Curve factory take submission without reselecting the pool', async () => {
-    const readSigner = {};
+    // Deadline reads stay on the read signer; private/relay write transports
+    // should only see transaction submission and nonce reads.
+    const readSigner = {
+      provider: {
+        getBlock: sinon.stub().resolves({ timestamp: 123 }),
+      },
+    };
     const writeSigner = {
       getAddress: sinon
         .stub()
         .resolves('0x00000000000000000000000000000000000000ef'),
       getTransactionCount: sinon.stub().resolves(0),
-      provider: {
-        getBlock: sinon.stub().resolves({ timestamp: 123 }),
-      },
     };
     const takeWriteTransport = {
       mode: 'private_rpc',
@@ -791,10 +787,6 @@ describe('take write submission', () => {
     sinon
       .stub(shared, 'computeFactoryAmountOutMinimum')
       .resolves(BigNumber.from(10));
-    sinon.stub(shared, 'getSwapDeadline').callsFake(async (signer) => {
-      expect(signer).to.equal(readSigner);
-      return 456;
-    });
     const queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
       .callsFake(async (signer, txFunction) => {
@@ -881,6 +873,9 @@ describe('take write submission', () => {
     expect(decoded[1]).to.equal(0);
     expect(decoded[2]).to.equal(1);
     expect(decoded[3]).to.equal(0);
+    expect(decoded[5].toNumber()).to.equal(1923);
+    expect((readSigner as any).provider.getBlock.calledOnceWithExactly('latest'))
+      .to.be.true;
   });
 
   it('refuses factory execution when an approved quote is missing route-binding fields', async () => {
@@ -999,15 +994,16 @@ describe('take write submission', () => {
   });
 
   it('uses the configured take write transport for Uniswap factory take submission', async () => {
-    const readSigner = {};
+    const readSigner = {
+      provider: {
+        getBlock: sinon.stub().resolves({ timestamp: 123 }),
+      },
+    };
     const writeSigner = {
       getAddress: sinon
         .stub()
         .resolves('0x00000000000000000000000000000000000000ee'),
       getTransactionCount: sinon.stub().resolves(0),
-      provider: {
-        getBlock: sinon.stub().resolves({ timestamp: 123 }),
-      },
     };
     const takeWriteTransport = {
       mode: 'private_rpc',
@@ -1037,10 +1033,6 @@ describe('take write submission', () => {
     sinon
       .stub(shared, 'computeFactoryAmountOutMinimum')
       .resolves(BigNumber.from(10));
-    sinon.stub(shared, 'getSwapDeadline').callsFake(async (signer) => {
-      expect(signer).to.equal(readSigner);
-      return 456;
-    });
     const queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
       .callsFake(async (signer, txFunction) => {
@@ -1099,5 +1091,13 @@ describe('take write submission', () => {
     ).to.be.true;
     expect(queueTransactionStub.calledOnce).to.be.true;
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
+    const takeArgs = populateTransactionStub.firstCall.args;
+    const decoded = ethers.utils.defaultAbiCoder.decode(
+      ['(address,address,address,uint24,uint256,uint256)'],
+      takeArgs[6]
+    );
+    expect(decoded[0][5].toNumber()).to.equal(1923);
+    expect((readSigner as any).provider.getBlock.calledOnceWithExactly('latest'))
+      .to.be.true;
   });
 });

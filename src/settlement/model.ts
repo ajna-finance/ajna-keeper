@@ -47,7 +47,6 @@ export interface SettlementIncentiveResult {
 
 interface SettlementConfigBase {
   dryRun?: boolean;
-  delayBetweenActions: number;
 }
 
 export type SettlementReadConfig = WithSubgraph<SettlementConfigBase>;

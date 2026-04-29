@@ -234,7 +234,6 @@ describe('External Take with MockSwapRouter', function () {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -261,7 +260,6 @@ describe('External Take with MockSwapRouter', function () {
         oneInchRouters: { 31337: mockRouterAddress },
         connectorTokens: [],
         keeperTaker: keeperTakerAddress,
-        delayBetweenActions: 0,
       },
     });
 
@@ -295,7 +293,6 @@ describe('External Take with MockSwapRouter', function () {
           subgraphUrl: '',
           oneInchRouters: {}, // No router for chainId 31337
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -325,7 +322,6 @@ describe('External Take with MockSwapRouter', function () {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -530,7 +526,6 @@ describe('Real Uniswap V3 External Take', function () {
           subgraphUrl: '',
           oneInchRouters: { 31337: adapterAddress },
           connectorTokens: [],
-          delayBetweenActions: 0,
         },
       })
     );
@@ -556,7 +551,6 @@ describe('Real Uniswap V3 External Take', function () {
         oneInchRouters: { 31337: adapterAddress },
         connectorTokens: [],
         keeperTaker: keeperTakerAddress,
-        delayBetweenActions: 0,
       },
     });
 

@@ -3,6 +3,7 @@ import { BigNumber } from 'ethers';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
+  mergeRoutePolicyIntoEvaluation,
 } from '../../src/take/external-take-policy';
 
 const raw = (value: number): BigNumber => BigNumber.from(value);
@@ -139,5 +140,93 @@ describe('External take route policy', () => {
       1e-7
     );
     expect(policy.effectiveMarketPriceFactor).to.be.closeTo(0.869565, 1e-7);
+  });
+
+  it('merges policy min-out and profitability telemetry into quote evaluations', () => {
+    const policy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: 0.99,
+      allowSubsidy: false,
+      quoteAmountRaw: raw(130),
+      quoteDueRaw: raw(100),
+      marketFactorFloorQuoteRaw: raw(102),
+      routeExecutionCostQuoteRaw: raw(5),
+      configuredProfitFloorQuoteRaw: raw(10),
+      nativeProfitFloorQuoteRaw: raw(7),
+      slippageRiskBufferQuoteRaw: raw(3),
+      routeMinOutRaw: raw(120),
+    });
+
+    const merged = mergeRoutePolicyIntoEvaluation({
+      evaluation: {
+        isTakeable: true,
+        marketPrice: 200,
+        takeablePrice: 198,
+        routeProfitability: {
+          gasPolicyEvaluatedAt: 123,
+          configuredMarketPriceFactor: 0.5,
+        },
+      },
+      policy,
+      auctionRepayRequirementQuoteRaw: raw(100),
+      configuredMarketPriceFactor: 0.99,
+      marketFactorFloorQuoteRaw: raw(102),
+      routeProfitabilityExtras: {
+        routeGasLimit: raw(900000),
+        gasPriceGwei: 1.5,
+      },
+    });
+
+    expect(merged.routeMinOutRaw?.eq(raw(120))).to.equal(true);
+    expect(merged.profitMinOutRaw?.eq(raw(118))).to.equal(true);
+    expect(merged.approvedMinOutRaw?.eq(raw(120))).to.equal(true);
+    expect(merged.takeablePrice).to.be.closeTo(169.4914, 0.0001);
+    expect(
+      merged.routeProfitability?.auctionRepayRequirementQuoteRaw?.eq(raw(100))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.routeExecutionCostQuoteRaw?.eq(raw(5))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.configuredProfitFloorQuoteRaw?.eq(raw(10))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.nativeProfitFloorQuoteRaw?.eq(raw(7))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.slippageRiskBufferQuoteRaw?.eq(raw(3))
+    ).to.equal(true);
+    expect(merged.routeProfitability?.configuredMarketPriceFactor).to.equal(
+      0.99
+    );
+    expect(
+      merged.routeProfitability?.marketFactorFloorQuoteRaw?.eq(raw(102))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.requiredProfitFloorQuoteRaw?.eq(raw(10))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.requiredNonSubsidizedOutputRaw?.eq(raw(118))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.requiredOutputFloorQuoteRaw?.eq(raw(118))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.expectedNetProfitQuoteRaw?.eq(raw(22))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.expectedShortfallQuoteRaw?.eq(raw(0))
+    ).to.equal(true);
+    expect(
+      merged.routeProfitability?.surplusOverFloorQuoteRaw?.eq(raw(12))
+    ).to.equal(true);
+    expect(merged.routeProfitability?.subsidyAllowed).to.equal(false);
+    expect(
+      merged.routeProfitability?.expectedSubsidyQuoteRaw?.eq(raw(0))
+    ).to.equal(true);
+    expect(merged.routeProfitability?.gasPolicyEvaluatedAt).to.equal(123);
+    expect(merged.routeProfitability?.routeGasLimit?.eq(raw(900000))).to.equal(
+      true
+    );
+    expect(merged.routeProfitability?.gasPriceGwei).to.equal(1.5);
   });
 });

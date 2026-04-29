@@ -84,7 +84,6 @@ function makeCollector(opts: {
     {
       runtime: {
         logLevel: 'debug',
-        delayBetweenActions: 0,
         delayBetweenRuns: 0,
         dryRun: false,
       },

@@ -5,11 +5,7 @@
 import { ethers, BigNumber, Signer } from 'ethers';
 import { logger } from '../../logging';
 import { getDecimalsErc20 } from '../../erc20';
-import {
-  PoolExistenceCache,
-  POOL_EXISTS_CACHE_TTL_MS,
-  UNINITIALIZED_POOL_CACHE_TTL_MS,
-} from './pool-existence-cache';
+import { InitializedV3PoolExistenceChecker } from './v3-pool-existence';
 
 // SushiSwap V3 QuoterV2 ABI with CORRECT field order (from production testing)
 const SUSHI_QUOTER_ABI = [
@@ -20,12 +16,6 @@ const SUSHI_QUOTER_ABI = [
   'function factory() external view returns (address)',
 ];
 
-const SUSHI_FACTORY_ABI = [
-  'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)',
-];
-const SUSHI_V3_POOL_ABI = [
-  'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
-];
 interface SushiSwapQuoteConfig {
   swapRouterAddress: string;
   quoterV2Address?: string;
@@ -56,19 +46,17 @@ export class SushiSwapQuoteProvider {
   private signer: Signer;
   private config: SushiSwapQuoteConfig;
   private quoterContract?: ethers.Contract;
-  private factoryContract: ethers.Contract;
   private isInitialized: boolean = false;
-  private poolExistenceCache = new PoolExistenceCache();
+  private poolExistenceChecker: InitializedV3PoolExistenceChecker;
 
   constructor(signer: Signer, config: SushiSwapQuoteConfig) {
     this.signer = signer;
     this.config = config;
 
-    // Always initialize factory for pool validation
-    this.factoryContract = new ethers.Contract(
+    this.poolExistenceChecker = new InitializedV3PoolExistenceChecker(
+      signer,
       config.factoryAddress,
-      SUSHI_FACTORY_ABI,
-      signer
+      'SushiSwap'
     );
 
     // Initialize quoter if address is provided
@@ -177,53 +165,11 @@ export class SushiSwapQuoteProvider {
       }
 
       const fee = feeTier ?? this.config.defaultFeeTier;
-      const cached = this.poolExistenceCache.get(tokenA, tokenB, fee);
-      if (cached !== undefined) {
-        logger.debug(
-          `SushiSwap pool existence cache hit: ${tokenA}/${tokenB} fee=${fee} exists=${cached}`
-        );
-        return cached;
-      }
-
-      const poolAddress = await this.factoryContract.getPool(
+      return await this.poolExistenceChecker.poolExists(
         tokenA,
         tokenB,
         fee
       );
-
-      let exists = false;
-      if (poolAddress !== ethers.constants.AddressZero) {
-        const poolContract = new ethers.Contract(
-          poolAddress,
-          SUSHI_V3_POOL_ABI,
-          this.signer
-        );
-        const slot0 = await poolContract.slot0();
-        exists = BigNumber.from(slot0.sqrtPriceX96 ?? slot0[0]).gt(0);
-      }
-      this.poolExistenceCache.set(
-        tokenA,
-        tokenB,
-        fee,
-        exists,
-        exists ? POOL_EXISTS_CACHE_TTL_MS : UNINITIALIZED_POOL_CACHE_TTL_MS
-      );
-
-      if (exists) {
-        logger.debug(
-          `SushiSwap initialized pool found: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
-        );
-      } else if (poolAddress !== ethers.constants.AddressZero) {
-        logger.debug(
-          `SushiSwap pool is not initialized at the current slot0 price: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
-        );
-      } else {
-        logger.debug(
-          `SushiSwap pool NOT found: ${tokenA}/${tokenB} fee=${fee}`
-        );
-      }
-
-      return exists;
     } catch (error) {
       logger.debug(`Error checking SushiSwap pool existence: ${error}`);
       throw error;

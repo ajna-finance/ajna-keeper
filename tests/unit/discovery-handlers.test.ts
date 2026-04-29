@@ -18,36 +18,10 @@ import { LiquiditySource } from '../../src/config';
 import * as erc20 from '../../src/erc20';
 import { DexRouter } from '../../src/dex/router';
 import { logger } from '../../src/logging';
-
-function createDiscoveryTransports(gasPrice: BigNumber = BigNumber.from(1)) {
-  return {
-    subgraph: {
-      cacheKey: 'test-subgraph',
-      getLoans: sinon.stub().rejects(new Error('unused')),
-      getLiquidations: sinon.stub().rejects(new Error('unused')),
-      getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
-      getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-      getChainwideLiquidationAuctions: sinon
-        .stub()
-        .rejects(new Error('unused')),
-      getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
-      getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
-    },
-    readRpc: {
-      getGasPrice: sinon.stub().resolves(gasPrice),
-    },
-  };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((innerResolve, innerReject) => {
-    resolve = innerResolve;
-    reject = innerReject;
-  });
-  return { promise, resolve, reject };
-}
+import {
+  createDeferred,
+  createDiscoveryTransports,
+} from '../helpers/discovery';
 
 describe('Discovery Handlers', () => {
   afterEach(() => {
@@ -129,7 +103,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -142,6 +115,180 @@ describe('Discovery Handlers', () => {
       poolAddress: pool.poolAddress,
       borrower: '0xBorrowerA',
     });
+  });
+
+  it('falls back to per-candidate take status reads when a preload status is missing', async () => {
+    const takeLiquidationStub = sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        quoteAmount: 10,
+        collateralAmount: 1,
+        marketPrice: 10,
+        takeablePrice: 12,
+      });
+    const borrowers = ['0xBorrowerA', '0xBorrowerB'];
+    const statusCalls: string[] = [];
+    let preloadFailed = false;
+    const pool = {
+      name: 'Discovered Preload Fallback Pool',
+      poolAddress: '0x1111111111111111111111111111111111111112',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().callsFake((borrower: string) => ({
+        getStatus: sinon.stub().callsFake(async () => {
+          statusCalls.push(borrower);
+          if (borrower === borrowers[0] && !preloadFailed) {
+            preloadFailed = true;
+            throw new Error('preload status read failed');
+          }
+          return {
+            collateral: ethers.utils.parseEther('1'),
+            price: ethers.utils.parseEther('1'),
+          };
+        }),
+      })),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: borrowers.map((borrower) => ({
+          poolAddress: pool.poolAddress,
+          borrower,
+          kickTime: Date.now(),
+          debtRemaining: '1',
+          collateralRemaining: '1',
+          neutralPrice: '1',
+          debt: '1',
+          collateral: '1',
+          heuristicScore: 1,
+        })),
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxConcurrentCandidateEvaluations: 2,
+          },
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(),
+    });
+
+    expect(statusCalls.filter((borrower) => borrower === borrowers[0]).length)
+      .to.be.greaterThan(1);
+    expect(takeLiquidationStub.calledOnce).to.be.true;
+    expect(takeLiquidationStub.firstCall.args[0].liquidation.borrower).to.equal(
+      borrowers[0]
+    );
+  });
+
+  it('can execute multiple discovered candidates in one same-pool cascade when configured', async () => {
+    const takeLiquidationStub = sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        quoteAmount: 10,
+        collateralAmount: 1,
+        marketPrice: 10,
+        takeablePrice: 12,
+      });
+    const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
+    const statusCalls: string[] = [];
+    const pool = {
+      name: 'Discovered Same Pool Cascade',
+      poolAddress: '0x1111111111111111111111111111111111111113',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().callsFake((borrower: string) => ({
+        getStatus: sinon.stub().callsFake(async () => {
+          statusCalls.push(borrower);
+          return {
+            collateral: ethers.utils.parseEther('1'),
+            price: ethers.utils.parseEther('1'),
+          };
+        }),
+      })),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: borrowers.map((borrower) => ({
+          poolAddress: pool.poolAddress,
+          borrower,
+          kickTime: Date.now(),
+          debtRemaining: '1',
+          collateralRemaining: '1',
+          neutralPrice: '1',
+          debt: '1',
+          collateral: '1',
+          heuristicScore: 1,
+        })),
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxConcurrentCandidateEvaluations: 2,
+            maxExecutionsPerPoolPerRun: 2,
+          },
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(),
+    });
+
+    expect(takeLiquidationStub.callCount).to.equal(2);
+    expect(
+      takeLiquidationStub
+        .getCalls()
+        .map((call) => call.args[0].liquidation.borrower)
+    ).to.deep.equal(borrowers.slice(0, 2));
+    expect(statusCalls).to.deep.equal([
+      borrowers[0],
+      borrowers[0],
+      borrowers[1],
+      borrowers[1],
+    ]);
   });
 
   it('removes hot-cache candidates when the approved quote is stale after auction price increases', async () => {
@@ -220,7 +367,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -303,7 +449,6 @@ describe('Discovery Handlers', () => {
             externalTakeTransportPolicy: 'require_private_or_relay',
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -399,32 +544,13 @@ describe('Discovery Handlers', () => {
             enabled: true,
             take: true,
           },
-          delayBetweenActions: 0,
           subgraphUrl: 'http://example-subgraph',
           keeperTaker: '0x4444444444444444444444444444444444444444',
           oneInchRouters: {
             1: '0x5555555555555555555555555555555555555555',
           },
         } as any,
-        transports: {
-          subgraph: {
-            cacheKey: 'test-subgraph',
-            getLoans: sinon.stub().rejects(new Error('unused')),
-            getLiquidations: sinon.stub().rejects(new Error('unused')),
-            getHighestMeaningfulBucket: sinon
-              .stub()
-              .rejects(new Error('unused')),
-            getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-            getChainwideLiquidationAuctions: sinon
-              .stub()
-              .rejects(new Error('unused')),
-            getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
-            getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
-          },
-          readRpc: {
-            getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
-          },
-        },
+        transports: createDiscoveryTransports(),
       });
     } catch (error) {
       expect.fail(
@@ -518,7 +644,6 @@ describe('Discovery Handlers', () => {
             oneInchQuoteFailureThreshold: 2,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
         keeperTaker: '0x4444444444444444444444444444444444444444',
         oneInchRouters: {
@@ -608,30 +733,13 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
         keeperTaker: '0x4444444444444444444444444444444444444444',
         oneInchRouters: {
           1: '0x5555555555555555555555555555555555555555',
         },
       } as any,
-      transports: {
-        subgraph: {
-          cacheKey: 'test-subgraph',
-          getLoans: sinon.stub().rejects(new Error('unused')),
-          getLiquidations: sinon.stub().rejects(new Error('unused')),
-          getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
-          getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-          getChainwideLiquidationAuctions: sinon
-            .stub()
-            .rejects(new Error('unused')),
-          getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
-          getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
-        },
-        readRpc: {
-          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
-        },
-      },
+      transports: createDiscoveryTransports(),
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
@@ -710,26 +818,9 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
-      transports: {
-        subgraph: {
-          cacheKey: 'test-subgraph',
-          getLoans: sinon.stub().rejects(new Error('unused')),
-          getLiquidations: sinon.stub().rejects(new Error('unused')),
-          getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
-          getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-          getChainwideLiquidationAuctions: sinon
-            .stub()
-            .rejects(new Error('unused')),
-          getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
-          getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
-        },
-        readRpc: {
-          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
-        },
-      },
+      transports: createDiscoveryTransports(),
     });
 
     expect(arbTakeLiquidationStub.calledOnce).to.be.true;
@@ -832,7 +923,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -995,7 +1085,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1131,7 +1220,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
         keeperTaker: '0x4444444444444444444444444444444444444444',
         oneInchRouters: {
@@ -1271,7 +1359,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
         keeperTaker: '0x4444444444444444444444444444444444444444',
         oneInchRouters: {
@@ -1382,7 +1469,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1491,7 +1577,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: pool.quoteAddress,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1605,7 +1690,6 @@ describe('Discovery Handlers', () => {
         oneInchRouters: {
           1: '0x1111111111111111111111111111111111111111',
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1736,7 +1820,6 @@ describe('Discovery Handlers', () => {
         oneInchRouters: {
           1: '0x1111111111111111111111111111111111111111',
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -1830,7 +1913,6 @@ describe('Discovery Handlers', () => {
             defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -2050,7 +2132,6 @@ describe('Discovery Handlers', () => {
             enabled: true,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -2144,7 +2225,6 @@ describe('Discovery Handlers', () => {
             defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -2248,7 +2328,6 @@ describe('Discovery Handlers', () => {
             defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -2390,7 +2469,6 @@ describe('Discovery Handlers', () => {
               oneInchQuoteFailureThreshold: 2,
             },
           },
-          delayBetweenActions: 0,
           subgraphUrl: 'http://example-subgraph',
         } as any,
         transports,
@@ -2500,7 +2578,6 @@ describe('Discovery Handlers', () => {
               externalTakeProbeTimeoutMs: 50,
             },
           },
-          delayBetweenActions: 0,
           subgraphUrl: 'http://example-subgraph',
         } as any,
         transports,
@@ -2618,7 +2695,6 @@ describe('Discovery Handlers', () => {
             maxGasPriceGwei: 1.5,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -2714,7 +2790,6 @@ describe('Discovery Handlers', () => {
             maxGasPriceGwei: 1.5,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -2811,7 +2886,6 @@ describe('Discovery Handlers', () => {
             maxGasPriceGwei: 3,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -2893,28 +2967,11 @@ describe('Discovery Handlers', () => {
             maxGasPriceGwei: 5,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
-      transports: {
-        subgraph: {
-          cacheKey: 'test-subgraph',
-          getLoans: sinon.stub().rejects(new Error('unused')),
-          getLiquidations: sinon.stub().rejects(new Error('unused')),
-          getHighestMeaningfulBucket: sinon.stub().rejects(new Error('unused')),
-          getUnsettledAuctions: sinon.stub().rejects(new Error('unused')),
-          getChainwideLiquidationAuctions: sinon
-            .stub()
-            .rejects(new Error('unused')),
-          getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
-          getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
-        },
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('100', 'gwei')),
-        },
-      },
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('100', 'gwei')
+      ),
     });
 
     expect(needsSettlementStub.called).to.be.false;
@@ -2983,7 +3040,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           settlement: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3059,7 +3115,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           settlement: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3132,7 +3187,6 @@ describe('Discovery Handlers', () => {
             minExpectedProfitQuote: 9999,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3207,7 +3261,6 @@ describe('Discovery Handlers', () => {
             maxGasCostNative: 0.01,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -3302,7 +3355,6 @@ describe('Discovery Handlers', () => {
         oneInchRouters: {
           8453: '0x1111111111111111111111111111111111111111',
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(
@@ -3311,7 +3363,12 @@ describe('Discovery Handlers', () => {
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
-    expect(oneInchQuoteStub.calledTwice).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(
+      BigNumber.from(oneInchQuoteStub.firstCall.args[1]).eq(
+        ethers.utils.parseEther('0.00117')
+      )
+    ).to.be.true;
   });
 
   it('uses raw quote units for discovered take profit-floor checks', async () => {
@@ -3386,7 +3443,6 @@ describe('Discovery Handlers', () => {
         tokenAddresses: {
           weth: '0x4200000000000000000000000000000000000006',
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(BigNumber.from(0)),
@@ -3475,7 +3531,6 @@ describe('Discovery Handlers', () => {
             maxGasCostNative: 1,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -3574,7 +3629,6 @@ describe('Discovery Handlers', () => {
             maxGasCostNative: 1,
           },
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports,
@@ -3664,7 +3718,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3761,7 +3814,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           take: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3850,7 +3902,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           settlement: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),
@@ -3926,7 +3977,6 @@ describe('Discovery Handlers', () => {
           enabled: true,
           settlement: true,
         },
-        delayBetweenActions: 0,
         subgraphUrl: 'http://example-subgraph',
       } as any,
       transports: createDiscoveryTransports(),

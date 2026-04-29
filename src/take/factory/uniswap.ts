@@ -31,7 +31,7 @@ import {
   formatFactoryTakeSubmissionLog,
   getSlippageFloorQuoteRaw,
   getUniswapV3QuoteProvider,
-  getSwapDeadline,
+  getSwapDeadlineCached,
 } from './shared';
 import {
   resolveTakeWriteTransport,
@@ -249,6 +249,7 @@ export async function executeUniswapV3FactoryTake({
     | 'keeperTakerFactory'
     | 'universalRouterOverrides'
     | 'takeWriteTransport'
+    | 'runtimeCache'
     | 'onFactoryExecutionFailure'
   >;
 }): Promise<void> {
@@ -271,7 +272,10 @@ export async function executeUniswapV3FactoryTake({
       liquidation,
       quoteEvaluation,
     });
-    const deadline = await getSwapDeadline(signer);
+    const deadline = await getSwapDeadlineCached({
+      signer,
+      runtimeCache: config.runtimeCache,
+    });
 
     logger.debug(
       formatFactoryExecutionLog({

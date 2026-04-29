@@ -105,7 +105,6 @@ describe('Settlement Module Tests', () => {
     config = {
       dryRun: false,
       subgraphUrl: 'http://test-subgraph-url',
-      delayBetweenActions: 0, // No delays in tests
     };
 
     // Stub external module dependencies

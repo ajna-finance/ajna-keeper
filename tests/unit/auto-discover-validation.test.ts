@@ -24,7 +24,6 @@ describe('auto-discover validation', () => {
     },
     runtime: {
       logLevel: 'debug',
-      delayBetweenActions: 0,
       delayBetweenRuns: 1,
     },
     ajna: {
@@ -577,6 +576,56 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be a positive integer'
     );
+
+    config.discovery!.take = {
+      enabled: true,
+      maxConcurrentCandidateEvaluations: 5,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxConcurrentCandidateEvaluations must be an integer between 1 and 4'
+    );
+
+    config.discovery!.take = {
+      enabled: true,
+      maxExecutionsPerPoolPerRun: 11,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxExecutionsPerPoolPerRun must be an integer between 1 and 10'
+    );
+
+    config.discovery!.take = {
+      enabled: true,
+      maxInFlightRouteProbes: 17,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxInFlightRouteProbes must be an integer between 1 and 16'
+    );
+  });
+
+  it('warns when multi-execution takes force sequential candidate evaluation', () => {
+    const config = baseConfig();
+    config.discovery!.take = {
+      enabled: true,
+      maxExecutionsPerPoolPerRun: 2,
+      maxConcurrentCandidateEvaluations: 2,
+    };
+    const warnStub = sinon.stub(logger, 'warn');
+
+    try {
+      expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'maxExecutionsPerPoolPerRun > 1 forces sequential same-pool candidate evaluation'
+          )
+        )
+      ).to.equal(true);
+    } finally {
+      warnStub.restore();
+    }
   });
 
   it('validates external take write transport policy', () => {

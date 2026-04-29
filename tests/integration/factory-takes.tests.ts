@@ -84,7 +84,6 @@ describe('Factory Takes Integration Tests', function () {
         dryRun: false,
         subgraphUrl: '',
         coinGeckoApiKey: '',
-        delayBetweenActions: 0,
       },
     });
 
@@ -143,7 +142,6 @@ describe('Factory Takes Integration Tests', function () {
       const hemiFactoryConfig = {
         dryRun: true, // Test workflow without external transactions
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
@@ -187,7 +185,6 @@ describe('Factory Takes Integration Tests', function () {
       const factoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -229,7 +226,6 @@ describe('Factory Takes Integration Tests', function () {
       const minimalFactoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -411,7 +407,6 @@ describe('Factory Takes Integration Tests', function () {
       const hemiUniswapConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
@@ -455,7 +450,6 @@ describe('Factory Takes Integration Tests', function () {
       const mainnetUniswapConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -504,7 +498,6 @@ describe('Factory Takes Integration Tests', function () {
         const factoryConfig = {
           dryRun: true,
           subgraphUrl: 'http://test-url',
-          delayBetweenActions: 100,
           keeperTakerFactory: '0x1234567890123456789012345678901234567890',
           takerContracts: {
             UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -556,7 +549,6 @@ describe('Factory Takes Integration Tests', function () {
       const incompleteConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         // Missing takerContracts and universalRouterOverrides
       };
@@ -588,7 +580,6 @@ describe('Factory Takes Integration Tests', function () {
       const configWithoutRouterOverrides = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -622,7 +613,6 @@ describe('Factory Takes Integration Tests', function () {
       const validFactoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -660,7 +650,6 @@ describe('Factory Takes Integration Tests', function () {
       const factoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -701,7 +690,6 @@ describe('Factory Takes Integration Tests', function () {
       const factoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -750,7 +738,6 @@ describe('Factory Takes Integration Tests', function () {
       const factoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -788,7 +775,6 @@ describe('Factory Takes Integration Tests', function () {
       const dryRunConfig = {
         dryRun: true, // Critical: dry run mode
         subgraphUrl: 'http://test-url',
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
@@ -830,7 +816,6 @@ describe('Factory Takes Integration Tests', function () {
 
       const factoryConfig = {
         dryRun: true,
-        delayBetweenActions: 100,
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',

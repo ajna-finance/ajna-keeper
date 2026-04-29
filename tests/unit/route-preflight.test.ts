@@ -21,7 +21,6 @@ describe('route deployment preflight', () => {
     },
     runtime: {
       logLevel: 'debug',
-      delayBetweenActions: 0,
       delayBetweenRuns: 1,
     },
     ajna: {

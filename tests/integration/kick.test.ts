@@ -513,7 +513,6 @@ describe('handleKicks (end-to-end)', function () {
         dryRun: false,
         subgraphUrl: '',
         coinGeckoApiKey: '',
-        delayBetweenActions: 0,
       },
     });
 
