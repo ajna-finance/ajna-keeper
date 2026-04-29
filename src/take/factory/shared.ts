@@ -1337,6 +1337,32 @@ export async function getCachedFactoryTokenDecimals(
   runtimeCache?: FactoryQuoteProviderRuntimeCache
 ): Promise<number> {
   const normalizedTokenAddress = tokenAddress.toLowerCase();
+  const unknownCacheKey = getFactoryTokenDecimalsCacheKey(
+    normalizedTokenAddress,
+    undefined
+  );
+  if (runtimeCache?.chainId !== undefined) {
+    migrateUnknownFactoryTokenDecimals(runtimeCache, runtimeCache.chainId);
+    const cached = runtimeCache.tokenDecimals?.get(
+      getFactoryTokenDecimalsCacheKey(
+        normalizedTokenAddress,
+        runtimeCache.chainId
+      )
+    );
+    if (cached !== undefined) {
+      return cached;
+    }
+  } else {
+    const cached = runtimeCache?.tokenDecimals?.get(unknownCacheKey);
+    if (cached !== undefined) {
+      startFactoryTokenDecimalsChainIdResolutionIfPossible({
+        signer,
+        runtimeCache,
+      });
+      return cached;
+    }
+  }
+
   let chainId = await resolveFactoryTokenDecimalsChainId({
     signer,
     runtimeCache,
@@ -1366,9 +1392,7 @@ export async function getCachedFactoryTokenDecimals(
     );
     runtimeCache.tokenDecimals.set(storeCacheKey, decimals);
     if (storeChainId !== undefined) {
-      runtimeCache.tokenDecimals.delete(
-        getFactoryTokenDecimalsCacheKey(normalizedTokenAddress, undefined)
-      );
+      runtimeCache.tokenDecimals.delete(unknownCacheKey);
     }
     pruneMapToMaxSize(
       runtimeCache.tokenDecimals,
@@ -1434,6 +1458,25 @@ function startFactoryTokenDecimalsChainIdResolution(params: {
     });
   params.runtimeCache.chainIdInflight = pending;
   return pending;
+}
+
+function startFactoryTokenDecimalsChainIdResolutionIfPossible(params: {
+  signer: Signer;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+}): void {
+  const runtimeCache = params.runtimeCache;
+  if (
+    !runtimeCache ||
+    runtimeCache.chainId !== undefined ||
+    runtimeCache.chainIdInflight ||
+    typeof params.signer.getChainId !== 'function'
+  ) {
+    return;
+  }
+  startFactoryTokenDecimalsChainIdResolution({
+    signer: params.signer,
+    runtimeCache,
+  });
 }
 
 async function resolveFactoryTokenDecimalsChainId(params: {

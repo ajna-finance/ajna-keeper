@@ -82,4 +82,48 @@ describe('take auction status reader', () => {
       takeStatusBatchBorrowerCount: TAKE_STATUS_BATCH_SIZE + 1,
     });
   });
+
+  it('keeps successful single-read fallback statuses when one borrower fails', async () => {
+    const stats = {};
+    const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
+    const pool = {
+      name: 'Partial Fallback Pool',
+      poolAddress: '0x3333333333333333333333333333333333333333',
+      contractUtilsMulti: {
+        auctionStatus: sinon
+          .stub()
+          .callsFake((_poolAddress: string, borrower: string) => borrower),
+      },
+      ethcallProvider: {
+        all: sinon.stub().rejects(new Error('batch unavailable')),
+      },
+      poolInfoContractUtils: {
+        auctionStatus: sinon
+          .stub()
+          .callsFake(async (_poolAddress: string, borrower: string) => {
+            if (borrower === '0xBorrowerB') {
+              throw new Error('borrower status unavailable');
+            }
+            return {
+              collateral_: BigNumber.from(borrower === '0xBorrowerA' ? 1 : 3),
+              price_: BigNumber.from(borrower === '0xBorrowerA' ? 100 : 300),
+            };
+          }),
+      },
+    };
+
+    const statuses = await createTakeAuctionStatusReader({ stats }).readMany!({
+      pool: pool as any,
+      borrowers,
+    });
+
+    expect(statuses.size).to.equal(2);
+    expect(statuses.get('0xborrowera')?.auctionPrice.eq(100)).to.equal(true);
+    expect(statuses.has('0xborrowerb')).to.equal(false);
+    expect(statuses.get('0xborrowerc')?.collateral.eq(3)).to.equal(true);
+    expect(stats).to.deep.include({
+      takeStatusReadCount: 3,
+      takeStatusBatchFallbackCount: 1,
+    });
+  });
 });

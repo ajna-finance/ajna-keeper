@@ -778,4 +778,75 @@ describe('shared arbTake helpers', () => {
     expect(statusReader.read.calledOnce).to.equal(true);
     expect(statusReader.read.firstCall.args[0].borrower).to.equal(borrowers[2]);
   });
+
+  it('stops after an ambiguous post-submission external take failure', async () => {
+    const borrowers = ['0xBorrowerA', '0xBorrowerB'];
+    let attemptedSubmission = false;
+    const candidateStatuses = new Map(
+      borrowers.map((borrower) => [
+        borrower.toLowerCase(),
+        {
+          borrower,
+          collateral: ethers.utils.parseEther('1'),
+          auctionPrice: ethers.utils.parseEther('1'),
+        },
+      ])
+    );
+    const executeExternalTake = sinon.stub().callsFake(async () => {
+      attemptedSubmission = true;
+      return false;
+    });
+    const onFound = sinon.stub();
+    const onSkip = sinon.stub();
+
+    await processTakeCandidates({
+      pool: {
+        name: 'Ambiguous Failure Pool',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+      } as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Ambiguous Failure Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: borrowers.map((borrower) => ({ borrower })),
+      candidateStatuses,
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(100),
+          takeablePrice: 1,
+        }),
+        executeExternalTake,
+      } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      maxConcurrentCandidateEvaluations: 2,
+      stopAfterExecution: true,
+      resetExternalTakeAttemptSubmission: () => {
+        attemptedSubmission = false;
+      },
+      didExternalTakeAttemptSubmission: () => attemptedSubmission,
+      onFound,
+      onSkip,
+    });
+
+    expect(executeExternalTake.calledOnce).to.equal(true);
+    expect(executeExternalTake.firstCall.args[0].liquidation.borrower).to.equal(
+      borrowers[0]
+    );
+    expect(onFound.calledOnce).to.equal(true);
+    expect(onFound.firstCall.args[0].borrower).to.equal(borrowers[0]);
+    expect(onSkip.calledOnce).to.equal(true);
+    expect(onSkip.firstCall.args[0].candidate.borrower).to.equal(borrowers[0]);
+    expect(onSkip.firstCall.args[0].stage).to.equal('execution');
+  });
 });

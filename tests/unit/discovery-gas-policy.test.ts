@@ -77,6 +77,80 @@ describe('Discovery Gas Policy', () => {
     });
   });
 
+  it('expires native-to-quote gas conversion cache entries', async () => {
+    const clock = sinon.useFakeTimers({ now: 1_000, toFake: ['Date'] });
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const oneInchQuoteStub = sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .onFirstCall()
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('1', 6).toString(),
+      })
+      .onSecondCall()
+      .resolves({
+        success: true,
+        dstAmount: ethers.utils.parseUnits('2', 6).toString(),
+      });
+
+    const rpcCache = { stats: {} };
+    const params = {
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        oneInchRouters: {
+          1: '0x1111111111111111111111111111111111111111',
+        },
+        connectorTokens: [],
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache,
+    };
+
+    const firstResult = await evaluateGasPolicy(params);
+    const cachedResult = await evaluateGasPolicy(params);
+    clock.tick(30_001);
+    const refreshedResult = await evaluateGasPolicy(params);
+
+    expect(firstResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to
+      .be.true;
+    expect(cachedResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to
+      .be.true;
+    expect(
+      refreshedResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('2', 6))
+    ).to.be.true;
+    expect(oneInchQuoteStub.calledTwice).to.be.true;
+    expect(rpcCache.stats).to.deep.include({
+      gasQuoteConversionCacheMisses: 2,
+      gasQuoteConversionCacheHits: 1,
+    });
+  });
+
   it('passes the configured 1inch timeout to gas quote conversions', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const oneInchQuoteStub = sinon

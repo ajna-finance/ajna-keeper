@@ -475,6 +475,30 @@ describe('Take Factory', () => {
       );
     });
 
+    it('returns an address-only decimals cache hit without waiting for a pending chainId lookup', async () => {
+      const tokenAddress = '0x1111111111111111111111111111111111111112';
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.tokenDecimals = new Map([[`unknown:${tokenAddress}`, 6]]);
+      mockSigner.getChainId = sinon
+        .stub()
+        .returns(new Promise<number>(() => {}));
+      const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+
+      let result: number | undefined;
+      await getCachedFactoryTokenDecimals(
+        mockSigner,
+        tokenAddress,
+        runtimeCache
+      ).then((decimals) => {
+        result = decimals;
+      });
+
+      expect(result).to.equal(6);
+      expect(decimalsStub.notCalled).to.be.true;
+      expect(mockSigner.getChainId.calledOnce).to.be.true;
+      expect(runtimeCache.chainIdInflight).to.exist;
+    });
+
     it('migrates address-only decimals cache entries once chainId resolves later', async () => {
       const clock = sinon.useFakeTimers();
       const tokenAddress = '0x2222222222222222222222222222222222222222';
@@ -525,6 +549,8 @@ describe('Take Factory', () => {
 
       expect(decimals).to.equal(8);
       expect(decimalsStub.notCalled).to.be.true;
+      expect(runtimeCache.chainIdInflight).to.exist;
+      await runtimeCache.chainIdInflight;
       expect(runtimeCache.tokenDecimals?.has(`unknown:${tokenAddress}`)).to.be
         .false;
       expect(runtimeCache.tokenDecimals?.get(`8453:${tokenAddress}`)).to.equal(

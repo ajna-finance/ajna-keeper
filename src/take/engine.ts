@@ -168,6 +168,8 @@ interface ProcessTakeCandidatesParams<
   candidateStatuses?: Map<string, TakeAuctionStatus>;
   stopAfterExecution?: boolean;
   maxConcurrentCandidateEvaluations?: number;
+  resetExternalTakeAttemptSubmission?: () => void;
+  didExternalTakeAttemptSubmission?: () => boolean;
   externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
   arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   approveExternalTake?: EvaluateTakeDecisionParams<
@@ -664,6 +666,8 @@ export async function processTakeCandidates<
   candidateStatuses,
   stopAfterExecution,
   maxConcurrentCandidateEvaluations,
+  resetExternalTakeAttemptSubmission,
+  didExternalTakeAttemptSubmission,
   onSkip,
   onExecuted,
   onFound,
@@ -764,6 +768,7 @@ export async function processTakeCandidates<
 
       const { candidate, decision } = outcome;
       onFound?.(decision);
+      resetExternalTakeAttemptSubmission?.();
       try {
         const executionResult = await executeTakeDecision({
           pool,
@@ -797,6 +802,13 @@ export async function processTakeCandidates<
           reason: getErrorMessage(error),
           decision,
         });
+        if (!dryRun && didExternalTakeAttemptSubmission?.()) {
+          preloadedStatusesValid = false;
+          if (stopAfterExecution) {
+            return;
+          }
+          break;
+        }
       }
     }
   }

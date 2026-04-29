@@ -68,7 +68,11 @@ import {
   withTimeoutAbort,
 } from '../utils';
 import { convertWadToTokenDecimalsCeil, getDecimalsErc20 } from '../erc20';
-import { createTakeAuctionStatusReader } from '../take/liquidation-status';
+import {
+  createTakeAuctionStatusReader,
+  TakeAuctionStatus,
+  TakeAuctionStatusReader,
+} from '../take/liquidation-status';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import {
   getOneInchCircuitOpenReason,
@@ -419,7 +423,7 @@ function createDiscoveryRouteProbeLimiter(params: {
   );
   return new RouteProbeLimiter({
     maxConcurrent: maxInFlightRouteProbes,
-    maxAbandoned: maxInFlightRouteProbes,
+    maxAbandoned: maxInFlightRouteProbes * 2,
     hardPermitHoldMs,
     onAbandoned: (label, error) => {
       incrementDiscoveryRouteProbeAbandonedCount(params.rpcCache);
@@ -909,6 +913,31 @@ function logDiscoveredTakeTargetSummary(params: {
   logger.info(
     `Discovered take target summary: pool=${params.pool.poolAddress} name="${params.target.name}" source=${params.target.take.liquiditySource ?? 'none'} dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} approvedTakeDecisions=${params.stats.approvedTakeDecisions} approvedArbTakeDecisions=${params.stats.approvedArbTakeDecisions} evaluationSkips=${params.stats.evaluationSkips} revalidationSkips=${params.stats.revalidationSkips} executionSkips=${params.stats.executionSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} profitFloorRejects=${params.stats.profitFloorRejects} arbProfitUnavailableRejects=${params.stats.arbProfitUnavailableRejects} executedExternalTakes=${params.stats.executedExternalTakes} executedArbTakes=${params.stats.executedArbTakes}`
   );
+}
+
+async function preloadDiscoveredTakeCandidateStatuses(params: {
+  takeAuctionStatusReader: TakeAuctionStatusReader;
+  pool: FungiblePool;
+  borrowers: string[];
+}): Promise<Map<string, TakeAuctionStatus> | undefined> {
+  if (
+    params.borrowers.length === 0 ||
+    !params.takeAuctionStatusReader.readMany
+  ) {
+    return undefined;
+  }
+
+  try {
+    return await params.takeAuctionStatusReader.readMany({
+      pool: params.pool,
+      borrowers: params.borrowers,
+    });
+  } catch (error) {
+    logger.warn(
+      `Discovered take status preload failed for ${params.pool.name}; falling back to per-candidate reads: ${getErrorMessage(error)}`
+    );
+    return undefined;
+  }
 }
 
 const INACTIVE_AUCTION_SKIP_REASONS = new Set<string>([
@@ -2419,6 +2448,14 @@ export async function handleDiscoveredTakeTarget(
       outcome,
     });
   };
+  let externalTakeAttemptedSubmission = false;
+  const recordExternalTakeExecutionFailure = (result: {
+    preBroadcast: boolean;
+  }): void => {
+    if (!result.preBroadcast) {
+      externalTakeAttemptedSubmission = true;
+    }
+  };
   const externalTakeAdapter = createExternalTakeAdapterForDiscovery({
     target: params.target,
     takePolicy,
@@ -2470,6 +2507,8 @@ export async function handleDiscoveredTakeTarget(
         recordOneInchCircuitOutcome('failure');
       }
     },
+    onOneInchExecutionFailure: recordExternalTakeExecutionFailure,
+    onFactoryExecutionFailure: recordExternalTakeExecutionFailure,
   };
 
   try {
@@ -2508,12 +2547,12 @@ export async function handleDiscoveredTakeTarget(
                 ),
               })
             : undefined;
-        const candidateStatuses = takeAuctionStatusReader.readMany
-          ? await takeAuctionStatusReader.readMany({
-              pool: params.pool,
-              borrowers: candidates.map(({ borrower }) => borrower),
-            })
-          : undefined;
+        const candidateStatuses =
+          await preloadDiscoveredTakeCandidateStatuses({
+            takeAuctionStatusReader,
+            pool: params.pool,
+            borrowers: candidates.map(({ borrower }) => borrower),
+          });
         if (prewarmFactoryRoutes) {
           await prewarmFactoryRoutes;
         }
@@ -2528,6 +2567,11 @@ export async function handleDiscoveredTakeTarget(
           candidateStatuses,
           stopAfterExecution: true,
           maxConcurrentCandidateEvaluations,
+          resetExternalTakeAttemptSubmission: () => {
+            externalTakeAttemptedSubmission = false;
+          },
+          didExternalTakeAttemptSubmission: () =>
+            externalTakeAttemptedSubmission,
           subgraph: transports.subgraph,
           externalTakeAdapter,
           arbTakeStrategy: createArbTakeStrategy(),

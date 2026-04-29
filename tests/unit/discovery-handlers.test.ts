@@ -144,6 +144,90 @@ describe('Discovery Handlers', () => {
     });
   });
 
+  it('falls back to per-candidate take status reads when a preload status is missing', async () => {
+    const takeLiquidationStub = sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        quoteAmount: 10,
+        collateralAmount: 1,
+        marketPrice: 10,
+        takeablePrice: 12,
+      });
+    const borrowers = ['0xBorrowerA', '0xBorrowerB'];
+    const statusCalls: string[] = [];
+    let preloadFailed = false;
+    const pool = {
+      name: 'Discovered Preload Fallback Pool',
+      poolAddress: '0x1111111111111111111111111111111111111112',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().callsFake((borrower: string) => ({
+        getStatus: sinon.stub().callsFake(async () => {
+          statusCalls.push(borrower);
+          if (borrower === borrowers[0] && !preloadFailed) {
+            preloadFailed = true;
+            throw new Error('preload status read failed');
+          }
+          return {
+            collateral: ethers.utils.parseEther('1'),
+            price: ethers.utils.parseEther('1'),
+          };
+        }),
+      })),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: borrowers.map((borrower) => ({
+          poolAddress: pool.poolAddress,
+          borrower,
+          kickTime: Date.now(),
+          debtRemaining: '1',
+          collateralRemaining: '1',
+          neutralPrice: '1',
+          debt: '1',
+          collateral: '1',
+          heuristicScore: 1,
+        })),
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: true,
+        },
+        delayBetweenActions: 0,
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(),
+    });
+
+    expect(statusCalls.filter((borrower) => borrower === borrowers[0]).length)
+      .to.be.greaterThan(1);
+    expect(takeLiquidationStub.calledOnce).to.be.true;
+    expect(takeLiquidationStub.firstCall.args[0].liquidation.borrower).to.equal(
+      borrowers[0]
+    );
+  });
+
   it('removes hot-cache candidates when the approved quote is stale after auction price increases', async () => {
     const takeLiquidationStub = sinon
       .stub(oneInchExecutionModule, 'takeLiquidation')

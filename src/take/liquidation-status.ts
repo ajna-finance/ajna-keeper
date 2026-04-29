@@ -1,10 +1,12 @@
 import { FungiblePool } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { getErrorMessage, mapWithConcurrencyPreservingOrder } from '../utils';
+import { getErrorMessage } from '../utils';
 import { logger } from '../logging';
 
 export const TAKE_STATUS_BATCH_SIZE = 50;
 const TAKE_STATUS_SINGLE_READ_FALLBACK_CONCURRENCY = 4;
+const AUCTION_STATUS_COLLATERAL_INDEX = 1;
+const AUCTION_STATUS_PRICE_INDEX = 4;
 
 export interface TakeAuctionStatus {
   borrower: string;
@@ -55,8 +57,12 @@ function mapAuctionStatusResult(
     [index: number]: unknown;
   }
 ): TakeAuctionStatus {
-  const collateral = result.collateral_ ?? result.collateral ?? result[1];
-  const auctionPrice = result.price_ ?? result.price ?? result[4];
+  const collateral =
+    result.collateral_ ??
+    result.collateral ??
+    result[AUCTION_STATUS_COLLATERAL_INDEX];
+  const auctionPrice =
+    result.price_ ?? result.price ?? result[AUCTION_STATUS_PRICE_INDEX];
   if (
     !BigNumber.isBigNumber(collateral) ||
     !BigNumber.isBigNumber(auctionPrice)
@@ -120,20 +126,33 @@ async function readSingleStatuses(params: {
   borrowers: string[];
   stats?: TakeAuctionStatusReadStats;
 }): Promise<Map<string, TakeAuctionStatus>> {
-  const statuses = await mapWithConcurrencyPreservingOrder(
-    params.borrowers,
-    TAKE_STATUS_SINGLE_READ_FALLBACK_CONCURRENCY,
-    async (borrower) =>
-      await readSingleStatus({
-        pool: params.pool,
-        borrower,
-        stats: params.stats,
-      })
-  );
   const result = new Map<string, TakeAuctionStatus>();
-  for (const status of statuses) {
-    result.set(normalizeBorrowerKey(status.borrower), status);
-  }
+  let nextIndex = 0;
+  const workerCount = Math.min(
+    TAKE_STATUS_SINGLE_READ_FALLBACK_CONCURRENCY,
+    params.borrowers.length
+  );
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < params.borrowers.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const borrower = params.borrowers[index];
+        try {
+          const status = await readSingleStatus({
+            pool: params.pool,
+            borrower,
+            stats: params.stats,
+          });
+          result.set(normalizeBorrowerKey(status.borrower), status);
+        } catch (error) {
+          logger.debug(
+            `Skipping preloaded take status for ${params.pool.name}/${borrower}: ${getErrorMessage(error)}`
+          );
+        }
+      }
+    })
+  );
   return result;
 }
 

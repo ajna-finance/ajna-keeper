@@ -75,10 +75,8 @@ export interface RouteProbeLimiterOptions {
 }
 
 type RouteProbeWaiter = {
-  label: string;
   resolve: () => void;
   reject: (error: Error) => void;
-  signal?: AbortSignal;
   abortHandler?: () => void;
 };
 
@@ -178,26 +176,36 @@ export class RouteProbeLimiter implements AsyncOperationLimiter {
         : new Error(`route probe ${label} cancelled before start`);
     }
     await new Promise<void>((resolve, reject) => {
-      const waiter: RouteProbeWaiter = {
-        label,
-        resolve: () => {
-          if (waiter.abortHandler) {
-            signal?.removeEventListener('abort', waiter.abortHandler);
-          }
-          resolve();
-        },
-        reject,
-        signal,
-      };
-      waiter.reject = (error) => {
+      let settled = false;
+      const cleanup = (waiter: RouteProbeWaiter): void => {
         if (waiter.abortHandler) {
           signal?.removeEventListener('abort', waiter.abortHandler);
         }
+      };
+      const removeWaiter = (waiter: RouteProbeWaiter): void => {
         const index = this.waiters.indexOf(waiter);
         if (index >= 0) {
           this.waiters.splice(index, 1);
         }
-        reject(error);
+      };
+      const waiter: RouteProbeWaiter = {
+        resolve: () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup(waiter);
+          resolve();
+        },
+        reject: (error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup(waiter);
+          removeWaiter(waiter);
+          reject(error);
+        },
       };
       if (signal) {
         waiter.abortHandler = () => {
@@ -205,9 +213,6 @@ export class RouteProbeLimiter implements AsyncOperationLimiter {
             signal.reason instanceof Error
               ? signal.reason
               : new Error(`route probe ${label} cancelled before start`);
-          if (waiter.abortHandler) {
-            signal.removeEventListener('abort', waiter.abortHandler);
-          }
           waiter.reject(error);
           this.drain();
         };

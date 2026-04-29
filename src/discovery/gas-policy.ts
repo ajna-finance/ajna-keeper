@@ -56,6 +56,8 @@ export interface GasPolicyResult {
 export const DEFAULT_L2_GAS_COST_BUFFER_BASIS_POINTS = 13_000;
 export const DEFAULT_L1_DISCOVERY_GAS_PRICE_TTL_MS = 5 * 1000;
 export const DEFAULT_L2_DISCOVERY_GAS_PRICE_TTL_MS = 15 * 1000;
+const GAS_QUOTE_CONVERSION_CACHE_TTL_MS = 30 * 1000;
+const MAX_GAS_QUOTE_CONVERSION_CACHE_ENTRIES = 256;
 
 interface L2ChainProfile {
   stableGas: boolean;
@@ -525,6 +527,28 @@ function getGasQuoteConversionCacheKey(params: {
       liquiditySources: params.liquiditySources,
     }),
   });
+}
+
+function pruneGasQuoteConversionCache(
+  rpcCache: DiscoveryRpcCache | undefined,
+  nowMs: number
+): void {
+  const cache = rpcCache?.gasQuoteConversions;
+  if (!cache) {
+    return;
+  }
+  for (const [key, entry] of Array.from(cache.entries())) {
+    if (nowMs - entry.createdAtMs > GAS_QUOTE_CONVERSION_CACHE_TTL_MS) {
+      cache.delete(key);
+    }
+  }
+  while (cache.size > MAX_GAS_QUOTE_CONVERSION_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) {
+      return;
+    }
+    cache.delete(oldestKey);
+  }
 }
 
 function logGasQuoteFallback(params: {
@@ -1103,9 +1127,18 @@ async function quoteExactNativeAmountToQuote(params: {
     gasLimit: params.gasLimit,
     minProfitNative: params.minProfitNative,
   });
+  const nowMs = Date.now();
+  pruneGasQuoteConversionCache(params.rpcCache, nowMs);
   if (conversionCacheKey && params.rpcCache?.gasQuoteConversions) {
     const cached = params.rpcCache.gasQuoteConversions.get(conversionCacheKey);
-    if (cached && params.gasPrice && cached.gasPrice.eq(params.gasPrice)) {
+    if (
+      cached &&
+      params.gasPrice &&
+      cached.gasPrice.eq(params.gasPrice) &&
+      nowMs - cached.createdAtMs <= GAS_QUOTE_CONVERSION_CACHE_TTL_MS
+    ) {
+      params.rpcCache.gasQuoteConversions.delete(conversionCacheKey);
+      params.rpcCache.gasQuoteConversions.set(conversionCacheKey, cached);
       incrementDiscoveryStat(params.rpcCache, 'gasQuoteConversionCacheHits');
       return cached.value;
     }
@@ -1127,14 +1160,14 @@ async function quoteExactNativeAmountToQuote(params: {
     takePolicy: params.takePolicy,
   });
   if (quotedAmount && conversionCacheKey && params.rpcCache) {
+    const createdAtMs = Date.now();
     params.rpcCache.gasQuoteConversions ??= new Map();
     params.rpcCache.gasQuoteConversions.set(conversionCacheKey, {
       value: quotedAmount.amountOut,
-      usedLiquiditySource: quotedAmount.liquiditySource,
-      preferredLiquiditySource: params.preferredLiquiditySource,
-      createdAtMs: Date.now(),
+      createdAtMs,
       gasPrice: params.gasPrice ?? BigNumber.from(0),
     });
+    pruneGasQuoteConversionCache(params.rpcCache, createdAtMs);
   }
   return quotedAmount?.amountOut;
 }
