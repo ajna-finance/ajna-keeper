@@ -32,6 +32,9 @@ export async function createDiscoveryRpcCache(params: {
     chainId,
     gasPrice: await params.readRpc.getGasPrice(),
     gasPriceFetchedAt: Date.now(),
+    stats: {
+      factory: {},
+    },
     ...(params.includeFactoryQuoteProviders
       ? {
           factoryQuoteProviders,

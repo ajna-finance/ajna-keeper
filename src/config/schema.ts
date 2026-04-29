@@ -279,6 +279,16 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    */
   takeRouteQuoteBudgetPerCandidate?: number;
   /**
+   * Opt-in bounded parallel liquidation candidate evaluation. Defaults to 1,
+   * which preserves sequential evaluation and execution behavior.
+   */
+  maxConcurrentCandidateEvaluations?: number;
+  /**
+   * Global cap on concurrent route/API/RPC probes used only when candidate
+   * evaluation concurrency is greater than 1.
+   */
+  maxInFlightRouteProbes?: number;
+  /**
    * Factory-route sources eligible for dynamic route selection. 1inch is not
    * supported here because it uses a separate aggregator execution path.
    */

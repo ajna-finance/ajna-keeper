@@ -53,6 +53,11 @@ export {
   createNoExternalTakeAdapter,
   createOneInchTakeAdapter,
 } from './one-inch-adapter';
+export type { TakeAuctionStatus, TakeAuctionStatusReader } from './liquidation-status';
+export {
+  createTakeAuctionStatusReader,
+  defaultTakeAuctionStatusReader,
+} from './liquidation-status';
 
 interface HandleTakeConfigBase {
   dryRun?: boolean;

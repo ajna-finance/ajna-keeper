@@ -13,7 +13,7 @@ describe('Discovery Gas Policy', () => {
     sinon.restore();
   });
 
-  it('quotes native-to-quote gas conversions fresh within a discovery cycle', async () => {
+  it('reuses identical native-to-quote gas conversions within a discovery cycle', async () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const oneInchQuoteStub = sinon
       .stub(DexRouter.prototype, 'getQuoteFromOneInch')
@@ -26,7 +26,7 @@ describe('Discovery Gas Policy', () => {
       provider: {},
       getChainId: sinon.stub().resolves(1),
     };
-    const rpcCache = {};
+    const rpcCache = { stats: {} };
     const params = {
       signer: signer as any,
       config: {
@@ -70,7 +70,11 @@ describe('Discovery Gas Policy', () => {
     expect(firstResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to
       .be.true;
     expect(firstResult.quoteTokenDecimals).to.equal(6);
-    expect(oneInchQuoteStub.calledTwice).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(rpcCache.stats).to.deep.include({
+      gasQuoteConversionCacheMisses: 1,
+      gasQuoteConversionCacheHits: 1,
+    });
   });
 
   it('passes the configured 1inch timeout to gas quote conversions', async () => {

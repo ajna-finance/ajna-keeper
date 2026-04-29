@@ -4,10 +4,14 @@ import {
   CurveRouterOverrides,
   DiscoveredDefaultsConfig,
   KeeperConfig,
+  LiquiditySource,
   SushiswapRouterOverrides,
   UniversalRouterOverrides,
 } from '../config';
-import { FactoryQuoteProviderRuntimeCache } from '../take/factory';
+import {
+  FactoryQuoteProviderRuntimeCache,
+  FactoryQuoteProviderRuntimeStats,
+} from '../take/factory';
 import {
   DiscoveryReadTransportConfig,
   getDiscoveryReadTransportConfig,
@@ -78,6 +82,27 @@ export interface DiscoveryRpcCache {
   gasPriceFetchedAt?: number;
   gasPriceInflight?: Promise<BigNumber>;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
+  stats?: DiscoveryRpcCacheStats;
   gasQuoteFallbackWarningKeys?: Set<string>;
+  gasQuoteConversions?: Map<string, GasQuoteConversionCacheEntry>;
   oneInchQuoteCircuit?: OneInchQuoteCircuitState;
+}
+
+export interface DiscoveryRpcCacheStats {
+  takeStatusReadCount?: number;
+  takeStatusBatchReadCount?: number;
+  takeStatusBatchBorrowerCount?: number;
+  takeStatusBatchFallbackCount?: number;
+  gasQuoteConversionCacheHits?: number;
+  gasQuoteConversionCacheMisses?: number;
+  routeProbeAbandonedCount?: number;
+  factory?: FactoryQuoteProviderRuntimeStats;
+}
+
+export interface GasQuoteConversionCacheEntry {
+  value: BigNumber;
+  usedLiquiditySource: LiquiditySource;
+  preferredLiquiditySource?: LiquiditySource;
+  createdAtMs: number;
+  gasPrice: BigNumber;
 }

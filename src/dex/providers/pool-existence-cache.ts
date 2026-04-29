@@ -10,6 +10,7 @@ interface PoolExistenceCacheEntry {
 export class PoolExistenceCache {
   private readonly maxEntries: number;
   private readonly entries = new Map<string, PoolExistenceCacheEntry>();
+  private readonly inflight = new Map<string, Promise<boolean>>();
 
   constructor(maxEntries: number = DEFAULT_MAX_POOL_EXISTENCE_CACHE_ENTRIES) {
     this.maxEntries = maxEntries;
@@ -42,6 +43,38 @@ export class PoolExistenceCache {
       expiresAt: Date.now() + ttlMs,
     });
     this.prune();
+  }
+
+  async getOrCreate(
+    tokenA: string,
+    tokenB: string,
+    feeTier: number,
+    loader: () => Promise<{ exists: boolean; ttlMs: number }>
+  ): Promise<boolean> {
+    const cached = this.get(tokenA, tokenB, feeTier);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const key = this.getKey(tokenA, tokenB, feeTier);
+    const pending = this.inflight.get(key);
+    if (pending) {
+      return await pending;
+    }
+
+    const load = (async () => {
+      const result = await loader();
+      this.set(tokenA, tokenB, feeTier, result.exists, result.ttlMs);
+      return result.exists;
+    })();
+    this.inflight.set(key, load);
+    try {
+      return await load;
+    } finally {
+      if (this.inflight.get(key) === load) {
+        this.inflight.delete(key);
+      }
+    }
   }
 
   private getKey(tokenA: string, tokenB: string, feeTier: number): string {

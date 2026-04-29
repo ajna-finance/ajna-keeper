@@ -16,16 +16,19 @@ import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
 import {
+  AsyncOperationLimiter,
   getErrorMessage,
   RequireFields,
   mapWithConcurrencyPreservingOrder,
   withTimeout,
+  withTimeoutAbort,
 } from '../../utils';
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
 import {
   ApprovedFactoryQuoteEvaluation,
+  TakeActionConfig,
   ExternalTakeQuoteEvaluation,
   TakeLiquidationPlan,
 } from '../types';
@@ -69,6 +72,7 @@ export interface FactoryRouteEvaluationContext {
 export interface FactoryRouteSelectionOptions {
   allowedLiquiditySources?: LiquiditySource[];
   routeQuoteBudgetPerCandidate?: number;
+  routeProbeLimiter?: AsyncOperationLimiter;
   routeProfitabilityContext?: FactoryRouteProfitabilityContext;
   routeProfitabilityContextFactory?: (
     sources: LiquiditySource[]
@@ -152,10 +156,54 @@ export interface FactoryQuoteProviderRuntimeCache {
   quoteTokenScales?: Map<string, BigNumber>;
   /** Success timestamps keyed by route; refreshed only after successful execution. */
   recentRouteSuccesses?: Map<string, number>;
+  stats?: FactoryQuoteProviderRuntimeStats;
+  swapDeadline?: FactorySwapDeadlineCacheEntry;
+}
+
+export interface FactoryQuoteProviderRuntimeStats {
+  swapDeadlineCacheHits?: number;
+  swapDeadlineCacheMisses?: number;
+  routeAvailabilityPrewarmCount?: number;
+  routeAvailabilityPrewarmFailureCount?: number;
+}
+
+interface FactorySwapDeadlineCacheEntry {
+  fetchedAtMs: number;
+  blockTimestamp: number;
+  deadline: number;
+  ttlSeconds: number;
 }
 
 export function createFactoryQuoteProviderRuntimeCache(): FactoryQuoteProviderRuntimeCache {
   return {};
+}
+
+export function incrementFactoryRuntimeStat(
+  stats: FactoryQuoteProviderRuntimeStats | undefined,
+  key: keyof FactoryQuoteProviderRuntimeStats,
+  amount: number = 1
+): void {
+  if (!stats) {
+    return;
+  }
+  stats[key] = (stats[key] ?? 0) + amount;
+}
+
+export async function withFactoryRuntimeStats<T>(
+  runtimeCache: FactoryQuoteProviderRuntimeCache | undefined,
+  stats: FactoryQuoteProviderRuntimeStats | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (!runtimeCache || !stats) {
+    return await fn();
+  }
+  const previousStats = runtimeCache.stats;
+  runtimeCache.stats = stats;
+  try {
+    return await fn();
+  } finally {
+    runtimeCache.stats = previousStats;
+  }
 }
 
 const ZERO = ZERO_BN;
@@ -311,6 +359,46 @@ export async function getSwapDeadline(
   const latestBlock = await signer.provider?.getBlock('latest');
   const baseTimestamp = latestBlock?.timestamp ?? Math.floor(Date.now() / 1000);
   return baseTimestamp + ttlSeconds;
+}
+
+export async function getSwapDeadlineCached(params: {
+  signer: Signer;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  ttlSeconds?: number;
+  freshnessMs?: number;
+}): Promise<number> {
+  const ttlSeconds = params.ttlSeconds ?? 1800;
+  const freshnessMs = params.freshnessMs ?? 1500;
+  const now = Date.now();
+  const cached = params.runtimeCache?.swapDeadline;
+  if (
+    cached &&
+    cached.ttlSeconds === ttlSeconds &&
+    now - cached.fetchedAtMs <= freshnessMs
+  ) {
+    incrementFactoryRuntimeStat(
+      params.runtimeCache?.stats,
+      'swapDeadlineCacheHits'
+    );
+    return cached.deadline;
+  }
+
+  incrementFactoryRuntimeStat(
+    params.runtimeCache?.stats,
+    'swapDeadlineCacheMisses'
+  );
+  const latestBlock = await params.signer.provider?.getBlock('latest');
+  const baseTimestamp = latestBlock?.timestamp ?? Math.floor(now / 1000);
+  const deadline = baseTimestamp + ttlSeconds;
+  if (params.runtimeCache) {
+    params.runtimeCache.swapDeadline = {
+      fetchedAtMs: now,
+      blockTimestamp: baseTimestamp,
+      deadline,
+      ttlSeconds,
+    };
+  }
+  return deadline;
 }
 
 export function getMarketPriceFactorUnits(marketPriceFactor: number): number {
@@ -902,6 +990,8 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
   signer: Signer;
   config: FactoryQuoteConfig;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  routeProbeLimiter?: AsyncOperationLimiter;
+  routeProbeAbortSignal?: AbortSignal;
 }): Promise<{
   availableRoutes: FactoryRouteCandidate[];
   unavailableRoutes: FactoryRouteAvailabilitySkip[];
@@ -911,11 +1001,20 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
   const availabilityResults = await mapWithConcurrencyPreservingOrder(
     params.routes,
     FACTORY_ROUTE_AVAILABILITY_CONCURRENCY,
-    async (route) =>
-      await checkFactoryRouteCandidateAvailability({
-        ...params,
-        route,
-      })
+    async (route) => {
+      const checkAvailability = async () =>
+        await checkFactoryRouteCandidateAvailability({
+          ...params,
+          route,
+        });
+      return params.routeProbeLimiter
+        ? await params.routeProbeLimiter.run(
+            `factory availability ${formatFactoryRouteCandidate(route)}`,
+            checkAvailability,
+            { signal: params.routeProbeAbortSignal }
+          )
+        : await checkAvailability();
+    }
   );
 
   for (const availability of availabilityResults) {
@@ -930,6 +1029,83 @@ export async function filterFactoryRouteCandidatesByAvailability(params: {
   }
 
   return { availableRoutes, unavailableRoutes };
+}
+
+export async function prewarmFactoryRouteAvailability(params: {
+  pool: Pick<
+    FungiblePool,
+    'name' | 'collateralAddress' | 'quoteAddress' | 'poolAddress'
+  >;
+  signer: Signer;
+  poolConfig: TakeActionConfig;
+  quoteConfig: FactoryQuoteConfig;
+  routeSelection?: FactoryRouteSelectionOptions;
+  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  timeoutMs?: number;
+}): Promise<void> {
+  const defaultLiquiditySource = params.poolConfig.take.liquiditySource;
+  if (
+    defaultLiquiditySource === undefined ||
+    !isDynamicFactorySource(defaultLiquiditySource)
+  ) {
+    return;
+  }
+
+  const routes = orderFactoryRouteCandidates({
+    routes: getFactoryRouteCandidates({
+      defaultLiquiditySource,
+      config: params.quoteConfig,
+      selection: params.routeSelection,
+    }),
+    defaultLiquiditySource,
+    config: params.quoteConfig,
+    pool: params.pool,
+    runtimeCache: params.runtimeCache,
+  });
+  if (routes.length === 0) {
+    return;
+  }
+
+  incrementFactoryRuntimeStat(
+    params.runtimeCache?.stats,
+    'routeAvailabilityPrewarmCount'
+  );
+
+  try {
+    if (params.timeoutMs !== undefined) {
+      await withTimeoutAbort(
+        async (signal) =>
+          await filterFactoryRouteCandidatesByAvailability({
+            routes,
+            pool: params.pool,
+            signer: params.signer,
+            config: params.quoteConfig,
+            runtimeCache: params.runtimeCache,
+            routeProbeLimiter: params.routeSelection?.routeProbeLimiter,
+            routeProbeAbortSignal: signal,
+          }),
+        params.timeoutMs,
+        'factory route availability prewarm'
+      );
+    } else {
+      await filterFactoryRouteCandidatesByAvailability({
+        routes,
+        pool: params.pool,
+        signer: params.signer,
+        config: params.quoteConfig,
+        runtimeCache: params.runtimeCache,
+        routeProbeLimiter: params.routeSelection?.routeProbeLimiter,
+      });
+    }
+  } catch (error) {
+    incrementFactoryRuntimeStat(
+      params.runtimeCache?.stats,
+      'routeAvailabilityPrewarmFailureCount'
+    );
+    logger.debug(
+      `Factory: route availability prewarm skipped for ${params.pool.name}: ${getErrorMessage(error)}`
+    );
+  }
 }
 
 export interface FactoryRouteEvaluationResult {

@@ -660,6 +660,40 @@ function logDiscoveryCycleSummary(params: {
   );
 }
 
+function getDiscoveryRpcStatParts(cache?: DiscoveryRpcCache): string[] {
+  const stats = cache?.stats;
+  if (!stats) {
+    return [];
+  }
+
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(stats)) {
+    if (key === 'factory' || typeof value !== 'number' || value === 0) {
+      continue;
+    }
+    parts.push(`${key}=${value}`);
+  }
+  for (const [key, value] of Object.entries(stats.factory ?? {})) {
+    if (typeof value === 'number' && value !== 0) {
+      parts.push(`factory.${key}=${value}`);
+    }
+  }
+  return parts;
+}
+
+function logDiscoveryRpcStats(params: {
+  cycleType: 'take' | 'settlement';
+  cache?: DiscoveryRpcCache;
+}): void {
+  const parts = getDiscoveryRpcStatParts(params.cache);
+  if (parts.length === 0) {
+    return;
+  }
+  logger.debug(
+    `Discovery ${params.cycleType} rpc stats: ${parts.join(' ')}`
+  );
+}
+
 function logDiscoveryCycleFailure(params: {
   cycleType: 'take' | 'settlement';
   phase: string;
@@ -746,6 +780,10 @@ async function runTakeDiscoveryCycle(
       }
     }
 
+    logDiscoveryRpcStats({
+      cycleType: 'take',
+      cache: rpcCacheState.cache,
+    });
     logDiscoveryCycleSummary({
       cycleType: 'take',
       stats,

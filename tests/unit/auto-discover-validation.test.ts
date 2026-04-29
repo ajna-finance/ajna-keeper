@@ -577,6 +577,24 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be a positive integer'
     );
+
+    config.discovery!.take = {
+      enabled: true,
+      maxConcurrentCandidateEvaluations: 5,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxConcurrentCandidateEvaluations must be an integer between 1 and 4'
+    );
+
+    config.discovery!.take = {
+      enabled: true,
+      maxInFlightRouteProbes: 17,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: maxInFlightRouteProbes must be an integer between 1 and 16'
+    );
   });
 
   it('validates external take write transport policy', () => {

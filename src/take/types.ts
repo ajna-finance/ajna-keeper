@@ -148,3 +148,10 @@ export interface TakeDecision {
   quoteEvaluation?: ExternalTakeQuoteEvaluation;
   reason?: string;
 }
+
+export interface TakeExecutionResult {
+  executedTake: boolean;
+  executedArbTake: boolean;
+  submittedTransaction: boolean;
+  poolStateMayHaveChanged: boolean;
+}

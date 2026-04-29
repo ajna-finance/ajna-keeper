@@ -163,14 +163,6 @@ export class UniswapV3QuoteProvider {
   ): Promise<boolean> {
     try {
       const fee = feeTier ?? this.config.defaultFeeTier;
-      const cached = this.poolExistenceCache.get(tokenA, tokenB, fee);
-      if (cached !== undefined) {
-        logger.debug(
-          `Uniswap V3 pool existence cache hit: ${tokenA}/${tokenB} fee=${fee} exists=${cached}`
-        );
-        return cached;
-      }
-
       if (!this.factoryContract) {
         this.factoryContract = new ethers.Contract(
           this.config.poolFactoryAddress,
@@ -178,45 +170,47 @@ export class UniswapV3QuoteProvider {
           this.signer
         );
       }
+      const factoryContract = this.factoryContract;
 
-      const poolAddress = await this.factoryContract.getPool(
-        tokenA,
-        tokenB,
-        fee
-      );
-      let exists = false;
-      if (poolAddress !== ethers.constants.AddressZero) {
-        const poolContract = new ethers.Contract(
-          poolAddress,
-          UNISWAP_V3_POOL_ABI,
-          this.signer
-        );
-        const slot0 = await poolContract.slot0();
-        exists = BigNumber.from(slot0.sqrtPriceX96 ?? slot0[0]).gt(0);
-      }
-      this.poolExistenceCache.set(
+      return await this.poolExistenceCache.getOrCreate(
         tokenA,
         tokenB,
         fee,
-        exists,
-        exists ? POOL_EXISTS_CACHE_TTL_MS : UNINITIALIZED_POOL_CACHE_TTL_MS
+        async () => {
+          const poolAddress = await factoryContract.getPool(tokenA, tokenB, fee);
+          let exists = false;
+          if (poolAddress !== ethers.constants.AddressZero) {
+            const poolContract = new ethers.Contract(
+              poolAddress,
+              UNISWAP_V3_POOL_ABI,
+              this.signer
+            );
+            const slot0 = await poolContract.slot0();
+            exists = BigNumber.from(slot0.sqrtPriceX96 ?? slot0[0]).gt(0);
+          }
+
+          if (exists) {
+            logger.debug(
+              `Uniswap V3 initialized pool found: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
+            );
+          } else if (poolAddress !== ethers.constants.AddressZero) {
+            logger.debug(
+              `Uniswap V3 pool is not initialized at the current slot0 price: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
+            );
+          } else {
+            logger.debug(
+              `Uniswap V3 pool NOT found: ${tokenA}/${tokenB} fee=${fee}`
+            );
+          }
+
+          return {
+            exists,
+            ttlMs: exists
+              ? POOL_EXISTS_CACHE_TTL_MS
+              : UNINITIALIZED_POOL_CACHE_TTL_MS,
+          };
+        }
       );
-
-      if (exists) {
-        logger.debug(
-          `Uniswap V3 initialized pool found: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
-        );
-      } else if (poolAddress !== ethers.constants.AddressZero) {
-        logger.debug(
-          `Uniswap V3 pool is not initialized at the current slot0 price: ${tokenA}/${tokenB} fee=${fee} at ${poolAddress}`
-        );
-      } else {
-        logger.debug(
-          `Uniswap V3 pool NOT found: ${tokenA}/${tokenB} fee=${fee}`
-        );
-      }
-
-      return exists;
     } catch (error) {
       logger.debug(`Error checking Uniswap V3 pool existence: ${error}`);
       throw error;

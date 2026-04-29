@@ -50,6 +50,7 @@ export type {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
+  FactoryQuoteProviderRuntimeStats,
   FactoryRouteProfitabilityContext,
   FactoryRouteSelectionOptions,
   FactoryTakeParams,
@@ -57,6 +58,7 @@ export type {
 export {
   computeFactoryAmountOutMinimum,
   createFactoryQuoteProviderRuntimeCache,
+  prewarmFactoryRouteAvailability,
 } from './shared';
 
 export function createFactoryTakeAdapter(params: {
@@ -197,6 +199,7 @@ export async function getFactoryTakeQuoteEvaluation(
           signer,
           config,
           runtimeCache,
+          routeProbeLimiter: routeSelection?.routeProbeLimiter,
         });
       if (unavailableRoutes.length > 0) {
         logger.debug(
@@ -342,7 +345,13 @@ export async function getFactoryTakeQuoteEvaluation(
       const routeEvaluationResults = await mapWithConcurrencyPreservingOrder(
         routesToEvaluate,
         FACTORY_ROUTE_QUOTE_CONCURRENCY,
-        evaluateFactoryRoute
+        async (route) =>
+          routeSelection?.routeProbeLimiter
+            ? await routeSelection.routeProbeLimiter.run(
+                `factory quote ${formatFactoryRouteCandidate(route)}`,
+                async () => await evaluateFactoryRoute(route)
+              )
+            : await evaluateFactoryRoute(route)
       );
 
       if (routeEvaluationResults.length > 1) {
@@ -796,6 +805,7 @@ async function takeWithUniswapV3Factory({
     'keeperTakerFactory' | 'universalRouterOverrides'
   > & {
     takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
+    runtimeCache?: FactoryQuoteProviderRuntimeCache;
     onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
   };
 }) {
@@ -834,6 +844,7 @@ async function takeWithSushiSwapFactory({
     'keeperTakerFactory' | 'sushiswapRouterOverrides'
   > & {
     takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
+    runtimeCache?: FactoryQuoteProviderRuntimeCache;
     onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
   };
 }) {
@@ -869,6 +880,7 @@ async function takeWithCurveFactory({
     'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'
   > & {
     takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
+    runtimeCache?: FactoryQuoteProviderRuntimeCache;
     onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
   };
 }) {

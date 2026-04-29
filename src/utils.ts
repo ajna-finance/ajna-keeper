@@ -59,6 +59,206 @@ export async function mapWithConcurrencyPreservingOrder<T, R>(
   return results;
 }
 
+export interface AsyncOperationLimiter {
+  run<T>(
+    label: string,
+    operation: () => Promise<T>,
+    options?: { signal?: AbortSignal }
+  ): Promise<T>;
+}
+
+export interface RouteProbeLimiterOptions {
+  maxConcurrent: number;
+  maxAbandoned: number;
+  hardPermitHoldMs: number;
+  onAbandoned?: (label: string, error: Error) => void;
+}
+
+type RouteProbeWaiter = {
+  label: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  signal?: AbortSignal;
+  abortHandler?: () => void;
+};
+
+export class RouteProbeLimiter implements AsyncOperationLimiter {
+  private active = 0;
+  private abandonedUnsettled = 0;
+  private readonly waiters: RouteProbeWaiter[] = [];
+
+  constructor(private readonly options: RouteProbeLimiterOptions) {
+    if (
+      !Number.isFinite(options.maxConcurrent) ||
+      options.maxConcurrent < 1 ||
+      !Number.isInteger(options.maxConcurrent)
+    ) {
+      throw new Error('RouteProbeLimiter maxConcurrent must be >= 1');
+    }
+    if (
+      !Number.isFinite(options.maxAbandoned) ||
+      options.maxAbandoned < 1 ||
+      !Number.isInteger(options.maxAbandoned)
+    ) {
+      throw new Error('RouteProbeLimiter maxAbandoned must be >= 1');
+    }
+    if (
+      !Number.isFinite(options.hardPermitHoldMs) ||
+      options.hardPermitHoldMs < 1
+    ) {
+      throw new Error('RouteProbeLimiter hardPermitHoldMs must be >= 1');
+    }
+  }
+
+  async run<T>(
+    label: string,
+    operation: () => Promise<T>,
+    options?: { signal?: AbortSignal }
+  ): Promise<T> {
+    await this.acquire(label, options?.signal);
+
+    let permitReleased = false;
+    let hardCapReleased = false;
+    let hardCapTimer: ReturnType<typeof setTimeout> | undefined;
+    const releasePermit = (): void => {
+      if (permitReleased) {
+        return;
+      }
+      permitReleased = true;
+      this.active = Math.max(0, this.active - 1);
+      this.drain();
+    };
+    const settleAbandonedProbe = (): void => {
+      if (!hardCapReleased) {
+        return;
+      }
+      this.abandonedUnsettled = Math.max(0, this.abandonedUnsettled - 1);
+      this.drain();
+    };
+
+    const operationPromise = Promise.resolve().then(operation);
+    operationPromise.then(
+      () => {
+        if (hardCapTimer) {
+          clearTimeout(hardCapTimer);
+        }
+        releasePermit();
+        settleAbandonedProbe();
+      },
+      () => {
+        if (hardCapTimer) {
+          clearTimeout(hardCapTimer);
+        }
+        releasePermit();
+        settleAbandonedProbe();
+      }
+    );
+
+    const hardCapPromise = new Promise<never>((_, reject) => {
+      hardCapTimer = setTimeout(() => {
+        hardCapReleased = true;
+        this.abandonedUnsettled += 1;
+        const error = new Error(
+          `route probe pressure budget hard cap exceeded for ${label} after ${this.options.hardPermitHoldMs}ms`
+        );
+        this.options.onAbandoned?.(label, error);
+        releasePermit();
+        reject(error);
+      }, this.options.hardPermitHoldMs);
+      hardCapTimer.unref?.();
+    });
+
+    return await Promise.race([operationPromise, hardCapPromise]);
+  }
+
+  private async acquire(label: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error(`route probe ${label} cancelled before start`);
+    }
+    await new Promise<void>((resolve, reject) => {
+      const waiter: RouteProbeWaiter = {
+        label,
+        resolve: () => {
+          if (waiter.abortHandler) {
+            signal?.removeEventListener('abort', waiter.abortHandler);
+          }
+          resolve();
+        },
+        reject,
+        signal,
+      };
+      waiter.reject = (error) => {
+        if (waiter.abortHandler) {
+          signal?.removeEventListener('abort', waiter.abortHandler);
+        }
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) {
+          this.waiters.splice(index, 1);
+        }
+        reject(error);
+      };
+      if (signal) {
+        waiter.abortHandler = () => {
+          const error =
+            signal.reason instanceof Error
+              ? signal.reason
+              : new Error(`route probe ${label} cancelled before start`);
+          if (waiter.abortHandler) {
+            signal.removeEventListener('abort', waiter.abortHandler);
+          }
+          waiter.reject(error);
+          this.drain();
+        };
+        signal.addEventListener('abort', waiter.abortHandler, { once: true });
+      }
+      this.waiters.push(waiter);
+      this.drain();
+    });
+  }
+
+  private drain(): void {
+    while (
+      this.active < this.options.maxConcurrent &&
+      this.abandonedUnsettled < this.options.maxAbandoned &&
+      this.waiters.length > 0
+    ) {
+      const waiter = this.waiters.shift();
+      if (!waiter) {
+        return;
+      }
+      this.active += 1;
+      waiter.resolve();
+    }
+  }
+}
+
+export async function withTimeoutAbort<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutError = new Error(`${label} timed out after ${timeoutMs}ms`);
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(controller.signal),
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          controller.abort(timeoutError);
+          reject(timeoutError);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
 interface UtilsType {
   addAccountFromKeystore: (
     keystorePath: string,

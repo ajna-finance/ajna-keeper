@@ -57,6 +57,8 @@ const VALIDATION_BOUNDS = {
   maxCurveExecutionDelayMs: 60_000,
   maxOneInchQuoteTimeoutMs: 10_000,
   maxExternalTakeProbeTimeoutMs: 10_000,
+  maxConcurrentCandidateEvaluations: 4,
+  maxInFlightRouteProbes: 16,
   maxOneInchAggregationExecutorAllowlistEntries: 64,
 };
 
@@ -722,6 +724,26 @@ export function validateAutoDiscoverConfig(
       takePolicy.takeRouteQuoteBudgetPerCandidate,
       'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate must be a positive integer'
     );
+    requireOptionalIntegerRange(
+      takePolicy.maxConcurrentCandidateEvaluations,
+      1,
+      VALIDATION_BOUNDS.maxConcurrentCandidateEvaluations,
+      `AutoDiscoverConfig.take: maxConcurrentCandidateEvaluations must be an integer between 1 and ${VALIDATION_BOUNDS.maxConcurrentCandidateEvaluations}`
+    );
+    requireOptionalIntegerRange(
+      takePolicy.maxInFlightRouteProbes,
+      1,
+      VALIDATION_BOUNDS.maxInFlightRouteProbes,
+      `AutoDiscoverConfig.take: maxInFlightRouteProbes must be an integer between 1 and ${VALIDATION_BOUNDS.maxInFlightRouteProbes}`
+    );
+    if (
+      takePolicy.maxInFlightRouteProbes !== undefined &&
+      (takePolicy.maxConcurrentCandidateEvaluations ?? 1) <= 1
+    ) {
+      logger.warn(
+        'AutoDiscoverConfig.take: maxInFlightRouteProbes is configured but maxConcurrentCandidateEvaluations is 1; the global route probe limiter is only enforced for parallel candidate evaluation'
+      );
+    }
     requireOptionalNonNegative(
       takePolicy.l1GasPriceFreshnessTtlMs,
       'AutoDiscoverConfig.take: l1GasPriceFreshnessTtlMs cannot be negative'

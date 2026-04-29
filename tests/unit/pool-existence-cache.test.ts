@@ -139,4 +139,31 @@ describe('PoolExistenceCache', () => {
       )
     ).to.be.undefined;
   });
+
+  it('coalesces concurrent loads for the same pool key', async () => {
+    const cache = new PoolExistenceCache();
+    const loader = sinon.stub().callsFake(async () => {
+      await Promise.resolve();
+      return { exists: true, ttlMs: 1_000 };
+    });
+
+    const [first, second] = await Promise.all([
+      cache.getOrCreate(
+        '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        3000,
+        loader
+      ),
+      cache.getOrCreate(
+        '0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+        '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        3000,
+        loader
+      ),
+    ]);
+
+    expect(first).to.equal(true);
+    expect(second).to.equal(true);
+    expect(loader.calledOnce).to.equal(true);
+  });
 });

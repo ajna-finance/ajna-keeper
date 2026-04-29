@@ -584,4 +584,198 @@ describe('shared arbTake helpers', () => {
 
     expect(result).to.equal(false);
   });
+
+  it('handles parallel candidate evaluation in deterministic order while serializing execution', async () => {
+    const borrowers = ['0xBorrowerA', '0xBorrowerB'];
+    const evaluationCompletionOrder: string[] = [];
+    const executionOrder: string[] = [];
+    let executionInFlight = 0;
+    let maxExecutionInFlight = 0;
+    const statusReader = {
+      read: sinon.stub().callsFake(async ({ borrower }) => {
+        await new Promise((resolve) =>
+          setTimeout(resolve, borrower === borrowers[0] ? 20 : 1)
+        );
+        evaluationCompletionOrder.push(borrower);
+        return {
+          borrower,
+          collateral: ethers.utils.parseEther('1'),
+          auctionPrice: ethers.utils.parseEther('1'),
+        };
+      }),
+    };
+    const onFound = sinon.stub();
+
+    await processTakeCandidates({
+      pool: {
+        name: 'Parallel Candidate Pool',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+      } as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Parallel Candidate Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: borrowers.map((borrower) => ({ borrower })),
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(100),
+          takeablePrice: 1,
+        }),
+        executeExternalTake: sinon.stub().callsFake(async ({ liquidation }) => {
+          executionOrder.push(liquidation.borrower);
+          executionInFlight += 1;
+          maxExecutionInFlight = Math.max(
+            maxExecutionInFlight,
+            executionInFlight
+          );
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          executionInFlight -= 1;
+          return true;
+        }),
+      } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
+      externalExecutionConfig: {} as any,
+      dryRun: true,
+      delayBetweenActions: 0,
+      takeAuctionStatusReader: statusReader as any,
+      maxConcurrentCandidateEvaluations: 2,
+      onFound,
+    });
+
+    expect(evaluationCompletionOrder).to.deep.equal([
+      borrowers[1],
+      borrowers[0],
+    ]);
+    expect(
+      onFound.getCalls().map((call) => call.args[0].borrower)
+    ).to.deep.equal(borrowers);
+    expect(executionOrder).to.deep.equal(borrowers);
+    expect(maxExecutionInFlight).to.equal(1);
+  });
+
+  it('discards already evaluated window decisions after state-changing execution', async () => {
+    const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
+    const evaluatedBorrowers: string[] = [];
+    const executionOrder: string[] = [];
+    const statusReader = {
+      read: sinon.stub().callsFake(async ({ borrower }) => {
+        evaluatedBorrowers.push(borrower);
+        return {
+          borrower,
+          collateral: ethers.utils.parseEther('1'),
+          auctionPrice: ethers.utils.parseEther('1'),
+        };
+      }),
+    };
+
+    await processTakeCandidates({
+      pool: {
+        name: 'State Change Pool',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+      } as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'State Change Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: borrowers.map((borrower) => ({ borrower })),
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(100),
+          takeablePrice: 1,
+        }),
+        executeExternalTake: sinon.stub().callsFake(async ({ liquidation }) => {
+          executionOrder.push(liquidation.borrower);
+          return true;
+        }),
+      } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      takeAuctionStatusReader: statusReader as any,
+      maxConcurrentCandidateEvaluations: 2,
+    });
+
+    expect(evaluatedBorrowers).to.deep.equal(borrowers);
+    expect(executionOrder).to.deep.equal([borrowers[0], borrowers[2]]);
+  });
+
+  it('does not reuse preloaded evaluation statuses after a state-changing execution when continuing', async () => {
+    const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
+    const statusReader = {
+      read: sinon.stub().callsFake(async ({ borrower }) => ({
+        borrower,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+      })),
+    };
+    const candidateStatuses = new Map(
+      borrowers.map((borrower) => [
+        borrower.toLowerCase(),
+        {
+          borrower,
+          collateral: ethers.utils.parseEther('1'),
+          auctionPrice: ethers.utils.parseEther('1'),
+        },
+      ])
+    );
+    const executionOrder: string[] = [];
+
+    await processTakeCandidates({
+      pool: {
+        name: 'Preloaded Status Invalidation Pool',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+      } as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Preloaded Status Invalidation Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      candidates: borrowers.map((borrower) => ({ borrower })),
+      candidateStatuses,
+      subgraph: {} as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        evaluateExternalTake: sinon.stub().resolves({
+          isTakeable: true,
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(100),
+          takeablePrice: 1,
+        }),
+        executeExternalTake: sinon.stub().callsFake(async ({ liquidation }) => {
+          executionOrder.push(liquidation.borrower);
+          return true;
+        }),
+      } as any,
+      arbTakeStrategy: createArbTakeStrategy(),
+      externalExecutionConfig: {} as any,
+      dryRun: false,
+      delayBetweenActions: 0,
+      takeAuctionStatusReader: statusReader as any,
+      maxConcurrentCandidateEvaluations: 2,
+    });
+
+    expect(executionOrder).to.deep.equal([borrowers[0], borrowers[2]]);
+    expect(statusReader.read.calledOnce).to.equal(true);
+    expect(statusReader.read.firstCall.args[0].borrower).to.equal(borrowers[2]);
+  });
 });

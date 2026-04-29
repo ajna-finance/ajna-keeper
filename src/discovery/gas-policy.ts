@@ -344,6 +344,189 @@ function getGasQuoteCacheKey(params: {
   return `${params.chainId}:${params.tokenIn.toLowerCase()}:${params.tokenOut.toLowerCase()}`;
 }
 
+function incrementDiscoveryStat(
+  rpcCache: DiscoveryRpcCache | undefined,
+  key: keyof NonNullable<DiscoveryRpcCache['stats']>
+): void {
+  if (!rpcCache?.stats) {
+    return;
+  }
+  const stats = rpcCache.stats as Record<string, number | undefined>;
+  stats[key] = (stats[key] ?? 0) + 1;
+}
+
+function normalizeIdentityAddress(value?: string): string | undefined {
+  return value?.toLowerCase();
+}
+
+function normalizeIdentityAddresses(values?: string[]): string[] | undefined {
+  return values?.map((value) => value.toLowerCase());
+}
+
+function stableJsonIdentity(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJsonIdentity(entry)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJsonIdentity(record[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function getCurvePoolConfigIdentity(
+  poolConfigs?: NonNullable<
+    DiscoveryExecutionConfig['curveRouterOverrides']
+  >['poolConfigs']
+): unknown {
+  if (!poolConfigs) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(poolConfigs)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([tokenPair, poolConfig]) => [
+        tokenPair.toLowerCase(),
+        {
+          address: normalizeIdentityAddress(poolConfig.address),
+          poolType: poolConfig.poolType,
+        },
+      ])
+  );
+}
+
+function getTokenAddressIdentity(
+  tokenAddresses?: DiscoveryExecutionConfig['tokenAddresses']
+): unknown {
+  if (!tokenAddresses) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(tokenAddresses)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([symbol, address]) => [
+        symbol.toLowerCase(),
+        normalizeIdentityAddress(address),
+      ])
+  );
+}
+
+function getGasQuoteSourceConfigIdentity(params: {
+  config: DiscoveryExecutionConfig;
+  chainId?: number;
+  liquiditySources: LiquiditySource[];
+}): string {
+  return stableJsonIdentity(
+    params.liquiditySources.map((source) => {
+      if (source === LiquiditySource.ONEINCH) {
+        return {
+          source,
+          router:
+            params.chainId !== undefined
+              ? normalizeIdentityAddress(
+                  params.config.oneInchRouters?.[params.chainId]
+                )
+              : undefined,
+          connectorTokens: normalizeIdentityAddresses(
+            params.config.connectorTokens
+          ),
+        };
+      }
+      if (source === LiquiditySource.UNISWAPV3) {
+        const routerConfig = params.config.universalRouterOverrides;
+        return {
+          source,
+          universalRouterAddress: normalizeIdentityAddress(
+            routerConfig?.universalRouterAddress
+          ),
+          poolFactoryAddress: normalizeIdentityAddress(
+            routerConfig?.poolFactoryAddress
+          ),
+          quoterV2Address: normalizeIdentityAddress(
+            routerConfig?.quoterV2Address
+          ),
+          wethAddress: normalizeIdentityAddress(routerConfig?.wethAddress),
+          feeTiers: getGasQuoteFeeTiers(
+            routerConfig?.defaultFeeTier,
+            routerConfig?.candidateFeeTiers,
+            DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+            STANDARD_V3_FEE_TIERS
+          ),
+        };
+      }
+      if (source === LiquiditySource.SUSHISWAP) {
+        const sushiConfig = params.config.sushiswapRouterOverrides;
+        return {
+          source,
+          swapRouterAddress: normalizeIdentityAddress(
+            sushiConfig?.swapRouterAddress
+          ),
+          factoryAddress: normalizeIdentityAddress(
+            sushiConfig?.factoryAddress
+          ),
+          quoterV2Address: normalizeIdentityAddress(
+            sushiConfig?.quoterV2Address
+          ),
+          wethAddress: normalizeIdentityAddress(sushiConfig?.wethAddress),
+          feeTiers: getGasQuoteFeeTiers(
+            sushiConfig?.defaultFeeTier,
+            sushiConfig?.candidateFeeTiers,
+            DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
+            STANDARD_V3_FEE_TIERS
+          ),
+        };
+      }
+      if (source === LiquiditySource.CURVE) {
+        const curveConfig = params.config.curveRouterOverrides;
+        return {
+          source,
+          wethAddress: normalizeIdentityAddress(curveConfig?.wethAddress),
+          poolConfigs: getCurvePoolConfigIdentity(curveConfig?.poolConfigs),
+          tokenAddresses: getTokenAddressIdentity(params.config.tokenAddresses),
+        };
+      }
+      return { source };
+    })
+  );
+}
+
+function getGasQuoteConversionCacheKey(params: {
+  config: DiscoveryExecutionConfig;
+  chainId?: number;
+  wrappedNativeAddress: string;
+  quoteTokenAddress: string;
+  liquiditySources: LiquiditySource[];
+  preferredLiquiditySource?: LiquiditySource;
+  amountInNative: BigNumber;
+  gasPrice?: BigNumber;
+  gasLimit?: BigNumber;
+  minProfitNative?: string;
+}): string | undefined {
+  if (params.chainId === undefined || !params.gasPrice) {
+    return undefined;
+  }
+  return stableJsonIdentity({
+    v: 1,
+    chainId: params.chainId,
+    wrappedNativeAddress: params.wrappedNativeAddress.toLowerCase(),
+    quoteTokenAddress: params.quoteTokenAddress.toLowerCase(),
+    liquiditySources: params.liquiditySources,
+    preferredLiquiditySource: params.preferredLiquiditySource,
+    amountInNative: params.amountInNative.toString(),
+    gasPrice: params.gasPrice.toString(),
+    gasLimit: params.gasLimit?.toString(),
+    minProfitNative: params.minProfitNative,
+    sourceConfig: getGasQuoteSourceConfigIdentity({
+      config: params.config,
+      chainId: params.chainId,
+      liquiditySources: params.liquiditySources,
+    }),
+  });
+}
+
 function logGasQuoteFallback(params: {
   usedLiquiditySource: LiquiditySource;
   preferredLiquiditySource?: LiquiditySource;
@@ -799,6 +982,9 @@ export async function evaluateGasPolicy(params: {
         preferredLiquiditySource,
         rpcCache: params.rpcCache,
         gasQuoteCacheKey,
+        gasPrice,
+        gasLimit: params.gasLimit,
+        minProfitNative: params.policy?.minProfitNative,
         oneInchQuoteTimeoutMs,
         takePolicy: params.policy,
       });
@@ -884,6 +1070,9 @@ async function quoteExactNativeAmountToQuote(params: {
   preferredLiquiditySource?: LiquiditySource;
   rpcCache?: DiscoveryRpcCache;
   gasQuoteCacheKey?: string;
+  gasPrice?: BigNumber;
+  gasLimit?: BigNumber;
+  minProfitNative?: string;
   oneInchQuoteTimeoutMs?: number;
   takePolicy?: Pick<
     AutoDiscoverTakePolicy,
@@ -902,6 +1091,27 @@ async function quoteExactNativeAmountToQuote(params: {
   if (params.liquiditySources.length === 0) {
     return undefined;
   }
+  const conversionCacheKey = getGasQuoteConversionCacheKey({
+    config: params.config,
+    chainId: params.chainId,
+    wrappedNativeAddress: params.wrappedNativeAddress,
+    quoteTokenAddress: params.quoteTokenAddress,
+    liquiditySources: params.liquiditySources,
+    preferredLiquiditySource: params.preferredLiquiditySource,
+    amountInNative: params.amountInNative,
+    gasPrice: params.gasPrice,
+    gasLimit: params.gasLimit,
+    minProfitNative: params.minProfitNative,
+  });
+  if (conversionCacheKey && params.rpcCache?.gasQuoteConversions) {
+    const cached = params.rpcCache.gasQuoteConversions.get(conversionCacheKey);
+    if (cached && params.gasPrice && cached.gasPrice.eq(params.gasPrice)) {
+      incrementDiscoveryStat(params.rpcCache, 'gasQuoteConversionCacheHits');
+      return cached.value;
+    }
+  }
+  incrementDiscoveryStat(params.rpcCache, 'gasQuoteConversionCacheMisses');
+
   const quotedAmount = await quoteTokensByGasQuoteSources({
     signer: params.signer,
     config: params.config,
@@ -916,5 +1126,15 @@ async function quoteExactNativeAmountToQuote(params: {
     oneInchQuoteTimeoutMs: params.oneInchQuoteTimeoutMs,
     takePolicy: params.takePolicy,
   });
+  if (quotedAmount && conversionCacheKey && params.rpcCache) {
+    params.rpcCache.gasQuoteConversions ??= new Map();
+    params.rpcCache.gasQuoteConversions.set(conversionCacheKey, {
+      value: quotedAmount.amountOut,
+      usedLiquiditySource: quotedAmount.liquiditySource,
+      preferredLiquiditySource: params.preferredLiquiditySource,
+      createdAtMs: Date.now(),
+      gasPrice: params.gasPrice ?? BigNumber.from(0),
+    });
+  }
   return quotedAmount?.amountOut;
 }

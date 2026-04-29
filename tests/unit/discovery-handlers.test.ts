@@ -3311,7 +3311,12 @@ describe('Discovery Handlers', () => {
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
-    expect(oneInchQuoteStub.calledTwice).to.be.true;
+    expect(oneInchQuoteStub.calledOnce).to.be.true;
+    expect(
+      BigNumber.from(oneInchQuoteStub.firstCall.args[1]).eq(
+        ethers.utils.parseEther('0.00117')
+      )
+    ).to.be.true;
   });
 
   it('uses raw quote units for discovered take profit-floor checks', async () => {
