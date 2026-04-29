@@ -69,9 +69,7 @@ import {
   withTimeoutAbort,
 } from '../utils';
 import { convertWadToTokenDecimalsCeil, getDecimalsErc20 } from '../erc20';
-import {
-  createTakeAuctionStatusReader,
-} from '../take/liquidation-status';
+import { createTakeAuctionStatusReader } from '../take/liquidation-status';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import {
   getOneInchCircuitOpenReason,
@@ -803,15 +801,101 @@ interface DiscoveredTakeTargetStats {
   candidateCount: number;
   approvedTakeDecisions: number;
   approvedArbTakeDecisions: number;
+  approvedOneInchTakeDecisions: number;
+  approvedFactoryTakeDecisions: number;
+  approvedUniswapV3TakeDecisions: number;
+  approvedSushiswapTakeDecisions: number;
+  approvedCurveTakeDecisions: number;
   evaluationSkips: number;
   revalidationSkips: number;
   executionSkips: number;
   gasPolicyRejects: number;
   profitFloorRejects: number;
   arbProfitUnavailableRejects: number;
+  // Real successful external executions. Dry-run "would execute" outcomes are
+  // tracked separately so production counters are not inflated by rehearsals.
   executedExternalTakes: number;
   executedArbTakes: number;
+  executedOneInchTakes: number;
+  executedFactoryTakes: number;
+  executedUniswapV3Takes: number;
+  executedSushiswapTakes: number;
+  executedCurveTakes: number;
+  dryRunExternalTakes: number;
+  dryRunArbTakes: number;
+  dryRunOneInchTakes: number;
+  dryRunFactoryTakes: number;
+  dryRunUniswapV3Takes: number;
+  dryRunSushiswapTakes: number;
+  dryRunCurveTakes: number;
+  oneInchSwapDataFailures: number;
+  oneInchPreBroadcastFailures: number;
+  oneInchPostSubmissionFailures: number;
+  factoryPreBroadcastFailures: number;
+  factoryPostSubmissionFailures: number;
+  hybridFallbackAttempts: number;
+  hybridFallbackSuccesses: number;
+  hotAuctionCandidateRemovals: number;
 }
+
+type ExecutedExternalTakeRouteStats = Pick<
+  DiscoveredTakeTargetStats,
+  | 'executedOneInchTakes'
+  | 'executedFactoryTakes'
+  | 'executedUniswapV3Takes'
+  | 'executedSushiswapTakes'
+  | 'executedCurveTakes'
+>;
+
+type ExternalTakeRouteStatKey =
+  | 'approvedOneInchTakeDecisions'
+  | 'approvedFactoryTakeDecisions'
+  | 'approvedUniswapV3TakeDecisions'
+  | 'approvedSushiswapTakeDecisions'
+  | 'approvedCurveTakeDecisions'
+  | keyof ExecutedExternalTakeRouteStats
+  | 'dryRunOneInchTakes'
+  | 'dryRunFactoryTakes'
+  | 'dryRunUniswapV3Takes'
+  | 'dryRunSushiswapTakes'
+  | 'dryRunCurveTakes';
+
+interface ExternalTakeRouteStatKeys {
+  oneInch: ExternalTakeRouteStatKey;
+  factory: ExternalTakeRouteStatKey;
+  uniswapV3: ExternalTakeRouteStatKey;
+  sushiswap: ExternalTakeRouteStatKey;
+  curve: ExternalTakeRouteStatKey;
+}
+
+type ExternalTakeRouteCounterStats = Pick<
+  DiscoveredTakeTargetStats,
+  ExternalTakeRouteStatKey
+>;
+
+const APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
+  oneInch: 'approvedOneInchTakeDecisions',
+  factory: 'approvedFactoryTakeDecisions',
+  uniswapV3: 'approvedUniswapV3TakeDecisions',
+  sushiswap: 'approvedSushiswapTakeDecisions',
+  curve: 'approvedCurveTakeDecisions',
+};
+
+const EXECUTED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
+  oneInch: 'executedOneInchTakes',
+  factory: 'executedFactoryTakes',
+  uniswapV3: 'executedUniswapV3Takes',
+  sushiswap: 'executedSushiswapTakes',
+  curve: 'executedCurveTakes',
+};
+
+const DRY_RUN_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
+  oneInch: 'dryRunOneInchTakes',
+  factory: 'dryRunFactoryTakes',
+  uniswapV3: 'dryRunUniswapV3Takes',
+  sushiswap: 'dryRunSushiswapTakes',
+  curve: 'dryRunCurveTakes',
+};
 
 interface ExternalTakeApprovalInput {
   price: number;
@@ -894,7 +978,7 @@ interface HandleDiscoveredTakeTargetParamsBase {
   onCandidateInactive?: (candidate: {
     poolAddress: string;
     borrower: string;
-  }) => void;
+  }) => boolean | void;
 }
 
 export type HandleDiscoveredTakeTargetParams =
@@ -958,9 +1042,161 @@ function logDiscoveredTakeTargetSummary(params: {
   target: ResolvedTakeTarget;
   stats: DiscoveredTakeTargetStats;
 }): void {
-  logger.info(
-    `Discovered take target summary: pool=${params.pool.poolAddress} name="${params.target.name}" source=${params.target.take.liquiditySource ?? 'none'} dryRun=${params.target.dryRun} candidates=${params.stats.candidateCount} approvedTakeDecisions=${params.stats.approvedTakeDecisions} approvedArbTakeDecisions=${params.stats.approvedArbTakeDecisions} evaluationSkips=${params.stats.evaluationSkips} revalidationSkips=${params.stats.revalidationSkips} executionSkips=${params.stats.executionSkips} gasPolicyRejects=${params.stats.gasPolicyRejects} profitFloorRejects=${params.stats.profitFloorRejects} arbProfitUnavailableRejects=${params.stats.arbProfitUnavailableRejects} executedExternalTakes=${params.stats.executedExternalTakes} executedArbTakes=${params.stats.executedArbTakes}`
+  const stats = params.stats;
+  const appendNonZeroField = (
+    fields: string[],
+    name: string,
+    value: number
+  ): void => {
+    if (value !== 0) {
+      fields.push(`${name}=${value}`);
+    }
+  };
+  const appendNonZeroGroup = (
+    fields: string[],
+    name: string,
+    entries: Array<{ label: string; value: number }>
+  ): void => {
+    const nonZeroEntries = entries.filter((entry) => entry.value !== 0);
+    if (nonZeroEntries.length === 0) {
+      return;
+    }
+    fields.push(
+      `${name}=${nonZeroEntries
+        .map((entry) => `${entry.label}:${entry.value}`)
+        .join(',')}`
+    );
+  };
+  const fields = [
+    `pool=${params.pool.poolAddress}`,
+    `name="${params.target.name}"`,
+    `source=${params.target.take.liquiditySource ?? 'none'}`,
+    `dryRun=${params.target.dryRun}`,
+    `candidates=${stats.candidateCount}`,
+    `approvedTakeDecisions=${stats.approvedTakeDecisions}`,
+    `approvedArbTakeDecisions=${stats.approvedArbTakeDecisions}`,
+    `evaluationSkips=${stats.evaluationSkips}`,
+    `revalidationSkips=${stats.revalidationSkips}`,
+    `executionSkips=${stats.executionSkips}`,
+    `gasPolicyRejects=${stats.gasPolicyRejects}`,
+    `profitFloorRejects=${stats.profitFloorRejects}`,
+    `arbProfitUnavailableRejects=${stats.arbProfitUnavailableRejects}`,
+    `executedExternalTakes=${stats.executedExternalTakes}`,
+    `executedArbTakes=${stats.executedArbTakes}`,
+  ];
+  appendNonZeroField(fields, 'dryRunExternalTakes', stats.dryRunExternalTakes);
+  appendNonZeroField(fields, 'dryRunArbTakes', stats.dryRunArbTakes);
+  appendNonZeroGroup(fields, 'approvedRoutes', [
+    { label: 'oneinch', value: stats.approvedOneInchTakeDecisions },
+    { label: 'factory', value: stats.approvedFactoryTakeDecisions },
+  ]);
+  appendNonZeroGroup(fields, 'approvedFactorySources', [
+    { label: 'uniswapV3', value: stats.approvedUniswapV3TakeDecisions },
+    { label: 'sushiswap', value: stats.approvedSushiswapTakeDecisions },
+    { label: 'curve', value: stats.approvedCurveTakeDecisions },
+  ]);
+  appendNonZeroGroup(fields, 'executedRoutes', [
+    { label: 'oneinch', value: stats.executedOneInchTakes },
+    { label: 'factory', value: stats.executedFactoryTakes },
+  ]);
+  appendNonZeroGroup(fields, 'executedFactorySources', [
+    { label: 'uniswapV3', value: stats.executedUniswapV3Takes },
+    { label: 'sushiswap', value: stats.executedSushiswapTakes },
+    { label: 'curve', value: stats.executedCurveTakes },
+  ]);
+  appendNonZeroGroup(fields, 'dryRunRoutes', [
+    { label: 'oneinch', value: stats.dryRunOneInchTakes },
+    { label: 'factory', value: stats.dryRunFactoryTakes },
+  ]);
+  appendNonZeroGroup(fields, 'dryRunFactorySources', [
+    { label: 'uniswapV3', value: stats.dryRunUniswapV3Takes },
+    { label: 'sushiswap', value: stats.dryRunSushiswapTakes },
+    { label: 'curve', value: stats.dryRunCurveTakes },
+  ]);
+  appendNonZeroGroup(fields, 'oneInchFailures', [
+    { label: 'swapData', value: stats.oneInchSwapDataFailures },
+    { label: 'preBroadcast', value: stats.oneInchPreBroadcastFailures },
+    { label: 'postSubmission', value: stats.oneInchPostSubmissionFailures },
+  ]);
+  appendNonZeroGroup(fields, 'factoryFailures', [
+    { label: 'preBroadcast', value: stats.factoryPreBroadcastFailures },
+    { label: 'postSubmission', value: stats.factoryPostSubmissionFailures },
+  ]);
+  appendNonZeroField(
+    fields,
+    'hybridFallbackAttempts',
+    stats.hybridFallbackAttempts
   );
+  appendNonZeroField(
+    fields,
+    'hybridFallbackSuccesses',
+    stats.hybridFallbackSuccesses
+  );
+  appendNonZeroField(
+    fields,
+    'hotAuctionCandidateRemovals',
+    stats.hotAuctionCandidateRemovals
+  );
+  logger.info(`Discovered take target summary: ${fields.join(' ')}`);
+}
+
+function isOneInchExternalTakeRoute(
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): boolean {
+  return (
+    quoteEvaluation?.externalTakePath === 'oneinch' ||
+    quoteEvaluation?.selectedLiquiditySource === LiquiditySource.ONEINCH
+  );
+}
+
+function isFactoryExternalTakeRoute(
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): boolean {
+  const source = quoteEvaluation?.selectedLiquiditySource;
+  return (
+    quoteEvaluation?.externalTakePath === 'factory' ||
+    (source !== undefined && isFactoryDynamicSource(source))
+  );
+}
+
+function incrementExternalTakeRouteStats(params: {
+  stats: ExternalTakeRouteCounterStats;
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
+  keys: ExternalTakeRouteStatKeys;
+}): void {
+  const { stats, quoteEvaluation, keys } = params;
+  if (isOneInchExternalTakeRoute(quoteEvaluation)) {
+    stats[keys.oneInch] += 1;
+  }
+  if (isFactoryExternalTakeRoute(quoteEvaluation)) {
+    stats[keys.factory] += 1;
+  }
+
+  switch (quoteEvaluation?.selectedLiquiditySource) {
+    case LiquiditySource.UNISWAPV3:
+      stats[keys.uniswapV3] += 1;
+      break;
+    case LiquiditySource.SUSHISWAP:
+      stats[keys.sushiswap] += 1;
+      break;
+    case LiquiditySource.CURVE:
+      stats[keys.curve] += 1;
+      break;
+  }
+}
+
+function recordSuccessfulExternalTakeRouteStats(
+  stats: ExternalTakeRouteCounterStats,
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined,
+  dryRun: boolean
+): void {
+  incrementExternalTakeRouteStats({
+    stats,
+    quoteEvaluation,
+    keys: dryRun
+      ? DRY_RUN_EXTERNAL_TAKE_ROUTE_STAT_KEYS
+      : EXECUTED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
+  });
 }
 
 const INACTIVE_AUCTION_SKIP_REASONS = new Set<string>([
@@ -2035,10 +2271,7 @@ function createExternalTakeAdapterForDiscovery(params: {
   quoteFactoryPath: FactoryPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
   recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
-  stats: Pick<
-    DiscoveredTakeTargetStats,
-    'gasPolicyRejects' | 'profitFloorRejects'
-  >;
+  stats: DiscoveredTakeTargetStats;
   config: DiscoveryExecutionConfig;
 }): ExternalTakeAdapter<ResolvedTakeTarget, DiscoveryExternalExecutionConfig> {
   if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
@@ -2100,9 +2333,14 @@ function createExternalTakeAdapterForDiscovery(params: {
             continue;
           }
 
+          const isFallbackCandidate = index > 0;
+          if (isFallbackCandidate) {
+            params.stats.hybridFallbackAttempts += 1;
+          }
+
           let approvedEvaluation = candidateEvaluation;
           let executionLiquidation = liquidation;
-          if (index > 0) {
+          if (isFallbackCandidate) {
             // The primary path already passed the engine's final approval hook.
             // Fallbacks are selected inside this executor, so refresh and
             // reapprove them immediately before attempting execution.
@@ -2194,6 +2432,14 @@ function createExternalTakeAdapterForDiscovery(params: {
                 config: oneInchConfig,
               });
             if (oneInchSucceeded) {
+              recordSuccessfulExternalTakeRouteStats(
+                params.stats,
+                approvedEvaluation,
+                config.dryRun === true
+              );
+              if (isFallbackCandidate) {
+                params.stats.hybridFallbackSuccesses += 1;
+              }
               return true;
             }
             if (
@@ -2239,6 +2485,14 @@ function createExternalTakeAdapterForDiscovery(params: {
               config: factoryConfig,
             });
           if (factorySucceeded) {
+            recordSuccessfulExternalTakeRouteStats(
+              params.stats,
+              approvedEvaluation,
+              config.dryRun === true
+            );
+            if (isFallbackCandidate) {
+              params.stats.hybridFallbackSuccesses += 1;
+            }
             return true;
           }
           if (
@@ -2286,14 +2540,23 @@ function createExternalTakeAdapterForDiscovery(params: {
         poolConfig,
         liquidation,
         config,
-      }) =>
-        oneInchExecutionModule.takeLiquidation({
+      }) => {
+        const succeeded = await oneInchExecutionModule.takeLiquidation({
           pool,
           signer,
           poolConfig,
           liquidation,
           config,
-        }),
+        });
+        if (succeeded) {
+          recordSuccessfulExternalTakeRouteStats(
+            params.stats,
+            liquidation.externalTakeQuoteEvaluation,
+            config.dryRun === true
+          );
+        }
+        return succeeded;
+      },
     };
   }
 
@@ -2320,14 +2583,23 @@ function createExternalTakeAdapterForDiscovery(params: {
         poolConfig,
         liquidation,
         config,
-      }) =>
-        takeFactoryModule.takeLiquidationFactory({
+      }) => {
+        const succeeded = await takeFactoryModule.takeLiquidationFactory({
           pool,
           signer,
           poolConfig,
           liquidation,
           config,
-        }),
+        });
+        if (succeeded) {
+          recordSuccessfulExternalTakeRouteStats(
+            params.stats,
+            liquidation.externalTakeQuoteEvaluation,
+            config.dryRun === true
+          );
+        }
+        return succeeded;
+      },
     };
   }
 
@@ -2350,6 +2622,11 @@ export async function handleDiscoveredTakeTarget(
     candidateCount: params.target.candidates.length,
     approvedTakeDecisions: 0,
     approvedArbTakeDecisions: 0,
+    approvedOneInchTakeDecisions: 0,
+    approvedFactoryTakeDecisions: 0,
+    approvedUniswapV3TakeDecisions: 0,
+    approvedSushiswapTakeDecisions: 0,
+    approvedCurveTakeDecisions: 0,
     evaluationSkips: 0,
     revalidationSkips: 0,
     executionSkips: 0,
@@ -2358,6 +2635,26 @@ export async function handleDiscoveredTakeTarget(
     arbProfitUnavailableRejects: 0,
     executedExternalTakes: 0,
     executedArbTakes: 0,
+    executedOneInchTakes: 0,
+    executedFactoryTakes: 0,
+    executedUniswapV3Takes: 0,
+    executedSushiswapTakes: 0,
+    executedCurveTakes: 0,
+    dryRunExternalTakes: 0,
+    dryRunArbTakes: 0,
+    dryRunOneInchTakes: 0,
+    dryRunFactoryTakes: 0,
+    dryRunUniswapV3Takes: 0,
+    dryRunSushiswapTakes: 0,
+    dryRunCurveTakes: 0,
+    oneInchSwapDataFailures: 0,
+    oneInchPreBroadcastFailures: 0,
+    oneInchPostSubmissionFailures: 0,
+    factoryPreBroadcastFailures: 0,
+    factoryPostSubmissionFailures: 0,
+    hybridFallbackAttempts: 0,
+    hybridFallbackSuccesses: 0,
+    hotAuctionCandidateRemovals: 0,
   };
   const rpcCache =
     params.rpcCache ??
@@ -2371,8 +2668,7 @@ export async function handleDiscoveredTakeTarget(
     rpcCache.stats.factory ??= {};
   }
   const takePolicy = getAutoDiscoverTakePolicy(params.config.autoDiscover);
-  const maxExecutionsPerPoolPerRun =
-    getMaxExecutionsPerPoolPerRun(takePolicy);
+  const maxExecutionsPerPoolPerRun = getMaxExecutionsPerPoolPerRun(takePolicy);
   const maxConcurrentCandidateEvaluations =
     maxExecutionsPerPoolPerRun > 1
       ? 1
@@ -2474,13 +2770,25 @@ export async function handleDiscoveredTakeTarget(
     });
   };
   let externalTakeAttemptedSubmission = false;
-  const recordExternalTakeExecutionFailure = (result: {
-    preBroadcast: boolean;
-  }): void => {
-    if (!result.preBroadcast) {
-      externalTakeAttemptedSubmission = true;
-    }
-  };
+  const recordExternalTakeExecutionFailure =
+    (path: 'oneinch' | 'factory') =>
+    (result: { preBroadcast: boolean; error?: string }): void => {
+      if (path === 'oneinch') {
+        if (result.preBroadcast) {
+          stats.oneInchPreBroadcastFailures += 1;
+        } else {
+          stats.oneInchPostSubmissionFailures += 1;
+        }
+      } else if (result.preBroadcast) {
+        stats.factoryPreBroadcastFailures += 1;
+      } else {
+        stats.factoryPostSubmissionFailures += 1;
+      }
+
+      if (!result.preBroadcast) {
+        externalTakeAttemptedSubmission = true;
+      }
+    };
   const externalTakeAdapter = createExternalTakeAdapterForDiscovery({
     target: params.target,
     takePolicy,
@@ -2526,12 +2834,13 @@ export async function handleDiscoveredTakeTarget(
         recordOneInchCircuitOutcome('success');
         return;
       }
+      stats.oneInchSwapDataFailures += 1;
       if (result.retryable !== false) {
         recordOneInchCircuitOutcome('failure');
       }
     },
-    onOneInchExecutionFailure: recordExternalTakeExecutionFailure,
-    onFactoryExecutionFailure: recordExternalTakeExecutionFailure,
+    onOneInchExecutionFailure: recordExternalTakeExecutionFailure('oneinch'),
+    onFactoryExecutionFailure: recordExternalTakeExecutionFailure('factory'),
   };
 
   try {
@@ -2673,6 +2982,11 @@ export async function handleDiscoveredTakeTarget(
           onExecutionAttempt: (decision) => {
             if (decision.approvedTake) {
               stats.approvedTakeDecisions += 1;
+              incrementExternalTakeRouteStats({
+                stats,
+                quoteEvaluation: decision.quoteEvaluation,
+                keys: APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
+              });
             }
             if (decision.approvedArbTake) {
               stats.approvedArbTakeDecisions += 1;
@@ -2680,10 +2994,13 @@ export async function handleDiscoveredTakeTarget(
           },
           onSkip: ({ candidate, stage, reason }) => {
             if (isInactiveAuctionSkipReason(reason)) {
-              params.onCandidateInactive?.({
+              const removed = params.onCandidateInactive?.({
                 poolAddress: params.target.poolAddress,
                 borrower: candidate.borrower,
               });
+              if (removed === true) {
+                stats.hotAuctionCandidateRemovals += 1;
+              }
             }
             if (stage === 'revalidation') {
               stats.revalidationSkips += 1;
@@ -2707,10 +3024,18 @@ export async function handleDiscoveredTakeTarget(
           },
           onExecuted: ({ executedTake, executedArbTake }) => {
             if (executedTake) {
-              stats.executedExternalTakes += 1;
+              if (params.target.dryRun) {
+                stats.dryRunExternalTakes += 1;
+              } else {
+                stats.executedExternalTakes += 1;
+              }
             }
             if (executedArbTake) {
-              stats.executedArbTakes += 1;
+              if (params.target.dryRun) {
+                stats.dryRunArbTakes += 1;
+              } else {
+                stats.executedArbTakes += 1;
+              }
             }
           },
         });

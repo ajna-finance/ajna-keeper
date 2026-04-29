@@ -23,6 +23,20 @@ import {
   createDiscoveryTransports,
 } from '../helpers/discovery';
 
+function getDiscoveredTakeSummary(loggerInfoStub: sinon.SinonStub): string {
+  const isSummaryMessage = (message: unknown): message is string =>
+    typeof message === 'string' &&
+    message.includes('Discovered take target summary:');
+  const summaryLog = loggerInfoStub
+    .getCalls()
+    .map((call) => call.args[0] as unknown)
+    .find(isSummaryMessage);
+  if (summaryLog === undefined) {
+    expect.fail('Expected a discovered take target summary log');
+  }
+  return summaryLog;
+}
+
 describe('Discovery Handlers', () => {
   afterEach(() => {
     sinon.restore();
@@ -195,8 +209,9 @@ describe('Discovery Handlers', () => {
       transports: createDiscoveryTransports(),
     });
 
-    expect(statusCalls.filter((borrower) => borrower === borrowers[0]).length)
-      .to.be.greaterThan(1);
+    expect(
+      statusCalls.filter((borrower) => borrower === borrowers[0]).length
+    ).to.be.greaterThan(1);
     expect(takeLiquidationStub.calledOnce).to.be.true;
     expect(takeLiquidationStub.firstCall.args[0].liquidation.borrower).to.equal(
       borrowers[0]
@@ -563,6 +578,7 @@ describe('Discovery Handlers', () => {
   });
 
   it('records retryable 1inch swap-data execution failures in the shared circuit', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
     const rpcCache: any = {
       chainId: 1,
       gasPrice: BigNumber.from(1),
@@ -656,6 +672,8 @@ describe('Discovery Handlers', () => {
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
     expect(rpcCache.oneInchQuoteCircuit?.failures).to.equal(1);
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).to.include('oneInchFailures=swapData:1');
   });
 
   it('passes the take write transport into discovered take execution', async () => {
@@ -1104,6 +1122,7 @@ describe('Discovery Handlers', () => {
   });
 
   it('falls back to factory after a hybrid 1inch pre-broadcast execution failure', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
     const takeLiquidationStub = sinon
       .stub(oneInchExecutionModule, 'takeLiquidation')
       .callsFake(async ({ config }: any) => {
@@ -1245,9 +1264,17 @@ describe('Discovery Handlers', () => {
         ethers.utils.parseEther('95')
       )
     ).to.be.true;
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).to.include('approvedRoutes=oneinch:1');
+    expect(summaryLog).to.include('executedRoutes=factory:1');
+    expect(summaryLog).to.include('executedFactorySources=uniswapV3:1');
+    expect(summaryLog).to.include('oneInchFailures=preBroadcast:1');
+    expect(summaryLog).to.include('hybridFallbackAttempts=1');
+    expect(summaryLog).to.include('hybridFallbackSuccesses=1');
   });
 
   it('falls back to 1inch after a hybrid factory pre-broadcast execution failure', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
     const takeLiquidationStub = sinon
       .stub(oneInchExecutionModule, 'takeLiquidation')
       .resolves(true);
@@ -1379,6 +1406,13 @@ describe('Discovery Handlers', () => {
 
     expect(takeLiquidationFactoryStub.calledOnce).to.be.true;
     expect(takeLiquidationStub.calledOnce).to.be.true;
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).to.include('approvedRoutes=factory:1');
+    expect(summaryLog).to.include('approvedFactorySources=uniswapV3:1');
+    expect(summaryLog).to.include('executedRoutes=oneinch:1');
+    expect(summaryLog).to.include('factoryFailures=preBroadcast:1');
+    expect(summaryLog).to.include('hybridFallbackAttempts=1');
+    expect(summaryLog).to.include('hybridFallbackSuccesses=1');
   });
 
   it('falls back to factory when the hybrid 1inch probe times out', async () => {
@@ -3723,20 +3757,89 @@ describe('Discovery Handlers', () => {
       transports: createDiscoveryTransports(),
     });
 
-    const summaryLog = loggerInfoStub
-      .getCalls()
-      .map((call) => call.args[0])
-      .find(
-        (message: any) =>
-          typeof message === 'string' &&
-          message.includes('Discovered take target summary:')
-      );
-    expect(summaryLog).to.be.a('string');
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
     expect(summaryLog).to.include('candidates=1');
     expect(summaryLog).to.include('approvedTakeDecisions=1');
     expect(summaryLog).to.include('revalidationSkips=1');
     expect(summaryLog).to.include('executionSkips=0');
     expect(summaryLog).to.include('executedExternalTakes=0');
+  });
+
+  it('reports dry-run discovered takes separately from executed takes', async () => {
+    sinon.stub(oneInchExecutionModule, 'takeLiquidation').resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quoteAmount: 10,
+        collateralAmount: 1,
+        marketPrice: 10,
+        takeablePrice: 12,
+      });
+    const loggerInfoStub = sinon.stub(logger, 'info');
+
+    const getStatusStub = sinon.stub().resolves({
+      collateral: ethers.utils.parseEther('1'),
+      price: ethers.utils.parseEther('1'),
+    });
+
+    const pool = {
+      name: 'Dry Run Summary Pool',
+      poolAddress: '0x5656565656565656565656565656565656565656',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: true,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerDryRunSummary',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: true,
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(),
+    });
+
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).to.include('executedExternalTakes=0');
+    expect(summaryLog).to.include('dryRunExternalTakes=1');
+    expect(summaryLog).to.include('dryRunRoutes=oneinch:1');
   });
 
   it('logs execution-stage discovered take failures separately from evaluation skips', async () => {
@@ -3819,15 +3922,7 @@ describe('Discovery Handlers', () => {
       transports: createDiscoveryTransports(),
     });
 
-    const summaryLog = loggerInfoStub
-      .getCalls()
-      .map((call) => call.args[0])
-      .find(
-        (message: any) =>
-          typeof message === 'string' &&
-          message.includes('Discovered take target summary:')
-      );
-    expect(summaryLog).to.be.a('string');
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
     expect(summaryLog).to.include('evaluationSkips=0');
     expect(summaryLog).to.include('revalidationSkips=0');
     expect(summaryLog).to.include('executionSkips=1');
