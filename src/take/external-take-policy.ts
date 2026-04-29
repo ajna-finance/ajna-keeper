@@ -227,6 +227,12 @@ export function mergeRoutePolicyIntoProfitability(params: {
   };
 }
 
+/**
+ * Merges route-policy floors and profitability fields into a quote evaluation.
+ * When `evaluation.marketPrice` is present, `takeablePrice` is recomputed from
+ * the policy's effective market-price factor; otherwise the existing
+ * `takeablePrice` is preserved.
+ */
 export function mergeRoutePolicyIntoEvaluation(params: {
   evaluation: ExternalTakeQuoteEvaluation;
   policy: ExternalTakeRoutePolicyResult;

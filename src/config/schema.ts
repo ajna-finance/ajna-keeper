@@ -284,9 +284,11 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    */
   maxConcurrentCandidateEvaluations?: number;
   /**
-   * Maximum successful take/arbTake executions for one discovered pool in a
-   * single take cycle. Defaults to 1 so same-pool cascades are retried on the
-   * next cycle unless explicitly opted into deeper per-cycle execution.
+   * Maximum successful borrower/candidate decisions for one discovered pool in
+   * a single take cycle. A candidate that executes both an external take and a
+   * follow-up arbTake counts once. Defaults to 1 so same-pool cascades are
+   * retried on the next cycle unless explicitly opted into deeper per-cycle
+   * execution. Values above 1 force sequential same-pool candidate evaluation.
    */
   maxExecutionsPerPoolPerRun?: number;
   /**

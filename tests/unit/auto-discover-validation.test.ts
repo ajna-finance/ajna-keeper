@@ -605,6 +605,29 @@ describe('auto-discover validation', () => {
     );
   });
 
+  it('warns when multi-execution takes force sequential candidate evaluation', () => {
+    const config = baseConfig();
+    config.discovery!.take = {
+      enabled: true,
+      maxExecutionsPerPoolPerRun: 2,
+      maxConcurrentCandidateEvaluations: 2,
+    };
+    const warnStub = sinon.stub(logger, 'warn');
+
+    try {
+      expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'maxExecutionsPerPoolPerRun > 1 forces sequential same-pool candidate evaluation'
+          )
+        )
+      ).to.equal(true);
+    } finally {
+      warnStub.restore();
+    }
+  });
+
   it('validates external take write transport policy', () => {
     const config = baseConfig();
     config.discovery!.take = {

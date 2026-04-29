@@ -1155,6 +1155,9 @@ async function quoteExactNativeAmountToQuote(params: {
       incrementDiscoveryStat(params.rpcCache, 'gasQuoteConversionCacheHits');
       return cached.value;
     }
+    if (cached && nowMs - cached.createdAtMs > cacheTtlMs) {
+      params.rpcCache.gasQuoteConversions.delete(conversionCacheKey);
+    }
   }
   incrementDiscoveryStat(params.rpcCache, 'gasQuoteConversionCacheMisses');
 

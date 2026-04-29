@@ -748,6 +748,14 @@ export function validateAutoDiscoverConfig(
         'AutoDiscoverConfig.take: maxInFlightRouteProbes is configured but maxConcurrentCandidateEvaluations is 1; the global route probe limiter is only enforced for parallel candidate evaluation'
       );
     }
+    if (
+      (takePolicy.maxExecutionsPerPoolPerRun ?? 1) > 1 &&
+      (takePolicy.maxConcurrentCandidateEvaluations ?? 1) > 1
+    ) {
+      logger.warn(
+        'AutoDiscoverConfig.take: maxExecutionsPerPoolPerRun > 1 forces sequential same-pool candidate evaluation; maxConcurrentCandidateEvaluations is ignored for those pools'
+      );
+    }
     requireOptionalNonNegative(
       takePolicy.l1GasPriceFreshnessTtlMs,
       'AutoDiscoverConfig.take: l1GasPriceFreshnessTtlMs cannot be negative'
