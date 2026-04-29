@@ -7,6 +7,7 @@ import {
   LiquiditySource,
   STANDARD_V3_FEE_TIERS,
   formatLiquiditySource,
+  getEffectiveV3FeeTiers,
   hasConfiguredGasQuoteLiquiditySource,
   resolveConfiguredGasQuoteLiquiditySource,
   resolveConfiguredWrappedNativeAddress,
@@ -36,7 +37,7 @@ import {
   recordOneInchQuoteFailure,
   recordOneInchQuoteSuccess,
 } from './one-inch-circuit';
-import { getErrorMessage, withTimeout } from '../utils';
+import { ceilDivBigNumber, getErrorMessage, withTimeout } from '../utils';
 import { BASIS_POINTS_DENOMINATOR_BN } from '../constants';
 
 export interface GasPolicyResult {
@@ -110,15 +111,6 @@ function applyL2GasCostBuffer(
     .mul(BigNumber.from(bufferBasisPoints))
     .add(BASIS_POINTS_DENOMINATOR_BN.sub(1))
     .div(BASIS_POINTS_DENOMINATOR_BN);
-}
-
-function ceilDivBigNumber(
-  numerator: BigNumber,
-  denominator: BigNumber
-): BigNumber {
-  return numerator.isZero()
-    ? BigNumber.from(0)
-    : numerator.add(denominator).sub(1).div(denominator);
 }
 
 function convertNativeWadToQuoteRaw(
@@ -255,11 +247,12 @@ function getGasQuoteFeeTiers(
   fallbackFeeTier: number,
   automaticCandidateFeeTiers?: readonly number[]
 ): number[] {
-  const tiers =
-    candidateFeeTiers !== undefined
-      ? candidateFeeTiers
-      : (automaticCandidateFeeTiers ?? []);
-  return Array.from(new Set([defaultFeeTier ?? fallbackFeeTier, ...tiers]));
+  return getEffectiveV3FeeTiers({
+    defaultFeeTier,
+    fallbackFeeTier,
+    candidateFeeTiers,
+    automaticCandidateFeeTiers,
+  });
 }
 
 interface FactoryV3GasQuoteProvider {

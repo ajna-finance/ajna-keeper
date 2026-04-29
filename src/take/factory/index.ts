@@ -7,10 +7,7 @@ import { LiquiditySource, formatLiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
 import {
-  ApprovedCurveFactoryQuoteEvaluation,
   ApprovedFactoryQuoteEvaluation,
-  ApprovedSushiSwapFactoryQuoteEvaluation,
-  ApprovedUniswapV3FactoryQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -21,7 +18,6 @@ import {
   FactoryQuoteConfig,
   FactoryQuoteProviderRuntimeCache,
   FactoryRouteCandidate,
-  FactoryRouteEvaluationContext,
   FactoryRouteSelectionOptions,
   FactoryTakeParams,
   applyFactoryRouteProfitabilityPolicy,
@@ -313,7 +309,7 @@ export async function getFactoryTakeQuoteEvaluation(
         );
         const rawEvaluation =
           route.liquiditySource === LiquiditySource.UNISWAPV3
-            ? await checkUniswapV3Quote(
+            ? await evaluateUniswapV3FactoryQuote({
                 pool,
                 auctionPriceWad,
                 collateral,
@@ -321,11 +317,11 @@ export async function getFactoryTakeQuoteEvaluation(
                 config,
                 signer,
                 runtimeCache,
-                route.feeTier,
-                routeContext
-              )
+                feeTier: route.feeTier,
+                routeContext,
+              })
             : route.liquiditySource === LiquiditySource.SUSHISWAP
-              ? await checkSushiSwapQuote(
+              ? await evaluateSushiSwapFactoryQuote({
                   pool,
                   auctionPriceWad,
                   collateral,
@@ -333,11 +329,11 @@ export async function getFactoryTakeQuoteEvaluation(
                   config,
                   signer,
                   runtimeCache,
-                  route.feeTier,
-                  routeContext
-                )
+                  feeTier: route.feeTier,
+                  routeContext,
+                })
               : route.liquiditySource === LiquiditySource.CURVE
-                ? await checkCurveQuote(
+                ? await evaluateCurveFactoryQuote({
                     pool,
                     auctionPriceWad,
                     collateral,
@@ -345,8 +341,8 @@ export async function getFactoryTakeQuoteEvaluation(
                     config,
                     signer,
                     runtimeCache,
-                    routeContext
-                  )
+                    routeContext,
+                  })
                 : {
                     isTakeable: false,
                     reason: `unsupported route source ${route.liquiditySource}`,
@@ -436,90 +432,6 @@ export async function getFactoryTakeQuoteEvaluation(
       reason: getErrorMessage(error),
     };
   }
-}
-
-/**
- * PHASE 3: Real Uniswap V3 quote check using OFFICIAL QuoterV2 contract
- * Uses the same method as Uniswap's frontend - guaranteed accurate prices
- */
-async function checkUniswapV3Quote(
-  pool: FungiblePool,
-  auctionPriceWad: BigNumber,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  config: Pick<FactoryTakeParams['config'], 'universalRouterOverrides'>,
-  signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  feeTier?: number,
-  routeContext?: FactoryRouteEvaluationContext
-): Promise<ExternalTakeQuoteEvaluation> {
-  return evaluateUniswapV3FactoryQuote({
-    pool,
-    auctionPriceWad,
-    collateral,
-    poolConfig,
-    config,
-    signer,
-    runtimeCache,
-    feeTier,
-    routeContext,
-  });
-}
-
-/**
- * Check SushiSwap V3 profitability using official QuoterV2 contract
- */
-async function checkSushiSwapQuote(
-  pool: FungiblePool,
-  auctionPriceWad: BigNumber,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  config: Pick<FactoryTakeParams['config'], 'sushiswapRouterOverrides'>,
-  signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  feeTier?: number,
-  routeContext?: FactoryRouteEvaluationContext
-): Promise<ExternalTakeQuoteEvaluation> {
-  return evaluateSushiSwapFactoryQuote({
-    pool,
-    auctionPriceWad,
-    collateral,
-    poolConfig,
-    config,
-    signer,
-    runtimeCache,
-    feeTier,
-    routeContext,
-  });
-}
-
-/**
- * Check Curve profitability using CurveQuoteProvider
- * FIXED: Now passes tokenAddresses for reliable pool discovery
- */
-async function checkCurveQuote(
-  pool: FungiblePool,
-  auctionPriceWad: BigNumber,
-  collateral: BigNumber,
-  poolConfig: TakeActionConfig,
-  config: Pick<
-    FactoryTakeParams['config'],
-    'curveRouterOverrides' | 'tokenAddresses'
-  >,
-  signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  routeContext?: FactoryRouteEvaluationContext
-): Promise<ExternalTakeQuoteEvaluation> {
-  return evaluateCurveFactoryQuote({
-    pool,
-    auctionPriceWad,
-    collateral,
-    poolConfig,
-    config,
-    signer,
-    runtimeCache,
-    routeContext,
-  });
 }
 
 function failFactoryTakeExecution(message: string): false {
@@ -693,7 +605,7 @@ async function executeSelectedFactoryRoute(
     params;
 
   if (quoteEvaluation.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
-    await takeWithUniswapV3Factory({
+    await executeUniswapV3FactoryTake({
       pool,
       poolConfig,
       signer,
@@ -704,7 +616,7 @@ async function executeSelectedFactoryRoute(
   } else if (
     quoteEvaluation.selectedLiquiditySource === LiquiditySource.SUSHISWAP
   ) {
-    await takeWithSushiSwapFactory({
+    await executeSushiSwapFactoryTake({
       pool,
       poolConfig,
       signer,
@@ -713,7 +625,7 @@ async function executeSelectedFactoryRoute(
       config,
     });
   } else {
-    await takeWithCurveFactory({
+    await executeCurveFactoryTake({
       pool,
       poolConfig,
       signer,
@@ -801,114 +713,4 @@ export async function takeLiquidationFactory({
     );
     return false;
   }
-}
-
-/**
- * Execute Uniswap V3 take via factory using WAD auction amounts.
- */
-async function takeWithUniswapV3Factory({
-  pool,
-  poolConfig,
-  signer,
-  liquidation,
-  quoteEvaluation,
-  config,
-}: {
-  pool: FungiblePool;
-  poolConfig: TakeActionConfig;
-  signer: Signer;
-  liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation;
-  config: Pick<
-    FactoryTakeParams['config'],
-    'keeperTakerFactory' | 'universalRouterOverrides'
-  > & {
-    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
-    runtimeCache?: FactoryQuoteProviderRuntimeCache;
-    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
-  };
-}) {
-  await executeUniswapV3FactoryTake({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation,
-    config,
-  });
-}
-
-/**
- * Execute SushiSwap take via factory
- */
-
-/**
- * Execute SushiSwap take via factory using WAD auction amounts.
- */
-async function takeWithSushiSwapFactory({
-  pool,
-  poolConfig,
-  signer,
-  liquidation,
-  quoteEvaluation,
-  config,
-}: {
-  pool: FungiblePool;
-  poolConfig: TakeActionConfig;
-  signer: Signer;
-  liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ApprovedSushiSwapFactoryQuoteEvaluation;
-  config: Pick<
-    FactoryTakeParams['config'],
-    'keeperTakerFactory' | 'sushiswapRouterOverrides'
-  > & {
-    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
-    runtimeCache?: FactoryQuoteProviderRuntimeCache;
-    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
-  };
-}) {
-  await executeSushiSwapFactoryTake({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation,
-    config,
-  });
-}
-
-/**
- * Execute Curve take via factory
- * FIXED: Now uses the same address→symbol→config lookup pattern as working Phase 1
- */
-async function takeWithCurveFactory({
-  pool,
-  poolConfig,
-  signer,
-  liquidation,
-  quoteEvaluation,
-  config,
-}: {
-  pool: FungiblePool;
-  poolConfig: TakeActionConfig;
-  signer: Signer;
-  liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ApprovedCurveFactoryQuoteEvaluation;
-  config: Pick<
-    FactoryTakeParams['config'],
-    'keeperTakerFactory' | 'curveRouterOverrides' | 'tokenAddresses'
-  > & {
-    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
-    runtimeCache?: FactoryQuoteProviderRuntimeCache;
-    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
-  };
-}) {
-  await executeCurveFactoryTake({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation,
-    config,
-  });
 }

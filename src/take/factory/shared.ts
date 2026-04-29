@@ -11,13 +11,17 @@ import {
   STANDARD_V3_FEE_TIERS,
   UniversalRouterOverrides,
   formatLiquiditySource,
+  getEffectiveV3FeeTiers,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
 import {
   AsyncOperationLimiter,
+  ceilDivBigNumber,
   getErrorMessage,
+  maxBigNumber,
+  pruneMapToMaxSize,
   RequireFields,
   mapWithConcurrencyPreservingOrder,
   withTimeout,
@@ -41,7 +45,6 @@ import {
 import {
   BASIS_POINTS_DENOMINATOR,
   MARKET_FACTOR_SCALE,
-  MAX_UINT24_FEE_TIER,
   WAD,
   ZERO_BN,
 } from '../../constants';
@@ -50,6 +53,7 @@ export {
   MARKET_FACTOR_SCALE,
   WAD,
 } from '../../constants';
+export { maxBigNumber } from '../../utils';
 
 export interface FactoryRouteCandidate {
   liquiditySource: LiquiditySource;
@@ -331,26 +335,12 @@ async function initializeQuoteProviderWithCooldown<
   return quoteProvider ?? undefined;
 }
 
-function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
-  while (map.size > maxSize) {
-    const oldestKey = map.keys().next().value;
-    map.delete(oldestKey);
-  }
-}
-
 export function ceilWmul(x: BigNumber, y: BigNumber): BigNumber {
   return x.mul(y).add(WAD.sub(1)).div(WAD);
 }
 
 export function ceilDiv(x: BigNumber, y: BigNumber): BigNumber {
-  return x.add(y).sub(1).div(y);
-}
-
-export function maxBigNumber(...values: BigNumber[]): BigNumber {
-  return values.reduce(
-    (max, value) => (value.gt(max) ? value : max),
-    values[0]
-  );
+  return ceilDivBigNumber(x, y);
 }
 
 export function deriveApprovedMinOutRaw(params: {
@@ -447,16 +437,12 @@ export function getEffectiveFactoryFeeTiers(
   candidateFeeTiers?: number[],
   automaticCandidateFeeTiers?: readonly number[]
 ): number[] {
-  const tiers =
-    candidateFeeTiers !== undefined
-      ? candidateFeeTiers
-      : (automaticCandidateFeeTiers ?? [defaultFeeTier]);
-  const effective = [defaultFeeTier, ...tiers].filter(isValidFactoryFeeTier);
-  return Array.from(new Set(effective));
-}
-
-function isValidFactoryFeeTier(tier: number): boolean {
-  return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
+  return getEffectiveV3FeeTiers({
+    defaultFeeTier,
+    candidateFeeTiers,
+    automaticCandidateFeeTiers,
+    filterInvalid: true,
+  });
 }
 
 function isDynamicFactorySource(source: LiquiditySource): boolean {

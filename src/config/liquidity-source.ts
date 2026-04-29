@@ -7,6 +7,7 @@ import {
   UniversalRouterOverrides,
   hasNonEmptyObject,
 } from './schema';
+import { MAX_UINT24_FEE_TIER } from '../constants';
 
 export interface LiquiditySourceConfig {
   curveRouterOverrides?: CurveRouterOverrides;
@@ -57,6 +58,32 @@ export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
 };
 
 export const STANDARD_V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
+
+export function isValidFactoryFeeTier(tier: number): boolean {
+  return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
+}
+
+export function getEffectiveV3FeeTiers(params: {
+  defaultFeeTier?: number;
+  fallbackFeeTier?: number;
+  candidateFeeTiers?: readonly number[];
+  automaticCandidateFeeTiers?: readonly number[];
+  filterInvalid?: boolean;
+}): number[] {
+  const primaryTier = params.defaultFeeTier ?? params.fallbackFeeTier;
+  const candidateTiers =
+    params.candidateFeeTiers !== undefined
+      ? params.candidateFeeTiers
+      : (params.automaticCandidateFeeTiers ??
+        (primaryTier !== undefined ? [primaryTier] : []));
+  const tiers = Array.from(
+    new Set([
+      ...(primaryTier !== undefined ? [primaryTier] : []),
+      ...candidateTiers,
+    ])
+  );
+  return params.filterInvalid ? tiers.filter(isValidFactoryFeeTier) : tiers;
+}
 
 export function formatLiquiditySource(
   source: LiquiditySource | undefined

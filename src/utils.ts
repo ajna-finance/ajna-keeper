@@ -19,6 +19,32 @@ export function getAddressInsensitiveMapValue<T>(
   return map.get(address) ?? map.get(address.toLowerCase());
 }
 
+export function pruneMapToMaxSize<K, V>(map: Map<K, V>, maxSize: number): void {
+  while (map.size > maxSize) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey === undefined) {
+      return;
+    }
+    map.delete(oldestKey);
+  }
+}
+
+export function ceilDivBigNumber(
+  numerator: BigNumber,
+  denominator: BigNumber
+): BigNumber {
+  return numerator.isZero()
+    ? BigNumber.from(0)
+    : numerator.add(denominator).sub(1).div(denominator);
+}
+
+export function maxBigNumber(...values: BigNumber[]): BigNumber {
+  return values.reduce(
+    (max, value) => (value.gt(max) ? value : max),
+    values[0]
+  );
+}
+
 export async function mapWithConcurrencyPreservingOrder<T, R>(
   items: readonly T[],
   concurrency: number,

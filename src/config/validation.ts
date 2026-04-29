@@ -28,12 +28,13 @@ import {
   formatLiquiditySource,
   getLiquiditySourceConfig,
   hasConfiguredWrappedNativeAddress,
+  isValidFactoryFeeTier,
   resolveConfiguredGasQuoteLiquiditySource,
   STANDARD_V3_FEE_TIERS,
 } from './liquidity-source';
 import { logger } from '../logging';
 import { ethers } from 'ethers';
-import { MARKET_FACTOR_SCALE, MAX_UINT24_FEE_TIER } from '../constants';
+import { MARKET_FACTOR_SCALE } from '../constants';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -206,10 +207,6 @@ function validateCandidateFeeTiers(
     }
     seen.add(tier);
   }
-}
-
-function isValidFactoryFeeTier(tier: number): boolean {
-  return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
 }
 
 function validateRouterFeeTiers(config: KeeperConfig): void {

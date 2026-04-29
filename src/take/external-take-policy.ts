@@ -1,18 +1,12 @@
 import { BigNumber } from 'ethers';
 import { MARKET_FACTOR_SCALE, ZERO_BN } from '../constants';
+import { maxBigNumber } from '../utils';
 
 export const EXTERNAL_TAKE_REJECTION_REASONS = {
   auctionPriceAboveThreshold: 'auction price above external take threshold',
   routeQuoteBelowRepaymentFloor: 'route quote below repayment floor',
   routeQuoteBelowRequiredOutputFloor: 'route quote below required output floor',
 } as const;
-
-function maxBigNumber(...values: BigNumber[]): BigNumber {
-  return values.reduce(
-    (max, value) => (value.gt(max) ? value : max),
-    values[0]
-  );
-}
 
 function ratioToNumber(numerator: BigNumber, denominator: BigNumber): number {
   if (denominator.isZero()) {
