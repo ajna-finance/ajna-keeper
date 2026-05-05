@@ -5,6 +5,7 @@ import {
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   getManualPools,
+  EnabledKickSettings,
   KeeperConfig,
   PoolConfig,
   validateAutoDiscoverConfig,
@@ -17,7 +18,6 @@ import {
   getErrorMessage,
   getProviderAndSigner,
   overrideMulticall,
-  RequireFields,
 } from './utils';
 import { handleKicks } from './kick';
 import { logger } from './logging';
@@ -362,8 +362,8 @@ export async function processKickCycle({
 
 function hasKickSettings(
   config: PoolConfig
-): config is RequireFields<PoolConfig, 'kick'> {
-  return !!config.kick;
+): config is PoolConfig & { kick: EnabledKickSettings } {
+  return config.kick?.enabled === true;
 }
 
 async function takePoolsLoop(params: DiscoveryLoopParams) {

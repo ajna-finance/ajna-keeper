@@ -93,6 +93,7 @@ const config: KeeperConfig = {
           value: 1.0, // USDC to USDT approximately 1:1
         },
         kick: {
+          enabled: true,
           minDebt: 0.07,
           priceFactor: 0.99,
         },
@@ -135,6 +136,7 @@ const config: KeeperConfig = {
           value: 15.5, // Approximate WETH to WBTC ratio (adjust based on current rates)
         },
         kick: {
+          enabled: true,
           minDebt: 0.0001, // Lower threshold for crypto assets
           priceFactor: 0.99,
         },

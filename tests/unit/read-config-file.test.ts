@@ -116,6 +116,54 @@ describe('assertIsValidConfig rewards.lpLookbackSeconds', () => {
   });
 });
 
+describe('assertIsValidConfig manual kick shape', () => {
+  const configWithKick = (kick: unknown) =>
+    ({
+      ...BASE_CONFIG,
+      manual: {
+        pools: [
+          {
+            name: 'Kick Shape Pool',
+            address: '0x6666666666666666666666666666666666666666',
+            price: { source: 'fixed', value: 1 },
+            kick,
+          },
+        ],
+      },
+    }) as any;
+
+  it('requires an explicit enabled toggle when a kick block is present', () => {
+    expect(() =>
+      assertIsValidConfig(
+        configWithKick({
+          minDebt: 1,
+          priceFactor: 0.9,
+        })
+      )
+    ).to.throw(/kick\.enabled must be explicitly true or false/);
+  });
+
+  it('accepts disabled kick settings without thresholds', () => {
+    expect(() =>
+      assertIsValidConfig(
+        configWithKick({
+          enabled: false,
+        })
+      )
+    ).to.not.throw();
+  });
+
+  it('requires thresholds when kick is enabled', () => {
+    expect(() =>
+      assertIsValidConfig(
+        configWithKick({
+          enabled: true,
+        })
+      )
+    ).to.throw(/kick\.minDebt must be a non-negative number/);
+  });
+});
+
 describe('assertIsValidConfig defaultLpReward shape', () => {
   const validDefault = {
     redeemFirst: TokenToCollect.QUOTE,

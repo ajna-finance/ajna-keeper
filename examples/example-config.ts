@@ -108,6 +108,7 @@ const config: KeeperConfig = {
           value: 1.15,
         },
         kick: {
+          enabled: true,
           minDebt: 0.07,
           priceFactor: 0.9,
         },
@@ -153,6 +154,7 @@ const config: KeeperConfig = {
           query: 'price?ids=ethereum&vs_currencies=usd',
         },
         kick: {
+          enabled: true,
           minDebt: 50,
           priceFactor: 0.95,
         },
@@ -191,6 +193,7 @@ const config: KeeperConfig = {
           reference: PriceOriginPoolReference.LUP,
         },
         kick: {
+          enabled: true,
           minDebt: 0.08,
           priceFactor: 0.95,
         },
@@ -213,6 +216,7 @@ const config: KeeperConfig = {
           value: 1.01,
         },
         kick: {
+          enabled: true,
           minDebt: 0.07,
           priceFactor: 0.99,
         },
@@ -256,6 +260,7 @@ const config: KeeperConfig = {
           value: 1.0,
         },
         kick: {
+          enabled: true,
           minDebt: 0.1,
           priceFactor: 0.99,
         },

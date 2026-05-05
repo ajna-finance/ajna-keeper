@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, constants } from 'ethers';
-import { PoolConfig, PriceOriginSource } from './config';
+import { EnabledKickSettings, PoolConfig, PriceOriginSource } from './config';
 import {
   getAllowanceOfErc20,
   getBalanceOfErc20,
@@ -109,12 +109,31 @@ interface GetLoansToKickParams
   >;
 }
 
+function assertEnabledKickSettings(
+  poolConfig: RequireFields<PoolConfig, 'kick'>
+): asserts poolConfig is PoolConfig & { kick: EnabledKickSettings } {
+  if (poolConfig.kick.enabled !== true) {
+    throw new Error(
+      `Kick settings for pool ${poolConfig.name ?? poolConfig.address} require enabled: true to run`
+    );
+  }
+  if (
+    poolConfig.kick.minDebt === undefined ||
+    poolConfig.kick.priceFactor === undefined
+  ) {
+    throw new Error(
+      `Kick settings for pool ${poolConfig.name ?? poolConfig.address} require minDebt and priceFactor when enabled`
+    );
+  }
+}
+
 export async function* getLoansToKick({
   pool,
   config,
   poolConfig,
   chainId,
 }: GetLoansToKickParams): AsyncGenerator<LoanToKick> {
+  assertEnabledKickSettings(poolConfig);
   const resolvedConfig = resolveSubgraphConfig(config);
   const { loans } = await resolvedConfig.subgraph.getLoans(pool.poolAddress);
   const loanMap = await pool.getLoans(loans.map(({ borrower }) => borrower));
@@ -131,8 +150,6 @@ export async function* getLoansToKick({
       constants.Zero
     );
   // Fixed and CoinGecko kick references are pool-wide for the duration of a kick pass.
-  // Pool-derived references must stay per-iteration because a prior kick can change pool
-  // prices before this async generator resumes on the next borrower.
   const staticLimitPrice =
     poolConfig.price.source === PriceOriginSource.POOL
       ? undefined
@@ -144,11 +161,18 @@ export async function* getLoansToKick({
           resolvedConfig.ethRpcUrl,
           resolvedConfig.tokenAddresses
         );
+  let cachedPoolPrices: Awaited<ReturnType<typeof pool.getPrices>> | undefined;
+  const getCachedPoolPrices = async () => {
+    if (!cachedPoolPrices) {
+      cachedPoolPrices = await pool.getPrices();
+    }
+    return cachedPoolPrices;
+  };
 
   for (let i = 0; i < borrowersSortedByBond.length; i++) {
     const borrower = borrowersSortedByBond[i];
     const [poolPrices, loanDetails] = await Promise.all([
-      pool.getPrices(),
+      getCachedPoolPrices(),
       pool.getLoan(borrower),
     ]);
     const { lup, hpb } = poolPrices;
@@ -210,6 +234,9 @@ export async function* getLoansToKick({
       estimatedRemainingBond,
       limitPrice,
     };
+    // A yielded candidate may be kicked before this generator resumes, which can
+    // move pool prices. Reuse cached prices only across skipped borrowers.
+    cachedPoolPrices = undefined;
   }
 }
 
