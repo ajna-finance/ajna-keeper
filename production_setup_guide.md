@@ -880,6 +880,7 @@ const config: KeeperConfig = {
           value: 1.01,
         },
         kick: {
+          enabled: true,
           minDebt: 0.07,
           priceFactor: 0.99,
         },
@@ -1032,6 +1033,7 @@ const config: KeeperConfig = {
           value: 1.0,
         },
         kick: {
+          enabled: true,
           minDebt: 0.1,
           priceFactor: 0.99,
         },

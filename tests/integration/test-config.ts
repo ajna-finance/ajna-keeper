@@ -37,6 +37,7 @@ export const MAINNET_CONFIG = {
         value: 1,
       } as PriceOrigin,
       kick: {
+        enabled: true,
         minDebt: 0,
         priceFactor: 0.9,
       },
@@ -63,6 +64,7 @@ export const MAINNET_CONFIG = {
         value: 0.075,
       } as PriceOrigin,
       kick: {
+        enabled: true,
         minDebt: 0,
         priceFactor: 0.9,
       },

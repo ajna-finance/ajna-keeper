@@ -117,6 +117,7 @@ export function assertIsValidConfig(
   // this pool" — not an error.
   if (config.manual?.pools) {
     for (const pool of config.manual.pools) {
+      validateKickSettings(pool.kick, `manual.pools[${pool.address}].kick`);
       try {
         const merged = resolveCollectLpRewardForPool(
           config.rewards?.defaultLpReward,
@@ -134,6 +135,46 @@ export function assertIsValidConfig(
           `Invalid LP reward config for pool ${pool.address}: ${getErrorMessage(error)}`
         );
       }
+    }
+  }
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function validateKickSettings(
+  settings: unknown,
+  path: string
+): void {
+  if (settings === undefined) {
+    return;
+  }
+  if (
+    typeof settings !== 'object' ||
+    settings === null ||
+    Array.isArray(settings)
+  ) {
+    throw new Error(`${path} must be an object`);
+  }
+  const kick = settings as {
+    enabled?: unknown;
+    minDebt?: unknown;
+    priceFactor?: unknown;
+  };
+  if (kick.enabled !== true && kick.enabled !== false) {
+    throw new Error(`${path}.enabled must be explicitly true or false`);
+  }
+  if (kick.enabled === true) {
+    if (!isFiniteNumber(kick.minDebt) || kick.minDebt < 0) {
+      throw new Error(
+        `${path}.minDebt must be a non-negative number when kick is enabled`
+      );
+    }
+    if (!isFiniteNumber(kick.priceFactor) || kick.priceFactor <= 0) {
+      throw new Error(
+        `${path}.priceFactor must be a positive number when kick is enabled`
+      );
     }
   }
 }

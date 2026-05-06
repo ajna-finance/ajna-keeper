@@ -132,6 +132,7 @@ describe('Discovery Target Resolution', () => {
             address: '0x2222222222222222222222222222222222222222',
             price: { source: PriceOriginSource.FIXED, value: 1 },
             kick: {
+              enabled: true,
               minDebt: 1,
               priceFactor: 0.9,
             },
@@ -224,6 +225,7 @@ describe('Discovery Target Resolution', () => {
             address: '0x2222222222222222222222222222222222222222',
             price: { source: PriceOriginSource.FIXED, value: 1 },
             kick: {
+              enabled: true,
               minDebt: 1,
               priceFactor: 0.9,
             },

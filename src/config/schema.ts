@@ -58,10 +58,23 @@ export type PriceOrigin = (
   invert?: boolean;
 };
 
-export interface KickSettings {
+export interface EnabledKickSettings {
+  /**
+   * Explicit per-pool kick toggle. Keep the kick block present with
+   * `enabled: false` to retain thresholds without scanning the pool.
+   */
+  enabled: true;
   minDebt: number;
   priceFactor: number;
 }
+
+export interface DisabledKickSettings {
+  enabled: false;
+  minDebt?: number;
+  priceFactor?: number;
+}
+
+export type KickSettings = EnabledKickSettings | DisabledKickSettings;
 
 export enum LiquiditySource {
   NONE = 0,

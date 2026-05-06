@@ -183,6 +183,7 @@ describe('getLoansToKick', function () {
         poolConfig: {
           ...MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
           kick: {
+            enabled: true,
             minDebt: 100, // 100 WETH — way above the ~1 WETH debt
             priceFactor: 0.9,
           },
@@ -225,6 +226,7 @@ describe('getLoansToKick', function () {
         poolConfig: {
           ...MAINNET_CONFIG.SOL_WETH_POOL.poolConfig,
           kick: {
+            enabled: true,
             minDebt: 0,
             priceFactor: 0.001, // NP * 0.001 will be far below the fixed price of 0.075
           },

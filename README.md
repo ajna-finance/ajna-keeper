@@ -663,6 +663,7 @@ const config: KeeperConfig = {
         address: '0x...',
         price: { source: PriceOriginSource.FIXED, value: 1.15 },
         kick: {
+          enabled: true,
           minDebt: 0.07,
           priceFactor: 0.9,
         },

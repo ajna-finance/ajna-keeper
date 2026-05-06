@@ -314,8 +314,17 @@ describe('Run Loop Discovery Integration', () => {
             address: '0x3333333333333333333333333333333333333333',
             price: { source: PriceOriginSource.FIXED, value: 1 },
             kick: {
+              enabled: true,
               minDebt: 1,
               priceFactor: 0.9,
+            },
+          },
+          {
+            name: 'Disabled Manual Kick Pool',
+            address: '0x4444444444444444444444444444444444444444',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            kick: {
+              enabled: false,
             },
           },
         ],
@@ -325,9 +334,16 @@ describe('Run Loop Discovery Integration', () => {
       name: 'Manual Kick Pool',
       poolAddress: '0x3333333333333333333333333333333333333333',
     };
+    const disabledPool = {
+      name: 'Disabled Manual Kick Pool',
+      poolAddress: '0x4444444444444444444444444444444444444444',
+    };
 
     await processKickCycle({
-      poolMap: new Map([[config.manual.pools[0].address, pool as any]]),
+      poolMap: new Map([
+        [config.manual.pools[0].address, pool as any],
+        [config.manual.pools[1].address, disabledPool as any],
+      ]),
       config,
       signer: {} as any,
       chainId: 1,
@@ -335,6 +351,7 @@ describe('Run Loop Discovery Integration', () => {
     });
 
     expect(handleKicksStub.calledOnce).to.be.true;
+    expect(handleKicksStub.firstCall.args[0].pool).to.equal(pool);
   });
 
   it('boots the merged discovery pipeline with zero manual take and settlement pools in dry run', async () => {

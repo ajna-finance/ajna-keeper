@@ -85,6 +85,7 @@ const config: KeeperConfig = {
           value: 1.04,
         },
         kick: {
+          enabled: true,
           minDebt: 0.07,
           priceFactor: 0.99,
         },
@@ -127,6 +128,7 @@ const config: KeeperConfig = {
           value: 0.99, // Static price ratio USD_T1/USD_T2
         },
         kick: {
+          enabled: true,
           minDebt: 0.1, // Minimum debt in USD_T2 to kick
           priceFactor: 0.99, // Kick when NP * 0.99 > current price
         },
