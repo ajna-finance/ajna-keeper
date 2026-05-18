@@ -3,6 +3,14 @@
   "version": "0.0.1",
   "description": "keeper bot for Ajna lending protocol",
   "main": "index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ajna-finance/ajna-keeper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ajna-finance/ajna-keeper/issues"
+  },
+  "homepage": "https://github.com/ajna-finance/ajna-keeper#readme",
   "scripts": {
     "start": "./node_modules/ts-node/dist/bin.js src/index.ts",
     "format": "prettier --write .",
@@ -17,7 +25,7 @@
     "create-keystore": "./node_modules/ts-node/dist/bin.js scripts/create-keystore.ts",
     "fork-base": "FORK_NETWORK=base hardhat node"
   },
-  "author": "",
+  "author": "Ajna Finance contributors",
   "license": "MIT",
   "dependencies": {
     "@ajna-finance/sdk": "^0.4.7",
