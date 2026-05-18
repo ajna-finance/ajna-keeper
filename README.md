@@ -1441,7 +1441,15 @@ npx ts-node scripts/price-diagnostics.ts cana
 
 ## Disclaimer
 
-User assumes all risk of data presented and transactions placed by this keeper; see license for more details.
+This keeper is experimental automation for interacting with Ajna pools and external liquidity venues. It is provided for operators who understand Ajna liquidations, auction mechanics, transaction submission, and the failure modes of RPCs, subgraphs, DEX routers, and private transaction relays.
+
+This software is not financial, investment, legal, tax, security, or operational advice. It does not guarantee profit, auction discovery, transaction inclusion, route availability, or protection from loss. Configuration choices can cause missed liquidations, reverted transactions, unprofitable transactions, stuck or conflicting nonces, failed swaps, unexpected token approvals, gas losses, or other adverse outcomes.
+
+Operators are responsible for reviewing configuration, contract addresses, wallet permissions, token approvals, subgraph freshness, RPC correctness, gas and profit thresholds, external route policies, and all transactions before running with funded wallets. Use dry-run mode, allow/deny lists, small initial limits, isolated signer accounts, and monitoring before enabling live execution.
+
+Users assume all risks associated with using this repository, including any risks from data presented by the keeper and transactions submitted by or through it. The software is provided "AS IS" and without warranty under the MIT license. The authors and contributors are not liable for losses, damages, failed transactions, market movements, protocol changes, third-party service outages, or any other consequences arising from use of this software.
+
+For vulnerability reporting and operational safety disclosures, see [SECURITY.md](SECURITY.md).
 
 ## DeepWiki
 
