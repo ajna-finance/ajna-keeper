@@ -1447,7 +1447,7 @@ This software is not financial, investment, legal, tax, security, or operational
 
 Operators are responsible for reviewing configuration, contract addresses, wallet permissions, token approvals, subgraph freshness, RPC correctness, gas and profit thresholds, external route policies, and all transactions before running with funded wallets. Use dry-run mode, allow/deny lists, small initial limits, isolated signer accounts, and monitoring before enabling live execution.
 
-Use of this repository is at the user's own risk. The software is provided "AS IS" and without warranty under the MIT license. The authors and contributors are not liable for losses, damages, failed transactions, market movements, protocol changes, third-party service outages, or any other consequences arising from use of this software.
+Users assume all risks associated with using this repository, including any risks from data presented by the keeper and transactions submitted by or through it. The software is provided "AS IS" and without warranty under the MIT license. The authors and contributors are not liable for losses, damages, failed transactions, market movements, protocol changes, third-party service outages, or any other consequences arising from use of this software.
 
 For vulnerability reporting and operational safety disclosures, see [SECURITY.md](SECURITY.md).
 
