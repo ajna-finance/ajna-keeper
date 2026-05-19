@@ -128,6 +128,74 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
+  it('accepts disabled hybrid gas quote fallback mode', () => {
+    const config = baseConfig();
+    config.discovery!.take = {
+      enabled: true,
+      hybridGasQuoteFailureFallbackMode: 'disabled',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('accepts factory-first hybrid gas quote fallback mode with a native gas cap', () => {
+    const config = baseConfig();
+    config.discovery!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      validateRouteDeployments: true,
+      hybridGasQuoteFailureFallbackMode: 'factory_first',
+      maxGasCostNative: 0.01,
+    };
+    config.discovery!.defaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    config.dex!.oneInch!.routers = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+  });
+
+  it('rejects unknown hybrid gas quote fallback mode', () => {
+    const config = baseConfig();
+    config.discovery!.take = {
+      enabled: true,
+      hybridGasQuoteFailureFallbackMode: 'gross_output' as any,
+      maxGasCostNative: 0.01,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode must be disabled or factory_first'
+    );
+  });
+
+  it('rejects factory-first hybrid gas quote fallback mode without maxGasCostNative', () => {
+    const config = baseConfig();
+    config.discovery!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['oneinch', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      validateRouteDeployments: true,
+      hybridGasQuoteFailureFallbackMode: 'factory_first',
+    };
+    config.discovery!.defaults!.take = {
+      liquiditySource: LiquiditySource.ONEINCH,
+      marketPriceFactor: 0.99,
+    };
+    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    config.dex!.oneInch!.routers = {
+      1: '0x1111111111111111111111111111111111111111',
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.throw(
+      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first requires maxGasCostNative'
+    );
+  });
+
   it('validates optional 1inch aggregation executor allowlists', () => {
     const config = baseConfig();
     config.dex!.oneInch!.aggregationExecutorAllowlist = {

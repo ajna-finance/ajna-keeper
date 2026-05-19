@@ -190,6 +190,16 @@ export async function getFactoryTakeQuoteEvaluation(
               reason: rejectionReason,
               selectedLiquiditySource: route.liquiditySource,
               selectedFeeTier: route.feeTier,
+              routeProfitability: {
+                gasPolicyRejectCode:
+                  routeProfitabilityContext?.gasPolicyRejectCodeBySource?.[
+                    route.liquiditySource
+                  ],
+                gasQuoteAttempts:
+                  routeProfitabilityContext?.gasQuoteAttemptsBySource?.[
+                    route.liquiditySource
+                  ],
+              },
             },
           });
         } else {
@@ -254,6 +264,16 @@ export async function getFactoryTakeQuoteEvaluation(
             reason: rejectionReason,
             selectedLiquiditySource: route.liquiditySource,
             selectedFeeTier: route.feeTier,
+            routeProfitability: {
+              gasPolicyRejectCode:
+                routeProfitabilityContext?.gasPolicyRejectCodeBySource?.[
+                  route.liquiditySource
+                ],
+              gasQuoteAttempts:
+                routeProfitabilityContext?.gasQuoteAttemptsBySource?.[
+                  route.liquiditySource
+                ],
+            },
           },
         });
         return false;
@@ -408,11 +428,18 @@ export async function getFactoryTakeQuoteEvaluation(
             `${formatFactoryRouteCandidate(route)}=skipped by route quote budget`
         ),
       ].join('; ');
+      const gasRejectedEvaluation = evaluations
+        .map(({ evaluation }) => evaluation)
+        .find(
+          (evaluation) =>
+            evaluation.routeProfitability?.gasPolicyRejectCode !== undefined
+        );
       return {
         isTakeable: false,
         reason: reason
           ? `no viable factory route: ${reason}`
           : 'no factory routes configured',
+        routeProfitability: gasRejectedEvaluation?.routeProfitability,
       };
     }
 

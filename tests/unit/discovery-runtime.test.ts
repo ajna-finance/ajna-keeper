@@ -15,6 +15,7 @@ import * as takeModule from '../../src/take';
 import * as settlementModule from '../../src/settlement';
 import * as kickModule from '../../src/kick';
 import * as discoveryHandlers from '../../src/discovery/handlers';
+import type { DiscoveredTakeTargetStats } from '../../src/discovery/take-executor';
 import * as takeWriteTransportModule from '../../src/take/write-transport';
 import subgraph from '../../src/subgraph';
 import { logger } from '../../src/logging';
@@ -48,6 +49,52 @@ const BASE_CONFIG: KeeperConfig = {
     pools: [],
   },
 };
+
+function makeDiscoveredTakeTargetStats(
+  overrides: Partial<DiscoveredTakeTargetStats> = {}
+): DiscoveredTakeTargetStats {
+  return {
+    candidateCount: 0,
+    approvedTakeDecisions: 0,
+    approvedArbTakeDecisions: 0,
+    approvedOneInchTakeDecisions: 0,
+    approvedFactoryTakeDecisions: 0,
+    approvedUniswapV3TakeDecisions: 0,
+    approvedSushiswapTakeDecisions: 0,
+    approvedCurveTakeDecisions: 0,
+    evaluationSkips: 0,
+    revalidationSkips: 0,
+    executionSkips: 0,
+    gasPolicyRejects: 0,
+    profitFloorRejects: 0,
+    arbProfitUnavailableRejects: 0,
+    executedExternalTakes: 0,
+    executedArbTakes: 0,
+    executedOneInchTakes: 0,
+    executedFactoryTakes: 0,
+    executedUniswapV3Takes: 0,
+    executedSushiswapTakes: 0,
+    executedCurveTakes: 0,
+    dryRunExternalTakes: 0,
+    dryRunArbTakes: 0,
+    dryRunOneInchTakes: 0,
+    dryRunFactoryTakes: 0,
+    dryRunUniswapV3Takes: 0,
+    dryRunSushiswapTakes: 0,
+    dryRunCurveTakes: 0,
+    oneInchSwapDataFailures: 0,
+    oneInchPreBroadcastFailures: 0,
+    oneInchPostSubmissionFailures: 0,
+    factoryPreBroadcastFailures: 0,
+    factoryPostSubmissionFailures: 0,
+    hybridFallbackAttempts: 0,
+    hybridFallbackSuccesses: 0,
+    hybridGasQuoteFallbackAttempts: 0,
+    hybridGasQuoteFallbackSuccesses: 0,
+    hotAuctionCandidateRemovals: 0,
+    ...overrides,
+  };
+}
 
 function createTestDiscoveryRuntime(params: {
   config: KeeperConfig;
@@ -543,6 +590,7 @@ describe('Run Loop Discovery Integration', () => {
       .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
       .callsFake(async (params: any) => {
         observedRpcCaches.push(params.rpcCache);
+        return makeDiscoveredTakeTargetStats();
       });
     sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
       liquidationAuctions: [
@@ -631,11 +679,13 @@ describe('Run Loop Discovery Integration', () => {
       .callsFake(async (params: any) => {
         observedGasPrices.push(params.rpcCache.gasPrice.toString());
         nowMs = 2_100;
+        return makeDiscoveredTakeTargetStats();
       });
     handleDiscoveredTakeTargetStub
       .onSecondCall()
       .callsFake(async (params: any) => {
         observedGasPrices.push(params.rpcCache.gasPrice.toString());
+        return makeDiscoveredTakeTargetStats();
       });
     sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
       liquidationAuctions: [
@@ -734,11 +784,13 @@ describe('Run Loop Discovery Integration', () => {
       .callsFake(async (params: any) => {
         observedGasPrices.push(params.rpcCache.gasPrice.toString());
         nowMs = 31_000;
+        return makeDiscoveredTakeTargetStats();
       });
     handleDiscoveredTakeTargetStub
       .onSecondCall()
       .callsFake(async (params: any) => {
         observedGasPrices.push(params.rpcCache.gasPrice.toString());
+        return makeDiscoveredTakeTargetStats();
       });
     sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
       liquidationAuctions: [

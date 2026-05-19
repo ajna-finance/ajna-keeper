@@ -577,7 +577,7 @@ describe('Discovery Handlers', () => {
     expect(arbTakeLiquidationStub.called).to.be.false;
   });
 
-  it('records retryable 1inch swap-data execution failures in the shared circuit', async () => {
+  it('records retryable 1inch swap-data execution failures in the swap-data circuit', async () => {
     const loggerInfoStub = sinon.stub(logger, 'info');
     const rpcCache: any = {
       chainId: 1,
@@ -671,7 +671,7 @@ describe('Discovery Handlers', () => {
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
-    expect(rpcCache.oneInchQuoteCircuit?.failures).to.equal(1);
+    expect(rpcCache.oneInchQuoteCircuits?.swap_data?.failures).to.equal(1);
     const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
     expect(summaryLog).to.include('oneInchFailures=swapData:1');
   });
@@ -848,6 +848,8 @@ describe('Discovery Handlers', () => {
   });
 
   it('probes 1inch and factory hybrid external take paths in parallel', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
+    const loggerWarnStub = sinon.stub(logger, 'warn');
     const takeLiquidationStub = sinon
       .stub(oneInchExecutionModule, 'takeLiquidation')
       .resolves(true);
@@ -1000,6 +1002,18 @@ describe('Discovery Handlers', () => {
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
     expect(takeLiquidationFactoryStub.called).to.be.false;
+    expect(
+      loggerWarnStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('Hybrid gas quote fallback')
+        )
+    ).to.equal(false);
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).not.to.include('hybridFallbackAttempts');
+    expect(summaryLog).not.to.include('hybridFallbackSuccesses');
+    expect(summaryLog).not.to.include('hybridGasQuoteFallbackAttempts');
+    expect(summaryLog).not.to.include('hybridGasQuoteFallbackSuccesses');
   });
 
   it('ranks hybrid paths by normalized expected net profit instead of 1inch gross output', async () => {
@@ -1416,6 +1430,8 @@ describe('Discovery Handlers', () => {
   });
 
   it('falls back to factory when the hybrid 1inch probe times out', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
+    const loggerWarnStub = sinon.stub(logger, 'warn');
     const takeLiquidationFactoryStub = sinon
       .stub(takeFactoryModule, 'takeLiquidationFactory')
       .resolves(true);
@@ -1518,6 +1534,18 @@ describe('Discovery Handlers', () => {
     });
 
     expect(takeLiquidationFactoryStub.calledOnce).to.be.true;
+    expect(
+      loggerWarnStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('Hybrid gas quote fallback')
+        )
+    ).to.equal(false);
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).not.to.include('hybridFallbackAttempts');
+    expect(summaryLog).not.to.include('hybridFallbackSuccesses');
+    expect(summaryLog).not.to.include('hybridGasQuoteFallbackAttempts');
+    expect(summaryLog).not.to.include('hybridGasQuoteFallbackSuccesses');
   });
 
   it('does not let a slow factory hybrid probe block a valid 1inch path', async () => {
@@ -1627,6 +1655,136 @@ describe('Discovery Handlers', () => {
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
     expect(takeLiquidationFactoryStub.called).to.be.false;
+  });
+
+  it('executes 1inch when the hybrid factory probe has no collateral quote route', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
+    const loggerWarnStub = sinon.stub(logger, 'warn');
+    const takeLiquidationStub = sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .resolves(true);
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchPathQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+        approvedMinOutRaw: ethers.utils.parseUnits('123', 6),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+        routeProfitability: {
+          expectedNetProfitQuoteRaw: ethers.utils.parseUnits('20', 6),
+          gasPriceWei: ethers.utils.parseUnits('1', 'gwei'),
+          gasPolicyEvaluatedAt: Date.now(),
+        },
+      });
+    const factoryQuoteStub = sinon
+      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: false,
+        externalTakePath: 'factory',
+        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+        reason: 'no collateral/quote factory route',
+      });
+
+    const pool = {
+      name: 'Hybrid Factory No Route Pool',
+      poolAddress: '0x77777777777777777777777777777777777777b1',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('100'),
+        }),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerHybridFactoryNoRoute',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            allowedExternalTakePaths: ['oneinch', 'factory'],
+            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+          },
+        },
+        tokenAddresses: {
+          weth: pool.quoteAddress,
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
+      rpcCache: {
+        chainId: 1,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(factoryQuoteStub.calledOnce).to.be.true;
+    expect(takeLiquidationStub.calledOnce).to.be.true;
+    expect(takeLiquidationFactoryStub.called).to.be.false;
+    expect(
+      loggerWarnStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('Hybrid gas quote fallback')
+        )
+    ).to.equal(false);
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).to.include('approvedRoutes=oneinch:1');
+    expect(summaryLog).to.include('executedRoutes=oneinch:1');
+    expect(summaryLog).not.to.include('hybridFallbackAttempts');
+    expect(summaryLog).not.to.include('hybridFallbackSuccesses');
+    expect(summaryLog).not.to.include('hybridGasQuoteFallbackAttempts');
+    expect(summaryLog).not.to.include('hybridGasQuoteFallbackSuccesses');
   });
 
   it('uses factory-first hybrid mode to avoid 1inch calls when factory approves first', async () => {
@@ -1970,6 +2128,948 @@ describe('Discovery Handlers', () => {
           String(call.args[0]).includes('no viable external take path')
         )
     ).to.be.true;
+  });
+
+  it('executes factory-first hybrid gas quote fallback when strict gas conversion fails', async () => {
+    const warnStub = sinon.stub(logger, 'warn');
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const takeLiquidationStub = sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .resolves(true);
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchPathQuoteEvaluation')
+      .resolves({
+        isTakeable: false,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        reason: '1inch unavailable',
+      });
+    const factoryQuote = {
+      isTakeable: true,
+      externalTakePath: 'factory' as const,
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier: 500,
+      quoteAmount: 125,
+      quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+      collateralAmount: 1,
+      marketPrice: 125,
+      takeablePrice: 123.75,
+      approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
+      quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+      quotedCollateralWad: ethers.utils.parseEther('1'),
+    };
+    const factoryQuoteStub = sinon
+      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .resolves(factoryQuote);
+
+    const pool = {
+      name: 'Hybrid Gas Fallback Pool',
+      poolAddress: '0x7777777777777777777777777777777777777781',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('100'),
+        }),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerHybridGasFallback',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            allowedExternalTakePaths: ['oneinch', 'factory'],
+            externalTakeRouteSelectionMode: 'maximize_profit',
+            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+            hybridGasQuoteFailureFallbackMode: 'factory_first',
+            maxGasCostNative: 1,
+          },
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
+      rpcCache: {
+        chainId: 1,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(takeLiquidationStub.called).to.be.false;
+    expect(takeLiquidationFactoryStub.calledOnce).to.be.true;
+    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(
+      warnStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('Hybrid gas quote fallback activated')
+        )
+    ).to.equal(true);
+  });
+
+  it('does not execute hybrid gas quote fallback when quote-denominated policy is configured', async () => {
+    const debugStub = sinon.stub(logger, 'debug');
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon.stub(oneInchExecutionModule, 'takeLiquidation').resolves(true);
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchPathQuoteEvaluation')
+      .resolves({
+        isTakeable: false,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        reason: '1inch unavailable',
+      });
+    const factoryQuoteStub = sinon
+      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        externalTakePath: 'factory',
+        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+        selectedFeeTier: 500,
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+        approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+      });
+    const pool = {
+      name: 'Hybrid Gas Fallback Ineligible Pool',
+      poolAddress: '0x7777777777777777777777777777777777777782',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('100'),
+        }),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerHybridGasFallbackIneligible',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            allowedExternalTakePaths: ['oneinch', 'factory'],
+            externalTakeRouteSelectionMode: 'maximize_profit',
+            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+            hybridGasQuoteFailureFallbackMode: 'factory_first',
+            maxGasCostNative: 1,
+            minExpectedProfitQuote: 0,
+          },
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
+      rpcCache: {
+        chainId: 1,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(takeLiquidationFactoryStub.called).to.equal(false);
+    expect(factoryQuoteStub.calledOnce).to.equal(true);
+    expect(
+      debugStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('minExpectedProfitQuote is configured')
+        )
+    ).to.equal(true);
+  });
+
+  const createHybridGasFallbackFactoryQuote = (
+    overrides: Record<string, unknown> = {}
+  ) => ({
+    isTakeable: true,
+    externalTakePath: 'factory' as const,
+    selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+    selectedFeeTier: 500,
+    quoteAmount: 125,
+    quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+    collateralAmount: 1,
+    marketPrice: 125,
+    takeablePrice: 123.75,
+    approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
+    quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+    quotedCollateralWad: ethers.utils.parseEther('1'),
+    ...overrides,
+  });
+
+  const createNativeToQuoteGasConversionReject = (
+    overrides: Record<string, unknown> = {}
+  ) => ({
+    isTakeable: false,
+    externalTakePath: 'factory' as const,
+    selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+    reason: 'failed to quote gas cost into quote token',
+    routeProfitability: {
+      gasPolicyRejectCode: 'native_to_quote_conversion_unavailable',
+      gasQuoteAttempts: [
+        {
+          source: LiquiditySource.UNISWAPV3,
+          tokenIn: '0x4200000000000000000000000000000000000006',
+          tokenOut: '0x2222222222222222222222222222222222222222',
+          amountIn: '900000000000000',
+          feeTiers: [3000, 100, 500, 10000],
+          success: false,
+          reason: 'no factory pool at configured fee tiers',
+        },
+      ],
+    },
+    ...overrides,
+  });
+
+  it('uses a gas-quote fallback factory candidate when selected 1inch fails before submission', async () => {
+    const warnStub = sinon.stub(logger, 'warn');
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const wethAddress = '0x4200000000000000000000000000000000000006';
+    const takeLiquidationStub = sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .callsFake(async (params: any) => {
+        params.config.onOneInchSwapDataResult?.({
+          success: false,
+          retryable: true,
+          error: '1inch swap-data unavailable',
+        });
+        return false;
+      });
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchPathQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quoteAmount: 130,
+        quoteAmountRaw: ethers.utils.parseUnits('130', 6),
+        collateralAmount: 1,
+        marketPrice: 130,
+        takeablePrice: 128.7,
+        approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+      });
+    const gasQuoteAttempts = [
+      {
+        source: LiquiditySource.UNISWAPV3,
+        tokenIn: wethAddress,
+        tokenOut: '0x2222222222222222222222222222222222222222',
+        amountIn: '900000000000000',
+        feeTiers: [3000, 100, 500, 10000],
+        success: false,
+        reason: 'no factory pool at configured fee tiers',
+      },
+    ];
+    const factoryQuoteStub = sinon
+      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .onFirstCall()
+      .resolves({
+        isTakeable: false,
+        externalTakePath: 'factory',
+        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+        reason: 'failed to quote gas cost into quote token',
+        routeProfitability: {
+          gasPolicyRejectCode: 'native_to_quote_conversion_unavailable',
+          gasQuoteAttempts,
+        },
+      })
+      .onSecondCall()
+      .resolves(createHybridGasFallbackFactoryQuote());
+
+    const pool = {
+      name: 'Hybrid 1inch Fallback Candidate Pool',
+      poolAddress: '0x77777777777777777777777777777777777777a1',
+      quoteAddress: wethAddress,
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('100'),
+        }),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerHybridOneInchThenFactoryFallback',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            allowedExternalTakePaths: ['oneinch', 'factory'],
+            externalTakeRouteSelectionMode: 'maximize_profit',
+            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+            hybridGasQuoteFailureFallbackMode: 'factory_first',
+            maxGasCostNative: 1,
+          },
+        },
+        tokenAddresses: {
+          weth: wethAddress,
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
+      rpcCache: {
+        chainId: 1,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(takeLiquidationStub.calledOnce).to.equal(true);
+    expect(takeLiquidationFactoryStub.calledOnce).to.equal(true);
+    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(
+      warnStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes(
+            'Hybrid 1inch path failed before submission'
+          )
+        )
+    ).to.equal(true);
+  });
+
+  it('rechecks fallback factory repayment floors against refreshed auction state before execution', async () => {
+    const debugStub = sinon.stub(logger, 'debug');
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const wethAddress = '0x4200000000000000000000000000000000000006';
+    let oneInchAttempted = false;
+    sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .callsFake(async (params: any) => {
+        oneInchAttempted = true;
+        params.config.onOneInchSwapDataResult?.({
+          success: false,
+          retryable: true,
+          error: '1inch swap-data unavailable',
+        });
+        return false;
+      });
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchPathQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quoteAmount: 130,
+        quoteAmountRaw: ethers.utils.parseUnits('130', 6),
+        collateralAmount: 1,
+        marketPrice: 130,
+        takeablePrice: 128.7,
+        approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+      });
+    sinon
+      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .onFirstCall()
+      .resolves({
+        isTakeable: false,
+        externalTakePath: 'factory',
+        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+        reason: 'failed to quote gas cost into quote token',
+        routeProfitability: {
+          gasPolicyRejectCode: 'native_to_quote_conversion_unavailable',
+          gasQuoteAttempts: [
+            {
+              source: LiquiditySource.UNISWAPV3,
+              tokenIn: wethAddress,
+              tokenOut: wethAddress,
+              amountIn: '900000000000000',
+              feeTiers: [3000, 100, 500, 10000],
+              success: false,
+              reason: 'no factory pool at configured fee tiers',
+            },
+          ],
+        },
+      })
+      .onSecondCall()
+      .resolves(
+        createHybridGasFallbackFactoryQuote({
+          quoteAmount: 125,
+          quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+          approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
+        })
+      );
+
+    const getStatusStub = sinon.stub().callsFake(async () => ({
+      collateral: ethers.utils.parseEther('1'),
+      price: ethers.utils.parseEther(oneInchAttempted ? '126' : '100'),
+    }));
+
+    const pool = {
+      name: 'Hybrid Fallback Reapproval Pool',
+      poolAddress: '0x77777777777777777777777777777777777777a2',
+      quoteAddress: wethAddress,
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: getStatusStub,
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: '0xBorrowerHybridFallbackReapproval',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            allowedExternalTakePaths: ['oneinch', 'factory'],
+            externalTakeRouteSelectionMode: 'maximize_profit',
+            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+            hybridGasQuoteFailureFallbackMode: 'factory_first',
+            maxGasCostNative: 1,
+          },
+        },
+        tokenAddresses: {
+          weth: wethAddress,
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      ),
+      rpcCache: {
+        chainId: 1,
+        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(takeLiquidationFactoryStub.called).to.equal(false);
+    expect(
+      debugStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes(
+            'Hybrid fallback path rejected during final approval'
+          )
+        )
+    ).to.equal(true);
+  });
+
+  async function runHybridGasFallbackScenario(
+    options: {
+      takePolicyOverrides?: Record<string, unknown>;
+      targetTakeOverrides?: Record<string, unknown>;
+      factoryEvaluations?: any[];
+      gasPrice?: BigNumber;
+      poolName?: string;
+      borrower?: string;
+    } = {}
+  ) {
+    const debugStub = sinon.stub(logger, 'debug');
+    const warnStub = sinon.stub(logger, 'warn');
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    const takeLiquidationStub = sinon
+      .stub(oneInchExecutionModule, 'takeLiquidation')
+      .resolves(true);
+    const takeLiquidationFactoryStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationFactory')
+      .resolves(true);
+    sinon
+      .stub(oneInchExecutionModule, 'getOneInchPathQuoteEvaluation')
+      .resolves({
+        isTakeable: false,
+        externalTakePath: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        reason: '1inch unavailable',
+      });
+    const factoryEvaluations = options.factoryEvaluations ?? [
+      createHybridGasFallbackFactoryQuote(),
+    ];
+    let factoryCallIndex = 0;
+    const factoryQuoteStub = sinon
+      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .callsFake(async () => {
+        const evaluation =
+          factoryEvaluations[
+            Math.min(factoryCallIndex, factoryEvaluations.length - 1)
+          ];
+        factoryCallIndex += 1;
+        return evaluation;
+      });
+
+    const pool = {
+      name: options.poolName ?? 'Hybrid Gas Fallback Matrix Pool',
+      poolAddress: '0x7777777777777777777777777777777777777791',
+      quoteAddress: '0x2222222222222222222222222222222222222222',
+      collateralAddress: '0x3333333333333333333333333333333333333333',
+      getLiquidation: sinon.stub().returns({
+        getStatus: sinon.stub().resolves({
+          collateral: ethers.utils.parseEther('1'),
+          price: ethers.utils.parseEther('100'),
+        }),
+      }),
+    };
+
+    await handleDiscoveredTakeTarget({
+      pool: pool as any,
+      signer: {
+        provider: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(options.gasPrice ?? ethers.utils.parseUnits('1', 'gwei')),
+        },
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+      target: {
+        source: 'discovered',
+        poolAddress: pool.poolAddress,
+        name: pool.name,
+        dryRun: false,
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+          ...options.targetTakeOverrides,
+        },
+        candidates: [
+          {
+            poolAddress: pool.poolAddress,
+            borrower: options.borrower ?? '0xBorrowerHybridGasFallbackMatrix',
+            kickTime: Date.now(),
+            debtRemaining: '1',
+            collateralRemaining: '1',
+            neutralPrice: '1',
+            debt: '1',
+            collateral: '1',
+            heuristicScore: 1,
+          },
+        ],
+      },
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            allowedExternalTakePaths: ['oneinch', 'factory'],
+            externalTakeRouteSelectionMode: 'maximize_profit',
+            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+            hybridGasQuoteFailureFallbackMode: 'factory_first',
+            maxGasCostNative: 1,
+            ...options.takePolicyOverrides,
+          },
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+        subgraphUrl: 'http://example-subgraph',
+      } as any,
+      transports: createDiscoveryTransports(
+        options.gasPrice ?? ethers.utils.parseUnits('1', 'gwei')
+      ),
+      rpcCache: {
+        chainId: 1,
+        gasPrice: options.gasPrice ?? ethers.utils.parseUnits('1', 'gwei'),
+        gasPriceFetchedAt: Date.now(),
+        factoryQuoteProviders:
+          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    return {
+      debugStub,
+      warnStub,
+      factoryQuoteStub,
+      takeLiquidationStub,
+      takeLiquidationFactoryStub,
+    };
+  }
+
+  it('does not execute hybrid gas quote fallback when fallback mode is disabled', async () => {
+    const { debugStub, factoryQuoteStub, takeLiquidationFactoryStub } =
+      await runHybridGasFallbackScenario({
+        takePolicyOverrides: {
+          hybridGasQuoteFailureFallbackMode: 'disabled',
+        },
+      });
+
+    expect(takeLiquidationFactoryStub.called).to.equal(false);
+    expect(factoryQuoteStub.calledOnce).to.equal(true);
+    expect(
+      debugStub
+        .getCalls()
+        .some((call) => String(call.args[0]).includes('fallback disabled'))
+    ).to.equal(true);
+  });
+
+  for (const { name, takePolicyOverrides, expectedLog } of [
+    {
+      name: 'route selection mode is not maximize_profit',
+      takePolicyOverrides: {
+        externalTakeRouteSelectionMode: 'factory_first',
+      },
+      expectedLog: 'route selection mode is not maximize_profit',
+    },
+    {
+      name: 'hybrid paths do not include both oneinch and factory',
+      takePolicyOverrides: {
+        allowedExternalTakePaths: ['factory'],
+      },
+      expectedLog: 'hybrid paths do not include both oneinch and factory',
+    },
+  ]) {
+    it(`does not execute hybrid gas quote fallback when ${name}`, async () => {
+      const { debugStub, factoryQuoteStub, takeLiquidationFactoryStub } =
+        await runHybridGasFallbackScenario({
+          takePolicyOverrides,
+          factoryEvaluations: [createNativeToQuoteGasConversionReject()],
+        });
+
+      expect(takeLiquidationFactoryStub.called).to.equal(false);
+      expect(factoryQuoteStub.calledOnce).to.equal(true);
+      expect(
+        debugStub
+          .getCalls()
+          .some((call) => String(call.args[0]).includes(expectedLog))
+      ).to.equal(true);
+    });
+  }
+
+  it('does not execute hybrid gas quote fallback when the fallback factory rerun has no takeable route', async () => {
+    const { debugStub, factoryQuoteStub, takeLiquidationFactoryStub } =
+      await runHybridGasFallbackScenario({
+        factoryEvaluations: [
+          createNativeToQuoteGasConversionReject(),
+          {
+            isTakeable: false,
+            externalTakePath: 'factory',
+            selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+            reason: 'route quote below repayment floor',
+          },
+        ],
+      });
+
+    expect(takeLiquidationFactoryStub.called).to.equal(false);
+    expect(factoryQuoteStub.callCount).to.equal(2);
+    expect(
+      debugStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes(
+            'Hybrid gas quote fallback factory quote rejected'
+          )
+        )
+    ).to.equal(true);
+  });
+
+  for (const { field, value, expectedLog } of [
+    {
+      field: 'maxGasCostQuote',
+      value: 1,
+      expectedLog: 'maxGasCostQuote is configured',
+    },
+    {
+      field: 'minProfitNative',
+      value: '1',
+      expectedLog: 'minProfitNative is configured',
+    },
+  ]) {
+    it(`does not execute hybrid gas quote fallback when ${field} is configured`, async () => {
+      const { debugStub, factoryQuoteStub, takeLiquidationFactoryStub } =
+        await runHybridGasFallbackScenario({
+          takePolicyOverrides: {
+            [field]: value,
+          },
+        });
+
+      expect(takeLiquidationFactoryStub.called).to.equal(false);
+      expect(factoryQuoteStub.calledOnce).to.equal(true);
+      expect(
+        debugStub
+          .getCalls()
+          .some((call) => String(call.args[0]).includes(expectedLog))
+      ).to.equal(true);
+    });
+  }
+
+  it('does not execute hybrid gas quote fallback when maxGasPriceGwei rejects', async () => {
+    const { factoryQuoteStub, takeLiquidationFactoryStub } =
+      await runHybridGasFallbackScenario({
+        takePolicyOverrides: {
+          maxGasPriceGwei: 0.5,
+        },
+      });
+
+    expect(takeLiquidationFactoryStub.called).to.equal(false);
+    expect(factoryQuoteStub.calledOnce).to.equal(true);
+  });
+
+  it('does not execute hybrid gas quote fallback when maxGasCostNative rejects', async () => {
+    const { factoryQuoteStub, takeLiquidationFactoryStub } =
+      await runHybridGasFallbackScenario({
+        takePolicyOverrides: {
+          maxGasCostNative: 0,
+        },
+      });
+
+    expect(takeLiquidationFactoryStub.called).to.equal(false);
+    expect(factoryQuoteStub.calledOnce).to.equal(true);
+  });
+
+  it('does not execute hybrid gas quote fallback for subsidized factory routes', async () => {
+    const { debugStub, takeLiquidationFactoryStub } =
+      await runHybridGasFallbackScenario({
+        targetTakeOverrides: {
+          allowSubsidy: true,
+        },
+        factoryEvaluations: [
+          createHybridGasFallbackFactoryQuote(),
+          createHybridGasFallbackFactoryQuote({
+            routeProfitability: {
+              subsidyAllowed: true,
+              expectedSubsidyQuoteRaw: ethers.utils.parseUnits('1', 6),
+            },
+          }),
+        ],
+      });
+
+    expect(takeLiquidationFactoryStub.called).to.equal(false);
+    expect(
+      debugStub
+        .getCalls()
+        .some((call) =>
+          String(call.args[0]).includes('rejected subsidized factory route')
+        )
+    ).to.equal(true);
+  });
+
+  it('executes hybrid gas quote fallback when factory route context rejects only native-to-quote gas conversion', async () => {
+    const loggerInfoStub = sinon.stub(logger, 'info');
+    const gasQuoteAttempts = [
+      {
+        source: LiquiditySource.UNISWAPV3,
+        tokenIn: '0x4200000000000000000000000000000000000006',
+        tokenOut: '0x2222222222222222222222222222222222222222',
+        amountIn: '900000000000000',
+        feeTiers: [3000, 100, 500, 10000],
+        success: false,
+        reason: 'no factory pool at configured fee tiers',
+      },
+    ];
+    const { warnStub, factoryQuoteStub, takeLiquidationFactoryStub } =
+      await runHybridGasFallbackScenario({
+        factoryEvaluations: [
+          {
+            isTakeable: false,
+            externalTakePath: 'factory',
+            selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+            reason: 'failed to quote gas cost into quote token',
+            routeProfitability: {
+              gasPolicyRejectCode: 'native_to_quote_conversion_unavailable',
+              gasQuoteAttempts,
+            },
+          },
+          createHybridGasFallbackFactoryQuote(),
+        ],
+      });
+
+    expect(takeLiquidationFactoryStub.calledOnce).to.equal(true);
+    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(
+      warnStub
+        .getCalls()
+        .some(
+          (call) =>
+            String(call.args[0]).includes(
+              'Hybrid gas quote fallback activated'
+            ) && String(call.args[0]).includes('UNISWAPV3')
+        )
+    ).to.equal(true);
+    const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
+    expect(summaryLog).not.to.include('hybridFallbackAttempts');
+    expect(summaryLog).not.to.include('hybridFallbackSuccesses');
+    expect(summaryLog).to.include('hybridGasQuoteFallbackAttempts=1');
+    expect(summaryLog).to.include('hybridGasQuoteFallbackSuccesses=1');
+  });
+
+  it('preserves configured factory liquidity source allowlists during hybrid gas quote fallback reruns', async () => {
+    const { factoryQuoteStub, takeLiquidationFactoryStub } =
+      await runHybridGasFallbackScenario({
+        takePolicyOverrides: {
+          allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+        },
+        factoryEvaluations: [
+          createNativeToQuoteGasConversionReject(),
+          createHybridGasFallbackFactoryQuote(),
+        ],
+      });
+
+    expect(takeLiquidationFactoryStub.calledOnce).to.equal(true);
+    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(
+      factoryQuoteStub.firstCall.args[7]!.allowedLiquiditySources
+    ).to.deep.equal([LiquiditySource.UNISWAPV3]);
+    expect(
+      factoryQuoteStub.secondCall.args[7]!.allowedLiquiditySources
+    ).to.deep.equal([LiquiditySource.UNISWAPV3]);
   });
 
   it('rejects disabled hybrid execution paths before dispatch', () => {

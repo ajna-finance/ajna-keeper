@@ -467,9 +467,9 @@ describe('Take Factory', () => {
       expect(decimals).to.equal(6);
       expect(decimalsStub.calledOnceWith(mockSigner, tokenAddress, undefined))
         .to.be.true;
-      expect(runtimeCache.tokenDecimals?.get(`unknown:${tokenAddress}`)).to.equal(
-        6
-      );
+      expect(
+        runtimeCache.tokenDecimals?.get(`unknown:${tokenAddress}`)
+      ).to.equal(6);
     });
 
     it('returns an address-only decimals cache hit without waiting for a pending chainId lookup', async () => {
@@ -515,9 +515,9 @@ describe('Take Factory', () => {
       await clock.tickAsync(DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS);
 
       expect(await decimalsPromise).to.equal(18);
-      expect(runtimeCache.tokenDecimals?.get(`unknown:${tokenAddress}`)).to.equal(
-        18
-      );
+      expect(
+        runtimeCache.tokenDecimals?.get(`unknown:${tokenAddress}`)
+      ).to.equal(18);
 
       const inflight = runtimeCache.chainIdInflight;
       resolveChainId(8453);
@@ -1547,6 +1547,90 @@ describe('Take Factory', () => {
       expect(uniswapPoolExistsStub.called).to.be.false;
       expect(uniswapQuoteStub.called).to.be.false;
       expect(sushiQuoteStub.calledOnce).to.be.true;
+    });
+
+    it('propagates structured gas-conversion rejection metadata when every factory route is gas-rejected', async () => {
+      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+      const pool = {
+        name: 'All Gas Rejected Pool',
+        collateralAddress: '0x1111111111111111111111111111111111111111',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(BigNumber.from('1000000000000')),
+        },
+      };
+      const poolConfig = {
+        name: 'All Gas Rejected Pool',
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      };
+      const config = {
+        universalRouterOverrides: {
+          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          defaultFeeTier: 3000,
+          wethAddress: '0x5555555555555555555555555555555555555555',
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+        },
+      };
+      const gasQuoteAttempts = [
+        {
+          source: LiquiditySource.UNISWAPV3,
+          tokenIn: '0x5555555555555555555555555555555555555555',
+          tokenOut: pool.quoteAddress,
+          amountIn: '123',
+          feeTiers: [3000, 100, 500, 10000],
+          success: false,
+          reason: 'no factory pool at configured fee tiers',
+        },
+      ];
+
+      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
+      runtimeCache.chainId = 8453;
+
+      const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
+        pool as any,
+        ethers.utils.parseEther('100'),
+        ethers.utils.parseEther('1'),
+        poolConfig as any,
+        config as any,
+        {
+          provider: {},
+          getChainId: sinon.stub().resolves(8453),
+        } as any,
+        runtimeCache,
+        {
+          allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
+          routeProfitabilityContext: {
+            routeRejectionReasonsBySource: {
+              [LiquiditySource.UNISWAPV3]:
+                'failed to quote gas cost into quote token',
+            },
+            gasPolicyRejectCodeBySource: {
+              [LiquiditySource.UNISWAPV3]:
+                'native_to_quote_conversion_unavailable',
+            },
+            gasQuoteAttemptsBySource: {
+              [LiquiditySource.UNISWAPV3]: gasQuoteAttempts,
+            },
+          },
+        }
+      );
+
+      expect(evaluation.isTakeable).to.equal(false);
+      expect(evaluation.reason).to.include(
+        'failed to quote gas cost into quote token'
+      );
+      expect(evaluation.routeProfitability?.gasPolicyRejectCode).to.equal(
+        'native_to_quote_conversion_unavailable'
+      );
+      expect(evaluation.routeProfitability?.gasQuoteAttempts).to.deep.equal(
+        gasQuoteAttempts
+      );
     });
 
     it('builds lazy route profitability only for available factory sources', async () => {

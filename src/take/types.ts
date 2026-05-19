@@ -6,6 +6,26 @@ import {
   TakeSettings,
 } from '../config';
 
+export type GasPolicyRejectCode =
+  | 'gas_price_above_cap'
+  | 'native_gas_cost_above_cap'
+  | 'quote_gas_cost_above_cap'
+  | 'native_to_quote_conversion_unavailable'
+  | 'wrapped_native_unconfigured'
+  | 'provider_unavailable'
+  | 'unknown';
+
+export interface GasQuoteAttempt {
+  source: LiquiditySource;
+  tokenIn: string;
+  tokenOut: string;
+  amountIn: string;
+  feeTiers?: number[];
+  success: boolean;
+  amountOut?: string;
+  reason?: string;
+}
+
 export interface RouteProfitabilityBreakdown {
   auctionRepayRequirementQuoteRaw?: BigNumber;
   routeExecutionCostQuoteRaw?: BigNumber;
@@ -31,6 +51,8 @@ export interface RouteProfitabilityBreakdown {
   gasPriceFreshnessTtlMs?: number;
   l2GasCostBufferBasisPoints?: number;
   gasPolicyEvaluatedAt?: number;
+  gasPolicyRejectCode?: GasPolicyRejectCode;
+  gasQuoteAttempts?: GasQuoteAttempt[];
 }
 
 export interface TakeActionConfig {
@@ -51,6 +73,7 @@ export interface TakeBorrowerCandidate {
 export interface ExternalTakeQuoteEvaluation {
   isTakeable: boolean;
   externalTakePath?: ExternalTakePathKind;
+  approvalMode?: 'strict_hybrid' | 'factory_gas_quote_fallback';
   marketPrice?: number;
   takeablePrice?: number;
   quoteAmount?: number;

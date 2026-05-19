@@ -31,6 +31,7 @@ import {
   getSushiSwapQuoteProvider,
   getUniswapV3QuoteProvider,
 } from '../take/factory/shared';
+import { GasPolicyRejectCode, GasQuoteAttempt } from '../take/types';
 import {
   DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS,
   getOneInchCircuitOpenReason,
@@ -51,6 +52,8 @@ export interface GasPolicyResult {
   gasLimit?: BigNumber;
   l2GasCostBufferBasisPoints?: number;
   quoteTokenDecimals?: number;
+  rejectCode?: GasPolicyRejectCode;
+  gasQuoteAttempts?: GasQuoteAttempt[];
   reason?: string;
 }
 
@@ -269,6 +272,12 @@ interface FactoryV3GasQuoteProvider {
   ): Promise<{ success: boolean; dstAmount?: BigNumber | string }>;
 }
 
+interface GasQuoteSourceResult {
+  amountOut?: BigNumber;
+  reason?: string;
+  feeTiers?: number[];
+}
+
 async function quoteFactoryV3GasConversion(params: {
   quoteProvider: FactoryV3GasQuoteProvider;
   amountIn: BigNumber;
@@ -278,14 +287,17 @@ async function quoteFactoryV3GasConversion(params: {
   candidateFeeTiers?: number[];
   fallbackFeeTier: number;
   automaticCandidateFeeTiers?: readonly number[];
-}): Promise<BigNumber | undefined> {
+}): Promise<GasQuoteSourceResult> {
   let bestQuote: BigNumber | undefined;
-  for (const feeTier of getGasQuoteFeeTiers(
+  let sawPool = false;
+  let sawQuoteFailure = false;
+  const feeTiers = getGasQuoteFeeTiers(
     params.defaultFeeTier,
     params.candidateFeeTiers,
     params.fallbackFeeTier,
     params.automaticCandidateFeeTiers
-  )) {
+  );
+  for (const feeTier of feeTiers) {
     try {
       const poolExists = await withTimeout(
         params.quoteProvider.poolExists(
@@ -299,6 +311,7 @@ async function quoteFactoryV3GasConversion(params: {
       if (!poolExists) {
         continue;
       }
+      sawPool = true;
       const quoteResult = await withTimeout(
         params.quoteProvider.getQuote(
           params.amountIn,
@@ -312,6 +325,7 @@ async function quoteFactoryV3GasConversion(params: {
       if (quoteResult.success && quoteResult.dstAmount) {
         const quote = BigNumber.from(quoteResult.dstAmount);
         if (quote.isZero()) {
+          sawQuoteFailure = true;
           logger.debug(
             `Gas quote conversion returned zero output for ${params.tokenIn}/${params.tokenOut} fee=${feeTier}`
           );
@@ -319,14 +333,27 @@ async function quoteFactoryV3GasConversion(params: {
         }
         // Use the highest output to conservatively price gas in quote-token terms.
         bestQuote = bestQuote && bestQuote.gt(quote) ? bestQuote : quote;
+      } else {
+        sawQuoteFailure = true;
       }
     } catch (error) {
+      sawQuoteFailure = true;
       logger.debug(
         `Factory gas quote conversion skipped fee=${feeTier} for ${params.tokenIn}/${params.tokenOut}: ${getErrorMessage(error)}`
       );
     }
   }
-  return bestQuote;
+  if (bestQuote) {
+    return { amountOut: bestQuote, feeTiers };
+  }
+  return {
+    feeTiers,
+    reason: sawPool
+      ? sawQuoteFailure
+        ? 'factory pool exists but returned no usable gas quote'
+        : 'factory pool exists but no usable gas quote was returned'
+      : 'no factory pool at configured fee tiers',
+  };
 }
 
 function getGasQuoteCacheKey(params: {
@@ -460,9 +487,7 @@ function getGasQuoteSourceConfigIdentity(params: {
           swapRouterAddress: normalizeIdentityAddress(
             sushiConfig?.swapRouterAddress
           ),
-          factoryAddress: normalizeIdentityAddress(
-            sushiConfig?.factoryAddress
-          ),
+          factoryAddress: normalizeIdentityAddress(sushiConfig?.factoryAddress),
           quoterV2Address: normalizeIdentityAddress(
             sushiConfig?.quoterV2Address
           ),
@@ -608,27 +633,28 @@ async function quoteTokensByLiquiditySource(params: {
     AutoDiscoverTakePolicy,
     'oneInchQuoteFailureCooldownMs' | 'oneInchQuoteFailureThreshold'
   >;
-}): Promise<BigNumber | undefined> {
+}): Promise<GasQuoteSourceResult> {
   if (params.tokenIn.toLowerCase() === params.tokenOut.toLowerCase()) {
-    return params.amountIn;
+    return { amountOut: params.amountIn };
   }
 
   if (params.liquiditySource === LiquiditySource.ONEINCH) {
     const chainId =
       params.chainId ?? (await tryResolveSignerChainId(params.signer));
     if (chainId === undefined) {
-      return undefined;
+      return { reason: 'chainId unavailable for 1inch gas quote' };
     }
     if (!params.config.oneInchRouters?.[chainId]) {
-      return undefined;
+      return { reason: `1inch router not configured for chain ${chainId}` };
     }
     const circuitOpenReason = getOneInchCircuitOpenReason({
       rpcCache: params.rpcCache,
       takePolicy: params.takePolicy,
+      purpose: 'gas_conversion',
     });
     if (circuitOpenReason) {
       logger.debug(`Skipping 1inch gas quote conversion: ${circuitOpenReason}`);
-      return undefined;
+      return { reason: circuitOpenReason };
     }
 
     const dexRouter = new DexRouter(params.signer, {
@@ -642,22 +668,33 @@ async function quoteTokensByLiquiditySource(params: {
       params.tokenOut,
       { timeoutMs: params.oneInchQuoteTimeoutMs }
     );
+    if (!quoteResult) {
+      recordOneInchQuoteFailure({
+        rpcCache: params.rpcCache,
+        takePolicy: params.takePolicy,
+        purpose: 'gas_conversion',
+      });
+      return { reason: '1inch returned empty gas quote response' };
+    }
     if (!quoteResult.success || !quoteResult.dstAmount) {
       if (quoteResult.retryable) {
         recordOneInchQuoteFailure({
           rpcCache: params.rpcCache,
           takePolicy: params.takePolicy,
+          purpose: 'gas_conversion',
         });
       }
-      return undefined;
+      return {
+        reason: quoteResult.error ?? '1inch returned no gas quote route',
+      };
     }
     const dstAmount = BigNumber.from(quoteResult.dstAmount);
     if (dstAmount.isZero()) {
       logger.debug('1inch gas quote conversion returned zero output');
-      return undefined;
+      return { reason: '1inch gas quote conversion returned zero output' };
     }
-    recordOneInchQuoteSuccess(params.rpcCache);
-    return dstAmount;
+    recordOneInchQuoteSuccess(params.rpcCache, 'gas_conversion');
+    return { amountOut: dstAmount };
   }
 
   if (params.liquiditySource === LiquiditySource.UNISWAPV3) {
@@ -668,7 +705,7 @@ async function quoteTokensByLiquiditySource(params: {
       !routerConfig.wethAddress ||
       !routerConfig.quoterV2Address
     ) {
-      return undefined;
+      return { reason: 'Uniswap V3 gas quote configuration incomplete' };
     }
 
     const quoteProvider = getUniswapV3QuoteProvider({
@@ -677,7 +714,7 @@ async function quoteTokensByLiquiditySource(params: {
       runtimeCache: params.rpcCache?.factoryQuoteProviders,
     });
     if (!quoteProvider) {
-      return undefined;
+      return { reason: 'Uniswap V3 quote provider unavailable' };
     }
     return await quoteFactoryV3GasConversion({
       quoteProvider,
@@ -699,7 +736,7 @@ async function quoteTokensByLiquiditySource(params: {
       !sushiConfig.wethAddress ||
       !sushiConfig.quoterV2Address
     ) {
-      return undefined;
+      return { reason: 'SushiSwap gas quote configuration incomplete' };
     }
     const quoteProvider = await getSushiSwapQuoteProvider({
       signer: params.signer,
@@ -707,7 +744,7 @@ async function quoteTokensByLiquiditySource(params: {
       runtimeCache: params.rpcCache?.factoryQuoteProviders,
     });
     if (!quoteProvider) {
-      return undefined;
+      return { reason: 'SushiSwap quote provider unavailable' };
     }
     return await quoteFactoryV3GasConversion({
       quoteProvider,
@@ -724,7 +761,7 @@ async function quoteTokensByLiquiditySource(params: {
   if (params.liquiditySource === LiquiditySource.CURVE) {
     const curveConfig = params.config.curveRouterOverrides;
     if (!curveConfig?.poolConfigs || !curveConfig.wethAddress) {
-      return undefined;
+      return { reason: 'Curve gas quote configuration incomplete' };
     }
     const quoteProvider = await getCurveQuoteProvider({
       signer: params.signer,
@@ -733,7 +770,7 @@ async function quoteTokensByLiquiditySource(params: {
       runtimeCache: params.rpcCache?.factoryQuoteProviders,
     });
     if (!quoteProvider) {
-      return undefined;
+      return { reason: 'Curve quote provider unavailable' };
     }
     const quoteResult = await withTimeout(
       quoteProvider.getQuote(params.amountIn, params.tokenIn, params.tokenOut),
@@ -741,11 +778,11 @@ async function quoteTokensByLiquiditySource(params: {
       'Curve gas quote'
     );
     return quoteResult.success && quoteResult.dstAmount
-      ? BigNumber.from(quoteResult.dstAmount)
-      : undefined;
+      ? { amountOut: BigNumber.from(quoteResult.dstAmount) }
+      : { reason: 'Curve returned no usable gas quote' };
   }
 
-  return undefined;
+  return { reason: 'unsupported liquidity source for gas quote conversion' };
 }
 
 async function quoteTokensByGasQuoteSources(params: {
@@ -764,12 +801,13 @@ async function quoteTokensByGasQuoteSources(params: {
     AutoDiscoverTakePolicy,
     'oneInchQuoteFailureCooldownMs' | 'oneInchQuoteFailureThreshold'
   >;
+  gasQuoteAttempts?: GasQuoteAttempt[];
 }): Promise<
   { amountOut: BigNumber; liquiditySource: LiquiditySource } | undefined
 > {
   for (const liquiditySource of params.liquiditySources) {
     try {
-      const amountOut = await quoteTokensByLiquiditySource({
+      const quoteResult = await quoteTokensByLiquiditySource({
         signer: params.signer,
         config: params.config,
         liquiditySource,
@@ -781,16 +819,34 @@ async function quoteTokensByGasQuoteSources(params: {
         oneInchQuoteTimeoutMs: params.oneInchQuoteTimeoutMs,
         takePolicy: params.takePolicy,
       });
-      if (amountOut) {
+      params.gasQuoteAttempts?.push({
+        source: liquiditySource,
+        tokenIn: params.tokenIn,
+        tokenOut: params.tokenOut,
+        amountIn: params.amountIn.toString(),
+        feeTiers: quoteResult.feeTiers,
+        success: quoteResult.amountOut !== undefined,
+        amountOut: quoteResult.amountOut?.toString(),
+        reason: quoteResult.reason,
+      });
+      if (quoteResult.amountOut) {
         logGasQuoteFallback({
           usedLiquiditySource: liquiditySource,
           preferredLiquiditySource: params.preferredLiquiditySource,
           rpcCache: params.rpcCache,
           gasQuoteCacheKey: params.gasQuoteCacheKey,
         });
-        return { amountOut, liquiditySource };
+        return { amountOut: quoteResult.amountOut, liquiditySource };
       }
     } catch (error) {
+      params.gasQuoteAttempts?.push({
+        source: liquiditySource,
+        tokenIn: params.tokenIn,
+        tokenOut: params.tokenOut,
+        amountIn: params.amountIn.toString(),
+        success: false,
+        reason: getErrorMessage(error),
+      });
       logger.debug(
         `Gas quote conversion failed with ${formatLiquiditySource(liquiditySource)}: ${getErrorMessage(error)}`
       );
@@ -826,6 +882,7 @@ export async function evaluateGasPolicy(params: {
   rpcCache?: DiscoveryRpcCache;
   chainId?: number;
 }): Promise<GasPolicyResult> {
+  const gasQuoteAttempts: GasQuoteAttempt[] = [];
   const provider = params.signer.provider;
   if (!provider) {
     return {
@@ -833,6 +890,7 @@ export async function evaluateGasPolicy(params: {
       gasCostNative: 0,
       gasCostQuote: 0,
       gasPriceGwei: 0,
+      rejectCode: 'provider_unavailable',
       reason: 'signer has no provider',
     };
   }
@@ -852,6 +910,7 @@ export async function evaluateGasPolicy(params: {
       gasCostNative: 0,
       gasCostQuote: 0,
       ...gasResultMetadata,
+      rejectCode: 'gas_price_above_cap',
       reason: `gas price ${gasPriceGwei.toFixed(2)} gwei exceeds maxGasPriceGwei ${maxGasPriceGwei}`,
     };
   }
@@ -884,6 +943,7 @@ export async function evaluateGasPolicy(params: {
       gasCostQuote: 0,
       ...gasResultMetadata,
       l2GasCostBufferBasisPoints,
+      rejectCode: 'native_gas_cost_above_cap',
       reason: `estimated gas cost ${gasCostNative.toFixed(6)} exceeds maxGasCostNative ${maxGasCostNative}`,
     };
   }
@@ -954,6 +1014,7 @@ export async function evaluateGasPolicy(params: {
       gasCostQuote: 0,
       ...gasResultMetadata,
       l2GasCostBufferBasisPoints,
+      rejectCode: 'wrapped_native_unconfigured',
       reason: 'no wrapped native token configured for gas cost conversion',
     };
   }
@@ -994,6 +1055,7 @@ export async function evaluateGasPolicy(params: {
         gasCostQuote: 0,
         ...gasResultMetadata,
         l2GasCostBufferBasisPoints,
+        rejectCode: 'native_to_quote_conversion_unavailable',
         reason: 'no liquidity source available for gas cost conversion',
       };
     }
@@ -1018,6 +1080,7 @@ export async function evaluateGasPolicy(params: {
         minProfitNative: params.policy?.minProfitNative,
         oneInchQuoteTimeoutMs,
         takePolicy: params.policy,
+        gasQuoteAttempts,
       });
       if (quotedAmount !== undefined) {
         return quotedAmount;
@@ -1029,6 +1092,8 @@ export async function evaluateGasPolicy(params: {
         ...gasResultMetadata,
         l2GasCostBufferBasisPoints,
         quoteTokenDecimals: quoteDecimals,
+        rejectCode: 'native_to_quote_conversion_unavailable',
+        gasQuoteAttempts,
         reason: failureReason,
       };
     };
@@ -1074,6 +1139,8 @@ export async function evaluateGasPolicy(params: {
       ...gasResultMetadata,
       l2GasCostBufferBasisPoints,
       quoteTokenDecimals: quoteDecimals,
+      rejectCode: 'quote_gas_cost_above_cap',
+      gasQuoteAttempts: gasQuoteAttempts.length ? gasQuoteAttempts : undefined,
       reason: `estimated gas cost ${gasCostQuote.toFixed(6)} exceeds maxGasCostQuote ${maxGasCostQuote}`,
     };
   }
@@ -1087,6 +1154,7 @@ export async function evaluateGasPolicy(params: {
     ...gasResultMetadata,
     l2GasCostBufferBasisPoints,
     quoteTokenDecimals: quoteDecimals,
+    gasQuoteAttempts: gasQuoteAttempts.length ? gasQuoteAttempts : undefined,
   };
 }
 
@@ -1109,6 +1177,7 @@ async function quoteExactNativeAmountToQuote(params: {
     AutoDiscoverTakePolicy,
     'oneInchQuoteFailureCooldownMs' | 'oneInchQuoteFailureThreshold'
   >;
+  gasQuoteAttempts?: GasQuoteAttempt[];
 }): Promise<BigNumber | undefined> {
   if (params.amountInNative.isZero()) {
     return BigNumber.from(0);
@@ -1174,6 +1243,7 @@ async function quoteExactNativeAmountToQuote(params: {
     gasQuoteCacheKey: params.gasQuoteCacheKey,
     oneInchQuoteTimeoutMs: params.oneInchQuoteTimeoutMs,
     takePolicy: params.takePolicy,
+    gasQuoteAttempts: params.gasQuoteAttempts,
   });
   if (quotedAmount && conversionCacheKey && params.rpcCache) {
     const createdAtMs = Date.now();

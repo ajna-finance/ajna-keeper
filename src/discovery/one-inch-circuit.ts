@@ -1,6 +1,10 @@
 import { AutoDiscoverTakePolicy } from '../config';
 import { logger } from '../logging';
-import { DiscoveryRpcCache, OneInchQuoteCircuitState } from './types';
+import {
+  DiscoveryRpcCache,
+  OneInchQuoteCircuitPurpose,
+  OneInchQuoteCircuitState,
+} from './types';
 
 export const DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS = 2_000;
 export const DEFAULT_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS = 30_000;
@@ -47,13 +51,21 @@ function getOneInchQuoteFailureThreshold(
 }
 
 function getOneInchCircuitState(
-  rpcCache?: DiscoveryRpcCache
+  rpcCache?: DiscoveryRpcCache,
+  purpose: OneInchQuoteCircuitPurpose = 'route_quote'
 ): OneInchQuoteCircuitState {
   if (!rpcCache) {
     return { failures: 0 };
   }
-  rpcCache.oneInchQuoteCircuit ??= { failures: 0 };
-  return rpcCache.oneInchQuoteCircuit;
+  if (purpose === 'route_quote') {
+    rpcCache.oneInchQuoteCircuit ??= { failures: 0 };
+    rpcCache.oneInchQuoteCircuits ??= {};
+    rpcCache.oneInchQuoteCircuits.route_quote ??= rpcCache.oneInchQuoteCircuit;
+    return rpcCache.oneInchQuoteCircuit;
+  }
+  rpcCache.oneInchQuoteCircuits ??= {};
+  rpcCache.oneInchQuoteCircuits[purpose] ??= { failures: 0 };
+  return rpcCache.oneInchQuoteCircuits[purpose]!;
 }
 
 function resetExpiredOneInchCircuit(
@@ -70,9 +82,11 @@ function resetExpiredOneInchCircuit(
 export function getOneInchCircuitOpenReason(params: {
   rpcCache?: DiscoveryRpcCache;
   takePolicy: OneInchCircuitPolicy;
+  purpose?: OneInchQuoteCircuitPurpose;
   nowMs?: number;
 }): string | undefined {
-  const state = getOneInchCircuitState(params.rpcCache);
+  const purpose = params.purpose ?? 'route_quote';
+  const state = getOneInchCircuitState(params.rpcCache, purpose);
   const nowMs = params.nowMs ?? Date.now();
   resetExpiredOneInchCircuit(state, nowMs);
   if (state.cooldownUntilMs !== undefined && state.cooldownUntilMs > nowMs) {
@@ -81,30 +95,41 @@ export function getOneInchCircuitOpenReason(params: {
       nowMs - state.lastOpenLogAtMs >= ONEINCH_CIRCUIT_OPEN_HEARTBEAT_MS
     ) {
       logger.info(
-        `1inch quote circuit remains open until ${state.cooldownUntilMs}`
+        `1inch quote circuit remains open for purpose=${purpose} until ${state.cooldownUntilMs}`
       );
       state.lastOpenLogAtMs = nowMs;
     }
-    return `1inch quote circuit open until ${state.cooldownUntilMs}`;
+    return `1inch quote circuit open for purpose=${purpose} until ${state.cooldownUntilMs}`;
   }
   return undefined;
 }
 
-export function recordOneInchQuoteSuccess(rpcCache?: DiscoveryRpcCache): void {
-  if (!rpcCache?.oneInchQuoteCircuit) {
+export function recordOneInchQuoteSuccess(
+  rpcCache?: DiscoveryRpcCache,
+  purpose: OneInchQuoteCircuitPurpose = 'route_quote'
+): void {
+  const state =
+    purpose === 'route_quote'
+      ? rpcCache?.oneInchQuoteCircuit
+      : rpcCache?.oneInchQuoteCircuits?.[purpose];
+  if (!state) {
     return;
   }
-  rpcCache.oneInchQuoteCircuit.failures = 0;
-  rpcCache.oneInchQuoteCircuit.cooldownUntilMs = undefined;
-  rpcCache.oneInchQuoteCircuit.lastOpenLogAtMs = undefined;
+  state.failures = 0;
+  state.cooldownUntilMs = undefined;
+  state.lastOpenLogAtMs = undefined;
 }
 
 export function recordOneInchQuoteFailure(params: {
   rpcCache?: DiscoveryRpcCache;
   takePolicy: OneInchCircuitPolicy;
+  purpose?: OneInchQuoteCircuitPurpose;
   nowMs?: number;
 }): void {
-  const state = getOneInchCircuitState(params.rpcCache);
+  const state = getOneInchCircuitState(
+    params.rpcCache,
+    params.purpose ?? 'route_quote'
+  );
   const nowMs = params.nowMs ?? Date.now();
   resetExpiredOneInchCircuit(state, nowMs);
   state.failures += 1;

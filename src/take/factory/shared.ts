@@ -32,8 +32,10 @@ import { SushiSwapQuoteProvider } from '../../dex/providers/sushiswap-quote-prov
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
 import {
   ApprovedFactoryQuoteEvaluation,
-  TakeActionConfig,
   ExternalTakeQuoteEvaluation,
+  GasPolicyRejectCode,
+  GasQuoteAttempt,
+  TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
 import { TakeWriteTransport } from '../write-transport';
@@ -93,6 +95,8 @@ export interface FactoryRouteProfitabilityContext {
   slippageRiskBufferQuoteRaw?: BigNumber;
   allowSubsidy?: boolean;
   routeRejectionReasonsBySource?: LiquiditySourceMap<string>;
+  gasPolicyRejectCodeBySource?: LiquiditySourceMap<GasPolicyRejectCode>;
+  gasQuoteAttemptsBySource?: LiquiditySourceMap<GasQuoteAttempt[]>;
   gasPriceWei?: BigNumber;
   gasPriceGwei?: number;
   gasPriceAgeMs?: number;
@@ -1720,6 +1724,13 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       ...params.evaluation,
       isTakeable: false,
       reason: rejectionReason,
+      routeProfitability: {
+        ...params.evaluation.routeProfitability,
+        gasPolicyRejectCode:
+          params.context?.gasPolicyRejectCodeBySource?.[params.liquiditySource],
+        gasQuoteAttempts:
+          params.context?.gasQuoteAttemptsBySource?.[params.liquiditySource],
+      },
     };
   }
 
@@ -1809,6 +1820,10 @@ export function applyFactoryRouteProfitabilityPolicy(params: {
       gasPriceFreshnessTtlMs: params.context.gasPriceFreshnessTtlMs,
       l2GasCostBufferBasisPoints: params.context.l2GasCostBufferBasisPoints,
       gasPolicyEvaluatedAt: params.context.gasPolicyEvaluatedAt,
+      gasPolicyRejectCode:
+        params.context.gasPolicyRejectCodeBySource?.[params.liquiditySource],
+      gasQuoteAttempts:
+        params.context.gasQuoteAttemptsBySource?.[params.liquiditySource],
     },
   });
 }
