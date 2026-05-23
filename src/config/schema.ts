@@ -89,6 +89,7 @@ export type ExternalTakePathKind = 'oneinch' | 'factory';
 export type ExternalTakeRouteSelectionMode =
   | 'maximize_profit'
   | 'factory_first';
+export type HybridGasQuoteFailureFallbackMode = 'disabled' | 'factory_first';
 export type ExternalTakeTransportPolicy =
   | 'allow_public'
   | 'prefer_private_or_relay'
@@ -276,6 +277,13 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    * API use; subsidized approvals keep probing remaining paths.
    */
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
+  /**
+   * Disabled-by-default escape hatch for hybrid maximize_profit discovery when
+   * collateral->quote factory execution is viable but native gas cannot be
+   * quoted into the pool quote token. When enabled, fallback approval uses only
+   * native gas caps and rejects quote-denominated policy fields at runtime.
+   */
+  hybridGasQuoteFailureFallbackMode?: HybridGasQuoteFailureFallbackMode;
   /**
    * Controls whether discovered external takes may fall back to public RPC
    * submission, or must use private RPC / relay write transport.

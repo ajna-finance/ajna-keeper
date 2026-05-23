@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { BigNumber } from 'ethers';
+import { BigNumber, ethers } from 'ethers';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
@@ -7,6 +7,7 @@ import {
 } from '../../src/take/external-take-policy';
 
 const raw = (value: number): BigNumber => BigNumber.from(value);
+const usdc = (value: string): BigNumber => ethers.utils.parseUnits(value, 18);
 
 describe('External take route policy', () => {
   it('approves profitable non-subsidized routes and carries the profit floor into min-out', () => {
@@ -228,5 +229,90 @@ describe('External take route policy', () => {
       true
     );
     expect(merged.routeProfitability?.gasPriceGwei).to.equal(1.5);
+  });
+
+  it('rejects the real CADC first BucketTake point below repayment and market threshold', () => {
+    const quoteDue = usdc('5.023934827627184068');
+    const marketFactorFloor = quoteDue.mul(100).add(98).div(99);
+    const policy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: 0.99,
+      allowSubsidy: false,
+      quoteAmountRaw: usdc('4.954684377911498'),
+      quoteDueRaw: quoteDue,
+      marketFactorFloorQuoteRaw: marketFactorFloor,
+    });
+
+    expect(policy.isEconomicallyExecutable).to.equal(false);
+    expect(policy.rejectionReason).to.equal(
+      EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRepaymentFloor
+    );
+  });
+
+  it('still rejects the real CADC first BucketTake point if the event bond change is naively credited', () => {
+    const quoteDue = usdc('5.023934827627184068');
+    const marketFactorFloor = quoteDue.mul(100).add(98).div(99);
+    const observedMarketOutput = usdc('4.954684377911498');
+    const reportedBondChange = usdc('0.023662955939816372');
+    const policy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: 0.99,
+      allowSubsidy: false,
+      quoteAmountRaw: observedMarketOutput.add(reportedBondChange),
+      quoteDueRaw: quoteDue,
+      marketFactorFloorQuoteRaw: marketFactorFloor,
+    });
+
+    expect(policy.isEconomicallyExecutable).to.equal(false);
+    expect(policy.rejectionReason).to.equal(
+      EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRepaymentFloor
+    );
+  });
+
+  it('approves the real CADC second BucketTake point before gas/profit floors', () => {
+    const quoteDue = usdc('3.090554648181740026');
+    const quoteAmount = usdc('3.1439176014062675');
+    const marketFactorFloor = quoteDue.mul(100).add(98).div(99);
+    const policy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: 0.99,
+      allowSubsidy: false,
+      quoteAmountRaw: quoteAmount,
+      quoteDueRaw: quoteDue,
+      marketFactorFloorQuoteRaw: marketFactorFloor,
+    });
+
+    expect(policy.isEconomicallyExecutable).to.equal(true);
+    expect(
+      policy.expectedNetProfitQuoteRaw.eq(quoteAmount.sub(quoteDue))
+    ).to.equal(true);
+  });
+
+  it('rejects the real CADC second BucketTake point when profit or gas floors consume the spread', () => {
+    const quoteDue = usdc('3.090554648181740026');
+    const quoteAmount = usdc('3.1439176014062675');
+    const marketFactorFloor = quoteDue.mul(100).add(98).div(99);
+    const profitFloorPolicy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: 0.99,
+      allowSubsidy: false,
+      quoteAmountRaw: quoteAmount,
+      quoteDueRaw: quoteDue,
+      marketFactorFloorQuoteRaw: marketFactorFloor,
+      configuredProfitFloorQuoteRaw: usdc('0.06'),
+    });
+    const gasFloorPolicy = applyExternalTakeRoutePolicy({
+      configuredMarketPriceFactor: 0.99,
+      allowSubsidy: false,
+      quoteAmountRaw: quoteAmount,
+      quoteDueRaw: quoteDue,
+      marketFactorFloorQuoteRaw: marketFactorFloor,
+      routeExecutionCostQuoteRaw: usdc('0.054'),
+    });
+
+    expect(profitFloorPolicy.isEconomicallyExecutable).to.equal(false);
+    expect(gasFloorPolicy.isEconomicallyExecutable).to.equal(false);
+    expect(profitFloorPolicy.rejectionReason).to.equal(
+      EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor
+    );
+    expect(gasFloorPolicy.rejectionReason).to.equal(
+      EXTERNAL_TAKE_REJECTION_REASONS.routeQuoteBelowRequiredOutputFloor
+    );
   });
 });

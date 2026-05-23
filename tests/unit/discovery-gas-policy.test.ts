@@ -141,9 +141,8 @@ describe('Discovery Gas Policy', () => {
       .be.true;
     expect(cachedResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('1', 6))).to
       .be.true;
-    expect(
-      refreshedResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('2', 6))
-    ).to.be.true;
+    expect(refreshedResult.gasCostQuoteRaw?.eq(ethers.utils.parseUnits('2', 6)))
+      .to.be.true;
     expect(oneInchQuoteStub.calledTwice).to.be.true;
     expect(rpcCache.stats).to.deep.include({
       gasQuoteConversionCacheMisses: 2,
@@ -323,7 +322,101 @@ describe('Discovery Gas Policy', () => {
 
     expect(result.approved).to.be.false;
     expect(result.reason).to.equal('failed to quote gas cost into quote token');
+    expect(result.rejectCode).to.equal(
+      'native_to_quote_conversion_unavailable'
+    );
+    expect(result.gasQuoteAttempts?.[0]).to.deep.include({
+      source: LiquiditySource.ONEINCH,
+      success: false,
+      reason: '1inch gas quote conversion returned zero output',
+    });
     expect(oneInchQuoteStub.calledOnce).to.be.true;
+  });
+
+  it('returns structured native-to-quote conversion rejection and per-source attempts when every gas quote source fails', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon
+      .stub(DexRouter.prototype, 'getQuoteFromOneInch')
+      .resolves({ success: false, error: 'insufficient liquidity' });
+    sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+    const poolExistsStub = sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'poolExists')
+      .resolves(false);
+    const uniswapQuoteStub = sinon.stub(
+      UniswapV3QuoteProvider.prototype,
+      'getQuote'
+    );
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(8453),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        oneInchRouters: {
+          8453: '0x1111111111111111111111111111111111111111',
+        },
+        universalRouterOverrides: {
+          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+          poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+          candidateFeeTiers: [500, 100, 10000],
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.ONEINCH,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 8453,
+      },
+    });
+
+    expect(result.approved).to.equal(false);
+    expect(result.rejectCode).to.equal(
+      'native_to_quote_conversion_unavailable'
+    );
+    expect(result.reason).to.equal('failed to quote gas cost into quote token');
+    expect(
+      result.gasQuoteAttempts?.map((attempt) => attempt.source)
+    ).to.deep.equal([LiquiditySource.ONEINCH, LiquiditySource.UNISWAPV3]);
+    expect(result.gasQuoteAttempts?.[0]).to.deep.include({
+      source: LiquiditySource.ONEINCH,
+      success: false,
+      reason: 'insufficient liquidity',
+    });
+    expect(result.gasQuoteAttempts?.[1]).to.deep.include({
+      source: LiquiditySource.UNISWAPV3,
+      success: false,
+      reason: 'no factory pool at configured fee tiers',
+    });
+    expect(result.gasQuoteAttempts?.[1].feeTiers).to.deep.equal([
+      3000, 500, 100, 10000,
+    ]);
+    expect(poolExistsStub.callCount).to.equal(4);
+    expect(uniswapQuoteStub.called).to.equal(false);
   });
 
   it('uses the cached discovery chainId instead of calling signer.getChainId per evaluation', async () => {
@@ -731,9 +824,11 @@ describe('Discovery Gas Policy', () => {
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
         chainId: 8453,
-        oneInchQuoteCircuit: {
-          failures: 2,
-          cooldownUntilMs: Date.now() + 30_000,
+        oneInchQuoteCircuits: {
+          gas_conversion: {
+            failures: 2,
+            cooldownUntilMs: Date.now() + 30_000,
+          },
         },
       },
     });
@@ -741,6 +836,18 @@ describe('Discovery Gas Policy', () => {
     expect(result.approved).to.be.true;
     expect(oneInchQuoteStub.called).to.be.false;
     expect(uniswapQuoteStub.calledOnce).to.be.true;
+    expect(result.gasQuoteAttempts?.[0]).to.deep.include({
+      source: LiquiditySource.ONEINCH,
+      success: false,
+    });
+    expect(result.gasQuoteAttempts?.[0].reason).to.include(
+      'purpose=gas_conversion'
+    );
+    expect(result.gasQuoteAttempts?.[1]).to.deep.include({
+      source: LiquiditySource.UNISWAPV3,
+      success: true,
+      amountOut: ethers.utils.parseUnits('2', 6).toString(),
+    });
   });
 
   it('tries another configured gas quote source when the preferred source cannot quote', async () => {
@@ -971,6 +1078,76 @@ describe('Discovery Gas Policy', () => {
     expect(poolExistsStub.calledTwice).to.be.true;
     expect(uniswapQuoteStub.calledOnce).to.be.true;
     expect(uniswapQuoteStub.firstCall.args[3]).to.equal(500);
+  });
+
+  it('records a failed Uniswap gas quote attempt when pools exist but return no usable quote', async () => {
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
+    sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
+    const poolExistsStub = sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'poolExists')
+      .resolves(true);
+    const uniswapQuoteStub = sinon
+      .stub(UniswapV3QuoteProvider.prototype, 'getQuote')
+      .resolves({ success: false } as any);
+
+    const result = await evaluateGasPolicy({
+      signer: {
+        provider: {},
+        getChainId: sinon.stub().resolves(8453),
+      } as any,
+      config: {
+        autoDiscover: {
+          enabled: true,
+          take: {
+            enabled: true,
+            maxGasCostQuote: 5,
+          },
+        },
+        universalRouterOverrides: {
+          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+          poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+          quoterV2Address: '0x4444444444444444444444444444444444444444',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          defaultFeeTier: 3000,
+        },
+        tokenAddresses: {
+          weth: '0x4200000000000000000000000000000000000006',
+        },
+      } as any,
+      transports: {
+        readRpc: {
+          getGasPrice: sinon
+            .stub()
+            .resolves(ethers.utils.parseUnits('1', 'gwei')),
+        },
+      },
+      policy: {
+        maxGasCostQuote: 5,
+      },
+      gasLimit: BigNumber.from(900000),
+      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      preferredLiquiditySource: LiquiditySource.UNISWAPV3,
+      gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+      rpcCache: {
+        chainId: 8453,
+      },
+    });
+
+    expect(result.approved).to.equal(false);
+    expect(result.rejectCode).to.equal(
+      'native_to_quote_conversion_unavailable'
+    );
+    expect(result.gasQuoteAttempts).to.have.length(1);
+    expect(result.gasQuoteAttempts?.[0]).to.deep.include({
+      source: LiquiditySource.UNISWAPV3,
+      success: false,
+      reason: 'factory pool exists but returned no usable gas quote',
+    });
+    expect(result.gasQuoteAttempts?.[0].feeTiers).to.deep.equal([
+      3000, 100, 500, 10000,
+    ]);
+    expect(poolExistsStub.callCount).to.equal(4);
+    expect(uniswapQuoteStub.callCount).to.equal(4);
   });
 
   it('checks SushiSwap pool availability before gas quote conversion', async () => {

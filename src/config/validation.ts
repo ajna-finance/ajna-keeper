@@ -2,6 +2,7 @@ import {
   ExternalTakeRouteSelectionMode,
   ExternalTakeTransportPolicy,
   ExternalTakePathKind,
+  HybridGasQuoteFailureFallbackMode,
   KeeperConfig,
   LiquiditySource,
   PostAuctionDex,
@@ -20,6 +21,7 @@ import {
   EXTERNAL_TAKE_PATHS,
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
   FACTORY_DYNAMIC_SOURCES,
+  HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
   isFactoryDynamicSource,
   resolveExternalTakePaths,
   resolveFactoryRouteSelectionSources,
@@ -339,6 +341,19 @@ function validateExternalTakeRouteSelectionMode(
   if (!EXTERNAL_TAKE_ROUTE_SELECTION_MODES.has(mode)) {
     throw new Error(
       'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
+    );
+  }
+}
+
+function validateHybridGasQuoteFailureFallbackMode(
+  mode: HybridGasQuoteFailureFallbackMode | undefined
+): void {
+  if (mode === undefined) {
+    return;
+  }
+  if (!HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES.has(mode)) {
+    throw new Error(
+      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode must be disabled or factory_first'
     );
   }
 }
@@ -801,6 +816,9 @@ export function validateAutoDiscoverConfig(
     validateExternalTakeRouteSelectionMode(
       takePolicy.externalTakeRouteSelectionMode
     );
+    validateHybridGasQuoteFailureFallbackMode(
+      takePolicy.hybridGasQuoteFailureFallbackMode
+    );
     requireOptionalBoolean(
       takePolicy.validateRouteDeployments,
       'AutoDiscoverConfig.take: validateRouteDeployments must be a boolean'
@@ -894,6 +912,23 @@ export function validateAutoDiscoverConfig(
       discoveredTake,
       takePolicy.allowedExternalTakePaths
     );
+    if (takePolicy.hybridGasQuoteFailureFallbackMode === 'factory_first') {
+      if (takePolicy.maxGasCostNative === undefined) {
+        throw new Error(
+          'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first requires maxGasCostNative'
+        );
+      }
+      if (
+        !externalTakePaths.has('oneinch') ||
+        !externalTakePaths.has('factory') ||
+        (takePolicy.externalTakeRouteSelectionMode !== undefined &&
+          takePolicy.externalTakeRouteSelectionMode !== 'maximize_profit')
+      ) {
+        logger.warn(
+          'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first is only eligible for hybrid maximize_profit routes with both oneinch and factory enabled'
+        );
+      }
+    }
     if (
       takePolicy.defaultFactoryLiquiditySource !== undefined &&
       !isFactoryDynamicSource(takePolicy.defaultFactoryLiquiditySource)

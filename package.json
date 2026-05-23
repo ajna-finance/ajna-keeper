@@ -23,7 +23,11 @@
     "production-verification:live-liquidity:mainnet": "RUN_LIVE_LIQUIDITY_E2E=true FORK_NETWORK=mainnet npx hardhat test tests/integration/live-liquidity-execution.test.ts",
     "production-verification:live-liquidity": "npm run production-verification:live-liquidity:mainnet",
     "create-keystore": "./node_modules/ts-node/dist/bin.js scripts/create-keystore.ts",
-    "fork-base": "FORK_NETWORK=base hardhat node"
+    "fork-base": "FORK_NETWORK=base hardhat node",
+    "create-liquidatable-fixture": "./node_modules/ts-node/dist/bin.js scripts/create-liquidatable-ajna-fixture.ts",
+    "create-liquidatable-uniswap-fixture": "./node_modules/ts-node/dist/bin.js scripts/create-liquidatable-ajna-fixture.ts --with-uniswap-v3-external-take",
+    "oneinch-route-canary": "./node_modules/ts-node/dist/bin.js scripts/oneinch-route-canary.ts",
+    "run-fixture-keeper-harness": "./node_modules/ts-node/dist/bin.js scripts/run-fixture-keeper-harness.ts"
   },
   "author": "Ajna Finance contributors",
   "license": "MIT",
@@ -34,6 +38,7 @@
     "@openzeppelin/contracts": "4.9.6",
     "@uniswap/sdk-core": "^7.5.0",
     "@uniswap/v3-core": "^1.0.1",
+    "@uniswap/v3-periphery": "^1.4.4",
     "@uniswap/v3-sdk": "^3.24.0",
     "axios": "^1.15.0",
     "ethcall": "^6.0.6",

@@ -1,8 +1,8 @@
 import dotenv from 'dotenv';
-import { HardhatUserConfig } from "hardhat/config";
-import '@typechain/hardhat'
-import '@nomicfoundation/hardhat-ethers'
-import "@nomicfoundation/hardhat-verify";
+import { HardhatUserConfig } from 'hardhat/config';
+import '@typechain/hardhat';
+import '@nomicfoundation/hardhat-ethers';
+import '@nomicfoundation/hardhat-verify';
 
 dotenv.config();
 
@@ -23,7 +23,9 @@ const forkConfigs: Record<string, { url: string; blockNumber?: number }> = {
 const forkNetwork = process.env.FORK_NETWORK || 'mainnet';
 const forkConfig = forkConfigs[forkNetwork];
 if (!forkConfig) {
-  throw new Error(`Unknown FORK_NETWORK: "${forkNetwork}". Valid: ${Object.keys(forkConfigs).join(', ')}`);
+  throw new Error(
+    `Unknown FORK_NETWORK: "${forkNetwork}". Valid: ${Object.keys(forkConfigs).join(', ')}`
+  );
 }
 
 const config: HardhatUserConfig = {
@@ -33,10 +35,10 @@ const config: HardhatUserConfig = {
     settings: {
       optimizer: {
         enabled: true,
-        runs: 200
+        runs: 200,
       },
       metadata: {
-      bytecodeHash: "none"  // Helps with verification
+        bytecodeHash: 'none', // Helps with verification
       },
     },
   },
@@ -45,10 +47,19 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
-      chainId: 31337,
+      chainId: Number(process.env.HARDHAT_CHAIN_ID ?? 31337),
       forking: {
         url: forkConfig.url,
-        ...(forkConfig.blockNumber ? { blockNumber: forkConfig.blockNumber } : {}),
+        ...(forkConfig.blockNumber
+          ? { blockNumber: forkConfig.blockNumber }
+          : {}),
+      },
+      chains: {
+        8453: {
+          hardforkHistory: {
+            shanghai: 0,
+          },
+        },
       },
     },
     avalanche: {
@@ -63,7 +74,7 @@ const config: HardhatUserConfig = {
       url: `https://boldest-soft-moon.hemi-mainnet.quiknode.pro/${process.env.QUICKNODE_API_KEY}`,
       chainId: 43111, // Hemi mainnet chain ID
       accounts: {
-        mnemonic: process.env.MNEMONIC || "your mnemonic here",
+        mnemonic: process.env.MNEMONIC || 'your mnemonic here',
       },
       gasPrice: 1000000000, // 1 gwei
       gas: 8000000, // 8M gas limit
@@ -73,20 +84,21 @@ const config: HardhatUserConfig = {
   //etherscan: { apiKey: process.env.ETHERSCAN_API_KEY },
   etherscan: {
     apiKey: {
-      avalanche: "verifyContract", // Snowtrace uses this generic key
-      snowtrace: "verifyContract"  // Alternative name
+      avalanche: 'verifyContract', // Snowtrace uses this generic key
+      snowtrace: 'verifyContract', // Alternative name
     },
     customChains: [
       {
-        network: "avalanche",
+        network: 'avalanche',
         chainId: 43114,
         urls: {
-          apiURL: "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api",
-          browserURL: "https://snowtrace.io"
-        }
-      }
-    ]
-  }
+          apiURL:
+            'https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api',
+          browserURL: 'https://snowtrace.io',
+        },
+      },
+    ],
+  },
 };
 
 export default config;

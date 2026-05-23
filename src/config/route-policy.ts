@@ -1,6 +1,7 @@
 import {
   ExternalTakePathKind,
   ExternalTakeRouteSelectionMode,
+  HybridGasQuoteFailureFallbackMode,
   LiquiditySource,
 } from './schema';
 
@@ -25,6 +26,9 @@ export const EXTERNAL_TAKE_PATHS = new Set<ExternalTakePathKind>([
 
 export const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
   new Set<ExternalTakeRouteSelectionMode>(['maximize_profit', 'factory_first']);
+
+export const HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES =
+  new Set<HybridGasQuoteFailureFallbackMode>(['disabled', 'factory_first']);
 
 export const DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE: ActiveExternalTakeRouteSelectionMode =
   'maximize_profit';

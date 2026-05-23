@@ -28,6 +28,7 @@ import {
   DiscoveryExecutionConfig,
   DiscoveryExecutionTransportConfig,
   DiscoveryRpcCache,
+  OneInchQuoteCircuitPurpose,
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
 import * as takeFactoryModule from '../take/factory';
@@ -723,6 +724,10 @@ async function buildFactoryRouteProfitabilityContext(params: {
   const routeGasLimitBySource: LiquiditySourceMap<BigNumber> = {};
   const nativeProfitFloorQuoteRawBySource: LiquiditySourceMap<BigNumber> = {};
   const routeRejectionReasonsBySource: LiquiditySourceMap<string> = {};
+  const gasPolicyRejectCodeBySource: FactoryRouteProfitabilityContext['gasPolicyRejectCodeBySource'] =
+    {};
+  const gasQuoteAttemptsBySource: FactoryRouteProfitabilityContext['gasQuoteAttemptsBySource'] =
+    {};
   const gasPriceFetchedAt = params.rpcCache?.gasPriceFetchedAt;
   const gasPriceAgeMs =
     gasPriceFetchedAt !== undefined
@@ -763,6 +768,12 @@ async function buildFactoryRouteProfitabilityContext(params: {
       }
       routeRejectionReasonsBySource[source] =
         gasPolicy.reason ?? 'route gas policy rejected source';
+      if (gasPolicy.rejectCode) {
+        gasPolicyRejectCodeBySource[source] = gasPolicy.rejectCode;
+      }
+      if (gasPolicy.gasQuoteAttempts) {
+        gasQuoteAttemptsBySource[source] = gasPolicy.gasQuoteAttempts;
+      }
       continue;
     }
 
@@ -782,6 +793,8 @@ async function buildFactoryRouteProfitabilityContext(params: {
     configuredProfitFloorQuoteRaw,
     allowSubsidy: params.allowSubsidy === true,
     routeRejectionReasonsBySource,
+    gasPolicyRejectCodeBySource,
+    gasQuoteAttemptsBySource,
     gasPriceWei: params.rpcCache?.gasPrice,
     gasPriceGwei:
       params.rpcCache?.gasPrice !== undefined
@@ -797,7 +810,7 @@ async function buildFactoryRouteProfitabilityContext(params: {
   };
 }
 
-interface DiscoveredTakeTargetStats {
+export interface DiscoveredTakeTargetStats {
   candidateCount: number;
   approvedTakeDecisions: number;
   approvedArbTakeDecisions: number;
@@ -835,6 +848,8 @@ interface DiscoveredTakeTargetStats {
   factoryPostSubmissionFailures: number;
   hybridFallbackAttempts: number;
   hybridFallbackSuccesses: number;
+  hybridGasQuoteFallbackAttempts: number;
+  hybridGasQuoteFallbackSuccesses: number;
   hotAuctionCandidateRemovals: number;
 }
 
@@ -902,16 +917,22 @@ interface ExternalTakeApprovalInput {
   auctionPrice: BigNumber;
   collateral: BigNumber;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
+  approvalMode?: DiscoveryExternalTakeApprovalMode;
   countStats?: boolean;
   forceGasRefresh?: boolean;
 }
 
 type ExternalTakeApprovalRejectCategory = 'gasPolicy' | 'profitFloor';
+type DiscoveryExternalTakeApprovalMode =
+  | 'strict_hybrid'
+  | 'factory_gas_quote_fallback';
 
 interface ExternalTakeApprovalResult {
   approved: boolean;
   reason?: string;
   rejectCategory?: ExternalTakeApprovalRejectCategory;
+  gasPolicyRejectCode?: GasPolicyResult['rejectCode'];
+  gasQuoteAttempts?: GasPolicyResult['gasQuoteAttempts'];
   quoteEvaluation?: ExternalTakeQuoteEvaluation;
 }
 
@@ -921,6 +942,7 @@ interface FactoryPathQuoteInput {
   poolConfig: ResolvedTakeTarget;
   auctionPrice: BigNumber;
   collateral: BigNumber;
+  factoryGasQuoteFallback?: boolean;
   routeProbeAbortSignal?: AbortSignal;
 }
 
@@ -955,6 +977,7 @@ function recordOneInchCircuitOutcomeForDiscovery(params: {
   rpcCache?: DiscoveryRpcCache;
   takePolicy: AutoDiscoverTakePolicyRuntime;
   outcome: OneInchCircuitOutcome;
+  purpose?: OneInchQuoteCircuitPurpose;
 }): void {
   if (params.outcome === 'neutral') {
     return;
@@ -963,10 +986,11 @@ function recordOneInchCircuitOutcomeForDiscovery(params: {
     recordOneInchQuoteFailure({
       rpcCache: params.rpcCache,
       takePolicy: params.takePolicy,
+      purpose: params.purpose,
     });
     return;
   }
-  recordOneInchQuoteSuccess(params.rpcCache);
+  recordOneInchQuoteSuccess(params.rpcCache, params.purpose);
 }
 
 interface HandleDiscoveredTakeTargetParamsBase {
@@ -1131,6 +1155,16 @@ function logDiscoveredTakeTargetSummary(params: {
     fields,
     'hybridFallbackSuccesses',
     stats.hybridFallbackSuccesses
+  );
+  appendNonZeroField(
+    fields,
+    'hybridGasQuoteFallbackAttempts',
+    stats.hybridGasQuoteFallbackAttempts
+  );
+  appendNonZeroField(
+    fields,
+    'hybridGasQuoteFallbackSuccesses',
+    stats.hybridGasQuoteFallbackSuccesses
   );
   appendNonZeroField(
     fields,
@@ -1339,13 +1373,15 @@ function applyDiscoveryApprovalProfitabilityPolicy(params: {
   quoteAmountRaw?: BigNumber;
   price: number;
   rpcCache?: DiscoveryRpcCache;
+  approvalMode: DiscoveryExternalTakeApprovalMode;
   countStats: boolean;
   stats: Pick<DiscoveredTakeTargetStats, 'profitFloorRejects'>;
 }): ExternalTakeApprovalResult {
   const configuredMarketPriceFactor = params.target.take.marketPriceFactor;
   const canApplyRawRoutePolicy =
     params.quoteAmountRaw !== undefined &&
-    params.gasCostQuoteRaw !== undefined &&
+    (params.gasCostQuoteRaw !== undefined ||
+      params.approvalMode === 'factory_gas_quote_fallback') &&
     params.auctionCostQuoteRaw !== undefined &&
     configuredMarketPriceFactor !== undefined;
   const gasTelemetryFields = getApprovalGasTelemetryFields({
@@ -1359,12 +1395,30 @@ function applyDiscoveryApprovalProfitabilityPolicy(params: {
     params.selectedFactoryLiquiditySource !== undefined &&
     canApplyRawRoutePolicy
   ) {
+    const auctionRepayRequirementQuoteRaw = params.auctionCostQuoteRaw;
+    const marketPriceFactor = configuredMarketPriceFactor;
+    if (
+      auctionRepayRequirementQuoteRaw === undefined ||
+      marketPriceFactor === undefined
+    ) {
+      return rejectDiscoveryProfitFloor({
+        reason: 'route profitability context missing raw policy inputs',
+        countStats: params.countStats,
+        stats: params.stats,
+      });
+    }
+    const marketFactorFloorQuoteRaw = ceilDiv(
+      auctionRepayRequirementQuoteRaw.mul(MARKET_FACTOR_SCALE),
+      BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
+    );
     const refreshedEvaluation = applyFactoryRouteProfitabilityPolicy({
       evaluation: {
         ...params.quoteEvaluation,
         routeProfitability: {
           ...params.quoteEvaluation.routeProfitability,
-          configuredMarketPriceFactor,
+          auctionRepayRequirementQuoteRaw,
+          configuredMarketPriceFactor: marketPriceFactor,
+          marketFactorFloorQuoteRaw,
         },
       },
       liquiditySource: params.selectedFactoryLiquiditySource,
@@ -1529,6 +1583,33 @@ async function approveExternalTakeForDiscovery(
   const countStats = params.countStats ?? true;
   let approvedQuoteEvaluation =
     cloneExternalTakeQuoteEvaluation(quoteEvaluation);
+  const approvalMode =
+    params.approvalMode ??
+    approvedQuoteEvaluation.approvalMode ??
+    'strict_hybrid';
+
+  if (approvalMode === 'factory_gas_quote_fallback') {
+    if (
+      takePolicy?.maxGasCostQuote !== undefined ||
+      takePolicy?.minExpectedProfitQuote !== undefined ||
+      takePolicy?.minProfitNative !== undefined
+    ) {
+      return {
+        approved: false,
+        reason:
+          'hybrid gas quote fallback ineligible because quote-denominated gas/profit policy is configured',
+        rejectCategory: 'gasPolicy',
+      };
+    }
+    if (takePolicy?.maxGasCostNative === undefined) {
+      return {
+        approved: false,
+        reason:
+          'hybrid gas quote fallback ineligible because maxGasCostNative is not configured',
+        rejectCategory: 'gasPolicy',
+      };
+    }
+  }
 
   const sourceSelection = resolveApprovedExternalTakeSource({
     target,
@@ -1543,6 +1624,9 @@ async function approveExternalTakeForDiscovery(
   const selectedLiquiditySource = sourceSelection.selectedLiquiditySource;
   const selectedFactoryLiquiditySource =
     sourceSelection.selectedFactoryLiquiditySource;
+  const fallbackInputWasSubsidized =
+    approvalMode === 'factory_gas_quote_fallback' &&
+    isSubsidizedExternalTakeQuote(approvedQuoteEvaluation);
   if (selectedLiquiditySource !== undefined && !params.forceGasRefresh) {
     const freshness = hasFreshFactoryRouteGasPolicy({
       quoteEvaluation: approvedQuoteEvaluation,
@@ -1628,7 +1712,10 @@ async function approveExternalTakeForDiscovery(
     quoteTokenAddress: pool.quoteAddress,
     preferredLiquiditySource: selectedLiquiditySource,
     useProfitFloor: true,
-    requireGasCostQuote: requiresHybridNetProfitRanking(takePolicy),
+    requireGasCostQuote:
+      approvalMode === 'factory_gas_quote_fallback'
+        ? false
+        : requiresHybridNetProfitRanking(takePolicy),
     gasPrice: rpcCache?.gasPrice,
     chainId: rpcCache?.chainId,
     rpcCache,
@@ -1654,6 +1741,8 @@ async function approveExternalTakeForDiscovery(
       approved: false,
       reason: gasPolicy.reason,
       rejectCategory: 'gasPolicy',
+      gasPolicyRejectCode: gasPolicy.rejectCode,
+      gasQuoteAttempts: gasPolicy.gasQuoteAttempts,
     };
   }
 
@@ -1741,6 +1830,7 @@ async function approveExternalTakeForDiscovery(
     quoteAmountRaw,
     price,
     rpcCache,
+    approvalMode,
     countStats,
     stats,
   });
@@ -1749,6 +1839,18 @@ async function approveExternalTakeForDiscovery(
   }
   approvedQuoteEvaluation =
     profitabilityApproval.quoteEvaluation ?? approvedQuoteEvaluation;
+
+  if (
+    approvalMode === 'factory_gas_quote_fallback' &&
+    (fallbackInputWasSubsidized ||
+      isSubsidizedExternalTakeQuote(approvedQuoteEvaluation))
+  ) {
+    return {
+      approved: false,
+      reason: 'hybrid gas quote fallback rejected subsidized factory route',
+      rejectCategory: 'profitFloor',
+    };
+  }
 
   logger.debug(
     `Discovered external take approved after gas/profit policy: ${formatExternalTakeGasTelemetry(
@@ -1805,6 +1907,16 @@ async function quoteFactoryPathForDiscovery(
       allowSubsidy: params.poolConfig.take.allowSubsidy === true,
       takePolicy: params.takePolicy,
     });
+  const routeSelection = {
+    allowedLiquiditySources: params.takePolicy?.allowedLiquiditySources,
+    routeQuoteBudgetPerCandidate:
+      params.takePolicy?.takeRouteQuoteBudgetPerCandidate,
+    routeProbeLimiter: params.routeProbeLimiter,
+    routeProbeAbortSignal: params.routeProbeAbortSignal,
+    routeProfitabilityContextFactory: params.factoryGasQuoteFallback
+      ? undefined
+      : routeProfitabilityContextFactory,
+  };
 
   const evaluation = await takeFactoryModule.getFactoryTakeQuoteEvaluation(
     params.pool,
@@ -1814,14 +1926,7 @@ async function quoteFactoryPathForDiscovery(
     params.factoryQuoteConfig,
     params.signer,
     params.rpcCache?.factoryQuoteProviders,
-    {
-      allowedLiquiditySources: params.takePolicy?.allowedLiquiditySources,
-      routeQuoteBudgetPerCandidate:
-        params.takePolicy?.takeRouteQuoteBudgetPerCandidate,
-      routeProbeLimiter: params.routeProbeLimiter,
-      routeProbeAbortSignal: params.routeProbeAbortSignal,
-      routeProfitabilityContextFactory,
-    }
+    routeSelection
   );
   return {
     ...evaluation,
@@ -1994,6 +2099,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: ResolvedTakeTarget;
+  takePolicy: AutoDiscoverTakePolicyRuntime;
   externalTakePaths: ExternalTakePathKind[];
   routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   probeTimeoutMs: number;
@@ -2035,6 +2141,8 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     evaluation?: ExternalTakeQuoteEvaluation;
     reason?: string;
     rejectCategory?: ExternalTakeApprovalRejectCategory;
+    gasPolicyRejectCode?: GasPolicyResult['rejectCode'];
+    gasQuoteAttempts?: GasPolicyResult['gasQuoteAttempts'];
     oneInchCircuitOutcome?: OneInchCircuitOutcome;
   };
   type ProbeControl = {
@@ -2088,10 +2196,16 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
       oneInchCircuitOutcome =
         path === 'oneinch' ? getOneInchCircuitOutcome(evaluation) : undefined;
       if (!evaluation.isTakeable) {
+        const gasPolicyRejectCode =
+          evaluation.routeProfitability?.gasPolicyRejectCode;
         return {
           path,
           durationMs: Date.now() - startedAt,
           reason: evaluation.reason ?? 'not takeable',
+          rejectCategory:
+            gasPolicyRejectCode !== undefined ? 'gasPolicy' : undefined,
+          gasPolicyRejectCode,
+          gasQuoteAttempts: evaluation.routeProfitability?.gasQuoteAttempts,
           oneInchCircuitOutcome,
         };
       }
@@ -2109,6 +2223,8 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
           durationMs: Date.now() - startedAt,
           reason: approval.reason ?? 'policy rejected path',
           rejectCategory: approval.rejectCategory,
+          gasPolicyRejectCode: approval.gasPolicyRejectCode,
+          gasQuoteAttempts: approval.gasQuoteAttempts,
           oneInchCircuitOutcome,
         };
       }
@@ -2219,6 +2335,123 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
         `${result.path}=${result.reason ?? 'not takeable'} (${result.durationMs}ms)`
     );
 
+  const formatGasQuoteAttempts = (
+    attempts: GasPolicyResult['gasQuoteAttempts']
+  ): string => {
+    if (!attempts?.length) {
+      return 'none';
+    }
+    return attempts
+      .map((attempt) => {
+        const feeTiers = attempt.feeTiers?.length
+          ? ` feeTiers=[${attempt.feeTiers.join(',')}]`
+          : '';
+        const outcome = attempt.success
+          ? `success amountOut=${attempt.amountOut ?? 'n/a'}`
+          : `failed reason=${attempt.reason ?? 'unknown'}`;
+        return `${formatLiquiditySource(attempt.source)} ${attempt.tokenIn}->${attempt.tokenOut} amountIn=${attempt.amountIn}${feeTiers} ${outcome}`;
+      })
+      .join('; ');
+  };
+  const factoryNativeToQuoteReject = probeResults.find(
+    (result) =>
+      result.path === 'factory' &&
+      result.gasPolicyRejectCode === 'native_to_quote_conversion_unavailable'
+  );
+  const getFallbackIneligibleReason = (): string | undefined => {
+    if (
+      params.takePolicy?.hybridGasQuoteFailureFallbackMode !== 'factory_first'
+    ) {
+      return 'fallback disabled';
+    }
+    if (params.routeSelectionMode !== 'maximize_profit') {
+      return 'route selection mode is not maximize_profit';
+    }
+    if (
+      !params.externalTakePaths.includes('oneinch') ||
+      !params.externalTakePaths.includes('factory')
+    ) {
+      return 'hybrid paths do not include both oneinch and factory';
+    }
+    if (params.takePolicy?.maxGasCostNative === undefined) {
+      return 'maxGasCostNative is not configured';
+    }
+    if (params.takePolicy?.maxGasCostQuote !== undefined) {
+      return 'maxGasCostQuote is configured';
+    }
+    if (params.takePolicy?.minExpectedProfitQuote !== undefined) {
+      return 'minExpectedProfitQuote is configured';
+    }
+    if (params.takePolicy?.minProfitNative !== undefined) {
+      return 'minProfitNative is configured';
+    }
+    if (!factoryNativeToQuoteReject) {
+      return 'factory path was not rejected only by native-to-quote gas conversion';
+    }
+    return undefined;
+  };
+  const buildHybridGasQuoteFallbackEvaluation = async (): Promise<
+    ExternalTakeQuoteEvaluation | undefined
+  > => {
+    const fallbackIneligibleReason = getFallbackIneligibleReason();
+    if (factoryNativeToQuoteReject && fallbackIneligibleReason) {
+      logger.debug(
+        `Hybrid gas quote fallback skipped for pool ${params.pool.name}: ${fallbackIneligibleReason}`
+      );
+    }
+    if (fallbackIneligibleReason) {
+      return undefined;
+    }
+
+    logger.warn(
+      `Hybrid external take max-profit ranking unavailable because native-to-quote gas conversion failed; attempting factory_first fallback pool=${params.pool.name} attempts="${formatGasQuoteAttempts(
+        factoryNativeToQuoteReject?.gasQuoteAttempts
+      )}"`
+    );
+    const fallbackQuote = await params.quoteFactoryPath({
+      pool: params.pool,
+      signer: params.signer,
+      poolConfig: params.poolConfig,
+      auctionPrice: params.auctionPrice,
+      collateral: params.collateral,
+      factoryGasQuoteFallback: true,
+    });
+    if (!fallbackQuote.isTakeable) {
+      logger.debug(
+        `Hybrid gas quote fallback factory quote rejected for pool ${params.pool.name}: ${fallbackQuote.reason ?? 'not takeable'}`
+      );
+      return undefined;
+    }
+
+    const fallbackApproval = await params.approveExternalTake({
+      price: params.price,
+      auctionPrice: params.auctionPrice,
+      collateral: params.collateral,
+      quoteEvaluation: fallbackQuote,
+      approvalMode: 'factory_gas_quote_fallback',
+      countStats: false,
+      forceGasRefresh: true,
+    });
+    if (!fallbackApproval.approved) {
+      logger.debug(
+        `Hybrid gas quote fallback approval rejected for pool ${params.pool.name}: ${fallbackApproval.reason ?? 'policy rejected fallback path'}`
+      );
+      return undefined;
+    }
+
+    const approvedFallback = fallbackApproval.quoteEvaluation ?? fallbackQuote;
+    const markedFallback: ExternalTakeQuoteEvaluation = {
+      ...approvedFallback,
+      approvalMode: 'factory_gas_quote_fallback',
+    };
+    logger.warn(
+      `Hybrid gas quote fallback activated: factory_first path=${markedFallback.externalTakePath} source=${formatLiquiditySource(markedFallback.selectedLiquiditySource)} pool=${params.pool.name} attempts="${formatGasQuoteAttempts(
+        factoryNativeToQuoteReject?.gasQuoteAttempts
+      )}"`
+    );
+    return markedFallback;
+  };
+
   const sortedApprovedEvaluations =
     sortExternalTakeQuoteEvaluationsForSelection({
       evaluations: approvedEvaluations,
@@ -2227,16 +2460,33 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
   const selected = sortedApprovedEvaluations[0];
   if (selected) {
     const selectedWithFallbacks = cloneExternalTakeQuoteEvaluation(selected);
-    selectedWithFallbacks.fallbackExternalTakeQuoteEvaluations =
-      sortedApprovedEvaluations.slice(1).map((evaluation) => {
+    const fallbackEvaluations = sortedApprovedEvaluations
+      .slice(1)
+      .map((evaluation) => {
         const fallback = cloneExternalTakeQuoteEvaluation(evaluation);
         fallback.fallbackExternalTakeQuoteEvaluations = undefined;
         return fallback;
       });
+    if (
+      selected.externalTakePath === 'oneinch' ||
+      selected.selectedLiquiditySource === LiquiditySource.ONEINCH
+    ) {
+      const gasQuoteFallback = await buildHybridGasQuoteFallbackEvaluation();
+      if (gasQuoteFallback) {
+        fallbackEvaluations.push(gasQuoteFallback);
+      }
+    }
+    selectedWithFallbacks.fallbackExternalTakeQuoteEvaluations =
+      fallbackEvaluations;
     logger.debug(
       `Hybrid external take selected path=${selected.externalTakePath} source=${formatLiquiditySource(selected.selectedLiquiditySource)} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${selected.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${selected.approvedMinOutRaw?.toString() ?? 'n/a'} rejectedPaths=${rejectedReasons.join(', ') || 'none'} for pool ${params.pool.name}`
     );
     return selectedWithFallbacks;
+  }
+
+  const gasQuoteFallback = await buildHybridGasQuoteFallbackEvaluation();
+  if (gasQuoteFallback) {
+    return gasQuoteFallback;
   }
 
   const hasGasPolicyReject = probeResults.some(
@@ -2289,6 +2539,7 @@ function createExternalTakeAdapterForDiscovery(params: {
           pool,
           signer,
           poolConfig,
+          takePolicy: params.takePolicy,
           externalTakePaths: params.externalTakePaths,
           routeSelectionMode: params.routeSelectionMode,
           probeTimeoutMs: params.probeTimeoutMs,
@@ -2333,14 +2584,21 @@ function createExternalTakeAdapterForDiscovery(params: {
             continue;
           }
 
-          const isFallbackCandidate = index > 0;
-          if (isFallbackCandidate) {
+          const isExecutionFallbackCandidate = index > 0;
+          const isGasQuoteFallbackCandidate =
+            candidateEvaluation.approvalMode === 'factory_gas_quote_fallback';
+          const requiresFallbackReapproval =
+            isExecutionFallbackCandidate || isGasQuoteFallbackCandidate;
+          if (isExecutionFallbackCandidate) {
             params.stats.hybridFallbackAttempts += 1;
+          }
+          if (isGasQuoteFallbackCandidate) {
+            params.stats.hybridGasQuoteFallbackAttempts += 1;
           }
 
           let approvedEvaluation = candidateEvaluation;
           let executionLiquidation = liquidation;
-          if (isFallbackCandidate) {
+          if (requiresFallbackReapproval) {
             // The primary path already passed the engine's final approval hook.
             // Fallbacks are selected inside this executor, so refresh and
             // reapprove them immediately before attempting execution.
@@ -2437,8 +2695,11 @@ function createExternalTakeAdapterForDiscovery(params: {
                 approvedEvaluation,
                 config.dryRun === true
               );
-              if (isFallbackCandidate) {
+              if (isExecutionFallbackCandidate) {
                 params.stats.hybridFallbackSuccesses += 1;
+              }
+              if (isGasQuoteFallbackCandidate) {
+                params.stats.hybridGasQuoteFallbackSuccesses += 1;
               }
               return true;
             }
@@ -2490,8 +2751,11 @@ function createExternalTakeAdapterForDiscovery(params: {
               approvedEvaluation,
               config.dryRun === true
             );
-            if (isFallbackCandidate) {
+            if (isExecutionFallbackCandidate) {
               params.stats.hybridFallbackSuccesses += 1;
+            }
+            if (isGasQuoteFallbackCandidate) {
+              params.stats.hybridGasQuoteFallbackSuccesses += 1;
             }
             return true;
           }
@@ -2608,7 +2872,7 @@ function createExternalTakeAdapterForDiscovery(params: {
 
 export async function handleDiscoveredTakeTarget(
   params: HandleDiscoveredTakeTargetParams
-): Promise<void> {
+): Promise<DiscoveredTakeTargetStats> {
   const transports = params.transports
     ? params.transports
     : hasDiscoveryTransportConfig(params.config)
@@ -2654,6 +2918,8 @@ export async function handleDiscoveredTakeTarget(
     factoryPostSubmissionFailures: 0,
     hybridFallbackAttempts: 0,
     hybridFallbackSuccesses: 0,
+    hybridGasQuoteFallbackAttempts: 0,
+    hybridGasQuoteFallbackSuccesses: 0,
     hotAuctionCandidateRemovals: 0,
   };
   const rpcCache =
@@ -2690,13 +2956,14 @@ export async function handleDiscoveredTakeTarget(
       target: params.target,
       stats,
     });
-    return;
+    return stats;
   }
   const approveExternalTake: DiscoveryExternalTakeApprover = async ({
     price,
     auctionPrice,
     collateral,
     quoteEvaluation,
+    approvalMode,
     countStats = true,
     forceGasRefresh = false,
   }) =>
@@ -2714,6 +2981,7 @@ export async function handleDiscoveredTakeTarget(
       auctionPrice,
       collateral,
       quoteEvaluation,
+      approvalMode,
       countStats,
       forceGasRefresh,
     });
@@ -2761,12 +3029,14 @@ export async function handleDiscoveredTakeTarget(
       routeProbeLimiter,
     });
   const recordOneInchCircuitOutcome = (
-    outcome: OneInchCircuitOutcome
+    outcome: OneInchCircuitOutcome,
+    purpose?: OneInchQuoteCircuitPurpose
   ): void => {
     recordOneInchCircuitOutcomeForDiscovery({
       rpcCache,
       takePolicy,
       outcome,
+      purpose,
     });
   };
   let externalTakeAttemptedSubmission = false;
@@ -2831,12 +3101,12 @@ export async function handleDiscoveredTakeTarget(
       error?: string;
     }) => {
       if (result.success) {
-        recordOneInchCircuitOutcome('success');
+        recordOneInchCircuitOutcome('success', 'swap_data');
         return;
       }
       stats.oneInchSwapDataFailures += 1;
       if (result.retryable !== false) {
-        recordOneInchCircuitOutcome('failure');
+        recordOneInchCircuitOutcome('failure', 'swap_data');
       }
     },
     onOneInchExecutionFailure: recordExternalTakeExecutionFailure('oneinch'),
@@ -3048,4 +3318,6 @@ export async function handleDiscoveredTakeTarget(
       stats,
     });
   }
+
+  return stats;
 }

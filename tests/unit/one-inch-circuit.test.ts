@@ -127,4 +127,36 @@ describe('1inch quote circuit', () => {
     ).to.include('1inch quote circuit open');
     expect(infoStub.calledTwice).to.be.true;
   });
+
+  it('keeps gas-conversion circuit state separate from route quote circuit state', () => {
+    const cache = {} as DiscoveryRpcCache;
+    const policy = {
+      oneInchQuoteFailureThreshold: 1,
+      oneInchQuoteFailureCooldownMs: 30_000,
+    };
+
+    recordOneInchQuoteFailure({
+      rpcCache: cache,
+      takePolicy: policy,
+      purpose: 'gas_conversion',
+      nowMs: 10_000,
+    });
+
+    expect(
+      getOneInchCircuitOpenReason({
+        rpcCache: cache,
+        takePolicy: policy,
+        purpose: 'gas_conversion',
+        nowMs: 10_001,
+      })
+    ).to.include('purpose=gas_conversion');
+    expect(
+      getOneInchCircuitOpenReason({
+        rpcCache: cache,
+        takePolicy: policy,
+        purpose: 'route_quote',
+        nowMs: 10_001,
+      })
+    ).to.be.undefined;
+  });
 });

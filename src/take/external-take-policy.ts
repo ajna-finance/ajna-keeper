@@ -78,6 +78,8 @@ export type RoutePolicyProfitabilityExtras = Partial<
     | 'gasPriceFreshnessTtlMs'
     | 'l2GasCostBufferBasisPoints'
     | 'gasPolicyEvaluatedAt'
+    | 'gasPolicyRejectCode'
+    | 'gasQuoteAttempts'
   >
 >;
 
@@ -206,8 +208,7 @@ export function mergeRoutePolicyIntoProfitability(params: {
     auctionRepayRequirementQuoteRaw: params.auctionRepayRequirementQuoteRaw,
     routeExecutionCostQuoteRaw: params.policy.routeExecutionCostQuoteRaw,
     nativeProfitFloorQuoteRaw: params.policy.nativeProfitFloorQuoteRaw,
-    configuredProfitFloorQuoteRaw:
-      params.policy.configuredProfitFloorQuoteRaw,
+    configuredProfitFloorQuoteRaw: params.policy.configuredProfitFloorQuoteRaw,
     slippageRiskBufferQuoteRaw: params.policy.slippageRiskBufferQuoteRaw,
     configuredMarketPriceFactor: params.configuredMarketPriceFactor,
     marketFactorFloorQuoteRaw: params.marketFactorFloorQuoteRaw,
@@ -254,8 +255,7 @@ export function mergeRoutePolicyIntoEvaluation(params: {
     routeProfitability: mergeRoutePolicyIntoProfitability({
       existing: params.evaluation.routeProfitability,
       policy: params.policy,
-      auctionRepayRequirementQuoteRaw:
-        params.auctionRepayRequirementQuoteRaw,
+      auctionRepayRequirementQuoteRaw: params.auctionRepayRequirementQuoteRaw,
       configuredMarketPriceFactor: params.configuredMarketPriceFactor,
       marketFactorFloorQuoteRaw: params.marketFactorFloorQuoteRaw,
       extras: params.routeProfitabilityExtras,

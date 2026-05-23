@@ -10,12 +10,13 @@ import {
 } from './settlement-executor';
 import {
   handleDiscoveredTakeTarget as handleDiscoveredTakeTargetImpl,
+  type DiscoveredTakeTargetStats,
   type HandleDiscoveredTakeTargetParams,
 } from './take-executor';
 
 export async function handleDiscoveredTakeTarget(
   params: HandleDiscoveredTakeTargetParams
-): Promise<void> {
+): Promise<DiscoveredTakeTargetStats> {
   return await handleDiscoveredTakeTargetImpl(params);
 }
 

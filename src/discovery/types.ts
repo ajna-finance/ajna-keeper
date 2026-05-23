@@ -74,6 +74,11 @@ export interface OneInchQuoteCircuitState {
   lastOpenLogAtMs?: number;
 }
 
+export type OneInchQuoteCircuitPurpose =
+  | 'route_quote'
+  | 'swap_data'
+  | 'gas_conversion';
+
 export interface DiscoveryRpcCache {
   chainId?: number;
   gasPrice?: BigNumber;
@@ -83,6 +88,9 @@ export interface DiscoveryRpcCache {
   stats?: DiscoveryRpcCacheStats;
   gasQuoteFallbackWarningKeys?: Set<string>;
   gasQuoteConversions?: Map<string, GasQuoteConversionCacheEntry>;
+  oneInchQuoteCircuits?: Partial<
+    Record<OneInchQuoteCircuitPurpose, OneInchQuoteCircuitState>
+  >;
   oneInchQuoteCircuit?: OneInchQuoteCircuitState;
 }
 
