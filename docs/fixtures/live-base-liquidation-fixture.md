@@ -70,6 +70,15 @@ export AJNA_AGENT_KEEPER_KEY="0x..."
 export AJNA_AGENT_OUTPUT_PATH="/tmp/ajna-liquidation-fixture-summary.json"
 ```
 
+The fixture script also shells out to helper CLIs for token deployment and Ajna
+pool actions. By default it looks for sibling checkouts at `../token-deployer`
+and `../ajna-skills`. If your checkout layout differs, set:
+
+```bash
+export AJNA_AGENT_TOKEN_DEPLOYER_REPO="/path/to/token-deployer"
+export AJNA_AGENT_AJNA_SKILLS_REPO="/path/to/ajna-skills"
+```
+
 To hand the auction to an already-running keeper, reuse the external-take
 contracts from that keeper config:
 
