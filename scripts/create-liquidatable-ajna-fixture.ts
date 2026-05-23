@@ -128,6 +128,36 @@ type UniswapV3LiquiditySummary = {
   positionManagerAddress: string;
 };
 
+type UniswapV3LiquidityMode = 'strict_hybrid' | 'fallback_regression';
+
+type UniswapV3FeeTierTestMode =
+  | 'all_configured'
+  | 'default_only'
+  | 'single_non_default'
+  | 'best_tier_selection';
+
+type UniswapV3QuoteCheckPair = 'collateral_quote' | 'weth_quote';
+
+type UniswapV3FeeTierQuoteCheck = {
+  pair: UniswapV3QuoteCheckPair;
+  tokenIn: string;
+  tokenOut: string;
+  amountInRaw: string;
+  feeTier: number;
+  poolAddress?: string;
+  poolExists: boolean;
+  quoteSuccess: boolean;
+  amountOutRaw?: string;
+  reason?: string;
+};
+
+type UniswapV3RouteShapeVerificationSummary = {
+  status: 'passed' | 'skipped';
+  liquidityMode: UniswapV3LiquidityMode;
+  strictHybridGasQuoteReady: boolean;
+  fallbackRegressionGasQuoteOmitted: boolean;
+};
+
 type FixtureStageSummary = {
   nativeGasFunding: {
     enabled: boolean;
@@ -255,8 +285,19 @@ type FixtureSummary = {
   };
   uniswapV3ExternalTake?: {
     routerConfig: UniswapV3RouterConfig;
+    liquidityMode?: UniswapV3LiquidityMode;
+    feeTierTestMode?: UniswapV3FeeTierTestMode;
+    configuredFeeTiers?: number[];
+    seededCollateralQuoteFeeTiers?: number[];
+    seededWethQuoteFeeTiers?: number[];
+    expectedExecutionFeeTier?: number;
     liquidity?: UniswapV3LiquiditySummary;
     liquidityByFeeTier?: UniswapV3LiquiditySummary[];
+    collateralQuoteLiquidityByFeeTier?: UniswapV3LiquiditySummary[];
+    wethQuoteLiquidityByFeeTier?: UniswapV3LiquiditySummary[];
+    collateralQuoteFeeTierChecks?: UniswapV3FeeTierQuoteCheck[];
+    wethQuoteFeeTierChecks?: UniswapV3FeeTierQuoteCheck[];
+    routeShapeVerification?: UniswapV3RouteShapeVerificationSummary;
     deployment?: ExternalTakeDeploymentSummary;
     keeperConfigSnippet?: ExternalTakeSnippetSummary;
     note: 'Manual keeper take tests still need either a real subgraph/indexer or a repo-local subgraph override harness.';
@@ -311,6 +352,15 @@ const UNISWAP_V3_KEEPER_TAKER_ABI = [
   'function poolFactory() view returns (address)',
   'function authorizedFactory() view returns (address)',
 ];
+const WETH9_ABI = [
+  'function balanceOf(address) view returns (uint256)',
+  'function deposit() payable',
+  'function allowance(address owner, address spender) view returns (uint256)',
+  'function approve(address spender, uint256 amount) returns (bool)',
+];
+const QUOTER_V2_ABI = [
+  'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96) params) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)',
+];
 const AJNA_POOL_TOKEN_ABI = [
   'function collateralAddress() view returns (address)',
   'function quoteTokenAddress() view returns (address)',
@@ -335,6 +385,9 @@ const LUP_BELOW_HTP_ERROR_SELECTOR = '0x444507e1';
 
 type CliOptions = {
   withUniswapV3ExternalTake: boolean;
+  uniswapV3LiquidityMode: UniswapV3LiquidityMode;
+  uniswapV3FeeTierTestMode: UniswapV3FeeTierTestMode;
+  uniswapV3ExpectedExecutionFeeTier?: number;
   fundNativeGas: boolean;
   createPool: boolean;
   deployTokens: boolean;
@@ -356,6 +409,36 @@ function parseBooleanValue(name: string, rawValue: string): boolean {
   throw new Error(
     `${name} must be one of: 1, 0, true, false, yes, no, on, off (received ${rawValue})`
   );
+}
+
+function parseEnumValue<T extends string>(
+  name: string,
+  rawValue: string,
+  allowedValues: readonly T[]
+): T {
+  if ((allowedValues as readonly string[]).includes(rawValue)) {
+    return rawValue as T;
+  }
+  throw new Error(
+    `${name} must be one of: ${allowedValues.join(', ')} (received ${rawValue})`
+  );
+}
+
+function optionalArgValue(argv: string[], name: string): string | undefined {
+  const prefix = `${name}=`;
+  const withEquals = argv.find((arg) => arg.startsWith(prefix));
+  if (withEquals !== undefined) {
+    return withEquals.slice(prefix.length);
+  }
+  const index = argv.indexOf(name);
+  if (index === -1) {
+    return undefined;
+  }
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith('--')) {
+    throw new Error(`${name} requires a value`);
+  }
+  return value;
 }
 
 function resolveToggle(params: {
@@ -382,9 +465,38 @@ function parseOptions(argv: string[]): CliOptions {
   const withUniswapV3ExternalTake =
     argv.includes('--with-uniswap-v3-external-take') ||
     process.env.AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE === '1';
+  const uniswapV3LiquidityMode = parseEnumValue(
+    'AJNA_AGENT_UNISWAP_LIQUIDITY_MODE',
+    optionalArgValue(argv, '--uniswap-liquidity-mode') ??
+      optionalEnv('AJNA_AGENT_UNISWAP_LIQUIDITY_MODE', 'strict_hybrid'),
+    ['strict_hybrid', 'fallback_regression'] as const
+  );
+  const uniswapV3FeeTierTestMode = parseEnumValue(
+    'AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE',
+    optionalArgValue(argv, '--uniswap-fee-tier-test-mode') ??
+      optionalEnv('AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE', 'all_configured'),
+    [
+      'all_configured',
+      'default_only',
+      'single_non_default',
+      'best_tier_selection',
+    ] as const
+  );
+  const expectedExecutionFeeTierRaw =
+    optionalArgValue(argv, '--uniswap-expected-execution-fee-tier') ??
+    process.env.AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER;
 
   return {
     withUniswapV3ExternalTake,
+    uniswapV3LiquidityMode,
+    uniswapV3FeeTierTestMode,
+    uniswapV3ExpectedExecutionFeeTier:
+      expectedExecutionFeeTierRaw === undefined
+        ? undefined
+        : parseUniswapV3FeeTier(
+            'AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER',
+            expectedExecutionFeeTierRaw
+          ),
     fundNativeGas: resolveToggle({
       argv,
       enableFlag: '--fund-native-gas',
@@ -445,7 +557,7 @@ function parseOptions(argv: string[]): CliOptions {
 }
 
 function usage() {
-  return `Usage: ts-node scripts/create-liquidatable-ajna-fixture.ts [--with-uniswap-v3-external-take] [--fund-native-gas|--no-fund-native-gas] [--create-pool|--no-create-pool] [--deploy-tokens|--no-deploy-tokens] [--transfer-tokens|--no-transfer-tokens] [--seed-uniswap|--no-seed-uniswap] [--deploy-external-take|--no-deploy-external-take] [--allow-evm-time-travel|--no-evm-time-travel] [--final-kick|--no-final-kick]
+  return `Usage: ts-node scripts/create-liquidatable-ajna-fixture.ts [--with-uniswap-v3-external-take] [--uniswap-liquidity-mode strict_hybrid|fallback_regression] [--uniswap-fee-tier-test-mode all_configured|default_only|single_non_default|best_tier_selection] [--uniswap-expected-execution-fee-tier 500] [--fund-native-gas|--no-fund-native-gas] [--create-pool|--no-create-pool] [--deploy-tokens|--no-deploy-tokens] [--transfer-tokens|--no-transfer-tokens] [--seed-uniswap|--no-seed-uniswap] [--deploy-external-take|--no-deploy-external-take] [--allow-evm-time-travel|--no-evm-time-travel] [--final-kick|--no-final-kick]
 
 Required env:
 - AJNA_AGENT_RPC_URL or AJNA_RPC_URL_BASE
@@ -505,11 +617,29 @@ Optional env:
 
 Optional Uniswap V3 external-take setup:
 - AJNA_AGENT_SEED_UNISWAP=yes|no (default: yes when external take is enabled)
+  (If final kick is enabled, the selected route shape is still checked with
+  QuoterV2 even when seeding is disabled, so reused liquidity must already
+  match the selected strict_hybrid or fallback_regression mode.)
 - AJNA_AGENT_DEPLOY_EXTERNAL_TAKE=yes|no (default: yes when external take is enabled)
 - AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS (reuse existing factory)
 - AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS (reuse existing UniswapV3 taker)
 - AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW
 - AJNA_AGENT_UNISWAP_COLLATERAL_LIQUIDITY_RAW
+- AJNA_AGENT_UNISWAP_LIQUIDITY_MODE
+  (strict_hybrid seeds and verifies collateral/quote plus WETH/quote.
+  fallback_regression seeds collateral/quote and requires WETH/quote to
+  remain unquoted so fallback behavior can be tested.)
+- AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE
+  (all_configured, default_only, single_non_default, or
+  best_tier_selection. best_tier_selection is reserved until per-tier
+  liquidity profiles are implemented.)
+- AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER
+  (Optional exact tier the operator expects the keeper to use. Required when
+  single_non_default would otherwise be ambiguous.)
+- AJNA_AGENT_UNISWAP_WETH_LIQUIDITY_RAW
+- AJNA_AGENT_UNISWAP_WETH_QUOTE_LIQUIDITY_RAW
+- AJNA_AGENT_UNISWAP_COLLATERAL_QUOTE_CHECK_AMOUNT_RAW
+- AJNA_AGENT_UNISWAP_WETH_QUOTE_CHECK_AMOUNT_RAW
 - AJNA_AGENT_UNISWAP_FEE_TIER
 - AJNA_AGENT_UNISWAP_FEE_TIERS
   (Comma-separated tiers to seed/probe. Defaults to 3000,500,10000.
@@ -563,6 +693,49 @@ function resolveUniswapV3FeeTiers(params: {
     );
   }
   return tiers;
+}
+
+function resolveUniswapV3SeedFeeTiers(params: {
+  routerConfig: UniswapV3RouterConfig;
+  feeTierTestMode: UniswapV3FeeTierTestMode;
+  expectedExecutionFeeTier?: number;
+}): number[] {
+  const { routerConfig, feeTierTestMode, expectedExecutionFeeTier } = params;
+  const configured = routerConfig.candidateFeeTiers;
+
+  if (feeTierTestMode === 'all_configured') {
+    return configured;
+  }
+
+  if (feeTierTestMode === 'default_only') {
+    return [routerConfig.defaultFeeTier];
+  }
+
+  if (feeTierTestMode === 'single_non_default') {
+    const selected =
+      expectedExecutionFeeTier ??
+      configured.find((feeTier) => feeTier !== routerConfig.defaultFeeTier);
+    if (selected === undefined) {
+      throw new Error(
+        'AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE=single_non_default requires at least one configured non-default fee tier or AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER'
+      );
+    }
+    if (selected === routerConfig.defaultFeeTier) {
+      throw new Error(
+        'AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER must not equal the default fee tier when single_non_default mode is selected'
+      );
+    }
+    if (!configured.includes(selected)) {
+      throw new Error(
+        `AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER=${selected} is not included in candidateFeeTiers=[${configured.join(',')}]`
+      );
+    }
+    return [selected];
+  }
+
+  throw new Error(
+    'AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE=best_tier_selection is reserved until per-tier liquidity profiles are implemented; use all_configured, default_only, or single_non_default'
+  );
 }
 
 function resolveRepoPath(envName: string, defaultRelativePath: string): string {
@@ -1288,6 +1461,38 @@ async function ensureNativeBalance(params: {
   await tx.wait();
 }
 
+async function ensureWrappedNativeBalance(params: {
+  signer: Wallet;
+  wethAddress: string;
+  minimumAmount: BigNumber;
+}): Promise<{ deposited: string; finalBalance: string }> {
+  const signerAddress = await params.signer.getAddress();
+  const weth = new Contract(params.wethAddress, WETH9_ABI, params.signer);
+  const current = await weth.balanceOf(signerAddress);
+  if (current.gte(params.minimumAmount)) {
+    return { deposited: '0', finalBalance: current.toString() };
+  }
+
+  const delta = params.minimumAmount.sub(current);
+  const nativeBalance = await params.signer.getBalance();
+  if (nativeBalance.lte(delta)) {
+    throw new Error(
+      `Insufficient native balance to wrap WETH for Uniswap gas-liquidity seeding: requiredDelta=${delta.toString()} nativeBalance=${nativeBalance.toString()}`
+    );
+  }
+
+  const depositTx = await weth.deposit({
+    value: delta,
+    gasLimit: 120_000,
+  });
+  await depositTx.wait();
+  const finalBalance = await weth.balanceOf(signerAddress);
+  return {
+    deposited: delta.toString(),
+    finalBalance: finalBalance.toString(),
+  };
+}
+
 function prepareAndExecute(
   ajnaSkillsRepo: string,
   action: string,
@@ -1883,27 +2088,26 @@ function getUniswapV3FullRangeTicks(feeTier: number): {
 
 async function createAndSeedUniswapV3Pool(params: {
   signer: Wallet;
-  quoteTokenAddress: string;
-  collateralTokenAddress: string;
-  quoteLiquidityRaw: string;
-  collateralLiquidityRaw: string;
+  tokenAAddress: string;
+  tokenBAddress: string;
+  tokenAAmountRaw: string;
+  tokenBAmountRaw: string;
   routerConfig: UniswapV3RouterConfig;
   feeTier: number;
 }): Promise<UniswapV3LiquiditySummary> {
-  const { signer, quoteTokenAddress, collateralTokenAddress, routerConfig } =
-    params;
+  const { signer, tokenAAddress, tokenBAddress, routerConfig } = params;
   const positionManager = new Contract(
     routerConfig.positionManagerAddress,
     NonfungiblePositionManagerABI,
     signer
   );
-  const quoteLiquidity = BigNumber.from(params.quoteLiquidityRaw);
-  const collateralLiquidity = BigNumber.from(params.collateralLiquidityRaw);
+  const tokenAAmount = BigNumber.from(params.tokenAAmountRaw);
+  const tokenBAmount = BigNumber.from(params.tokenBAmountRaw);
   const ordered = sortTokenPair(
-    collateralTokenAddress,
-    quoteTokenAddress,
-    collateralLiquidity,
-    quoteLiquidity
+    tokenAAddress,
+    tokenBAddress,
+    tokenAAmount,
+    tokenBAmount
   );
 
   await approveErc20Exact(
@@ -2001,14 +2205,15 @@ async function createAndSeedUniswapV3Pool(params: {
 
 async function createAndSeedUniswapV3Pools(params: {
   signer: Wallet;
-  quoteTokenAddress: string;
-  collateralTokenAddress: string;
-  quoteLiquidityRaw: string;
-  collateralLiquidityRaw: string;
+  tokenAAddress: string;
+  tokenBAddress: string;
+  tokenAAmountRaw: string;
+  tokenBAmountRaw: string;
   routerConfig: UniswapV3RouterConfig;
+  feeTiers: number[];
 }): Promise<UniswapV3LiquiditySummary[]> {
   const summaries: UniswapV3LiquiditySummary[] = [];
-  for (const feeTier of params.routerConfig.candidateFeeTiers) {
+  for (const feeTier of params.feeTiers) {
     summaries.push(
       await createAndSeedUniswapV3Pool({
         ...params,
@@ -2017,6 +2222,189 @@ async function createAndSeedUniswapV3Pools(params: {
     );
   }
   return summaries;
+}
+
+async function checkUniswapV3FeeTierQuote(params: {
+  signer: Wallet;
+  routerConfig: UniswapV3RouterConfig;
+  pair: UniswapV3QuoteCheckPair;
+  tokenIn: string;
+  tokenOut: string;
+  amountInRaw: string;
+  feeTier: number;
+}): Promise<UniswapV3FeeTierQuoteCheck> {
+  const tokenIn = normalizeAddress(params.tokenIn);
+  const tokenOut = normalizeAddress(params.tokenOut);
+  const base: Omit<UniswapV3FeeTierQuoteCheck, 'poolExists' | 'quoteSuccess'> =
+    {
+      pair: params.pair,
+      tokenIn,
+      tokenOut,
+      amountInRaw: params.amountInRaw,
+      feeTier: params.feeTier,
+    };
+
+  const factory = new Contract(
+    params.routerConfig.poolFactoryAddress,
+    FACTORY_ABI,
+    params.signer
+  );
+  const poolAddress = await factory.getPool(tokenIn, tokenOut, params.feeTier);
+  if (!poolAddress || poolAddress === ethers.constants.AddressZero) {
+    return {
+      ...base,
+      poolExists: false,
+      quoteSuccess: false,
+      reason: 'pool_not_found',
+    };
+  }
+
+  const quoter = new Contract(
+    params.routerConfig.quoterV2Address,
+    QUOTER_V2_ABI,
+    params.signer
+  );
+
+  try {
+    const quoted = await quoter.callStatic.quoteExactInputSingle({
+      tokenIn,
+      tokenOut,
+      amountIn: BigNumber.from(params.amountInRaw),
+      fee: params.feeTier,
+      sqrtPriceLimitX96: 0,
+    });
+    const amountOut: BigNumber = Array.isArray(quoted)
+      ? quoted[0]
+      : quoted.amountOut;
+    if (!BigNumber.isBigNumber(amountOut) || amountOut.isZero()) {
+      return {
+        ...base,
+        poolAddress,
+        poolExists: true,
+        quoteSuccess: false,
+        amountOutRaw: amountOut?.toString(),
+        reason: 'zero_amount_out',
+      };
+    }
+    return {
+      ...base,
+      poolAddress,
+      poolExists: true,
+      quoteSuccess: true,
+      amountOutRaw: amountOut.toString(),
+    };
+  } catch (error) {
+    return {
+      ...base,
+      poolAddress,
+      poolExists: true,
+      quoteSuccess: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function checkUniswapV3FeeTierQuotes(params: {
+  signer: Wallet;
+  routerConfig: UniswapV3RouterConfig;
+  pair: UniswapV3QuoteCheckPair;
+  tokenIn: string;
+  tokenOut: string;
+  amountInRaw: string;
+  feeTiers: number[];
+}): Promise<UniswapV3FeeTierQuoteCheck[]> {
+  const checks: UniswapV3FeeTierQuoteCheck[] = [];
+  for (const feeTier of params.feeTiers) {
+    checks.push(
+      await checkUniswapV3FeeTierQuote({
+        ...params,
+        feeTier,
+      })
+    );
+  }
+  return checks;
+}
+
+function requireUniswapRouteShape(params: {
+  liquidityMode: UniswapV3LiquidityMode;
+  feeTierTestMode: UniswapV3FeeTierTestMode;
+  seededCollateralQuoteFeeTiers: number[];
+  requireSeededFeeTierMatch?: boolean;
+  expectedExecutionFeeTier?: number;
+  collateralQuoteFeeTierChecks: UniswapV3FeeTierQuoteCheck[];
+  wethQuoteFeeTierChecks: UniswapV3FeeTierQuoteCheck[];
+}): UniswapV3RouteShapeVerificationSummary {
+  const collateralQuoteSuccesses = params.collateralQuoteFeeTierChecks.filter(
+    (check) => check.quoteSuccess
+  );
+  const wethQuoteSuccesses = params.wethQuoteFeeTierChecks.filter(
+    (check) => check.quoteSuccess
+  );
+
+  const expectedFeeTier =
+    params.expectedExecutionFeeTier ??
+    (params.seededCollateralQuoteFeeTiers.length === 1
+      ? params.seededCollateralQuoteFeeTiers[0]
+      : undefined);
+
+  if (expectedFeeTier !== undefined) {
+    const expectedCheck = params.collateralQuoteFeeTierChecks.find(
+      (check) => check.feeTier === expectedFeeTier
+    );
+    if (!expectedCheck?.quoteSuccess) {
+      throw new Error(
+        `Uniswap route-shape verification failed: expected collateral/quote fee tier ${expectedFeeTier} did not quote`
+      );
+    }
+  } else if (collateralQuoteSuccesses.length === 0) {
+    throw new Error(
+      'Uniswap route-shape verification failed: no configured collateral/quote fee tier quoted'
+    );
+  }
+
+  if (
+    params.feeTierTestMode === 'single_non_default' &&
+    params.requireSeededFeeTierMatch !== false
+  ) {
+    if (expectedFeeTier === undefined) {
+      throw new Error(
+        'single_non_default verification requires an expected execution fee tier'
+      );
+    }
+    const seeded = params.seededCollateralQuoteFeeTiers;
+    if (seeded.length !== 1 || seeded[0] !== expectedFeeTier) {
+      throw new Error(
+        `single_non_default verification expected exactly seeded fee tier ${expectedFeeTier}, got [${seeded.join(',')}]`
+      );
+    }
+  }
+
+  if (params.liquidityMode === 'strict_hybrid') {
+    if (wethQuoteSuccesses.length === 0) {
+      throw new Error(
+        'strict_hybrid Uniswap route-shape verification failed: WETH/quote did not quote on any configured fee tier'
+      );
+    }
+    return {
+      status: 'passed',
+      liquidityMode: params.liquidityMode,
+      strictHybridGasQuoteReady: true,
+      fallbackRegressionGasQuoteOmitted: false,
+    };
+  }
+
+  if (wethQuoteSuccesses.length > 0) {
+    throw new Error(
+      `fallback_regression Uniswap route-shape verification failed: WETH/quote unexpectedly quoted on fee tier(s) ${wethQuoteSuccesses.map((check) => check.feeTier).join(',')}`
+    );
+  }
+
+  return {
+    status: 'passed',
+    liquidityMode: params.liquidityMode,
+    strictHybridGasQuoteReady: false,
+    fallbackRegressionGasQuoteOmitted: true,
+  };
 }
 
 async function deployUniswapV3ExternalTakeContracts(params: {
@@ -2360,9 +2748,21 @@ async function main() {
         validateFeeTierTickSpacing: shouldSeedUniswap,
       })
     : undefined;
+  const uniswapSeedFeeTiers =
+    shouldSeedUniswap && uniswapRouterConfig
+      ? resolveUniswapV3SeedFeeTiers({
+          routerConfig: uniswapRouterConfig,
+          feeTierTestMode: options.uniswapV3FeeTierTestMode,
+          expectedExecutionFeeTier: options.uniswapV3ExpectedExecutionFeeTier,
+        })
+      : [];
   const uniswapLiquidityTierCount = shouldSeedUniswap
-    ? (uniswapRouterConfig?.candidateFeeTiers.length ?? 0)
+    ? uniswapSeedFeeTiers.length
     : 0;
+  const shouldSeedWethQuoteUniswap =
+    shouldSeedUniswap && options.uniswapV3LiquidityMode === 'strict_hybrid';
+  const shouldVerifyUniswapRouteShape =
+    options.withUniswapV3ExternalTake && (shouldSeedUniswap || shouldFinalKick);
   const quoteLiquidityRaw = options.withUniswapV3ExternalTake
     ? optionalEnv(
         'AJNA_AGENT_UNISWAP_QUOTE_LIQUIDITY_RAW',
@@ -2375,8 +2775,34 @@ async function main() {
         '10000000000000000000000'
       )
     : '0';
+  const wethLiquidityRaw = options.withUniswapV3ExternalTake
+    ? optionalEnv('AJNA_AGENT_UNISWAP_WETH_LIQUIDITY_RAW', '1000000000000000')
+    : '0';
+  const wethQuoteLiquidityRaw = options.withUniswapV3ExternalTake
+    ? optionalEnv(
+        'AJNA_AGENT_UNISWAP_WETH_QUOTE_LIQUIDITY_RAW',
+        '1000000000000000000000'
+      )
+    : '0';
+  const collateralQuoteCheckAmountRaw = options.withUniswapV3ExternalTake
+    ? optionalEnv(
+        'AJNA_AGENT_UNISWAP_COLLATERAL_QUOTE_CHECK_AMOUNT_RAW',
+        '1000000000000000000'
+      )
+    : '0';
+  const wethQuoteCheckAmountRaw = options.withUniswapV3ExternalTake
+    ? optionalEnv(
+        'AJNA_AGENT_UNISWAP_WETH_QUOTE_CHECK_AMOUNT_RAW',
+        '1000000000000000'
+      )
+    : '0';
   const quoteInitialSupplyRaw = big(quoteMintRaw)
     .add(big(quoteLiquidityRaw).mul(uniswapLiquidityTierCount))
+    .add(
+      shouldSeedWethQuoteUniswap
+        ? big(wethQuoteLiquidityRaw).mul(uniswapLiquidityTierCount)
+        : BigNumber.from(0)
+    )
     // Keeper is always present now (it's the operator key), so always
     // include the buffer in the quote mint so the keeper has enough for
     // downstream take/swap operations.
@@ -2663,23 +3089,96 @@ async function main() {
   let uniswapBootstrap:
     | {
         routerConfig: UniswapV3RouterConfig;
+        liquidityMode: UniswapV3LiquidityMode;
+        feeTierTestMode: UniswapV3FeeTierTestMode;
+        configuredFeeTiers: number[];
+        seededCollateralQuoteFeeTiers: number[];
+        seededWethQuoteFeeTiers: number[];
+        expectedExecutionFeeTier?: number;
         liquidity?: UniswapV3LiquiditySummary;
         liquidityByFeeTier?: UniswapV3LiquiditySummary[];
+        collateralQuoteLiquidityByFeeTier?: UniswapV3LiquiditySummary[];
+        wethQuoteLiquidityByFeeTier?: UniswapV3LiquiditySummary[];
+        collateralQuoteFeeTierChecks?: UniswapV3FeeTierQuoteCheck[];
+        wethQuoteFeeTierChecks?: UniswapV3FeeTierQuoteCheck[];
+        routeShapeVerification?: UniswapV3RouteShapeVerificationSummary;
         deployment?: ExternalTakeDeploymentSummary;
       }
     | undefined;
   if (options.withUniswapV3ExternalTake) {
     const routerConfig = uniswapRouterConfig!;
-    const liquidityByFeeTier = shouldSeedUniswap
+    const collateralQuoteLiquidityByFeeTier = shouldSeedUniswap
       ? await createAndSeedUniswapV3Pools({
           signer: keeperSigner,
-          quoteTokenAddress: quoteManifest.deployedAddress,
-          collateralTokenAddress: collateralManifest.deployedAddress,
-          quoteLiquidityRaw,
-          collateralLiquidityRaw,
+          tokenAAddress: collateralManifest.deployedAddress,
+          tokenBAddress: quoteManifest.deployedAddress,
+          tokenAAmountRaw: collateralLiquidityRaw,
+          tokenBAmountRaw: quoteLiquidityRaw,
           routerConfig,
+          feeTiers: uniswapSeedFeeTiers,
         })
       : undefined;
+    const seededWethQuoteFeeTiers = shouldSeedWethQuoteUniswap
+      ? uniswapSeedFeeTiers
+      : [];
+    if (shouldSeedWethQuoteUniswap) {
+      await ensureWrappedNativeBalance({
+        signer: keeperSigner,
+        wethAddress: routerConfig.wethAddress,
+        minimumAmount: big(wethLiquidityRaw).mul(
+          seededWethQuoteFeeTiers.length
+        ),
+      });
+    }
+    const wethQuoteLiquidityByFeeTier = shouldSeedWethQuoteUniswap
+      ? await createAndSeedUniswapV3Pools({
+          signer: keeperSigner,
+          tokenAAddress: routerConfig.wethAddress,
+          tokenBAddress: quoteManifest.deployedAddress,
+          tokenAAmountRaw: wethLiquidityRaw,
+          tokenBAmountRaw: wethQuoteLiquidityRaw,
+          routerConfig,
+          feeTiers: seededWethQuoteFeeTiers,
+        })
+      : undefined;
+    const collateralQuoteFeeTierChecks = shouldVerifyUniswapRouteShape
+      ? await checkUniswapV3FeeTierQuotes({
+          signer: keeperSigner,
+          routerConfig,
+          pair: 'collateral_quote',
+          tokenIn: collateralManifest.deployedAddress,
+          tokenOut: quoteManifest.deployedAddress,
+          amountInRaw: collateralQuoteCheckAmountRaw,
+          feeTiers: routerConfig.candidateFeeTiers,
+        })
+      : undefined;
+    const wethQuoteFeeTierChecks = shouldVerifyUniswapRouteShape
+      ? await checkUniswapV3FeeTierQuotes({
+          signer: keeperSigner,
+          routerConfig,
+          pair: 'weth_quote',
+          tokenIn: routerConfig.wethAddress,
+          tokenOut: quoteManifest.deployedAddress,
+          amountInRaw: wethQuoteCheckAmountRaw,
+          feeTiers: routerConfig.candidateFeeTiers,
+        })
+      : undefined;
+    const routeShapeVerification = shouldVerifyUniswapRouteShape
+      ? requireUniswapRouteShape({
+          liquidityMode: options.uniswapV3LiquidityMode,
+          feeTierTestMode: options.uniswapV3FeeTierTestMode,
+          seededCollateralQuoteFeeTiers: uniswapSeedFeeTiers,
+          requireSeededFeeTierMatch: shouldSeedUniswap,
+          expectedExecutionFeeTier: options.uniswapV3ExpectedExecutionFeeTier,
+          collateralQuoteFeeTierChecks: collateralQuoteFeeTierChecks ?? [],
+          wethQuoteFeeTierChecks: wethQuoteFeeTierChecks ?? [],
+        })
+      : {
+          status: 'skipped' as const,
+          liquidityMode: options.uniswapV3LiquidityMode,
+          strictHybridGasQuoteReady: false,
+          fallbackRegressionGasQuoteOmitted: false,
+        };
     const deployment = shouldDeployExternalTake
       ? existingKeeperTakerFactoryAddress && existingUniswapV3TakerAddress
         ? await resolveExistingUniswapV3ExternalTakeDeployment({
@@ -2707,8 +3206,19 @@ async function main() {
 
     uniswapBootstrap = {
       routerConfig,
-      liquidity: liquidityByFeeTier?.[0],
-      liquidityByFeeTier,
+      liquidityMode: options.uniswapV3LiquidityMode,
+      feeTierTestMode: options.uniswapV3FeeTierTestMode,
+      configuredFeeTiers: routerConfig.candidateFeeTiers,
+      seededCollateralQuoteFeeTiers: uniswapSeedFeeTiers,
+      seededWethQuoteFeeTiers,
+      expectedExecutionFeeTier: options.uniswapV3ExpectedExecutionFeeTier,
+      liquidity: collateralQuoteLiquidityByFeeTier?.[0],
+      liquidityByFeeTier: collateralQuoteLiquidityByFeeTier,
+      collateralQuoteLiquidityByFeeTier,
+      wethQuoteLiquidityByFeeTier,
+      collateralQuoteFeeTierChecks,
+      wethQuoteFeeTierChecks,
+      routeShapeVerification,
       deployment,
     };
   }
@@ -2739,8 +3249,22 @@ async function main() {
 
     uniswapSummary = {
       routerConfig: uniswapBootstrap.routerConfig,
+      liquidityMode: uniswapBootstrap.liquidityMode,
+      feeTierTestMode: uniswapBootstrap.feeTierTestMode,
+      configuredFeeTiers: uniswapBootstrap.configuredFeeTiers,
+      seededCollateralQuoteFeeTiers:
+        uniswapBootstrap.seededCollateralQuoteFeeTiers,
+      seededWethQuoteFeeTiers: uniswapBootstrap.seededWethQuoteFeeTiers,
+      expectedExecutionFeeTier: uniswapBootstrap.expectedExecutionFeeTier,
       liquidity: uniswapBootstrap.liquidity,
       liquidityByFeeTier: uniswapBootstrap.liquidityByFeeTier,
+      collateralQuoteLiquidityByFeeTier:
+        uniswapBootstrap.collateralQuoteLiquidityByFeeTier,
+      wethQuoteLiquidityByFeeTier: uniswapBootstrap.wethQuoteLiquidityByFeeTier,
+      collateralQuoteFeeTierChecks:
+        uniswapBootstrap.collateralQuoteFeeTierChecks,
+      wethQuoteFeeTierChecks: uniswapBootstrap.wethQuoteFeeTierChecks,
+      routeShapeVerification: uniswapBootstrap.routeShapeVerification,
       deployment: uniswapBootstrap.deployment,
       keeperConfigSnippet,
       note: 'Manual keeper take tests still need either a real subgraph/indexer or a repo-local subgraph override harness.',
@@ -3211,7 +3735,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }
 
-main().catch((error) => {
+function handleMainError(error: unknown): void {
   if (activeFailureCheckpointWriter) {
     try {
       activeFailureCheckpointWriter(error);
@@ -3229,4 +3753,17 @@ main().catch((error) => {
     `${error instanceof Error ? error.message : String(error)}\n`
   );
   process.exitCode = 1;
-});
+}
+
+export { parseOptions, requireUniswapRouteShape, resolveUniswapV3SeedFeeTiers };
+export type {
+  UniswapV3FeeTierQuoteCheck,
+  UniswapV3FeeTierTestMode,
+  UniswapV3LiquidityMode,
+  UniswapV3RouterConfig,
+  UniswapV3RouteShapeVerificationSummary,
+};
+
+if (require.main === module) {
+  main().catch(handleMainError);
+}

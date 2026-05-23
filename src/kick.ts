@@ -92,6 +92,10 @@ export async function handleKicks({
   })) {
     await kick({ signer, pool, loanToKick, config: resolvedConfig });
   }
+  if (resolvedConfig.dryRun) {
+    logger.info(`DryRun - Skipping quote allowance cleanup. pool: ${pool.name}`);
+    return;
+  }
   await clearAllowances({ pool, signer });
 }
 
