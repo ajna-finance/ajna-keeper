@@ -500,7 +500,8 @@ export async function estimateGasWithBuffer(
   estimateFn: () => Promise<BigNumber>,
   fallbackGasLimit: BigNumber,
   label: string,
-  basisPoints: number = 13000
+  basisPoints: number = 13000,
+  options: { allowFallback?: boolean } = {}
 ): Promise<BigNumber> {
   try {
     const estimatedGas = await estimateFn();
@@ -510,6 +511,12 @@ export async function estimateGasWithBuffer(
     );
     return gasLimit;
   } catch (error) {
+    if (options.allowFallback !== true) {
+      logger.warn(
+        `${label} gas estimation failed; refusing fallback gas limit ${fallbackGasLimit.toString()}: ${error}`
+      );
+      throw error;
+    }
     logger.warn(
       `${label} gas estimation failed, using fallback ${fallbackGasLimit.toString()}: ${error}`
     );

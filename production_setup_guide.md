@@ -316,12 +316,11 @@ const config: KeeperConfig = {
     },
   },
   dex: {
-    // ADD: Universal Router configuration for Uniswap V3
+    // ADD: Uniswap V3 routing configuration
     uniswapV3: {
       universalRouter: {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
         wethAddress: '0x4200000000000000000000000000000000000006',
-        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         defaultFeeTier: 3000, // Global runtime default for Uniswap external takes
@@ -994,12 +993,11 @@ const config: KeeperConfig = {
   },
 
   dex: {
-    // Universal Router configuration for Uniswap V3
+    // Uniswap V3 routing configuration
     uniswapV3: {
       universalRouter: {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
         wethAddress: '0x4200000000000000000000000000000000000006',
-        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
         defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
         candidateFeeTiers: [500], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
         defaultSlippage: 0.5,

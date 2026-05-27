@@ -23,10 +23,8 @@ import {
   MockAtomicSwapPool__factory,
   MockCurveSwapPool__factory,
   MockERC20__factory,
-  MockPermit2__factory,
   MockPoolDeployer__factory,
   MockSushiSwapRouter__factory,
-  MockUniversalRouter__factory,
 } from '../../typechain-types/factories/contracts/mocks';
 
 const ERC20_NON_SUBSET_HASH = utils.keccak256(
@@ -174,11 +172,7 @@ describe('Production route selection fork verification', function () {
     let takerAddress: string;
 
     if (params.source === LiquiditySource.UNISWAPV3) {
-      const permit2 = await new MockPermit2__factory(owner).deploy();
-      await permit2.deployed();
-      const router = await new MockUniversalRouter__factory(owner).deploy(
-        permit2.address,
-        quoteToken.address,
+      const router = await new MockSushiSwapRouter__factory(owner).deploy(
         ROUTER_AMOUNT_OUT
       );
       await router.deployed();
@@ -186,17 +180,8 @@ describe('Production route selection fork verification', function () {
 
       swapRouter = router.address;
       swapDetails = utils.defaultAbiCoder.encode(
-        ['(address,address,address,uint24,uint256,uint256)'],
-        [
-          [
-            router.address,
-            permit2.address,
-            quoteToken.address,
-            500,
-            APPROVED_MIN_OUT,
-            DEADLINE,
-          ],
-        ]
+        ['(address,address,uint24,uint256,uint256)'],
+        [[router.address, quoteToken.address, 500, APPROVED_MIN_OUT, DEADLINE]]
       );
       takerAddress = uniswapTaker.address;
     } else if (params.source === LiquiditySource.SUSHISWAP) {
@@ -405,11 +390,7 @@ describe('Production route selection fork verification', function () {
     const uniswapAmountOut = utils.parseEther('119.5');
     const sushiAmountOut = utils.parseEther('120');
 
-    const permit2 = await new MockPermit2__factory(owner).deploy();
-    await permit2.deployed();
-    const uniswapRouter = await new MockUniversalRouter__factory(owner).deploy(
-      permit2.address,
-      quoteToken.address,
+    const uniswapRouter = await new MockSushiSwapRouter__factory(owner).deploy(
       uniswapAmountOut
     );
     await uniswapRouter.deployed();
@@ -458,8 +439,7 @@ describe('Production route selection fork verification', function () {
     };
     const config = {
       universalRouterOverrides: {
-        universalRouterAddress: uniswapRouter.address,
-        permit2Address: permit2.address,
+        swapRouter02Address: uniswapRouter.address,
         poolFactoryAddress: '0x4444444444444444444444444444444444444444',
         defaultFeeTier: 3000,
         candidateFeeTiers: [],

@@ -423,6 +423,7 @@ export interface UniswapV3Overrides {
 
 export interface UniversalRouterOverrides {
   universalRouterAddress?: string;
+  swapRouter02Address?: string;
   permit2Address?: string;
   poolFactoryAddress?: string;
   defaultFeeTier?: number;

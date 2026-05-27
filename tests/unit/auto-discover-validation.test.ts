@@ -58,8 +58,7 @@ describe('auto-discover validation', () => {
       oneInch: {},
       uniswapV3: {
         universalRouter: {
-          universalRouterAddress: '0x5555555555555555555555555555555555555555',
-          permit2Address: '0x6666666666666666666666666666666666666666',
+          swapRouter02Address: '0x5555555555555555555555555555555555555555',
           poolFactoryAddress: '0x7777777777777777777777777777777777777777',
           quoterV2Address: '0x1212121212121212121212121212121212121212',
           wethAddress: '0x4200000000000000000000000000000000000006',

@@ -18,7 +18,8 @@ interface QuoteDecimals {
 }
 
 interface UniswapV3Config {
-  universalRouterAddress: string;
+  universalRouterAddress?: string;
+  swapRouter02Address?: string;
   poolFactoryAddress: string;
   defaultFeeTier: number;
   wethAddress: string;
@@ -139,7 +140,6 @@ export class UniswapV3QuoteProvider {
    */
   isAvailable(): boolean {
     return !!(
-      this.config.universalRouterAddress &&
       this.config.poolFactoryAddress &&
       this.config.defaultFeeTier &&
       this.config.wethAddress &&

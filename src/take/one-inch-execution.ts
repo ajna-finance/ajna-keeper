@@ -674,7 +674,9 @@ export async function takeLiquidation({
         const gasLimit = await estimateGasWithBuffer(
           () => keeperTaker.estimateGas.takeWithAtomicSwap(...txArgs),
           fallbackGasLimit,
-          `Take ${pool.name}/${borrower}`
+          `Take ${pool.name}/${borrower}`,
+          13000,
+          { allowFallback: false }
         );
         const txRequest =
           await keeperTaker.populateTransaction.takeWithAtomicSwap(...txArgs, {

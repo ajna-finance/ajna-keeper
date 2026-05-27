@@ -48,8 +48,9 @@ type FixtureSummary = {
   };
   uniswapV3ExternalTake?: {
     routerConfig: {
-      universalRouterAddress: string;
-      permit2Address: string;
+      swapRouter02Address: string;
+      universalRouterAddress?: string;
+      permit2Address?: string;
       poolFactoryAddress: string;
       quoterV2Address: string;
       wethAddress: string;

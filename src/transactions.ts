@@ -176,7 +176,9 @@ export async function liquidationArbTake(
       const gasLimit = await estimateGasWithBuffer(
         () => contractPoolWithSigner.estimateGas.bucketTake(...txArgs),
         fallbackGasLimit,
-        `ArbTake ${liquidation.borrowerAddress.slice(0, 8)}`
+        `ArbTake ${liquidation.borrowerAddress.slice(0, 8)}`,
+        13000,
+        { allowFallback: false }
       );
       const txRequest =
         await contractPoolWithSigner.populateTransaction.bucketTake(...txArgs, {

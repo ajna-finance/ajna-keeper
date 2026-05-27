@@ -572,14 +572,13 @@ export function validateTakeSettings(
       }
       const routerOverrides = keeperConfig.dex.uniswapV3.universalRouter;
       if (
-        !routerOverrides.universalRouterAddress ||
-        !routerOverrides.permit2Address ||
+        !routerOverrides.swapRouter02Address ||
         !routerOverrides.poolFactoryAddress ||
         !routerOverrides.wethAddress ||
         !routerOverrides.quoterV2Address
       ) {
         throw new Error(
-          'TakeSettings: dex.uniswapV3.universalRouter.universalRouterAddress, permit2Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
+          'TakeSettings: dex.uniswapV3.universalRouter.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
         );
       }
     }

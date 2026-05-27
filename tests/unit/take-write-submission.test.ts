@@ -1073,8 +1073,7 @@ describe('take write submission', () => {
       config: {
         keeperTakerFactory: '0x0000000000000000000000000000000000000013',
         universalRouterOverrides: {
-          universalRouterAddress: '0x0000000000000000000000000000000000000014',
-          permit2Address: '0x0000000000000000000000000000000000000015',
+          swapRouter02Address: '0x0000000000000000000000000000000000000014',
           defaultFeeTier: 3000,
         },
         takeWriteTransport: takeWriteTransport as any,
@@ -1093,10 +1092,10 @@ describe('take write submission', () => {
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
     const takeArgs = populateTransactionStub.firstCall.args;
     const decoded = ethers.utils.defaultAbiCoder.decode(
-      ['(address,address,address,uint24,uint256,uint256)'],
+      ['(address,address,uint24,uint256,uint256)'],
       takeArgs[6]
     );
-    expect(decoded[0][5].toNumber()).to.equal(1923);
+    expect(decoded[0][4].toNumber()).to.equal(1923);
     expect((readSigner as any).provider.getBlock.calledOnceWithExactly('latest'))
       .to.be.true;
   });

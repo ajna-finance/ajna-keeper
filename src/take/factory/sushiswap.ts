@@ -319,7 +319,9 @@ export async function executeSushiSwapFactoryTake({
         const gasLimit = await estimateGasWithBuffer(
           () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
           fallbackGasLimit,
-          `Factory Sushi take ${pool.name}/${liquidation.borrower}`
+          `Factory Sushi take ${pool.name}/${liquidation.borrower}`,
+          13000,
+          { allowFallback: false }
         );
         const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
           ...txArgs,

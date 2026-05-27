@@ -550,7 +550,7 @@ export function formatFactoryExecutionLog(params: {
     `${extraLines}\n` +
     `  Collateral (WAD): ${params.collateralWad.toString()}\n` +
     `  Auction Price (WAD): ${params.auctionPriceWad.toString()}\n` +
-    `  Minimal Amount Out: ${params.minimalAmountOut.toString()} (quoted bound)`
+    `  Router Amount Out Minimum: ${params.minimalAmountOut.toString()}`
   );
 }
 
@@ -696,8 +696,7 @@ export function getUniswapV3QuoteProvider(params: {
 }): UniswapV3QuoteProvider | undefined {
   const routerConfig = params.routerConfig;
   if (
-    !routerConfig?.universalRouterAddress ||
-    !routerConfig.poolFactoryAddress ||
+    !routerConfig?.poolFactoryAddress ||
     !routerConfig.wethAddress ||
     !routerConfig.quoterV2Address
   ) {
@@ -708,6 +707,7 @@ export function getUniswapV3QuoteProvider(params: {
   if (quoteProvider === undefined) {
     const candidateProvider = new UniswapV3QuoteProvider(params.signer, {
       universalRouterAddress: routerConfig.universalRouterAddress,
+      swapRouter02Address: routerConfig.swapRouter02Address,
       poolFactoryAddress: routerConfig.poolFactoryAddress,
       defaultFeeTier:
         routerConfig.defaultFeeTier ??
@@ -721,9 +721,26 @@ export function getUniswapV3QuoteProvider(params: {
     }
   }
 
-  return quoteProvider && quoteProvider.isAvailable()
-    ? quoteProvider
-    : undefined;
+  return quoteProvider ?? undefined;
+}
+
+export function getConfiguredUniswapSwapRouterAddress(
+  routerConfig?: UniversalRouterOverrides
+): string | undefined {
+  return routerConfig?.swapRouter02Address;
+}
+
+export function requireConfiguredUniswapSwapRouterAddress(
+  routerConfig: UniversalRouterOverrides | undefined,
+  poolName: string
+): string {
+  const swapRouterAddress = getConfiguredUniswapSwapRouterAddress(routerConfig);
+  if (!swapRouterAddress) {
+    throw new Error(
+      `Factory: swapRouter02Address required for UniswapV3 takes in pool ${poolName}`
+    );
+  }
+  return swapRouterAddress;
 }
 
 export async function getSushiSwapQuoteProvider(params: {

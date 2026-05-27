@@ -55,8 +55,7 @@ describe('route deployment preflight', () => {
     dex: {
       uniswapV3: {
         universalRouter: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
-          permit2Address: '0x4444444444444444444444444444444444444444',
+          swapRouter02Address: '0x3333333333333333333333333333333333333333',
           poolFactoryAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
           wethAddress: '0x7777777777777777777777777777777777777777',
@@ -87,7 +86,7 @@ describe('route deployment preflight', () => {
       chainId: 1,
     });
 
-    expect(provider.getCode.callCount).to.equal(7);
+    expect(provider.getCode.callCount).to.equal(6);
   });
 
   it('fails startup preflight when a configured taker has no bytecode', async () => {
@@ -287,7 +286,7 @@ describe('route deployment preflight', () => {
       expect((error as Error).message).to.include(
         'code could not be read after retries'
       );
-      expect(provider.getCode.callCount).to.equal(28);
+      expect(provider.getCode.callCount).to.equal(24);
     } finally {
       clock.restore();
     }

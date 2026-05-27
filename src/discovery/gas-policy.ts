@@ -462,8 +462,8 @@ function getGasQuoteSourceConfigIdentity(params: {
         const routerConfig = params.config.universalRouterOverrides;
         return {
           source,
-          universalRouterAddress: normalizeIdentityAddress(
-            routerConfig?.universalRouterAddress
+          swapRouter02Address: normalizeIdentityAddress(
+            routerConfig?.swapRouter02Address
           ),
           poolFactoryAddress: normalizeIdentityAddress(
             routerConfig?.poolFactoryAddress
@@ -700,8 +700,7 @@ async function quoteTokensByLiquiditySource(params: {
   if (params.liquiditySource === LiquiditySource.UNISWAPV3) {
     const routerConfig = params.config.universalRouterOverrides;
     if (
-      !routerConfig?.universalRouterAddress ||
-      !routerConfig.poolFactoryAddress ||
+      !routerConfig?.poolFactoryAddress ||
       !routerConfig.wethAddress ||
       !routerConfig.quoterV2Address
     ) {

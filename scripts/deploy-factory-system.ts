@@ -151,9 +151,8 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     }
 
     const required = [
-      'universalRouterAddress',
+      'swapRouter02Address',
       'wethAddress',
-      'permit2Address',
       'poolFactoryAddress',
       'quoterV2Address',
     ];

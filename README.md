@@ -770,9 +770,8 @@ const config: KeeperConfig = {
   dex: {
     uniswapV3: {
       universalRouter: {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
         wethAddress: '0x4200000000000000000000000000000000000006',
-        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
@@ -800,6 +799,8 @@ const config: KeeperConfig = {
 **Uniswap V3 Route Selection**
 
 Uniswap external takes use `defaultFeeTier` as the preferred route and automatically probe standard V3 tiers when `candidateFeeTiers` is unset. The keeper checks whether a pool exists before spending quote budget, then quotes viable routes and executes with the selected fee tier.
+
+Uniswap factory external takes execute directly through SwapRouter02 and require `swapRouter02Address`. `universalRouterAddress` and `permit2Address` are only needed for Universal Router flows such as LP reward swaps.
 
 To check liquidity:
 
@@ -1225,7 +1226,7 @@ manual: {
 Edit `config.ts` to include these optional fields:
 
 `dex.uniswapV3.universalRouter`:
-Required for Uniswap V3 swaps. Provides addresses for Universal Router integration.
+Required for Uniswap V3 quote routing and swaps. Factory external takes use `swapRouter02Address`; Universal Router and Permit2 are only required for Universal Router flows such as LP reward swaps.
 
 - Format:
 
@@ -1234,9 +1235,11 @@ dex: {
   uniswapV3: {
     universalRouter: {
       universalRouterAddress: "0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B",
+      swapRouter02Address: "0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160",
       wethAddress: "0x4200000000000000000000000000000000000006",
       permit2Address: "0xB952578f3520EE8Ea45b7914994dcf4702cEe578",
       poolFactoryAddress: "0x346239972d1fa486FC4a521031BC81bFB7D6e8a4",
+      quoterV2Address: "0xcBa55304013187D49d4012F4d7e4B63a04405cd5",
       defaultFeeTier: 3000,
       defaultSlippage: 0.5,
     },

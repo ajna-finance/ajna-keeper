@@ -326,7 +326,9 @@ export async function executeCurveFactoryTake({
         const gasLimit = await estimateGasWithBuffer(
           () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
           fallbackGasLimit,
-          `Factory Curve take ${pool.name}/${liquidation.borrower}`
+          `Factory Curve take ${pool.name}/${liquidation.borrower}`,
+          13000,
+          { allowFallback: false }
         );
         const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
           ...txArgs,

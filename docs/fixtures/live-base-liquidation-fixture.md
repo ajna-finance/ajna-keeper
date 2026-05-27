@@ -158,6 +158,7 @@ The fixture can seed and probe multiple Uniswap V3 candidate fee tiers:
 ```bash
 export AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE=all_configured
 export AJNA_AGENT_UNISWAP_FEE_TIERS=3000,500,10000
+export AJNA_AGENT_UNISWAP_SWAP_ROUTER_02_ADDRESS=0x2626664c2603336E57B271c5C0b26F421741e481
 ```
 
 Supported modes:

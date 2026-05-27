@@ -137,9 +137,8 @@ describe('Take Factory', () => {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
         universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
           wethAddress: '0x4200000000000000000000000000000000000006',
-          permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
           defaultFeeTier: 3000,
           defaultSlippage: 0.5,
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
@@ -200,31 +199,32 @@ describe('Take Factory', () => {
     it('should validate required fields for Uniswap V3 configuration', () => {
       // Based on real Hemi config
       const validHemiConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         wethAddress: '0x4200000000000000000000000000000000000006',
-        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
         defaultFeeTier: 3000,
         defaultSlippage: 0.5,
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
       };
 
       const incompleteConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
-        // Missing poolFactoryAddress and wethAddress
+        swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
+        // Missing poolFactoryAddress, wethAddress, and quoterV2Address
       };
 
-      // Business logic: Uniswap V3 requires specific configuration fields
+      // Business logic: Uniswap V3 external takes require direct SwapRouter02 plus quote routing fields.
       const isValidConfig = !!(
-        validHemiConfig.universalRouterAddress &&
+        validHemiConfig.swapRouter02Address &&
         validHemiConfig.poolFactoryAddress &&
-        validHemiConfig.wethAddress
+        validHemiConfig.wethAddress &&
+        validHemiConfig.quoterV2Address
       );
 
       const isIncompleteConfig = !!(
-        incompleteConfig.universalRouterAddress &&
+        incompleteConfig.swapRouter02Address &&
         (incompleteConfig as any).poolFactoryAddress &&
-        (incompleteConfig as any).wethAddress
+        (incompleteConfig as any).wethAddress &&
+        (incompleteConfig as any).quoterV2Address
       );
 
       expect(isValidConfig).to.be.true;
@@ -382,10 +382,9 @@ describe('Take Factory', () => {
       // Real Hemi configuration - complete
       const completeHemiConfig = {
         universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           wethAddress: '0x4200000000000000000000000000000000000006',
-          permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -393,8 +392,8 @@ describe('Take Factory', () => {
       // Incomplete configuration (missing key fields)
       const incompleteConfig = {
         universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
-          // Missing permit2Address and other required fields
+          swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
+          // Missing quote routing fields
         },
       };
 
@@ -405,13 +404,17 @@ describe('Take Factory', () => {
 
       // Business logic: validate required fields for Uniswap operations
       const isCompleteConfig = !!(
-        completeHemiConfig.universalRouterOverrides?.universalRouterAddress &&
-        completeHemiConfig.universalRouterOverrides?.permit2Address
+        completeHemiConfig.universalRouterOverrides?.swapRouter02Address &&
+        completeHemiConfig.universalRouterOverrides?.poolFactoryAddress &&
+        completeHemiConfig.universalRouterOverrides?.wethAddress &&
+        completeHemiConfig.universalRouterOverrides?.quoterV2Address
       );
 
       const isIncompleteConfig = !!(
-        incompleteConfig.universalRouterOverrides?.universalRouterAddress &&
-        (incompleteConfig.universalRouterOverrides as any)?.permit2Address
+        incompleteConfig.universalRouterOverrides?.swapRouter02Address &&
+        (incompleteConfig.universalRouterOverrides as any)?.poolFactoryAddress &&
+        (incompleteConfig.universalRouterOverrides as any)?.wethAddress &&
+        (incompleteConfig.universalRouterOverrides as any)?.quoterV2Address
       );
 
       const isMissingConfig = !!(missingConfig as any).universalRouterOverrides;
@@ -2526,8 +2529,7 @@ describe('Take Factory', () => {
       // Real Hemi configuration values
       const config = {
         universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
-          permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
+          swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
           defaultFeeTier: 3000,
           defaultSlippage: 0.5,
         },
@@ -2540,8 +2542,7 @@ describe('Take Factory', () => {
 
       // Business logic: prepare swap details for Uniswap V3
       const swapDetails = {
-        universalRouter: config.universalRouterOverrides.universalRouterAddress,
-        permit2: config.universalRouterOverrides.permit2Address,
+        swapRouter: config.universalRouterOverrides.swapRouter02Address,
         targetToken: pool.quoteAddress,
         feeTier: config.universalRouterOverrides.defaultFeeTier,
         slippageBps: Math.floor(
@@ -2550,11 +2551,8 @@ describe('Take Factory', () => {
         deadline: Math.floor(Date.now() / 1000) + 1800, // 30 minutes
       };
 
-      expect(swapDetails.universalRouter).to.equal(
-        '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B'
-      );
-      expect(swapDetails.permit2).to.equal(
-        '0xB952578f3520EE8Ea45b7914994dcf4702cEe578'
+      expect(swapDetails.swapRouter).to.equal(
+        '0x2626664c2603336E57B271c5C0b26F421741e481'
       );
       expect(swapDetails.targetToken).to.equal(
         '0x91e1a2966408d434cfc1c0790df4a1ce08dc73d8'
@@ -2569,15 +2567,17 @@ describe('Take Factory', () => {
     it('should handle missing swap configuration gracefully', () => {
       const incompleteConfig = {
         universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
-          // Missing permit2Address and other required fields
+          swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
+          // Missing quote routing fields
         },
       };
 
       // Business logic: detect incomplete configuration
       const hasRequiredFields = !!(
-        incompleteConfig.universalRouterOverrides?.universalRouterAddress &&
-        (incompleteConfig.universalRouterOverrides as any)?.permit2Address
+        incompleteConfig.universalRouterOverrides?.swapRouter02Address &&
+        (incompleteConfig.universalRouterOverrides as any)?.poolFactoryAddress &&
+        (incompleteConfig.universalRouterOverrides as any)?.wethAddress &&
+        (incompleteConfig.universalRouterOverrides as any)?.quoterV2Address
       );
 
       expect(hasRequiredFields).to.be.false;

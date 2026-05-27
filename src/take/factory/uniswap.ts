@@ -32,6 +32,7 @@ import {
   getSlippageFloorQuoteRaw,
   getUniswapV3QuoteProvider,
   getSwapDeadlineCached,
+  requireConfiguredUniswapSwapRouterAddress,
 } from './shared';
 import {
   resolveTakeWriteTransport,
@@ -73,7 +74,6 @@ export async function evaluateUniswapV3FactoryQuote({
   const routerConfig = config.universalRouterOverrides;
 
   if (
-    !routerConfig.universalRouterAddress ||
     !routerConfig.poolFactoryAddress ||
     !routerConfig.wethAddress
   ) {
@@ -267,7 +267,11 @@ export async function executeUniswapV3FactoryTake({
       logger.error(message);
       throw new Error(message);
     }
-    const minimalAmountOut = await computeFactoryAmountOutMinimum({
+    const swapRouterAddress = requireConfiguredUniswapSwapRouterAddress(
+      config.universalRouterOverrides,
+      pool.name
+    );
+    const routerAmountOutMinimum = await computeFactoryAmountOutMinimum({
       pool,
       liquidation,
       quoteEvaluation,
@@ -283,25 +287,23 @@ export async function executeUniswapV3FactoryTake({
         poolName: pool.name,
         collateralWad: liquidation.collateral,
         auctionPriceWad: liquidation.auctionPrice,
-        minimalAmountOut,
+        minimalAmountOut: routerAmountOutMinimum,
       })
     );
 
     const swapDetails = {
-      universalRouter: config.universalRouterOverrides.universalRouterAddress!,
-      permit2: config.universalRouterOverrides.permit2Address!,
+      swapRouter: swapRouterAddress,
       targetToken: pool.quoteAddress,
       feeTier: quoteEvaluation.selectedFeeTier,
-      amountOutMinimum: minimalAmountOut,
+      amountOutMinimum: routerAmountOutMinimum,
       deadline,
     };
 
     const encodedSwapDetails = ethers.utils.defaultAbiCoder.encode(
-      ['(address,address,address,uint24,uint256,uint256)'],
+      ['(address,address,uint24,uint256,uint256)'],
       [
         [
-          swapDetails.universalRouter,
-          swapDetails.permit2,
+          swapDetails.swapRouter,
           swapDetails.targetToken,
           swapDetails.feeTier,
           swapDetails.amountOutMinimum,
@@ -328,13 +330,15 @@ export async function executeUniswapV3FactoryTake({
           liquidation.auctionPrice,
           liquidation.collateral,
           Number(LiquiditySource.UNISWAPV3),
-          swapDetails.universalRouter,
+          swapDetails.swapRouter,
           encodedSwapDetails,
         ] as const;
         const gasLimit = await estimateGasWithBuffer(
           () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
           fallbackGasLimit,
-          `Factory Uniswap take ${pool.name}/${liquidation.borrower}`
+          `Factory Uniswap take ${pool.name}/${liquidation.borrower}`,
+          13000,
+          { allowFallback: false }
         );
         const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
           ...txArgs,

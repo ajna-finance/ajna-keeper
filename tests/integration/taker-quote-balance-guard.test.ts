@@ -12,11 +12,9 @@ import {
   MockCurveSwapPool__factory,
   MockERC20__factory,
   MockOneInchUnderdeliveryRouter__factory,
-  MockPermit2__factory,
   MockPoolDeployer__factory,
   MockSushiSwapRouter__factory,
   MockSwapRouter__factory,
-  MockUniversalRouter__factory,
 } from '../../typechain-types/factories/contracts/mocks';
 
 const ERC20_NON_SUBSET_HASH = utils.keccak256(
@@ -31,7 +29,7 @@ const ZERO_FACTORY = constants.AddressZero;
 const ONE_INCH_DETAILS_TYPE =
   '(address,(address,address,address,address,uint256,uint256,uint256),bytes)';
 const ONE_INCH_CALLBACK_DATA_TYPE = '(uint8,address,bytes)';
-const UNISWAP_DETAILS_TYPE = '(address,address,address,uint24,uint256,uint256)';
+const UNISWAP_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
 const SUSHI_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
 const CURVE_DETAILS_TYPE =
   '(address,address,address,uint8,uint8,uint8,uint256,uint256)';
@@ -241,6 +239,42 @@ describe('Taker quote balance guards', () => {
     );
   });
 
+  it('executes uniswap callbacks through direct SwapRouter02 custody', async () => {
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      ZERO_FACTORY
+    );
+    await taker.deployed();
+
+    await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(
+      QUOTE_AMOUNT_DUE
+    );
+    await router.deployed();
+    await quoteToken.mint(router.address, QUOTE_AMOUNT_DUE);
+
+    const callbackData = utils.defaultAbiCoder.encode(
+      [UNISWAP_DETAILS_TYPE],
+      [[router.address, quoteToken.address, 500, QUOTE_AMOUNT_DUE, DEADLINE]]
+    );
+
+    await pool.callAtomicSwapCallback(
+      taker.address,
+      COLLATERAL_AMOUNT,
+      QUOTE_AMOUNT_DUE,
+      callbackData
+    );
+
+    expect(
+      (await collateralToken.balanceOf(router.address)).eq(COLLATERAL_AMOUNT)
+    ).to.equal(true);
+    expect(
+      (await quoteToken.balanceOf(taker.address)).eq(QUOTE_AMOUNT_DUE)
+    ).to.equal(true);
+  });
+
   it('rejects uniswap callbacks that do not increase quote balance', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } =
       await deployBase();
@@ -253,18 +287,12 @@ describe('Taker quote balance guards', () => {
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
     await quoteToken.mint(taker.address, QUOTE_AMOUNT_DUE);
 
-    const permit2 = await new MockPermit2__factory(owner).deploy();
-    await permit2.deployed();
-    const router = await new MockUniversalRouter__factory(owner).deploy(
-      permit2.address,
-      quoteToken.address,
-      0
-    );
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(0);
     await router.deployed();
 
     const callbackData = utils.defaultAbiCoder.encode(
       [UNISWAP_DETAILS_TYPE],
-      [[router.address, permit2.address, quoteToken.address, 500, 0, DEADLINE]]
+      [[router.address, quoteToken.address, 500, 0, DEADLINE]]
     );
 
     await expectCustomError(

@@ -57,7 +57,7 @@ describe('UniswapV3QuoteProvider', () => {
       expect(provider.isAvailable()).to.be.false;
     });
 
-    it('should return false when universalRouterAddress is missing', () => {
+    it('should not require universalRouterAddress for quote-only availability', () => {
       const config = {
         // Missing universalRouterAddress
         poolFactoryAddress: '0xFactory123',
@@ -67,7 +67,7 @@ describe('UniswapV3QuoteProvider', () => {
       };
 
       const provider = new UniswapV3QuoteProvider(mockSigner, config as any);
-      expect(provider.isAvailable()).to.be.false;
+      expect(provider.isAvailable()).to.be.true;
     });
 
     it('should return false when poolFactoryAddress is missing', () => {

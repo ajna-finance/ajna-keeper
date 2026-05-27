@@ -267,17 +267,10 @@ export async function validateAutoDiscoverRouteDeployments(params: {
       if (source === LiquiditySource.UNISWAPV3) {
         await requireContractCode({
           provider: params.provider,
-          label: 'Uniswap V3 universalRouterAddress',
+          label: 'Uniswap V3 swapRouter02Address',
           address:
             params.config.dex?.uniswapV3?.universalRouter
-              ?.universalRouterAddress,
-          errors,
-        });
-        await requireContractCode({
-          provider: params.provider,
-          label: 'Uniswap V3 permit2Address',
-          address:
-            params.config.dex?.uniswapV3?.universalRouter?.permit2Address,
+              ?.swapRouter02Address,
           errors,
         });
         await requireContractCode({

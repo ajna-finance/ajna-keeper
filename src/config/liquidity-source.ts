@@ -136,8 +136,7 @@ export function hasConfiguredGasQuoteLiquiditySource(
       );
     case LiquiditySource.UNISWAPV3:
       return !!(
-        config.universalRouterOverrides?.universalRouterAddress &&
-        config.universalRouterOverrides.poolFactoryAddress &&
+        config.universalRouterOverrides?.poolFactoryAddress &&
         config.universalRouterOverrides.wethAddress &&
         config.universalRouterOverrides.quoterV2Address
       );
