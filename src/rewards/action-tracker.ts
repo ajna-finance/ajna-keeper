@@ -76,7 +76,9 @@ export class RewardActionTracker {
     const targetAddress =
       targetToken in (this.config.network.tokenAddresses || {})
         ? this.config.network.tokenAddresses![targetToken]
-        : this.config.dex?.uniswapV3?.legacy?.wethAddress;
+        : this.config.dex?.uniswapV3?.legacy?.wethAddress ??
+          this.config.dex?.uniswapV3?.router?.wethAddress ??
+          this.config.dex?.uniswapV3?.universalRouter?.wethAddress;
 
     if (!targetAddress) {
       logger.error(

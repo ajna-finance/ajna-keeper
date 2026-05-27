@@ -37,11 +37,9 @@ const config: KeeperConfig = {
   },
   dex: {
     uniswapV3: {
-      universalRouter: {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B', // HEMI UniversalRouter based on gov proposal
+      router: {
         swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160', // HEMI SwapRouter02 for factory external takes
         wethAddress: '0x4200000000000000000000000000000000000006', // Wrapped ETH on HEMI
-        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
         defaultFeeTier: 3000, // Preferred/default 0.3% route for this chain
         candidateFeeTiers: [500], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
         defaultSlippage: 0.5, // 0.5% as default slippage

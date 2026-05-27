@@ -4,7 +4,7 @@ import {
   KeeperConfig,
   LiquiditySource,
   SushiswapRouterOverrides,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
   hasNonEmptyObject,
 } from './schema';
 import { MAX_UINT24_FEE_TIER } from '../constants';
@@ -15,7 +15,7 @@ export interface LiquiditySourceConfig {
   oneInchRouters?: { [chainId: number]: string };
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
-  universalRouterOverrides?: UniversalRouterOverrides;
+  uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
 }
 
 export function getLiquiditySourceConfig(
@@ -27,7 +27,7 @@ export function getLiquiditySourceConfig(
     oneInchRouters: config.dex?.oneInch?.routers,
     sushiswapRouterOverrides: config.dex?.sushiswap,
     tokenAddresses: config.network.tokenAddresses,
-    universalRouterOverrides: config.dex?.uniswapV3?.universalRouter,
+    uniswapV3RouterOverrides: config.dex?.uniswapV3?.router,
   };
 }
 
@@ -136,9 +136,9 @@ export function hasConfiguredGasQuoteLiquiditySource(
       );
     case LiquiditySource.UNISWAPV3:
       return !!(
-        config.universalRouterOverrides?.poolFactoryAddress &&
-        config.universalRouterOverrides.wethAddress &&
-        config.universalRouterOverrides.quoterV2Address
+        config.uniswapV3RouterOverrides?.poolFactoryAddress &&
+        config.uniswapV3RouterOverrides.wethAddress &&
+        config.uniswapV3RouterOverrides.quoterV2Address
       );
     case LiquiditySource.SUSHISWAP:
       return !!(
@@ -189,7 +189,7 @@ export function resolveConfiguredWrappedNativeAddress(
 ): string | undefined {
   if (liquiditySource === LiquiditySource.UNISWAPV3) {
     return (
-      config.universalRouterOverrides?.wethAddress ??
+      config.uniswapV3RouterOverrides?.wethAddress ??
       resolveWrappedNativeTokenAddress(config.tokenAddresses)
     );
   }
@@ -210,7 +210,7 @@ export function resolveConfiguredWrappedNativeAddress(
 
   return (
     resolveWrappedNativeTokenAddress(config.tokenAddresses) ??
-    config.universalRouterOverrides?.wethAddress ??
+    config.uniswapV3RouterOverrides?.wethAddress ??
     config.sushiswapRouterOverrides?.wethAddress ??
     config.curveRouterOverrides?.wethAddress
   );

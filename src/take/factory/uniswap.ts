@@ -12,6 +12,7 @@ import {
 import {
   estimateGasWithBuffer,
   getErrorMessage,
+  TAKE_WRITE_GAS_ESTIMATE_OPTIONS,
   weiToDecimaled,
   withTimeout,
 } from '../../utils';
@@ -55,23 +56,23 @@ export async function evaluateUniswapV3FactoryQuote({
   auctionPriceWad: BigNumber;
   collateral: BigNumber;
   poolConfig: TakeActionConfig;
-  config: Pick<FactoryQuoteConfig, 'universalRouterOverrides'>;
+  config: Pick<FactoryQuoteConfig, 'uniswapV3RouterOverrides'>;
   signer: Signer;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
   feeTier?: number;
   routeContext?: FactoryRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
-  if (!config.universalRouterOverrides) {
+  if (!config.uniswapV3RouterOverrides) {
     logger.debug(
-      `Factory: No universalRouterOverrides configured for pool ${pool.name}`
+      `Factory: No uniswapV3RouterOverrides configured for pool ${pool.name}`
     );
     return {
       isTakeable: false,
-      reason: 'missing universalRouterOverrides',
+      reason: 'missing uniswapV3RouterOverrides',
     };
   }
 
-  const routerConfig = config.universalRouterOverrides;
+  const routerConfig = config.uniswapV3RouterOverrides;
 
   if (
     !routerConfig.poolFactoryAddress ||
@@ -247,7 +248,7 @@ export async function executeUniswapV3FactoryTake({
   config: Pick<
     FactoryExecutionConfig,
     | 'keeperTakerFactory'
-    | 'universalRouterOverrides'
+    | 'uniswapV3RouterOverrides'
     | 'takeWriteTransport'
     | 'runtimeCache'
     | 'onFactoryExecutionFailure'
@@ -261,14 +262,14 @@ export async function executeUniswapV3FactoryTake({
       signer
     );
 
-    if (!config.universalRouterOverrides) {
+    if (!config.uniswapV3RouterOverrides) {
       const message =
-        'Factory: universalRouterOverrides required for UniswapV3 takes';
+        'Factory: uniswapV3RouterOverrides required for UniswapV3 takes';
       logger.error(message);
       throw new Error(message);
     }
     const swapRouterAddress = requireConfiguredUniswapSwapRouterAddress(
-      config.universalRouterOverrides,
+      config.uniswapV3RouterOverrides,
       pool.name
     );
     const routerAmountOutMinimum = await computeFactoryAmountOutMinimum({
@@ -338,7 +339,7 @@ export async function executeUniswapV3FactoryTake({
           fallbackGasLimit,
           `Factory Uniswap take ${pool.name}/${liquidation.borrower}`,
           13000,
-          { allowFallback: false }
+          TAKE_WRITE_GAS_ESTIMATE_OPTIONS
         );
         const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
           ...txArgs,

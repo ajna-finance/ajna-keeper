@@ -214,4 +214,55 @@ describe('RewardActionTracker', () => {
     // No more calls should happen since token should be removed
     expect(dexRouter.swap.called).to.be.false;
   });
+
+  it('uses universal router WETH as the reward target fallback', async () => {
+    const signer = Wallet.createRandom();
+    sinon.stub(signer, 'getChainId').resolves(1);
+
+    dexRouter = {
+      swap: sinon.stub().resolves({ success: true }),
+    } as unknown as { swap: SinonStub };
+
+    const wethAddress = MAINNET_CONFIG.WETH_ADDRESS;
+    const tokenToSwap = MAINNET_CONFIG.WBTC_USDC_POOL.collateralAddress;
+    const et = new RewardActionTracker(
+      signer,
+      createMockKeeperConfig({
+        network: {
+          rpcUrl: 'mock://rpc',
+          subgraph: { url: 'mock://subgraph' },
+        },
+        dex: {
+          uniswapV3: {
+            universalRouter: {
+              universalRouterAddress:
+                '0x0000000000000000000000000000000000000001',
+              permit2Address: '0x0000000000000000000000000000000000000002',
+              poolFactoryAddress: '0x0000000000000000000000000000000000000003',
+              wethAddress,
+              defaultFeeTier: FeeAmount.MEDIUM,
+            },
+          },
+        },
+      }),
+      dexRouter as unknown as DexRouter
+    );
+
+    const exchangeAction: RewardAction = {
+      action: RewardActionLabel.EXCHANGE,
+      address: tokenToSwap,
+      targetToken: 'weth',
+      slippage: 1,
+      dexProvider: PostAuctionDex.UNISWAP_V3,
+      fee: FeeAmount.MEDIUM,
+    };
+
+    et.addToken(exchangeAction, tokenToSwap, decimaledToWei(1));
+
+    await et.handleAllTokens();
+
+    const callArgs = dexRouter.swap.getCall(0).args;
+    expect(callArgs[3]).to.equal(wethAddress);
+    expect(callArgs[8].uniswap.wethAddress).to.equal(wethAddress);
+  });
 });

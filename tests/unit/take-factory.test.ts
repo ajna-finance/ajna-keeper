@@ -136,7 +136,7 @@ describe('Take Factory', () => {
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
-        universalRouterOverrides: {
+        uniswapV3RouterOverrides: {
           swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
           wethAddress: '0x4200000000000000000000000000000000000006',
           defaultFeeTier: 3000,
@@ -321,8 +321,7 @@ describe('Take Factory', () => {
       const config = {
         dryRun: true,
         keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           wethAddress: '0x4200000000000000000000000000000000000006',
         },
@@ -350,8 +349,7 @@ describe('Take Factory', () => {
       const config = {
         dryRun: false,
         keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           wethAddress: '0x4200000000000000000000000000000000000006',
         },
@@ -368,8 +366,7 @@ describe('Take Factory', () => {
       const config = {
         dryRun: false,
         // Missing keeperTakerFactory
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
         },
       };
 
@@ -381,7 +378,7 @@ describe('Take Factory', () => {
     it('should validate Uniswap configuration completeness', () => {
       // Real Hemi configuration - complete
       const completeHemiConfig = {
-        universalRouterOverrides: {
+        uniswapV3RouterOverrides: {
           swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -391,7 +388,7 @@ describe('Take Factory', () => {
 
       // Incomplete configuration (missing key fields)
       const incompleteConfig = {
-        universalRouterOverrides: {
+        uniswapV3RouterOverrides: {
           swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
           // Missing quote routing fields
         },
@@ -399,25 +396,25 @@ describe('Take Factory', () => {
 
       // No configuration at all
       const missingConfig = {
-        // No universalRouterOverrides at all
+        // No uniswapV3RouterOverrides at all
       };
 
       // Business logic: validate required fields for Uniswap operations
       const isCompleteConfig = !!(
-        completeHemiConfig.universalRouterOverrides?.swapRouter02Address &&
-        completeHemiConfig.universalRouterOverrides?.poolFactoryAddress &&
-        completeHemiConfig.universalRouterOverrides?.wethAddress &&
-        completeHemiConfig.universalRouterOverrides?.quoterV2Address
+        completeHemiConfig.uniswapV3RouterOverrides?.swapRouter02Address &&
+        completeHemiConfig.uniswapV3RouterOverrides?.poolFactoryAddress &&
+        completeHemiConfig.uniswapV3RouterOverrides?.wethAddress &&
+        completeHemiConfig.uniswapV3RouterOverrides?.quoterV2Address
       );
 
       const isIncompleteConfig = !!(
-        incompleteConfig.universalRouterOverrides?.swapRouter02Address &&
-        (incompleteConfig.universalRouterOverrides as any)?.poolFactoryAddress &&
-        (incompleteConfig.universalRouterOverrides as any)?.wethAddress &&
-        (incompleteConfig.universalRouterOverrides as any)?.quoterV2Address
+        incompleteConfig.uniswapV3RouterOverrides?.swapRouter02Address &&
+        (incompleteConfig.uniswapV3RouterOverrides as any)?.poolFactoryAddress &&
+        (incompleteConfig.uniswapV3RouterOverrides as any)?.wethAddress &&
+        (incompleteConfig.uniswapV3RouterOverrides as any)?.quoterV2Address
       );
 
-      const isMissingConfig = !!(missingConfig as any).universalRouterOverrides;
+      const isMissingConfig = !!(missingConfig as any).uniswapV3RouterOverrides;
 
       expect(isCompleteConfig).to.be.true;
       expect(isIncompleteConfig).to.be.false;
@@ -585,8 +582,7 @@ describe('Take Factory', () => {
         },
       };
       const config = {
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           candidateFeeTiers: [3000],
@@ -1007,7 +1003,7 @@ describe('Take Factory', () => {
       const routes = getFactoryRouteCandidates({
         defaultLiquiditySource: LiquiditySource.UNISWAPV3,
         config: {
-          universalRouterOverrides: { defaultFeeTier: 3000 },
+          uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
           sushiswapRouterOverrides: {
             defaultFeeTier: 500,
             candidateFeeTiers: [500],
@@ -1027,7 +1023,7 @@ describe('Take Factory', () => {
       const routes = getFactoryRouteCandidates({
         defaultLiquiditySource: LiquiditySource.UNISWAPV3,
         config: {
-          universalRouterOverrides: { defaultFeeTier: 3000 },
+          uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
         },
       });
 
@@ -1059,7 +1055,7 @@ describe('Take Factory', () => {
       const routes = getFactoryRouteCandidates({
         defaultLiquiditySource: LiquiditySource.UNISWAPV3,
         config: {
-          universalRouterOverrides: {
+          uniswapV3RouterOverrides: {
             defaultFeeTier: 3000,
             candidateFeeTiers: [500],
           },
@@ -1127,7 +1123,7 @@ describe('Take Factory', () => {
           ],
           defaultLiquiditySource: LiquiditySource.UNISWAPV3,
           config: {
-            universalRouterOverrides: { defaultFeeTier: 3000 },
+            uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
             sushiswapRouterOverrides: { defaultFeeTier: 500 },
           },
         })
@@ -1175,7 +1171,7 @@ describe('Take Factory', () => {
           evaluations: [subsidizedRoute, nonSubsidizedRoute],
           defaultLiquiditySource: LiquiditySource.UNISWAPV3,
           config: {
-            universalRouterOverrides: { defaultFeeTier: 3000 },
+            uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
             sushiswapRouterOverrides: { defaultFeeTier: 500 },
           },
         })
@@ -1219,7 +1215,7 @@ describe('Take Factory', () => {
           evaluations: [largerSubsidyRoute, smallerSubsidyRoute],
           defaultLiquiditySource: LiquiditySource.SUSHISWAP,
           config: {
-            universalRouterOverrides: { defaultFeeTier: 3000 },
+            uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
             sushiswapRouterOverrides: { defaultFeeTier: 500 },
           },
         })
@@ -1384,8 +1380,7 @@ describe('Take Factory', () => {
         },
       };
       const config = {
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           candidateFeeTiers: [500],
@@ -1491,8 +1486,7 @@ describe('Take Factory', () => {
         },
       };
       const config = {
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           wethAddress: '0x5555555555555555555555555555555555555555',
@@ -1572,8 +1566,7 @@ describe('Take Factory', () => {
         },
       };
       const config = {
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           wethAddress: '0x5555555555555555555555555555555555555555',
@@ -1684,9 +1677,7 @@ describe('Take Factory', () => {
           },
         } as any,
         {
-          universalRouterOverrides: {
-            universalRouterAddress:
-              '0x3333333333333333333333333333333333333333',
+          uniswapV3RouterOverrides: {
             poolFactoryAddress: '0x4444444444444444444444444444444444444444',
             defaultFeeTier: 3000,
             wethAddress: '0x5555555555555555555555555555555555555555',
@@ -1763,9 +1754,7 @@ describe('Take Factory', () => {
             new ethers.providers.JsonRpcProvider()
           ) as any,
           config: {
-            universalRouterOverrides: {
-              universalRouterAddress:
-                '0x3333333333333333333333333333333333333333',
+            uniswapV3RouterOverrides: {
               poolFactoryAddress: '0x4444444444444444444444444444444444444444',
               defaultFeeTier: 3000,
               wethAddress: '0x5555555555555555555555555555555555555555',
@@ -1842,9 +1831,7 @@ describe('Take Factory', () => {
           },
         } as any,
         {
-          universalRouterOverrides: {
-            universalRouterAddress:
-              '0x3333333333333333333333333333333333333333',
+          uniswapV3RouterOverrides: {
             poolFactoryAddress: '0x4444444444444444444444444444444444444444',
             defaultFeeTier: 3000,
             candidateFeeTiers: [500, 100, 10_000],
@@ -1911,9 +1898,7 @@ describe('Take Factory', () => {
           },
         } as any,
         {
-          universalRouterOverrides: {
-            universalRouterAddress:
-              '0x3333333333333333333333333333333333333333',
+          uniswapV3RouterOverrides: {
             poolFactoryAddress: '0x4444444444444444444444444444444444444444',
             defaultFeeTier: 3000,
             candidateFeeTiers: [500, 100, 10_000],
@@ -1974,9 +1959,7 @@ describe('Take Factory', () => {
           },
         } as any,
         {
-          universalRouterOverrides: {
-            universalRouterAddress:
-              '0x3333333333333333333333333333333333333333',
+          uniswapV3RouterOverrides: {
             poolFactoryAddress: '0x4444444444444444444444444444444444444444',
             defaultFeeTier: 3000,
             wethAddress: '0x5555555555555555555555555555555555555555',
@@ -2043,8 +2026,7 @@ describe('Take Factory', () => {
         },
       };
       const config = {
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           candidateFeeTiers: [500],
@@ -2151,9 +2133,7 @@ describe('Take Factory', () => {
           },
         } as any,
         {
-          universalRouterOverrides: {
-            universalRouterAddress:
-              '0x3333333333333333333333333333333333333333',
+          uniswapV3RouterOverrides: {
             poolFactoryAddress: '0x4444444444444444444444444444444444444444',
             defaultFeeTier: 3000,
             candidateFeeTiers: [500],
@@ -2239,8 +2219,7 @@ describe('Take Factory', () => {
         },
       };
       const config = {
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           wethAddress: '0x5555555555555555555555555555555555555555',
@@ -2320,8 +2299,7 @@ describe('Take Factory', () => {
         },
       };
       const config = {
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           candidateFeeTiers: [500],
@@ -2397,8 +2375,7 @@ describe('Take Factory', () => {
         },
       };
       const config = {
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3333333333333333333333333333333333333333',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           wethAddress: '0x5555555555555555555555555555555555555555',
@@ -2528,7 +2505,7 @@ describe('Take Factory', () => {
     it('should prepare correct Uniswap V3 swap details structure', () => {
       // Real Hemi configuration values
       const config = {
-        universalRouterOverrides: {
+        uniswapV3RouterOverrides: {
           swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
           defaultFeeTier: 3000,
           defaultSlippage: 0.5,
@@ -2542,11 +2519,11 @@ describe('Take Factory', () => {
 
       // Business logic: prepare swap details for Uniswap V3
       const swapDetails = {
-        swapRouter: config.universalRouterOverrides.swapRouter02Address,
+        swapRouter: config.uniswapV3RouterOverrides.swapRouter02Address,
         targetToken: pool.quoteAddress,
-        feeTier: config.universalRouterOverrides.defaultFeeTier,
+        feeTier: config.uniswapV3RouterOverrides.defaultFeeTier,
         slippageBps: Math.floor(
-          config.universalRouterOverrides.defaultSlippage * 100
+          config.uniswapV3RouterOverrides.defaultSlippage * 100
         ),
         deadline: Math.floor(Date.now() / 1000) + 1800, // 30 minutes
       };
@@ -2566,7 +2543,7 @@ describe('Take Factory', () => {
 
     it('should handle missing swap configuration gracefully', () => {
       const incompleteConfig = {
-        universalRouterOverrides: {
+        uniswapV3RouterOverrides: {
           swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
           // Missing quote routing fields
         },
@@ -2574,10 +2551,10 @@ describe('Take Factory', () => {
 
       // Business logic: detect incomplete configuration
       const hasRequiredFields = !!(
-        incompleteConfig.universalRouterOverrides?.swapRouter02Address &&
-        (incompleteConfig.universalRouterOverrides as any)?.poolFactoryAddress &&
-        (incompleteConfig.universalRouterOverrides as any)?.wethAddress &&
-        (incompleteConfig.universalRouterOverrides as any)?.quoterV2Address
+        incompleteConfig.uniswapV3RouterOverrides?.swapRouter02Address &&
+        (incompleteConfig.uniswapV3RouterOverrides as any)?.poolFactoryAddress &&
+        (incompleteConfig.uniswapV3RouterOverrides as any)?.wethAddress &&
+        (incompleteConfig.uniswapV3RouterOverrides as any)?.quoterV2Address
       );
 
       expect(hasRequiredFields).to.be.false;
@@ -2598,7 +2575,7 @@ describe('Take Factory', () => {
           config: {
             dryRun: false,
             keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
-            // Missing universalRouterOverrides
+            // Missing uniswapV3RouterOverrides
           },
           liquiditySource: LiquiditySource.UNISWAPV3,
           hasError: true,
@@ -2609,10 +2586,7 @@ describe('Take Factory', () => {
           config: {
             dryRun: false,
             keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
-            universalRouterOverrides: {
-              universalRouterAddress:
-                '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
-              permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
+            uniswapV3RouterOverrides: {
             },
           },
           liquiditySource: LiquiditySource.UNISWAPV3,
@@ -2634,7 +2608,7 @@ describe('Take Factory', () => {
           errorType = 'missing_factory';
         } else if (
           scenario.liquiditySource === LiquiditySource.UNISWAPV3 &&
-          !(scenario.config as any).universalRouterOverrides
+          !(scenario.config as any).uniswapV3RouterOverrides
         ) {
           hasConfigError = true;
           errorType = 'missing_uniswap_config';

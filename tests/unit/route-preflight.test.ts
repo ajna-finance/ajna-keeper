@@ -54,7 +54,7 @@ describe('route deployment preflight', () => {
     },
     dex: {
       uniswapV3: {
-        universalRouter: {
+        router: {
           swapRouter02Address: '0x3333333333333333333333333333333333333333',
           poolFactoryAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',

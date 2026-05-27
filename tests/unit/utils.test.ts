@@ -12,6 +12,7 @@ import {
   overrideMulticall,
   decimaledToWei,
   estimateGasWithBuffer,
+  GAS_ESTIMATE_FALLBACK_POLICY,
   mapWithConcurrencyPreservingOrder,
   RouteProbeLimiter,
   withTimeoutAbort,
@@ -398,7 +399,7 @@ describe('estimateGasWithBuffer', () => {
       fallbackGas,
       'test tx',
       13000,
-      { allowFallback: true }
+      { fallbackPolicy: GAS_ESTIMATE_FALLBACK_POLICY.ALLOW_FALLBACK }
     );
 
     expect(gasLimit.eq(fallbackGas)).to.equal(true);

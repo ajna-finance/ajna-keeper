@@ -1074,7 +1074,7 @@ describe('take write submission', () => {
       },
       config: {
         keeperTakerFactory: '0x0000000000000000000000000000000000000013',
-        universalRouterOverrides: {
+        uniswapV3RouterOverrides: {
           swapRouter02Address: '0x0000000000000000000000000000000000000014',
           defaultFeeTier: 3000,
         },

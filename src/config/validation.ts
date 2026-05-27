@@ -10,7 +10,7 @@ import {
   SettlementConfig,
   TakeSettings,
   TakeWriteTransportMode,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   getManualPools,
@@ -213,8 +213,8 @@ function validateCandidateFeeTiers(
 }
 
 function validateRouterFeeTiers(config: KeeperConfig): void {
-  const uniswapConfig: UniversalRouterOverrides | undefined =
-    config.dex?.uniswapV3?.universalRouter;
+  const uniswapConfig: UniswapV3RouterOverrides | undefined =
+    config.dex?.uniswapV3?.router;
   const sushiConfig: SushiswapRouterOverrides | undefined =
     config.dex?.sushiswap;
   requireOptionalPercentage(
@@ -230,7 +230,7 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
   validateCandidateFeeTiers(
     uniswapConfig?.candidateFeeTiers,
     uniswapConfig?.defaultFeeTier,
-    'KeeperConfig.dex.uniswapV3.universalRouter'
+    'KeeperConfig.dex.uniswapV3.router'
   );
   validateCandidateFeeTiers(
     sushiConfig?.candidateFeeTiers,
@@ -565,12 +565,12 @@ export function validateTakeSettings(
           'TakeSettings: takers.contracts.UniswapV3 required when liquiditySource is UNISWAPV3'
         );
       }
-      if (!keeperConfig.dex?.uniswapV3?.universalRouter) {
+      if (!keeperConfig.dex?.uniswapV3?.router) {
         throw new Error(
-          'TakeSettings: dex.uniswapV3.universalRouter required when liquiditySource is UNISWAPV3'
+          'TakeSettings: dex.uniswapV3.router required when liquiditySource is UNISWAPV3'
         );
       }
-      const routerOverrides = keeperConfig.dex.uniswapV3.universalRouter;
+      const routerOverrides = keeperConfig.dex.uniswapV3.router;
       if (
         !routerOverrides.swapRouter02Address ||
         !routerOverrides.poolFactoryAddress ||
@@ -578,7 +578,7 @@ export function validateTakeSettings(
         !routerOverrides.quoterV2Address
       ) {
         throw new Error(
-          'TakeSettings: dex.uniswapV3.universalRouter.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
+          'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
         );
       }
     }
@@ -1081,11 +1081,11 @@ export function validateAutoDiscoverConfig(
       externalTakePaths
     );
     if (
-      config.dex?.uniswapV3?.universalRouter?.candidateFeeTiers !== undefined &&
+      config.dex?.uniswapV3?.router?.candidateFeeTiers !== undefined &&
       !effectiveFactorySources.has(LiquiditySource.UNISWAPV3)
     ) {
       logger.warn(
-        'KeeperConfig.dex.uniswapV3.universalRouter.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
+        'KeeperConfig.dex.uniswapV3.router.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
       );
     }
     if (

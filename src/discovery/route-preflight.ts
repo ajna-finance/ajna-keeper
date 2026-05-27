@@ -269,28 +269,25 @@ export async function validateAutoDiscoverRouteDeployments(params: {
           provider: params.provider,
           label: 'Uniswap V3 swapRouter02Address',
           address:
-            params.config.dex?.uniswapV3?.universalRouter
-              ?.swapRouter02Address,
+            params.config.dex?.uniswapV3?.router?.swapRouter02Address,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'Uniswap V3 poolFactoryAddress',
-          address:
-            params.config.dex?.uniswapV3?.universalRouter?.poolFactoryAddress,
+          address: params.config.dex?.uniswapV3?.router?.poolFactoryAddress,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'Uniswap V3 quoterV2Address',
-          address:
-            params.config.dex?.uniswapV3?.universalRouter?.quoterV2Address,
+          address: params.config.dex?.uniswapV3?.router?.quoterV2Address,
           errors,
         });
         await requireContractCode({
           provider: params.provider,
           label: 'Uniswap V3 wethAddress',
-          address: params.config.dex?.uniswapV3?.universalRouter?.wethAddress,
+          address: params.config.dex?.uniswapV3?.router?.wethAddress,
           errors,
         });
       }

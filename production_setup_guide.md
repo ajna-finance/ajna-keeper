@@ -67,7 +67,7 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 ```typescript
 dex: {
   uniswapV3: {
-    universalRouter: {
+    router: {
       defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
       // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
       // candidateFeeTiers: [500, 10000],
@@ -151,7 +151,7 @@ Rationale:
 Result in Production Config:
 dex: {
   uniswapV3: {
-    universalRouter: {
+    router: {
       defaultFeeTier: 3000, // Uniswap external takes default to 0.3% in this keeper instance
       // Omit candidateFeeTiers to auto-probe standard V3 tiers.
     },
@@ -318,7 +318,7 @@ const config: KeeperConfig = {
   dex: {
     // ADD: Uniswap V3 routing configuration for factory external takes
     uniswapV3: {
-      universalRouter: {
+      router: {
         swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
         wethAddress: '0x4200000000000000000000000000000000000006',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
@@ -726,7 +726,7 @@ For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `default
 ```typescript
 dex: {
   uniswapV3: {
-    universalRouter: {
+    router: {
       defaultFeeTier: 3000, // Optimize for most common pairs (WETH/USDC, etc.)
       // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
       // candidateFeeTiers: [500, 10000],
@@ -996,7 +996,7 @@ const config: KeeperConfig = {
   dex: {
     // Uniswap V3 routing configuration
     uniswapV3: {
-      universalRouter: {
+      router: {
         swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
         wethAddress: '0x4200000000000000000000000000000000000006',
         defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
@@ -1244,7 +1244,7 @@ yarn ts-node scripts/query-1inch.ts --config config.ts --action deploy
 **Factory Deployment Failures:**
 
 ```bash
-# Error: "Missing dex.uniswapV3.universalRouter or dex.sushiswap"
+# Error: "Missing dex.uniswapV3.router or dex.sushiswap"
 # Solution: Add complete router configs to config.ts
 
 # Error: "Network mismatch"
@@ -1265,7 +1265,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 # Log: "TakeSettings: takers.oneInch required when liquiditySource is ONEINCH"
 # Solution: Deploy 1inch contract or switch to factory approach
 
-# Log: "dex.uniswapV3.universalRouter.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3"
+# Log: "dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3"
 # Solution: Add complete Uniswap V3 factory-take routing configuration
 
 # Log: "dex.sushiswap required when liquiditySource is SUSHISWAP"

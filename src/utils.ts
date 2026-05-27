@@ -496,12 +496,24 @@ export function withGasLimitBuffer(
   return estimatedGas.mul(basisPoints).add(9999).div(10000);
 }
 
+export const GAS_ESTIMATE_FALLBACK_POLICY = {
+  ALLOW_FALLBACK: 'allow_fallback',
+  REFUSE_FALLBACK: 'refuse_fallback',
+} as const;
+
+export type GasEstimateFallbackPolicy =
+  (typeof GAS_ESTIMATE_FALLBACK_POLICY)[keyof typeof GAS_ESTIMATE_FALLBACK_POLICY];
+
+export const TAKE_WRITE_GAS_ESTIMATE_OPTIONS = {
+  fallbackPolicy: GAS_ESTIMATE_FALLBACK_POLICY.REFUSE_FALLBACK,
+} as const;
+
 export async function estimateGasWithBuffer(
   estimateFn: () => Promise<BigNumber>,
   fallbackGasLimit: BigNumber,
   label: string,
   basisPoints: number = 13000,
-  options: { allowFallback?: boolean } = {}
+  options: { fallbackPolicy?: GasEstimateFallbackPolicy } = {}
 ): Promise<BigNumber> {
   try {
     const estimatedGas = await estimateFn();
@@ -511,7 +523,10 @@ export async function estimateGasWithBuffer(
     );
     return gasLimit;
   } catch (error) {
-    if (options.allowFallback !== true) {
+    if (
+      options.fallbackPolicy !==
+      GAS_ESTIMATE_FALLBACK_POLICY.ALLOW_FALLBACK
+    ) {
       logger.warn(
         `${label} gas estimation failed; refusing fallback gas limit ${fallbackGasLimit.toString()}: ${error}`
       );

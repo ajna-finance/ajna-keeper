@@ -1027,7 +1027,7 @@ type DiscoveryExternalExecutionConfig = Pick<
   | 'oneInchRouters'
   | 'sushiswapRouterOverrides'
   | 'tokenAddresses'
-  | 'universalRouterOverrides'
+  | 'uniswapV3RouterOverrides'
 > & {
   takeWriteTransport?: TakeWriteTransport;
   runtimeCache?: DiscoveryRpcCache['factoryQuoteProviders'];
@@ -1877,7 +1877,7 @@ async function quoteFactoryPathForDiscovery(
     defaultFactoryLiquiditySource: LiquiditySource | undefined;
     routeProbeLimiter?: AsyncOperationLimiter;
     factoryQuoteConfig: {
-      universalRouterOverrides: DiscoveryExecutionConfig['universalRouterOverrides'];
+      uniswapV3RouterOverrides: DiscoveryExecutionConfig['uniswapV3RouterOverrides'];
       sushiswapRouterOverrides: DiscoveryExecutionConfig['sushiswapRouterOverrides'];
       curveRouterOverrides: DiscoveryExecutionConfig['curveRouterOverrides'];
       tokenAddresses: DiscoveryExecutionConfig['tokenAddresses'];
@@ -2995,7 +2995,7 @@ export async function handleDiscoveredTakeTarget(
       takePolicy?.defaultFactoryLiquiditySource,
   });
   const factoryQuoteConfig = {
-    universalRouterOverrides: params.config.universalRouterOverrides,
+    uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
     sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
     tokenAddresses: params.config.tokenAddresses,
@@ -3085,7 +3085,7 @@ export async function handleDiscoveredTakeTarget(
     oneInchRouters: params.config.oneInchRouters,
     keeperTaker: params.config.keeperTaker,
     keeperTakerFactory: params.config.keeperTakerFactory,
-    universalRouterOverrides: params.config.universalRouterOverrides,
+    uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
     sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
     tokenAddresses: params.config.tokenAddresses,

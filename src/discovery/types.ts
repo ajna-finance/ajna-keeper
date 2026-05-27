@@ -6,7 +6,7 @@ import {
   KeeperConfig,
   LiquiditySource,
   SushiswapRouterOverrides,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
 } from '../config';
 import {
   FactoryQuoteProviderRuntimeCache,
@@ -31,7 +31,7 @@ export interface DiscoveryExecutionConfig {
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   takerContracts?: { [source: string]: string };
   tokenAddresses?: { [tokenSymbol: string]: string };
-  universalRouterOverrides?: UniversalRouterOverrides;
+  uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
 }
 
 export type DiscoveryExecutionTransportConfig = DiscoveryExecutionConfig &
@@ -55,7 +55,7 @@ export function getDiscoveryExecutionConfig(
     sushiswapRouterOverrides: config.dex?.sushiswap,
     takerContracts: config.takers?.contracts,
     tokenAddresses: config.network.tokenAddresses,
-    universalRouterOverrides: config.dex?.uniswapV3?.universalRouter,
+    uniswapV3RouterOverrides: config.dex?.uniswapV3?.router,
   };
 }
 

@@ -49,11 +49,9 @@ const config: KeeperConfig = {
       ],
     },
     uniswapV3: {
-      universalRouter: {
-        universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Avalanche UniversalRouter
+      router: {
         swapRouter02Address: '0xbb00FF08d01D300023C629E8fFfFcb65A5a578cE', // Avalanche SwapRouter02 for factory external takes
         wethAddress: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', // wrapped AVAX as intermediary token
-        permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
         defaultFeeTier: 3000, // 0.3% as default for this chain
         defaultSlippage: 0.5, // 0.5% as default slippage
         poolFactoryAddress: '0x740b1c1de25031C31FF4fC9A62f554A55cdC1baD',

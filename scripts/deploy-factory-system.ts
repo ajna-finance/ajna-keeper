@@ -143,10 +143,10 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     );
 
     // Validate Uniswap V3 configuration
-    const uniswapConfig = config.dex?.uniswapV3?.universalRouter;
+    const uniswapConfig = config.dex?.uniswapV3?.router;
     if (!uniswapConfig) {
       throw new Error(
-        'dex.uniswapV3.universalRouter required for Uniswap V3 pools'
+        'dex.uniswapV3.router required for Uniswap V3 pools'
       );
     }
 
@@ -160,7 +160,7 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     for (const field of required) {
       if (!uniswapConfig[field as keyof typeof uniswapConfig]) {
         throw new Error(
-          `Missing dex.uniswapV3.universalRouter.${field} for Uniswap V3`
+          `Missing dex.uniswapV3.router.${field} for Uniswap V3`
         );
       }
     }
@@ -718,8 +718,8 @@ async function main() {
     // ADD DELAY AFTER FACTORY DEPLOYMENT
     await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
 
-    // Deploy Uniswap V3 taker if configured
-    if (config.dex?.uniswapV3?.universalRouter) {
+    // Deploy Uniswap V3 taker if factory SwapRouter02 routing is configured
+    if (config.dex?.uniswapV3?.router) {
       addresses.uniswapTaker = await deployUniswapTaker(
         deployer,
         config.ajna.erc20PoolFactory,

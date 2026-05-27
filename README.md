@@ -487,7 +487,7 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 
 **For External Takes (Time-Sensitive):**
 
-- Uses `dex.uniswapV3.universalRouter.defaultFeeTier` or `dex.sushiswap.defaultFeeTier` as the preferred route
+- Uses `dex.uniswapV3.router.defaultFeeTier` or `dex.sushiswap.defaultFeeTier` as the preferred route
 - Auto-probes standard Uniswap V3 and SushiSwap fee tiers when `candidateFeeTiers` is unset
 - Applies the selected quote route to execution, including the selected fee tier
 - Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
@@ -769,7 +769,7 @@ const config: KeeperConfig = {
   },
   dex: {
     uniswapV3: {
-      universalRouter: {
+      router: {
         swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
         wethAddress: '0x4200000000000000000000000000000000000006',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
@@ -1040,7 +1040,7 @@ const config: KeeperConfig = {
   },
   dex: {
     uniswapV3: {
-      universalRouter: {
+      router: {
         defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
         candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
         /* other addresses */
@@ -1226,7 +1226,7 @@ manual: {
 Edit `config.ts` to include these optional fields:
 
 `dex.uniswapV3.universalRouter`:
-Required for Uniswap V3 quote routing and swaps. Factory external takes use `swapRouter02Address`; Universal Router and Permit2 are only required for Universal Router flows such as LP reward swaps.
+Required only for Universal Router flows such as LP reward swaps. Factory external takes use `dex.uniswapV3.router` instead.
 
 - Format:
 
@@ -1235,11 +1235,9 @@ dex: {
   uniswapV3: {
     universalRouter: {
       universalRouterAddress: "0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B",
-      swapRouter02Address: "0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160",
       wethAddress: "0x4200000000000000000000000000000000000006",
       permit2Address: "0xB952578f3520EE8Ea45b7914994dcf4702cEe578",
       poolFactoryAddress: "0x346239972d1fa486FC4a521031BC81bFB7D6e8a4",
-      quoterV2Address: "0xcBa55304013187D49d4012F4d7e4B63a04405cd5",
       defaultFeeTier: 3000,
       defaultSlippage: 0.5,
     },
@@ -1248,7 +1246,7 @@ dex: {
 ```
 
 `network.tokenAddresses` (Optional):
-Useful for specifying target tokens (e.g., WETH) if not using `dex.uniswapV3.universalRouter`.
+Useful for specifying target tokens (e.g., WETH) if not using `dex.uniswapV3.router` or `dex.uniswapV3.universalRouter`.
 
 - Example:
 

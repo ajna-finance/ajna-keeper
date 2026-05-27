@@ -9,7 +9,7 @@ import {
   PoolConfig,
   SushiswapRouterOverrides,
   STANDARD_V3_FEE_TIERS,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
   formatLiquiditySource,
   getEffectiveV3FeeTiers,
 } from '../../config';
@@ -109,7 +109,7 @@ export interface FactoryTakeConfigBase {
   dryRun?: boolean;
   keeperTakerFactory?: string;
   takerContracts?: { [source: string]: string };
-  universalRouterOverrides?: UniversalRouterOverrides;
+  uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
@@ -130,7 +130,7 @@ export type FactoryExecutionConfig = Pick<
   FactoryTakeConfig,
   | 'dryRun'
   | 'keeperTakerFactory'
-  | 'universalRouterOverrides'
+  | 'uniswapV3RouterOverrides'
   | 'sushiswapRouterOverrides'
   | 'curveRouterOverrides'
   | 'tokenAddresses'
@@ -145,7 +145,7 @@ export type FactoryExecutionConfig = Pick<
 
 export type FactoryQuoteConfig = Pick<
   FactoryTakeConfig,
-  | 'universalRouterOverrides'
+  | 'uniswapV3RouterOverrides'
   | 'sushiswapRouterOverrides'
   | 'curveRouterOverrides'
   | 'tokenAddresses'
@@ -461,12 +461,12 @@ export function getDefaultFactoryFeeTierForSource(
   source: LiquiditySource,
   config: Pick<
     FactoryQuoteConfig,
-    'universalRouterOverrides' | 'sushiswapRouterOverrides'
+    'uniswapV3RouterOverrides' | 'sushiswapRouterOverrides'
   >
 ): number | undefined {
   if (source === LiquiditySource.UNISWAPV3) {
     return (
-      config.universalRouterOverrides?.defaultFeeTier ??
+      config.uniswapV3RouterOverrides?.defaultFeeTier ??
       DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3]
     );
   }
@@ -583,7 +583,7 @@ function isDefaultFactoryRoute(params: {
   defaultLiquiditySource: LiquiditySource;
   config: Pick<
     FactoryQuoteConfig,
-    'universalRouterOverrides' | 'sushiswapRouterOverrides'
+    'uniswapV3RouterOverrides' | 'sushiswapRouterOverrides'
   >;
 }): boolean {
   if (params.route.liquiditySource !== params.defaultLiquiditySource) {
@@ -617,7 +617,7 @@ export function orderFactoryRouteCandidates(params: {
   defaultLiquiditySource: LiquiditySource;
   config: Pick<
     FactoryQuoteConfig,
-    'universalRouterOverrides' | 'sushiswapRouterOverrides'
+    'uniswapV3RouterOverrides' | 'sushiswapRouterOverrides'
   >;
   pool: Pick<FungiblePool, 'collateralAddress' | 'quoteAddress'>;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
@@ -691,7 +691,7 @@ export function recordFactoryRouteSuccess(params: {
 
 export function getUniswapV3QuoteProvider(params: {
   signer: Signer;
-  routerConfig?: FactoryQuoteConfig['universalRouterOverrides'];
+  routerConfig?: FactoryQuoteConfig['uniswapV3RouterOverrides'];
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
 }): UniswapV3QuoteProvider | undefined {
   const routerConfig = params.routerConfig;
@@ -706,7 +706,6 @@ export function getUniswapV3QuoteProvider(params: {
   let quoteProvider = params.runtimeCache?.uniswapV3;
   if (quoteProvider === undefined) {
     const candidateProvider = new UniswapV3QuoteProvider(params.signer, {
-      universalRouterAddress: routerConfig.universalRouterAddress,
       swapRouter02Address: routerConfig.swapRouter02Address,
       poolFactoryAddress: routerConfig.poolFactoryAddress,
       defaultFeeTier:
@@ -725,13 +724,13 @@ export function getUniswapV3QuoteProvider(params: {
 }
 
 export function getConfiguredUniswapSwapRouterAddress(
-  routerConfig?: UniversalRouterOverrides
+  routerConfig?: UniswapV3RouterOverrides
 ): string | undefined {
   return routerConfig?.swapRouter02Address;
 }
 
 export function requireConfiguredUniswapSwapRouterAddress(
-  routerConfig: UniversalRouterOverrides | undefined,
+  routerConfig: UniswapV3RouterOverrides | undefined,
   poolName: string
 ): string {
   const swapRouterAddress = getConfiguredUniswapSwapRouterAddress(routerConfig);
@@ -921,14 +920,14 @@ async function checkUniswapV3RouteAvailability(
 ): Promise<FactoryRouteAvailabilityResult> {
   const quoteProvider = getUniswapV3QuoteProvider({
     signer: params.signer,
-    routerConfig: params.config.universalRouterOverrides,
+    routerConfig: params.config.uniswapV3RouterOverrides,
     runtimeCache: params.runtimeCache,
   });
   return await checkV3StyleRouteAvailability({
     ...params,
     label: 'Uniswap V3',
     quoteProvider,
-    configuredFeeTier: params.config.universalRouterOverrides?.defaultFeeTier,
+    configuredFeeTier: params.config.uniswapV3RouterOverrides?.defaultFeeTier,
     defaultFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
   });
 }
@@ -1151,7 +1150,7 @@ function compareFactoryRouteRank(
     defaultLiquiditySource: LiquiditySource;
     config: Pick<
       FactoryQuoteConfig,
-      'universalRouterOverrides' | 'sushiswapRouterOverrides'
+      'uniswapV3RouterOverrides' | 'sushiswapRouterOverrides'
     >;
   }
 ): number {
@@ -1224,7 +1223,7 @@ function compareFactoryRouteEvaluations(
     defaultLiquiditySource: LiquiditySource;
     config: Pick<
       FactoryQuoteConfig,
-      'universalRouterOverrides' | 'sushiswapRouterOverrides'
+      'uniswapV3RouterOverrides' | 'sushiswapRouterOverrides'
     >;
   }
 ): number {
@@ -1240,7 +1239,7 @@ export function selectBestFactoryRouteEvaluation(params: {
   defaultLiquiditySource: LiquiditySource;
   config: Pick<
     FactoryQuoteConfig,
-    'universalRouterOverrides' | 'sushiswapRouterOverrides'
+    'uniswapV3RouterOverrides' | 'sushiswapRouterOverrides'
   >;
 }): FactoryRouteEvaluationResult | undefined {
   const takeableEvaluations = params.evaluations.filter(({ evaluation }) => {
@@ -1286,7 +1285,7 @@ export function getFactoryRouteCandidates(params: {
   defaultLiquiditySource: LiquiditySource;
   config: Pick<
     FactoryQuoteConfig,
-    'universalRouterOverrides' | 'sushiswapRouterOverrides'
+    'uniswapV3RouterOverrides' | 'sushiswapRouterOverrides'
   >;
   selection?: FactoryRouteSelectionOptions;
 }): FactoryRouteCandidate[] {
@@ -1301,13 +1300,13 @@ export function getFactoryRouteCandidates(params: {
   for (const source of uniqueSources) {
     if (source === LiquiditySource.UNISWAPV3) {
       const defaultFeeTier =
-        params.config.universalRouterOverrides?.defaultFeeTier ??
+        params.config.uniswapV3RouterOverrides?.defaultFeeTier ??
         DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3];
       routesBySource.set(
         source,
         getEffectiveFactoryFeeTiers(
           defaultFeeTier,
-          params.config.universalRouterOverrides?.candidateFeeTiers,
+          params.config.uniswapV3RouterOverrides?.candidateFeeTiers,
           STANDARD_V3_FEE_TIERS
         ).map((feeTier) => ({ liquiditySource: source, feeTier }))
       );

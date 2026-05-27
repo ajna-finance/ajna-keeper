@@ -49,11 +49,9 @@ const config: KeeperConfig = {
       ],
     },
     uniswapV3: {
-      universalRouter: {
-        universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Base UniversalRouter
+      router: {
         swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481', // Base SwapRouter02 for factory external takes
         wethAddress: '0x4200000000000000000000000000000000000006', // WETH on Base
-        permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
         defaultFeeTier: 3000, // Preferred/default 0.3% fee tier
         candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
         defaultSlippage: 0.5, // 0.5% slippage tolerance
