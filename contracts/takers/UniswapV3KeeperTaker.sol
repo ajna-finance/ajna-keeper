@@ -42,6 +42,7 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     error InvalidPool();
     error UnsupportedSource();
     error SwapFailed();
+    error InvalidSwapDetails();
     error InsufficientQuoteReceived();
 
     constructor(PoolDeployer ajnaErc20PoolFactory, address _authorizedFactory) {
@@ -89,6 +90,12 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
 
 
         UniswapV3SwapDetails memory details = abi.decode(data, (UniswapV3SwapDetails));
+        if (
+            details.swapRouter == address(0) ||
+            details.targetToken != pool.quoteTokenAddress() ||
+            details.deadline <= block.timestamp ||
+            details.amountOutMinimum == 0
+        ) revert InvalidSwapDetails();
         _swapWithUniswapV3(pool.collateralAddress(), details.targetToken, collateral, quoteAmountDue, details);
     }
 

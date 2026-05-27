@@ -273,6 +273,91 @@ describe('Taker quote balance guards', () => {
     expect(
       (await quoteToken.balanceOf(taker.address)).eq(QUOTE_AMOUNT_DUE)
     ).to.equal(true);
+    expect(
+      (await collateralToken.allowance(taker.address, router.address)).eq(0)
+    ).to.equal(true);
+  });
+
+  it('executes full uniswap takes with direct SwapRouter02 and resets allowances', async () => {
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      ZERO_FACTORY
+    );
+    await taker.deployed();
+
+    await pool.setQuoteAmountDue(QUOTE_AMOUNT_DUE);
+    await collateralToken.mint(pool.address, COLLATERAL_AMOUNT);
+
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(
+      QUOTE_AMOUNT_DUE
+    );
+    await router.deployed();
+    await quoteToken.mint(router.address, QUOTE_AMOUNT_DUE);
+
+    const swapDetails = utils.defaultAbiCoder.encode(
+      [UNISWAP_DETAILS_TYPE],
+      [[router.address, quoteToken.address, 500, QUOTE_AMOUNT_DUE, DEADLINE]]
+    );
+
+    await taker.takeWithAtomicSwap(
+      pool.address,
+      owner.address,
+      utils.parseEther('1'),
+      COLLATERAL_AMOUNT,
+      2,
+      router.address,
+      swapDetails
+    );
+
+    expect((await pool.takeCount()).eq(1)).to.equal(true);
+    expect(
+      (await collateralToken.balanceOf(router.address)).eq(COLLATERAL_AMOUNT)
+    ).to.equal(true);
+    expect((await quoteToken.balanceOf(pool.address)).eq(QUOTE_AMOUNT_DUE)).to
+      .be.true;
+    expect(
+      (await collateralToken.allowance(taker.address, router.address)).eq(0)
+    ).to.equal(true);
+    expect((await quoteToken.allowance(taker.address, pool.address)).eq(0)).to
+      .equal(true);
+  });
+
+  it('rejects uniswap callbacks that target anything other than pool quote', async () => {
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
+      await deployBase();
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      ZERO_FACTORY
+    );
+    await taker.deployed();
+
+    await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(
+      QUOTE_AMOUNT_DUE
+    );
+    await router.deployed();
+
+    const callbackData = utils.defaultAbiCoder.encode(
+      [UNISWAP_DETAILS_TYPE],
+      [[router.address, collateralToken.address, 500, QUOTE_AMOUNT_DUE, DEADLINE]]
+    );
+
+    await expectCustomError(
+      pool.callAtomicSwapCallback(
+        taker.address,
+        COLLATERAL_AMOUNT,
+        QUOTE_AMOUNT_DUE,
+        callbackData
+      ),
+      'InvalidSwapDetails'
+    );
+
+    expect((await collateralToken.balanceOf(router.address)).eq(0)).to.equal(
+      true
+    );
+    expect((await quoteToken.balanceOf(taker.address)).eq(0)).to.equal(true);
   });
 
   it('rejects uniswap callbacks that do not increase quote balance', async () => {
@@ -292,7 +377,7 @@ describe('Taker quote balance guards', () => {
 
     const callbackData = utils.defaultAbiCoder.encode(
       [UNISWAP_DETAILS_TYPE],
-      [[router.address, quoteToken.address, 500, 0, DEADLINE]]
+      [[router.address, quoteToken.address, 500, 1, DEADLINE]]
     );
 
     await expectCustomError(
