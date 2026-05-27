@@ -148,6 +148,7 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
           wethAddress: '0x4200000000000000000000000000000000000006',
           permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
           defaultFeeTier: 3000,
@@ -191,6 +192,7 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
           wethAddress: '0x4200000000000000000000000000000000000006',
           permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
           defaultFeeTier: 3000,
@@ -231,9 +233,11 @@ describe('Factory Takes Integration Tests', function () {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
         universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-          // Minimal required fields only
+          // Minimal required fields for factory external takes.
         },
       };
 
@@ -413,6 +417,7 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B', // Hemi address
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160', // Hemi SwapRouter02
           wethAddress: '0x4200000000000000000000000000000000000006', // Hemi WETH
           permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578', // Hemi Permit2
           defaultFeeTier: 3000,
@@ -456,6 +461,7 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Mainnet address
+          swapRouter02Address: MAINNET_CONFIG.UNISWAP_V3_SWAP_ROUTER_02, // Mainnet SwapRouter02
           wethAddress: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // Mainnet WETH
           permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3', // Mainnet Permit2
           defaultFeeTier: 3000,
@@ -505,6 +511,7 @@ describe('Factory Takes Integration Tests', function () {
           universalRouterOverrides: {
             universalRouterAddress:
               '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+            swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
             wethAddress: '0x4200000000000000000000000000000000000006',
             permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
             defaultFeeTier: feeConfig.tier, // Different fee tier
@@ -619,6 +626,9 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -656,6 +666,9 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -696,6 +709,9 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -744,6 +760,9 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -781,6 +800,9 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -822,6 +844,9 @@ describe('Factory Takes Integration Tests', function () {
         },
         universalRouterOverrides: {
           universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };

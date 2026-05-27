@@ -156,6 +156,7 @@ describe('Smart DEX Routing Integration Tests', () => {
             universalRouter: {
               universalRouterAddress:
                 '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+              swapRouter02Address: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
               quoterV2Address: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
               permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
               poolFactoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984',

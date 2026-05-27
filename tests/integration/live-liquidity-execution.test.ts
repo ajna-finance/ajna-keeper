@@ -87,6 +87,7 @@ const MAINNET_UNISWAP_SOL_WETH_FIXTURE: LiveLiquidityFixture = {
   uniswap: {
     // Pinned for the mainnet fork block used by MAINNET_CONFIG.BLOCK_NUMBER.
     universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+    swapRouter02Address: MAINNET_CONFIG.UNISWAP_V3_SWAP_ROUTER_02,
     permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
     poolFactoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
     quoterV2Address: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
@@ -273,6 +274,46 @@ async function expectLiveUniswapRoutesAvailable(params: {
   ).to.be.at.least(minimumAvailableRoutes);
 }
 
+function expectApprovedMinOutInvariants(quoteEvaluation: {
+  approvedMinOutRaw?: BigNumber;
+  routeMinOutRaw?: BigNumber;
+  profitMinOutRaw?: BigNumber;
+  routeProfitability?: {
+    auctionRepayRequirementQuoteRaw?: BigNumber;
+  };
+}) {
+  const approvedMinOutRaw = quoteEvaluation.approvedMinOutRaw;
+  expect(approvedMinOutRaw, 'approved min-out should be present').to.not.equal(
+    undefined
+  );
+
+  const floors = [
+    {
+      label: 'route slippage floor',
+      value: quoteEvaluation.routeMinOutRaw,
+    },
+    {
+      label: 'profit floor',
+      value: quoteEvaluation.profitMinOutRaw,
+    },
+    {
+      label: 'auction repayment floor',
+      value:
+        quoteEvaluation.routeProfitability?.auctionRepayRequirementQuoteRaw,
+    },
+  ].filter(
+    (floor): floor is { label: string; value: BigNumber } =>
+      floor.value !== undefined
+  );
+
+  for (const floor of floors) {
+    expect(
+      approvedMinOutRaw!.gte(floor.value),
+      `approved min-out should preserve ${floor.label}`
+    ).to.be.true;
+  }
+}
+
 async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
   const provider = getProvider();
   expect(await provider.getBlockNumber()).to.equal(MAINNET_CONFIG.BLOCK_NUMBER);
@@ -349,6 +390,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
     ),
     'route quote should exceed Ajna repayment floor before execution'
   ).to.be.true;
+  expectApprovedMinOutInvariants(quoteEvaluation);
 
   const liquidation = await buildLiveFactoryLiquidationPlan({
     pool,

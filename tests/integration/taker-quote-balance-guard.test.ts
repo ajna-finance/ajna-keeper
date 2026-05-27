@@ -324,6 +324,118 @@ describe('Taker quote balance guards', () => {
       .equal(true);
   });
 
+  it('rejects full uniswap takes when the router argument differs from encoded details', async () => {
+    const { owner, quoteToken, poolDeployer, pool } = await deployBase();
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      ZERO_FACTORY
+    );
+    await taker.deployed();
+
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(
+      QUOTE_AMOUNT_DUE
+    );
+    await router.deployed();
+    const otherRouter = await new MockSushiSwapRouter__factory(owner).deploy(
+      QUOTE_AMOUNT_DUE
+    );
+    await otherRouter.deployed();
+
+    const swapDetails = utils.defaultAbiCoder.encode(
+      [UNISWAP_DETAILS_TYPE],
+      [[router.address, quoteToken.address, 500, QUOTE_AMOUNT_DUE, DEADLINE]]
+    );
+
+    await expectCustomError(
+      taker.takeWithAtomicSwap(
+        pool.address,
+        owner.address,
+        utils.parseEther('1'),
+        COLLATERAL_AMOUNT,
+        2,
+        otherRouter.address,
+        swapDetails
+      ),
+      'Router mismatch'
+    );
+
+    expect((await pool.takeCount()).eq(0)).to.equal(true);
+    expect((await quoteToken.allowance(taker.address, pool.address)).eq(0)).to
+      .equal(true);
+  });
+
+  it('rejects full uniswap takes with expired deadlines', async () => {
+    const { owner, quoteToken, poolDeployer, pool } = await deployBase();
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      ZERO_FACTORY
+    );
+    await taker.deployed();
+
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(
+      QUOTE_AMOUNT_DUE
+    );
+    await router.deployed();
+
+    const swapDetails = utils.defaultAbiCoder.encode(
+      [UNISWAP_DETAILS_TYPE],
+      [[router.address, quoteToken.address, 500, QUOTE_AMOUNT_DUE, 1]]
+    );
+
+    await expectCustomError(
+      taker.takeWithAtomicSwap(
+        pool.address,
+        owner.address,
+        utils.parseEther('1'),
+        COLLATERAL_AMOUNT,
+        2,
+        router.address,
+        swapDetails
+      ),
+      'Expired deadline'
+    );
+
+    expect((await pool.takeCount()).eq(0)).to.equal(true);
+    expect((await quoteToken.allowance(taker.address, pool.address)).eq(0)).to
+      .equal(true);
+  });
+
+  it('rejects full uniswap takes with zero amountOutMinimum', async () => {
+    const { owner, quoteToken, poolDeployer, pool } = await deployBase();
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      ZERO_FACTORY
+    );
+    await taker.deployed();
+
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(
+      QUOTE_AMOUNT_DUE
+    );
+    await router.deployed();
+
+    const swapDetails = utils.defaultAbiCoder.encode(
+      [UNISWAP_DETAILS_TYPE],
+      [[router.address, quoteToken.address, 500, 0, DEADLINE]]
+    );
+
+    await expectCustomError(
+      taker.takeWithAtomicSwap(
+        pool.address,
+        owner.address,
+        utils.parseEther('1'),
+        COLLATERAL_AMOUNT,
+        2,
+        router.address,
+        swapDetails
+      ),
+      'Invalid minimum amount'
+    );
+
+    expect((await pool.takeCount()).eq(0)).to.equal(true);
+    expect((await quoteToken.allowance(taker.address, pool.address)).eq(0)).to
+      .equal(true);
+  });
+
   it('rejects uniswap callbacks that target anything other than pool quote', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } =
       await deployBase();

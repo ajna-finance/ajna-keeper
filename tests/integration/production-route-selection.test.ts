@@ -25,6 +25,7 @@ import {
   MockERC20__factory,
   MockPoolDeployer__factory,
   MockSushiSwapRouter__factory,
+  MockSwapRouter__factory,
 } from '../../typechain-types/factories/contracts/mocks';
 
 const ERC20_NON_SUBSET_HASH = utils.keccak256(
@@ -36,6 +37,10 @@ const QUOTE_AMOUNT_DUE = utils.parseEther('5');
 const ROUTER_AMOUNT_OUT = utils.parseEther('7');
 const APPROVED_MIN_OUT = utils.parseEther('6');
 const QUOTE_TOKEN_SCALE = BigNumber.from(1);
+const USDC_QUOTE_TOKEN_SCALE = BigNumber.from('1000000000000');
+const USDC_QUOTE_AMOUNT_DUE = BigNumber.from('5000000');
+const USDC_ROUTER_AMOUNT_OUT = BigNumber.from('7000000');
+const USDC_APPROVED_MIN_OUT = BigNumber.from('6000000');
 const DEADLINE = 4_102_444_800;
 const BORROWER = '0x000000000000000000000000000000000000b0b0';
 
@@ -70,7 +75,14 @@ describe('Production route selection fork verification', function () {
     sinon.restore();
   });
 
-  async function deployFactoryHarness() {
+  async function deployFactoryHarness(options?: {
+    quoteDecimals?: number;
+    quoteTokenScale?: BigNumber;
+    quoteAmountDue?: BigNumber;
+  }) {
+    const quoteDecimals = options?.quoteDecimals ?? 18;
+    const quoteTokenScale = options?.quoteTokenScale ?? QUOTE_TOKEN_SCALE;
+    const quoteAmountDue = options?.quoteAmountDue ?? QUOTE_AMOUNT_DUE;
     const provider = getProvider();
     const owner = Wallet.createRandom().connect(provider);
     await setBalance(owner.address, utils.parseEther('100').toHexString());
@@ -85,7 +97,7 @@ describe('Production route selection fork verification', function () {
     const quoteToken = await new MockERC20__factory(owner).deploy(
       'Mock Quote',
       'MQUOTE',
-      18
+      quoteDecimals
     );
     await quoteToken.deployed();
 
@@ -95,10 +107,10 @@ describe('Production route selection fork verification', function () {
     const pool = await new MockAtomicSwapPool__factory(owner).deploy(
       collateralToken.address,
       quoteToken.address,
-      QUOTE_TOKEN_SCALE
+      quoteTokenScale
     );
     await pool.deployed();
-    await pool.setQuoteAmountDue(QUOTE_AMOUNT_DUE);
+    await pool.setQuoteAmountDue(quoteAmountDue);
     await collateralToken.mint(pool.address, COLLATERAL_AMOUNT.mul(10));
 
     await poolDeployer.setDeployedPool(
@@ -144,7 +156,254 @@ describe('Production route selection fork verification', function () {
       uniswapTaker,
       sushiTaker,
       curveTaker,
+      quoteAmountDue,
     };
+  }
+
+  function buildFactoryPoolView(params: {
+    pool: any;
+    collateralToken: { address: string };
+    quoteToken: { address: string };
+    name?: string;
+  }) {
+    return {
+      name: params.name ?? 'Factory Route Pool',
+      poolAddress: params.pool.address,
+      collateralAddress: params.collateralToken.address,
+      quoteAddress: params.quoteToken.address,
+      contract: params.pool,
+    };
+  }
+
+  async function snapshotFactoryState(params: {
+    pool: any;
+    collateralToken: any;
+    quoteToken: any;
+    takerAddress: string;
+  }) {
+    return {
+      poolQuote: await params.quoteToken.balanceOf(params.pool.address),
+      poolCollateral: await params.collateralToken.balanceOf(
+        params.pool.address
+      ),
+      takeCount: await params.pool.takeCount(),
+      poolAllowance: await params.quoteToken.allowance(
+        params.takerAddress,
+        params.pool.address
+      ),
+    };
+  }
+
+  async function expectFactoryStateUnchanged(
+    params: {
+      pool: any;
+      collateralToken: any;
+      quoteToken: any;
+      takerAddress: string;
+    },
+    before: Awaited<ReturnType<typeof snapshotFactoryState>>
+  ) {
+    expect(
+      (await params.quoteToken.balanceOf(params.pool.address)).eq(
+        before.poolQuote
+      )
+    ).to.be.true;
+    expect(
+      (
+        await params.collateralToken.balanceOf(params.pool.address)
+      ).eq(before.poolCollateral)
+    ).to.be.true;
+    expect((await params.pool.takeCount()).eq(before.takeCount)).to.be.true;
+    expect(
+      (
+        await params.quoteToken.allowance(
+          params.takerAddress,
+          params.pool.address
+        )
+      ).eq(before.poolAllowance)
+    ).to.be.true;
+  }
+
+  function buildApprovedFactoryQuoteEvaluation(params: {
+    source: LiquiditySource;
+    quoteAmountRaw: BigNumber;
+    routeMinOutRaw: BigNumber;
+    profitMinOutRaw?: BigNumber;
+    fallbackApprovedMinOutRaw?: BigNumber;
+    selectedFeeTier?: number;
+    curvePool?: {
+      address: string;
+      poolType: CurvePoolType;
+      tokenInIndex: number;
+      tokenOutIndex: number;
+    };
+  }) {
+    return {
+      isTakeable: true,
+      externalTakePath: 'factory',
+      quoteAmountRaw: params.quoteAmountRaw,
+      selectedLiquiditySource: params.source,
+      selectedFeeTier: params.selectedFeeTier,
+      routeMinOutRaw: params.routeMinOutRaw,
+      profitMinOutRaw: params.profitMinOutRaw,
+      approvedMinOutRaw:
+        params.fallbackApprovedMinOutRaw ?? params.routeMinOutRaw,
+      curvePool: params.curvePool,
+      reason: 'test-approved route',
+    };
+  }
+
+  async function expectFactoryExecutionRejectedWithoutStateMutation(params: {
+    source: LiquiditySource;
+    routerAmountOut: BigNumber;
+    routeMinOutRaw: BigNumber;
+    profitMinOutRaw?: BigNumber;
+    fallbackApprovedMinOutRaw?: BigNumber;
+    quoteAmountRaw: BigNumber;
+    selectedFeeTier?: number;
+    wrongUniswapRouter?: boolean;
+  }) {
+    const {
+      owner,
+      collateralToken,
+      quoteToken,
+      pool,
+      factory,
+      uniswapTaker,
+      sushiTaker,
+      curveTaker,
+    } = await deployFactoryHarness();
+
+    let takerAddress: string;
+    let config: any = {
+      dryRun: false,
+      keeperTakerFactory: factory.address,
+      runtimeCache: createFactoryQuoteProviderRuntimeCache(),
+    };
+    let curvePoolSelection:
+      | {
+          address: string;
+          poolType: CurvePoolType;
+          tokenInIndex: number;
+          tokenOutIndex: number;
+        }
+      | undefined;
+
+    if (params.source === LiquiditySource.UNISWAPV3) {
+      takerAddress = uniswapTaker.address;
+      if (params.wrongUniswapRouter) {
+        const wrongRouter = await new MockSwapRouter__factory(owner).deploy(
+          1,
+          1
+        );
+        await wrongRouter.deployed();
+        await quoteToken.mint(wrongRouter.address, params.routerAmountOut);
+        config.universalRouterOverrides = {
+          universalRouterAddress: wrongRouter.address,
+          swapRouter02Address: wrongRouter.address,
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          wethAddress: quoteToken.address,
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+          defaultFeeTier: params.selectedFeeTier ?? 500,
+        };
+      } else {
+        const router = await new MockSushiSwapRouter__factory(owner).deploy(
+          params.routerAmountOut
+        );
+        await router.deployed();
+        await quoteToken.mint(router.address, params.routerAmountOut);
+        config.universalRouterOverrides = {
+          swapRouter02Address: router.address,
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          wethAddress: quoteToken.address,
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+          defaultFeeTier: params.selectedFeeTier ?? 500,
+        };
+      }
+    } else if (params.source === LiquiditySource.SUSHISWAP) {
+      takerAddress = sushiTaker.address;
+      const router = await new MockSushiSwapRouter__factory(owner).deploy(
+        params.routerAmountOut
+      );
+      await router.deployed();
+      await quoteToken.mint(router.address, params.routerAmountOut);
+      config.sushiswapRouterOverrides = {
+        swapRouterAddress: router.address,
+        quoterV2Address: '0x9999999999999999999999999999999999999999',
+        factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        wethAddress: quoteToken.address,
+        defaultFeeTier: params.selectedFeeTier ?? 500,
+      };
+    } else {
+      takerAddress = curveTaker.address;
+      const curvePool = await new MockCurveSwapPool__factory(owner).deploy(
+        collateralToken.address,
+        params.routerAmountOut
+      );
+      await curvePool.deployed();
+      await curvePool.setTokenOut(quoteToken.address);
+      await quoteToken.mint(curvePool.address, params.routerAmountOut);
+      curvePoolSelection = {
+        address: curvePool.address,
+        poolType: CurvePoolType.STABLE,
+        tokenInIndex: 0,
+        tokenOutIndex: 1,
+      };
+      config.curveRouterOverrides = {};
+    }
+
+    const poolView = buildFactoryPoolView({
+      pool,
+      collateralToken,
+      quoteToken,
+      name: 'Rejected Factory Route Pool',
+    });
+    const before = await snapshotFactoryState({
+      pool,
+      collateralToken,
+      quoteToken,
+      takerAddress,
+    });
+    const quoteEvaluation = buildApprovedFactoryQuoteEvaluation({
+      source: params.source,
+      quoteAmountRaw: params.quoteAmountRaw,
+      routeMinOutRaw: params.routeMinOutRaw,
+      profitMinOutRaw: params.profitMinOutRaw,
+      fallbackApprovedMinOutRaw: params.fallbackApprovedMinOutRaw,
+      selectedFeeTier:
+        params.source === LiquiditySource.CURVE
+          ? undefined
+          : (params.selectedFeeTier ?? 500),
+      curvePool: curvePoolSelection,
+    });
+
+    const executed = await takeLiquidationFactory({
+      pool: poolView as any,
+      poolConfig: {
+        name: poolView.name,
+        take: {
+          liquiditySource: params.source,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      signer: owner,
+      liquidation: {
+        borrower: BORROWER,
+        hpbIndex: 0,
+        collateral: COLLATERAL_AMOUNT,
+        auctionPrice: AUCTION_PRICE,
+        isTakeable: true,
+        isArbTakeable: false,
+        externalTakeQuoteEvaluation: quoteEvaluation as any,
+      },
+      config,
+    });
+
+    expect(executed).to.equal(false);
+    await expectFactoryStateUnchanged(
+      { pool, collateralToken, quoteToken, takerAddress },
+      before
+    );
   }
 
   async function expectSuccessfulFactoryTake(params: {
@@ -278,6 +537,135 @@ describe('Production route selection fork verification', function () {
     await expectSuccessfulFactoryTake({
       source: LiquiditySource.CURVE,
       poolType: CurvePoolType.CRYPTO,
+    });
+  });
+
+  it('executes Uniswap factory takes with non-18-decimal quote token raw units', async () => {
+    const {
+      owner,
+      collateralToken,
+      quoteToken,
+      pool,
+      factory,
+      uniswapTaker,
+    } = await deployFactoryHarness({
+      quoteDecimals: 6,
+      quoteTokenScale: USDC_QUOTE_TOKEN_SCALE,
+      quoteAmountDue: USDC_QUOTE_AMOUNT_DUE,
+    });
+
+    const router = await new MockSushiSwapRouter__factory(owner).deploy(
+      USDC_ROUTER_AMOUNT_OUT
+    );
+    await router.deployed();
+    await quoteToken.mint(router.address, USDC_ROUTER_AMOUNT_OUT);
+
+    const poolQuoteBefore = await quoteToken.balanceOf(pool.address);
+    const poolCollateralBefore = await collateralToken.balanceOf(pool.address);
+    const ownerQuoteBefore = await quoteToken.balanceOf(owner.address);
+    const takeCountBefore = await pool.takeCount();
+    const poolView = buildFactoryPoolView({
+      pool,
+      collateralToken,
+      quoteToken,
+      name: 'USDC Quote Factory Route Pool',
+    });
+    const quoteEvaluation = buildApprovedFactoryQuoteEvaluation({
+      source: LiquiditySource.UNISWAPV3,
+      quoteAmountRaw: USDC_ROUTER_AMOUNT_OUT,
+      routeMinOutRaw: USDC_APPROVED_MIN_OUT,
+      selectedFeeTier: 500,
+    });
+
+    const executed = await takeLiquidationFactory({
+      pool: poolView as any,
+      poolConfig: {
+        name: poolView.name,
+        take: {
+          liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      signer: owner,
+      liquidation: {
+        borrower: BORROWER,
+        hpbIndex: 0,
+        collateral: COLLATERAL_AMOUNT,
+        auctionPrice: AUCTION_PRICE,
+        isTakeable: true,
+        isArbTakeable: false,
+        externalTakeQuoteEvaluation: quoteEvaluation as any,
+      },
+      config: {
+        dryRun: false,
+        keeperTakerFactory: factory.address,
+        universalRouterOverrides: {
+          swapRouter02Address: router.address,
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          wethAddress: quoteToken.address,
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
+          defaultFeeTier: 500,
+        },
+        runtimeCache: createFactoryQuoteProviderRuntimeCache(),
+      },
+    });
+
+    expect(executed).to.equal(true);
+    expect((await pool.takeCount()).eq(takeCountBefore.add(1))).to.be.true;
+    expect(
+      (await quoteToken.balanceOf(pool.address)).eq(
+        poolQuoteBefore.add(USDC_QUOTE_AMOUNT_DUE)
+      )
+    ).to.be.true;
+    expect(
+      (await collateralToken.balanceOf(pool.address)).eq(
+        poolCollateralBefore.sub(COLLATERAL_AMOUNT)
+      )
+    ).to.be.true;
+    expect(
+      (await quoteToken.balanceOf(owner.address)).eq(
+        ownerQuoteBefore.add(
+          USDC_ROUTER_AMOUNT_OUT.sub(USDC_QUOTE_AMOUNT_DUE)
+        )
+      )
+    ).to.be.true;
+    expect(
+      (await quoteToken.allowance(uniswapTaker.address, pool.address)).eq(
+        constants.Zero
+      )
+    ).to.be.true;
+  });
+
+  it('rejects factory routes that underdeliver below the configured profit floor', async () => {
+    const routeFloor = QUOTE_AMOUNT_DUE.add(utils.parseEther('0.2'));
+    const profitFloor = APPROVED_MIN_OUT;
+    const underDeliveredOutput = profitFloor.sub(1);
+
+    for (const source of [
+      LiquiditySource.UNISWAPV3,
+      LiquiditySource.SUSHISWAP,
+      LiquiditySource.CURVE,
+    ]) {
+      await expectFactoryExecutionRejectedWithoutStateMutation({
+        source,
+        routerAmountOut: underDeliveredOutput,
+        routeMinOutRaw: routeFloor,
+        profitMinOutRaw: profitFloor,
+        fallbackApprovedMinOutRaw: routeFloor,
+        quoteAmountRaw: ROUTER_AMOUNT_OUT,
+        selectedFeeTier: 500,
+      });
+    }
+  });
+
+  it('fails closed when a Universal Router-style address is configured as SwapRouter02', async () => {
+    await expectFactoryExecutionRejectedWithoutStateMutation({
+      source: LiquiditySource.UNISWAPV3,
+      routerAmountOut: ROUTER_AMOUNT_OUT,
+      routeMinOutRaw: APPROVED_MIN_OUT,
+      quoteAmountRaw: ROUTER_AMOUNT_OUT,
+      selectedFeeTier: 500,
+      wrongUniswapRouter: true,
     });
   });
 
