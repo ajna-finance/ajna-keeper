@@ -11,6 +11,7 @@ import {
   MockAtomicSwapPool__factory,
   MockCurveSwapPool__factory,
   MockERC20__factory,
+  MockMinOutBypassSwap__factory,
   MockOneInchUnderdeliveryRouter__factory,
   MockPoolDeployer__factory,
   MockSwapRouter02__factory,
@@ -23,6 +24,7 @@ const ERC20_NON_SUBSET_HASH = utils.keccak256(
 );
 const COLLATERAL_AMOUNT = utils.parseEther('10');
 const QUOTE_AMOUNT_DUE = utils.parseEther('5');
+const APPROVED_MIN_OUT = utils.parseEther('6');
 const QUOTE_TOKEN_SCALE = BigNumber.from(1);
 const DEADLINE = 4_102_444_800;
 const ZERO_FACTORY = constants.AddressZero;
@@ -114,6 +116,24 @@ describe('Taker quote balance guards', () => {
     await router.deployed();
     if (amountOut.gt(0)) {
       await base.quoteToken.mint(router.address, amountOut);
+    }
+    return router;
+  }
+
+  async function deployMinOutBypassSwap(
+    base: Awaited<ReturnType<typeof deployBase>>,
+    actualAmountOut: BigNumber,
+    reportedAmountOut: BigNumber
+  ) {
+    const router = await new MockMinOutBypassSwap__factory(base.owner).deploy(
+      base.collateralToken.address,
+      base.quoteToken.address,
+      actualAmountOut,
+      reportedAmountOut
+    );
+    await router.deployed();
+    if (actualAmountOut.gt(0)) {
+      await base.quoteToken.mint(router.address, actualAmountOut);
     }
     return router;
   }
@@ -531,6 +551,35 @@ describe('Taker quote balance guards', () => {
     );
   });
 
+  it('rejects uniswap callbacks when actual quote received is below amountOutMinimum', async () => {
+    const base = await deployBase();
+    const { collateralToken, quoteToken, pool } = base;
+    const taker = await deployUniswapTaker(base);
+
+    await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
+    const router = await deployMinOutBypassSwap(
+      base,
+      QUOTE_AMOUNT_DUE,
+      APPROVED_MIN_OUT
+    );
+
+    const callbackData = encodeUniswapDetails({
+      routerAddress: router.address,
+      targetToken: quoteToken.address,
+      amountOutMinimum: APPROVED_MIN_OUT,
+    });
+
+    await expectCustomError(
+      pool.callAtomicSwapCallback(
+        taker.address,
+        COLLATERAL_AMOUNT,
+        QUOTE_AMOUNT_DUE,
+        callbackData
+      ),
+      'InsufficientQuoteReceived'
+    );
+  });
+
   it('rejects sushiswap callbacks that do not increase quote balance', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } =
       await deployBase();
@@ -549,6 +598,38 @@ describe('Taker quote balance guards', () => {
     const callbackData = utils.defaultAbiCoder.encode(
       [SUSHI_DETAILS_TYPE],
       [[router.address, quoteToken.address, 500, 0, DEADLINE]]
+    );
+
+    await expectCustomError(
+      pool.callAtomicSwapCallback(
+        taker.address,
+        COLLATERAL_AMOUNT,
+        QUOTE_AMOUNT_DUE,
+        callbackData
+      ),
+      'InsufficientQuoteReceived'
+    );
+  });
+
+  it('rejects sushiswap callbacks when actual quote received is below amountOutMinimum', async () => {
+    const base = await deployBase();
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } = base;
+    const taker = await new SushiSwapKeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      ZERO_FACTORY
+    );
+    await taker.deployed();
+
+    await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
+    const router = await deployMinOutBypassSwap(
+      base,
+      QUOTE_AMOUNT_DUE,
+      APPROVED_MIN_OUT
+    );
+
+    const callbackData = utils.defaultAbiCoder.encode(
+      [SUSHI_DETAILS_TYPE],
+      [[router.address, quoteToken.address, 500, APPROVED_MIN_OUT, DEADLINE]]
     );
 
     await expectCustomError(
@@ -591,6 +672,49 @@ describe('Taker quote balance guards', () => {
           0,
           1,
           0,
+          DEADLINE,
+        ],
+      ]
+    );
+
+    await expectCustomError(
+      pool.callAtomicSwapCallback(
+        taker.address,
+        COLLATERAL_AMOUNT,
+        QUOTE_AMOUNT_DUE,
+        callbackData
+      ),
+      'InsufficientQuoteReceived'
+    );
+  });
+
+  it('rejects curve callbacks when actual quote received is below amountOutMinimum', async () => {
+    const base = await deployBase();
+    const { owner, collateralToken, quoteToken, poolDeployer, pool } = base;
+    const taker = await new CurveKeeperTaker__factory(owner).deploy(
+      poolDeployer.address,
+      ZERO_FACTORY
+    );
+    await taker.deployed();
+
+    await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
+    const curvePool = await deployMinOutBypassSwap(
+      base,
+      QUOTE_AMOUNT_DUE,
+      APPROVED_MIN_OUT
+    );
+
+    const callbackData = utils.defaultAbiCoder.encode(
+      [CURVE_DETAILS_TYPE],
+      [
+        [
+          curvePool.address,
+          collateralToken.address,
+          quoteToken.address,
+          0,
+          0,
+          1,
+          APPROVED_MIN_OUT,
           DEADLINE,
         ],
       ]

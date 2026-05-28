@@ -197,7 +197,8 @@ describe('Production route selection fork verification', function () {
         approvedMinOutRaw: routeFloor,
         quoteAmountRaw: ROUTER_AMOUNT_OUT,
         selectedFeeTier: 500,
-        expectedFailureReason: /insufficient output amount/i,
+        expectedFailureReason:
+          /insufficient output amount|InsufficientQuoteReceived/i,
       });
     }
   });

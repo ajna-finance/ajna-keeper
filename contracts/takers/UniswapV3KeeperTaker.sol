@@ -145,7 +145,9 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         _safeApproveWithReset(tokenInContract, details.swapRouter, 0);
 
         uint256 quoteReceived = IERC20(tokenOut).balanceOf(address(this)) - quoteBalanceBefore;
-        if (quoteReceived < quoteAmountDue) revert InsufficientQuoteReceived();
+        if (quoteReceived < details.amountOutMinimum || quoteReceived < quoteAmountDue) {
+            revert InsufficientQuoteReceived();
+        }
         emit SwapExecuted(tokenIn, tokenOut, amountIn, quoteReceived);
     }
 

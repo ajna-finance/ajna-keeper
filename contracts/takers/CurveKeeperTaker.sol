@@ -225,21 +225,19 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         }
 
         // Execute the swap using the transaction-level gas limit selected by the keeper.
-        (bool success, bytes memory result) = details.poolAddress.call(swapCalldata);
+        (bool success, ) = details.poolAddress.call(swapCalldata);
         if (!success) {
             revert SwapFailed();
         }
 
-        // Decode and validate output amount (both pool types return uint256)
-        uint256 amountOut = abi.decode(result, (uint256));
-        require(amountOut >= amountOutMin, "Insufficient output amount");
-
         _safeApproveWithReset(tokenInContract, details.poolAddress, 0);
 
         uint256 quoteReceived = IERC20(details.tokenOut).balanceOf(address(this)) - quoteBalanceBefore;
-        if (quoteReceived < quoteAmountDue) revert InsufficientQuoteReceived();
+        if (quoteReceived < amountOutMin || quoteReceived < quoteAmountDue) {
+            revert InsufficientQuoteReceived();
+        }
 
-        emit SwapExecuted(details.tokenIn, details.tokenOut, amountIn, amountOut);
+        emit SwapExecuted(details.tokenIn, details.tokenOut, amountIn, quoteReceived);
     }
 
     /// @dev Recovers token balance to owner
