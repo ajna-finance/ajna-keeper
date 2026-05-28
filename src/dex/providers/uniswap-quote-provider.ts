@@ -18,8 +18,6 @@ interface QuoteDecimals {
 }
 
 interface UniswapV3Config {
-  universalRouterAddress?: string;
-  swapRouter02Address?: string;
   poolFactoryAddress: string;
   defaultFeeTier: number;
   wethAddress: string;

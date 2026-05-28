@@ -1076,6 +1076,9 @@ describe('take write submission', () => {
         keeperTakerFactory: '0x0000000000000000000000000000000000000013',
         uniswapV3RouterOverrides: {
           swapRouter02Address: '0x0000000000000000000000000000000000000014',
+          poolFactoryAddress: '0x0000000000000000000000000000000000000015',
+          wethAddress: '0x0000000000000000000000000000000000000016',
+          quoterV2Address: '0x0000000000000000000000000000000000000017',
           defaultFeeTier: 3000,
         },
         takeWriteTransport: takeWriteTransport as any,

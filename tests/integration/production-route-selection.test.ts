@@ -196,6 +196,7 @@ describe('Production route selection fork verification', function () {
         fallbackApprovedMinOutRaw: routeFloor,
         quoteAmountRaw: ROUTER_AMOUNT_OUT,
         selectedFeeTier: 500,
+        expectedFailureReason: /insufficient output amount/i,
       });
     }
   });
@@ -208,6 +209,8 @@ describe('Production route selection fork verification', function () {
       quoteAmountRaw: ROUTER_AMOUNT_OUT,
       selectedFeeTier: 500,
       wrongUniswapRouter: true,
+      expectedFailureReason:
+        /estimate|revert|function selector|missing revert data|UNPREDICTABLE_GAS_LIMIT/i,
     });
   });
 
@@ -290,6 +293,7 @@ describe('Production route selection fork verification', function () {
       } as any,
       {
         uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x3333333333333333333333333333333333333333',
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           defaultFeeTier: 3000,
           candidateFeeTiers: [500],

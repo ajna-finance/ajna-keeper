@@ -12,7 +12,6 @@ import {
 import {
   estimateGasWithBuffer,
   getErrorMessage,
-  TAKE_WRITE_GAS_ESTIMATE_OPTIONS,
   weiToDecimaled,
   withTimeout,
 } from '../../utils';
@@ -321,8 +320,7 @@ export async function executeSushiSwapFactoryTake({
           () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
           fallbackGasLimit,
           `Factory Sushi take ${pool.name}/${liquidation.borrower}`,
-          13000,
-          TAKE_WRITE_GAS_ESTIMATE_OPTIONS
+          13000
         );
         const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
           ...txArgs,

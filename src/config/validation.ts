@@ -29,6 +29,7 @@ import {
 import {
   formatLiquiditySource,
   getLiquiditySourceConfig,
+  getMissingUniswapV3FactoryRouteConfigFields,
   hasConfiguredWrappedNativeAddress,
   isValidFactoryFeeTier,
   resolveConfiguredGasQuoteLiquiditySource,
@@ -166,8 +167,7 @@ function requireOptionalIntegerRange(
   }
 }
 
-function validateCandidateFeeTiers(
-  tiers: number[] | undefined,
+function validateDefaultFeeTier(
   defaultFeeTier: number | undefined,
   fieldName: string
 ): void {
@@ -176,6 +176,14 @@ function validateCandidateFeeTiers(
       `${fieldName}: defaultFeeTier must be a positive uint24 fee tier`
     );
   }
+}
+
+function validateCandidateFeeTiers(
+  tiers: number[] | undefined,
+  defaultFeeTier: number | undefined,
+  fieldName: string
+): void {
+  validateDefaultFeeTier(defaultFeeTier, fieldName);
 
   if (tiers === undefined) {
     return;
@@ -215,6 +223,7 @@ function validateCandidateFeeTiers(
 function validateRouterFeeTiers(config: KeeperConfig): void {
   const uniswapConfig: UniswapV3RouterOverrides | undefined =
     config.dex?.uniswapV3?.router;
+  const universalRouterConfig = config.dex?.uniswapV3?.universalRouter;
   const sushiConfig: SushiswapRouterOverrides | undefined =
     config.dex?.sushiswap;
   requireOptionalPercentage(
@@ -231,6 +240,10 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
     uniswapConfig?.candidateFeeTiers,
     uniswapConfig?.defaultFeeTier,
     'KeeperConfig.dex.uniswapV3.router'
+  );
+  validateDefaultFeeTier(
+    universalRouterConfig?.defaultFeeTier,
+    'KeeperConfig.dex.uniswapV3.universalRouter'
   );
   validateCandidateFeeTiers(
     sushiConfig?.candidateFeeTiers,
@@ -572,10 +585,7 @@ export function validateTakeSettings(
       }
       const routerOverrides = keeperConfig.dex.uniswapV3.router;
       if (
-        !routerOverrides.swapRouter02Address ||
-        !routerOverrides.poolFactoryAddress ||
-        !routerOverrides.wethAddress ||
-        !routerOverrides.quoterV2Address
+        getMissingUniswapV3FactoryRouteConfigFields(routerOverrides).length > 0
       ) {
         throw new Error(
           'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'

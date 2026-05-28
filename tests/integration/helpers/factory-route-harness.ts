@@ -265,6 +265,12 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
     tokenOutIndex: number;
   };
 }): ExternalTakeQuoteEvaluation {
+  const approvedMinOutRaw =
+    params.fallbackApprovedMinOutRaw ??
+    (params.profitMinOutRaw && params.profitMinOutRaw.gt(params.routeMinOutRaw)
+      ? params.profitMinOutRaw
+      : params.routeMinOutRaw);
+
   return {
     isTakeable: true,
     externalTakePath: 'factory',
@@ -273,8 +279,7 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
     selectedFeeTier: params.selectedFeeTier,
     routeMinOutRaw: params.routeMinOutRaw,
     profitMinOutRaw: params.profitMinOutRaw,
-    approvedMinOutRaw:
-      params.fallbackApprovedMinOutRaw ?? params.routeMinOutRaw,
+    approvedMinOutRaw,
     curvePool: params.curvePool,
     reason: 'test-approved route',
   };
@@ -313,6 +318,7 @@ export async function expectFactoryExecutionRejectedWithoutStateMutation(params:
   quoteAmountRaw: BigNumber;
   selectedFeeTier?: number;
   wrongUniswapRouter?: boolean;
+  expectedFailureReason?: string | RegExp;
 }) {
   const harness = await deployFactoryHarness();
   const {
@@ -331,6 +337,10 @@ export async function expectFactoryExecutionRejectedWithoutStateMutation(params:
     dryRun: false,
     keeperTakerFactory: factory.address,
     runtimeCache: createFactoryQuoteProviderRuntimeCache(),
+  };
+  const executionFailures: Array<{ preBroadcast: boolean; error?: string }> = [];
+  config.onFactoryExecutionFailure = (failure) => {
+    executionFailures.push(failure);
   };
   let curvePoolSelection:
     | {
@@ -437,6 +447,17 @@ export async function expectFactoryExecutionRejectedWithoutStateMutation(params:
   });
 
   expect(executed).to.equal(false);
+  if (params.expectedFailureReason) {
+    expect(executionFailures.length).to.be.greaterThan(0);
+    const failureMessage = executionFailures
+      .map((failure) => failure.error ?? '')
+      .join('\n');
+    if (typeof params.expectedFailureReason === 'string') {
+      expect(failureMessage).to.include(params.expectedFailureReason);
+    } else {
+      expect(failureMessage).to.match(params.expectedFailureReason);
+    }
+  }
   await expectFactoryStateUnchanged(
     { pool, collateralToken, quoteToken, takerAddress },
     before

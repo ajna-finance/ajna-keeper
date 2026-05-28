@@ -1,6 +1,10 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { DEFAULT_FEE_TIER_BY_SOURCE, LiquiditySource } from '../../config';
+import {
+  DEFAULT_FEE_TIER_BY_SOURCE,
+  LiquiditySource,
+  resolveUniswapV3FactoryRouteConfig,
+} from '../../config';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import {
@@ -12,7 +16,6 @@ import {
 import {
   estimateGasWithBuffer,
   getErrorMessage,
-  TAKE_WRITE_GAS_ESTIMATE_OPTIONS,
   weiToDecimaled,
   withTimeout,
 } from '../../utils';
@@ -33,7 +36,6 @@ import {
   getSlippageFloorQuoteRaw,
   getUniswapV3QuoteProvider,
   getSwapDeadlineCached,
-  requireConfiguredUniswapSwapRouterAddress,
 } from './shared';
 import {
   resolveTakeWriteTransport,
@@ -62,35 +64,23 @@ export async function evaluateUniswapV3FactoryQuote({
   feeTier?: number;
   routeContext?: FactoryRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
-  if (!config.uniswapV3RouterOverrides) {
+  const routerConfig = resolveUniswapV3FactoryRouteConfig(
+    config.uniswapV3RouterOverrides
+  );
+  if (!routerConfig) {
     logger.debug(
-      `Factory: No uniswapV3RouterOverrides configured for pool ${pool.name}`
+      `Factory: Incomplete uniswapV3RouterOverrides configured for pool ${pool.name}`
     );
     return {
       isTakeable: false,
-      reason: 'missing uniswapV3RouterOverrides',
-    };
-  }
-
-  const routerConfig = config.uniswapV3RouterOverrides;
-
-  if (
-    !routerConfig.poolFactoryAddress ||
-    !routerConfig.wethAddress
-  ) {
-    logger.debug(
-      `Factory: Missing required router configuration for pool ${pool.name}`
-    );
-    return {
-      isTakeable: false,
-      reason: 'missing required Uniswap router configuration',
+      reason: 'missing required Uniswap V3 factory route configuration',
     };
   }
 
   try {
     const quoteProvider = getUniswapV3QuoteProvider({
       signer,
-      routerConfig,
+      quoteConfig: routerConfig,
       runtimeCache,
     });
     if (!quoteProvider) {
@@ -262,16 +252,16 @@ export async function executeUniswapV3FactoryTake({
       signer
     );
 
-    if (!config.uniswapV3RouterOverrides) {
+    const routerConfig = resolveUniswapV3FactoryRouteConfig(
+      config.uniswapV3RouterOverrides
+    );
+    if (!routerConfig) {
       const message =
-        'Factory: uniswapV3RouterOverrides required for UniswapV3 takes';
+        'Factory: complete dex.uniswapV3.router configuration required for UniswapV3 takes';
       logger.error(message);
       throw new Error(message);
     }
-    const swapRouterAddress = requireConfiguredUniswapSwapRouterAddress(
-      config.uniswapV3RouterOverrides,
-      pool.name
-    );
+    const swapRouterAddress = routerConfig.swapRouter02Address;
     const routerAmountOutMinimum = await computeFactoryAmountOutMinimum({
       pool,
       liquidation,
@@ -338,8 +328,7 @@ export async function executeUniswapV3FactoryTake({
           () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
           fallbackGasLimit,
           `Factory Uniswap take ${pool.name}/${liquidation.borrower}`,
-          13000,
-          TAKE_WRITE_GAS_ESTIMATE_OPTIONS
+          13000
         );
         const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
           ...txArgs,

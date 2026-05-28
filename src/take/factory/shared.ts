@@ -7,11 +7,13 @@ import {
   LiquiditySource,
   LiquiditySourceMap,
   PoolConfig,
+  ResolvedUniswapV3FactoryQuoteConfig,
   SushiswapRouterOverrides,
   STANDARD_V3_FEE_TIERS,
   UniswapV3RouterOverrides,
   formatLiquiditySource,
   getEffectiveV3FeeTiers,
+  resolveUniswapV3FactoryRouteConfig,
 } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
@@ -691,28 +693,21 @@ export function recordFactoryRouteSuccess(params: {
 
 export function getUniswapV3QuoteProvider(params: {
   signer: Signer;
-  routerConfig?: FactoryQuoteConfig['uniswapV3RouterOverrides'];
+  quoteConfig?: ResolvedUniswapV3FactoryQuoteConfig;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
 }): UniswapV3QuoteProvider | undefined {
-  const routerConfig = params.routerConfig;
-  if (
-    !routerConfig?.poolFactoryAddress ||
-    !routerConfig.wethAddress ||
-    !routerConfig.quoterV2Address
-  ) {
+  const quoteConfig = params.quoteConfig;
+  if (!quoteConfig) {
     return undefined;
   }
 
   let quoteProvider = params.runtimeCache?.uniswapV3;
   if (quoteProvider === undefined) {
     const candidateProvider = new UniswapV3QuoteProvider(params.signer, {
-      swapRouter02Address: routerConfig.swapRouter02Address,
-      poolFactoryAddress: routerConfig.poolFactoryAddress,
-      defaultFeeTier:
-        routerConfig.defaultFeeTier ??
-        DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
-      wethAddress: routerConfig.wethAddress,
-      quoterV2Address: routerConfig.quoterV2Address,
+      poolFactoryAddress: quoteConfig.poolFactoryAddress,
+      defaultFeeTier: quoteConfig.defaultFeeTier,
+      wethAddress: quoteConfig.wethAddress,
+      quoterV2Address: quoteConfig.quoterV2Address,
     });
     quoteProvider = candidateProvider.isAvailable() ? candidateProvider : null;
     if (params.runtimeCache) {
@@ -721,25 +716,6 @@ export function getUniswapV3QuoteProvider(params: {
   }
 
   return quoteProvider ?? undefined;
-}
-
-export function getConfiguredUniswapSwapRouterAddress(
-  routerConfig?: UniswapV3RouterOverrides
-): string | undefined {
-  return routerConfig?.swapRouter02Address;
-}
-
-export function requireConfiguredUniswapSwapRouterAddress(
-  routerConfig: UniswapV3RouterOverrides | undefined,
-  poolName: string
-): string {
-  const swapRouterAddress = getConfiguredUniswapSwapRouterAddress(routerConfig);
-  if (!swapRouterAddress) {
-    throw new Error(
-      `Factory: swapRouter02Address required for UniswapV3 takes in pool ${poolName}`
-    );
-  }
-  return swapRouterAddress;
 }
 
 export async function getSushiSwapQuoteProvider(params: {
@@ -918,16 +894,19 @@ async function checkV3StyleRouteAvailability(
 async function checkUniswapV3RouteAvailability(
   params: FactoryRouteAvailabilityCheckParams
 ): Promise<FactoryRouteAvailabilityResult> {
+  const quoteConfig = resolveUniswapV3FactoryRouteConfig(
+    params.config.uniswapV3RouterOverrides
+  );
   const quoteProvider = getUniswapV3QuoteProvider({
     signer: params.signer,
-    routerConfig: params.config.uniswapV3RouterOverrides,
+    quoteConfig,
     runtimeCache: params.runtimeCache,
   });
   return await checkV3StyleRouteAvailability({
     ...params,
     label: 'Uniswap V3',
     quoteProvider,
-    configuredFeeTier: params.config.uniswapV3RouterOverrides?.defaultFeeTier,
+    configuredFeeTier: quoteConfig?.defaultFeeTier,
     defaultFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
   });
 }

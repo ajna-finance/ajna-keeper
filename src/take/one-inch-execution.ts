@@ -19,7 +19,6 @@ import {
   decimaledToWei,
   estimateGasWithBuffer,
   getErrorMessage,
-  TAKE_WRITE_GAS_ESTIMATE_OPTIONS,
   weiToDecimaled,
 } from '../utils';
 import { logTakeExecutionTelemetry } from './execution-telemetry';
@@ -676,8 +675,7 @@ export async function takeLiquidation({
           () => keeperTaker.estimateGas.takeWithAtomicSwap(...txArgs),
           fallbackGasLimit,
           `Take ${pool.name}/${borrower}`,
-          13000,
-          TAKE_WRITE_GAS_ESTIMATE_OPTIONS
+          13000
         );
         const txRequest =
           await keeperTaker.populateTransaction.takeWithAtomicSwap(...txArgs, {

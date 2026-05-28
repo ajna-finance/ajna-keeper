@@ -504,10 +504,6 @@ export const GAS_ESTIMATE_FALLBACK_POLICY = {
 export type GasEstimateFallbackPolicy =
   (typeof GAS_ESTIMATE_FALLBACK_POLICY)[keyof typeof GAS_ESTIMATE_FALLBACK_POLICY];
 
-export const TAKE_WRITE_GAS_ESTIMATE_OPTIONS = {
-  fallbackPolicy: GAS_ESTIMATE_FALLBACK_POLICY.REFUSE_FALLBACK,
-} as const;
-
 export async function estimateGasWithBuffer(
   estimateFn: () => Promise<BigNumber>,
   fallbackGasLimit: BigNumber,

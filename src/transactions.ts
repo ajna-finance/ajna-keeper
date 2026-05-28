@@ -24,11 +24,7 @@ import {
   getDecimalsErc20,
   convertWadToTokenDecimals,
 } from './erc20';
-import {
-  estimateGasWithBuffer,
-  TAKE_WRITE_GAS_ESTIMATE_OPTIONS,
-  weiToDecimaled,
-} from './utils';
+import { estimateGasWithBuffer, weiToDecimaled } from './utils';
 import { logger } from './logging';
 
 const quoteScaleCache = new Map<string, BigNumber>();
@@ -180,8 +176,7 @@ export async function liquidationArbTake(
         () => contractPoolWithSigner.estimateGas.bucketTake(...txArgs),
         fallbackGasLimit,
         `ArbTake ${liquidation.borrowerAddress.slice(0, 8)}`,
-        13000,
-        TAKE_WRITE_GAS_ESTIMATE_OPTIONS
+        13000
       );
       const txRequest =
         await contractPoolWithSigner.populateTransaction.bucketTake(...txArgs, {

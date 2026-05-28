@@ -59,6 +59,75 @@ export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
 
 export const STANDARD_V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
 
+export const UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS = [
+  'swapRouter02Address',
+  'poolFactoryAddress',
+  'quoterV2Address',
+  'wethAddress',
+] as const;
+
+export type UniswapV3FactoryRouteAddressField =
+  (typeof UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS)[number];
+
+export interface ResolvedUniswapV3FactoryQuoteConfig {
+  poolFactoryAddress: string;
+  quoterV2Address: string;
+  wethAddress: string;
+  defaultFeeTier: number;
+  candidateFeeTiers?: number[];
+  defaultSlippage?: number;
+}
+
+export interface ResolvedUniswapV3FactoryRouteConfig
+  extends ResolvedUniswapV3FactoryQuoteConfig {
+  swapRouter02Address: string;
+}
+
+export function getMissingUniswapV3FactoryRouteConfigFields(
+  config: UniswapV3RouterOverrides | undefined
+): UniswapV3FactoryRouteAddressField[] {
+  return UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS.filter(
+    (field) => !config?.[field]
+  );
+}
+
+export function resolveUniswapV3FactoryQuoteConfig(
+  config: UniswapV3RouterOverrides | undefined
+): ResolvedUniswapV3FactoryQuoteConfig | undefined {
+  if (
+    !config?.poolFactoryAddress ||
+    !config.quoterV2Address ||
+    !config.wethAddress
+  ) {
+    return undefined;
+  }
+
+  return {
+    poolFactoryAddress: config.poolFactoryAddress,
+    quoterV2Address: config.quoterV2Address,
+    wethAddress: config.wethAddress,
+    defaultFeeTier:
+      config.defaultFeeTier ??
+      DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+    candidateFeeTiers: config.candidateFeeTiers,
+    defaultSlippage: config.defaultSlippage,
+  };
+}
+
+export function resolveUniswapV3FactoryRouteConfig(
+  config: UniswapV3RouterOverrides | undefined
+): ResolvedUniswapV3FactoryRouteConfig | undefined {
+  const quoteConfig = resolveUniswapV3FactoryQuoteConfig(config);
+  if (!quoteConfig || !config?.swapRouter02Address) {
+    return undefined;
+  }
+
+  return {
+    ...quoteConfig,
+    swapRouter02Address: config.swapRouter02Address,
+  };
+}
+
 export function isValidFactoryFeeTier(tier: number): boolean {
   return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
 }
@@ -135,10 +204,8 @@ export function hasConfiguredGasQuoteLiquiditySource(
         (chainId === undefined || config.oneInchRouters?.[chainId])
       );
     case LiquiditySource.UNISWAPV3:
-      return !!(
-        config.uniswapV3RouterOverrides?.poolFactoryAddress &&
-        config.uniswapV3RouterOverrides.wethAddress &&
-        config.uniswapV3RouterOverrides.quoterV2Address
+      return !!resolveUniswapV3FactoryQuoteConfig(
+        config.uniswapV3RouterOverrides
       );
     case LiquiditySource.SUSHISWAP:
       return !!(
