@@ -9,11 +9,17 @@ import {
   resolveExternalTakePaths,
   resolveFactoryRouteSelectionSources,
 } from '../config';
+import { normalizeLifiAddressAllowlist } from '../dex/lifi';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
 
 const FACTORY_TAKER_REGISTRY_ABI = [
   'function takerContracts(uint8 source) view returns (address)',
+];
+const LIFI_TAKER_ALLOWLIST_ABI = [
+  'function getAllowedCallTargets() view returns (address[])',
+  'function getAllowedApprovalSpenders() view returns (address[])',
+  'function getAllowedCallSelectors(address target) view returns (bytes4[])',
 ];
 const FACTORY_REGISTRY_READ_RETRY_DELAYS_MS = [100, 250, 500];
 
@@ -29,6 +35,7 @@ const TAKER_CONTRACT_KEYS: Record<LiquiditySource, string[]> = {
   ],
   [LiquiditySource.SUSHISWAP]: ['SushiSwap', 'SUSHISWAP', 'sushiswap', '3'],
   [LiquiditySource.CURVE]: ['Curve', 'CURVE', 'curve', '4'],
+  [LiquiditySource.LIFI]: ['Lifi'],
 };
 
 function getEffectiveExternalTakePaths(
@@ -210,6 +217,200 @@ async function validateFactoryRegistry(params: {
   }
 }
 
+function normalizeAddressList(
+  addresses: readonly string[] | undefined,
+  label: string,
+  errors: string[]
+): string[] {
+  try {
+    return normalizeLifiAddressAllowlist(addresses, { label })
+      .map((address) => address.toLowerCase())
+      .sort();
+  } catch (error) {
+    errors.push(`${label} is invalid: ${getErrorMessage(error)}`);
+    return [];
+  }
+}
+
+function normalizeSelectorList(
+  selectors: readonly string[] | undefined
+): string[] {
+  return Array.from(
+    new Set((selectors ?? []).map((selector) => selector.toLowerCase()))
+  ).sort();
+}
+
+function normalizeSelectorConfig(
+  selectorsByTarget: Record<string, string[]> | undefined
+): Record<string, string[]> {
+  const normalized: Record<string, string[]> = {};
+  for (const [target, selectors] of Object.entries(selectorsByTarget ?? {})) {
+    const key = ethers.utils.getAddress(target).toLowerCase();
+    normalized[key] = selectors;
+  }
+  return normalized;
+}
+
+function assertExactSet(params: {
+  label: string;
+  expected: readonly string[];
+  actual: readonly string[];
+  errors: string[];
+}): void {
+  if (
+    params.expected.length !== params.actual.length ||
+    params.expected.some((value, index) => value !== params.actual[index])
+  ) {
+    params.errors.push(
+      `${params.label} mismatch: expected [${params.expected.join(
+        ', '
+      )}], got [${params.actual.join(', ')}]`
+    );
+  }
+}
+
+async function readLifiAllowlist<T>(params: {
+  provider: providers.Provider;
+  takerAddress: string;
+  operation: (contract: ethers.Contract) => Promise<T>;
+  label: string;
+  errors: string[];
+}): Promise<T | undefined> {
+  const contract = new ethers.Contract(
+    params.takerAddress,
+    LIFI_TAKER_ALLOWLIST_ABI,
+    params.provider
+  );
+  const { value, error } = await retryRpcRead(() => params.operation(contract));
+  if (value === undefined) {
+    params.errors.push(
+      `${params.label} could not be read after retries: ${getErrorMessage(error)}`
+    );
+    return undefined;
+  }
+  return value;
+}
+
+async function validateLifiAllowlistPreflight(params: {
+  config: KeeperConfig;
+  provider: providers.Provider;
+  chainId: number;
+  takerAddress: string | undefined;
+  errors: string[];
+}): Promise<void> {
+  const lifi = params.config.dex?.lifi;
+  if (!lifi || lifi.mode !== 'production' || !params.takerAddress) {
+    return;
+  }
+
+  const expectedTargets = normalizeAddressList(
+    lifi.callTargetAllowlist?.[params.chainId],
+    `LI.FI callTargetAllowlist.${params.chainId}`,
+    params.errors
+  );
+  const expectedSpenders = normalizeAddressList(
+    lifi.approvalSpenderAllowlist?.[params.chainId],
+    `LI.FI approvalSpenderAllowlist.${params.chainId}`,
+    params.errors
+  );
+  const expectedSelectorsByTarget = normalizeSelectorConfig(
+    lifi.selectorAllowlist?.[params.chainId]
+  );
+  if (expectedTargets.length === 0) {
+    params.errors.push(
+      `LI.FI callTargetAllowlist.${params.chainId} is not configured`
+    );
+  }
+  if (expectedSpenders.length === 0) {
+    params.errors.push(
+      `LI.FI approvalSpenderAllowlist.${params.chainId} is not configured`
+    );
+  }
+
+  for (const target of expectedTargets) {
+    await requireContractCode({
+      provider: params.provider,
+      label: `LI.FI call target ${target}`,
+      address: target,
+      errors: params.errors,
+    });
+  }
+  for (const spender of expectedSpenders) {
+    await requireContractCode({
+      provider: params.provider,
+      label: `LI.FI approval spender ${spender}`,
+      address: spender,
+      errors: params.errors,
+    });
+  }
+
+  const actualTargets = await readLifiAllowlist<string[]>({
+    provider: params.provider,
+    takerAddress: params.takerAddress,
+    label: 'LI.FI taker call target allowlist',
+    errors: params.errors,
+    operation: (contract) => contract.getAllowedCallTargets(),
+  });
+  const actualSpenders = await readLifiAllowlist<string[]>({
+    provider: params.provider,
+    takerAddress: params.takerAddress,
+    label: 'LI.FI taker approval spender allowlist',
+    errors: params.errors,
+    operation: (contract) => contract.getAllowedApprovalSpenders(),
+  });
+
+  if (actualTargets !== undefined) {
+    assertExactSet({
+      label: 'LI.FI taker call target allowlist',
+      expected: expectedTargets,
+      actual: normalizeAddressList(
+        actualTargets,
+        'LI.FI taker call target allowlist',
+        params.errors
+      ),
+      errors: params.errors,
+    });
+  }
+  if (actualSpenders !== undefined) {
+    assertExactSet({
+      label: 'LI.FI taker approval spender allowlist',
+      expected: expectedSpenders,
+      actual: normalizeAddressList(
+        actualSpenders,
+        'LI.FI taker approval spender allowlist',
+        params.errors
+      ),
+      errors: params.errors,
+    });
+  }
+
+  for (const target of expectedTargets) {
+    const configuredSelectors = expectedSelectorsByTarget[target] ?? [];
+    const expectedSelectors = normalizeSelectorList(configuredSelectors);
+    if (expectedSelectors.length === 0) {
+      params.errors.push(
+        `LI.FI selectorAllowlist.${params.chainId}.${target} is not configured`
+      );
+      continue;
+    }
+    const actualSelectors = await readLifiAllowlist<string[]>({
+      provider: params.provider,
+      takerAddress: params.takerAddress,
+      label: `LI.FI taker selector allowlist for ${target}`,
+      errors: params.errors,
+      operation: (contract) => contract.getAllowedCallSelectors(target),
+    });
+    if (actualSelectors !== undefined) {
+      assertExactSet({
+        label: `LI.FI taker selector allowlist for ${target}`,
+        expected: expectedSelectors,
+        actual: normalizeSelectorList(actualSelectors),
+        errors: params.errors,
+      });
+    }
+  }
+}
+
 /**
  * Performs startup-only checks for the contracts required by the enabled
  * autodiscover external-take paths. This is intentionally fail-fast: route
@@ -323,6 +524,40 @@ export async function validateAutoDiscoverRouteDeployments(params: {
         }
       }
     }
+  }
+
+  if (paths.has('lifi')) {
+    await requireContractCode({
+      provider: params.provider,
+      label: 'takers.factory',
+      address: params.config.takers?.factory,
+      errors,
+    });
+
+    const takerAddress = getConfiguredTakerAddress(
+      params.config,
+      LiquiditySource.LIFI
+    );
+    await requireContractCode({
+      provider: params.provider,
+      label: 'LI.FI taker',
+      address: takerAddress,
+      errors,
+    });
+    await validateFactoryRegistry({
+      provider: params.provider,
+      factoryAddress: params.config.takers?.factory,
+      source: LiquiditySource.LIFI,
+      expectedTaker: takerAddress,
+      errors,
+    });
+    await validateLifiAllowlistPreflight({
+      config: params.config,
+      provider: params.provider,
+      chainId: params.chainId,
+      takerAddress,
+      errors,
+    });
   }
 
   if (errors.length > 0) {

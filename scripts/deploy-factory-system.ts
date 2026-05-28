@@ -2,7 +2,16 @@ import { ethers } from 'ethers';
 import { readFileSync } from 'fs';
 import * as path from 'path';
 import { password } from '@inquirer/prompts';
-import { getManualPools, readConfigFile, KeeperConfig } from '../src/config';
+import {
+  getManualPools,
+  readConfigFile,
+  KeeperConfig,
+  LiquiditySource,
+} from '../src/config';
+import {
+  normalizeLifiAddressAllowlist,
+  normalizeLifiSelectorAllowlistRecord,
+} from '../src/dex/lifi';
 
 /**
  * Universal Factory System Deployment Script
@@ -14,6 +23,7 @@ import { getManualPools, readConfigFile, KeeperConfig } from '../src/config';
  * - Chain-agnostic (works on any chain with proper config)
  * - Config-driven (reads all addresses from config file)
  * - Fixed deployment order (factory → taker with factory authorization)
+ * - Production LI.FI configs deploy and register LifiKeeperTaker, then apply reviewed allowlists
  * - Interactive password input (same as main bot)
  * - Comprehensive validation and error handling
  * - Manual gas limits for problematic networks
@@ -24,7 +34,14 @@ interface DeploymentAddresses {
   uniswapTaker?: string;
   sushiTaker?: string;
   curveTaker?: string;
+  lifiTaker?: string;
   // Future: uniswapV4, pancakeswap, balancer, izumi, etc.
+}
+
+interface LifiProductionAllowlists {
+  callTargets: string[];
+  approvalSpenders: string[];
+  selectorAllowlist: Record<string, string[]>;
 }
 
 // Gas configuration for different networks
@@ -97,6 +114,81 @@ function getGasConfig(chainId: number) {
   return config;
 }
 
+function normalizeLifiSelectorsForTarget(
+  target: string,
+  selectors: readonly string[],
+  label: string,
+  requireNonEmpty = true
+): string[] {
+  if (!requireNonEmpty && selectors.length === 0) {
+    return [];
+  }
+  const normalized = normalizeLifiSelectorAllowlistRecord(
+    { [target]: selectors },
+    { label, requireNonEmpty }
+  );
+  return normalized[ethers.utils.getAddress(target).toLowerCase()] ?? [];
+}
+
+function toLowerSet(values: readonly string[]): Set<string> {
+  return new Set(values.map((value) => value.toLowerCase()));
+}
+
+function getLifiProductionAllowlists(
+  config: KeeperConfig,
+  chainId: number
+): LifiProductionAllowlists {
+  const lifi = config.dex?.lifi;
+  if (!lifi || lifi.mode !== 'production') {
+    throw new Error('LI.FI production config is required for deployment');
+  }
+  const callTargets = normalizeLifiAddressAllowlist(
+    lifi.callTargetAllowlist?.[chainId],
+    {
+      label: `LI.FI callTargetAllowlist.${chainId}`,
+      requireNonEmpty: true,
+    }
+  );
+  const approvalSpenders = normalizeLifiAddressAllowlist(
+    lifi.approvalSpenderAllowlist?.[chainId],
+    {
+      label: `LI.FI approvalSpenderAllowlist.${chainId}`,
+      requireNonEmpty: true,
+    }
+  );
+  const selectorAllowlist = normalizeLifiSelectorAllowlistRecord(
+    lifi.selectorAllowlist?.[chainId],
+    {
+      label: `LI.FI selectorAllowlist.${chainId}`,
+      requireNonEmpty: true,
+      callTargetAllowlist: callTargets,
+      requireCallTargetCoverage: true,
+    }
+  );
+  return { callTargets, approvalSpenders, selectorAllowlist };
+}
+
+function hasProductionLifiConfig(config: KeeperConfig): boolean {
+  return config.dex?.lifi?.mode === 'production';
+}
+
+function assertExactSet(
+  label: string,
+  expectedValues: readonly string[],
+  actualValues: readonly string[]
+): void {
+  const expected = expectedValues.map((value) => value.toLowerCase()).sort();
+  const actual = actualValues.map((value) => value.toLowerCase()).sort();
+  if (
+    expected.length !== actual.length ||
+    expected.some((value, index) => value !== actual[index])
+  ) {
+    throw new Error(
+      `${label} mismatch. expected=[${expected.join(',')}] actual=[${actual.join(',')}]`
+    );
+  }
+}
+
 async function validateConfig(config: KeeperConfig): Promise<void> {
   console.log('Validating configuration...');
 
@@ -132,6 +224,25 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     throw new Error('Contract artifacts not found. Please run: yarn compile');
   }
 
+  if (hasProductionLifiConfig(config)) {
+    const lifiArtifactPath = path.join(
+      __dirname,
+      '..',
+      'artifacts',
+      'contracts',
+      'takers',
+      'LifiKeeperTaker.sol',
+      'LifiKeeperTaker.json'
+    );
+    try {
+      require(lifiArtifactPath);
+    } catch (error) {
+      throw new Error(
+        'LI.FI contract artifact not found. Please run: yarn compile'
+      );
+    }
+  }
+
   // Check if any pools are configured for Uniswap V3 takes
   const uniswapPools = getManualPools(config).filter(
     (pool) => pool.take?.liquiditySource === 2 // LiquiditySource.UNISWAPV3
@@ -145,9 +256,7 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     // Validate Uniswap V3 configuration
     const uniswapConfig = config.dex?.uniswapV3?.router;
     if (!uniswapConfig) {
-      throw new Error(
-        'dex.uniswapV3.router required for Uniswap V3 pools'
-      );
+      throw new Error('dex.uniswapV3.router required for Uniswap V3 pools');
     }
 
     const required = [
@@ -159,9 +268,7 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
 
     for (const field of required) {
       if (!uniswapConfig[field as keyof typeof uniswapConfig]) {
-        throw new Error(
-          `Missing dex.uniswapV3.router.${field} for Uniswap V3`
-        );
+        throw new Error(`Missing dex.uniswapV3.router.${field} for Uniswap V3`);
       }
     }
   }
@@ -431,6 +538,53 @@ async function deployCurveKeeperTaker(
   return taker.address;
 }
 
+async function deployLifiKeeperTaker(
+  deployer: ethers.Wallet,
+  ajnaPoolFactory: string,
+  factoryAddress: string,
+  chainId: number
+): Promise<string> {
+  console.log('\n📦 Step 2d: Deploying LifiKeeperTaker...');
+
+  const takerArtifactPath = path.join(
+    __dirname,
+    '..',
+    'artifacts',
+    'contracts',
+    'takers',
+    'LifiKeeperTaker.sol',
+    'LifiKeeperTaker.json'
+  );
+  const takerArtifact = require(takerArtifactPath);
+
+  const LifiKeeperTaker = new ethers.ContractFactory(
+    takerArtifact.abi,
+    takerArtifact.bytecode,
+    deployer
+  );
+
+  const gasConfig = getGasConfig(chainId);
+  const deployOptions: any = {
+    gasLimit: gasConfig.gasLimit,
+  };
+
+  if (gasConfig.gasPrice) {
+    deployOptions.gasPrice = gasConfig.gasPrice;
+  }
+
+  const taker = await LifiKeeperTaker.deploy(
+    ajnaPoolFactory,
+    factoryAddress,
+    deployOptions
+  );
+
+  console.log('✅ LI.FI taker deployment tx:', taker.deployTransaction.hash);
+  await taker.deployed();
+  console.log('🎉 LifiKeeperTaker deployed to:', taker.address);
+
+  return taker.address;
+}
+
 async function configureFactory(
   deployer: ethers.Wallet,
   factoryAddress: string,
@@ -473,13 +627,185 @@ async function configureFactory(
 
   // Register Curve taker (LiquiditySource.CURVE = 4)
   if (addresses.curveTaker) {
-    const setCurveTakerTx = await factory.setTaker(4, addresses.curveTaker);
+    const setCurveTakerTx = await factory.setTaker(
+      LiquiditySource.CURVE,
+      addresses.curveTaker
+    );
     console.log('✅ Curve configuration tx:', setCurveTakerTx.hash);
     await setCurveTakerTx.wait();
     console.log('🎉 Factory configured with Curve taker');
   }
+
+  // Register LI.FI taker (LiquiditySource.LIFI = 5)
+  if (addresses.lifiTaker) {
+    const setLifiTakerTx = await factory.setTaker(
+      LiquiditySource.LIFI,
+      addresses.lifiTaker
+    );
+    console.log('✅ LI.FI configuration tx:', setLifiTakerTx.hash);
+    await setLifiTakerTx.wait();
+    console.log('🎉 Factory configured with LI.FI taker');
+  }
   // ADD DELAY AFTER CONFIGURATION
   await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
+}
+
+async function configureLifiAllowlists(
+  deployer: ethers.Wallet,
+  takerAddress: string,
+  config: KeeperConfig,
+  chainId: number
+): Promise<void> {
+  if (!hasProductionLifiConfig(config)) {
+    return;
+  }
+
+  console.log('\n⚙️  Step 3b: Configuring LI.FI taker allowlists...');
+
+  const takerArtifactPath = path.join(
+    __dirname,
+    '..',
+    'artifacts',
+    'contracts',
+    'takers',
+    'LifiKeeperTaker.sol',
+    'LifiKeeperTaker.json'
+  );
+  const takerArtifact = require(takerArtifactPath);
+  const taker = new ethers.Contract(takerAddress, takerArtifact.abi, deployer);
+
+  const { callTargets, approvalSpenders, selectorAllowlist } =
+    getLifiProductionAllowlists(config, chainId);
+  const configuredCallTargets = toLowerSet(callTargets);
+  const configuredApprovalSpenders = toLowerSet(approvalSpenders);
+  const currentCallTargets = normalizeLifiAddressAllowlist(
+    await taker.getAllowedCallTargets(),
+    {
+      label: 'on-chain LI.FI call target allowlist',
+    }
+  );
+  const currentApprovalSpenders = normalizeLifiAddressAllowlist(
+    await taker.getAllowedApprovalSpenders(),
+    {
+      label: 'on-chain LI.FI approval spender allowlist',
+    }
+  );
+  const currentCallTargetSet = toLowerSet(currentCallTargets);
+  const currentApprovalSpenderSet = toLowerSet(currentApprovalSpenders);
+
+  for (const target of currentCallTargets) {
+    if (!configuredCallTargets.has(target.toLowerCase())) {
+      const tx = await taker.setCallTarget(target, false);
+      console.log(`Disabled stale LI.FI call target ${target} tx:`, tx.hash);
+      await tx.wait();
+    }
+  }
+
+  for (const spender of currentApprovalSpenders) {
+    if (!configuredApprovalSpenders.has(spender.toLowerCase())) {
+      const tx = await taker.setApprovalSpender(spender, false);
+      console.log(
+        `Disabled stale LI.FI approval spender ${spender} tx:`,
+        tx.hash
+      );
+      await tx.wait();
+    }
+  }
+
+  const selectorTargets = new Map<string, string>();
+  for (const target of [...currentCallTargets, ...callTargets]) {
+    selectorTargets.set(target.toLowerCase(), target);
+  }
+
+  for (const target of Array.from(selectorTargets.values())) {
+    const configuredSelectors = toLowerSet(
+      selectorAllowlist[target.toLowerCase()] ?? []
+    );
+    const currentSelectors = normalizeLifiSelectorsForTarget(
+      target,
+      await taker.getAllowedCallSelectors(target),
+      `on-chain LI.FI selector allowlist for ${target}`,
+      false
+    );
+
+    for (const selector of currentSelectors) {
+      if (!configuredSelectors.has(selector.toLowerCase())) {
+        const tx = await taker.setCallSelector(target, selector, false);
+        console.log(
+          `Disabled stale LI.FI selector ${selector} for ${target} tx:`,
+          tx.hash
+        );
+        await tx.wait();
+      }
+    }
+  }
+
+  for (const target of callTargets) {
+    if (currentCallTargetSet.has(target.toLowerCase())) {
+      continue;
+    }
+    const tx = await taker.setCallTarget(target, true);
+    console.log(`✅ LI.FI call target ${target} tx:`, tx.hash);
+    await tx.wait();
+  }
+
+  for (const spender of approvalSpenders) {
+    if (currentApprovalSpenderSet.has(spender.toLowerCase())) {
+      continue;
+    }
+    const tx = await taker.setApprovalSpender(spender, true);
+    console.log(`✅ LI.FI approval spender ${spender} tx:`, tx.hash);
+    await tx.wait();
+  }
+
+  for (const [target, selectors] of Object.entries(selectorAllowlist)) {
+    const currentSelectors = toLowerSet(
+      normalizeLifiSelectorsForTarget(
+        target,
+        await taker.getAllowedCallSelectors(target),
+        `on-chain LI.FI selector allowlist for ${target}`,
+        false
+      )
+    );
+    for (const selector of selectors) {
+      if (currentSelectors.has(selector.toLowerCase())) {
+        continue;
+      }
+      const tx = await taker.setCallSelector(target, selector, true);
+      console.log(`✅ LI.FI selector ${selector} for ${target} tx:`, tx.hash);
+      await tx.wait();
+    }
+  }
+
+  assertExactSet(
+    'LI.FI call target allowlist',
+    callTargets,
+    normalizeLifiAddressAllowlist(await taker.getAllowedCallTargets(), {
+      label: 'on-chain LI.FI call target allowlist',
+    })
+  );
+  assertExactSet(
+    'LI.FI approval spender allowlist',
+    approvalSpenders,
+    normalizeLifiAddressAllowlist(await taker.getAllowedApprovalSpenders(), {
+      label: 'on-chain LI.FI approval spender allowlist',
+    })
+  );
+  for (const target of callTargets) {
+    assertExactSet(
+      `LI.FI selector allowlist for ${target}`,
+      selectorAllowlist[target.toLowerCase()] ?? [],
+      normalizeLifiSelectorsForTarget(
+        target,
+        await taker.getAllowedCallSelectors(target),
+        `on-chain LI.FI selector allowlist for ${target}`
+      )
+    );
+  }
+
+  console.log(
+    `🎉 LI.FI allowlists configured: targets=${callTargets.length}, spenders=${approvalSpenders.length}, selectorTargets=${Object.keys(selectorAllowlist).length}`
+  );
 }
 
 async function verifyDeployment(
@@ -561,6 +887,58 @@ async function verifyDeployment(
     }
   }
 
+  if (addresses.lifiTaker) {
+    const hasLifiTaker = await factory.hasConfiguredTaker(LiquiditySource.LIFI);
+    const registeredLifiTaker = await factory.takerContracts(
+      LiquiditySource.LIFI
+    );
+    console.log(`- LI.FI Configured: ${hasLifiTaker}`);
+    console.log(`- Registered LI.FI Taker: ${registeredLifiTaker}`);
+    console.log(`- Expected LI.FI Taker: ${addresses.lifiTaker}`);
+
+    const takerArtifact = require(
+      path.join(
+        __dirname,
+        '..',
+        'artifacts',
+        'contracts',
+        'takers',
+        'LifiKeeperTaker.sol',
+        'LifiKeeperTaker.json'
+      )
+    );
+    const taker = new ethers.Contract(
+      addresses.lifiTaker,
+      takerArtifact.abi,
+      deployer
+    );
+
+    const takerOwner = await taker.owner();
+    const authorizedFactory = await taker.authorizedFactory();
+
+    console.log(`- LI.FI Taker Owner: ${takerOwner}`);
+    console.log(`- LI.FI Authorized Factory: ${authorizedFactory}`);
+    console.log(`- Expected Factory: ${addresses.factory}`);
+
+    if (
+      !hasLifiTaker ||
+      registeredLifiTaker.toLowerCase() !== addresses.lifiTaker.toLowerCase()
+    ) {
+      throw new Error('❌ LI.FI factory configuration verification failed');
+    }
+
+    if (authorizedFactory.toLowerCase() !== addresses.factory.toLowerCase()) {
+      throw new Error('❌ LI.FI taker authorization verification failed');
+    }
+
+    if (
+      takerOwner.toLowerCase() !== deployer.address.toLowerCase() ||
+      factoryOwner.toLowerCase() !== deployer.address.toLowerCase()
+    ) {
+      throw new Error('❌ LI.FI owner verification failed');
+    }
+  }
+
   console.log('✅ All verification checks passed');
 }
 
@@ -579,7 +957,8 @@ function generateConfigUpdate(
     addresses.factory ||
     addresses.uniswapTaker ||
     addresses.sushiTaker ||
-    addresses.curveTaker
+    addresses.curveTaker ||
+    addresses.lifiTaker
   ) {
     console.log('takers: {');
   }
@@ -587,7 +966,12 @@ function generateConfigUpdate(
     console.log(`  factory: '${addresses.factory}',`);
   }
 
-  if (addresses.uniswapTaker || addresses.sushiTaker || addresses.curveTaker) {
+  if (
+    addresses.uniswapTaker ||
+    addresses.sushiTaker ||
+    addresses.curveTaker ||
+    addresses.lifiTaker
+  ) {
     console.log('  contracts: {');
     if (addresses.uniswapTaker) {
       console.log(`    UniswapV3: '${addresses.uniswapTaker}',`);
@@ -598,13 +982,17 @@ function generateConfigUpdate(
     if (addresses.curveTaker) {
       console.log(`    Curve: '${addresses.curveTaker}',`);
     }
+    if (addresses.lifiTaker) {
+      console.log(`    Lifi: '${addresses.lifiTaker}',`);
+    }
     console.log('  },');
   }
   if (
     addresses.factory ||
     addresses.uniswapTaker ||
     addresses.sushiTaker ||
-    addresses.curveTaker
+    addresses.curveTaker ||
+    addresses.lifiTaker
   ) {
     console.log('},');
   }
@@ -619,6 +1007,12 @@ function generateConfigUpdate(
   }
   if (addresses.sushiTaker) {
     console.log(`🍣 SushiSwapKeeperTaker: ${addresses.sushiTaker}`);
+  }
+  if (addresses.curveTaker) {
+    console.log(`🌊 CurveKeeperTaker: ${addresses.curveTaker}`);
+  }
+  if (addresses.lifiTaker) {
+    console.log(`🔁 LifiKeeperTaker: ${addresses.lifiTaker}`);
   }
 
   console.log('\n🚀 Next Steps:');
@@ -753,6 +1147,19 @@ async function main() {
       // ADD DELAY AFTER CURVE DEPLOYMENT
       await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
     }
+
+    // Deploy LI.FI taker only for production configs. Canary configs are
+    // for route-shape discovery and fork validation, not live registration.
+    if (hasProductionLifiConfig(config)) {
+      addresses.lifiTaker = await deployLifiKeeperTaker(
+        deployer,
+        config.ajna.erc20PoolFactory,
+        addresses.factory,
+        chainInfo.chainId
+      );
+      // ADD DELAY AFTER LI.FI DEPLOYMENT
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
+    }
     // ADD DELAY BEFORE CONFIGURATION
     console.log('\n⏳ Waiting before configuration...');
     await new Promise((resolve) => setTimeout(resolve, 3000)); // 3 second delay
@@ -762,6 +1169,14 @@ async function main() {
       throw new Error('Missing factory address for configuration');
     }
     await configureFactory(deployer, addresses.factory, addresses);
+    if (addresses.lifiTaker) {
+      await configureLifiAllowlists(
+        deployer,
+        addresses.lifiTaker,
+        config,
+        chainInfo.chainId
+      );
+    }
 
     // Step 8: Verify everything works
     await verifyDeployment(deployer, addresses);

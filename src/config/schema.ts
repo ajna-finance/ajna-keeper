@@ -82,10 +82,11 @@ export enum LiquiditySource {
   UNISWAPV3 = 2,
   SUSHISWAP = 3,
   CURVE = 4,
+  LIFI = 5,
 }
 
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
-export type ExternalTakePathKind = 'oneinch' | 'factory';
+export type ExternalTakePathKind = 'oneinch' | 'factory' | 'lifi';
 export type ExternalTakeRouteSelectionMode =
   | 'maximize_profit'
   | 'factory_first';
@@ -531,6 +532,57 @@ export interface OneInchDexConfig {
   connectorTokens?: Array<string>;
 }
 
+export type LifiDexMode = 'canary' | 'production';
+export type LifiFeeCostPolicy = 'included_only' | 'reject_all';
+
+export type ChainAddressAllowlist = {
+  [chainId: number]: string[];
+};
+
+export type ChainTargetSelectorAllowlist = {
+  [chainId: number]: {
+    [callTarget: string]: string[];
+  };
+};
+
+interface LifiDexBaseConfig {
+  apiBaseUrl?: string;
+  apiKeyEnvVar?: string;
+  integrator?: string;
+  defaultSlippage?: number;
+  quoteTimeoutMs?: number;
+  quoteFailureCooldownMs?: number;
+  quoteFailureThreshold?: number;
+  maxPriceImpact?: number;
+  feeCostPolicy?: LifiFeeCostPolicy;
+  maxQuoteAgeMs?: number;
+}
+
+export interface LifiCanaryDexConfig extends LifiDexBaseConfig {
+  mode: 'canary';
+  allowExchanges?: string[];
+  denyExchanges?: string[];
+  preferExchanges?: string[];
+  allowBroadExchangeFilters?: boolean;
+  callTargetAllowlist?: ChainAddressAllowlist;
+  approvalSpenderAllowlist?: ChainAddressAllowlist;
+  observedSelectorAllowlist?: ChainTargetSelectorAllowlist;
+}
+
+export interface LifiProductionDexConfig extends LifiDexBaseConfig {
+  mode: 'production';
+  allowExchanges: string[];
+  denyExchanges?: string[];
+  preferExchanges?: string[];
+  allowBroadExchangeFilters?: false;
+  callTargetAllowlist: ChainAddressAllowlist;
+  approvalSpenderAllowlist: ChainAddressAllowlist;
+  selectorAllowlist: ChainTargetSelectorAllowlist;
+  observedSelectorAllowlist?: ChainTargetSelectorAllowlist;
+}
+
+export type LifiDexConfig = LifiCanaryDexConfig | LifiProductionDexConfig;
+
 export interface UniswapV3DexConfig {
   legacy?: UniswapV3Overrides;
   router?: UniswapV3RouterOverrides;
@@ -539,6 +591,7 @@ export interface UniswapV3DexConfig {
 
 export interface DexConfig {
   oneInch?: OneInchDexConfig;
+  lifi?: LifiDexConfig;
   uniswapV3?: UniswapV3DexConfig;
   sushiswap?: SushiswapRouterOverrides;
   curve?: CurveRouterOverrides;

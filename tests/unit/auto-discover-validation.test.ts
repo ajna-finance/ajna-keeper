@@ -159,6 +159,59 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
+  it('accepts factory-first hybrid gas quote fallback mode for LI.FI plus factory routes', () => {
+    const config = baseConfig();
+    const lifiCallTarget = '0x8888888888888888888888888888888888888888';
+    config.discovery!.take = {
+      enabled: true,
+      allowedExternalTakePaths: ['lifi', 'factory'],
+      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      validateRouteDeployments: true,
+      hybridGasQuoteFailureFallbackMode: 'factory_first',
+      maxGasCostNative: 0.01,
+      dexGasOverrides: {
+        [LiquiditySource.LIFI]: '650000',
+      },
+    };
+    config.discovery!.defaults!.take = {
+      liquiditySource: LiquiditySource.LIFI,
+      marketPriceFactor: 0.99,
+    };
+    config.takers!.contracts!.Lifi =
+      '0x4444444444444444444444444444444444444444';
+    config.dex!.lifi = {
+      mode: 'production',
+      allowExchanges: ['uniswap'],
+      callTargetAllowlist: {
+        1: [lifiCallTarget],
+      },
+      approvalSpenderAllowlist: {
+        1: ['0x9999999999999999999999999999999999999999'],
+      },
+      selectorAllowlist: {
+        1: {
+          [lifiCallTarget]: ['0x12345678'],
+        },
+      },
+    };
+    const warnStub = sinon.stub(logger, 'warn');
+
+    try {
+      expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+      expect(
+        warnStub
+          .getCalls()
+          .some((call) =>
+            String(call.args[0]).includes(
+              'hybridGasQuoteFailureFallbackMode=factory_first is only eligible'
+            )
+          )
+      ).to.equal(false);
+    } finally {
+      warnStub.restore();
+    }
+  });
+
   it('rejects unknown hybrid gas quote fallback mode', () => {
     const config = baseConfig();
     config.discovery!.take = {
@@ -745,7 +798,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch and factory'
+      'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch, factory, and lifi'
     );
 
     config.discovery!.take = {

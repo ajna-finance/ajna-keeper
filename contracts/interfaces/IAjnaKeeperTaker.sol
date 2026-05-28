@@ -10,10 +10,11 @@ interface IAjnaKeeperTaker is IERC20Taker {
     /// @notice Identifies the source of liquidity to use for the swap.
     enum LiquiditySource {
         None,      // (do not use)
-        OneInch,   // Use 1inch for swaps
-        UniswapV3, // Use Uniswap V3 Universal Router
-        SushiSwap, // Future: SushiSwap integration
-        Curve      // Future: Curve integration
+        OneInch,   // Use 1inch single-contract aggregation
+        UniswapV3, // Use Uniswap V3 direct SwapRouter02 execution
+        SushiSwap, // Use SushiSwap direct-DEX execution
+        Curve,     // Use Curve direct-DEX execution
+        Lifi       // Use LI.FI same-chain aggregator calldata
     }
 
     /// @notice Called by keeper to invoke `Pool.take`, passing `IERC20Taker` callback data.

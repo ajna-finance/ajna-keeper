@@ -28,10 +28,12 @@ import {
   DiscoveryExecutionConfig,
   DiscoveryExecutionTransportConfig,
   DiscoveryRpcCache,
+  LifiCircuitPurpose,
   OneInchQuoteCircuitPurpose,
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
 import * as takeFactoryModule from '../take/factory';
+import * as lifiExecutionModule from '../take/lifi-execution';
 import * as oneInchAdapterModule from '../take/one-inch-adapter';
 import * as oneInchExecutionModule from '../take/one-inch-execution';
 import { createArbTakeStrategy } from '../take/arb-strategy';
@@ -78,6 +80,11 @@ import {
   recordOneInchQuoteFailure,
   recordOneInchQuoteSuccess,
 } from './one-inch-circuit';
+import {
+  getLifiCircuitOpenReason,
+  recordLifiQuoteFailure,
+  recordLifiQuoteSuccess,
+} from './lifi-circuit';
 import { BASIS_POINTS_DENOMINATOR_BN, WAD, ZERO_BN } from '../constants';
 
 // Conservative per-route execution limits used for profitability screening.
@@ -94,6 +101,7 @@ type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy
 >;
 type OneInchCircuitOutcome = 'success' | 'failure' | 'neutral';
+type LifiCircuitOutcome = 'success' | 'failure' | 'neutral';
 
 function withTakeLiquiditySource<T extends ResolvedTakeTarget>(
   target: T,
@@ -227,9 +235,11 @@ export function resolveHybridExternalTakeExecutionSelection(params: {
   const sourceSelectedPath =
     selectedSource === LiquiditySource.ONEINCH
       ? 'oneinch'
-      : selectedSource !== undefined && isFactoryDynamicSource(selectedSource)
-        ? 'factory'
-        : undefined;
+      : selectedSource === LiquiditySource.LIFI
+        ? 'lifi'
+        : selectedSource !== undefined && isFactoryDynamicSource(selectedSource)
+          ? 'factory'
+          : undefined;
   if (
     selectedPath !== undefined &&
     sourceSelectedPath !== undefined &&
@@ -303,11 +313,29 @@ function formatExternalTakeGasTelemetry(params: {
           currentGasPrice,
         })
       : undefined;
+  const configuredDexGasOverride =
+    params.source !== undefined
+      ? params.takePolicy?.dexGasOverrides?.[params.source]
+      : undefined;
+  const routeGasLimit =
+    routeProfitability?.routeGasLimit ??
+    (params.source !== undefined
+      ? getExternalTakeGasLimit(params.takePolicy, params.source)
+      : undefined);
+  const routeGasModel =
+    params.source === undefined
+      ? 'n/a'
+      : configuredDexGasOverride !== undefined
+        ? 'dexGasOverrides'
+        : 'default';
   return (
     `pool=${params.poolAddress}` +
     ` borrower=${params.borrower ?? 'n/a'}` +
     ` path=${params.path ?? 'n/a'}` +
     ` source=${formatLiquiditySource(params.source)}` +
+    ` routeGasModel=${routeGasModel}` +
+    ` configuredDexGasOverrideRaw=${configuredDexGasOverride ?? 'none'}` +
+    ` routeGasLimit=${routeGasLimit?.toString() ?? 'n/a'}` +
     ` evaluatedGasGwei=${routeProfitability?.gasPriceGwei ?? 'n/a'}` +
     ` currentGasWei=${currentGasPrice?.toString() ?? 'n/a'}` +
     ` gasAgeMs=${gasAgeMs ?? 'n/a'}` +
@@ -344,8 +372,8 @@ function requiresHybridNetProfitRanking(
 ): boolean {
   const paths = takePolicy?.allowedExternalTakePaths;
   return !!(
-    paths?.includes('oneinch') &&
-    paths.includes('factory') &&
+    paths !== undefined &&
+    paths.length > 1 &&
     normalizeExternalTakeRouteSelectionMode(
       takePolicy?.externalTakeRouteSelectionMode
     ) === 'maximize_profit'
@@ -810,6 +838,14 @@ async function buildFactoryRouteProfitabilityContext(params: {
   };
 }
 
+interface ExternalTakePathCounters {
+  approved: number;
+  executed: number;
+  dryRun: number;
+  preBroadcastFailures: number;
+  postSubmissionFailures: number;
+}
+
 export interface DiscoveredTakeTargetStats {
   candidateCount: number;
   approvedTakeDecisions: number;
@@ -846,6 +882,9 @@ export interface DiscoveredTakeTargetStats {
   oneInchPostSubmissionFailures: number;
   factoryPreBroadcastFailures: number;
   factoryPostSubmissionFailures: number;
+  externalTakeByPath: Partial<
+    Record<ExternalTakePathKind, ExternalTakePathCounters>
+  >;
   hybridFallbackAttempts: number;
   hybridFallbackSuccesses: number;
   hybridGasQuoteFallbackAttempts: number;
@@ -885,7 +924,7 @@ interface ExternalTakeRouteStatKeys {
 
 type ExternalTakeRouteCounterStats = Pick<
   DiscoveredTakeTargetStats,
-  ExternalTakeRouteStatKey
+  ExternalTakeRouteStatKey | 'externalTakeByPath'
 >;
 
 const APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
@@ -950,6 +989,11 @@ interface OneInchPathQuoteInput extends FactoryPathQuoteInput {
   price: number;
 }
 
+interface LifiPathQuoteInput extends FactoryPathQuoteInput {
+  price: number;
+  recordCircuitOutcome?: boolean;
+}
+
 type DiscoveryExternalTakeApprover = (
   approvalParams: ExternalTakeApprovalInput
 ) => Promise<ExternalTakeApprovalResult>;
@@ -960,6 +1004,10 @@ type FactoryPathQuoteFn = (
 
 type OneInchPathQuoteFn = (
   quoteParams: OneInchPathQuoteInput
+) => Promise<ExternalTakeQuoteEvaluation>;
+
+type LifiPathQuoteFn = (
+  quoteParams: LifiPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
 type DiscoveryOneInchQuoteOptions = {
@@ -993,6 +1041,26 @@ function recordOneInchCircuitOutcomeForDiscovery(params: {
   recordOneInchQuoteSuccess(params.rpcCache, params.purpose);
 }
 
+function recordLifiCircuitOutcomeForDiscovery(params: {
+  rpcCache?: DiscoveryRpcCache;
+  config?: DiscoveryExecutionConfig;
+  outcome: LifiCircuitOutcome;
+  purpose?: LifiCircuitPurpose;
+}): void {
+  if (params.outcome === 'neutral') {
+    return;
+  }
+  if (params.outcome === 'failure') {
+    recordLifiQuoteFailure({
+      rpcCache: params.rpcCache,
+      lifiConfig: params.config?.lifi,
+      purpose: params.purpose,
+    });
+    return;
+  }
+  recordLifiQuoteSuccess(params.rpcCache, params.purpose);
+}
+
 interface HandleDiscoveredTakeTargetParamsBase {
   pool: FungiblePool;
   signer: Signer;
@@ -1022,6 +1090,8 @@ type DiscoveryExternalExecutionConfig = Pick<
   | 'dryRun'
   | 'keeperTaker'
   | 'keeperTakerFactory'
+  | 'lifi'
+  | 'lifiTaker'
   | 'oneInchAggregationExecutorAllowlist'
   | 'oneInchDefaultSlippage'
   | 'oneInchRouters'
@@ -1045,6 +1115,16 @@ type DiscoveryExternalExecutionConfig = Pick<
     error?: string;
   }) => void;
   onFactoryExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
+  onLifiQuoteResult?: (result: {
+    success: boolean;
+    retryable?: boolean;
+    errorCode?: number | string;
+    error?: string;
+  }) => void;
+  onLifiExecutionFailure?: (result: {
     preBroadcast: boolean;
     error?: string;
   }) => void;
@@ -1113,6 +1193,14 @@ function logDiscoveredTakeTargetSummary(params: {
   appendNonZeroGroup(fields, 'approvedRoutes', [
     { label: 'oneinch', value: stats.approvedOneInchTakeDecisions },
     { label: 'factory', value: stats.approvedFactoryTakeDecisions },
+    {
+      label: 'lifi',
+      value: getExternalTakePathCounter({
+        stats,
+        path: 'lifi',
+        field: 'approved',
+      }),
+    },
   ]);
   appendNonZeroGroup(fields, 'approvedFactorySources', [
     { label: 'uniswapV3', value: stats.approvedUniswapV3TakeDecisions },
@@ -1122,6 +1210,14 @@ function logDiscoveredTakeTargetSummary(params: {
   appendNonZeroGroup(fields, 'executedRoutes', [
     { label: 'oneinch', value: stats.executedOneInchTakes },
     { label: 'factory', value: stats.executedFactoryTakes },
+    {
+      label: 'lifi',
+      value: getExternalTakePathCounter({
+        stats,
+        path: 'lifi',
+        field: 'executed',
+      }),
+    },
   ]);
   appendNonZeroGroup(fields, 'executedFactorySources', [
     { label: 'uniswapV3', value: stats.executedUniswapV3Takes },
@@ -1131,6 +1227,14 @@ function logDiscoveredTakeTargetSummary(params: {
   appendNonZeroGroup(fields, 'dryRunRoutes', [
     { label: 'oneinch', value: stats.dryRunOneInchTakes },
     { label: 'factory', value: stats.dryRunFactoryTakes },
+    {
+      label: 'lifi',
+      value: getExternalTakePathCounter({
+        stats,
+        path: 'lifi',
+        field: 'dryRun',
+      }),
+    },
   ]);
   appendNonZeroGroup(fields, 'dryRunFactorySources', [
     { label: 'uniswapV3', value: stats.dryRunUniswapV3Takes },
@@ -1145,6 +1249,24 @@ function logDiscoveredTakeTargetSummary(params: {
   appendNonZeroGroup(fields, 'factoryFailures', [
     { label: 'preBroadcast', value: stats.factoryPreBroadcastFailures },
     { label: 'postSubmission', value: stats.factoryPostSubmissionFailures },
+  ]);
+  appendNonZeroGroup(fields, 'lifiFailures', [
+    {
+      label: 'preBroadcast',
+      value: getExternalTakePathCounter({
+        stats,
+        path: 'lifi',
+        field: 'preBroadcastFailures',
+      }),
+    },
+    {
+      label: 'postSubmission',
+      value: getExternalTakePathCounter({
+        stats,
+        path: 'lifi',
+        field: 'postSubmissionFailures',
+      }),
+    },
   ]);
   appendNonZeroField(
     fields,
@@ -1193,12 +1315,96 @@ function isFactoryExternalTakeRoute(
   );
 }
 
+function isLifiExternalTakeRoute(
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): boolean {
+  return (
+    quoteEvaluation?.externalTakePath === 'lifi' ||
+    quoteEvaluation?.selectedLiquiditySource === LiquiditySource.LIFI
+  );
+}
+
+function withExternalTakeApprovalContext(params: {
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  auctionPrice: BigNumber;
+  collateral: BigNumber;
+}): ExternalTakeQuoteEvaluation {
+  return {
+    ...params.quoteEvaluation,
+    quotedAuctionPriceWad: params.auctionPrice,
+    quotedCollateralWad: params.collateral,
+  };
+}
+
+type ExternalTakePathCounterField = keyof ExternalTakePathCounters;
+
+function resolveExternalTakePathFromEvaluation(
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): ExternalTakePathKind | undefined {
+  if (quoteEvaluation?.externalTakePath !== undefined) {
+    return quoteEvaluation.externalTakePath;
+  }
+  const source = quoteEvaluation?.selectedLiquiditySource;
+  if (source === LiquiditySource.ONEINCH) {
+    return 'oneinch';
+  }
+  if (source === LiquiditySource.LIFI) {
+    return 'lifi';
+  }
+  return source !== undefined && isFactoryDynamicSource(source)
+    ? 'factory'
+    : undefined;
+}
+
+function getExternalTakePathCounters(
+  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByPath'>,
+  path: ExternalTakePathKind
+): ExternalTakePathCounters {
+  stats.externalTakeByPath[path] ??= {
+    approved: 0,
+    executed: 0,
+    dryRun: 0,
+    preBroadcastFailures: 0,
+    postSubmissionFailures: 0,
+  };
+  return stats.externalTakeByPath[path]!;
+}
+
+function incrementExternalTakePathCounter(params: {
+  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByPath'>;
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
+  field: ExternalTakePathCounterField;
+}): void {
+  const path = resolveExternalTakePathFromEvaluation(params.quoteEvaluation);
+  if (!path) {
+    return;
+  }
+  const counters = getExternalTakePathCounters(params.stats, path);
+  counters[params.field] += 1;
+}
+
+function getExternalTakePathCounter(params: {
+  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByPath'>;
+  path: ExternalTakePathKind;
+  field: ExternalTakePathCounterField;
+}): number {
+  return params.stats.externalTakeByPath[params.path]?.[params.field] ?? 0;
+}
+
 function incrementExternalTakeRouteStats(params: {
   stats: ExternalTakeRouteCounterStats;
   quoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
   keys: ExternalTakeRouteStatKeys;
+  pathCounter?: ExternalTakePathCounterField;
 }): void {
   const { stats, quoteEvaluation, keys } = params;
+  if (params.pathCounter !== undefined) {
+    incrementExternalTakePathCounter({
+      stats,
+      quoteEvaluation,
+      field: params.pathCounter,
+    });
+  }
   if (isOneInchExternalTakeRoute(quoteEvaluation)) {
     stats[keys.oneInch] += 1;
   }
@@ -1230,6 +1436,7 @@ function recordSuccessfulExternalTakeRouteStats(
     keys: dryRun
       ? DRY_RUN_EXTERNAL_TAKE_ROUTE_STAT_KEYS
       : EXECUTED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
+    pathCounter: dryRun ? 'dryRun' : 'executed',
   });
 }
 
@@ -2095,6 +2302,119 @@ async function quoteKeeperTakerOneInchTakeForDiscovery(
   });
 }
 
+async function quoteLifiPathForDiscovery(
+  params: {
+    config: DiscoveryExecutionConfig;
+    rpcCache?: DiscoveryRpcCache;
+    takePolicy: AutoDiscoverTakePolicyRuntime;
+    recordCircuitOutcome?: boolean;
+    routeProbeLimiter?: AsyncOperationLimiter;
+  } & LifiPathQuoteInput
+): Promise<ExternalTakeQuoteEvaluation> {
+  const circuitOpenReason = getLifiCircuitOpenReason({
+    rpcCache: params.rpcCache,
+    lifiConfig: params.config.lifi,
+  });
+  if (circuitOpenReason) {
+    return {
+      isTakeable: false,
+      externalTakePath: 'lifi',
+      selectedLiquiditySource: LiquiditySource.LIFI,
+      quotedAuctionPriceWad: params.auctionPrice,
+      quotedCollateralWad: params.collateral,
+      reason: circuitOpenReason,
+    };
+  }
+
+  let evaluation: ExternalTakeQuoteEvaluation;
+  try {
+    evaluation = await withTimeoutAbort(
+      async (timeoutSignal) =>
+        await withCombinedAbortSignal(
+          [timeoutSignal, params.routeProbeAbortSignal],
+          async (signal) => {
+            if (signal?.aborted) {
+              throw signal.reason instanceof Error
+                ? signal.reason
+                : new Error('LI.FI external take quote aborted');
+            }
+            const evaluateLifiQuote = async () =>
+              await lifiExecutionModule.getLifiPathQuoteEvaluation(
+                params.pool,
+                params.price,
+                params.collateral,
+                params.poolConfig,
+                {
+                  lifi: params.config.lifi,
+                  lifiTaker:
+                    params.config.lifiTaker ??
+                    lifiExecutionModule.getLifiTakerAddress(
+                      params.config.takerContracts
+                    ),
+                  lifiRequestAbortSignal: signal,
+                  chainId: params.rpcCache?.chainId,
+                  tokenDecimalsCache: getDiscoveryTokenDecimalsCache(
+                    params.rpcCache
+                  ),
+                },
+                params.signer,
+                params.auctionPrice
+              );
+            return params.routeProbeLimiter
+              ? await params.routeProbeLimiter.run(
+                  `LI.FI quote ${params.pool.name}`,
+                  evaluateLifiQuote,
+                  { signal }
+                )
+              : await evaluateLifiQuote();
+          }
+        ),
+      getExternalTakeProbeTimeoutMs(params.takePolicy),
+      'LI.FI external take quote'
+    );
+  } catch (error) {
+    if (params.recordCircuitOutcome !== false) {
+      recordLifiCircuitOutcomeForDiscovery({
+        rpcCache: params.rpcCache,
+        config: params.config,
+        outcome: 'failure',
+      });
+    }
+    return {
+      isTakeable: false,
+      externalTakePath: 'lifi',
+      selectedLiquiditySource: LiquiditySource.LIFI,
+      quotedAuctionPriceWad: params.auctionPrice,
+      quotedCollateralWad: params.collateral,
+      reason: getErrorMessage(error),
+      quoteFailureRetryable: true,
+      quoteFailureCode: 'exception',
+    };
+  }
+
+  if (params.recordCircuitOutcome !== false) {
+    recordLifiCircuitOutcomeForDiscovery({
+      rpcCache: params.rpcCache,
+      config: params.config,
+      outcome:
+        evaluation.quoteFailureRetryable === true
+          ? 'failure'
+          : evaluation.quoteAmountRaw !== undefined
+            ? 'success'
+            : 'neutral',
+    });
+  }
+
+  return {
+    ...evaluation,
+    externalTakePath: 'lifi',
+    selectedLiquiditySource:
+      evaluation.selectedLiquiditySource ?? LiquiditySource.LIFI,
+    quotedAuctionPriceWad: params.auctionPrice,
+    quotedCollateralWad: params.collateral,
+  };
+}
+
 async function evaluateHybridExternalTakeForDiscovery(params: {
   pool: FungiblePool;
   signer: Signer;
@@ -2108,8 +2428,10 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
   collateral: BigNumber;
   quoteOneInchPath: OneInchPathQuoteFn;
   quoteFactoryPath: FactoryPathQuoteFn;
+  quoteLifiPath: LifiPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
   recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
+  recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
   stats: Pick<
     DiscoveredTakeTargetStats,
     'gasPolicyRejects' | 'profitFloorRejects'
@@ -2144,6 +2466,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     gasPolicyRejectCode?: GasPolicyResult['rejectCode'];
     gasQuoteAttempts?: GasPolicyResult['gasQuoteAttempts'];
     oneInchCircuitOutcome?: OneInchCircuitOutcome;
+    lifiCircuitOutcome?: LifiCircuitOutcome;
   };
   type ProbeControl = {
     abandoned: boolean;
@@ -2160,32 +2483,57 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
     }
     return evaluation.quoteAmountRaw !== undefined ? 'success' : 'neutral';
   };
+  const getLifiCircuitOutcome = (
+    evaluation: ExternalTakeQuoteEvaluation
+  ): LifiCircuitOutcome | undefined => {
+    if (evaluation.reason?.startsWith('LI.FI quote circuit open')) {
+      return undefined;
+    }
+    if (evaluation.quoteFailureRetryable === true) {
+      return 'failure';
+    }
+    return evaluation.quoteAmountRaw !== undefined ? 'success' : 'neutral';
+  };
   const probeExternalTakePath = async (
     path: ExternalTakePathKind,
     control?: ProbeControl
   ): Promise<ProbeResult> => {
     const startedAt = Date.now();
     let oneInchCircuitOutcome: OneInchCircuitOutcome | undefined;
+    let lifiCircuitOutcome: LifiCircuitOutcome | undefined;
     try {
-      const evaluation =
-        path === 'oneinch'
-          ? await params.quoteOneInchPath({
-              pool: params.pool,
-              signer: params.signer,
-              poolConfig: params.poolConfig,
-              price: params.price,
-              auctionPrice: params.auctionPrice,
-              collateral: params.collateral,
-              routeProbeAbortSignal: control?.abortController.signal,
-            })
-          : await params.quoteFactoryPath({
-              pool: params.pool,
-              signer: params.signer,
-              poolConfig: params.poolConfig,
-              auctionPrice: params.auctionPrice,
-              collateral: params.collateral,
-              routeProbeAbortSignal: control?.abortController.signal,
-            });
+      let evaluation: ExternalTakeQuoteEvaluation;
+      if (path === 'oneinch') {
+        evaluation = await params.quoteOneInchPath({
+          pool: params.pool,
+          signer: params.signer,
+          poolConfig: params.poolConfig,
+          price: params.price,
+          auctionPrice: params.auctionPrice,
+          collateral: params.collateral,
+          routeProbeAbortSignal: control?.abortController.signal,
+        });
+      } else if (path === 'factory') {
+        evaluation = await params.quoteFactoryPath({
+          pool: params.pool,
+          signer: params.signer,
+          poolConfig: params.poolConfig,
+          auctionPrice: params.auctionPrice,
+          collateral: params.collateral,
+          routeProbeAbortSignal: control?.abortController.signal,
+        });
+      } else {
+        evaluation = await params.quoteLifiPath({
+          pool: params.pool,
+          signer: params.signer,
+          poolConfig: params.poolConfig,
+          price: params.price,
+          auctionPrice: params.auctionPrice,
+          collateral: params.collateral,
+          routeProbeAbortSignal: control?.abortController.signal,
+          recordCircuitOutcome: false,
+        });
+      }
       if (control?.abandoned) {
         return {
           path,
@@ -2195,6 +2543,8 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
       }
       oneInchCircuitOutcome =
         path === 'oneinch' ? getOneInchCircuitOutcome(evaluation) : undefined;
+      lifiCircuitOutcome =
+        path === 'lifi' ? getLifiCircuitOutcome(evaluation) : undefined;
       if (!evaluation.isTakeable) {
         const gasPolicyRejectCode =
           evaluation.routeProfitability?.gasPolicyRejectCode;
@@ -2207,6 +2557,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
           gasPolicyRejectCode,
           gasQuoteAttempts: evaluation.routeProfitability?.gasQuoteAttempts,
           oneInchCircuitOutcome,
+          lifiCircuitOutcome,
         };
       }
 
@@ -2226,6 +2577,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
           gasPolicyRejectCode: approval.gasPolicyRejectCode,
           gasQuoteAttempts: approval.gasQuoteAttempts,
           oneInchCircuitOutcome,
+          lifiCircuitOutcome,
         };
       }
       return {
@@ -2233,6 +2585,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
         durationMs: Date.now() - startedAt,
         evaluation: approval.quoteEvaluation ?? evaluation,
         oneInchCircuitOutcome,
+        lifiCircuitOutcome,
       };
     } catch (error) {
       return {
@@ -2241,12 +2594,17 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
         reason: getErrorMessage(error),
         oneInchCircuitOutcome:
           path === 'oneinch' ? (oneInchCircuitOutcome ?? 'failure') : undefined,
+        lifiCircuitOutcome:
+          path === 'lifi' ? (lifiCircuitOutcome ?? 'failure') : undefined,
       };
     }
   };
   const recordProbeCircuitOutcome = (result: ProbeResult): void => {
     if (result.oneInchCircuitOutcome) {
       params.recordOneInchCircuitOutcome(result.oneInchCircuitOutcome);
+    }
+    if (result.lifiCircuitOutcome) {
+      params.recordLifiCircuitOutcome(result.lifiCircuitOutcome);
     }
   };
 
@@ -2276,6 +2634,7 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
               durationMs: params.probeTimeoutMs,
               reason: `probe timed out after ${params.probeTimeoutMs}ms`,
               oneInchCircuitOutcome: path === 'oneinch' ? 'failure' : undefined,
+              lifiCircuitOutcome: path === 'lifi' ? 'failure' : undefined,
             });
           }, params.probeTimeoutMs);
         }),
@@ -2368,10 +2727,11 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
       return 'route selection mode is not maximize_profit';
     }
     if (
-      !params.externalTakePaths.includes('oneinch') ||
-      !params.externalTakePaths.includes('factory')
+      !params.externalTakePaths.includes('factory') ||
+      (!params.externalTakePaths.includes('oneinch') &&
+        !params.externalTakePaths.includes('lifi'))
     ) {
-      return 'hybrid paths do not include both oneinch and factory';
+      return 'hybrid paths do not include factory and at least one aggregator path';
     }
     if (params.takePolicy?.maxGasCostNative === undefined) {
       return 'maxGasCostNative is not configured';
@@ -2468,8 +2828,8 @@ async function evaluateHybridExternalTakeForDiscovery(params: {
         return fallback;
       });
     if (
-      selected.externalTakePath === 'oneinch' ||
-      selected.selectedLiquiditySource === LiquiditySource.ONEINCH
+      isOneInchExternalTakeRoute(selected) ||
+      isLifiExternalTakeRoute(selected)
     ) {
       const gasQuoteFallback = await buildHybridGasQuoteFallbackEvaluation();
       if (gasQuoteFallback) {
@@ -2519,11 +2879,27 @@ function createExternalTakeAdapterForDiscovery(params: {
   quoteOneInchPath: OneInchPathQuoteFn;
   quoteKeeperTakerOneInchTake: OneInchPathQuoteFn;
   quoteFactoryPath: FactoryPathQuoteFn;
+  quoteLifiPath: LifiPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
   recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
+  recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
   stats: DiscoveredTakeTargetStats;
   config: DiscoveryExecutionConfig;
+  rpcCache?: DiscoveryRpcCache;
 }): ExternalTakeAdapter<ResolvedTakeTarget, DiscoveryExternalExecutionConfig> {
+  const getLifiExecutionRefreshCircuitOpenReason = (
+    executionConfig: Pick<DiscoveryExternalExecutionConfig, 'dryRun'>
+  ): string | undefined => {
+    if (executionConfig.dryRun === true) {
+      return undefined;
+    }
+    return getLifiCircuitOpenReason({
+      rpcCache: params.rpcCache,
+      lifiConfig: params.config.lifi,
+      purpose: 'execution_refresh',
+    });
+  };
+
   if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
     return {
       kind: 'hybrid',
@@ -2548,8 +2924,10 @@ function createExternalTakeAdapterForDiscovery(params: {
           collateral,
           quoteOneInchPath: params.quoteOneInchPath,
           quoteFactoryPath: params.quoteFactoryPath,
+          quoteLifiPath: params.quoteLifiPath,
           approveExternalTake: params.approveExternalTake,
           recordOneInchCircuitOutcome: params.recordOneInchCircuitOutcome,
+          recordLifiCircuitOutcome: params.recordLifiCircuitOutcome,
           stats: params.stats,
         }),
       executeExternalTake: async ({
@@ -2636,8 +3014,12 @@ function createExternalTakeAdapterForDiscovery(params: {
               );
               continue;
             }
-            approvedEvaluation =
-              fallbackApproval.quoteEvaluation ?? candidateEvaluation;
+            approvedEvaluation = withExternalTakeApprovalContext({
+              quoteEvaluation:
+                fallbackApproval.quoteEvaluation ?? candidateEvaluation,
+              auctionPrice: executionLiquidation.auctionPrice,
+              collateral: executionLiquidation.collateral,
+            });
           }
 
           const selectedPath = selection.effectiveSelectedPath;
@@ -2710,6 +3092,76 @@ function createExternalTakeAdapterForDiscovery(params: {
             ) {
               logger.warn(
                 `Hybrid 1inch path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
+              );
+              continue;
+            }
+            return false;
+          }
+
+          if (
+            selectedPath === 'lifi' ||
+            selectedSource === LiquiditySource.LIFI
+          ) {
+            let lifiPreBroadcastFailed = false;
+            const originalLifiExecutionFailure = config.onLifiExecutionFailure;
+            const lifiConfig = {
+              ...config,
+              onLifiExecutionFailure: (result: {
+                preBroadcast: boolean;
+                error?: string;
+              }) => {
+                originalLifiExecutionFailure?.(result);
+                if (result.preBroadcast) {
+                  lifiPreBroadcastFailed = true;
+                }
+              },
+            };
+            if (config.dryRun !== true) {
+              const executionRefreshCircuitOpenReason =
+                getLifiExecutionRefreshCircuitOpenReason(config);
+              if (executionRefreshCircuitOpenReason) {
+                lifiConfig.onLifiExecutionFailure?.({
+                  preBroadcast: true,
+                  error: executionRefreshCircuitOpenReason,
+                });
+                if (index < executionCandidates.length - 1) {
+                  logger.warn(
+                    `Hybrid LI.FI path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
+                  );
+                  continue;
+                }
+                return false;
+              }
+            }
+            const lifiSucceeded = await lifiExecutionModule.takeLiquidationLifi(
+              {
+                pool,
+                signer,
+                poolConfig,
+                liquidation: liquidationForCandidate,
+                config: lifiConfig,
+              }
+            );
+            if (lifiSucceeded) {
+              recordSuccessfulExternalTakeRouteStats(
+                params.stats,
+                approvedEvaluation,
+                config.dryRun === true
+              );
+              if (isExecutionFallbackCandidate) {
+                params.stats.hybridFallbackSuccesses += 1;
+              }
+              if (isGasQuoteFallbackCandidate) {
+                params.stats.hybridGasQuoteFallbackSuccesses += 1;
+              }
+              return true;
+            }
+            if (
+              lifiPreBroadcastFailed &&
+              index < executionCandidates.length - 1
+            ) {
+              logger.warn(
+                `Hybrid LI.FI path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
               );
               continue;
             }
@@ -2824,6 +3276,63 @@ function createExternalTakeAdapterForDiscovery(params: {
     };
   }
 
+  if (params.target.take.liquiditySource === LiquiditySource.LIFI) {
+    return {
+      kind: 'hybrid',
+      evaluateExternalTake: async ({
+        pool,
+        signer,
+        poolConfig,
+        price,
+        auctionPrice,
+        collateral,
+      }) =>
+        params.quoteLifiPath({
+          pool,
+          signer,
+          poolConfig,
+          price,
+          auctionPrice,
+          collateral,
+        }),
+      executeExternalTake: async ({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config,
+      }) => {
+        const executionRefreshCircuitOpenReason =
+          getLifiExecutionRefreshCircuitOpenReason(config);
+        if (executionRefreshCircuitOpenReason) {
+          config.onLifiExecutionFailure?.({
+            preBroadcast: true,
+            error: executionRefreshCircuitOpenReason,
+          });
+          logger.warn(
+            `LI.FI execution refresh circuit is open for ${pool.name}/${liquidation.borrower}; skipping direct LI.FI external take`
+          );
+          return false;
+        }
+        const succeeded = await lifiExecutionModule.takeLiquidationLifi({
+          pool,
+          signer,
+          poolConfig,
+          liquidation,
+          config,
+        });
+        if (succeeded) {
+          recordSuccessfulExternalTakeRouteStats(
+            params.stats,
+            liquidation.externalTakeQuoteEvaluation,
+            config.dryRun === true
+          );
+        }
+        return succeeded;
+      },
+    };
+  }
+
   if (params.target.take.liquiditySource !== undefined) {
     return {
       kind: 'factory',
@@ -2916,6 +3425,7 @@ export async function handleDiscoveredTakeTarget(
     oneInchPostSubmissionFailures: 0,
     factoryPreBroadcastFailures: 0,
     factoryPostSubmissionFailures: 0,
+    externalTakeByPath: {},
     hybridFallbackAttempts: 0,
     hybridFallbackSuccesses: 0,
     hybridGasQuoteFallbackAttempts: 0,
@@ -3028,6 +3538,15 @@ export async function handleDiscoveredTakeTarget(
       takePolicy,
       routeProbeLimiter,
     });
+  const quoteLifiPath: LifiPathQuoteFn = (quoteParams) =>
+    quoteLifiPathForDiscovery({
+      ...quoteParams,
+      config: params.config,
+      rpcCache,
+      takePolicy,
+      recordCircuitOutcome: quoteParams.recordCircuitOutcome,
+      routeProbeLimiter,
+    });
   const recordOneInchCircuitOutcome = (
     outcome: OneInchCircuitOutcome,
     purpose?: OneInchQuoteCircuitPurpose
@@ -3039,19 +3558,40 @@ export async function handleDiscoveredTakeTarget(
       purpose,
     });
   };
+  const recordLifiCircuitOutcome = (
+    outcome: LifiCircuitOutcome,
+    purpose?: LifiCircuitPurpose
+  ): void => {
+    recordLifiCircuitOutcomeForDiscovery({
+      rpcCache,
+      config: params.config,
+      outcome,
+      purpose,
+    });
+  };
   let externalTakeAttemptedSubmission = false;
   const recordExternalTakeExecutionFailure =
-    (path: 'oneinch' | 'factory') =>
+    (path: 'oneinch' | 'factory' | 'lifi') =>
     (result: { preBroadcast: boolean; error?: string }): void => {
+      const pathCounters = getExternalTakePathCounters(
+        stats,
+        path as ExternalTakePathKind
+      );
+      if (result.preBroadcast) {
+        pathCounters.preBroadcastFailures += 1;
+      } else {
+        pathCounters.postSubmissionFailures += 1;
+      }
+
       if (path === 'oneinch') {
         if (result.preBroadcast) {
           stats.oneInchPreBroadcastFailures += 1;
         } else {
           stats.oneInchPostSubmissionFailures += 1;
         }
-      } else if (result.preBroadcast) {
+      } else if (path === 'factory' && result.preBroadcast) {
         stats.factoryPreBroadcastFailures += 1;
-      } else {
+      } else if (path === 'factory') {
         stats.factoryPostSubmissionFailures += 1;
       }
 
@@ -3070,10 +3610,13 @@ export async function handleDiscoveredTakeTarget(
     quoteOneInchPath,
     quoteKeeperTakerOneInchTake,
     quoteFactoryPath,
+    quoteLifiPath,
     approveExternalTake,
     recordOneInchCircuitOutcome,
+    recordLifiCircuitOutcome,
     stats,
     config: params.config,
+    rpcCache,
   });
 
   const externalExecutionConfig = {
@@ -3085,6 +3628,10 @@ export async function handleDiscoveredTakeTarget(
     oneInchRouters: params.config.oneInchRouters,
     keeperTaker: params.config.keeperTaker,
     keeperTakerFactory: params.config.keeperTakerFactory,
+    lifi: params.config.lifi,
+    lifiTaker:
+      params.config.lifiTaker ??
+      lifiExecutionModule.getLifiTakerAddress(params.config.takerContracts),
     uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
     sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
@@ -3111,6 +3658,27 @@ export async function handleDiscoveredTakeTarget(
     },
     onOneInchExecutionFailure: recordExternalTakeExecutionFailure('oneinch'),
     onFactoryExecutionFailure: recordExternalTakeExecutionFailure('factory'),
+    onLifiQuoteResult: (result: {
+      success: boolean;
+      retryable?: boolean;
+      errorCode?: number | string;
+      error?: string;
+    }) => {
+      recordLifiCircuitOutcome(
+        result.success
+          ? 'success'
+          : result.retryable === true
+            ? 'failure'
+            : 'neutral',
+        'execution_refresh'
+      );
+      if (!result.success) {
+        logger.debug(
+          `LI.FI execution quote refresh failed: ${result.error ?? result.errorCode ?? 'unknown error'}`
+        );
+      }
+    },
+    onLifiExecutionFailure: recordExternalTakeExecutionFailure('lifi'),
   };
 
   try {
@@ -3194,14 +3762,26 @@ export async function handleDiscoveredTakeTarget(
             auctionPrice,
             collateral,
             quoteEvaluation,
-          }) =>
-            approveExternalTake({
+          }) => {
+            const approval = await approveExternalTake({
               price,
               auctionPrice,
               collateral,
               quoteEvaluation,
               forceGasRefresh: true,
-            }),
+            });
+            if (!approval.approved) {
+              return approval;
+            }
+            return {
+              ...approval,
+              quoteEvaluation: withExternalTakeApprovalContext({
+                quoteEvaluation: approval.quoteEvaluation ?? quoteEvaluation,
+                auctionPrice,
+                collateral,
+              }),
+            };
+          },
           approveArbTake: async () => {
             if (
               takePolicy?.minExpectedProfitQuote !== undefined ||
@@ -3256,6 +3836,7 @@ export async function handleDiscoveredTakeTarget(
                 stats,
                 quoteEvaluation: decision.quoteEvaluation,
                 keys: APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
+                pathCounter: 'approved',
               });
             }
             if (decision.approvedArbTake) {

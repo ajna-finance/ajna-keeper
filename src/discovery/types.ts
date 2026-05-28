@@ -4,6 +4,7 @@ import {
   CurveRouterOverrides,
   DiscoveredDefaultsConfig,
   KeeperConfig,
+  LifiDexConfig,
   LiquiditySource,
   SushiswapRouterOverrides,
   UniswapV3RouterOverrides,
@@ -25,6 +26,8 @@ export interface DiscoveryExecutionConfig {
   discoveredDefaults?: DiscoveredDefaultsConfig;
   keeperTaker?: string;
   keeperTakerFactory?: string;
+  lifi?: LifiDexConfig;
+  lifiTaker?: string;
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
@@ -48,6 +51,8 @@ export function getDiscoveryExecutionConfig(
     discoveredDefaults: config.discovery?.defaults,
     keeperTaker: config.takers?.oneInch,
     keeperTakerFactory: config.takers?.factory,
+    lifi: config.dex?.lifi,
+    lifiTaker: config.takers?.contracts?.Lifi,
     oneInchAggregationExecutorAllowlist:
       config.dex?.oneInch?.aggregationExecutorAllowlist,
     oneInchDefaultSlippage: config.dex?.oneInch?.defaultSlippage,
@@ -79,6 +84,29 @@ export type OneInchQuoteCircuitPurpose =
   | 'swap_data'
   | 'gas_conversion';
 
+export interface ExternalProviderCircuitState {
+  failures: number;
+  cooldownUntilMs?: number;
+  lastOpenLogAtMs?: number;
+}
+
+export type ExternalProviderCircuitPath = 'oneinch' | 'lifi';
+export type LifiCircuitPurpose = 'route_quote' | 'execution_refresh';
+
+export type ExternalProviderCircuitPurposeByPath = {
+  oneinch: OneInchQuoteCircuitPurpose;
+  lifi: LifiCircuitPurpose;
+};
+
+export type ExternalProviderCircuits = {
+  [Path in ExternalProviderCircuitPath]?: Partial<
+    Record<
+      ExternalProviderCircuitPurposeByPath[Path],
+      ExternalProviderCircuitState
+    >
+  >;
+};
+
 export interface DiscoveryRpcCache {
   chainId?: number;
   gasPrice?: BigNumber;
@@ -92,6 +120,7 @@ export interface DiscoveryRpcCache {
     Record<OneInchQuoteCircuitPurpose, OneInchQuoteCircuitState>
   >;
   oneInchQuoteCircuit?: OneInchQuoteCircuitState;
+  providerCircuits?: ExternalProviderCircuits;
 }
 
 export interface DiscoveryRpcCacheStats {

@@ -1,0 +1,107 @@
+{
+  "type": "lifi",
+  "tool": "uniswap",
+  "action": {
+    "fromToken": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "chainId": 8453
+    },
+    "toToken": {
+      "address": "0x2222222222222222222222222222222222222222",
+      "chainId": 8453
+    },
+    "fromAmount": "1000000",
+    "fromChainId": 8453,
+    "toChainId": 8453,
+    "fromAddress": "0x3333333333333333333333333333333333333333",
+    "toAddress": "0x3333333333333333333333333333333333333333"
+  },
+  "estimate": {
+    "approvalAddress": "0x5555555555555555555555555555555555555555",
+    "fromAmount": "1000000",
+    "toAmount": "2000000",
+    "toAmountMin": "1900000",
+    "feeCosts": [
+      {
+        "included": true,
+        "amount": "1000",
+        "token": {
+          "address": "0x1111111111111111111111111111111111111111",
+          "chainId": 8453
+        },
+        "name": "LIFI Fixed Fee"
+      }
+    ]
+  },
+  "includedSteps": [
+    {
+      "type": "protocol",
+      "tool": "feeCollection",
+      "action": {
+        "fromToken": {
+          "address": "0x1111111111111111111111111111111111111111",
+          "chainId": 8453
+        },
+        "toToken": {
+          "address": "0x1111111111111111111111111111111111111111",
+          "chainId": 8453
+        },
+        "fromAmount": "1000000",
+        "fromChainId": 8453,
+        "toChainId": 8453,
+        "fromAddress": "0x5555555555555555555555555555555555555555",
+        "toAddress": "0x5555555555555555555555555555555555555555"
+      },
+      "estimate": {
+        "approvalAddress": "0x7777777777777777777777777777777777777777",
+        "fromAmount": "1000000",
+        "toAmount": "999000",
+        "toAmountMin": "999000",
+        "feeCosts": [
+          {
+            "included": true,
+            "amount": "1000",
+            "token": {
+              "address": "0x1111111111111111111111111111111111111111",
+              "chainId": 8453
+            },
+            "name": "LIFI Fixed Fee"
+          }
+        ]
+      }
+    },
+    {
+      "type": "swap",
+      "tool": "uniswap",
+      "action": {
+        "fromToken": {
+          "address": "0x1111111111111111111111111111111111111111",
+          "chainId": 8453
+        },
+        "toToken": {
+          "address": "0x2222222222222222222222222222222222222222",
+          "chainId": 8453
+        },
+        "fromAmount": "999000",
+        "fromChainId": 8453,
+        "toChainId": 8453,
+        "fromAddress": "0x5555555555555555555555555555555555555555",
+        "toAddress": "0x5555555555555555555555555555555555555555"
+      },
+      "estimate": {
+        "approvalAddress": "0x8888888888888888888888888888888888888888",
+        "fromAmount": "999000",
+        "toAmount": "2000000",
+        "toAmountMin": "1900000",
+        "feeCosts": []
+      }
+    }
+  ],
+  "transactionRequest": {
+    "to": "0x4444444444444444444444444444444444444444",
+    "data": "0xabcdef1200000000",
+    "value": "0x0",
+    "from": "0x3333333333333333333333333333333333333333",
+    "chainId": 8453
+  }
+}

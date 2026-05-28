@@ -57,15 +57,59 @@ function getOneInchCircuitState(
   if (!rpcCache) {
     return { failures: 0 };
   }
+  const providerState = rpcCache.providerCircuits?.oneinch?.[purpose];
   if (purpose === 'route_quote') {
-    rpcCache.oneInchQuoteCircuit ??= { failures: 0 };
     rpcCache.oneInchQuoteCircuits ??= {};
-    rpcCache.oneInchQuoteCircuits.route_quote ??= rpcCache.oneInchQuoteCircuit;
-    return rpcCache.oneInchQuoteCircuit;
+    const state = rpcCache.oneInchQuoteCircuit ??
+      rpcCache.oneInchQuoteCircuits.route_quote ??
+      providerState ?? { failures: 0 };
+    rpcCache.oneInchQuoteCircuit = state;
+    rpcCache.oneInchQuoteCircuits.route_quote = state;
+    return linkOneInchProviderCircuitState(rpcCache, purpose, state);
   }
   rpcCache.oneInchQuoteCircuits ??= {};
-  rpcCache.oneInchQuoteCircuits[purpose] ??= { failures: 0 };
-  return rpcCache.oneInchQuoteCircuits[purpose]!;
+  const state = rpcCache.oneInchQuoteCircuits[purpose] ??
+    providerState ?? { failures: 0 };
+  rpcCache.oneInchQuoteCircuits[purpose] = state;
+  return linkOneInchProviderCircuitState(rpcCache, purpose, state);
+}
+
+function linkOneInchProviderCircuitState(
+  rpcCache: DiscoveryRpcCache,
+  purpose: OneInchQuoteCircuitPurpose,
+  state: OneInchQuoteCircuitState
+): OneInchQuoteCircuitState {
+  rpcCache.oneInchQuoteCircuits ??= {};
+  if (purpose === 'route_quote') {
+    rpcCache.oneInchQuoteCircuit = state;
+    rpcCache.oneInchQuoteCircuits.route_quote = state;
+  } else {
+    rpcCache.oneInchQuoteCircuits[purpose] = state;
+  }
+  rpcCache.providerCircuits ??= {};
+  rpcCache.providerCircuits.oneinch ??= {};
+  rpcCache.providerCircuits.oneinch[purpose] = state;
+  return state;
+}
+
+function getExistingOneInchCircuitState(
+  rpcCache: DiscoveryRpcCache | undefined,
+  purpose: OneInchQuoteCircuitPurpose
+): OneInchQuoteCircuitState | undefined {
+  if (!rpcCache) {
+    return undefined;
+  }
+  if (purpose === 'route_quote') {
+    return (
+      rpcCache.oneInchQuoteCircuit ??
+      rpcCache.oneInchQuoteCircuits?.route_quote ??
+      rpcCache.providerCircuits?.oneinch?.route_quote
+    );
+  }
+  return (
+    rpcCache.oneInchQuoteCircuits?.[purpose] ??
+    rpcCache.providerCircuits?.oneinch?.[purpose]
+  );
 }
 
 function resetExpiredOneInchCircuit(
@@ -108,13 +152,11 @@ export function recordOneInchQuoteSuccess(
   rpcCache?: DiscoveryRpcCache,
   purpose: OneInchQuoteCircuitPurpose = 'route_quote'
 ): void {
-  const state =
-    purpose === 'route_quote'
-      ? rpcCache?.oneInchQuoteCircuit
-      : rpcCache?.oneInchQuoteCircuits?.[purpose];
-  if (!state) {
+  const state = getExistingOneInchCircuitState(rpcCache, purpose);
+  if (!rpcCache || !state) {
     return;
   }
+  linkOneInchProviderCircuitState(rpcCache, purpose, state);
   state.failures = 0;
   state.cooldownUntilMs = undefined;
   state.lastOpenLogAtMs = undefined;

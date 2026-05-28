@@ -6,17 +6,38 @@ import '@nomicfoundation/hardhat-verify';
 
 dotenv.config();
 
+function optionalEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function alchemyRpcUrl(network: string): string {
+  return `https://${network}.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`;
+}
+
+function baseRpcUrl(): string {
+  return (
+    optionalEnv('AJNA_AGENT_RPC_URL', 'AJNA_RPC_URL_BASE', 'BASE_RPC_URL') ??
+    alchemyRpcUrl('base-mainnet')
+  );
+}
+
 const forkConfigs: Record<string, { url: string; blockNumber?: number }> = {
   mainnet: {
-    url: `https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+    url: alchemyRpcUrl('eth-mainnet'),
     blockNumber: 21731352,
   },
   base: {
-    url: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+    url: baseRpcUrl(),
     blockNumber: Number(process.env.BASE_FORK_BLOCK ?? 30000000),
   },
   avalanche: {
-    url: `https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+    url: alchemyRpcUrl('avax-mainnet'),
   },
 };
 
@@ -64,11 +85,11 @@ const config: HardhatUserConfig = {
     },
     avalanche: {
       chainId: 43114,
-      url: `https://avax-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+      url: alchemyRpcUrl('avax-mainnet'),
     },
     base: {
       chainId: 8453,
-      url: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+      url: baseRpcUrl(),
     },
     hemi: {
       url: `https://boldest-soft-moon.hemi-mainnet.quiknode.pro/${process.env.QUICKNODE_API_KEY}`,

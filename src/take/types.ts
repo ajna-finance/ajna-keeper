@@ -1,4 +1,5 @@
 import { BigNumber } from 'ethers';
+import { ApprovedLifiQuote } from '../dex/lifi';
 import {
   CurvePoolType,
   ExternalTakePathKind,
@@ -92,6 +93,7 @@ export interface ExternalTakeQuoteEvaluation {
   auctionIdentity?: string;
   fallbackExternalTakeQuoteEvaluations?: ExternalTakeQuoteEvaluation[];
   curvePool?: CurvePoolSelection;
+  lifiQuote?: ApprovedLifiQuote;
   reason?: string;
 }
 
@@ -133,6 +135,12 @@ export interface ApprovedCurveFactoryQuoteEvaluation
   curvePool: CurvePoolSelection;
 }
 
+export interface ApprovedLifiQuoteEvaluation
+  extends ApprovedExternalTakeQuoteBase<LiquiditySource.LIFI> {
+  externalTakePath: 'lifi';
+  lifiQuote: ApprovedLifiQuote;
+}
+
 export type ApprovedFactoryQuoteEvaluation =
   | ApprovedUniswapV3FactoryQuoteEvaluation
   | ApprovedSushiSwapFactoryQuoteEvaluation
@@ -140,7 +148,8 @@ export type ApprovedFactoryQuoteEvaluation =
 
 export type ApprovedExternalTakeQuoteEvaluation =
   | ApprovedOneInchQuoteEvaluation
-  | ApprovedFactoryQuoteEvaluation;
+  | ApprovedFactoryQuoteEvaluation
+  | ApprovedLifiQuoteEvaluation;
 
 export interface ArbTakeEvaluation {
   isArbTakeable: boolean;

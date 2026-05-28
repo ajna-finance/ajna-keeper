@@ -22,6 +22,7 @@ export const FACTORY_DYNAMIC_SOURCES: readonly FactoryLiquiditySource[] = [
 export const EXTERNAL_TAKE_PATHS = new Set<ExternalTakePathKind>([
   'oneinch',
   'factory',
+  'lifi',
 ]);
 
 export const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
@@ -57,6 +58,9 @@ export function resolveExternalTakePaths(params: {
   }
   if (params.defaultLiquiditySource === LiquiditySource.ONEINCH) {
     return ['oneinch'];
+  }
+  if (params.defaultLiquiditySource === LiquiditySource.LIFI) {
+    return ['lifi'];
   }
   if (isFactoryDynamicSource(params.defaultLiquiditySource)) {
     return ['factory'];

@@ -31,7 +31,7 @@ function formatBorrowerTelemetryId(borrower: string): string {
 }
 
 export function logTakeExecutionTelemetry(params: {
-  path: 'oneinch' | 'factory';
+  path: 'oneinch' | 'factory' | 'lifi';
   source?: LiquiditySource;
   poolName: string;
   poolAddress: string;

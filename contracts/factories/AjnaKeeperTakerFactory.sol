@@ -20,6 +20,8 @@ contract AjnaKeeperTakerFactory {
     mapping(IAjnaKeeperTaker.LiquiditySource => address) public takerContracts;
     /// @dev Maps taker addresses to their supported sources for validation
     mapping(address => IAjnaKeeperTaker.LiquiditySource[]) public takerSources;
+    /// @dev Last supported enum value. Keep source iteration in sync with IAjnaKeeperTaker.LiquiditySource.
+    uint8 private constant LAST_LIQUIDITY_SOURCE = uint8(IAjnaKeeperTaker.LiquiditySource.Lifi);
 
     // Events
     event TakerUpdated(IAjnaKeeperTaker.LiquiditySource indexed source, address indexed oldTaker, address indexed newTaker);
@@ -148,7 +150,7 @@ contract AjnaKeeperTakerFactory {
     ) {
         // Count non-zero takers
         uint256 count = 0;
-        for (uint8 i = 1; i < 5; i++) { // Skip None(0), check OneInch(1) through Curve(4)
+        for (uint8 i = 1; i <= LAST_LIQUIDITY_SOURCE; i++) { // Skip None(0)
             if (takerContracts[IAjnaKeeperTaker.LiquiditySource(i)] != address(0)) {
                 count++;
             }
@@ -159,7 +161,7 @@ contract AjnaKeeperTakerFactory {
         takers = new address[](count);
         uint256 index = 0;
         
-        for (uint8 i = 1; i < 5; i++) {
+        for (uint8 i = 1; i <= LAST_LIQUIDITY_SOURCE; i++) {
             address takerAddr = takerContracts[IAjnaKeeperTaker.LiquiditySource(i)];
             if (takerAddr != address(0)) {
                 sources[index] = IAjnaKeeperTaker.LiquiditySource(i);

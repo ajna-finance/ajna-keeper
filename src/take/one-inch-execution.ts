@@ -14,7 +14,7 @@ import {
   getDecimalsErc20,
 } from '../erc20';
 import { logger } from '../logging';
-import { NonceTracker } from '../nonce';
+import { isNonceConsumedTransactionError, NonceTracker } from '../nonce';
 import {
   decimaledToWei,
   estimateGasWithBuffer,
@@ -680,10 +680,12 @@ export async function takeLiquidation({
             gasLimit,
             nonce: nonce.toString(),
           });
-        attemptedSubmission = true;
         const receipt = await submitTakeTransaction(
           takeWriteTransport,
-          txRequest
+          txRequest,
+          () => {
+            attemptedSubmission = true;
+          }
         );
         logTakeExecutionTelemetry({
           path: 'oneinch',
@@ -705,7 +707,8 @@ export async function takeLiquidation({
     return true;
   } catch (error) {
     config.onOneInchExecutionFailure?.({
-      preBroadcast: !attemptedSubmission,
+      preBroadcast:
+        !attemptedSubmission && !isNonceConsumedTransactionError(error),
       error: getErrorMessage(error),
     });
     logger.error(

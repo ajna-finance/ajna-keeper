@@ -4,6 +4,7 @@ import {
   ExternalTakePathKind,
   HybridGasQuoteFailureFallbackMode,
   KeeperConfig,
+  LifiDexConfig,
   LiquiditySource,
   PostAuctionDex,
   SushiswapRouterOverrides,
@@ -38,6 +39,11 @@ import {
 import { logger } from '../logging';
 import { ethers } from 'ethers';
 import { MARKET_FACTOR_SCALE } from '../constants';
+import {
+  MAX_LIFI_INTEGRATOR_LENGTH,
+  normalizeLifiApiBaseUrl,
+  validateLifiIntegrator,
+} from './lifi-policy';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -65,7 +71,26 @@ const VALIDATION_BOUNDS = {
   maxExecutionsPerPoolPerRun: 10,
   maxInFlightRouteProbes: 16,
   maxOneInchAggregationExecutorAllowlistEntries: 64,
+  maxLifiQuoteTimeoutMs: 10_000,
+  maxLifiQuoteAgeMs: 60_000,
+  maxLifiSlippage: 0.5,
+  maxLifiPriceImpact: 0.5,
+  maxLifiIntegratorLength: MAX_LIFI_INTEGRATOR_LENGTH,
+  maxLifiAllowlistEntries: 128,
+  maxLifiSelectorsPerTarget: 32,
 };
+const LIFI_BROAD_FILTER_KEYWORDS = new Set([
+  '',
+  'all',
+  'default',
+  'none',
+  '[]',
+]);
+const LIFI_UNSUPPORTED_FILTER_KEYWORDS = new Set([
+  'feecollection',
+  'fee_collection',
+  'fee-collection',
+]);
 
 function validateQuoteDenominatedGasPolicy(
   config: KeeperConfig,
@@ -290,6 +315,9 @@ function getEffectiveTakeGasOverrideSources(
   if (externalTakePaths.has('oneinch')) {
     sources.add(LiquiditySource.ONEINCH);
   }
+  if (externalTakePaths.has('lifi')) {
+    sources.add(LiquiditySource.LIFI);
+  }
   return sources;
 }
 
@@ -320,7 +348,7 @@ function validateAllowedExternalTakePaths(
   for (const path of paths) {
     if (!EXTERNAL_TAKE_PATHS.has(path)) {
       throw new Error(
-        'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch and factory'
+        'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch, factory, and lifi'
       );
     }
     if (seen.has(path)) {
@@ -431,6 +459,429 @@ function validateOneInchAggregationExecutorAllowlist(
   }
 }
 
+function validateCanonicalChainIdKey(chainId: string, fieldName: string): void {
+  const parsedChainId = Number(chainId);
+  if (
+    !/^[1-9]\d*$/.test(chainId) ||
+    !Number.isInteger(parsedChainId) ||
+    parsedChainId <= 0 ||
+    String(parsedChainId) !== chainId
+  ) {
+    throw new Error(
+      `${fieldName} entries must use canonical positive integer chain ID keys`
+    );
+  }
+}
+
+function validateLifiFilterList(params: {
+  values: string[] | undefined;
+  fieldName: string;
+  mode: 'canary' | 'production';
+  allowBroadExchangeFilters?: boolean;
+}): Set<string> {
+  const normalized = new Set<string>();
+  if (params.values === undefined) {
+    return normalized;
+  }
+  if (!Array.isArray(params.values)) {
+    throw new Error(`${params.fieldName} must be an array of exchange keys`);
+  }
+  for (const value of params.values) {
+    if (typeof value !== 'string') {
+      throw new Error(`${params.fieldName} entries must be exchange keys`);
+    }
+    const key = value.trim().toLowerCase();
+    if (
+      LIFI_BROAD_FILTER_KEYWORDS.has(key) &&
+      !(params.mode === 'canary' && params.allowBroadExchangeFilters === true)
+    ) {
+      throw new Error(
+        `${params.fieldName} cannot use broad LI.FI filter keyword ${JSON.stringify(value)} outside canary allowBroadExchangeFilters mode`
+      );
+    }
+    if (LIFI_UNSUPPORTED_FILTER_KEYWORDS.has(key)) {
+      throw new Error(
+        `${params.fieldName} cannot use unsupported LI.FI filter keyword ${JSON.stringify(value)}`
+      );
+    }
+    if (normalized.has(key)) {
+      throw new Error(`${params.fieldName} cannot contain duplicate entries`);
+    }
+    normalized.add(key);
+  }
+  return normalized;
+}
+
+function validateNoLifiFilterConflicts(params: {
+  allow: Set<string>;
+  deny: Set<string>;
+  prefer: Set<string>;
+}): void {
+  for (const key of Array.from(params.allow)) {
+    if (params.prefer.has(key)) {
+      throw new Error(
+        `KeeperConfig.dex.lifi exchange filter ${key} cannot appear in both allowExchanges and preferExchanges`
+      );
+    }
+    if (params.deny.has(key)) {
+      throw new Error(
+        `KeeperConfig.dex.lifi exchange filter ${key} cannot appear in both allowExchanges and denyExchanges`
+      );
+    }
+  }
+  for (const key of Array.from(params.prefer)) {
+    if (params.deny.has(key)) {
+      throw new Error(
+        `KeeperConfig.dex.lifi exchange filter ${key} cannot appear in both preferExchanges and denyExchanges`
+      );
+    }
+  }
+}
+
+function validateAddressAllowlist(params: {
+  value: { [chainId: number]: string[] } | undefined;
+  fieldName: string;
+  requiredChainId?: number;
+  required?: boolean;
+}): Map<number, Set<string>> {
+  if (params.value === undefined) {
+    if (params.required) {
+      throw new Error(`${params.fieldName} is required`);
+    }
+    return new Map();
+  }
+  if (
+    typeof params.value !== 'object' ||
+    params.value === null ||
+    Array.isArray(params.value)
+  ) {
+    throw new Error(`${params.fieldName} must be an object keyed by chainId`);
+  }
+
+  const addressesByChain = new Map<number, Set<string>>();
+  for (const [chainId, addresses] of Object.entries(params.value)) {
+    validateCanonicalChainIdKey(chainId, params.fieldName);
+    if (!Array.isArray(addresses) || addresses.length === 0) {
+      throw new Error(`${params.fieldName}.${chainId} must be non-empty`);
+    }
+    if (addresses.length > VALIDATION_BOUNDS.maxLifiAllowlistEntries) {
+      throw new Error(
+        `${params.fieldName}.${chainId} cannot contain more than ${VALIDATION_BOUNDS.maxLifiAllowlistEntries} addresses`
+      );
+    }
+    const seen = new Set<string>();
+    for (const address of addresses) {
+      if (typeof address !== 'string' || !ethers.utils.isAddress(address)) {
+        throw new Error(
+          `${params.fieldName}.${chainId} contains invalid address ${String(address)}`
+        );
+      }
+      const normalizedAddress = ethers.utils.getAddress(address).toLowerCase();
+      if (normalizedAddress === ethers.constants.AddressZero.toLowerCase()) {
+        throw new Error(
+          `${params.fieldName}.${chainId} cannot contain zero address`
+        );
+      }
+      if (seen.has(normalizedAddress)) {
+        throw new Error(
+          `${params.fieldName}.${chainId} cannot contain duplicate addresses`
+        );
+      }
+      seen.add(normalizedAddress);
+      const numericChainId = Number(chainId);
+      const chainAddresses =
+        addressesByChain.get(numericChainId) ?? new Set<string>();
+      chainAddresses.add(normalizedAddress);
+      addressesByChain.set(numericChainId, chainAddresses);
+    }
+  }
+
+  if (
+    params.requiredChainId !== undefined &&
+    !Object.prototype.hasOwnProperty.call(params.value, params.requiredChainId)
+  ) {
+    throw new Error(
+      `${params.fieldName}.${params.requiredChainId} is required`
+    );
+  }
+  return addressesByChain;
+}
+
+function validateSelectorAllowlist(params: {
+  value: { [chainId: number]: { [callTarget: string]: string[] } } | undefined;
+  fieldName: string;
+  requiredChainId?: number;
+  requiredCallTargetsByChain?: Map<number, Set<string>>;
+  required?: boolean;
+}): void {
+  if (params.value === undefined) {
+    if (params.required) {
+      throw new Error(`${params.fieldName} is required`);
+    }
+    return;
+  }
+  if (
+    typeof params.value !== 'object' ||
+    params.value === null ||
+    Array.isArray(params.value)
+  ) {
+    throw new Error(`${params.fieldName} must be an object keyed by chainId`);
+  }
+
+  let sawRequiredChain = false;
+  const sawChains = new Set<number>();
+  for (const [chainId, selectorsByTarget] of Object.entries(params.value)) {
+    validateCanonicalChainIdKey(chainId, params.fieldName);
+    const numericChainId = Number(chainId);
+    sawChains.add(numericChainId);
+    if (
+      typeof selectorsByTarget !== 'object' ||
+      selectorsByTarget === null ||
+      Array.isArray(selectorsByTarget)
+    ) {
+      throw new Error(
+        `${params.fieldName}.${chainId} must be an object keyed by call target`
+      );
+    }
+    if (Object.keys(selectorsByTarget).length === 0) {
+      throw new Error(`${params.fieldName}.${chainId} must be non-empty`);
+    }
+    const normalizedTargets = new Set<string>();
+    for (const [target, selectors] of Object.entries(selectorsByTarget)) {
+      if (!ethers.utils.isAddress(target)) {
+        throw new Error(
+          `${params.fieldName}.${chainId} contains invalid call target ${target}`
+        );
+      }
+      const normalizedTarget = ethers.utils.getAddress(target).toLowerCase();
+      normalizedTargets.add(normalizedTarget);
+      const requiredCallTargets =
+        params.requiredCallTargetsByChain?.get(numericChainId);
+      if (
+        params.requiredCallTargetsByChain !== undefined &&
+        (requiredCallTargets === undefined ||
+          !requiredCallTargets.has(normalizedTarget))
+      ) {
+        throw new Error(
+          `${params.fieldName}.${chainId}.${target} is not present in callTargetAllowlist.${chainId}`
+        );
+      }
+      if (!Array.isArray(selectors) || selectors.length === 0) {
+        throw new Error(
+          `${params.fieldName}.${chainId}.${target} must be non-empty`
+        );
+      }
+      if (selectors.length > VALIDATION_BOUNDS.maxLifiSelectorsPerTarget) {
+        throw new Error(
+          `${params.fieldName}.${chainId}.${target} cannot contain more than ${VALIDATION_BOUNDS.maxLifiSelectorsPerTarget} selectors`
+        );
+      }
+      const seenSelectors = new Set<string>();
+      for (const selector of selectors) {
+        if (
+          typeof selector !== 'string' ||
+          !/^0x[0-9a-fA-F]{8}$/.test(selector)
+        ) {
+          throw new Error(
+            `${params.fieldName}.${chainId}.${target} contains invalid selector ${String(selector)}`
+          );
+        }
+        const normalizedSelector = selector.toLowerCase();
+        if (seenSelectors.has(normalizedSelector)) {
+          throw new Error(
+            `${params.fieldName}.${chainId}.${target} cannot contain duplicate selectors`
+          );
+        }
+        seenSelectors.add(normalizedSelector);
+      }
+    }
+
+    if (
+      params.requiredChainId !== undefined &&
+      numericChainId === params.requiredChainId
+    ) {
+      sawRequiredChain = true;
+    }
+
+    const requiredCallTargets =
+      params.requiredCallTargetsByChain?.get(numericChainId);
+    if (requiredCallTargets !== undefined) {
+      for (const callTarget of Array.from(requiredCallTargets)) {
+        if (!normalizedTargets.has(callTarget)) {
+          throw new Error(
+            `${params.fieldName}.${chainId} must include selectors for every configured LI.FI call target`
+          );
+        }
+      }
+    }
+  }
+
+  if (params.requiredChainId !== undefined && !sawRequiredChain) {
+    throw new Error(
+      `${params.fieldName}.${params.requiredChainId} is required`
+    );
+  }
+  for (const chainId of Array.from(
+    params.requiredCallTargetsByChain?.keys() ?? []
+  )) {
+    if (!sawChains.has(chainId)) {
+      throw new Error(`${params.fieldName}.${chainId} is required`);
+    }
+  }
+}
+
+function validateLifiDexConfig(params: {
+  config: LifiDexConfig | undefined;
+  fieldName: string;
+  chainId?: number;
+  requireProduction: boolean;
+}): void {
+  const lifi = params.config;
+  if (!lifi) {
+    throw new Error(`${params.fieldName} required when LI.FI is enabled`);
+  }
+  if (lifi.mode !== 'canary' && lifi.mode !== 'production') {
+    throw new Error(`${params.fieldName}.mode must be canary or production`);
+  }
+  if (params.requireProduction && lifi.mode !== 'production') {
+    throw new Error(
+      `${params.fieldName}.mode must be production for live LI.FI external takes`
+    );
+  }
+  if (lifi.apiBaseUrl !== undefined) {
+    normalizeLifiApiBaseUrl(lifi.apiBaseUrl, `${params.fieldName}.apiBaseUrl`, {
+      requireHttps: lifi.mode === 'production',
+    });
+  }
+  if (
+    lifi.apiKeyEnvVar !== undefined &&
+    (typeof lifi.apiKeyEnvVar !== 'string' ||
+      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(lifi.apiKeyEnvVar))
+  ) {
+    throw new Error(
+      `${params.fieldName}.apiKeyEnvVar must be an environment variable name`
+    );
+  }
+  if (lifi.integrator !== undefined) {
+    validateLifiIntegrator(lifi.integrator, `${params.fieldName}.integrator`);
+  }
+  requireOptionalIntegerRange(
+    lifi.quoteTimeoutMs,
+    1,
+    VALIDATION_BOUNDS.maxLifiQuoteTimeoutMs,
+    `${params.fieldName}.quoteTimeoutMs must be an integer between 1 and ${VALIDATION_BOUNDS.maxLifiQuoteTimeoutMs}`
+  );
+  requireOptionalIntegerRange(
+    lifi.quoteFailureThreshold,
+    1,
+    100,
+    `${params.fieldName}.quoteFailureThreshold must be an integer between 1 and 100`
+  );
+  requireOptionalPositive(
+    lifi.quoteFailureCooldownMs,
+    `${params.fieldName}.quoteFailureCooldownMs must be greater than 0`
+  );
+  requireOptionalIntegerRange(
+    lifi.maxQuoteAgeMs,
+    1,
+    VALIDATION_BOUNDS.maxLifiQuoteAgeMs,
+    `${params.fieldName}.maxQuoteAgeMs must be an integer between 1 and ${VALIDATION_BOUNDS.maxLifiQuoteAgeMs}`
+  );
+  if (
+    lifi.defaultSlippage !== undefined &&
+    (!isFiniteNumber(lifi.defaultSlippage) ||
+      lifi.defaultSlippage <= 0 ||
+      lifi.defaultSlippage > VALIDATION_BOUNDS.maxLifiSlippage)
+  ) {
+    throw new Error(
+      `${params.fieldName}.defaultSlippage must be greater than 0 and at most ${VALIDATION_BOUNDS.maxLifiSlippage}`
+    );
+  }
+  if (
+    lifi.maxPriceImpact !== undefined &&
+    (!isFiniteNumber(lifi.maxPriceImpact) ||
+      lifi.maxPriceImpact <= 0 ||
+      lifi.maxPriceImpact > VALIDATION_BOUNDS.maxLifiPriceImpact)
+  ) {
+    throw new Error(
+      `${params.fieldName}.maxPriceImpact must be greater than 0 and at most ${VALIDATION_BOUNDS.maxLifiPriceImpact}`
+    );
+  }
+  if (
+    lifi.feeCostPolicy !== undefined &&
+    lifi.feeCostPolicy !== 'included_only' &&
+    lifi.feeCostPolicy !== 'reject_all'
+  ) {
+    throw new Error(
+      `${params.fieldName}.feeCostPolicy must be included_only or reject_all`
+    );
+  }
+  if (lifi.allowBroadExchangeFilters === true && lifi.mode !== 'canary') {
+    throw new Error(
+      `${params.fieldName}.allowBroadExchangeFilters is canary-only`
+    );
+  }
+
+  const allow = validateLifiFilterList({
+    values: lifi.allowExchanges,
+    fieldName: `${params.fieldName}.allowExchanges`,
+    mode: lifi.mode,
+    allowBroadExchangeFilters: lifi.allowBroadExchangeFilters,
+  });
+  const deny = validateLifiFilterList({
+    values: lifi.denyExchanges,
+    fieldName: `${params.fieldName}.denyExchanges`,
+    mode: lifi.mode,
+    allowBroadExchangeFilters: lifi.allowBroadExchangeFilters,
+  });
+  const prefer = validateLifiFilterList({
+    values: lifi.preferExchanges,
+    fieldName: `${params.fieldName}.preferExchanges`,
+    mode: lifi.mode,
+    allowBroadExchangeFilters: lifi.allowBroadExchangeFilters,
+  });
+  validateNoLifiFilterConflicts({ allow, deny, prefer });
+  if (lifi.mode === 'production' && allow.size === 0) {
+    throw new Error(
+      `${params.fieldName}.allowExchanges must be non-empty in production`
+    );
+  }
+
+  const production = lifi.mode === 'production';
+  const callTargets = validateAddressAllowlist({
+    value: lifi.callTargetAllowlist,
+    fieldName: `${params.fieldName}.callTargetAllowlist`,
+    requiredChainId: production ? params.chainId : undefined,
+    required: production,
+  });
+  const approvalSpenders = validateAddressAllowlist({
+    value: lifi.approvalSpenderAllowlist,
+    fieldName: `${params.fieldName}.approvalSpenderAllowlist`,
+    requiredChainId: production ? params.chainId : undefined,
+    required: production,
+  });
+  if (production) {
+    for (const configuredChainId of Array.from(callTargets.keys())) {
+      if (!approvalSpenders.has(configuredChainId)) {
+        throw new Error(
+          `${params.fieldName}.approvalSpenderAllowlist.${configuredChainId} is required`
+        );
+      }
+    }
+  }
+  validateSelectorAllowlist({
+    value: 'selectorAllowlist' in lifi ? lifi.selectorAllowlist : undefined,
+    fieldName: `${params.fieldName}.selectorAllowlist`,
+    requiredChainId: production ? params.chainId : undefined,
+    requiredCallTargetsByChain: callTargets,
+    required: production,
+  });
+  validateSelectorAllowlist({
+    value: lifi.observedSelectorAllowlist,
+    fieldName: `${params.fieldName}.observedSelectorAllowlist`,
+  });
+}
+
 function getConfiguredTakeWriteMode(
   config: KeeperConfig
 ): TakeWriteTransportMode | undefined {
@@ -511,10 +962,11 @@ export function validateTakeSettings(
       config.liquiditySource !== LiquiditySource.ONEINCH &&
       config.liquiditySource !== LiquiditySource.UNISWAPV3 &&
       config.liquiditySource !== LiquiditySource.SUSHISWAP &&
-      config.liquiditySource !== LiquiditySource.CURVE
+      config.liquiditySource !== LiquiditySource.CURVE &&
+      config.liquiditySource !== LiquiditySource.LIFI
     ) {
       throw new Error(
-        'TakeSettings: liquiditySource must be ONEINCH or UNISWAPV3 or SUSHISWAP or CURVE'
+        'TakeSettings: liquiditySource must be ONEINCH or UNISWAPV3 or SUSHISWAP or CURVE or LIFI'
       );
     }
 
@@ -661,6 +1113,25 @@ export function validateTakeSettings(
           'TakeSettings: network.tokenAddresses required when liquiditySource is CURVE'
         );
       }
+    }
+
+    if (config.liquiditySource === LiquiditySource.LIFI) {
+      if (!keeperConfig.takers?.factory) {
+        throw new Error(
+          'TakeSettings: takers.factory required when liquiditySource is LIFI'
+        );
+      }
+      if (!keeperConfig.takers.contracts?.['Lifi']) {
+        throw new Error(
+          'TakeSettings: takers.contracts.Lifi required when liquiditySource is LIFI'
+        );
+      }
+      validateLifiDexConfig({
+        config: keeperConfig.dex?.lifi,
+        fieldName: 'KeeperConfig.dex.lifi',
+        chainId,
+        requireProduction: keeperConfig.runtime?.dryRun !== true,
+      });
     }
   }
 
@@ -928,13 +1399,13 @@ export function validateAutoDiscoverConfig(
         );
       }
       if (
-        !externalTakePaths.has('oneinch') ||
         !externalTakePaths.has('factory') ||
+        (!externalTakePaths.has('oneinch') && !externalTakePaths.has('lifi')) ||
         (takePolicy.externalTakeRouteSelectionMode !== undefined &&
           takePolicy.externalTakeRouteSelectionMode !== 'maximize_profit')
       ) {
         logger.warn(
-          'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first is only eligible for hybrid maximize_profit routes with both oneinch and factory enabled'
+          'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first is only eligible for hybrid maximize_profit routes with factory and at least one aggregator path enabled'
         );
       }
     }
@@ -968,6 +1439,14 @@ export function validateAutoDiscoverConfig(
         'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
       );
     }
+    if (
+      externalTakePaths.has('lifi') &&
+      takePolicy.validateRouteDeployments !== true
+    ) {
+      throw new Error(
+        'AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include lifi'
+      );
+    }
     if (externalTakePaths.has('oneinch')) {
       if (
         !config.dex?.oneInch?.aggregationExecutorAllowlist ||
@@ -986,7 +1465,17 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
-    if (externalTakePaths.has('factory') && externalTakePaths.has('oneinch')) {
+    if (externalTakePaths.has('lifi')) {
+      if (takePolicy.dexGasOverrides?.[LiquiditySource.LIFI] === undefined) {
+        throw new Error(
+          'AutoDiscoverConfig.take: dexGasOverrides.LIFI required when resolved external take paths include lifi'
+        );
+      }
+    }
+    if (
+      externalTakePaths.size > 1 ||
+      (externalTakePaths.has('factory') && externalTakePaths.has('oneinch'))
+    ) {
       validateQuoteDenominatedGasPolicy(
         config,
         'AutoDiscoverConfig.take: hybrid external take route ranking',
@@ -1069,6 +1558,17 @@ export function validateAutoDiscoverConfig(
         {
           ...discoveredTake,
           liquiditySource: LiquiditySource.ONEINCH,
+        },
+        config,
+        chainId
+      );
+    }
+
+    if (externalTakePaths.has('lifi')) {
+      validateTakeSettings(
+        {
+          ...discoveredTake,
+          liquiditySource: LiquiditySource.LIFI,
         },
         config,
         chainId

@@ -3,7 +3,11 @@ import { Wallet, constants, providers, utils } from 'ethers';
 import { network } from 'hardhat';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
-import { SushiSwapKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
+import {
+  LifiKeeperTaker__factory,
+  SushiSwapKeeperTaker__factory,
+} from '../../typechain-types/factories/contracts/takers';
+import { MockPoolDeployer__factory } from '../../typechain-types/factories/contracts/mocks';
 import { LiquiditySource } from '../../src/config';
 
 function getProvider() {
@@ -92,6 +96,37 @@ describe('Factory taker registration', () => {
     expect(await factory.takerContracts(LiquiditySource.SUSHISWAP)).to.equal(
       taker.address
     );
+  });
+
+  it('rejects takers owned by a different keeper authority', async () => {
+    const owner = Wallet.createRandom().connect(getProvider());
+    const otherOwner = Wallet.createRandom().connect(getProvider());
+    await fundSigner(owner.address);
+    await fundSigner(otherOwner.address);
+
+    const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
+    await poolDeployer.deployed();
+
+    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+      poolDeployer.address
+    );
+    await factory.deployed();
+
+    const taker = await new LifiKeeperTaker__factory(otherOwner).deploy(
+      poolDeployer.address,
+      factory.address
+    );
+    await taker.deployed();
+
+    let error: unknown;
+    try {
+      await factory.setTaker(LiquiditySource.LIFI, taker.address);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).to.be.instanceOf(Error);
+    expect((error as Error).message).to.contain('Owner mismatch');
   });
 
   it('rejects takers bound to a different Ajna pool factory', async () => {
