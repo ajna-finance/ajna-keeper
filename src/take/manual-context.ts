@@ -3,7 +3,7 @@ import {
   LiquiditySource,
   PoolConfig,
   SushiswapRouterOverrides,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
 } from '../config';
 import { RequireFields } from '../utils';
 import { ArbTakeStrategy, createArbTakeStrategy } from './arb-strategy';
@@ -37,7 +37,7 @@ export interface ManualOneInchContextConfig
 export interface ManualFactoryContextConfig
   extends ManualTakeCommonContextConfig {
   keeperTakerFactory?: string;
-  universalRouterOverrides?: UniversalRouterOverrides;
+  uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
@@ -111,7 +111,7 @@ export function createManualFactoryTakeContext(params: {
   return {
     externalTakeAdapter: createFactoryTakeAdapter({
       quoteConfig: {
-        universalRouterOverrides: params.config.universalRouterOverrides,
+        uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
         sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
         curveRouterOverrides: params.config.curveRouterOverrides,
         tokenAddresses: params.config.tokenAddresses,
@@ -125,7 +125,7 @@ export function createManualFactoryTakeContext(params: {
     externalExecutionConfig: {
       dryRun: params.config.dryRun,
       keeperTakerFactory: params.config.keeperTakerFactory,
-      universalRouterOverrides: params.config.universalRouterOverrides,
+      uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
       sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
       curveRouterOverrides: params.config.curveRouterOverrides,
       tokenAddresses: params.config.tokenAddresses,

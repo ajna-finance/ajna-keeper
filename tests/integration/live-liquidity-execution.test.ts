@@ -12,7 +12,7 @@ import {
   configureAjna,
   LiquiditySource,
   PoolConfig,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
 } from '../../src/config';
 import { SECONDS_PER_DAY } from '../../src/constants';
 import { getLoansToKick, kick } from '../../src/kick';
@@ -65,7 +65,7 @@ interface LiveLiquidityFixture {
   timeToKick: number;
   timeAfterKick: number;
   quoteToken: string;
-  uniswap: UniversalRouterOverrides;
+  uniswap: UniswapV3RouterOverrides;
   routeQuoteBudgetPerCandidate?: number;
   minimumAvailableUniswapRoutes?: number;
 }
@@ -86,8 +86,7 @@ const MAINNET_UNISWAP_SOL_WETH_FIXTURE: LiveLiquidityFixture = {
   quoteToken: MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress,
   uniswap: {
     // Pinned for the mainnet fork block used by MAINNET_CONFIG.BLOCK_NUMBER.
-    universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
-    permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+    swapRouter02Address: MAINNET_CONFIG.UNISWAP_V3_SWAP_ROUTER_02,
     poolFactoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
     quoterV2Address: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e',
     wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
@@ -248,7 +247,7 @@ async function expectLiveUniswapRoutesAvailable(params: {
   const routes = getFactoryRouteCandidates({
     defaultLiquiditySource: LiquiditySource.UNISWAPV3,
     config: {
-      universalRouterOverrides: params.fixture.uniswap,
+      uniswapV3RouterOverrides: params.fixture.uniswap,
     },
   });
   expect(
@@ -262,7 +261,7 @@ async function expectLiveUniswapRoutesAvailable(params: {
       pool: params.pool,
       signer: params.signer,
       config: {
-        universalRouterOverrides: params.fixture.uniswap,
+        uniswapV3RouterOverrides: params.fixture.uniswap,
       },
       runtimeCache: params.runtimeCache,
     });
@@ -271,6 +270,46 @@ async function expectLiveUniswapRoutesAvailable(params: {
     availableRoutes.length,
     `expected at least ${minimumAvailableRoutes} initialized real Uniswap V3 pool(s)`
   ).to.be.at.least(minimumAvailableRoutes);
+}
+
+function expectApprovedMinOutInvariants(quoteEvaluation: {
+  approvedMinOutRaw?: BigNumber;
+  routeMinOutRaw?: BigNumber;
+  profitMinOutRaw?: BigNumber;
+  routeProfitability?: {
+    auctionRepayRequirementQuoteRaw?: BigNumber;
+  };
+}) {
+  const approvedMinOutRaw = quoteEvaluation.approvedMinOutRaw;
+  expect(approvedMinOutRaw, 'approved min-out should be present').to.not.equal(
+    undefined
+  );
+
+  const floors = [
+    {
+      label: 'route slippage floor',
+      value: quoteEvaluation.routeMinOutRaw,
+    },
+    {
+      label: 'profit floor',
+      value: quoteEvaluation.profitMinOutRaw,
+    },
+    {
+      label: 'auction repayment floor',
+      value:
+        quoteEvaluation.routeProfitability?.auctionRepayRequirementQuoteRaw,
+    },
+  ].filter(
+    (floor): floor is { label: string; value: BigNumber } =>
+      floor.value !== undefined
+  );
+
+  for (const floor of floors) {
+    expect(
+      approvedMinOutRaw!.gte(floor.value),
+      `approved min-out should preserve ${floor.label}`
+    ).to.be.true;
+  }
 }
 
 async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
@@ -309,7 +348,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
     liquidationStatus.collateral,
     buildLiveUniswapPoolConfig(fixture, 0.000001),
     {
-      universalRouterOverrides: fixture.uniswap,
+      uniswapV3RouterOverrides: fixture.uniswap,
     },
     signer,
     runtimeCache,
@@ -329,7 +368,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
     liquidationStatus.collateral,
     poolConfig,
     {
-      universalRouterOverrides: fixture.uniswap,
+      uniswapV3RouterOverrides: fixture.uniswap,
     },
     signer,
     runtimeCache,
@@ -349,6 +388,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
     ),
     'route quote should exceed Ajna repayment floor before execution'
   ).to.be.true;
+  expectApprovedMinOutInvariants(quoteEvaluation);
 
   const liquidation = await buildLiveFactoryLiquidationPlan({
     pool,
@@ -367,7 +407,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
     config: {
       dryRun: false,
       keeperTakerFactory: factory.address,
-      universalRouterOverrides: fixture.uniswap,
+      uniswapV3RouterOverrides: fixture.uniswap,
       runtimeCache,
     },
   });

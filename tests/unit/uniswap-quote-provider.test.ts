@@ -19,7 +19,6 @@ describe('UniswapV3QuoteProvider', () => {
   describe('isAvailable()', () => {
     it('should return true when all required config is present', () => {
       const config = {
-        universalRouterAddress: '0xUniversalRouter123',
         poolFactoryAddress: '0xFactory123',
         defaultFeeTier: 3000,
         wethAddress: '0xWeth123',
@@ -33,7 +32,6 @@ describe('UniswapV3QuoteProvider', () => {
     it('should return true for real Hemi configuration', () => {
       // Real working Hemi configuration
       const hemiConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -46,7 +44,6 @@ describe('UniswapV3QuoteProvider', () => {
 
     it('should return false when QuoterV2 address is missing', () => {
       const config = {
-        universalRouterAddress: '0xUniversalRouter123',
         poolFactoryAddress: '0xFactory123',
         defaultFeeTier: 3000,
         wethAddress: '0xWeth123',
@@ -57,7 +54,7 @@ describe('UniswapV3QuoteProvider', () => {
       expect(provider.isAvailable()).to.be.false;
     });
 
-    it('should return false when universalRouterAddress is missing', () => {
+    it('should not require universalRouterAddress for quote-only availability', () => {
       const config = {
         // Missing universalRouterAddress
         poolFactoryAddress: '0xFactory123',
@@ -67,12 +64,11 @@ describe('UniswapV3QuoteProvider', () => {
       };
 
       const provider = new UniswapV3QuoteProvider(mockSigner, config as any);
-      expect(provider.isAvailable()).to.be.false;
+      expect(provider.isAvailable()).to.be.true;
     });
 
     it('should return false when poolFactoryAddress is missing', () => {
       const config = {
-        universalRouterAddress: '0xUniversalRouter123',
         // Missing poolFactoryAddress
         defaultFeeTier: 3000,
         wethAddress: '0xWeth123',
@@ -85,7 +81,6 @@ describe('UniswapV3QuoteProvider', () => {
 
     it('should return false when wethAddress is missing', () => {
       const config = {
-        universalRouterAddress: '0xUniversalRouter123',
         poolFactoryAddress: '0xFactory123',
         defaultFeeTier: 3000,
         // Missing wethAddress
@@ -100,7 +95,6 @@ describe('UniswapV3QuoteProvider', () => {
   describe('getQuoterAddress()', () => {
     it('should return the configured QuoterV2 address', () => {
       const config = {
-        universalRouterAddress: '0xUniversalRouter123',
         poolFactoryAddress: '0xFactory123',
         defaultFeeTier: 3000,
         wethAddress: '0xWeth123',
@@ -113,7 +107,6 @@ describe('UniswapV3QuoteProvider', () => {
 
     it('should return real Hemi QuoterV2 address', () => {
       const hemiConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -128,7 +121,6 @@ describe('UniswapV3QuoteProvider', () => {
 
     it('should return undefined when QuoterV2 address is not configured', () => {
       const config = {
-        universalRouterAddress: '0xUniversalRouter123',
         poolFactoryAddress: '0xFactory123',
         defaultFeeTier: 3000,
         wethAddress: '0xWeth123',
@@ -145,7 +137,6 @@ describe('UniswapV3QuoteProvider', () => {
       const clock = sinon.useFakeTimers();
       const getPoolStub = sinon.stub().resolves(ethers.constants.AddressZero);
       const provider = new UniswapV3QuoteProvider(mockSigner, {
-        universalRouterAddress: '0xUniversalRouter123',
         poolFactoryAddress: '0xFactory123',
         defaultFeeTier: 3000,
         wethAddress: '0xWeth123',
@@ -172,7 +163,6 @@ describe('UniswapV3QuoteProvider', () => {
   describe('getQuote() - early validation', () => {
     it('should return failure when QuoterV2 address is not configured', async () => {
       const config = {
-        universalRouterAddress: '0xUniversalRouter123',
         poolFactoryAddress: '0xFactory123',
         defaultFeeTier: 3000,
         wethAddress: '0xWeth123',
@@ -194,7 +184,6 @@ describe('UniswapV3QuoteProvider', () => {
 
     it('should validate inputs with real Hemi token addresses', async () => {
       const hemiConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -222,26 +211,22 @@ describe('UniswapV3QuoteProvider', () => {
         name: 'Ethereum Mainnet',
         chainId: 1,
         quoterV2: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e', // Real Ethereum QuoterV2
-        universalRouter: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
       },
       {
         name: 'Avalanche',
         chainId: 43114,
         quoterV2: '0xbe0F5544EC67e9B3b2D979aaA43f18Fd87E6257F', // Real Avalanche QuoterV2
-        universalRouter: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
       },
       {
         name: 'Hemi',
         chainId: 43111,
         quoterV2: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5', // Real Hemi QuoterV2
-        universalRouter: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
       },
     ];
 
     chainConfigs.forEach((chain) => {
       it(`should handle ${chain.name} configuration correctly`, () => {
         const config = {
-          universalRouterAddress: chain.universalRouter,
           poolFactoryAddress: '0xFactory123', // Chain-specific factory would go here
           defaultFeeTier: 3000,
           wethAddress: '0xWETH123', // Chain-specific WETH would go here
@@ -257,7 +242,6 @@ describe('UniswapV3QuoteProvider', () => {
 
     it('should handle missing QuoterV2 for unsupported chains', () => {
       const unsupportedChainConfig = {
-        universalRouterAddress: '0xUniversalRouter123',
         poolFactoryAddress: '0xFactory123',
         defaultFeeTier: 3000,
         wethAddress: '0xWETH123',
@@ -285,7 +269,6 @@ describe('UniswapV3QuoteProvider', () => {
       ];
 
       const baseConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         wethAddress: '0x4200000000000000000000000000000000000006',
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
@@ -302,16 +285,12 @@ describe('UniswapV3QuoteProvider', () => {
       });
     });
 
-    it('should handle complete vs partial configuration gracefully', () => {
+    it('should handle complete quote configuration gracefully', () => {
       const completeHemiConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-        // Extra fields that might be present
-        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
-        defaultSlippage: 0.5,
       };
 
       const provider = new UniswapV3QuoteProvider(
@@ -319,7 +298,6 @@ describe('UniswapV3QuoteProvider', () => {
         completeHemiConfig
       );
 
-      // Should work even with extra fields
       expect(provider.isAvailable()).to.be.true;
       expect(provider.getQuoterAddress()).to.equal(
         '0xcBa55304013187D49d4012F4d7e4B63a04405cd5'
@@ -330,7 +308,6 @@ describe('UniswapV3QuoteProvider', () => {
   describe('Real Production Integration Scenarios', () => {
     it('should integrate with real pool addresses and amounts', async () => {
       const hemiConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -360,7 +337,6 @@ describe('UniswapV3QuoteProvider', () => {
     it('should handle mixed strategy pools configuration', () => {
       // Config that supports both arbTake and external take (like real Hemi pools)
       const mixedStrategyConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',

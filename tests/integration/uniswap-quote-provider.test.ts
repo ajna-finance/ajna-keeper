@@ -3,10 +3,14 @@ import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 
+type UniswapV3QuoteProviderConfig = ConstructorParameters<
+  typeof UniswapV3QuoteProvider
+>[1];
+
 describe('Uniswap V3 Quote Provider', () => {
-  let mockSigner: any;
+  let mockSigner: ethers.Signer;
   let quoteProvider: UniswapV3QuoteProvider;
-  let validConfig: any;
+  let validConfig: UniswapV3QuoteProviderConfig;
 
   beforeEach(() => {
     // Reset sinon after each test
@@ -19,11 +23,10 @@ describe('Uniswap V3 Quote Provider', () => {
       provider: {
         getCode: sinon.stub().resolves('0x1234'), // Mock contract exists
       },
-    };
+    } as unknown as ethers.Signer;
 
     // Valid Uniswap V3 configuration (based on your Hemi config)
     validConfig = {
-      universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
       poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
       defaultFeeTier: 3000,
       wethAddress: '0x4200000000000000000000000000000000000006',
@@ -48,14 +51,10 @@ describe('Uniswap V3 Quote Provider', () => {
 
   it('should detect incomplete configuration', async () => {
     const incompleteConfig = {
-      universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
       // Missing required fields
-    };
+    } as UniswapV3QuoteProviderConfig;
 
-    quoteProvider = new UniswapV3QuoteProvider(
-      mockSigner,
-      incompleteConfig as any
-    );
+    quoteProvider = new UniswapV3QuoteProvider(mockSigner, incompleteConfig);
     expect(quoteProvider.isAvailable()).to.be.false;
   });
 
@@ -76,16 +75,15 @@ describe('Uniswap V3 Quote Provider', () => {
 
   it('should handle missing QuoterV2 configuration', async () => {
     const configWithoutQuoter = {
-      universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
       poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
       defaultFeeTier: 3000,
       wethAddress: '0x4200000000000000000000000000000000000006',
       // Missing quoterV2Address
-    };
+    } as UniswapV3QuoteProviderConfig;
 
     const providerWithoutQuoter = new UniswapV3QuoteProvider(
       mockSigner,
-      configWithoutQuoter as any
+      configWithoutQuoter
     );
 
     expect(providerWithoutQuoter.isAvailable()).to.be.false;
@@ -109,8 +107,7 @@ describe('Uniswap V3 Quote Provider', () => {
     );
 
     // Test Mainnet configuration
-    const mainnetConfig = {
-      universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+    const mainnetConfig: UniswapV3QuoteProviderConfig = {
       poolFactoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
       defaultFeeTier: 3000,
       wethAddress: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',

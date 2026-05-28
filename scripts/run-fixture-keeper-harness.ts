@@ -48,8 +48,7 @@ type FixtureSummary = {
   };
   uniswapV3ExternalTake?: {
     routerConfig: {
-      universalRouterAddress: string;
-      permit2Address: string;
+      swapRouter02Address: string;
       poolFactoryAddress: string;
       quoterV2Address: string;
       wethAddress: string;
@@ -510,7 +509,7 @@ async function runDiscoveredTakeAttempt(params: {
         },
       },
       keeperTakerFactory: uniswapV3ExternalTake.deployment.keeperTakerFactory,
-      universalRouterOverrides: uniswapV3ExternalTake.routerConfig,
+      uniswapV3RouterOverrides: uniswapV3ExternalTake.routerConfig,
       tokenAddresses: {
         weth: uniswapV3ExternalTake.routerConfig.wethAddress,
       },
@@ -657,7 +656,7 @@ async function main() {
               UniswapV3:
                 summary.uniswapV3ExternalTake.deployment.uniswapV3Taker,
             },
-            universalRouterOverrides:
+            uniswapV3RouterOverrides:
               summary.uniswapV3ExternalTake.routerConfig,
           },
         });

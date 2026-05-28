@@ -182,20 +182,18 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
 
         // Execute the swap
         // AUDIT FIX: Replace unsafe call with Address.functionCall and validate return
-        bytes memory result = Address.functionCall(
+        Address.functionCall(
             details.swapRouter,
             swapCalldata,
             "SushiSwap swap failed"
         );
-        
-        // Decode and validate output amount
-        uint256 amountOut = abi.decode(result, (uint256));
-        require(amountOut >= amountOutMin, "Insufficient output amount");
 
         _safeApproveWithReset(tokenInContract, details.swapRouter, 0);
 
         uint256 quoteReceived = IERC20(tokenOut).balanceOf(address(this)) - quoteBalanceBefore;
-        if (quoteReceived < quoteAmountDue) revert InsufficientQuoteReceived();
+        if (quoteReceived < amountOutMin || quoteReceived < quoteAmountDue) {
+            revert InsufficientQuoteReceived();
+        }
     }
 
     /// @dev Recovers token balance to owner

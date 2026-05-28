@@ -146,10 +146,9 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
           wethAddress: '0x4200000000000000000000000000000000000006',
-          permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
           defaultFeeTier: 3000,
           defaultSlippage: 0.5,
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
@@ -189,10 +188,9 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
           wethAddress: '0x4200000000000000000000000000000000000006',
-          permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
           defaultFeeTier: 3000,
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
@@ -230,10 +228,12 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-          // Minimal required fields only
+          // Minimal required fields for factory external takes.
         },
       };
 
@@ -269,7 +269,6 @@ describe('Factory Takes Integration Tests', function () {
 
     it('should create quote provider with valid configuration', async () => {
       const validQuoteConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -289,7 +288,6 @@ describe('Factory Takes Integration Tests', function () {
 
     it('should handle quote provider with different fee tiers', async () => {
       const quoteConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 500, // 0.05% tier
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -331,7 +329,6 @@ describe('Factory Takes Integration Tests', function () {
 
     it('should detect missing quote provider configuration', async () => {
       const invalidQuoteConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -349,7 +346,6 @@ describe('Factory Takes Integration Tests', function () {
 
     it('should handle quote provider parameter validation', async () => {
       const quoteConfig = {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         defaultFeeTier: 3000,
         wethAddress: '0x4200000000000000000000000000000000000006',
@@ -411,10 +407,9 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B', // Hemi address
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160', // Hemi SwapRouter02
           wethAddress: '0x4200000000000000000000000000000000000006', // Hemi WETH
-          permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578', // Hemi Permit2
           defaultFeeTier: 3000,
           defaultSlippage: 0.5,
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4', // Hemi factory
@@ -454,10 +449,9 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD', // Mainnet address
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: MAINNET_CONFIG.UNISWAP_V3_SWAP_ROUTER_02, // Mainnet SwapRouter02
           wethAddress: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // Mainnet WETH
-          permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3', // Mainnet Permit2
           defaultFeeTier: 3000,
           defaultSlippage: 0.5,
           poolFactoryAddress: '0x1F98431c8aD98523631AE4a59f267346ea31F984', // Mainnet factory
@@ -502,11 +496,9 @@ describe('Factory Takes Integration Tests', function () {
           takerContracts: {
             UniswapV3: '0x2234567890123456789012345678901234567890',
           },
-          universalRouterOverrides: {
-            universalRouterAddress:
-              '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+          uniswapV3RouterOverrides: {
+            swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
             wethAddress: '0x4200000000000000000000000000000000000006',
-            permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
             defaultFeeTier: feeConfig.tier, // Different fee tier
             poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
             quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
@@ -550,7 +542,7 @@ describe('Factory Takes Integration Tests', function () {
         dryRun: true,
         subgraphUrl: 'http://test-url',
         keeperTakerFactory: '0x1234567890123456789012345678901234567890',
-        // Missing takerContracts and universalRouterOverrides
+        // Missing takerContracts and uniswapV3RouterOverrides
       };
 
       const poolConfig: PoolConfig = {
@@ -574,7 +566,7 @@ describe('Factory Takes Integration Tests', function () {
       expect(true).to.be.true;
     });
 
-    it('should handle missing universalRouterOverrides', async () => {
+    it('should handle missing uniswapV3RouterOverrides', async () => {
       await setupFactoryTakeScenario();
 
       const configWithoutRouterOverrides = {
@@ -584,7 +576,7 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        // Missing universalRouterOverrides
+        // Missing uniswapV3RouterOverrides
       };
 
       const poolConfig: PoolConfig = {
@@ -617,8 +609,10 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -654,8 +648,10 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -694,8 +690,10 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -742,8 +740,10 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -779,8 +779,10 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };
@@ -820,8 +822,10 @@ describe('Factory Takes Integration Tests', function () {
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
+          wethAddress: '0x4200000000000000000000000000000000000006',
+          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         },
       };

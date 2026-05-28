@@ -57,9 +57,8 @@ describe('auto-discover validation', () => {
     dex: {
       oneInch: {},
       uniswapV3: {
-        universalRouter: {
-          universalRouterAddress: '0x5555555555555555555555555555555555555555',
-          permit2Address: '0x6666666666666666666666666666666666666666',
+        router: {
+          swapRouter02Address: '0x5555555555555555555555555555555555555555',
           poolFactoryAddress: '0x7777777777777777777777777777777777777777',
           quoterV2Address: '0x1212121212121212121212121212121212121212',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -290,8 +289,8 @@ describe('auto-discover validation', () => {
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
-    config.dex!.uniswapV3!.universalRouter = {
-      ...config.dex!.uniswapV3!.universalRouter!,
+    config.dex!.uniswapV3!.router = {
+      ...config.dex!.uniswapV3!.router!,
       wethAddress: undefined as unknown as string,
     };
 
@@ -784,7 +783,7 @@ describe('auto-discover validation', () => {
 
   it('treats allowedLiquiditySources as authoritative for source validation', () => {
     const config = baseConfig();
-    delete config.dex!.uniswapV3!.universalRouter;
+    delete config.dex!.uniswapV3!.router;
     config.takers!.contracts = {
       SushiSwap: '0x4444444444444444444444444444444444444444',
     };

@@ -106,8 +106,7 @@ type ExecutePreparedResult = {
 };
 
 type UniswapV3RouterConfig = {
-  universalRouterAddress: string;
-  permit2Address: string;
+  swapRouter02Address: string;
   poolFactoryAddress: string;
   quoterV2Address: string;
   wethAddress: string;
@@ -319,8 +318,7 @@ const BASE_AJNA_ERC20_POOL_FACTORY =
   '0x214f62B5836D83f3D6c4f71F174209097B1A779C';
 const BASE_POOL_INFO_UTILS = '0x97fa9b0909C238D170C1ab3B5c728A3a45BBEcBa';
 const BASE_UNISWAP_DEFAULTS: UniswapV3RouterConfig = {
-  universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
-  permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
+  swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
   poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
   quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
   wethAddress: '0x4200000000000000000000000000000000000006',
@@ -645,6 +643,7 @@ Optional Uniswap V3 external-take setup:
   (Comma-separated tiers to seed/probe. Defaults to 3000,500,10000.
   AJNA_AGENT_UNISWAP_FEE_TIER is always included first.)
 - AJNA_AGENT_UNISWAP_UNIVERSAL_ROUTER_ADDRESS
+- AJNA_AGENT_UNISWAP_SWAP_ROUTER_02_ADDRESS
 - AJNA_AGENT_UNISWAP_PERMIT2_ADDRESS
 - AJNA_AGENT_UNISWAP_POOL_FACTORY_ADDRESS
 - AJNA_AGENT_UNISWAP_QUOTER_V2_ADDRESS
@@ -2033,13 +2032,9 @@ function resolveUniswapV3RouterConfig(params: {
     }
   }
   return {
-    universalRouterAddress: optionalEnv(
-      'AJNA_AGENT_UNISWAP_UNIVERSAL_ROUTER_ADDRESS',
-      BASE_UNISWAP_DEFAULTS.universalRouterAddress
-    ),
-    permit2Address: optionalEnv(
-      'AJNA_AGENT_UNISWAP_PERMIT2_ADDRESS',
-      BASE_UNISWAP_DEFAULTS.permit2Address
+    swapRouter02Address: optionalEnv(
+      'AJNA_AGENT_UNISWAP_SWAP_ROUTER_02_ADDRESS',
+      BASE_UNISWAP_DEFAULTS.swapRouter02Address
     ),
     poolFactoryAddress: optionalEnv(
       'AJNA_AGENT_UNISWAP_POOL_FACTORY_ADDRESS',
@@ -2493,7 +2488,7 @@ function buildKeeperExternalTakeSnippet(params: {
   routerConfig: UniswapV3RouterConfig;
   deployment: ExternalTakeDeploymentSummary;
 }): string {
-  return `// Merge this into an existing Base keeper config.\n// Note: manual kick/take tests against this fresh local pool still need either a\n// local subgraph/indexer or a repo-local subgraph override harness.\n{\n  takers: {\n    factory: '${params.deployment.keeperTakerFactory}',\n    contracts: {\n      UniswapV3: '${params.deployment.uniswapV3Taker}',\n    },\n  },\n  dex: {\n    uniswapV3: {\n      universalRouter: {\n        universalRouterAddress: '${params.routerConfig.universalRouterAddress}',\n        permit2Address: '${params.routerConfig.permit2Address}',\n        poolFactoryAddress: '${params.routerConfig.poolFactoryAddress}',\n        quoterV2Address: '${params.routerConfig.quoterV2Address}',\n        wethAddress: '${params.routerConfig.wethAddress}',\n        defaultFeeTier: ${params.routerConfig.defaultFeeTier},\n        candidateFeeTiers: [${params.routerConfig.candidateFeeTiers.join(', ')}],\n        defaultSlippage: ${params.routerConfig.defaultSlippage},\n      },\n    },\n  },\n  manual: {\n    pools: [\n      {\n        name: '${params.collateralToken.symbol} / ${params.quoteToken.symbol} Local Fixture',\n        address: '${params.poolAddress}',\n        price: { source: PriceOriginSource.FIXED, value: 1 },\n        kick: {\n          enabled: true,\n          minDebt: 0.001,\n          priceFactor: 0.99,\n        },\n        take: {\n          minCollateral: 0.01,\n          liquiditySource: LiquiditySource.UNISWAPV3,\n          marketPriceFactor: 0.98,\n        },\n      },\n    ],\n  },\n}`;
+  return `// Merge this into an existing Base keeper config.\n// Note: manual kick/take tests against this fresh local pool still need either a\n// local subgraph/indexer or a repo-local subgraph override harness.\n{\n  takers: {\n    factory: '${params.deployment.keeperTakerFactory}',\n    contracts: {\n      UniswapV3: '${params.deployment.uniswapV3Taker}',\n    },\n  },\n  dex: {\n    uniswapV3: {\n      router: {\n        swapRouter02Address: '${params.routerConfig.swapRouter02Address}',\n        poolFactoryAddress: '${params.routerConfig.poolFactoryAddress}',\n        quoterV2Address: '${params.routerConfig.quoterV2Address}',\n        wethAddress: '${params.routerConfig.wethAddress}',\n        defaultFeeTier: ${params.routerConfig.defaultFeeTier},\n        candidateFeeTiers: [${params.routerConfig.candidateFeeTiers.join(', ')}],\n        defaultSlippage: ${params.routerConfig.defaultSlippage},\n      },\n    },\n  },\n  manual: {\n    pools: [\n      {\n        name: '${params.collateralToken.symbol} / ${params.quoteToken.symbol} Local Fixture',\n        address: '${params.poolAddress}',\n        price: { source: PriceOriginSource.FIXED, value: 1 },\n        kick: {\n          enabled: true,\n          minDebt: 0.001,\n          priceFactor: 0.99,\n        },\n        take: {\n          minCollateral: 0.01,\n          liquiditySource: LiquiditySource.UNISWAPV3,\n          marketPriceFactor: 0.98,\n        },\n      },\n    ],\n  },\n}`;
 }
 
 let activeFailureCheckpointWriter: ((error: unknown) => void) | undefined;

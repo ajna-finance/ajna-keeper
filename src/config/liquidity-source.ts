@@ -4,7 +4,7 @@ import {
   KeeperConfig,
   LiquiditySource,
   SushiswapRouterOverrides,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
   hasNonEmptyObject,
 } from './schema';
 import { MAX_UINT24_FEE_TIER } from '../constants';
@@ -15,7 +15,7 @@ export interface LiquiditySourceConfig {
   oneInchRouters?: { [chainId: number]: string };
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
-  universalRouterOverrides?: UniversalRouterOverrides;
+  uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
 }
 
 export function getLiquiditySourceConfig(
@@ -27,7 +27,7 @@ export function getLiquiditySourceConfig(
     oneInchRouters: config.dex?.oneInch?.routers,
     sushiswapRouterOverrides: config.dex?.sushiswap,
     tokenAddresses: config.network.tokenAddresses,
-    universalRouterOverrides: config.dex?.uniswapV3?.universalRouter,
+    uniswapV3RouterOverrides: config.dex?.uniswapV3?.router,
   };
 }
 
@@ -58,6 +58,83 @@ export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
 };
 
 export const STANDARD_V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
+
+export const UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS = [
+  'swapRouter02Address',
+  'poolFactoryAddress',
+  'quoterV2Address',
+  'wethAddress',
+] as const;
+
+export type UniswapV3FactoryRouteAddressField =
+  (typeof UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS)[number];
+
+export const UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS: readonly UniswapV3FactoryRouteAddressField[] =
+  [
+    'swapRouter02Address',
+    'poolFactoryAddress',
+    'quoterV2Address',
+    'wethAddress',
+  ];
+
+export interface ResolvedUniswapV3FactoryQuoteConfig {
+  poolFactoryAddress: string;
+  quoterV2Address: string;
+  wethAddress: string;
+  defaultFeeTier: number;
+  candidateFeeTiers?: number[];
+  defaultSlippage?: number;
+}
+
+export interface ResolvedUniswapV3FactoryRouteConfig
+  extends ResolvedUniswapV3FactoryQuoteConfig {
+  swapRouter02Address: string;
+}
+
+export function getMissingUniswapV3FactoryRouteConfigFields(
+  config: UniswapV3RouterOverrides | undefined
+): UniswapV3FactoryRouteAddressField[] {
+  return UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS.filter(
+    (field) => !config?.[field]
+  );
+}
+
+export function resolveUniswapV3FactoryQuoteConfig(
+  config: UniswapV3RouterOverrides | undefined
+): ResolvedUniswapV3FactoryQuoteConfig | undefined {
+  if (
+    !config?.poolFactoryAddress ||
+    !config.quoterV2Address ||
+    !config.wethAddress
+  ) {
+    return undefined;
+  }
+
+  return {
+    poolFactoryAddress: config.poolFactoryAddress,
+    quoterV2Address: config.quoterV2Address,
+    wethAddress: config.wethAddress,
+    defaultFeeTier:
+      config.defaultFeeTier ??
+      DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
+    candidateFeeTiers: config.candidateFeeTiers,
+    defaultSlippage: config.defaultSlippage,
+  };
+}
+
+export function resolveUniswapV3FactoryRouteConfig(
+  config: UniswapV3RouterOverrides | undefined
+): ResolvedUniswapV3FactoryRouteConfig | undefined {
+  const quoteConfig = resolveUniswapV3FactoryQuoteConfig(config);
+  if (!quoteConfig || !config?.swapRouter02Address) {
+    return undefined;
+  }
+
+  return {
+    ...quoteConfig,
+    swapRouter02Address: config.swapRouter02Address,
+  };
+}
 
 export function isValidFactoryFeeTier(tier: number): boolean {
   return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
@@ -135,11 +212,8 @@ export function hasConfiguredGasQuoteLiquiditySource(
         (chainId === undefined || config.oneInchRouters?.[chainId])
       );
     case LiquiditySource.UNISWAPV3:
-      return !!(
-        config.universalRouterOverrides?.universalRouterAddress &&
-        config.universalRouterOverrides.poolFactoryAddress &&
-        config.universalRouterOverrides.wethAddress &&
-        config.universalRouterOverrides.quoterV2Address
+      return !!resolveUniswapV3FactoryQuoteConfig(
+        config.uniswapV3RouterOverrides
       );
     case LiquiditySource.SUSHISWAP:
       return !!(
@@ -190,7 +264,7 @@ export function resolveConfiguredWrappedNativeAddress(
 ): string | undefined {
   if (liquiditySource === LiquiditySource.UNISWAPV3) {
     return (
-      config.universalRouterOverrides?.wethAddress ??
+      config.uniswapV3RouterOverrides?.wethAddress ??
       resolveWrappedNativeTokenAddress(config.tokenAddresses)
     );
   }
@@ -211,7 +285,7 @@ export function resolveConfiguredWrappedNativeAddress(
 
   return (
     resolveWrappedNativeTokenAddress(config.tokenAddresses) ??
-    config.universalRouterOverrides?.wethAddress ??
+    config.uniswapV3RouterOverrides?.wethAddress ??
     config.sushiswapRouterOverrides?.wethAddress ??
     config.curveRouterOverrides?.wethAddress
   );

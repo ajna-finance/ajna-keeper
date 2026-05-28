@@ -498,6 +498,24 @@ export function withGasLimitBuffer(
 
 export async function estimateGasWithBuffer(
   estimateFn: () => Promise<BigNumber>,
+  label: string,
+  basisPoints: number = 13000
+): Promise<BigNumber> {
+  try {
+    const estimatedGas = await estimateFn();
+    const gasLimit = withGasLimitBuffer(estimatedGas, basisPoints);
+    logger.debug(
+      `${label} gas estimate: ${estimatedGas.toString()} -> buffered ${gasLimit.toString()}`
+    );
+    return gasLimit;
+  } catch (error) {
+    logger.warn(`${label} gas estimation failed; refusing transaction: ${error}`);
+    throw error;
+  }
+}
+
+export async function estimateGasWithFallbackBuffer(
+  estimateFn: () => Promise<BigNumber>,
   fallbackGasLimit: BigNumber,
   label: string,
   basisPoints: number = 13000

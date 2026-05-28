@@ -5,7 +5,7 @@ import {
   LiquiditySource,
   PoolConfig,
   SushiswapRouterOverrides,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
 } from '../config';
 import { logger } from '../logging';
 import { SmartDexManager } from '../dex/manager';
@@ -67,7 +67,7 @@ interface HandleTakeConfigBase {
   keeperTaker?: string;
   keeperTakerFactory?: string;
   takerContracts?: { [source: string]: string };
-  universalRouterOverrides?: UniversalRouterOverrides;
+  uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };

@@ -1,35 +1,31 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-// AUDIT FIX: Import OpenZeppelin utilities
-import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 import { ReentrancyGuard } from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
+import { ISwapRouter02 } from "../interfaces/ISwapRouter02.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
-/// @notice SIMPLIFIED DEBUG VERSION: UniswapV3KeeperTaker with essential debugging
+/// @notice Uniswap V3 implementation for Ajna keeper takes using direct SwapRouter02 execution.
 contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256; 
    
-    /// @notice FIXED: Simple configuration like 1inch (no complex validation)
+    /// @notice Direct Uniswap V3 swap configuration encoded by the keeper.
     struct UniswapV3SwapDetails {
-        address universalRouter;
-        address permit2;
+        address swapRouter;
         address targetToken;
         uint24 feeTier;
-        uint256 amountOutMinimum;  // Pre-calculated by TypeScript
+        uint256 amountOutMinimum;
         uint256 deadline;
     }
 
     /// @dev Hash used for all ERC20 pools
     bytes32 public constant ERC20_NON_SUBSET_HASH = keccak256("ERC20_NON_SUBSET_HASH");
-    /// @dev V3_SWAP_EXACT_IN command for Universal Router
-    bytes1 private constant V3_SWAP_EXACT_IN = 0x00;
     /// @dev Actor allowed to take auctions
     address public immutable owner;
     /// @dev Identifies the Ajna deployment
@@ -46,6 +42,7 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     error InvalidPool();
     error UnsupportedSource();
     error SwapFailed();
+    error InvalidSwapDetails();
     error InsufficientQuoteReceived();
 
     constructor(PoolDeployer ajnaErc20PoolFactory, address _authorizedFactory) {
@@ -64,33 +61,25 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         address swapRouter,
         bytes calldata swapDetails
     ) external onlyOwnerOrFactory {
-        // Basic validation (like 1inch)
         if (source != LiquiditySource.UniswapV3) revert UnsupportedSource();
         if (!_validatePool(pool)) revert InvalidPool();
 
-        // FIXED: Decode struct like SushiSwap pattern
         UniswapV3SwapDetails memory details = abi.decode(swapDetails, (UniswapV3SwapDetails));
-        
-        // Basic validation
-        require(details.universalRouter == swapRouter, "Router mismatch");
+        require(swapRouter != address(0) && details.swapRouter == swapRouter, "Router mismatch");
         require(details.targetToken == pool.quoteTokenAddress(), "Invalid target");
-        
-        
-        // FIXED: Re-encode for callback (like SushiSwap)
+        require(details.deadline > block.timestamp, "Expired deadline");
+        require(details.amountOutMinimum > 0, "Invalid minimum amount");
+
         bytes memory data = abi.encode(details);
 
-        // FIXED: Simple approval like 1inch WITH MATH.CEILDIV
         uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale());
         
         _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), approvalAmount);
 
-        // Invoke take
         pool.take(borrowerAddress, maxAmount, address(this), data);
         
-        // SECURITY FIX: Reset allowance to prevent future misuse
         _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), 0);
 
-        // Send profit to owner
         _recoverToken(IERC20(pool.quoteTokenAddress()));
     }
 
@@ -100,11 +89,13 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         if (!_validatePool(pool)) revert InvalidPool();
 
 
-        // FIXED: Simple decode like 1inch
         UniswapV3SwapDetails memory details = abi.decode(data, (UniswapV3SwapDetails));
-        
-        
-        // Execute swap, the collateral amount is already in native tokens from Ajna Core contract
+        if (
+            details.swapRouter == address(0) ||
+            details.targetToken != pool.quoteTokenAddress() ||
+            details.deadline <= block.timestamp ||
+            details.amountOutMinimum == 0
+        ) revert InvalidSwapDetails();
         _swapWithUniswapV3(pool.collateralAddress(), details.targetToken, collateral, quoteAmountDue, details);
     }
 
@@ -124,7 +115,7 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         return source == LiquiditySource.UniswapV3;
     }
 
-    /// @dev SIMPLIFIED: Essential debugging without stack depth issues
+    /// @dev Execute an exact-input Uniswap V3 swap using collateral held by this taker.
     function _swapWithUniswapV3(
         address tokenIn,
         address tokenOut,
@@ -132,52 +123,32 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         uint256 quoteAmountDue,
         UniswapV3SwapDetails memory details
     ) private {
-        
-        if (amountIn == 0) {
+        if (amountIn == 0 || block.timestamp >= details.deadline) {
             revert SwapFailed();
         }
 
         IERC20 tokenInContract = IERC20(tokenIn);
         uint256 quoteBalanceBefore = IERC20(tokenOut).balanceOf(address(this));
 
-        // Step 1: Approve Permit2
-        _safeApproveWithReset(tokenInContract, details.permit2, amountIn);
-        
-        // Step 2: Permit2 -> Universal Router approval
-        bytes memory permit2Data = abi.encodeWithSignature(
-            "approve(address,address,uint160,uint48)",
-            tokenIn, details.universalRouter, amountIn, uint48(details.deadline)
+        _safeApproveWithReset(tokenInContract, details.swapRouter, amountIn);
+        ISwapRouter02(details.swapRouter).exactInputSingle(
+            ISwapRouter02.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: details.feeTier,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: details.amountOutMinimum,
+                sqrtPriceLimitX96: 0
+            })
         );
-        
-        (bool permit2Success,) = details.permit2.call(permit2Data);
-        
-        if (!permit2Success) {
-            revert SwapFailed();
-        }
-
-        // Step 3: Build Universal Router call
-        
-        bytes memory path = abi.encodePacked(tokenIn, details.feeTier, tokenOut);
-        bytes memory commands = abi.encodePacked(V3_SWAP_EXACT_IN);
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = abi.encode(address(this), amountIn, details.amountOutMinimum, path, true);
-        
-        bytes memory swapData = abi.encodeWithSignature(
-            "execute(bytes,bytes[],uint256)",
-            commands, inputs, details.deadline
-        );
-        
-        // Step 4: Execute swap
-        (bool swapSuccess,) = details.universalRouter.call(swapData);
-        
-        if (!swapSuccess) {
-            revert SwapFailed();
-        }
-
-        _safeApproveWithReset(tokenInContract, details.permit2, 0);
+        _safeApproveWithReset(tokenInContract, details.swapRouter, 0);
 
         uint256 quoteReceived = IERC20(tokenOut).balanceOf(address(this)) - quoteBalanceBefore;
-        if (quoteReceived < quoteAmountDue) revert InsufficientQuoteReceived();
+        if (quoteReceived < details.amountOutMinimum || quoteReceived < quoteAmountDue) {
+            revert InsufficientQuoteReceived();
+        }
+        emit SwapExecuted(tokenIn, tokenOut, amountIn, quoteReceived);
     }
 
     function _recoverToken(IERC20 token) private {

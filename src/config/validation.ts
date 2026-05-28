@@ -10,7 +10,7 @@ import {
   SettlementConfig,
   TakeSettings,
   TakeWriteTransportMode,
-  UniversalRouterOverrides,
+  UniswapV3RouterOverrides,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   getManualPools,
@@ -29,6 +29,7 @@ import {
 import {
   formatLiquiditySource,
   getLiquiditySourceConfig,
+  getMissingUniswapV3FactoryRouteConfigFields,
   hasConfiguredWrappedNativeAddress,
   isValidFactoryFeeTier,
   resolveConfiguredGasQuoteLiquiditySource,
@@ -166,8 +167,7 @@ function requireOptionalIntegerRange(
   }
 }
 
-function validateCandidateFeeTiers(
-  tiers: number[] | undefined,
+function validateDefaultFeeTier(
   defaultFeeTier: number | undefined,
   fieldName: string
 ): void {
@@ -176,6 +176,14 @@ function validateCandidateFeeTiers(
       `${fieldName}: defaultFeeTier must be a positive uint24 fee tier`
     );
   }
+}
+
+function validateCandidateFeeTiers(
+  tiers: number[] | undefined,
+  defaultFeeTier: number | undefined,
+  fieldName: string
+): void {
+  validateDefaultFeeTier(defaultFeeTier, fieldName);
 
   if (tiers === undefined) {
     return;
@@ -213,8 +221,9 @@ function validateCandidateFeeTiers(
 }
 
 function validateRouterFeeTiers(config: KeeperConfig): void {
-  const uniswapConfig: UniversalRouterOverrides | undefined =
-    config.dex?.uniswapV3?.universalRouter;
+  const uniswapConfig: UniswapV3RouterOverrides | undefined =
+    config.dex?.uniswapV3?.router;
+  const universalRouterConfig = config.dex?.uniswapV3?.universalRouter;
   const sushiConfig: SushiswapRouterOverrides | undefined =
     config.dex?.sushiswap;
   requireOptionalPercentage(
@@ -230,6 +239,10 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
   validateCandidateFeeTiers(
     uniswapConfig?.candidateFeeTiers,
     uniswapConfig?.defaultFeeTier,
+    'KeeperConfig.dex.uniswapV3.router'
+  );
+  validateDefaultFeeTier(
+    universalRouterConfig?.defaultFeeTier,
     'KeeperConfig.dex.uniswapV3.universalRouter'
   );
   validateCandidateFeeTiers(
@@ -565,21 +578,17 @@ export function validateTakeSettings(
           'TakeSettings: takers.contracts.UniswapV3 required when liquiditySource is UNISWAPV3'
         );
       }
-      if (!keeperConfig.dex?.uniswapV3?.universalRouter) {
+      if (!keeperConfig.dex?.uniswapV3?.router) {
         throw new Error(
-          'TakeSettings: dex.uniswapV3.universalRouter required when liquiditySource is UNISWAPV3'
+          'TakeSettings: dex.uniswapV3.router required when liquiditySource is UNISWAPV3'
         );
       }
-      const routerOverrides = keeperConfig.dex.uniswapV3.universalRouter;
+      const routerOverrides = keeperConfig.dex.uniswapV3.router;
       if (
-        !routerOverrides.universalRouterAddress ||
-        !routerOverrides.permit2Address ||
-        !routerOverrides.poolFactoryAddress ||
-        !routerOverrides.wethAddress ||
-        !routerOverrides.quoterV2Address
+        getMissingUniswapV3FactoryRouteConfigFields(routerOverrides).length > 0
       ) {
         throw new Error(
-          'TakeSettings: dex.uniswapV3.universalRouter.universalRouterAddress, permit2Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
+          'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
         );
       }
     }
@@ -1082,11 +1091,11 @@ export function validateAutoDiscoverConfig(
       externalTakePaths
     );
     if (
-      config.dex?.uniswapV3?.universalRouter?.candidateFeeTiers !== undefined &&
+      config.dex?.uniswapV3?.router?.candidateFeeTiers !== undefined &&
       !effectiveFactorySources.has(LiquiditySource.UNISWAPV3)
     ) {
       logger.warn(
-        'KeeperConfig.dex.uniswapV3.universalRouter.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
+        'KeeperConfig.dex.uniswapV3.router.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
       );
     }
     if (

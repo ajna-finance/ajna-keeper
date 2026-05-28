@@ -36,10 +36,9 @@ const config: KeeperConfig = {
       },
     },
     uniswapV3: {
-      universalRouter: {
-        universalRouterAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+      router: {
+        swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
         wethAddress: '0x4200000000000000000000000000000000000006',
-        permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3',
         poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
         quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a',
         defaultFeeTier: 3000, // Preferred/default 0.3% fee tier

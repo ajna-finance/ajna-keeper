@@ -58,7 +58,7 @@ describe('manual take context helpers', () => {
       config: {
         dryRun: true,
         keeperTakerFactory: '0xfactory',
-        universalRouterOverrides: { universalRouterAddress: '0xuniversal' },
+        uniswapV3RouterOverrides: { swapRouter02Address: '0xswaprouter02' },
         sushiswapRouterOverrides: { swapRouterAddress: '0xsushi' },
         curveRouterOverrides: {
           poolConfigs: {

@@ -363,8 +363,7 @@ describe('Discovery Gas Policy', () => {
         oneInchRouters: {
           8453: '0x1111111111111111111111111111111111111111',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -725,8 +724,7 @@ describe('Discovery Gas Policy', () => {
         oneInchRouters: {
           1: '0x1111111111111111111111111111111111111111',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -794,8 +792,7 @@ describe('Discovery Gas Policy', () => {
         oneInchRouters: {
           8453: '0x1111111111111111111111111111111111111111',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -880,8 +877,7 @@ describe('Discovery Gas Policy', () => {
         oneInchRouters: {
           8453: '0x1111111111111111111111111111111111111111',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -958,8 +954,7 @@ describe('Discovery Gas Policy', () => {
         oneInchRouters: {
           8453: '0x1111111111111111111111111111111111111111',
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -1041,8 +1036,7 @@ describe('Discovery Gas Policy', () => {
             maxGasCostQuote: 5,
           },
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -1103,8 +1097,7 @@ describe('Discovery Gas Policy', () => {
             maxGasCostQuote: 5,
           },
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -1322,8 +1315,7 @@ describe('Discovery Gas Policy', () => {
             maxGasCostQuote: 5,
           },
         },
-        universalRouterOverrides: {
-          universalRouterAddress: '0x2222222222222222222222222222222222222222',
+        uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
           wethAddress: '0x4200000000000000000000000000000000000006',

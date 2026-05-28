@@ -10,7 +10,7 @@ While the main README covers the basic setup process, production deployments ben
 
 - **RPC Provider**: Alchemy or QuickNode (hosted)
 - **Subgraph**: BuiltByMom/Ajna-subgraph deployed on Goldsky (hosted)
-- **DEX Integration**: 1inch API, Uniswap V3 Universal Router, SushiSwap V3 Router, or Curve
+- **DEX Integration**: 1inch API, Uniswap V3 SwapRouter02 for factory takes, SushiSwap V3 Router, or Curve
 - **Monitoring**: Goldsky subgraph monitoring + custom logging
 
 ## Step 1: RPC Provider Setup
@@ -67,7 +67,7 @@ For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept
 ```typescript
 dex: {
   uniswapV3: {
-    universalRouter: {
+    router: {
       defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
       // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
       // candidateFeeTiers: [500, 10000],
@@ -151,7 +151,7 @@ Rationale:
 Result in Production Config:
 dex: {
   uniswapV3: {
-    universalRouter: {
+    router: {
       defaultFeeTier: 3000, // Uniswap external takes default to 0.3% in this keeper instance
       // Omit candidateFeeTiers to auto-probe standard V3 tiers.
     },
@@ -284,7 +284,7 @@ const config: KeeperConfig = {
 # 2. Compile contracts first
 yarn compile
 
-# 3. Verify Universal Router and SushiSwap addresses for your chain
+# 3. Verify Uniswap SwapRouter02, quote routing, and SushiSwap addresses for your chain
 # Uniswap V3 Gov Post: https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323/8
 # SushiSwap: Check official documentation or block explorers
 ```
@@ -316,12 +316,11 @@ const config: KeeperConfig = {
     },
   },
   dex: {
-    // ADD: Universal Router configuration for Uniswap V3
+    // ADD: Uniswap V3 routing configuration for factory external takes
     uniswapV3: {
-      universalRouter: {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+      router: {
+        swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
         wethAddress: '0x4200000000000000000000000000000000000006',
-        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
         defaultFeeTier: 3000, // Global runtime default for Uniswap external takes
@@ -506,17 +505,18 @@ The recommended approach uses the [BuiltByMom/Ajna-subgraph](https://github.com/
 
 [Ajna Deployment Addresses with Bridge Addresses](https://faqs.ajna.finance/info/deployment-addresses-and-bridges)
 
-### Uniswap Universal Router Addresses
+### Uniswap V3 Routing Addresses
 
-**Important:** Official Uniswap documentation sometimes contains outdated addresses. Use these verified addresses from production deployments:
+Factory external takes require `swapRouter02Address`, `poolFactoryAddress`, `quoterV2Address`, and `wethAddress`. Universal Router and Permit2 are only needed for Universal Router flows such as LP reward swaps.
 
-| Network   | Universal Router Address                     | Verified Source                                                                     |
-| --------- | -------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Ethereum  | `0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD` | [Uniswap Gov](https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323) |
-| Avalanche | `0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD` | Production Verified                                                                 |
-| Base      | `0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD` | [Uniswap Gov](https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323) |
-| Arbitrum  | `0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD` | [Uniswap Gov](https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323) |
-| Hemi      | `0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B` | [Uniswap Gov](https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323) |
+Use SwapRouter02 as the swap executor for factory external takes. Do not put the Universal Router address in `swapRouter02Address`.
+
+| Network  | SwapRouter02                                 | Pool Factory                                 | QuoterV2                                     | WETH / Wrapped Native                        | Verified Source                                                                     |
+| -------- | -------------------------------------------- | -------------------------------------------- | -------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Ethereum | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` | `0x1F98431c8aD98523631AE4a59f267346ea31F984` | `0x61fFE014bA17989E743c5F6cB21bF9697530B21e` | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2` | [Uniswap Gov](https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323) |
+| Hemi     | `0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160` | `0x346239972d1fa486FC4a521031BC81bFB7D6e8a4` | `0xcBa55304013187D49d4012F4d7e4B63a04405cd5` | `0x4200000000000000000000000000000000000006` | [Uniswap Gov](https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323) |
+
+Universal Router remains optional for code paths that explicitly use Universal Router and Permit2. It is not required for factory external takes.
 
 ### SushiSwap V3 Router Addresses
 
@@ -726,7 +726,7 @@ For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `default
 ```typescript
 dex: {
   uniswapV3: {
-    universalRouter: {
+    router: {
       defaultFeeTier: 3000, // Optimize for most common pairs (WETH/USDC, etc.)
       // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
       // candidateFeeTiers: [500, 10000],
@@ -994,12 +994,11 @@ const config: KeeperConfig = {
   },
 
   dex: {
-    // Universal Router configuration for Uniswap V3
+    // Uniswap V3 routing configuration
     uniswapV3: {
-      universalRouter: {
-        universalRouterAddress: '0x533c7A53389e0538AB6aE1D7798D6C1213eAc28B',
+      router: {
+        swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
         wethAddress: '0x4200000000000000000000000000000000000006',
-        permit2Address: '0xB952578f3520EE8Ea45b7914994dcf4702cEe578',
         defaultFeeTier: 3000, // Preferred/default Uniswap external-take route
         candidateFeeTiers: [500], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
         defaultSlippage: 0.5,
@@ -1245,7 +1244,7 @@ yarn ts-node scripts/query-1inch.ts --config config.ts --action deploy
 **Factory Deployment Failures:**
 
 ```bash
-# Error: "Missing dex.uniswapV3.universalRouter or dex.sushiswap"
+# Error: "Missing dex.uniswapV3.router or dex.sushiswap"
 # Solution: Add complete router configs to config.ts
 
 # Error: "Network mismatch"
@@ -1266,8 +1265,8 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 # Log: "TakeSettings: takers.oneInch required when liquiditySource is ONEINCH"
 # Solution: Deploy 1inch contract or switch to factory approach
 
-# Log: "dex.uniswapV3.universalRouter required when liquiditySource is UNISWAPV3"
-# Solution: Add complete Universal Router configuration
+# Log: "dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3"
+# Solution: Add complete Uniswap V3 factory-take routing configuration
 
 # Log: "dex.sushiswap required when liquiditySource is SUSHISWAP"
 # Solution: Add complete SushiSwap configuration

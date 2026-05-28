@@ -9,6 +9,7 @@ import {
   formatLiquiditySource,
   getEffectiveV3FeeTiers,
   hasConfiguredGasQuoteLiquiditySource,
+  resolveUniswapV3FactoryQuoteConfig,
   resolveConfiguredGasQuoteLiquiditySource,
   resolveConfiguredWrappedNativeAddress,
 } from '../config';
@@ -459,22 +460,21 @@ function getGasQuoteSourceConfigIdentity(params: {
         };
       }
       if (source === LiquiditySource.UNISWAPV3) {
-        const routerConfig = params.config.universalRouterOverrides;
+        const quoteConfig = resolveUniswapV3FactoryQuoteConfig(
+          params.config.uniswapV3RouterOverrides
+        );
         return {
           source,
-          universalRouterAddress: normalizeIdentityAddress(
-            routerConfig?.universalRouterAddress
-          ),
           poolFactoryAddress: normalizeIdentityAddress(
-            routerConfig?.poolFactoryAddress
+            quoteConfig?.poolFactoryAddress
           ),
           quoterV2Address: normalizeIdentityAddress(
-            routerConfig?.quoterV2Address
+            quoteConfig?.quoterV2Address
           ),
-          wethAddress: normalizeIdentityAddress(routerConfig?.wethAddress),
+          wethAddress: normalizeIdentityAddress(quoteConfig?.wethAddress),
           feeTiers: getGasQuoteFeeTiers(
-            routerConfig?.defaultFeeTier,
-            routerConfig?.candidateFeeTiers,
+            quoteConfig?.defaultFeeTier,
+            quoteConfig?.candidateFeeTiers,
             DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
             STANDARD_V3_FEE_TIERS
           ),
@@ -698,19 +698,16 @@ async function quoteTokensByLiquiditySource(params: {
   }
 
   if (params.liquiditySource === LiquiditySource.UNISWAPV3) {
-    const routerConfig = params.config.universalRouterOverrides;
-    if (
-      !routerConfig?.universalRouterAddress ||
-      !routerConfig.poolFactoryAddress ||
-      !routerConfig.wethAddress ||
-      !routerConfig.quoterV2Address
-    ) {
+    const quoteConfig = resolveUniswapV3FactoryQuoteConfig(
+      params.config.uniswapV3RouterOverrides
+    );
+    if (!quoteConfig) {
       return { reason: 'Uniswap V3 gas quote configuration incomplete' };
     }
 
     const quoteProvider = getUniswapV3QuoteProvider({
       signer: params.signer,
-      routerConfig,
+      quoteConfig,
       runtimeCache: params.rpcCache?.factoryQuoteProviders,
     });
     if (!quoteProvider) {
@@ -721,8 +718,8 @@ async function quoteTokensByLiquiditySource(params: {
       amountIn: params.amountIn,
       tokenIn: params.tokenIn,
       tokenOut: params.tokenOut,
-      defaultFeeTier: routerConfig.defaultFeeTier,
-      candidateFeeTiers: routerConfig.candidateFeeTiers,
+      defaultFeeTier: quoteConfig.defaultFeeTier,
+      candidateFeeTiers: quoteConfig.candidateFeeTiers,
       fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
       automaticCandidateFeeTiers: STANDARD_V3_FEE_TIERS,
     });

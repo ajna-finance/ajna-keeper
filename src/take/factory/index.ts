@@ -111,7 +111,7 @@ export async function getFactoryTakeQuoteEvaluation(
   poolConfig: TakeActionConfig,
   config: Pick<
     FactoryTakeParams['config'],
-    | 'universalRouterOverrides'
+    | 'uniswapV3RouterOverrides'
     | 'sushiswapRouterOverrides'
     | 'curveRouterOverrides'
     | 'tokenAddresses'
@@ -612,7 +612,7 @@ interface FactoryLiquidationExecutionParams {
     FactoryTakeParams['config'],
     | 'dryRun'
     | 'keeperTakerFactory'
-    | 'universalRouterOverrides'
+    | 'uniswapV3RouterOverrides'
     | 'sushiswapRouterOverrides'
     | 'curveRouterOverrides'
     | 'tokenAddresses'

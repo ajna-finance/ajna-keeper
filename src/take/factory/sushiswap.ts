@@ -306,7 +306,6 @@ export async function executeSushiSwapFactoryTake({
     const receipt = await NonceTracker.queueTransaction(
       takeWriteTransport.signer,
       async (nonce: number) => {
-        const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
         const txArgs = [
           pool.poolAddress,
           liquidation.borrower,
@@ -318,8 +317,8 @@ export async function executeSushiSwapFactoryTake({
         ] as const;
         const gasLimit = await estimateGasWithBuffer(
           () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
-          fallbackGasLimit,
-          `Factory Sushi take ${pool.name}/${liquidation.borrower}`
+          `Factory Sushi take ${pool.name}/${liquidation.borrower}`,
+          13000
         );
         const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
           ...txArgs,

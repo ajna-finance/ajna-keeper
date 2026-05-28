@@ -3,6 +3,7 @@ import {
   ExternalTakePathKind,
   KeeperConfig,
   LiquiditySource,
+  UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
   resolveExternalTakePaths,
@@ -265,41 +266,15 @@ export async function validateAutoDiscoverRouteDeployments(params: {
       });
 
       if (source === LiquiditySource.UNISWAPV3) {
-        await requireContractCode({
-          provider: params.provider,
-          label: 'Uniswap V3 universalRouterAddress',
-          address:
-            params.config.dex?.uniswapV3?.universalRouter
-              ?.universalRouterAddress,
-          errors,
-        });
-        await requireContractCode({
-          provider: params.provider,
-          label: 'Uniswap V3 permit2Address',
-          address:
-            params.config.dex?.uniswapV3?.universalRouter?.permit2Address,
-          errors,
-        });
-        await requireContractCode({
-          provider: params.provider,
-          label: 'Uniswap V3 poolFactoryAddress',
-          address:
-            params.config.dex?.uniswapV3?.universalRouter?.poolFactoryAddress,
-          errors,
-        });
-        await requireContractCode({
-          provider: params.provider,
-          label: 'Uniswap V3 quoterV2Address',
-          address:
-            params.config.dex?.uniswapV3?.universalRouter?.quoterV2Address,
-          errors,
-        });
-        await requireContractCode({
-          provider: params.provider,
-          label: 'Uniswap V3 wethAddress',
-          address: params.config.dex?.uniswapV3?.universalRouter?.wethAddress,
-          errors,
-        });
+        const routerConfig = params.config.dex?.uniswapV3?.router;
+        for (const field of UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS) {
+          await requireContractCode({
+            provider: params.provider,
+            label: `Uniswap V3 ${field}`,
+            address: routerConfig?.[field],
+            errors,
+          });
+        }
       }
 
       if (source === LiquiditySource.SUSHISWAP) {

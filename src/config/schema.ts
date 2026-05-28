@@ -424,6 +424,14 @@ export interface UniswapV3Overrides {
 export interface UniversalRouterOverrides {
   universalRouterAddress?: string;
   permit2Address?: string;
+  wethAddress?: string;
+  poolFactoryAddress?: string;
+  defaultFeeTier?: number;
+  defaultSlippage?: number;
+}
+
+export interface UniswapV3RouterOverrides {
+  swapRouter02Address?: string;
   poolFactoryAddress?: string;
   defaultFeeTier?: number;
   candidateFeeTiers?: number[];
@@ -525,6 +533,7 @@ export interface OneInchDexConfig {
 
 export interface UniswapV3DexConfig {
   legacy?: UniswapV3Overrides;
+  router?: UniswapV3RouterOverrides;
   universalRouter?: UniversalRouterOverrides;
 }
 

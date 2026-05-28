@@ -11,6 +11,8 @@ import {
   askPassword,
   overrideMulticall,
   decimaledToWei,
+  estimateGasWithBuffer,
+  estimateGasWithFallbackBuffer,
   mapWithConcurrencyPreservingOrder,
   RouteProbeLimiter,
   withTimeoutAbort,
@@ -363,6 +365,41 @@ describe('tokenChangeDecimals', () => {
   testConvertDecimals('-1000000', 6, 18, '-1000000000000000000');
   testConvertDecimals('-1000000000000000000', 18, 6, '-1000000');
   testConvertDecimals('-100', 18, 6, '0');
+});
+
+describe('estimateGasWithBuffer', () => {
+  it('buffers successful gas estimates', async () => {
+    const gasLimit = await estimateGasWithBuffer(
+      async () => BigNumber.from(100_000),
+      'test tx'
+    );
+
+    expect(gasLimit.eq(BigNumber.from(130_000))).to.equal(true);
+  });
+
+  it('refuses fallback gas by default when estimation fails', async () => {
+    await expect(
+      estimateGasWithBuffer(
+        async () => {
+          throw new Error('execution reverted');
+        },
+        'test tx'
+      )
+    ).to.be.rejectedWith('execution reverted');
+  });
+
+  it('uses fallback gas through the explicit fallback helper', async () => {
+    const fallbackGas = BigNumber.from(500_000);
+    const gasLimit = await estimateGasWithFallbackBuffer(
+      async () => {
+        throw new Error('rpc estimation unavailable');
+      },
+      fallbackGas,
+      'test tx'
+    );
+
+    expect(gasLimit.eq(fallbackGas)).to.equal(true);
+  });
 });
 
 describe('waitForConditionToBeTrue', () => {

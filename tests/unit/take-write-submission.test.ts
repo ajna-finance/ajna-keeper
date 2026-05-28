@@ -784,9 +784,10 @@ describe('take write submission', () => {
     sinon
       .stub(AjnaKeeperTakerFactory__factory, 'connect')
       .returns(factory as any);
+    const approvedExecutionFloor = BigNumber.from(10);
     sinon
       .stub(shared, 'computeFactoryAmountOutMinimum')
-      .resolves(BigNumber.from(10));
+      .resolves(approvedExecutionFloor);
     const queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
       .callsFake(async (signer, txFunction) => {
@@ -1030,9 +1031,10 @@ describe('take write submission', () => {
     sinon
       .stub(AjnaKeeperTakerFactory__factory, 'connect')
       .returns(factory as any);
+    const approvedExecutionFloor = BigNumber.from(10);
     sinon
       .stub(shared, 'computeFactoryAmountOutMinimum')
-      .resolves(BigNumber.from(10));
+      .resolves(approvedExecutionFloor);
     const queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
       .callsFake(async (signer, txFunction) => {
@@ -1072,9 +1074,11 @@ describe('take write submission', () => {
       },
       config: {
         keeperTakerFactory: '0x0000000000000000000000000000000000000013',
-        universalRouterOverrides: {
-          universalRouterAddress: '0x0000000000000000000000000000000000000014',
-          permit2Address: '0x0000000000000000000000000000000000000015',
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: '0x0000000000000000000000000000000000000014',
+          poolFactoryAddress: '0x0000000000000000000000000000000000000015',
+          wethAddress: '0x0000000000000000000000000000000000000016',
+          quoterV2Address: '0x0000000000000000000000000000000000000017',
           defaultFeeTier: 3000,
         },
         takeWriteTransport: takeWriteTransport as any,
@@ -1092,11 +1096,26 @@ describe('take write submission', () => {
     expect(queueTransactionStub.calledOnce).to.be.true;
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
     const takeArgs = populateTransactionStub.firstCall.args;
+    expect(takeArgs[0]).to.equal(
+      '0x0000000000000000000000000000000000000011'
+    );
+    expect(takeArgs[4]).to.equal(Number(LiquiditySource.UNISWAPV3));
+    expect(takeArgs[5]).to.equal(
+      '0x0000000000000000000000000000000000000014'
+    );
     const decoded = ethers.utils.defaultAbiCoder.decode(
-      ['(address,address,address,uint24,uint256,uint256)'],
+      ['(address,address,uint24,uint256,uint256)'],
       takeArgs[6]
     );
-    expect(decoded[0][5].toNumber()).to.equal(1923);
+    expect(decoded[0][0]).to.equal(
+      '0x0000000000000000000000000000000000000014'
+    );
+    expect(decoded[0][1]).to.equal(
+      '0x0000000000000000000000000000000000000012'
+    );
+    expect(decoded[0][2]).to.equal(3000);
+    expect(decoded[0][3].eq(approvedExecutionFloor)).to.be.true;
+    expect(decoded[0][4].toNumber()).to.equal(1923);
     expect((readSigner as any).provider.getBlock.calledOnceWithExactly('latest'))
       .to.be.true;
   });
