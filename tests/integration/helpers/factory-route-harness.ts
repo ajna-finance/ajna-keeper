@@ -13,6 +13,7 @@ import {
   FactoryExecutionConfig,
   takeLiquidationFactory,
 } from '../../../src/take/factory';
+import { deriveApprovedMinOutRaw } from '../../../src/take/factory/shared';
 import { ExternalTakeQuoteEvaluation } from '../../../src/take/types';
 import { RequireFields } from '../../../src/utils';
 import { setBalance } from '../test-utils';
@@ -256,7 +257,7 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
   quoteAmountRaw: BigNumber;
   routeMinOutRaw: BigNumber;
   profitMinOutRaw?: BigNumber;
-  fallbackApprovedMinOutRaw?: BigNumber;
+  approvedMinOutRaw?: BigNumber;
   selectedFeeTier?: number;
   curvePool?: {
     address: string;
@@ -266,10 +267,14 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
   };
 }): ExternalTakeQuoteEvaluation {
   const approvedMinOutRaw =
-    params.fallbackApprovedMinOutRaw ??
-    (params.profitMinOutRaw && params.profitMinOutRaw.gt(params.routeMinOutRaw)
-      ? params.profitMinOutRaw
-      : params.routeMinOutRaw);
+    params.approvedMinOutRaw ??
+    deriveApprovedMinOutRaw({
+      routeMinOutRaw: params.routeMinOutRaw,
+      profitMinOutRaw: params.profitMinOutRaw,
+    });
+  if (!approvedMinOutRaw) {
+    throw new Error('Test factory quote evaluation missing approved min-out');
+  }
 
   return {
     isTakeable: true,
@@ -309,101 +314,174 @@ export async function deployFundedSushiRouter(
   return router;
 }
 
-export async function expectFactoryExecutionRejectedWithoutStateMutation(params: {
+interface CurvePoolSelection {
+  address: string;
+  poolType: CurvePoolType;
+  tokenInIndex: number;
+  tokenOutIndex: number;
+}
+
+interface FactoryRouteExecutionFixture {
+  takerAddress: string;
+  configOverrides: Pick<
+    FactoryExecutionConfig,
+    | 'uniswapV3RouterOverrides'
+    | 'sushiswapRouterOverrides'
+    | 'curveRouterOverrides'
+  >;
+  curvePool?: CurvePoolSelection;
+}
+
+interface FactoryRouteExecutionSetup {
+  harness: FactoryHarness;
+  routerAmountOut: BigNumber;
+  selectedFeeTier?: number;
+}
+
+async function prepareUniswapFactoryRouteExecution(
+  params: FactoryRouteExecutionSetup
+): Promise<FactoryRouteExecutionFixture> {
+  const { harness } = params;
+  const router = await deployFundedSwapRouter02(
+    harness,
+    params.routerAmountOut
+  );
+  return {
+    takerAddress: harness.uniswapTaker.address,
+    configOverrides: {
+      uniswapV3RouterOverrides: {
+        swapRouter02Address: router.address,
+        poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+        wethAddress: harness.quoteToken.address,
+        quoterV2Address: '0x6666666666666666666666666666666666666666',
+        defaultFeeTier: params.selectedFeeTier ?? 500,
+      },
+    },
+  };
+}
+
+async function prepareUniswapNonSwapRouterExecution(
+  params: FactoryRouteExecutionSetup
+): Promise<FactoryRouteExecutionFixture> {
+  const { harness } = params;
+  const router = await new MockSwapRouter__factory(harness.owner).deploy(1, 1);
+  await router.deployed();
+  await harness.quoteToken.mint(router.address, params.routerAmountOut);
+  return {
+    takerAddress: harness.uniswapTaker.address,
+    configOverrides: {
+      uniswapV3RouterOverrides: {
+        swapRouter02Address: router.address,
+        poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+        wethAddress: harness.quoteToken.address,
+        quoterV2Address: '0x6666666666666666666666666666666666666666',
+        defaultFeeTier: params.selectedFeeTier ?? 500,
+      },
+    },
+  };
+}
+
+async function prepareSushiFactoryRouteExecution(
+  params: FactoryRouteExecutionSetup
+): Promise<FactoryRouteExecutionFixture> {
+  const { harness } = params;
+  const router = await deployFundedSushiRouter(
+    harness,
+    params.routerAmountOut
+  );
+  return {
+    takerAddress: harness.sushiTaker.address,
+    configOverrides: {
+      sushiswapRouterOverrides: {
+        swapRouterAddress: router.address,
+        quoterV2Address: '0x9999999999999999999999999999999999999999',
+        factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        wethAddress: harness.quoteToken.address,
+        defaultFeeTier: params.selectedFeeTier ?? 500,
+      },
+    },
+  };
+}
+
+async function prepareCurveFactoryRouteExecution(
+  params: FactoryRouteExecutionSetup
+): Promise<FactoryRouteExecutionFixture> {
+  const { harness } = params;
+  const curvePool = await new MockCurveSwapPool__factory(harness.owner).deploy(
+    harness.collateralToken.address,
+    params.routerAmountOut
+  );
+  await curvePool.deployed();
+  await curvePool.setTokenOut(harness.quoteToken.address);
+  await harness.quoteToken.mint(curvePool.address, params.routerAmountOut);
+  return {
+    takerAddress: harness.curveTaker.address,
+    configOverrides: {
+      curveRouterOverrides: {},
+    },
+    curvePool: {
+      address: curvePool.address,
+      poolType: CurvePoolType.STABLE,
+      tokenInIndex: 0,
+      tokenOutIndex: 1,
+    },
+  };
+}
+
+async function prepareFactoryRouteExecution(params: {
+  source: LiquiditySource;
+  routerAmountOut: BigNumber;
+  selectedFeeTier?: number;
+  harness: FactoryHarness;
+}): Promise<FactoryRouteExecutionFixture> {
+  switch (params.source) {
+    case LiquiditySource.UNISWAPV3:
+      return await prepareUniswapFactoryRouteExecution(params);
+    case LiquiditySource.SUSHISWAP:
+      return await prepareSushiFactoryRouteExecution(params);
+    case LiquiditySource.CURVE:
+      return await prepareCurveFactoryRouteExecution(params);
+    default:
+      throw new Error(`Unsupported factory route source ${params.source}`);
+  }
+}
+
+interface RejectedFactoryExecutionParams {
   source: LiquiditySource;
   routerAmountOut: BigNumber;
   routeMinOutRaw: BigNumber;
   profitMinOutRaw?: BigNumber;
-  fallbackApprovedMinOutRaw?: BigNumber;
+  approvedMinOutRaw?: BigNumber;
   quoteAmountRaw: BigNumber;
   selectedFeeTier?: number;
-  wrongUniswapRouter?: boolean;
   expectedFailureReason?: string | RegExp;
-}) {
-  const harness = await deployFactoryHarness();
-  const {
-    owner,
-    collateralToken,
-    quoteToken,
-    pool,
-    factory,
-    uniswapTaker,
-    sushiTaker,
-    curveTaker,
-  } = harness;
+}
 
-  let takerAddress: string;
+async function expectRejectedFactoryExecutionWithPreparedRoute(
+  params: RejectedFactoryExecutionParams & {
+    prepareRoute: (
+      setup: FactoryRouteExecutionSetup
+    ) => Promise<FactoryRouteExecutionFixture>;
+  }
+) {
+  const harness = await deployFactoryHarness();
+  const { owner, collateralToken, quoteToken, pool, factory } = harness;
+  const route = await params.prepareRoute({
+    harness,
+    routerAmountOut: params.routerAmountOut,
+    selectedFeeTier: params.selectedFeeTier,
+  });
+
   const config: FactoryExecutionConfig = {
     dryRun: false,
     keeperTakerFactory: factory.address,
     runtimeCache: createFactoryQuoteProviderRuntimeCache(),
+    ...route.configOverrides,
   };
   const executionFailures: Array<{ preBroadcast: boolean; error?: string }> = [];
   config.onFactoryExecutionFailure = (failure) => {
     executionFailures.push(failure);
   };
-  let curvePoolSelection:
-    | {
-        address: string;
-        poolType: CurvePoolType;
-        tokenInIndex: number;
-        tokenOutIndex: number;
-      }
-    | undefined;
-
-  if (params.source === LiquiditySource.UNISWAPV3) {
-    takerAddress = uniswapTaker.address;
-    if (params.wrongUniswapRouter) {
-      const wrongRouter = await new MockSwapRouter__factory(owner).deploy(1, 1);
-      await wrongRouter.deployed();
-      await quoteToken.mint(wrongRouter.address, params.routerAmountOut);
-      config.uniswapV3RouterOverrides = {
-        swapRouter02Address: wrongRouter.address,
-        poolFactoryAddress: '0x4444444444444444444444444444444444444444',
-        wethAddress: quoteToken.address,
-        quoterV2Address: '0x6666666666666666666666666666666666666666',
-        defaultFeeTier: params.selectedFeeTier ?? 500,
-      };
-    } else {
-      const router = await deployFundedSwapRouter02(
-        harness,
-        params.routerAmountOut
-      );
-      config.uniswapV3RouterOverrides = {
-        swapRouter02Address: router.address,
-        poolFactoryAddress: '0x4444444444444444444444444444444444444444',
-        wethAddress: quoteToken.address,
-        quoterV2Address: '0x6666666666666666666666666666666666666666',
-        defaultFeeTier: params.selectedFeeTier ?? 500,
-      };
-    }
-  } else if (params.source === LiquiditySource.SUSHISWAP) {
-    takerAddress = sushiTaker.address;
-    const router = await deployFundedSushiRouter(harness, params.routerAmountOut);
-    config.sushiswapRouterOverrides = {
-      swapRouterAddress: router.address,
-      quoterV2Address: '0x9999999999999999999999999999999999999999',
-      factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      wethAddress: quoteToken.address,
-      defaultFeeTier: params.selectedFeeTier ?? 500,
-    };
-  } else {
-    takerAddress = curveTaker.address;
-    const curvePool = await new MockCurveSwapPool__factory(owner).deploy(
-      collateralToken.address,
-      params.routerAmountOut
-    );
-    await curvePool.deployed();
-    await curvePool.setTokenOut(quoteToken.address);
-    await quoteToken.mint(curvePool.address, params.routerAmountOut);
-    curvePoolSelection = {
-      address: curvePool.address,
-      poolType: CurvePoolType.STABLE,
-      tokenInIndex: 0,
-      tokenOutIndex: 1,
-    };
-    config.curveRouterOverrides = {};
-  }
 
   const poolView = buildFactoryPoolView({
     pool,
@@ -415,19 +493,19 @@ export async function expectFactoryExecutionRejectedWithoutStateMutation(params:
     pool,
     collateralToken,
     quoteToken,
-    takerAddress,
+    takerAddress: route.takerAddress,
   });
   const quoteEvaluation = buildApprovedFactoryQuoteEvaluation({
     source: params.source,
     quoteAmountRaw: params.quoteAmountRaw,
     routeMinOutRaw: params.routeMinOutRaw,
     profitMinOutRaw: params.profitMinOutRaw,
-    fallbackApprovedMinOutRaw: params.fallbackApprovedMinOutRaw,
+    approvedMinOutRaw: params.approvedMinOutRaw,
     selectedFeeTier:
       params.source === LiquiditySource.CURVE
         ? undefined
         : (params.selectedFeeTier ?? 500),
-    curvePool: curvePoolSelection,
+    curvePool: route.curvePool,
   });
 
   const executed = await takeLiquidationFactory({
@@ -459,9 +537,29 @@ export async function expectFactoryExecutionRejectedWithoutStateMutation(params:
     }
   }
   await expectFactoryStateUnchanged(
-    { pool, collateralToken, quoteToken, takerAddress },
+    { pool, collateralToken, quoteToken, takerAddress: route.takerAddress },
     before
   );
+}
+
+export async function expectFactoryExecutionRejectedWithoutStateMutation(
+  params: RejectedFactoryExecutionParams
+) {
+  await expectRejectedFactoryExecutionWithPreparedRoute({
+    ...params,
+    prepareRoute: async (setup) =>
+      await prepareFactoryRouteExecution({ ...setup, source: params.source }),
+  });
+}
+
+export async function expectUniswapNonSwapRouterExecutionRejectedWithoutStateMutation(
+  params: Omit<RejectedFactoryExecutionParams, 'source'>
+) {
+  await expectRejectedFactoryExecutionWithPreparedRoute({
+    ...params,
+    source: LiquiditySource.UNISWAPV3,
+    prepareRoute: prepareUniswapNonSwapRouterExecution,
+  });
 }
 
 export async function expectSuccessfulFactoryTake(params: {

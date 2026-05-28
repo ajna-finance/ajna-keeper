@@ -12,7 +12,7 @@ import {
   overrideMulticall,
   decimaledToWei,
   estimateGasWithBuffer,
-  GAS_ESTIMATE_FALLBACK_POLICY,
+  estimateGasWithFallbackBuffer,
   mapWithConcurrencyPreservingOrder,
   RouteProbeLimiter,
   withTimeoutAbort,
@@ -371,7 +371,6 @@ describe('estimateGasWithBuffer', () => {
   it('buffers successful gas estimates', async () => {
     const gasLimit = await estimateGasWithBuffer(
       async () => BigNumber.from(100_000),
-      BigNumber.from(500_000),
       'test tx'
     );
 
@@ -384,22 +383,19 @@ describe('estimateGasWithBuffer', () => {
         async () => {
           throw new Error('execution reverted');
         },
-        BigNumber.from(500_000),
         'test tx'
       )
     ).to.be.rejectedWith('execution reverted');
   });
 
-  it('uses fallback gas only when explicitly allowed', async () => {
+  it('uses fallback gas through the explicit fallback helper', async () => {
     const fallbackGas = BigNumber.from(500_000);
-    const gasLimit = await estimateGasWithBuffer(
+    const gasLimit = await estimateGasWithFallbackBuffer(
       async () => {
         throw new Error('rpc estimation unavailable');
       },
       fallbackGas,
-      'test tx',
-      13000,
-      { fallbackPolicy: GAS_ESTIMATE_FALLBACK_POLICY.ALLOW_FALLBACK }
+      'test tx'
     );
 
     expect(gasLimit.eq(fallbackGas)).to.equal(true);

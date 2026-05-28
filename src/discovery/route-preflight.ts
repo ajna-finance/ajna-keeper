@@ -3,7 +3,7 @@ import {
   ExternalTakePathKind,
   KeeperConfig,
   LiquiditySource,
-  UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS,
+  UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
   resolveExternalTakePaths,
@@ -267,7 +267,7 @@ export async function validateAutoDiscoverRouteDeployments(params: {
 
       if (source === LiquiditySource.UNISWAPV3) {
         const routerConfig = params.config.dex?.uniswapV3?.router;
-        for (const field of UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS) {
+        for (const field of UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS) {
           await requireContractCode({
             provider: params.provider,
             label: `Uniswap V3 ${field}`,

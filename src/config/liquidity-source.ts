@@ -59,7 +59,7 @@ export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
 
 export const STANDARD_V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
 
-export const UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS = [
+export const UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS = [
   'swapRouter02Address',
   'poolFactoryAddress',
   'quoterV2Address',
@@ -67,7 +67,15 @@ export const UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS = [
 ] as const;
 
 export type UniswapV3FactoryRouteAddressField =
-  (typeof UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS)[number];
+  (typeof UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS)[number];
+
+export const UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS: readonly UniswapV3FactoryRouteAddressField[] =
+  [
+    'swapRouter02Address',
+    'poolFactoryAddress',
+    'quoterV2Address',
+    'wethAddress',
+  ];
 
 export interface ResolvedUniswapV3FactoryQuoteConfig {
   poolFactoryAddress: string;
@@ -86,7 +94,7 @@ export interface ResolvedUniswapV3FactoryRouteConfig
 export function getMissingUniswapV3FactoryRouteConfigFields(
   config: UniswapV3RouterOverrides | undefined
 ): UniswapV3FactoryRouteAddressField[] {
-  return UNISWAP_V3_FACTORY_ROUTE_ADDRESS_FIELDS.filter(
+  return UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS.filter(
     (field) => !config?.[field]
   );
 }

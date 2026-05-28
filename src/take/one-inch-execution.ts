@@ -661,7 +661,6 @@ export async function takeLiquidation({
     await NonceTracker.queueTransaction(
       takeWriteTransport.signer,
       async (nonce: number) => {
-        const fallbackGasLimit = ethers.BigNumber.from(1_500_000);
         const txArgs = [
           pool.poolAddress,
           liquidation.borrower,
@@ -673,7 +672,6 @@ export async function takeLiquidation({
         ] as const;
         const gasLimit = await estimateGasWithBuffer(
           () => keeperTaker.estimateGas.takeWithAtomicSwap(...txArgs),
-          fallbackGasLimit,
           `Take ${pool.name}/${borrower}`,
           13000
         );

@@ -27,6 +27,7 @@ import {
   deployFundedSwapRouter02,
   expectFactoryExecutionRejectedWithoutStateMutation,
   expectSuccessfulFactoryTake,
+  expectUniswapNonSwapRouterExecutionRejectedWithoutStateMutation,
   QUOTE_AMOUNT_DUE,
   ROUTER_AMOUNT_OUT,
   USDC_APPROVED_MIN_OUT,
@@ -193,7 +194,7 @@ describe('Production route selection fork verification', function () {
         routerAmountOut: underDeliveredOutput,
         routeMinOutRaw: routeFloor,
         profitMinOutRaw: profitFloor,
-        fallbackApprovedMinOutRaw: routeFloor,
+        approvedMinOutRaw: routeFloor,
         quoteAmountRaw: ROUTER_AMOUNT_OUT,
         selectedFeeTier: 500,
         expectedFailureReason: /insufficient output amount/i,
@@ -202,13 +203,11 @@ describe('Production route selection fork verification', function () {
   });
 
   it('fails closed when a Universal Router-style address is configured as SwapRouter02', async () => {
-    await expectFactoryExecutionRejectedWithoutStateMutation({
-      source: LiquiditySource.UNISWAPV3,
+    await expectUniswapNonSwapRouterExecutionRejectedWithoutStateMutation({
       routerAmountOut: ROUTER_AMOUNT_OUT,
       routeMinOutRaw: APPROVED_MIN_OUT,
       quoteAmountRaw: ROUTER_AMOUNT_OUT,
       selectedFeeTier: 500,
-      wrongUniswapRouter: true,
       expectedFailureReason:
         /estimate|revert|function selector|missing revert data|UNPREDICTABLE_GAS_LIMIT/i,
     });

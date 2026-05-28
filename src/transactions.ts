@@ -171,10 +171,8 @@ export async function liquidationArbTake(
   await NonceTracker.queueTransaction(queueSigner, async (nonce) => {
     if (takeWriteTransport) {
       const txArgs = [liquidation.borrowerAddress, false, bucketIndex] as const;
-      const fallbackGasLimit = BigNumber.from(800_000);
       const gasLimit = await estimateGasWithBuffer(
         () => contractPoolWithSigner.estimateGas.bucketTake(...txArgs),
-        fallbackGasLimit,
         `ArbTake ${liquidation.borrowerAddress.slice(0, 8)}`,
         13000
       );
