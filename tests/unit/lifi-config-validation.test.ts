@@ -486,6 +486,18 @@ describe('LI.FI config validation', () => {
     );
   });
 
+  it('rejects production LI.FI approval-spender chains without matching call-target policy', () => {
+    const config = baseConfig();
+    const otherChainId = 1;
+    (config.dex!.lifi as any).approvalSpenderAllowlist[otherChainId] = [
+      spender,
+    ];
+
+    expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
+      'KeeperConfig.dex.lifi.callTargetAllowlist.1 is required'
+    );
+  });
+
   it('requires selectors for every configured production LI.FI call target on non-active chains', () => {
     const config = baseConfig();
     const otherChainId = 1;

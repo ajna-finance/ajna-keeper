@@ -143,11 +143,75 @@ function getRequiredLivePolicySourceError(
   if (hasBroadExchangeFilter(config.dex.lifi)) {
     return 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires concrete production LI.FI exchange filters; broad filter keywords are not allowed';
   }
+  const incompletePolicyError = getRequiredLiveProductionPolicyError(
+    config.dex.lifi
+  );
+  if (incompletePolicyError !== undefined) {
+    return incompletePolicyError;
+  }
 
   const overrides = getSetEnvNames(REQUIRED_LIVE_POLICY_OVERRIDE_ENVS);
   if (overrides.length > 0) {
     return `AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE does not allow LI.FI policy env overrides: ${overrides.join(', ')}`;
   }
+  return undefined;
+}
+
+function getRequiredLiveProductionPolicyError(
+  lifi: Extract<LifiDexConfig, { mode: 'production' }>
+): string | undefined {
+  const chainKeys = new Set<string>();
+  for (const { label, value } of [
+    {
+      label: 'config.dex.lifi.callTargetAllowlist',
+      value: lifi.callTargetAllowlist,
+    },
+    {
+      label: 'config.dex.lifi.approvalSpenderAllowlist',
+      value: lifi.approvalSpenderAllowlist,
+    },
+    { label: 'config.dex.lifi.selectorAllowlist', value: lifi.selectorAllowlist },
+  ]) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return `AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires complete production LI.FI policy for every configured chain: ${label} is required`;
+    }
+    for (const chainKey of Object.keys(value)) {
+      chainKeys.add(chainKey);
+    }
+  }
+
+  if (chainKeys.size === 0) {
+    return 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires at least one complete production LI.FI chain policy';
+  }
+
+  for (const chainKey of Array.from(chainKeys).sort()) {
+    try {
+      const chainId = parsePositiveInteger(
+        chainKey,
+        `config.dex.lifi chain ${chainKey}`
+      );
+      const callTargets = normalizeLifiAddressAllowlist(
+        lifi.callTargetAllowlist?.[chainId],
+        {
+          label: `config.dex.lifi.callTargetAllowlist.${chainId}`,
+          requireNonEmpty: true,
+        }
+      );
+      normalizeLifiAddressAllowlist(lifi.approvalSpenderAllowlist?.[chainId], {
+        label: `config.dex.lifi.approvalSpenderAllowlist.${chainId}`,
+        requireNonEmpty: true,
+      });
+      normalizeLifiSelectorAllowlistRecord(lifi.selectorAllowlist?.[chainId], {
+        label: `config.dex.lifi.selectorAllowlist.${chainId}`,
+        requireNonEmpty: true,
+        callTargetAllowlist: callTargets,
+        requireCallTargetCoverage: true,
+      });
+    } catch (error) {
+      return `AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires complete production LI.FI policy for every configured chain: ${getErrorMessage(error)}`;
+    }
+  }
+
   return undefined;
 }
 
@@ -184,10 +248,18 @@ function getConfiguredLifiChains(config: KeeperConfig | undefined): number[] {
   if (lifi?.mode !== 'production') {
     return [];
   }
+  const getChainIds = (record: unknown): number[] => {
+    if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+      return [];
+    }
+    return Object.keys(record)
+      .map(Number)
+      .filter((chainId) => Number.isInteger(chainId) && chainId > 0);
+  };
   const chainSets = [
-    new Set(Object.keys(lifi.callTargetAllowlist).map(Number)),
-    new Set(Object.keys(lifi.approvalSpenderAllowlist).map(Number)),
-    new Set(Object.keys(lifi.selectorAllowlist).map(Number)),
+    new Set(getChainIds(lifi.callTargetAllowlist)),
+    new Set(getChainIds(lifi.approvalSpenderAllowlist)),
+    new Set(getChainIds(lifi.selectorAllowlist)),
   ];
   const [first, ...rest] = chainSets;
   return Array.from(first)

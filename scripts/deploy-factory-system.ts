@@ -299,6 +299,21 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
   console.log('Configuration validation passed');
 }
 
+function validateDetectedChainLifiProductionConfig(
+  config: KeeperConfig,
+  chainInfo: { chainId: number; name: string }
+): void {
+  if (!hasProductionLifiConfig(config)) {
+    return;
+  }
+
+  const { callTargets, approvalSpenders, selectorAllowlist } =
+    getLifiProductionAllowlists(config, chainInfo.chainId);
+  console.log(
+    `✅ LI.FI production allowlists validated for ${chainInfo.name} (${chainInfo.chainId}): targets=${callTargets.length}, spenders=${approvalSpenders.length}, selectorTargets=${Object.keys(selectorAllowlist).length}`
+  );
+}
+
 async function deployFactory(
   deployer: ethers.Wallet,
   ajnaPoolFactory: string,
@@ -1017,9 +1032,24 @@ function generateConfigUpdate(
 
   console.log('\n🚀 Next Steps:');
   console.log('1. Update your config file with the addresses above');
-  console.log('2. Test with: yarn start --config your-config-file.ts');
-  console.log('3. Expected result: "Type: factory, Valid: true"');
-  console.log(`4. Factory system ready for ${chainName}! 🎊`);
+  if (addresses.lifiTaker) {
+    console.log(
+      `2. Run the LI.FI route-shape gate: AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary -- --config ${configPath}`
+    );
+    console.log(
+      `3. Run the LI.FI callback-path fork gate: AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=${configPath} npm run lifi-fork-execution-canary`
+    );
+    console.log(
+      '4. For non-Base LI.FI production support, run an equivalent reviewed chain-specific fork canary before live use'
+    );
+    console.log(
+      `5. After both LI.FI gates pass, test startup with: yarn start --config ${configPath}`
+    );
+  } else {
+    console.log(`2. Test with: yarn start --config ${configPath}`);
+    console.log('3. Expected result: "Type: factory, Valid: true"');
+  }
+  console.log(`Factory system deployment complete for ${chainName}`);
 }
 
 async function main() {
@@ -1055,6 +1085,7 @@ async function main() {
     console.log(
       `🌐 Target Network: ${chainInfo.name} (Chain ID: ${chainInfo.chainId})`
     );
+    validateDetectedChainLifiProductionConfig(config, chainInfo);
 
     // Step 3: Load wallet from keystore
     console.log('\n🔐 Loading wallet from keystore...');

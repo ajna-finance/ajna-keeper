@@ -83,6 +83,7 @@ Module._load = function(request, parent, isMain) {
     allowExchanges?: string[];
     allowBroadExchangeFilters?: boolean;
     extraChainId?: number;
+    incompleteExtraChainId?: number;
   }): string {
     const configPath = path.join(params.dir, 'keeper-config.json');
     const chainId = params.chainId ?? 8453;
@@ -101,6 +102,9 @@ Module._load = function(request, parent, isMain) {
       selectorAllowlist[params.extraChainId] = {
         [params.callTarget]: [params.selector],
       };
+    }
+    if (params.incompleteExtraChainId !== undefined) {
+      callTargetAllowlist[params.incompleteExtraChainId] = [params.callTarget];
     }
     fs.writeFileSync(
       configPath,
@@ -586,6 +590,96 @@ Module._load = function(request, parent, isMain) {
     expect(fs.existsSync(requestsPath)).to.equal(false);
   });
 
+  it('fails closed before contacting LI.FI when required-live config has incomplete chain policy', () => {
+    const takerAddress = '0x1111111111111111111111111111111111111111';
+    const callTarget = '0x4444444444444444444444444444444444444444';
+    const approvalSpender = '0x5555555555555555555555555555555555555555';
+    const selector = '0xabcdef12';
+    const mockDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'lifi-route-canary-incomplete-chain-policy-')
+    );
+    const { requestsPath, preloadPath } = writeNoContactAxiosMock(
+      mockDir,
+      'LI.FI should not be contacted for incomplete required-live chain policy'
+    );
+    const configPath = writeKeeperConfig({
+      dir: mockDir,
+      mode: 'production',
+      takerAddress,
+      callTarget,
+      approvalSpender,
+      selector,
+      chainId: 8453,
+      incompleteExtraChainId: 1,
+    });
+
+    const { result, summary } = runCanary(
+      {
+        NODE_OPTIONS: `--require ${preloadPath}`,
+        AJNA_AGENT_LIFI_CANARY_MOCK_REQUESTS_PATH: requestsPath,
+        AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE: 'true',
+        AJNA_AGENT_LIFI_CANARY_CHAIN_ID: '8453',
+      },
+      ['--config', configPath]
+    );
+
+    expect(result.status, result.stderr).to.equal(1);
+    expect(summary, result.stderr).to.not.equal(undefined);
+    expect(summary.status).to.equal('skipped');
+    expect(summary.checks[0].error).to.include(
+      'requires complete production LI.FI policy for every configured chain'
+    );
+    expect(summary.checks[0].error).to.include(
+      'config.dex.lifi.approvalSpenderAllowlist.1'
+    );
+    expect(fs.existsSync(requestsPath)).to.equal(false);
+  });
+
+  it('reports a skipped summary before contacting LI.FI when required-live config omits selector policy', () => {
+    const takerAddress = '0x1111111111111111111111111111111111111111';
+    const callTarget = '0x4444444444444444444444444444444444444444';
+    const approvalSpender = '0x5555555555555555555555555555555555555555';
+    const selector = '0xabcdef12';
+    const mockDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'lifi-route-canary-missing-selector-policy-')
+    );
+    const { requestsPath, preloadPath } = writeNoContactAxiosMock(
+      mockDir,
+      'LI.FI should not be contacted for missing required-live selector policy'
+    );
+    const configPath = writeKeeperConfig({
+      dir: mockDir,
+      mode: 'production',
+      takerAddress,
+      callTarget,
+      approvalSpender,
+      selector,
+      chainId: 8453,
+    });
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    delete config.dex.lifi.selectorAllowlist;
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const { result, summary } = runCanary(
+      {
+        NODE_OPTIONS: `--require ${preloadPath}`,
+        AJNA_AGENT_LIFI_CANARY_MOCK_REQUESTS_PATH: requestsPath,
+        AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE: 'true',
+        AJNA_AGENT_LIFI_CANARY_CHAIN_ID: '8453',
+      },
+      ['--config', configPath]
+    );
+
+    expect(result.error, result.error?.message).to.equal(undefined);
+    expect(result.status, result.stderr).to.equal(1);
+    expect(summary, result.stderr).to.not.equal(undefined);
+    expect(summary.status).to.equal('skipped');
+    expect(summary.checks[0].error).to.include(
+      'config.dex.lifi.selectorAllowlist is required'
+    );
+    expect(fs.existsSync(requestsPath)).to.equal(false);
+  });
+
   it('infers the required-live canary chain from a single-chain production config', () => {
     const chainId = '43114';
     const takerAddress = '0x1111111111111111111111111111111111111111';
@@ -758,8 +852,9 @@ Module._load = function(request, parent, isMain) {
       ['--config', configPath]
     );
 
+    expect(result.error, result.error?.message).to.equal(undefined);
     expect(result.status).to.equal(1);
-    expect(result.stderr).to.include(
+    expect(`${result.stderr}${result.stdout}`).to.include(
       'AJNA_AGENT_LIFI_CANARY_CHAIN_ID is required'
     );
     expect(summary).to.equal(undefined);

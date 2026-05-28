@@ -40,6 +40,21 @@ describe('LI.FI factory deployment script support', () => {
     expect(source).to.include('assertExactSet');
   });
 
+  it('validates target-chain LI.FI production allowlists before wallet/deploy actions', () => {
+    expect(source).to.include('validateDetectedChainLifiProductionConfig');
+    expect(source).to.include('getLifiProductionAllowlists(config, chainInfo.chainId)');
+
+    const validationIndex = source.indexOf(
+      'validateDetectedChainLifiProductionConfig(config, chainInfo);'
+    );
+    const walletIndex = source.indexOf(
+      "console.log('\\n🔐 Loading wallet from keystore...');"
+    );
+
+    expect(validationIndex).to.be.greaterThan(-1);
+    expect(walletIndex).to.be.greaterThan(validationIndex);
+  });
+
   it('reconciles stale LI.FI allowlist entries before final exact verification', () => {
     expect(source).to.include('currentCallTargets');
     expect(source).to.include('currentApprovalSpenders');
@@ -54,5 +69,20 @@ describe('LI.FI factory deployment script support', () => {
 
   it('does not silently truncate configured LI.FI selectors during deployment', () => {
     expect(source).to.not.include('hexDataSlice(selector, 0, 4)');
+  });
+
+  it('prints LI.FI production canary gates before suggesting live startup', () => {
+    expect(source).to.include(
+      'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary'
+    );
+    expect(source).to.include(
+      'AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=${configPath} npm run lifi-fork-execution-canary'
+    );
+    expect(source).to.include(
+      'For non-Base LI.FI production support, run an equivalent reviewed chain-specific fork canary before live use'
+    );
+    expect(source).to.include(
+      'After both LI.FI gates pass, test startup with: yarn start --config ${configPath}'
+    );
   });
 });

@@ -9,7 +9,10 @@ import {
   resolveExternalTakePaths,
   resolveFactoryRouteSelectionSources,
 } from '../config';
-import { normalizeLifiAddressAllowlist } from '../dex/lifi';
+import {
+  normalizeLifiAddressAllowlist,
+  normalizeLifiSelectorAllowlistRecord,
+} from '../dex/lifi';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
 
@@ -240,15 +243,29 @@ function normalizeSelectorList(
   ).sort();
 }
 
-function normalizeSelectorConfig(
-  selectorsByTarget: Record<string, string[]> | undefined
-): Record<string, string[]> {
-  const normalized: Record<string, string[]> = {};
-  for (const [target, selectors] of Object.entries(selectorsByTarget ?? {})) {
-    const key = ethers.utils.getAddress(target).toLowerCase();
-    normalized[key] = selectors;
+function normalizeSelectorConfig(params: {
+  selectorsByTarget: Record<string, string[]> | undefined;
+  chainId: number;
+  callTargets: readonly string[];
+  errors: string[];
+}): Record<string, string[]> {
+  if (params.callTargets.length === 0) {
+    return {};
   }
-  return normalized;
+
+  try {
+    return normalizeLifiSelectorAllowlistRecord(params.selectorsByTarget, {
+      label: `LI.FI selectorAllowlist.${params.chainId}`,
+      requireNonEmpty: true,
+      callTargetAllowlist: params.callTargets,
+      requireCallTargetCoverage: true,
+    });
+  } catch (error) {
+    params.errors.push(
+      `LI.FI selectorAllowlist.${params.chainId} is invalid: ${getErrorMessage(error)}`
+    );
+    return {};
+  }
 }
 
 function assertExactSet(params: {
@@ -313,9 +330,12 @@ async function validateLifiAllowlistPreflight(params: {
     `LI.FI approvalSpenderAllowlist.${params.chainId}`,
     params.errors
   );
-  const expectedSelectorsByTarget = normalizeSelectorConfig(
-    lifi.selectorAllowlist?.[params.chainId]
-  );
+  const expectedSelectorsByTarget = normalizeSelectorConfig({
+    selectorsByTarget: lifi.selectorAllowlist?.[params.chainId],
+    chainId: params.chainId,
+    callTargets: expectedTargets,
+    errors: params.errors,
+  });
   if (expectedTargets.length === 0) {
     params.errors.push(
       `LI.FI callTargetAllowlist.${params.chainId} is not configured`

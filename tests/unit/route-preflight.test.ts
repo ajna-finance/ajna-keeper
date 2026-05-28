@@ -502,6 +502,28 @@ describe('route deployment preflight', () => {
     }
   });
 
+  it('fails LI.FI preflight when a configured approval spender has no bytecode', async () => {
+    const { config, provider } = lifiProviderStub();
+    const spender = config.dex!.lifi!.approvalSpenderAllowlist![1][0];
+    provider.getCode.callsFake(async (address: string) =>
+      address.toLowerCase() === spender.toLowerCase() ? '0x' : '0x6000'
+    );
+
+    try {
+      await validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      expect.fail('expected preflight to fail');
+    } catch (error) {
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        `LI.FI approval spender ${spender.toLowerCase()} has no contract code`
+      );
+    }
+  });
+
   it('fails LI.FI preflight when on-chain call targets do not exactly match config', async () => {
     const { config, provider } = lifiProviderStub({
       allowedTargets: ['0x9999999999999999999999999999999999999999'],
@@ -541,6 +563,33 @@ describe('route deployment preflight', () => {
         'LI.FI taker approval spender allowlist'
       );
       expect((error as Error).message).to.include('mismatch');
+    }
+  });
+
+  it('fails LI.FI preflight when selector policy includes a non-call-target entry', async () => {
+    const { config, provider } = lifiProviderStub();
+    (config.dex!.lifi! as any).selectorAllowlist = {
+      1: {
+        '0x3333333333333333333333333333333333333333': ['0xabcdef12'],
+        '0x5555555555555555555555555555555555555555': ['0xdeadbeef'],
+      },
+    };
+
+    try {
+      await validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      expect.fail('expected preflight to fail');
+    } catch (error) {
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        'LI.FI selectorAllowlist.1 is invalid'
+      );
+      expect((error as Error).message).to.include(
+        'is not present in callTargetAllowlist'
+      );
     }
   });
 

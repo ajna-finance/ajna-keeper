@@ -868,6 +868,13 @@ function validateLifiDexConfig(params: {
         );
       }
     }
+    for (const configuredChainId of Array.from(approvalSpenders.keys())) {
+      if (!callTargets.has(configuredChainId)) {
+        throw new Error(
+          `${params.fieldName}.callTargetAllowlist.${configuredChainId} is required`
+        );
+      }
+    }
   }
   validateSelectorAllowlist({
     value: 'selectorAllowlist' in lifi ? lifi.selectorAllowlist : undefined,
