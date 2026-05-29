@@ -11,8 +11,11 @@ import {
 import {
   convertWadToTokenDecimals,
   convertWadToTokenDecimalsCeil,
-  getDecimalsErc20,
 } from '../erc20';
+import {
+  getCachedTokenDecimals,
+  resolveExternalTakeChainId,
+} from './external-take-chain';
 import { logger } from '../logging';
 import { isNonceConsumedTransactionError, NonceTracker } from '../nonce';
 import {
@@ -40,97 +43,20 @@ import {
   mergeRoutePolicyIntoEvaluation,
 } from './external-take-policy';
 
-const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
-
-interface VerifiedOneInchChainCheck {
-  provider?: object;
-  pending: Promise<void>;
-}
-
-const verifiedOneInchChainIds = new WeakMap<
-  object,
-  Map<number, VerifiedOneInchChainCheck>
->();
-
 async function getOneInchTokenDecimals(params: {
   signer: Signer;
   tokenAddress: string;
   chainId?: number;
   cache?: Map<string, number>;
 }): Promise<number> {
-  const cacheKey = `${params.chainId ?? 'unknown'}:${params.tokenAddress.toLowerCase()}`;
-  const cached = params.cache?.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const decimals = await getDecimalsErc20(
-    params.signer,
-    params.tokenAddress,
-    params.chainId
-  );
-  if (params.cache) {
-    params.cache.set(cacheKey, decimals);
-    while (params.cache.size > MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES) {
-      const oldestKey = params.cache.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      params.cache.delete(oldestKey);
-    }
-  }
-  return decimals;
-}
-
-async function assertConfiguredChainIdMatchesSigner(
-  signer: Signer,
-  configuredChainId: number
-): Promise<void> {
-  if (typeof signer !== 'object' || signer === null) {
-    return;
-  }
-  const provider = (signer as { provider?: object }).provider;
-  let signerChecks = verifiedOneInchChainIds.get(signer);
-  if (!signerChecks) {
-    signerChecks = new Map();
-    verifiedOneInchChainIds.set(signer, signerChecks);
-  }
-  const cached = signerChecks.get(configuredChainId);
-  if (cached !== undefined && cached.provider === provider) {
-    await cached.pending;
-    return;
-  }
-
-  const check: VerifiedOneInchChainCheck = {
-    provider,
-    pending: (async () => {
-      const signerChainId = await signer.getChainId();
-      if (signerChainId !== configuredChainId) {
-        throw new Error(
-          `configured 1inch chainId ${configuredChainId} does not match signer chainId ${signerChainId}`
-        );
-      }
-    })(),
-  };
-  signerChecks.set(configuredChainId, check);
-  try {
-    await check.pending;
-  } catch (error) {
-    if (signerChecks.get(configuredChainId) === check) {
-      signerChecks.delete(configuredChainId);
-    }
-    throw error;
-  }
+  return getCachedTokenDecimals(params);
 }
 
 async function resolveOneInchChainId(
   config: Partial<Pick<OneInchQuoteConfig, 'chainId'>>,
   signer: Signer
 ): Promise<number> {
-  if (config.chainId === undefined) {
-    return await signer.getChainId();
-  }
-  await assertConfiguredChainIdMatchesSigner(signer, config.chainId);
-  return config.chainId;
+  return resolveExternalTakeChainId(config, signer, '1inch');
 }
 
 function getQuoteAmountDueRawFromDecimals(params: {

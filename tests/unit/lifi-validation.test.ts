@@ -336,6 +336,33 @@ describe('LI.FI quote validation', () => {
     );
   });
 
+  it('rejects the 0xEEEE EVM native-token placeholder for route assets', () => {
+    const nativePlaceholder = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+
+    expect(() =>
+      validate(
+        quote({
+          action: action({
+            fromToken: { address: nativePlaceholder, chainId },
+          }),
+        })
+      )
+    ).to.throw(
+      'LI.FI quote.action.fromToken.address cannot be native token placeholder'
+    );
+    expect(() =>
+      validate(
+        quote({
+          action: action({
+            toToken: { address: nativePlaceholder, chainId },
+          }),
+        })
+      )
+    ).to.throw(
+      'LI.FI quote.action.toToken.address cannot be native token placeholder'
+    );
+  });
+
   it('rejects route token address mismatches', () => {
     const otherToken = '0x6666666666666666666666666666666666666666';
 

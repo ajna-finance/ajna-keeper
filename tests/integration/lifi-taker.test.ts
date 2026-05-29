@@ -603,6 +603,56 @@ describe('LifiKeeperTaker', () => {
     ).to.be.true;
   });
 
+  it('reverts when the LI.FI target consumes input but returns zero quote output', async () => {
+    const result = await deployFixture();
+    const amountIn = utils.parseEther('1');
+
+    await result.collateral.mint(result.pool.address, amountIn);
+    await result.pool.setQuoteAmountDue(utils.parseEther('1'));
+
+    const noOutputSelector = result.target.interface.getSighash('mockNoOutput');
+    await result.taker.setCallSelector(
+      result.target.address,
+      noOutputSelector,
+      true
+    );
+    const callData = result.target.interface.encodeFunctionData(
+      'mockNoOutput',
+      [result.collateral.address, amountIn]
+    );
+    const details = encodeDetails({
+      approvalSpender: result.target.address,
+      srcToken: result.collateral.address,
+      dstToken: result.quote.address,
+      dstReceiver: result.taker.address,
+      amountIn,
+      amountOutMinimum: utils.parseEther('1.1'),
+      callData,
+    });
+
+    await expectRevertWith(
+      result.factory.takeWithAtomicSwap(
+        result.pool.address,
+        BORROWER,
+        constants.WeiPerEther,
+        amountIn,
+        LiquiditySource.LIFI,
+        result.target.address,
+        details
+      ),
+      'InsufficientQuoteReceived'
+    );
+    expect((await result.pool.takeCount()).eq(0)).to.be.true;
+    expect(
+      (
+        await result.collateral.allowance(
+          result.taker.address,
+          result.target.address
+        )
+      ).eq(0)
+    ).to.be.true;
+  });
+
   it('reverts when callback collateral does not match LI.FI amountIn', async () => {
     const result = await executeTake({
       detailsAmountIn: utils.parseEther('0.99'),
@@ -822,6 +872,47 @@ describe('LifiKeeperTaker', () => {
       callData: '0xdeadbeef00000000',
     });
     await expectRevertWith(badSelectorResult.send(), 'SelectorNotAllowed');
+  });
+
+  it('rejects an allowlisted LI.FI call target that has no contract code', async () => {
+    const fixture = await deployFixture();
+    const amountIn = utils.parseEther('1');
+    const amountOutMinimum = utils.parseEther('1.1');
+    const noCodeTarget = Wallet.createRandom().address;
+    const selector = '0xabcdef12';
+
+    await fixture.collateral.mint(fixture.pool.address, amountIn);
+    await fixture.pool.setQuoteAmountDue(utils.parseEther('1'));
+    // Allowlist a target/spender/selector whose address has no contract code.
+    // Without the on-chain code-existence guard the low-level call would
+    // succeed as a no-op and the swap would silently move no funds.
+    await fixture.taker.setCallTarget(noCodeTarget, true);
+    await fixture.taker.setApprovalSpender(noCodeTarget, true);
+    await fixture.taker.setCallSelector(noCodeTarget, selector, true);
+
+    const details = encodeDetails({
+      approvalSpender: noCodeTarget,
+      srcToken: fixture.collateral.address,
+      dstToken: fixture.quote.address,
+      dstReceiver: fixture.taker.address,
+      amountIn,
+      amountOutMinimum,
+      callData: selector + '00'.repeat(32),
+    });
+
+    await expectRevertWith(
+      fixture.factory.takeWithAtomicSwap(
+        fixture.pool.address,
+        BORROWER,
+        constants.WeiPerEther,
+        amountIn,
+        LiquiditySource.LIFI,
+        noCodeTarget,
+        details
+      ),
+      'CallTargetHasNoCode'
+    );
+    expect((await fixture.pool.takeCount()).eq(0)).to.be.true;
   });
 
   it('rejects non-allowlisted approval spenders', async () => {

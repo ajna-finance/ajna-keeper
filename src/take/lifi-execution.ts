@@ -8,7 +8,11 @@ import {
   fetchLifiQuote,
   validateLifiQuote,
 } from '../dex/lifi';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
+import { convertWadToTokenDecimals } from '../erc20';
+import {
+  getCachedTokenDecimals,
+  resolveExternalTakeChainId,
+} from './external-take-chain';
 import { logger } from '../logging';
 import { isNonceConsumedTransactionError, NonceTracker } from '../nonce';
 import {
@@ -35,18 +39,6 @@ import {
   submitTakeTransaction,
 } from './write-transport';
 import { logTakeExecutionTelemetry } from './execution-telemetry';
-
-const MAX_LIFI_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
-
-interface VerifiedLifiChainCheck {
-  provider?: object;
-  pending: Promise<void>;
-}
-
-const verifiedLifiChainIds = new WeakMap<
-  object,
-  Map<number, VerifiedLifiChainCheck>
->();
 
 function getLifiApiKey(config: LifiDexConfig | undefined): string | undefined {
   return config?.apiKeyEnvVar ? process.env[config.apiKeyEnvVar] : undefined;
@@ -94,11 +86,18 @@ function getLifiFreshQuoteAgeError(params: {
 
 function recordLifiStaleFreshQuote(
   config: LifiExecutionConfig,
-  error: string
+  error: string,
+  retryable: boolean
 ): void {
+  // `retryable` here drives the LI.FI execution_refresh circuit (retryable
+  // failures count toward opening it). Staleness detected after the quote has
+  // waited in the keeper's own nonce queue / gas-estimation path is a local
+  // latency condition, not a LI.FI health signal, so it is recorded as
+  // non-retryable (neutral) to avoid opening the circuit while the provider is
+  // healthy. Genuine provider failures still flow through the fetch catch path.
   config.onLifiQuoteResult?.({
     success: false,
-    retryable: true,
+    retryable,
     error,
   });
 }
@@ -132,79 +131,14 @@ async function getLifiTokenDecimals(params: {
   chainId?: number;
   cache?: Map<string, number>;
 }): Promise<number> {
-  const cacheKey = `${params.chainId ?? 'unknown'}:${params.tokenAddress.toLowerCase()}`;
-  const cached = params.cache?.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const decimals = await getDecimalsErc20(
-    params.signer,
-    params.tokenAddress,
-    params.chainId
-  );
-  if (params.cache) {
-    params.cache.set(cacheKey, decimals);
-    while (params.cache.size > MAX_LIFI_TOKEN_DECIMAL_CACHE_ENTRIES) {
-      const oldestKey = params.cache.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      params.cache.delete(oldestKey);
-    }
-  }
-  return decimals;
-}
-
-async function assertConfiguredChainIdMatchesSigner(
-  signer: Signer,
-  configuredChainId: number
-): Promise<void> {
-  if (typeof signer !== 'object' || signer === null) {
-    return;
-  }
-  const provider = (signer as { provider?: object }).provider;
-  let signerChecks = verifiedLifiChainIds.get(signer);
-  if (!signerChecks) {
-    signerChecks = new Map();
-    verifiedLifiChainIds.set(signer, signerChecks);
-  }
-  const cached = signerChecks.get(configuredChainId);
-  if (cached !== undefined && cached.provider === provider) {
-    await cached.pending;
-    return;
-  }
-
-  const check: VerifiedLifiChainCheck = {
-    provider,
-    pending: (async () => {
-      const signerChainId = await signer.getChainId();
-      if (signerChainId !== configuredChainId) {
-        throw new Error(
-          `configured LI.FI chainId ${configuredChainId} does not match signer chainId ${signerChainId}`
-        );
-      }
-    })(),
-  };
-  signerChecks.set(configuredChainId, check);
-  try {
-    await check.pending;
-  } catch (error) {
-    if (signerChecks.get(configuredChainId) === check) {
-      signerChecks.delete(configuredChainId);
-    }
-    throw error;
-  }
+  return getCachedTokenDecimals(params);
 }
 
 async function resolveLifiChainId(
   config: Partial<Pick<LifiQuoteConfig, 'chainId'>>,
   signer: Signer
 ): Promise<number> {
-  if (config.chainId === undefined) {
-    return await signer.getChainId();
-  }
-  await assertConfiguredChainIdMatchesSigner(signer, config.chainId);
-  return config.chainId;
+  return resolveExternalTakeChainId(config, signer, 'LI.FI');
 }
 
 function requireProductionLifiConfig(
@@ -410,7 +344,7 @@ export async function getLifiPathQuoteEvaluation(
     const takeablePrice = marketPrice * policy.effectiveMarketPriceFactor;
 
     logger.info(
-      `LI.FI take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor}, lifiMode=${lifiConfig.mode}, topLevelType=${getLifiTopLevelQuoteType(approvedQuote)}, topLevelTool=${getLifiTopLevelQuoteTool(approvedQuote)}, effectiveTool=${approvedQuote.tool}, tool=${approvedQuote.tool}, expectedOutputRaw=${approvedQuote.quoteAmountRaw.toString()}, routeMinOutRaw=${approvedQuote.routeMinOutRaw.toString()}, approvedMinOutRaw=${policy.approvedMinOutRaw.toString()}, target=${approvedQuote.transactionTarget}, transactionTarget=${approvedQuote.transactionRequest.to}, approvalSpender=${approvedQuote.approvalSpender}, selector=${approvedQuote.selector}, rejectionReason=${policy.rejectionReason ?? 'none'} -> ${policy.isEconomicallyExecutable ? 'TAKEABLE' : 'skip'}`
+      `LI.FI take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor}, lifiMode=${lifiConfig.mode}, topLevelType=${getLifiTopLevelQuoteType(approvedQuote)}, topLevelTool=${getLifiTopLevelQuoteTool(approvedQuote)}, effectiveTool=${approvedQuote.tool}, expectedOutputRaw=${approvedQuote.quoteAmountRaw.toString()}, routeMinOutRaw=${approvedQuote.routeMinOutRaw.toString()}, approvedMinOutRaw=${policy.approvedMinOutRaw.toString()}, target=${approvedQuote.transactionTarget}, transactionTarget=${approvedQuote.transactionRequest.to}, approvalSpender=${approvedQuote.approvalSpender}, selector=${approvedQuote.selector}, rejectionReason=${policy.rejectionReason ?? 'none'} -> ${policy.isEconomicallyExecutable ? 'TAKEABLE' : 'skip'}`
     );
 
     return mergeRoutePolicyIntoEvaluation({
@@ -666,7 +600,7 @@ export async function takeLiquidationLifi(params: {
       config: lifiConfig,
     });
     if (freshQuoteAgeError) {
-      recordLifiStaleFreshQuote(config, freshQuoteAgeError);
+      recordLifiStaleFreshQuote(config, freshQuoteAgeError, true);
       recordLifiPreBroadcastFailure(config, freshQuoteAgeError);
       return false;
     }
@@ -676,7 +610,7 @@ export async function takeLiquidationLifi(params: {
         config: lifiConfig,
       });
       if (error) {
-        recordLifiStaleFreshQuote(config, error);
+        recordLifiStaleFreshQuote(config, error, false);
         throw new Error(error);
       }
     };

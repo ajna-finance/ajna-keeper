@@ -651,17 +651,52 @@ async function configureFactory(
     console.log('🎉 Factory configured with Curve taker');
   }
 
-  // Register LI.FI taker (LiquiditySource.LIFI = 5)
-  if (addresses.lifiTaker) {
-    const setLifiTakerTx = await factory.setTaker(
-      LiquiditySource.LIFI,
-      addresses.lifiTaker
-    );
-    console.log('✅ LI.FI configuration tx:', setLifiTakerTx.hash);
-    await setLifiTakerTx.wait();
-    console.log('🎉 Factory configured with LI.FI taker');
-  }
+  // LI.FI taker registration is intentionally NOT done here. It is registered
+  // by registerLifiTakerInFactory only AFTER configureLifiAllowlists has
+  // applied and exactly verified the call-target/approval-spender/selector
+  // allowlists, so the factory never maps LiquiditySource.LIFI to a taker whose
+  // on-chain allowlists are incomplete or unverified.
   // ADD DELAY AFTER CONFIGURATION
+  await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
+}
+
+// Register the LI.FI taker in the factory. Must run only after
+// configureLifiAllowlists has succeeded (allowlists applied and reconciled),
+// keeping factory enablement strictly downstream of verified config/on-chain
+// agreement per the LI.FI plan's atomic operational runbook.
+async function registerLifiTakerInFactory(
+  deployer: ethers.Wallet,
+  factoryAddress: string,
+  addresses: DeploymentAddresses
+): Promise<void> {
+  if (!addresses.lifiTaker) {
+    return;
+  }
+  console.log('\n⚙️  Step 3c: Registering LI.FI taker in factory...');
+  const factoryArtifact = require(
+    path.join(
+      __dirname,
+      '..',
+      'artifacts',
+      'contracts',
+      'factories',
+      'AjnaKeeperTakerFactory.sol',
+      'AjnaKeeperTakerFactory.json'
+    )
+  );
+  const factory = new ethers.Contract(
+    factoryAddress,
+    factoryArtifact.abi,
+    deployer
+  );
+  // Register LI.FI taker (LiquiditySource.LIFI = 5)
+  const setLifiTakerTx = await factory.setTaker(
+    LiquiditySource.LIFI,
+    addresses.lifiTaker
+  );
+  console.log('✅ LI.FI configuration tx:', setLifiTakerTx.hash);
+  await setLifiTakerTx.wait();
+  console.log('🎉 Factory configured with LI.FI taker');
   await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
 }
 
@@ -1201,12 +1236,18 @@ async function main() {
     }
     await configureFactory(deployer, addresses.factory, addresses);
     if (addresses.lifiTaker) {
+      // Configure + exactly verify the LI.FI taker allowlists FIRST, then
+      // register the taker in the factory. This keeps factory enablement
+      // strictly downstream of verified config/on-chain agreement: a failure
+      // while applying or reconciling allowlists aborts before the factory ever
+      // maps LiquiditySource.LIFI to a misconfigured taker.
       await configureLifiAllowlists(
         deployer,
         addresses.lifiTaker,
         config,
         chainInfo.chainId
       );
+      await registerLifiTakerInFactory(deployer, addresses.factory, addresses);
     }
 
     // Step 8: Verify everything works

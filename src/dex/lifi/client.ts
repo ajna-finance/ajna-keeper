@@ -39,7 +39,10 @@ function requireAddress(value: string, label: string): string {
 }
 
 function requirePositiveDecimalInteger(value: string, label: string): string {
-  if (!/^[0-9]+$/.test(value) || /^0+$/.test(value)) {
+  // Canonical positive integer: no leading zeros, no zero. Mirrors the strict
+  // form used by validate-route's requirePositiveAmount so the request and
+  // response helpers cannot drift on what counts as a valid amount string.
+  if (!/^[1-9]\d*$/.test(value)) {
     throw new Error(`${label} must be a positive decimal integer string`);
   }
   return value;

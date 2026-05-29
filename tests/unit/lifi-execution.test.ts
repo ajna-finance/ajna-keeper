@@ -646,15 +646,24 @@ describe('LI.FI execution', () => {
     expect(estimateGas.calledOnce).to.equal(true);
     expect(populateTransaction.called).to.equal(false);
     expect(submitTransaction.called).to.equal(false);
+    // Staleness detected while the quote waited in the keeper's nonce queue /
+    // gas-estimation path is keeper-side latency, not a LI.FI health failure,
+    // so it must be recorded as non-retryable (neutral) and must not open the
+    // execution_refresh circuit.
     expect(
       onLifiQuoteResult
         .getCalls()
         .some(
           (call) =>
             call.args[0].success === false &&
-            call.args[0].retryable === true &&
+            call.args[0].retryable === false &&
             call.args[0].error === 'LI.FI fresh quote exceeded maxQuoteAgeMs'
         )
+    ).to.equal(true);
+    expect(
+      onLifiQuoteResult
+        .getCalls()
+        .every((call) => call.args[0].retryable !== true)
     ).to.equal(true);
     expect(
       onLifiQuoteResult.getCalls().some((call) => call.args[0].success === true)

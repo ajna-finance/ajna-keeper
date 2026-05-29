@@ -18,6 +18,15 @@ import {
 import { normalizeLifiSelectorAllowlist } from './selector-allowlist';
 
 const ZERO_ADDRESS = ethers.constants.AddressZero.toLowerCase();
+// EVM/LI.FI native-token sentinel. Ajna pools here are ERC20 pools, so wrapped
+// native tokens must be referenced by their ERC20 address; reject the
+// placeholder explicitly rather than relying solely on the token-equality check.
+const NATIVE_TOKEN_PLACEHOLDER = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+
+function isNativeTokenPlaceholder(address: string): boolean {
+  const normalized = address.toLowerCase();
+  return normalized === ZERO_ADDRESS || normalized === NATIVE_TOKEN_PLACEHOLDER;
+}
 
 export interface ValidateLifiQuoteParams {
   quote: unknown;
@@ -142,7 +151,7 @@ function assertTokenAddress(params: {
     params.label
   );
   const address = requireAddress(token.address, `${params.label}.address`);
-  if (address.toLowerCase() === ZERO_ADDRESS) {
+  if (isNativeTokenPlaceholder(address)) {
     throw new Error(
       `${params.label}.address cannot be native token placeholder`
     );
@@ -726,12 +735,9 @@ export function validateLifiQuote(
         ? { from: ethers.utils.getAddress(transactionRequest.from) }
         : {}),
       chainId: txChainId,
-      ...(typeof transactionRequest.gasLimit === 'string'
-        ? { gasLimit: transactionRequest.gasLimit }
-        : {}),
-      ...(typeof transactionRequest.gasPrice === 'string'
-        ? { gasPrice: transactionRequest.gasPrice }
-        : {}),
+      // Provider-reported gasLimit/gasPrice are intentionally dropped: with
+      // skipSimulation=true they are not authoritative. Execution derives a
+      // local gas limit before submission, so they must never reach the wire.
     },
     tool: includedTool ?? normalizeStepTool(quote, 'LI.FI quote'),
     ...(topLevelTool ? { topLevelTool } : {}),

@@ -12,6 +12,21 @@ describe('LI.FI route canary', function () {
   const tsNodeBin = path.join(repoRoot, 'node_modules/ts-node/dist/bin.js');
   const source = fs.readFileSync(scriptPath, 'utf8');
 
+  // The no-broadcast guarantee must hold for the canary's whole first-party LI.FI
+  // import surface, not just the entry script: a write primitive introduced into
+  // src/dex/lifi/* (the modules the canary imports for fetch/validate) would
+  // otherwise slip past a scan of scriptPath alone. Shared modules like
+  // src/utils / src/config legitimately reference ethers Wallet/providers for
+  // non-canary reasons, so they are intentionally out of scope here.
+  const lifiModuleDir = path.join(repoRoot, 'src/dex/lifi');
+  const noBroadcastScanSources = [
+    source,
+    ...fs
+      .readdirSync(lifiModuleDir)
+      .filter((file) => file.endsWith('.ts'))
+      .map((file) => fs.readFileSync(path.join(lifiModuleDir, file), 'utf8')),
+  ];
+
   function runCanary(
     env: Record<string, string | undefined> = {},
     args: string[] = []
@@ -182,7 +197,9 @@ Module._load = function(request, parent, isMain) {
     ];
 
     for (const forbidden of forbiddenWriteHooks) {
-      expect(source).to.not.include(forbidden);
+      for (const scanned of noBroadcastScanSources) {
+        expect(scanned).to.not.include(forbidden);
+      }
     }
   });
 

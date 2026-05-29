@@ -2,6 +2,7 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import {
   ExternalTakePathKind,
+  FACTORY_DYNAMIC_SOURCES,
   LiquiditySource,
   LiquiditySourceMap,
   TakeWriteTransportMode,
@@ -15,6 +16,7 @@ import {
   resolveFactoryRouteSelectionSources,
 } from '../config';
 import { ResolvedTakeTarget } from './targets';
+import { ExternalTakeRouteProvider } from './external-take-provider';
 import { logger } from '../logging';
 import {
   createDiscoveryTransportsForConfig,
@@ -2900,6 +2902,182 @@ function createExternalTakeAdapterForDiscovery(params: {
     });
   };
 
+  // Execution-side route providers. The hybrid executor and the single-path
+  // direct adapters both dispatch through these instead of branching on path
+  // identity, so each path's failure classification and provider-circuit gating
+  // live behind one boundary. Quote ranking still happens in the discovery
+  // quote machinery above.
+  type DiscoveryExternalTakeRouteProvider = ExternalTakeRouteProvider<
+    ResolvedTakeTarget,
+    DiscoveryExternalExecutionConfig
+  >;
+
+  const oneInchProvider: DiscoveryExternalTakeRouteProvider = {
+    path: 'oneinch',
+    supportedSources: () => [LiquiditySource.ONEINCH],
+    supportedCircuitPurposes: () => [
+      'route_quote',
+      'swap_data',
+      'gas_conversion',
+    ],
+    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
+      let oneInchPreSubmitRejected = false;
+      let oneInchSwapDataSucceeded = false;
+      let oneInchPreBroadcastFailed = false;
+      const originalSwapDataResult = config.onOneInchSwapDataResult;
+      const originalExecutionFailure = config.onOneInchExecutionFailure;
+      const oneInchConfig = {
+        ...config,
+        onOneInchSwapDataResult: (result: {
+          success: boolean;
+          retryable?: boolean;
+          errorCode?: number | string;
+          error?: string;
+        }) => {
+          originalSwapDataResult?.(result);
+          if (result.success) {
+            oneInchSwapDataSucceeded = true;
+          } else {
+            oneInchPreSubmitRejected = true;
+          }
+        },
+        onOneInchExecutionFailure: (result: {
+          preBroadcast: boolean;
+          error?: string;
+        }) => {
+          originalExecutionFailure?.(result);
+          if (result.preBroadcast) {
+            oneInchPreBroadcastFailed = true;
+          }
+        },
+      };
+      const succeeded = await oneInchExecutionModule.takeLiquidation({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config: oneInchConfig,
+      });
+      return {
+        succeeded,
+        preBroadcastFailed:
+          (oneInchPreSubmitRejected && !oneInchSwapDataSucceeded) ||
+          oneInchPreBroadcastFailed,
+      };
+    },
+  };
+
+  const lifiProvider: DiscoveryExternalTakeRouteProvider = {
+    path: 'lifi',
+    supportedSources: () => [LiquiditySource.LIFI],
+    supportedCircuitPurposes: () => ['route_quote', 'execution_refresh'],
+    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
+      let lifiPreBroadcastFailed = false;
+      const originalLifiExecutionFailure = config.onLifiExecutionFailure;
+      const lifiConfig = {
+        ...config,
+        onLifiExecutionFailure: (result: {
+          preBroadcast: boolean;
+          error?: string;
+        }) => {
+          originalLifiExecutionFailure?.(result);
+          if (result.preBroadcast) {
+            lifiPreBroadcastFailed = true;
+          }
+        },
+      };
+      // Enforce the LI.FI execution_refresh circuit at the provider boundary so
+      // both hybrid and direct callers fail closed identically. Returns
+      // undefined when dryRun, matching the prior caller-side guard.
+      const circuitOpenReason =
+        getLifiExecutionRefreshCircuitOpenReason(config);
+      if (circuitOpenReason) {
+        lifiConfig.onLifiExecutionFailure?.({
+          preBroadcast: true,
+          error: circuitOpenReason,
+        });
+        return {
+          succeeded: false,
+          preBroadcastFailed: true,
+          circuitOpenReason,
+        };
+      }
+      const succeeded = await lifiExecutionModule.takeLiquidationLifi({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config: lifiConfig,
+      });
+      return { succeeded, preBroadcastFailed: lifiPreBroadcastFailed };
+    },
+  };
+
+  const factoryProvider: DiscoveryExternalTakeRouteProvider = {
+    path: 'factory',
+    supportedSources: () => FACTORY_DYNAMIC_SOURCES,
+    supportedCircuitPurposes: () => [],
+    execute: async ({
+      pool,
+      signer,
+      poolConfig,
+      liquidation,
+      config,
+      selectedSource,
+    }) => {
+      let factoryPreBroadcastFailed = false;
+      const factoryPoolConfig =
+        selectedSource !== undefined && isFactoryDynamicSource(selectedSource)
+          ? withTakeLiquiditySource(poolConfig, selectedSource)
+          : poolConfig;
+      const originalFactoryExecutionFailure = config.onFactoryExecutionFailure;
+      const factoryConfig = {
+        ...config,
+        onFactoryExecutionFailure: (result: {
+          preBroadcast: boolean;
+          error?: string;
+        }) => {
+          originalFactoryExecutionFailure?.(result);
+          if (result.preBroadcast) {
+            factoryPreBroadcastFailed = true;
+          }
+        },
+      };
+      const succeeded = await takeFactoryModule.takeLiquidationFactory({
+        pool,
+        signer,
+        poolConfig: factoryPoolConfig,
+        liquidation,
+        config: factoryConfig,
+      });
+      return { succeeded, preBroadcastFailed: factoryPreBroadcastFailed };
+    },
+  };
+
+  const PROVIDER_WARN_LABEL: Record<ExternalTakePathKind, string> = {
+    oneinch: '1inch',
+    lifi: 'LI.FI',
+    factory: 'factory',
+  };
+
+  // Replicates the prior selection precedence: explicit path wins, otherwise the
+  // selected source disambiguates oneinch/lifi, with factory as the default.
+  const selectExternalTakeProvider = (
+    selectedPath: ExternalTakePathKind | undefined,
+    selectedSource: LiquiditySource | undefined
+  ): DiscoveryExternalTakeRouteProvider => {
+    if (
+      selectedPath === 'oneinch' ||
+      selectedSource === LiquiditySource.ONEINCH
+    ) {
+      return oneInchProvider;
+    }
+    if (selectedPath === 'lifi' || selectedSource === LiquiditySource.LIFI) {
+      return lifiProvider;
+    }
+    return factoryProvider;
+  };
+
   if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
     return {
       kind: 'hybrid',
@@ -3029,175 +3207,19 @@ function createExternalTakeAdapterForDiscovery(params: {
             externalTakeQuoteEvaluation: approvedEvaluation,
           };
 
-          if (
-            selectedPath === 'oneinch' ||
-            selectedSource === LiquiditySource.ONEINCH
-          ) {
-            let oneInchPreSubmitRejected = false;
-            let oneInchSwapDataSucceeded = false;
-            let oneInchPreBroadcastFailed = false;
-            const originalSwapDataResult = config.onOneInchSwapDataResult;
-            const originalExecutionFailure = config.onOneInchExecutionFailure;
-            const oneInchConfig = {
-              ...config,
-              onOneInchSwapDataResult: (result: {
-                success: boolean;
-                retryable?: boolean;
-                errorCode?: number | string;
-                error?: string;
-              }) => {
-                originalSwapDataResult?.(result);
-                if (result.success) {
-                  oneInchSwapDataSucceeded = true;
-                } else {
-                  oneInchPreSubmitRejected = true;
-                }
-              },
-              onOneInchExecutionFailure: (result: {
-                preBroadcast: boolean;
-                error?: string;
-              }) => {
-                originalExecutionFailure?.(result);
-                if (result.preBroadcast) {
-                  oneInchPreBroadcastFailed = true;
-                }
-              },
-            };
-            const oneInchSucceeded =
-              await oneInchExecutionModule.takeLiquidation({
-                pool,
-                signer,
-                poolConfig,
-                liquidation: liquidationForCandidate,
-                config: oneInchConfig,
-              });
-            if (oneInchSucceeded) {
-              recordSuccessfulExternalTakeRouteStats(
-                params.stats,
-                approvedEvaluation,
-                config.dryRun === true
-              );
-              if (isExecutionFallbackCandidate) {
-                params.stats.hybridFallbackSuccesses += 1;
-              }
-              if (isGasQuoteFallbackCandidate) {
-                params.stats.hybridGasQuoteFallbackSuccesses += 1;
-              }
-              return true;
-            }
-            if (
-              ((oneInchPreSubmitRejected && !oneInchSwapDataSucceeded) ||
-                oneInchPreBroadcastFailed) &&
-              index < executionCandidates.length - 1
-            ) {
-              logger.warn(
-                `Hybrid 1inch path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
-              );
-              continue;
-            }
-            return false;
-          }
-
-          if (
-            selectedPath === 'lifi' ||
-            selectedSource === LiquiditySource.LIFI
-          ) {
-            let lifiPreBroadcastFailed = false;
-            const originalLifiExecutionFailure = config.onLifiExecutionFailure;
-            const lifiConfig = {
-              ...config,
-              onLifiExecutionFailure: (result: {
-                preBroadcast: boolean;
-                error?: string;
-              }) => {
-                originalLifiExecutionFailure?.(result);
-                if (result.preBroadcast) {
-                  lifiPreBroadcastFailed = true;
-                }
-              },
-            };
-            if (config.dryRun !== true) {
-              const executionRefreshCircuitOpenReason =
-                getLifiExecutionRefreshCircuitOpenReason(config);
-              if (executionRefreshCircuitOpenReason) {
-                lifiConfig.onLifiExecutionFailure?.({
-                  preBroadcast: true,
-                  error: executionRefreshCircuitOpenReason,
-                });
-                if (index < executionCandidates.length - 1) {
-                  logger.warn(
-                    `Hybrid LI.FI path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
-                  );
-                  continue;
-                }
-                return false;
-              }
-            }
-            const lifiSucceeded = await lifiExecutionModule.takeLiquidationLifi(
-              {
-                pool,
-                signer,
-                poolConfig,
-                liquidation: liquidationForCandidate,
-                config: lifiConfig,
-              }
-            );
-            if (lifiSucceeded) {
-              recordSuccessfulExternalTakeRouteStats(
-                params.stats,
-                approvedEvaluation,
-                config.dryRun === true
-              );
-              if (isExecutionFallbackCandidate) {
-                params.stats.hybridFallbackSuccesses += 1;
-              }
-              if (isGasQuoteFallbackCandidate) {
-                params.stats.hybridGasQuoteFallbackSuccesses += 1;
-              }
-              return true;
-            }
-            if (
-              lifiPreBroadcastFailed &&
-              index < executionCandidates.length - 1
-            ) {
-              logger.warn(
-                `Hybrid LI.FI path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
-              );
-              continue;
-            }
-            return false;
-          }
-
-          let factoryPreBroadcastFailed = false;
-          const selectedFactorySource = selectedSource;
-          const factoryPoolConfig =
-            selectedFactorySource !== undefined &&
-            isFactoryDynamicSource(selectedFactorySource)
-              ? withTakeLiquiditySource(poolConfig, selectedFactorySource)
-              : poolConfig;
-          const originalFactoryExecutionFailure =
-            config.onFactoryExecutionFailure;
-          const factoryConfig = {
-            ...config,
-            onFactoryExecutionFailure: (result: {
-              preBroadcast: boolean;
-              error?: string;
-            }) => {
-              originalFactoryExecutionFailure?.(result);
-              if (result.preBroadcast) {
-                factoryPreBroadcastFailed = true;
-              }
-            },
-          };
-          const factorySucceeded =
-            await takeFactoryModule.takeLiquidationFactory({
-              pool,
-              signer,
-              poolConfig: factoryPoolConfig,
-              liquidation: liquidationForCandidate,
-              config: factoryConfig,
-            });
-          if (factorySucceeded) {
+          const provider = selectExternalTakeProvider(
+            selectedPath,
+            selectedSource
+          );
+          const attempt = await provider.execute({
+            pool,
+            signer,
+            poolConfig,
+            liquidation: liquidationForCandidate,
+            config,
+            selectedSource,
+          });
+          if (attempt.succeeded) {
             recordSuccessfulExternalTakeRouteStats(
               params.stats,
               approvedEvaluation,
@@ -3212,11 +3234,11 @@ function createExternalTakeAdapterForDiscovery(params: {
             return true;
           }
           if (
-            factoryPreBroadcastFailed &&
+            attempt.preBroadcastFailed &&
             index < executionCandidates.length - 1
           ) {
             logger.warn(
-              `Hybrid factory path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
+              `Hybrid ${PROVIDER_WARN_LABEL[provider.path]} path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
             );
             continue;
           }
@@ -3257,21 +3279,21 @@ function createExternalTakeAdapterForDiscovery(params: {
         liquidation,
         config,
       }) => {
-        const succeeded = await oneInchExecutionModule.takeLiquidation({
+        const attempt = await oneInchProvider.execute({
           pool,
           signer,
           poolConfig,
           liquidation,
           config,
         });
-        if (succeeded) {
+        if (attempt.succeeded) {
           recordSuccessfulExternalTakeRouteStats(
             params.stats,
             liquidation.externalTakeQuoteEvaluation,
             config.dryRun === true
           );
         }
-        return succeeded;
+        return attempt.succeeded;
       },
     };
   }
@@ -3302,33 +3324,25 @@ function createExternalTakeAdapterForDiscovery(params: {
         liquidation,
         config,
       }) => {
-        const executionRefreshCircuitOpenReason =
-          getLifiExecutionRefreshCircuitOpenReason(config);
-        if (executionRefreshCircuitOpenReason) {
-          config.onLifiExecutionFailure?.({
-            preBroadcast: true,
-            error: executionRefreshCircuitOpenReason,
-          });
-          logger.warn(
-            `LI.FI execution refresh circuit is open for ${pool.name}/${liquidation.borrower}; skipping direct LI.FI external take`
-          );
-          return false;
-        }
-        const succeeded = await lifiExecutionModule.takeLiquidationLifi({
+        const attempt = await lifiProvider.execute({
           pool,
           signer,
           poolConfig,
           liquidation,
           config,
         });
-        if (succeeded) {
+        if (attempt.succeeded) {
           recordSuccessfulExternalTakeRouteStats(
             params.stats,
             liquidation.externalTakeQuoteEvaluation,
             config.dryRun === true
           );
+        } else if (attempt.circuitOpenReason) {
+          logger.warn(
+            `LI.FI execution refresh circuit is open for ${pool.name}/${liquidation.borrower}; skipping direct LI.FI external take`
+          );
         }
-        return succeeded;
+        return attempt.succeeded;
       },
     };
   }
@@ -3357,21 +3371,21 @@ function createExternalTakeAdapterForDiscovery(params: {
         liquidation,
         config,
       }) => {
-        const succeeded = await takeFactoryModule.takeLiquidationFactory({
+        const attempt = await factoryProvider.execute({
           pool,
           signer,
           poolConfig,
           liquidation,
           config,
         });
-        if (succeeded) {
+        if (attempt.succeeded) {
           recordSuccessfulExternalTakeRouteStats(
             params.stats,
             liquidation.externalTakeQuoteEvaluation,
             config.dryRun === true
           );
         }
-        return succeeded;
+        return attempt.succeeded;
       },
     };
   }

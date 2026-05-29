@@ -5,8 +5,6 @@ export const DEFAULT_LIFI_API_BASE_URL = 'https://li.quest/v1';
 export const DEFAULT_LIFI_SLIPPAGE = 0.005;
 export const DEFAULT_LIFI_QUOTE_TIMEOUT_MS = 2_000;
 export const DEFAULT_LIFI_QUOTE_MAX_AGE_MS = 30_000;
-export const DEFAULT_LIFI_QUOTE_FAILURE_COOLDOWN_MS = 30_000;
-export const DEFAULT_LIFI_QUOTE_FAILURE_THRESHOLD = 2;
 export const DEFAULT_LIFI_FEE_COST_POLICY: LifiFeeCostPolicy = 'included_only';
 
 export interface LifiQuoteRequest {
@@ -119,8 +117,6 @@ export interface ApprovedLifiQuote {
     value: string;
     from?: string;
     chainId: number;
-    gasLimit?: string;
-    gasPrice?: string;
   };
   tool: string;
   topLevelTool?: string;

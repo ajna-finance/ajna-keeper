@@ -93,6 +93,12 @@ export interface ExternalProviderCircuitState {
 export type ExternalProviderCircuitPath = 'oneinch' | 'lifi';
 export type LifiCircuitPurpose = 'route_quote' | 'execution_refresh';
 
+// Union of every provider's circuit purposes, used by ExternalTakeRouteProvider
+// metadata so a provider can declare which circuits it participates in.
+export type ExternalTakeCircuitPurpose =
+  | OneInchQuoteCircuitPurpose
+  | LifiCircuitPurpose;
+
 export type ExternalProviderCircuitPurposeByPath = {
   oneinch: OneInchQuoteCircuitPurpose;
   lifi: LifiCircuitPurpose;

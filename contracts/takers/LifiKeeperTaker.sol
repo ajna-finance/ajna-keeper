@@ -52,6 +52,7 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     error UnsupportedSource();
     error InvalidSwapDetails();
     error CallTargetNotAllowed();
+    error CallTargetHasNoCode();
     error ApprovalSpenderNotAllowed();
     error SelectorNotAllowed();
     error StaleSourceBalance();
@@ -302,6 +303,11 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
             revert InvalidSwapDetails();
         }
         if (!_callTargets[swapRouter]) revert CallTargetNotAllowed();
+        // A low-level call to an address with no code returns success with empty
+        // return data, so a misconfigured (or self-destructed) allowlisted target
+        // would no-op rather than swap. Defense-in-depth alongside the off-chain
+        // preflight code-existence check: fail closed before the call is made.
+        if (swapRouter.code.length == 0) revert CallTargetHasNoCode();
         if (!_approvalSpenders[details.approvalSpender]) revert ApprovalSpenderNotAllowed();
         if (!_callSelectors[swapRouter][_selector(details.callData)]) revert SelectorNotAllowed();
     }
