@@ -755,15 +755,16 @@ describe('LifiKeeperTaker', () => {
     ).to.be.true;
   });
 
-  it('reverts when LI.FI leaves callback collateral on the taker', async () => {
+  it('recovers LI.FI source token residue to the owner after quote repayment', async () => {
     const result = await deployFixture();
     const amountIn = utils.parseEther('1');
     const outputAmount = utils.parseEther('1.25');
     const refundAmount = utils.parseEther('0.01');
+    const quoteAmountDue = utils.parseEther('1');
 
     await result.collateral.mint(result.pool.address, amountIn);
     await result.quote.mint(result.target.address, outputAmount);
-    await result.pool.setQuoteAmountDue(utils.parseEther('1'));
+    await result.pool.setQuoteAmountDue(quoteAmountDue);
     const refundSelector =
       result.target.interface.getSighash('mockSwapWithRefund');
     await result.taker.setCallSelector(
@@ -793,19 +794,24 @@ describe('LifiKeeperTaker', () => {
       callData,
     });
 
-    await expectRevertWith(
-      result.factory.takeWithAtomicSwap(
-        result.pool.address,
-        BORROWER,
-        constants.WeiPerEther,
-        amountIn,
-        LiquiditySource.LIFI,
-        result.target.address,
-        details
-      ),
-      'SourceNotConsumed'
+    await result.factory.takeWithAtomicSwap(
+      result.pool.address,
+      BORROWER,
+      constants.WeiPerEther,
+      amountIn,
+      LiquiditySource.LIFI,
+      result.target.address,
+      details
     );
-    expect((await result.pool.takeCount()).eq(0)).to.be.true;
+    expect((await result.pool.takeCount()).eq(1)).to.be.true;
+    expect(
+      (await result.quote.balanceOf(result.pool.address)).eq(quoteAmountDue)
+    ).to.be.true;
+    expect((await result.collateral.balanceOf(result.taker.address)).eq(0)).to
+      .be.true;
+    expect(
+      (await result.collateral.balanceOf(result.owner.address)).eq(refundAmount)
+    ).to.be.true;
   });
 
   it('reverts on reentrant callback attempts', async () => {

@@ -105,10 +105,7 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
 
         _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), 0);
         _recoverToken(IERC20(pool.quoteTokenAddress()));
-
-        if (IERC20(details.srcToken).balanceOf(address(this)) != 0) {
-            revert SourceNotConsumed();
-        }
+        _recoverToken(IERC20(details.srcToken));
     }
 
     /// @notice Called by the Ajna pool after it sends callback collateral to this taker.
@@ -264,9 +261,6 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
             : quoteAmountDue;
         if (quoteReceived < requiredQuoteReceived) {
             revert InsufficientQuoteReceived();
-        }
-        if (srcToken.balanceOf(address(this)) != 0) {
-            revert SourceNotConsumed();
         }
 
         emit SwapExecuted(pool.collateralAddress(), pool.quoteTokenAddress(), swapRouter, details.amountInTokenUnits, quoteReceived);

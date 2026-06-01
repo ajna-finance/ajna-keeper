@@ -47,6 +47,10 @@ import {
   SushiSwapKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../typechain-types';
+import {
+  MockAtomicSwapPool__factory,
+  MockPoolDeployer__factory,
+} from '../../typechain-types/factories/contracts/mocks';
 import { LifiKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
 import ERC20_ABI from '../../src/abis/erc20.abi.json';
 import {
@@ -60,8 +64,17 @@ import {
   configureAjna,
   readConfigFile,
 } from '../../src/config';
+import { normalizeLifiApiBaseUrl } from '../../src/config/lifi-policy';
 import { validateAutoDiscoverConfig } from '../../src/config/validation';
 import { SECONDS_PER_DAY } from '../../src/constants';
+import {
+  DEFAULT_LIFI_API_BASE_URL,
+  assertLifiToolsContainFilters,
+  fetchLifiQuote,
+  fetchLifiTools,
+  normalizeLifiExchangeFilters,
+  validateLifiQuote,
+} from '../../src/dex/lifi';
 import { handleDiscoveredTakeTarget } from '../../src/discovery/handlers';
 import { createDiscoveryRpcCache } from '../../src/discovery/rpc-cache';
 import type { DiscoveredTakeTargetStats } from '../../src/discovery/take-executor';
@@ -97,6 +110,29 @@ const HYBRID_FORK_TIMEOUT_MS = 900_000;
 const BASE_CHAIN_ID = 8453;
 const FIXTURE_SUBGRAPH_SENTINEL_URL = 'http://hybrid-fork-loop.invalid';
 const HYBRID_FORK_CONFIG_ENV = 'AJNA_AGENT_HYBRID_FORK_CONFIG';
+const BASE_WETH = utils.getAddress(
+  '0x4200000000000000000000000000000000000006'
+);
+const BASE_USDC = utils.getAddress(
+  '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
+);
+const DEFAULT_LIFI_CALLBACK_PROOF_WETH_AMOUNT_RAW = '1000000000000000';
+const ERC20_NON_SUBSET_HASH = utils.keccak256(
+  utils.toUtf8Bytes('ERC20_NON_SUBSET_HASH')
+);
+const LIFI_CALLBACK_PROOF_BORROWER = utils.getAddress(
+  '0x00000000000000000000000000000000000000b0'
+);
+const WETH_ABI = [
+  'function deposit() payable',
+  'function transfer(address to,uint256 amount) returns (bool)',
+  'function balanceOf(address owner) view returns (uint256)',
+  'function allowance(address owner,address spender) view returns (uint256)',
+];
+const QUOTE_TOKEN_ABI = [
+  'function balanceOf(address owner) view returns (uint256)',
+  'function allowance(address owner,address spender) view returns (uint256)',
+];
 
 // Ajna's Base mainnet deployment (must match hardhat fork addresses).
 const BASE_AJNA_CONFIG = {
@@ -174,6 +210,33 @@ function requireProductionLifi(lifi: LifiDexConfig): ProductionLifiDexConfig {
     throw new Error('reviewed config dex.lifi must be production mode');
   }
   return lifi;
+}
+
+function normalizeApiBaseUrlForGate(value: string): string {
+  return normalizeLifiApiBaseUrl(value, 'LI.FI API base URL');
+}
+
+function requireDefaultLifiApiBaseUrl(apiBaseUrl: string | undefined): void {
+  if (
+    apiBaseUrl !== undefined &&
+    normalizeApiBaseUrlForGate(apiBaseUrl) !==
+      normalizeApiBaseUrlForGate(DEFAULT_LIFI_API_BASE_URL)
+  ) {
+    throw new Error(
+      'hybrid LI.FI fork execution proof requires the default LI.FI API base URL; refusing custom or mocked API base URL'
+    );
+  }
+}
+
+function getHybridLifiApiKey(config: LifiDexConfig): string | undefined {
+  if (config.apiKeyEnvVar) {
+    return optionalEnv(config.apiKeyEnvVar);
+  }
+  return optionalEnv(
+    'AJNA_AGENT_LIFI_API_KEY',
+    'AJNA_AGENT_HYBRID_LIFI_API_KEY',
+    'LIFI_API_KEY'
+  );
 }
 
 interface HybridForkFixture {
@@ -270,6 +333,13 @@ function loadHybridForkFixture(): HybridForkFixture {
     liveTake: process.env.AJNA_AGENT_HYBRID_FORK_LIVE_TAKE === 'true',
     paths: parseHybridPaths(),
   };
+}
+
+function shouldRunLifiCallbackProof(fixture: HybridForkFixture): boolean {
+  return (
+    fixture.paths.includes('lifi') &&
+    process.env.AJNA_AGENT_HYBRID_LIFI_CALLBACK_PROOF === 'true'
+  );
 }
 
 // Subgraph reader that serves the keeper's discovery loop from the fork pool,
@@ -394,6 +464,188 @@ async function configureLifiTakerAllowlists(
       await (await taker.setCallSelector(target, selector, true)).wait();
     }
   }
+}
+
+function encodeLifiSwapDetails(params: {
+  approvalSpender: string;
+  srcToken: string;
+  dstToken: string;
+  dstReceiver: string;
+  amountInTokenUnits: BigNumber;
+  amountOutMinimum: BigNumber;
+  callData: string;
+}): string {
+  return utils.defaultAbiCoder.encode(
+    [
+      'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)',
+    ],
+    [params]
+  );
+}
+
+async function runLifiCallbackExecutionProof(params: {
+  provider: ReturnType<typeof getProvider>;
+  owner: Wallet;
+  lifi: ProductionLifiDexConfig;
+}): Promise<void> {
+  requireDefaultLifiApiBaseUrl(params.lifi.apiBaseUrl);
+  const fromToken = utils.getAddress(
+    optionalEnv('AJNA_AGENT_HYBRID_LIFI_CALLBACK_FROM_TOKEN') ?? BASE_WETH
+  );
+  const toToken = utils.getAddress(
+    optionalEnv('AJNA_AGENT_HYBRID_LIFI_CALLBACK_TO_TOKEN') ?? BASE_USDC
+  );
+  if (fromToken.toLowerCase() !== BASE_WETH.toLowerCase()) {
+    throw new Error(
+      'AJNA_AGENT_HYBRID_LIFI_CALLBACK_FROM_TOKEN currently must be Base WETH so the fork proof can fund the callback source asset locally'
+    );
+  }
+  const fromAmount = BigNumber.from(
+    optionalEnv('AJNA_AGENT_HYBRID_LIFI_CALLBACK_FROM_AMOUNT_RAW') ??
+      DEFAULT_LIFI_CALLBACK_PROOF_WETH_AMOUNT_RAW
+  );
+  if (!fromAmount.gt(0)) {
+    throw new Error(
+      'AJNA_AGENT_HYBRID_LIFI_CALLBACK_FROM_AMOUNT_RAW must be > 0'
+    );
+  }
+  const profitFloorRaw = BigNumber.from(
+    optionalEnv('AJNA_AGENT_HYBRID_LIFI_CALLBACK_PROFIT_FLOOR_RAW') ?? '1'
+  );
+  if (!profitFloorRaw.gt(0)) {
+    throw new Error(
+      'AJNA_AGENT_HYBRID_LIFI_CALLBACK_PROFIT_FLOOR_RAW must be > 0'
+    );
+  }
+
+  const pool = await new MockAtomicSwapPool__factory(params.owner).deploy(
+    fromToken,
+    toToken,
+    1
+  );
+  await pool.deployed();
+  const poolDeployer = await new MockPoolDeployer__factory(
+    params.owner
+  ).deploy();
+  await poolDeployer.deployed();
+  await poolDeployer.setDeployedPool(
+    ERC20_NON_SUBSET_HASH,
+    fromToken,
+    toToken,
+    pool.address
+  );
+  const factory = await new AjnaKeeperTakerFactory__factory(
+    params.owner
+  ).deploy(poolDeployer.address);
+  await factory.deployed();
+  const taker = await new LifiKeeperTaker__factory(params.owner).deploy(
+    poolDeployer.address,
+    factory.address
+  );
+  await taker.deployed();
+  await (await factory.setTaker(LiquiditySource.LIFI, taker.address)).wait();
+
+  const takerContract = new Contract(
+    taker.address,
+    LifiKeeperTaker__factory.abi,
+    params.owner
+  );
+  await configureLifiTakerAllowlists(takerContract, params.lifi);
+
+  const apiKey = getHybridLifiApiKey(params.lifi);
+  const toolsResponse = await fetchLifiTools({
+    config: params.lifi,
+    apiKey,
+  });
+  assertLifiToolsContainFilters({
+    filters: normalizeLifiExchangeFilters(params.lifi),
+    toolsResponse,
+  });
+
+  const quoteResult = await fetchLifiQuote({
+    config: params.lifi,
+    apiKey,
+    request: {
+      chainId: BASE_CHAIN_ID,
+      fromToken,
+      toToken,
+      fromAmount: fromAmount.toString(),
+      fromAddress: taker.address,
+      toAddress: taker.address,
+      slippage: params.lifi.defaultSlippage ?? 0.005,
+      maxPriceImpact: params.lifi.maxPriceImpact,
+    },
+  });
+  const approvedQuote = validateLifiQuote({
+    quote: quoteResult.data,
+    chainId: BASE_CHAIN_ID,
+    fromToken,
+    toToken,
+    fromAmount,
+    takerAddress: taker.address,
+    allowedExchangeTools: params.lifi.allowExchanges,
+    callTargetAllowlist: params.lifi.callTargetAllowlist[BASE_CHAIN_ID],
+    approvalSpenderAllowlist:
+      params.lifi.approvalSpenderAllowlist[BASE_CHAIN_ID],
+    selectorAllowlist: params.lifi.selectorAllowlist[BASE_CHAIN_ID],
+    feeCostPolicy: params.lifi.feeCostPolicy,
+  });
+
+  const weth = new Contract(fromToken, WETH_ABI, params.owner);
+  const quoteToken = new Contract(toToken, QUOTE_TOKEN_ABI, params.owner);
+  await weth.deposit({ value: fromAmount });
+  await weth.transfer(pool.address, fromAmount);
+  expect((await weth.balanceOf(taker.address)).eq(0)).to.equal(true);
+  expect((await quoteToken.balanceOf(taker.address)).eq(0)).to.equal(true);
+
+  const quoteAmountDue = approvedQuote.routeMinOutRaw;
+  const approvedMinOutRaw = quoteAmountDue.add(profitFloorRaw);
+  if (approvedQuote.quoteAmountRaw.lt(approvedMinOutRaw)) {
+    throw new Error(
+      'hybrid LI.FI callback proof quote cannot satisfy route min-out plus profit floor'
+    );
+  }
+  await pool.setQuoteAmountDue(quoteAmountDue);
+  const details = encodeLifiSwapDetails({
+    approvalSpender: approvedQuote.approvalSpender,
+    srcToken: approvedQuote.srcToken,
+    dstToken: approvedQuote.dstToken,
+    dstReceiver: approvedQuote.dstReceiver,
+    amountInTokenUnits: approvedQuote.amountInTokenUnits,
+    amountOutMinimum: approvedMinOutRaw,
+    callData: approvedQuote.transactionRequest.data,
+  });
+  const auctionPriceWad = quoteAmountDue
+    .mul(constants.WeiPerEther)
+    .add(fromAmount)
+    .sub(1)
+    .div(fromAmount);
+
+  await factory.takeWithAtomicSwap(
+    pool.address,
+    LIFI_CALLBACK_PROOF_BORROWER,
+    auctionPriceWad,
+    fromAmount,
+    LiquiditySource.LIFI,
+    approvedQuote.transactionTarget,
+    details
+  );
+
+  expect((await pool.takeCount()).eq(1)).to.equal(true);
+  expect(
+    (await quoteToken.balanceOf(pool.address)).eq(quoteAmountDue)
+  ).to.equal(true);
+  expect((await weth.balanceOf(taker.address)).eq(0)).to.equal(true);
+  expect((await quoteToken.balanceOf(taker.address)).eq(0)).to.equal(true);
+  expect(
+    (await weth.allowance(taker.address, approvedQuote.approvalSpender)).eq(0)
+  ).to.equal(true);
+  expect(
+    (await quoteToken.allowance(taker.address, pool.address)).eq(0)
+  ).to.equal(true);
+  expect(
+    (await quoteToken.balanceOf(params.owner.address)).gte(profitFloorRaw)
+  ).to.equal(true);
 }
 
 // The forced all-three-paths discovery policy, in KeeperConfig.discovery shape
@@ -614,6 +866,9 @@ describe('Hybrid Base-fork discovery loop (oneinch + factory + lifi)', function 
       new Contract(lifiTaker.address, LifiKeeperTaker__factory.abi, signer),
       lifi
     );
+    if (shouldRunLifiCallbackProof(fixture)) {
+      await runLifiCallbackExecutionProof({ provider, owner: signer, lifi });
+    }
 
     await constructUnderwaterAuction({ pool, fixture });
 

@@ -26,6 +26,19 @@ describe('Hybrid fork loop harness', () => {
     expect(script).to.not.include('--network');
   });
 
+  it('exposes a LI.FI-only fork proof command with callback execution enabled', () => {
+    const script = packageJson.scripts['hybrid-lifi-fork-proof'];
+    expect(script).to.include('RUN_HYBRID_FORK_LOOP=true');
+    expect(script).to.include('HARDHAT_CHAIN_ID=8453');
+    expect(script).to.include('FORK_NETWORK=base');
+    expect(script).to.include('AJNA_AGENT_HYBRID_PATHS=lifi');
+    expect(script).to.include('AJNA_AGENT_HYBRID_LIFI_CALLBACK_PROOF=true');
+    expect(script).to.include(
+      'npx hardhat test tests/integration/hybrid-fork-loop.test.ts'
+    );
+    expect(script).to.not.include('--network');
+  });
+
   it('gates and skips cleanly like the other fork canaries', () => {
     expect(source).to.include("process.env.RUN_HYBRID_FORK_LOOP === 'true'");
     expect(source).to.include('this.skip();');
@@ -53,6 +66,32 @@ describe('Hybrid fork loop harness', () => {
     expect(source).to.include('validateRouteDeployments: true');
     expect(source).to.include("[LiquiditySource.LIFI]: '900000'");
     expect(source).to.include('validateAutoDiscoverConfig');
+  });
+
+  it('can pair hybrid LI.FI route selection with a fork-local callback execution proof', () => {
+    expect(source).to.include('AJNA_AGENT_HYBRID_LIFI_CALLBACK_PROOF');
+    expect(source).to.include('function runLifiCallbackExecutionProof');
+    expect(source).to.include('MockAtomicSwapPool__factory');
+    expect(source).to.include('MockPoolDeployer__factory');
+    expect(source).to.include('fetchLifiTools');
+    expect(source).to.include('fetchLifiQuote');
+    expect(source).to.include('validateLifiQuote');
+    expect(source).to.include(
+      'hybrid LI.FI fork execution proof requires the default LI.FI API base URL'
+    );
+    expect(source).to.include('factory.takeWithAtomicSwap(');
+    const proofIndex = source.indexOf(
+      'await runLifiCallbackExecutionProof({ provider, owner: signer, lifi });'
+    );
+    const auctionIndex = source.indexOf(
+      'await constructUnderwaterAuction({ pool, fixture });'
+    );
+    const discoveryIndex = source.indexOf(
+      'stats = await handleDiscoveredTakeTarget({'
+    );
+    expect(proofIndex).to.be.greaterThan(-1);
+    expect(auctionIndex).to.be.greaterThan(proofIndex);
+    expect(discoveryIndex).to.be.greaterThan(auctionIndex);
   });
 
   it('deploys + registers all four takers and configures LI.FI allowlists', () => {
