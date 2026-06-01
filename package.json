@@ -29,6 +29,8 @@
     "oneinch-route-canary": "./node_modules/ts-node/dist/bin.js scripts/oneinch-route-canary.ts",
     "lifi-route-canary": "./node_modules/ts-node/dist/bin.js scripts/lifi-route-canary.ts",
     "lifi-fork-execution-canary": "RUN_LIFI_FORK_CANARY=true HARDHAT_CHAIN_ID=8453 FORK_NETWORK=base npx hardhat test tests/integration/lifi-fork-execution-canary.test.ts",
+    "hybrid-fork-loop": "RUN_HYBRID_FORK_LOOP=true HARDHAT_CHAIN_ID=8453 FORK_NETWORK=base npx hardhat test tests/integration/hybrid-fork-loop.test.ts",
+    "preflight-fork-reconciliation": "RUN_PREFLIGHT_FORK=true HARDHAT_CHAIN_ID=8453 FORK_NETWORK=base npx hardhat test tests/integration/preflight-fork-reconciliation.test.ts",
     "run-fixture-keeper-harness": "./node_modules/ts-node/dist/bin.js scripts/run-fixture-keeper-harness.ts"
   },
   "author": "Ajna Finance contributors",

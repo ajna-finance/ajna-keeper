@@ -38,6 +38,14 @@ const RUN_LIFI_FORK_CANARY =
   process.env.RUN_LIFI_FORK_CANARY === 'true' ||
   process.env.AJNA_AGENT_RUN_LIFI_FORK_CANARY === 'true';
 
+// Opt-in, NON-PRODUCTION mode: skip the configured-production-deployment
+// registration gate and instead verify real LI.FI calldata execution against the
+// freshly deployed local factory/taker this test already creates. Use this to
+// validate real same-chain calldata key-free WITHOUT a deployed production
+// factory/taker. The strict production gate remains the default.
+const USE_FRESH_DEPLOYMENT =
+  process.env.AJNA_AGENT_LIFI_FORK_CANARY_USE_FRESH_DEPLOYMENT === 'true';
+
 const BASE_CHAIN_ID = 8453;
 const BASE_WETH = utils.getAddress(
   '0x4200000000000000000000000000000000000006'
@@ -498,10 +506,12 @@ describe('LI.FI callback-path fork execution canary', function () {
 
     const provider = getProvider();
     const lifiConfig = await buildForkCanaryConfig();
-    await requireConfiguredProductionTakerRegistration({
-      provider,
-      config: lifiConfig,
-    });
+    if (!USE_FRESH_DEPLOYMENT) {
+      await requireConfiguredProductionTakerRegistration({
+        provider,
+        config: lifiConfig,
+      });
+    }
 
     const owner = Wallet.createRandom().connect(provider);
     await setBalance(owner.address, utils.parseEther('100').toHexString());
@@ -565,7 +575,11 @@ describe('LI.FI callback-path fork execution canary', function () {
       feeCostPolicy: lifiConfig.feeCostPolicy,
     });
 
-    expect(approvedQuote.transactionRequest.value).to.equal('0');
+    // li.quest returns value as a hex string ("0x0"); the validator accepts any
+    // zero representation, so assert numeric zero rather than a literal '0'.
+    expect(
+      BigNumber.from(approvedQuote.transactionRequest.value).isZero()
+    ).to.equal(true);
     expect(approvedQuote.srcToken).to.equal(fromToken);
     expect(approvedQuote.dstToken).to.equal(toToken);
     expect(approvedQuote.dstReceiver).to.equal(taker.address);

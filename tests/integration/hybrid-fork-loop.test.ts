@@ -1,0 +1,733 @@
+// Tier-2 full-loop Base-fork keeper harness.
+//
+// This is the ONLY test that drives the real keeper discovery loop
+// (`handleDiscoveredTakeTarget`) end to end on a fork with ALL external-take
+// providers enabled — 1inch + factory (Uniswap/Sushi/Curve) + LI.FI — so the
+// hybrid ranking and fallback are exercised against REAL aggregator routes
+// (li.quest + 1inch APIs) and real on-chain DEX liquidity. Every other fork
+// test (production-route-selection, live-liquidity-execution, base-cadc-replay,
+// lifi-fork-execution-canary) bypasses the discovery loop and disables the
+// aggregator paths.
+//
+// It is env-gated (RUN_HYBRID_FORK_LOOP=true) and skips cleanly otherwise, like
+// the other fork canaries, so the default suite never runs it or touches the
+// network.
+//
+// PREREQUISITES (operator-supplied; this CANNOT run without them):
+//   - A Base archive RPC: AJNA_AGENT_RPC_URL | AJNA_RPC_URL_BASE | BASE_RPC_URL,
+//     or ALCHEMY_API_KEY (resolved by hardhat.config.ts::baseRpcUrl()).
+//   - AJNA_AGENT_HYBRID_FORK_CONFIG: path to a reviewed production keeper config
+//     that enables all three paths — production `dex.lifi` with Base-keyed
+//     callTargetAllowlist/approvalSpenderAllowlist/selectorAllowlist and concrete
+//     allowExchanges; `dex.oneInch.routers[8453]`; `dex.uniswapV3.router` (all
+//     four Base addresses); `network.tokenAddresses.weth`; and
+//     `takers.{factory, oneInch, contracts.{UniswapV3, Lifi}}`.
+//   - Base whales (must hold the relevant token at BASE_FORK_BLOCK):
+//       AJNA_AGENT_HYBRID_LENDER_WHALE   (holds the pool's quote token)
+//       AJNA_AGENT_HYBRID_BORROWER_WHALE (holds the pool's collateral token)
+//       AJNA_AGENT_HYBRID_KICKER_WHALE   (optional; defaults to the lender whale)
+//
+// Defaults target the Base WETH/USDC Ajna pool. The position-construction
+// amounts (deposit/borrow/collateral/warp) are economic knobs and will likely
+// need tuning for your pinned BASE_FORK_BLOCK so that at least one real route
+// clears the keeper's profit floor; the test warps the auction down up to
+// AJNA_AGENT_HYBRID_MAX_WARPS times and reports what it finds. Defaults to
+// dry-run (the keeper evaluates + ranks all three providers and logs "would
+// take" without submitting); set AJNA_AGENT_HYBRID_FORK_LIVE_TAKE=true for a
+// real on-chain take with balance-delta assertions.
+
+import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
+import { expect } from 'chai';
+import { BigNumber, Contract, Wallet, constants, utils } from 'ethers';
+import { network } from 'hardhat';
+import {
+  AjnaKeeperTaker__factory,
+  AjnaKeeperTakerFactory__factory,
+  CurveKeeperTaker__factory,
+  SushiSwapKeeperTaker__factory,
+  UniswapV3KeeperTaker__factory,
+} from '../../typechain-types';
+import { LifiKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
+import ERC20_ABI from '../../src/abis/erc20.abi.json';
+import {
+  AutoDiscoverConfig,
+  ExternalTakePathKind,
+  KeeperConfig,
+  LifiDexConfig,
+  LiquiditySource,
+  PoolConfig,
+  PriceOriginSource,
+  configureAjna,
+  readConfigFile,
+} from '../../src/config';
+import { validateAutoDiscoverConfig } from '../../src/config/validation';
+import { SECONDS_PER_DAY } from '../../src/constants';
+import { handleDiscoveredTakeTarget } from '../../src/discovery/handlers';
+import { createDiscoveryRpcCache } from '../../src/discovery/rpc-cache';
+import type { DiscoveredTakeTargetStats } from '../../src/discovery/take-executor';
+import { getDiscoveryExecutionConfig } from '../../src/discovery/types';
+import { ResolvedTakeTarget } from '../../src/discovery/targets';
+import { getLoansToKick } from '../../src/kick';
+import { poolKick } from '../../src/transactions';
+import { NonceTracker } from '../../src/nonce';
+import {
+  DiscoveryReadTransports,
+  SubgraphReader,
+} from '../../src/read-transports';
+import { arrayFromAsync, RequireFields, weiToDecimaled } from '../../src/utils';
+import { depositQuoteToken, drawDebt } from './loan-helpers';
+import {
+  makeGetHighestMeaningfulBucket,
+  makeGetLiquidationsFromSdk,
+  makeGetLoansFromSdk,
+  overrideGetHighestMeaningfulBucket,
+  overrideGetLiquidations,
+  overrideGetLoans,
+} from './subgraph-mock';
+import {
+  getProvider,
+  impersonateSigner,
+  increaseTime,
+  resetHardhat,
+  setBalance,
+} from './test-utils';
+
+const RUN_HYBRID_FORK_LOOP = process.env.RUN_HYBRID_FORK_LOOP === 'true';
+const HYBRID_FORK_TIMEOUT_MS = 900_000;
+const BASE_CHAIN_ID = 8453;
+const FIXTURE_SUBGRAPH_SENTINEL_URL = 'http://hybrid-fork-loop.invalid';
+const HYBRID_FORK_CONFIG_ENV = 'AJNA_AGENT_HYBRID_FORK_CONFIG';
+
+// Ajna's Base mainnet deployment (must match hardhat fork addresses).
+const BASE_AJNA_CONFIG = {
+  erc20PoolFactory: '0x214f62B5836D83f3D6c4f71F174209097B1A779C',
+  erc721PoolFactory: '0xeefEC5d1Cc4bde97279d01D88eFf9e0fEe981769',
+  poolUtils: '0x97fa9b0909C238D170C1ab3B5c728A3a45BBEcBa',
+  positionManager: '0x59710a4149A27585f1841b5783ac704a08274e64',
+  ajnaToken: '0xf0f326af3b1Ed943ab95C29470730CC8Cf66ae47',
+  grantFund: '',
+  burnWrapper: '',
+  lenderHelper: '',
+};
+
+const DEFAULT_BASE_WETH_USDC_POOL =
+  '0x0b17159f2486f669a1f930926638008e2ccb4287';
+
+function optionalEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function requireEnv(name: string, hint: string): string {
+  const value = optionalEnv(name);
+  if (!value) {
+    throw new Error(
+      `${name} is required for RUN_HYBRID_FORK_LOOP=true (${hint})`
+    );
+  }
+  return value;
+}
+
+function envNumber(name: string, fallback: number): number {
+  const value = optionalEnv(name);
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${name} must be a finite number`);
+  }
+  return parsed;
+}
+
+function requireConfiguredBaseForkRpc(): void {
+  const forkUrl = (network.config as { forking?: { url?: unknown } }).forking
+    ?.url;
+  if (
+    typeof forkUrl !== 'string' ||
+    forkUrl.trim().length === 0 ||
+    /\b(undefined|null)\b/i.test(forkUrl)
+  ) {
+    throw new Error(
+      'Base fork RPC is required for RUN_HYBRID_FORK_LOOP=true before hardhat_reset; set AJNA_AGENT_RPC_URL, AJNA_RPC_URL_BASE, BASE_RPC_URL, or ALCHEMY_API_KEY for the configured Base fork URL'
+    );
+  }
+}
+
+async function loadHybridKeeperConfig(): Promise<KeeperConfig> {
+  const configPath = requireEnv(
+    HYBRID_FORK_CONFIG_ENV,
+    'path to a reviewed production keeper config enabling oneinch + factory + lifi'
+  );
+  return readConfigFile(configPath);
+}
+
+type ProductionLifiDexConfig = Extract<LifiDexConfig, { mode: 'production' }>;
+
+function requireProductionLifi(lifi: LifiDexConfig): ProductionLifiDexConfig {
+  if (lifi.mode !== 'production') {
+    throw new Error('reviewed config dex.lifi must be production mode');
+  }
+  return lifi;
+}
+
+interface HybridForkFixture {
+  poolAddress: string;
+  lenderWhale: string;
+  borrowerWhale: string;
+  kickerWhale: string;
+  depositQuoteAmount: number;
+  depositPrice: number;
+  borrowAmount: number;
+  collateralToPledge: number;
+  timeToKick: number;
+  timeAfterKick: number;
+  maxWarps: number;
+  warpSeconds: number;
+  marketPriceFactor: number;
+  minCollateral: number;
+  liveTake: boolean;
+  paths: ExternalTakePathKind[];
+}
+
+// Override the competing external-take paths (default: all three). Set e.g.
+// AJNA_AGENT_HYBRID_PATHS=lifi to force LI.FI to be the executed path so the LI.FI
+// path can be validated end-to-end through the keeper loop without a 1inch key.
+function parseHybridPaths(): ExternalTakePathKind[] {
+  const all: ExternalTakePathKind[] = ['oneinch', 'factory', 'lifi'];
+  const raw = optionalEnv('AJNA_AGENT_HYBRID_PATHS');
+  if (!raw) {
+    return all;
+  }
+  const parsed = raw
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+  const valid = parsed.filter((value): value is ExternalTakePathKind =>
+    (all as string[]).includes(value)
+  );
+  if (valid.length === 0 || valid.length !== parsed.length) {
+    throw new Error(
+      'AJNA_AGENT_HYBRID_PATHS must be a non-empty CSV subset of: oneinch,factory,lifi'
+    );
+  }
+  return valid;
+}
+
+function defaultSourceForPaths(paths: ExternalTakePathKind[]): LiquiditySource {
+  if (paths.includes('factory')) {
+    return LiquiditySource.UNISWAPV3;
+  }
+  if (paths.includes('lifi')) {
+    return LiquiditySource.LIFI;
+  }
+  return LiquiditySource.ONEINCH;
+}
+
+function loadHybridForkFixture(): HybridForkFixture {
+  const lenderWhale = requireEnv(
+    'AJNA_AGENT_HYBRID_LENDER_WHALE',
+    "an account holding the pool's quote token at the fork block"
+  );
+  return {
+    poolAddress: utils.getAddress(
+      optionalEnv('AJNA_AGENT_HYBRID_POOL') ?? DEFAULT_BASE_WETH_USDC_POOL
+    ),
+    lenderWhale: utils.getAddress(lenderWhale),
+    borrowerWhale: utils.getAddress(
+      requireEnv(
+        'AJNA_AGENT_HYBRID_BORROWER_WHALE',
+        "an account holding the pool's collateral token at the fork block"
+      )
+    ),
+    kickerWhale: utils.getAddress(
+      optionalEnv('AJNA_AGENT_HYBRID_KICKER_WHALE') ?? lenderWhale
+    ),
+    depositQuoteAmount: envNumber(
+      'AJNA_AGENT_HYBRID_DEPOSIT_QUOTE_AMOUNT',
+      5000
+    ),
+    // Defaults are the validated values for the Base WETH/USDC pool at a recent
+    // fork block (WETH ~= 2008 USDC). depositPrice should track current market;
+    // the Base Ajna WETH/USDC pool has a very low interest rate, so a large
+    // timeToKick is needed for accrual to push the borrower's TP above the LUP.
+    depositPrice: envNumber('AJNA_AGENT_HYBRID_DEPOSIT_PRICE', 2010),
+    borrowAmount: envNumber('AJNA_AGENT_HYBRID_BORROW_AMOUNT', 1900),
+    collateralToPledge: envNumber('AJNA_AGENT_HYBRID_COLLATERAL_PLEDGE', 1),
+    timeToKick:
+      SECONDS_PER_DAY * envNumber('AJNA_AGENT_HYBRID_TIME_TO_KICK_DAYS', 10950),
+    timeAfterKick:
+      3600 * envNumber('AJNA_AGENT_HYBRID_TIME_AFTER_KICK_HOURS', 24),
+    maxWarps: envNumber('AJNA_AGENT_HYBRID_MAX_WARPS', 24),
+    warpSeconds: 3600 * envNumber('AJNA_AGENT_HYBRID_WARP_HOURS', 6),
+    marketPriceFactor: envNumber('AJNA_AGENT_HYBRID_MARKET_PRICE_FACTOR', 0.99),
+    minCollateral: envNumber('AJNA_AGENT_HYBRID_MIN_COLLATERAL', 0.0001),
+    liveTake: process.env.AJNA_AGENT_HYBRID_FORK_LIVE_TAKE === 'true',
+    paths: parseHybridPaths(),
+  };
+}
+
+// Subgraph reader that serves the keeper's discovery loop from the fork pool,
+// rather than a real subgraph (mirrors run-fixture-keeper-harness.ts).
+function makeFixtureSubgraphReader(
+  pool: FungiblePool,
+  borrower: string
+): SubgraphReader {
+  const getLoans = makeGetLoansFromSdk(pool);
+  const getLiquidations = makeGetLiquidationsFromSdk(pool);
+  return {
+    cacheKey: `hybrid-fork:${pool.poolAddress}:${borrower.toLowerCase()}`,
+    getLoans(poolAddress) {
+      return getLoans(FIXTURE_SUBGRAPH_SENTINEL_URL, poolAddress);
+    },
+    getLiquidations(poolAddress, minCollateral) {
+      return getLiquidations(
+        FIXTURE_SUBGRAPH_SENTINEL_URL,
+        poolAddress,
+        minCollateral
+      );
+    },
+    async getHighestMeaningfulBucket() {
+      return { buckets: [] } as never;
+    },
+    async getUnsettledAuctions() {
+      return { liquidationAuctions: [] } as never;
+    },
+    async getChainwideLiquidationAuctions() {
+      return { liquidationAuctions: [] } as never;
+    },
+    async getBucketTakeLPAwards() {
+      return { bucketTakeLPAwards: [] } as never;
+    },
+    async getSubgraphMeta() {
+      return {
+        block: { number: 0, timestamp: Math.floor(SECONDS_PER_DAY) },
+      } as never;
+    },
+  };
+}
+
+// One factory registers ALL FOUR factory/lifi takers; the legacy single-contract
+// AjnaKeeperTaker (1inch path) is deployed separately and owned by the signer so
+// the 1inch path can also win execution, not just compete in ranking.
+async function deployHybridFactorySystem(signer: Wallet) {
+  const oneInchTaker = await new AjnaKeeperTaker__factory(signer).deploy(
+    BASE_AJNA_CONFIG.erc20PoolFactory
+  );
+  await oneInchTaker.deployed();
+  const factory = await new AjnaKeeperTakerFactory__factory(signer).deploy(
+    BASE_AJNA_CONFIG.erc20PoolFactory
+  );
+  await factory.deployed();
+  const uniswapTaker = await new UniswapV3KeeperTaker__factory(signer).deploy(
+    BASE_AJNA_CONFIG.erc20PoolFactory,
+    factory.address
+  );
+  const sushiTaker = await new SushiSwapKeeperTaker__factory(signer).deploy(
+    BASE_AJNA_CONFIG.erc20PoolFactory,
+    factory.address
+  );
+  const curveTaker = await new CurveKeeperTaker__factory(signer).deploy(
+    BASE_AJNA_CONFIG.erc20PoolFactory,
+    factory.address
+  );
+  const lifiTaker = await new LifiKeeperTaker__factory(signer).deploy(
+    BASE_AJNA_CONFIG.erc20PoolFactory,
+    factory.address
+  );
+  for (const taker of [uniswapTaker, sushiTaker, curveTaker, lifiTaker]) {
+    await taker.deployed();
+  }
+  await (
+    await factory.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address)
+  ).wait();
+  await (
+    await factory.setTaker(LiquiditySource.SUSHISWAP, sushiTaker.address)
+  ).wait();
+  await (
+    await factory.setTaker(LiquiditySource.CURVE, curveTaker.address)
+  ).wait();
+  await (
+    await factory.setTaker(LiquiditySource.LIFI, lifiTaker.address)
+  ).wait();
+  return {
+    factory,
+    oneInchTaker,
+    uniswapTaker,
+    sushiTaker,
+    curveTaker,
+    lifiTaker,
+  };
+}
+
+// Configure the freshly deployed LI.FI taker's on-chain allowlists from the
+// reviewed production config (mirrors lifi-fork-execution-canary.test.ts).
+async function configureLifiTakerAllowlists(
+  taker: Contract,
+  lifi: ProductionLifiDexConfig
+): Promise<void> {
+  const callTargets = lifi.callTargetAllowlist?.[BASE_CHAIN_ID] ?? [];
+  const spenders = lifi.approvalSpenderAllowlist?.[BASE_CHAIN_ID] ?? [];
+  const selectorsByTarget = lifi.selectorAllowlist?.[BASE_CHAIN_ID] ?? {};
+  if (
+    callTargets.length === 0 ||
+    spenders.length === 0 ||
+    Object.keys(selectorsByTarget).length === 0
+  ) {
+    throw new Error(
+      `Reviewed config dex.lifi must define callTargetAllowlist/approvalSpenderAllowlist/selectorAllowlist for chain ${BASE_CHAIN_ID}`
+    );
+  }
+  for (const target of callTargets) {
+    await (await taker.setCallTarget(target, true)).wait();
+  }
+  for (const spender of spenders) {
+    await (await taker.setApprovalSpender(spender, true)).wait();
+  }
+  for (const [target, selectors] of Object.entries(selectorsByTarget)) {
+    for (const selector of selectors) {
+      await (await taker.setCallSelector(target, selector, true)).wait();
+    }
+  }
+}
+
+// The forced all-three-paths discovery policy, in KeeperConfig.discovery shape
+// so validateAutoDiscoverConfig validates exactly what we run.
+function buildForcedDiscoveryPolicy(
+  fixture: HybridForkFixture
+): AutoDiscoverConfig {
+  const paths = fixture.paths;
+  const take: Record<string, unknown> = {
+    enabled: true,
+    allowedExternalTakePaths: paths,
+    externalTakeRouteSelectionMode: 'maximize_profit',
+    validateRouteDeployments: true,
+    maxGasCostNative: 0.05,
+    externalTakeProbeTimeoutMs: 8000,
+    oneInchQuoteTimeoutMs: 8000,
+  };
+  // Factory-specific policy is only valid (and only required) when the factory
+  // path is enabled; allowedLiquiditySources requires a factory path. Factory
+  // source = Uniswap V3 only, so the harness needs no Sushi/Curve dex config.
+  if (paths.includes('factory')) {
+    take.defaultFactoryLiquiditySource = LiquiditySource.UNISWAPV3;
+    take.allowedLiquiditySources = [LiquiditySource.UNISWAPV3];
+  }
+  // dexGasOverrides[LIFI] is mandatory whenever the LI.FI path is enabled.
+  if (paths.includes('lifi')) {
+    take.dexGasOverrides = { [LiquiditySource.LIFI]: '900000' };
+  }
+  return {
+    enabled: true,
+    logSkips: true,
+    defaults: {
+      take: {
+        liquiditySource: defaultSourceForPaths(paths),
+        marketPriceFactor: fixture.marketPriceFactor,
+        minCollateral: fixture.minCollateral,
+      },
+    },
+    take,
+  } as AutoDiscoverConfig;
+}
+
+function buildKickPoolConfig(
+  fixture: HybridForkFixture
+): RequireFields<PoolConfig, 'kick' | 'take'> {
+  return {
+    address: fixture.poolAddress,
+    price: { source: PriceOriginSource.FIXED, value: fixture.depositPrice },
+    kick: { enabled: true, minDebt: 0, priceFactor: 0.99 },
+    take: {
+      minCollateral: fixture.minCollateral,
+      hpbPriceFactor: 0.9,
+      liquiditySource: LiquiditySource.UNISWAPV3,
+      marketPriceFactor: fixture.marketPriceFactor,
+    },
+  } as RequireFields<PoolConfig, 'kick' | 'take'>;
+}
+
+async function constructUnderwaterAuction(params: {
+  pool: FungiblePool;
+  fixture: HybridForkFixture;
+}): Promise<void> {
+  const { pool, fixture } = params;
+  await depositQuoteToken({
+    pool,
+    owner: fixture.lenderWhale,
+    amount: fixture.depositQuoteAmount,
+    price: fixture.depositPrice,
+  });
+  await drawDebt({
+    pool,
+    owner: fixture.borrowerWhale,
+    amountToBorrow: fixture.borrowAmount,
+    collateralToPledge: fixture.collateralToPledge,
+  });
+  await increaseTime(fixture.timeToKick);
+
+  const loansToKick = await arrayFromAsync(
+    getLoansToKick({
+      pool,
+      poolConfig: buildKickPoolConfig(fixture),
+      config: { subgraphUrl: '', coinGeckoApiKey: '' },
+    })
+  );
+  expect(
+    loansToKick.length,
+    'expected at least one kickable loan after interest accrual; tune AJNA_AGENT_HYBRID_BORROW_AMOUNT / COLLATERAL_PLEDGE / TIME_TO_KICK_DAYS'
+  ).to.be.greaterThan(0);
+
+  const loanToKick = loansToKick[0];
+  const kicker = await impersonateSigner(fixture.kickerWhale);
+  await setBalance(fixture.kickerWhale, utils.parseEther('100').toHexString());
+  // Approve the liquidation bond and kick directly via poolKick so an on-chain
+  // revert surfaces here. The keeper's kick() wrapper catches and swallows the
+  // revert (returning normally), which would otherwise leave the harness with no
+  // auction and a confusing "loop never ran" failure downstream.
+  const quoteToken = new Contract(pool.quoteAddress, ERC20_ABI, kicker);
+  await (
+    await quoteToken.approve(pool.poolAddress, constants.MaxUint256)
+  ).wait();
+  await poolKick(pool, kicker, loanToKick.borrower);
+  const kickedStatus = await pool
+    .getLiquidation(loanToKick.borrower)
+    .getStatus();
+  expect(
+    Number(kickedStatus.kickTime ?? 0) > 0 || kickedStatus.collateral.gt(0),
+    'kick did not create an active auction'
+  ).to.equal(true);
+  await increaseTime(fixture.timeAfterKick);
+}
+
+function buildHybridTakeTarget(params: {
+  pool: FungiblePool;
+  borrower: string;
+  fixture: HybridForkFixture;
+  kickTime: number;
+  collateralWad: BigNumber;
+  debtWad: BigNumber;
+  neutralPriceWad: BigNumber;
+}): ResolvedTakeTarget {
+  const collateral = String(weiToDecimaled(params.collateralWad));
+  const debt = String(weiToDecimaled(params.debtWad));
+  return {
+    source: 'discovered',
+    poolAddress: params.pool.poolAddress,
+    name: 'Hybrid Fork Pool',
+    dryRun: !params.fixture.liveTake,
+    take: {
+      minCollateral: params.fixture.minCollateral,
+      liquiditySource: defaultSourceForPaths(params.fixture.paths),
+      marketPriceFactor: params.fixture.marketPriceFactor,
+    },
+    candidates: [
+      {
+        poolAddress: params.pool.poolAddress,
+        borrower: params.borrower,
+        kickTime: Number.isFinite(params.kickTime) ? params.kickTime : 0,
+        debtRemaining: debt,
+        collateralRemaining: collateral,
+        neutralPrice: String(weiToDecimaled(params.neutralPriceWad)),
+        debt,
+        collateral,
+        heuristicScore: 0,
+      },
+    ],
+  };
+}
+
+function summarizeProviderOutcome(stats: DiscoveredTakeTargetStats): string {
+  return JSON.stringify(
+    {
+      candidateCount: stats.candidateCount,
+      externalTakeByPath: stats.externalTakeByPath,
+      hybridFallbackAttempts: stats.hybridFallbackAttempts,
+      hybridFallbackSuccesses: stats.hybridFallbackSuccesses,
+    },
+    null,
+    2
+  );
+}
+
+describe('Hybrid Base-fork discovery loop (oneinch + factory + lifi)', function () {
+  this.timeout(HYBRID_FORK_TIMEOUT_MS);
+
+  before(async function () {
+    if (!RUN_HYBRID_FORK_LOOP) {
+      this.skip();
+    }
+    if (network.name !== 'hardhat') {
+      throw new Error('hybrid fork loop must run on the hardhat network');
+    }
+    if ((process.env.FORK_NETWORK ?? 'mainnet') !== 'base') {
+      throw new Error('hybrid fork loop currently requires FORK_NETWORK=base');
+    }
+    if (Number(process.env.HARDHAT_CHAIN_ID ?? '31337') !== BASE_CHAIN_ID) {
+      throw new Error('hybrid fork loop requires HARDHAT_CHAIN_ID=8453');
+    }
+    requireConfiguredBaseForkRpc();
+    // Fail fast if the reviewed config cannot support all three paths.
+    const keeperConfig = await loadHybridKeeperConfig();
+    const fixture = loadHybridForkFixture();
+    validateAutoDiscoverConfig(
+      { ...keeperConfig, discovery: buildForcedDiscoveryPolicy(fixture) },
+      BASE_CHAIN_ID
+    );
+    await resetHardhat();
+  });
+
+  beforeEach(async () => {
+    await resetHardhat();
+    NonceTracker.clearNonces();
+  });
+
+  it('runs handleDiscoveredTakeTarget with all three providers competing on real routes', async function () {
+    const keeperConfig = await loadHybridKeeperConfig();
+    const fixture = loadHybridForkFixture();
+    if (!keeperConfig.dex?.lifi) {
+      throw new Error('reviewed config must define dex.lifi');
+    }
+    const lifi = requireProductionLifi(keeperConfig.dex.lifi);
+
+    const provider = getProvider();
+    const signer = Wallet.createRandom().connect(provider);
+    await setBalance(signer.address, utils.parseEther('100').toHexString());
+
+    configureAjna(BASE_AJNA_CONFIG as never);
+    const pool = await new AjnaSDK(
+      provider
+    ).fungiblePoolFactory.getPoolByAddress(fixture.poolAddress);
+    // Serve the discovery loop from the fork pool, not a real subgraph.
+    overrideGetLoans(makeGetLoansFromSdk(pool));
+    overrideGetLiquidations(makeGetLiquidationsFromSdk(pool));
+    overrideGetHighestMeaningfulBucket(makeGetHighestMeaningfulBucket(pool));
+
+    const { factory, oneInchTaker, lifiTaker } =
+      await deployHybridFactorySystem(signer);
+    await configureLifiTakerAllowlists(
+      new Contract(lifiTaker.address, LifiKeeperTaker__factory.abi, signer),
+      lifi
+    );
+
+    await constructUnderwaterAuction({ pool, fixture });
+
+    // Build the discovery execution config from the reviewed config, but force
+    // the all-three-paths policy and point at the freshly deployed factory.
+    const execBase = getDiscoveryExecutionConfig({
+      ...keeperConfig,
+      discovery: buildForcedDiscoveryPolicy(fixture),
+    });
+    const readRpc = { getGasPrice: () => provider.getGasPrice() };
+    const transports: DiscoveryReadTransports = {
+      subgraph: makeFixtureSubgraphReader(pool, fixture.borrowerWhale),
+      readRpc,
+    };
+
+    const quoteToken = new Contract(pool.quoteAddress, ERC20_ABI, provider);
+    const ownerQuoteBefore: BigNumber = await quoteToken.balanceOf(
+      signer.address
+    );
+    const collateralBefore: BigNumber = (
+      await pool.getLiquidation(fixture.borrowerWhale).getStatus()
+    ).collateral;
+
+    // Warp the dutch auction down until a route clears (or maxWarps reached).
+    let stats: DiscoveredTakeTargetStats | undefined;
+    let executed = false;
+    for (let attempt = 0; attempt <= fixture.maxWarps; attempt += 1) {
+      const status = await pool
+        .getLiquidation(fixture.borrowerWhale)
+        .getStatus();
+      if (!status.collateral.gt(0)) {
+        break;
+      }
+      // Fresh rpcCache per attempt; deliberately do NOT force-open the 1inch
+      // circuit (unlike run-fixture-keeper-harness) so real 1inch routes compete.
+      const rpcCache = await createDiscoveryRpcCache({
+        signer,
+        readRpc,
+        includeFactoryQuoteProviders: true,
+      });
+      stats = await handleDiscoveredTakeTarget({
+        pool,
+        signer,
+        transports,
+        rpcCache,
+        target: buildHybridTakeTarget({
+          pool,
+          borrower: fixture.borrowerWhale,
+          fixture,
+          kickTime: Math.floor(Number(status.kickTime ?? 0)),
+          collateralWad: status.collateral,
+          debtWad: status.debtToCover ?? BigNumber.from(0),
+          neutralPriceWad: status.neutralPrice ?? BigNumber.from(0),
+        }),
+        config: {
+          ...execBase,
+          dryRun: !fixture.liveTake,
+          keeperTaker: oneInchTaker.address,
+          keeperTakerFactory: factory.address,
+          lifiTaker: lifiTaker.address,
+        },
+      });
+      const executedNow =
+        (stats.executedExternalTakes ?? 0) > 0 ||
+        (stats.dryRunExternalTakes ?? 0) > 0;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[hybrid-fork-loop] attempt ${attempt} auctionPrice=${weiToDecimaled(
+          status.price
+        )} -> ${summarizeProviderOutcome(stats)}`
+      );
+      if (executedNow) {
+        executed = true;
+        break;
+      }
+      await increaseTime(fixture.warpSeconds);
+    }
+
+    expect(
+      stats,
+      'expected the discovery loop to run at least once'
+    ).to.not.equal(undefined);
+    expect(
+      executed,
+      'no external take path became takeable within AJNA_AGENT_HYBRID_MAX_WARPS; tune deposit/borrow/warp economics for your fork block'
+    ).to.equal(true);
+
+    if (fixture.liveTake) {
+      // A real take executed: auction collateral fell and the keeper did not
+      // lose quote token (it earned at least the enforced profit floor).
+      const after = await pool
+        .getLiquidation(fixture.borrowerWhale)
+        .getStatus();
+      expect(
+        after.collateral.lt(collateralBefore),
+        'expected the live take to reduce auction collateral'
+      ).to.equal(true);
+      const ownerQuoteAfter: BigNumber = await quoteToken.balanceOf(
+        signer.address
+      );
+      expect(ownerQuoteAfter.gte(ownerQuoteBefore)).to.equal(true);
+      // No residual LI.FI taker collateral allowance after a successful take
+      // (only meaningful if the winning route was LI.FI; harmless otherwise).
+      const collateralToken = new Contract(
+        pool.collateralAddress,
+        ERC20_ABI,
+        provider
+      );
+      for (const spender of lifi.approvalSpenderAllowlist?.[BASE_CHAIN_ID] ??
+        []) {
+        expect(
+          (await collateralToken.allowance(lifiTaker.address, spender)).eq(0)
+        ).to.equal(true);
+      }
+    }
+  });
+});
