@@ -1,19 +1,15 @@
 import { BigNumber, ethers } from 'ethers';
-import { LifiFeeCostPolicy } from '../../config';
 import { ApprovedLifiFeeCost, LifiFeeCost } from './schema';
+import type { LifiFeeCostPolicy } from './schema';
 
-function asFeeCosts(params: {
-  value: unknown;
-  fieldName: string;
+function withFeeCostSource(params: {
+  feeCosts?: readonly LifiFeeCost[];
   source: ApprovedLifiFeeCost['source'];
 }): Array<LifiFeeCost & { source: ApprovedLifiFeeCost['source'] }> {
-  if (params.value === undefined) {
+  if (params.feeCosts === undefined) {
     return [];
   }
-  if (!Array.isArray(params.value)) {
-    throw new Error(`${params.fieldName} must be an array`);
-  }
-  return (params.value as LifiFeeCost[]).map((feeCost) => ({
+  return params.feeCosts.map((feeCost) => ({
     ...feeCost,
     source: params.source,
   }));
@@ -24,9 +20,9 @@ function isDecimalInteger(value: unknown): value is string {
 }
 
 export function validateLifiFeeCosts(params: {
-  topLevelFeeCosts: unknown;
-  feeCollectionStepFeeCosts: unknown;
-  executableSwapStepFeeCosts: unknown;
+  topLevelFeeCosts?: readonly LifiFeeCost[];
+  feeCollectionStepFeeCosts?: readonly LifiFeeCost[];
+  executableSwapStepFeeCosts?: readonly LifiFeeCost[];
   expectedSourceToken: string;
   expectedOutputToken: string;
   expectedChainId: number;
@@ -35,19 +31,16 @@ export function validateLifiFeeCosts(params: {
   feeCostPolicy: LifiFeeCostPolicy;
 }): ApprovedLifiFeeCost[] {
   const feeCosts = [
-    ...asFeeCosts({
-      value: params.topLevelFeeCosts,
-      fieldName: 'LI.FI top-level feeCosts',
+    ...withFeeCostSource({
+      feeCosts: params.topLevelFeeCosts,
       source: 'top_level',
     }),
-    ...asFeeCosts({
-      value: params.feeCollectionStepFeeCosts,
-      fieldName: 'LI.FI included feeCollection step feeCosts',
+    ...withFeeCostSource({
+      feeCosts: params.feeCollectionStepFeeCosts,
       source: 'included_fee_collection_step',
     }),
-    ...asFeeCosts({
-      value: params.executableSwapStepFeeCosts,
-      fieldName: 'LI.FI included executable swap step feeCosts',
+    ...withFeeCostSource({
+      feeCosts: params.executableSwapStepFeeCosts,
       source: 'included_swap_step',
     }),
   ];

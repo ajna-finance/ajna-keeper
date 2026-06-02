@@ -1,77 +1,112 @@
-import fs from 'fs';
-import path from 'path';
 import { expect } from 'chai';
-import { buildLifiAllowlistReconciliationPlan } from '../../scripts/deployment/lifi-factory-deployment';
+import {
+  buildLifiAllowlistReconciliationPlan,
+  getLifiProductionAllowlists,
+  getLifiProductionDeploymentGateMessages,
+  hasProductionLifiConfig,
+  validateDetectedChainLifiProductionConfig,
+} from '../../scripts/deployment/lifi-factory-deployment';
+import { KeeperConfig, LifiDexConfig } from '../../src/config';
+
+const BASE_CHAIN_ID = 8453;
+const CALL_TARGET = '0x1111111111111111111111111111111111111111';
+const APPROVAL_SPENDER = '0x2222222222222222222222222222222222222222';
+const SELECTOR = '0xabcdef12';
+
+function keeperConfigWithLifi(lifi: LifiDexConfig): KeeperConfig {
+  return {
+    network: {
+      rpcUrl: 'http://localhost:8545',
+      subgraph: { url: 'http://localhost:8000' },
+    },
+    signer: { keystore: '/tmp/keeper.json' },
+    runtime: { logLevel: 'info', delayBetweenRuns: 60 },
+    ajna: {
+      erc20PoolFactory: '0x3333333333333333333333333333333333333333',
+      erc721PoolFactory: '0x4444444444444444444444444444444444444444',
+      poolUtils: '0x5555555555555555555555555555555555555555',
+      positionManager: '0x6666666666666666666666666666666666666666',
+      ajnaToken: '0x7777777777777777777777777777777777777777',
+      grantFund: '',
+      burnWrapper: '',
+      lenderHelper: '',
+    },
+    manual: { pools: [] },
+    dex: { lifi },
+  };
+}
+
+function productionConfig(
+  overrides: Partial<
+    Extract<NonNullable<KeeperConfig['dex']>['lifi'], { mode: 'production' }>
+  > = {}
+): KeeperConfig {
+  return keeperConfigWithLifi({
+    mode: 'production',
+    allowExchanges: ['Uniswap'],
+    callTargetAllowlist: { [BASE_CHAIN_ID]: [CALL_TARGET] },
+    approvalSpenderAllowlist: { [BASE_CHAIN_ID]: [APPROVAL_SPENDER] },
+    selectorAllowlist: { [BASE_CHAIN_ID]: { [CALL_TARGET]: [SELECTOR] } },
+    ...overrides,
+  });
+}
 
 describe('LI.FI factory deployment script support', () => {
-  const deploySource = fs.readFileSync(
-    path.join(__dirname, '../../scripts/deploy-factory-system.ts'),
-    'utf8'
-  );
-  const lifiDeploymentSource = fs.readFileSync(
-    path.join(__dirname, '../../scripts/deployment/lifi-factory-deployment.ts'),
-    'utf8'
-  );
-  const source = `${deploySource}\n${lifiDeploymentSource}`;
-
-  it('deploys and registers the canonical LI.FI taker for production dex.lifi config', () => {
-    expect(source).to.include('deployLifiKeeperTaker');
-    expect(source).to.include('LifiKeeperTaker.sol');
-    expect(source).to.include('hasProductionLifiConfig');
-    expect(source).to.include("config.dex?.lifi?.mode === 'production'");
-    expect(source).to.include('LiquiditySource.LIFI');
-    expect(source).to.include('addresses.lifiTaker');
-    expect(source).to.include("Lifi: '");
+  it('enables LI.FI taker deployment only for production dex.lifi config', () => {
+    expect(hasProductionLifiConfig(productionConfig())).to.equal(true);
+    expect(
+      hasProductionLifiConfig(
+        keeperConfigWithLifi({
+          mode: 'canary',
+          allowExchanges: ['uniswap'],
+        })
+      )
+    ).to.equal(false);
+    expect(
+      hasProductionLifiConfig({ ...productionConfig(), dex: {} })
+    ).to.equal(false);
   });
 
-  it('keeps canary LI.FI config out of live deployment registration', () => {
-    expect(source).to.include('Canary configs are');
-    expect(source).to.not.include('if (config.dex?.lifi) {');
-  });
-
-  it('configures reviewed LI.FI allowlists from the same production config', () => {
-    expect(source).to.include('configureLifiAllowlists');
-    expect(source).to.include('normalizeLifiProductionChainPolicy');
-    expect(source).to.include('policy.callTargets');
-    expect(source).to.include('policy.approvalSpenders');
-    expect(source).to.include('selectorAllowlist');
-    expect(source).to.include('setCallTarget');
-    expect(source).to.include('setApprovalSpender');
-    expect(source).to.include('setCallSelector');
-    expect(source).to.include('getAllowedCallTargets');
-    expect(source).to.include('getAllowedApprovalSpenders');
-    expect(source).to.include('getAllowedCallSelectors');
-    expect(source).to.include('assertExactSet');
-  });
-
-  it('validates target-chain LI.FI production allowlists before wallet/deploy actions', () => {
-    expect(source).to.include('validateDetectedChainLifiProductionConfig');
-    expect(source).to.include(
-      'getLifiProductionAllowlists(config, chainInfo.chainId)'
+  it('resolves reviewed production allowlists for the detected chain', () => {
+    const allowlists = getLifiProductionAllowlists(
+      productionConfig(),
+      BASE_CHAIN_ID
     );
 
-    const validationIndex = deploySource.indexOf(
-      'validateDetectedChainLifiProductionConfig(config, chainInfo);'
-    );
-    const walletIndex = deploySource.indexOf(
-      "console.log('\\n🔐 Loading wallet from keystore...');"
-    );
-
-    expect(validationIndex).to.be.greaterThan(-1);
-    expect(walletIndex).to.be.greaterThan(validationIndex);
+    expect(allowlists.callTargets).to.deep.equal([CALL_TARGET]);
+    expect(allowlists.approvalSpenders).to.deep.equal([APPROVAL_SPENDER]);
+    expect(allowlists.selectorAllowlist).to.deep.equal({
+      [CALL_TARGET]: [SELECTOR],
+    });
   });
 
-  it('reconciles stale LI.FI allowlist entries before final exact verification', () => {
-    expect(source).to.include('currentCallTargets');
-    expect(source).to.include('currentApprovalSpenders');
-    expect(source).to.include('buildLifiAllowlistReconciliationPlan');
-    expect(source).to.include('assertContainsSet');
-    expect(source).to.include('setCallTarget(target, false)');
-    expect(source).to.include('setApprovalSpender(spender, false)');
-    expect(source).to.include('setCallSelector(target, selector, false)');
-    expect(source).to.include('Disabled stale LI.FI call target');
-    expect(source).to.include('Disabled stale LI.FI approval spender');
-    expect(source).to.include('Disabled stale LI.FI selector');
+  it('validates target-chain LI.FI production allowlists before wallet/deploy actions can use them', () => {
+    const originalLog = console.log;
+    const logs: string[] = [];
+    console.log = (...args: unknown[]) => {
+      logs.push(args.join(' '));
+    };
+    try {
+      validateDetectedChainLifiProductionConfig(productionConfig(), {
+        chainId: BASE_CHAIN_ID,
+        name: 'Base',
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(logs.join('\n')).to.include(
+      'LI.FI production allowlists validated for Base (8453)'
+    );
+  });
+
+  it('fails closed when production config does not cover the detected chain', () => {
+    expect(() =>
+      validateDetectedChainLifiProductionConfig(productionConfig(), {
+        chainId: 1,
+        name: 'Ethereum Mainnet',
+      })
+    ).to.throw('LI.FI.callTargetAllowlist.1 is required');
   });
 
   it('plans desired LI.FI allowlist additions before stale removals', () => {
@@ -108,21 +143,26 @@ describe('LI.FI factory deployment script support', () => {
   });
 
   it('does not silently truncate configured LI.FI selectors during deployment', () => {
-    expect(source).to.not.include('hexDataSlice(selector, 0, 4)');
+    expect(() =>
+      getLifiProductionAllowlists(
+        productionConfig({
+          selectorAllowlist: {
+            [BASE_CHAIN_ID]: { [CALL_TARGET]: ['0xabcdef1234'] },
+          },
+        }),
+        BASE_CHAIN_ID
+      )
+    ).to.throw('LI.FI.selectorAllowlist.8453 entry is invalid: 0xabcdef1234');
   });
 
   it('prints LI.FI production canary gates before suggesting live startup', () => {
-    expect(source).to.include(
-      'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary'
-    );
-    expect(source).to.include(
-      'AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=${configPath} npm run lifi-fork-execution-canary'
-    );
-    expect(source).to.include(
-      'For non-Base LI.FI production support, run an equivalent reviewed chain-specific fork canary before live use'
-    );
-    expect(source).to.include(
-      'After both LI.FI gates pass, test startup with: yarn start --config ${configPath}'
-    );
+    expect(
+      getLifiProductionDeploymentGateMessages('base-config.ts')
+    ).to.deep.equal([
+      'Run the LI.FI route-shape gate: AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary -- --config base-config.ts',
+      'Run the LI.FI callback-path fork gate: AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=base-config.ts npm run lifi-fork-execution-canary',
+      'For non-Base LI.FI production support, run an equivalent reviewed chain-specific fork canary before live use',
+      'After both LI.FI gates pass, test startup with: yarn start --config base-config.ts',
+    ]);
   });
 });

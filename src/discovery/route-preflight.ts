@@ -6,11 +6,11 @@ import {
   UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
-  normalizeLifiProductionChainPolicy,
   resolveExternalTakePaths,
   resolveFactoryRouteSelectionSources,
 } from '../config';
 import { normalizeLifiAddressAllowlist } from '../dex/lifi';
+import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
 

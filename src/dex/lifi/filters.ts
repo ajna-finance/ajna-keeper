@@ -1,3 +1,5 @@
+export type LifiDexMode = 'canary' | 'production';
+
 const BROAD_EXCHANGE_FILTERS = new Set(['', 'all', 'default', 'none', '[]']);
 const UNSUPPORTED_EXCHANGE_FILTERS = new Set([
   'feecollection',
@@ -12,9 +14,16 @@ export interface NormalizedLifiExchangeFilters {
 }
 
 export interface LifiExchangeFilterConfig {
+  mode: LifiDexMode;
   allowExchanges?: readonly string[];
   denyExchanges?: readonly string[];
   preferExchanges?: readonly string[];
+  allowBroadExchangeFilters?: boolean;
+}
+
+export interface NormalizeLifiExchangeFilterOptions {
+  fieldName?: string;
+  mode?: LifiDexMode;
   allowBroadExchangeFilters?: boolean;
 }
 
@@ -27,24 +36,30 @@ export function isBroadLifiExchangeFilter(value: string): boolean {
 }
 
 function normalizeFilterList(params: {
-  values: readonly string[] | undefined;
+  values: readonly unknown[] | undefined;
   fieldName: string;
+  mode: LifiDexMode;
   allowBroadExchangeFilters?: boolean;
 }): string[] | undefined {
   if (params.values === undefined) {
     return undefined;
   }
+  if (!Array.isArray(params.values)) {
+    throw new Error(`${params.fieldName} must be an array of exchange keys`);
+  }
 
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const value of params.values) {
+    if (typeof value !== 'string') {
+      throw new Error(`${params.fieldName} entries must be exchange keys`);
+    }
     const key = value.trim().toLowerCase();
-    if (
-      isBroadLifiExchangeFilter(key) &&
-      params.allowBroadExchangeFilters !== true
-    ) {
+    const broadFilterAllowed =
+      params.allowBroadExchangeFilters === true && params.mode === 'canary';
+    if (isBroadLifiExchangeFilter(key) && !broadFilterAllowed) {
       throw new Error(
-        `${params.fieldName} cannot use broad LI.FI filter keyword ${JSON.stringify(value)}`
+        `${params.fieldName} cannot use broad LI.FI filter keyword ${JSON.stringify(value)} outside canary allowBroadExchangeFilters mode`
       );
     }
     if (isUnsupportedLifiExchangeTool(key)) {
@@ -63,43 +78,52 @@ function normalizeFilterList(params: {
 }
 
 export function normalizeLifiExchangeFilters(
-  config: LifiExchangeFilterConfig
+  config: LifiExchangeFilterConfig,
+  options: NormalizeLifiExchangeFilterOptions = {}
 ): NormalizedLifiExchangeFilters {
+  const fieldName = options.fieldName ?? 'dex.lifi';
+  const mode = options.mode ?? config.mode;
+  const allowBroadExchangeFilters =
+    options.allowBroadExchangeFilters ?? config.allowBroadExchangeFilters;
   const allowExchanges = normalizeFilterList({
     values: config.allowExchanges,
-    fieldName: 'dex.lifi.allowExchanges',
-    allowBroadExchangeFilters: config.allowBroadExchangeFilters,
+    fieldName: `${fieldName}.allowExchanges`,
+    mode,
+    allowBroadExchangeFilters,
   });
   const denyExchanges = normalizeFilterList({
     values: config.denyExchanges,
-    fieldName: 'dex.lifi.denyExchanges',
-    allowBroadExchangeFilters: config.allowBroadExchangeFilters,
+    fieldName: `${fieldName}.denyExchanges`,
+    mode,
+    allowBroadExchangeFilters,
   });
   const preferExchanges = normalizeFilterList({
     values: config.preferExchanges,
-    fieldName: 'dex.lifi.preferExchanges',
-    allowBroadExchangeFilters: config.allowBroadExchangeFilters,
+    fieldName: `${fieldName}.preferExchanges`,
+    mode,
+    allowBroadExchangeFilters,
   });
 
   const allow = new Set(allowExchanges ?? []);
   const deny = new Set(denyExchanges ?? []);
   const prefer = new Set(preferExchanges ?? []);
+  const conflictPrefix = fieldName === 'dex.lifi' ? 'LI.FI' : fieldName;
   for (const key of Array.from(allow)) {
     if (prefer.has(key)) {
       throw new Error(
-        `LI.FI exchange filter ${key} cannot appear in both allowExchanges and preferExchanges`
+        `${conflictPrefix} exchange filter ${key} cannot appear in both allowExchanges and preferExchanges`
       );
     }
     if (deny.has(key)) {
       throw new Error(
-        `LI.FI exchange filter ${key} cannot appear in both allowExchanges and denyExchanges`
+        `${conflictPrefix} exchange filter ${key} cannot appear in both allowExchanges and denyExchanges`
       );
     }
   }
   for (const key of Array.from(prefer)) {
     if (deny.has(key)) {
       throw new Error(
-        `LI.FI exchange filter ${key} cannot appear in both preferExchanges and denyExchanges`
+        `${conflictPrefix} exchange filter ${key} cannot appear in both preferExchanges and denyExchanges`
       );
     }
   }
@@ -109,6 +133,29 @@ export function normalizeLifiExchangeFilters(
     ...(denyExchanges !== undefined ? { denyExchanges } : {}),
     ...(preferExchanges !== undefined ? { preferExchanges } : {}),
   };
+}
+
+export function hasBroadLifiPolicyExchangeFilter(
+  config: LifiExchangeFilterConfig
+): boolean {
+  return [
+    ...(config.allowExchanges ?? []),
+    ...(config.denyExchanges ?? []),
+    ...(config.preferExchanges ?? []),
+  ].some((value) => isBroadLifiExchangeFilter(value));
+}
+
+export function getConcreteProductionLifiPolicyError(params: {
+  config: LifiExchangeFilterConfig;
+  context: string;
+}): string | undefined {
+  if (params.config.allowBroadExchangeFilters === true) {
+    return `${params.context} requires concrete production LI.FI exchange filters; config.dex.lifi.allowBroadExchangeFilters is canary-only`;
+  }
+  if (hasBroadLifiPolicyExchangeFilter(params.config)) {
+    return `${params.context} requires concrete production LI.FI exchange filters; broad filter keywords are not allowed`;
+  }
+  return undefined;
 }
 
 export function extractLifiExchangeToolKeys(toolsResponse: unknown): string[] {

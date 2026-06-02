@@ -232,7 +232,9 @@ describe('Factory slippage bound', function () {
         isArbTakeable: false,
         externalTakeQuoteEvaluation: {
           isTakeable: true,
+          externalTakePath: 'factory',
           quoteAmountRaw: quotedAmountRaw,
+          routeExecutionFloorRaw: approvedMinOutRaw,
           approvedMinOutRaw,
           selectedLiquiditySource: LiquiditySource.SUSHISWAP,
           selectedFeeTier: 3000,

@@ -1,12 +1,21 @@
 import type { KeeperConfig, LifiDexConfig } from '../../config';
 import {
-  getConfiguredLifiCompletePolicyChainIds,
   getLifiRequiredLiveProductionPolicyError,
-  normalizeLifiApiBaseUrl,
+} from '../../config/lifi-policy';
+import {
+  getConfiguredLifiCompletePolicyChainIds,
   normalizeLifiCanaryChainPolicy,
   normalizeLifiProductionChainPolicy,
-} from '../../config/lifi-policy';
-import { isBroadLifiExchangeFilter } from './filters';
+} from './chain-policy';
+import {
+  getLifiPolicyApiKey,
+  getSetLifiPolicyEnvNames,
+  isDefaultLifiApiBaseUrl,
+} from './api-policy';
+import {
+  getConcreteProductionLifiPolicyError,
+  hasBroadLifiPolicyExchangeFilter,
+} from './filters';
 import {
   DEFAULT_LIFI_CANARY_CHAIN_ID,
   normalizeAddress,
@@ -65,24 +74,6 @@ const REQUIRED_LIVE_POLICY_OVERRIDE_ENVS = [
   'AJNA_AGENT_LIFI_CANARY_SELECTOR_ALLOWLIST_JSON',
 ];
 
-function normalizeApiBaseUrlForGate(value: string): string {
-  return normalizeLifiApiBaseUrl(value, 'LI.FI API base URL');
-}
-
-function isDefaultLifiApiBaseUrl(value: string): boolean {
-  return (
-    normalizeApiBaseUrlForGate(value) ===
-    normalizeApiBaseUrlForGate(DEFAULT_LIFI_API_BASE_URL)
-  );
-}
-
-function getSetEnvNames(
-  env: LifiRouteCanaryEnv,
-  names: readonly string[]
-): string[] {
-  return names.filter((name) => optionalEnv(env, name) !== undefined);
-}
-
 function getRequiredLivePolicySourceError(
   env: LifiRouteCanaryEnv,
   config: KeeperConfig | undefined
@@ -99,13 +90,12 @@ function getRequiredLivePolicySourceError(
   if (!config.takers?.contracts?.Lifi) {
     return 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires config.takers.contracts.Lifi';
   }
-  const allowBroadExchangeFilters: unknown =
-    config.dex.lifi.allowBroadExchangeFilters;
-  if (allowBroadExchangeFilters === true) {
-    return 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires concrete production LI.FI exchange filters; config.dex.lifi.allowBroadExchangeFilters is canary-only';
-  }
-  if (hasBroadExchangeFilter(config.dex.lifi)) {
-    return 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires concrete production LI.FI exchange filters; broad filter keywords are not allowed';
+  const concretePolicyError = getConcreteProductionLifiPolicyError({
+    config: config.dex.lifi,
+    context: 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE',
+  });
+  if (concretePolicyError !== undefined) {
+    return concretePolicyError;
   }
   const incompletePolicyError = getLifiRequiredLiveProductionPolicyError(
     config.dex.lifi
@@ -114,7 +104,11 @@ function getRequiredLivePolicySourceError(
     return incompletePolicyError;
   }
 
-  const overrides = getSetEnvNames(env, REQUIRED_LIVE_POLICY_OVERRIDE_ENVS);
+  const overrides = getSetLifiPolicyEnvNames({
+    env,
+    names: REQUIRED_LIVE_POLICY_OVERRIDE_ENVS,
+    readEnv: optionalEnv,
+  });
   if (overrides.length > 0) {
     return `AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE does not allow LI.FI policy env overrides: ${overrides.join(', ')}`;
   }
@@ -292,23 +286,19 @@ function getApiKey(
   env: LifiRouteCanaryEnv,
   config: LifiDexConfig
 ): string | undefined {
-  if (config.apiKeyEnvVar) {
-    return optionalEnv(env, config.apiKeyEnvVar);
-  }
-  return (
-    optionalEnv(env, 'AJNA_AGENT_LIFI_API_KEY') ??
-    optionalEnv(env, 'AJNA_AGENT_LIFI_CANARY_API_KEY') ??
-    optionalEnv(env, 'LIFI_API_KEY')
-  );
+  return getLifiPolicyApiKey({
+    config,
+    env,
+    fallbackEnvNames: [
+      'AJNA_AGENT_LIFI_API_KEY',
+      'AJNA_AGENT_LIFI_CANARY_API_KEY',
+      'LIFI_API_KEY',
+    ],
+    readEnv: optionalEnv,
+  });
 }
 
-export function hasBroadExchangeFilter(config: LifiDexConfig): boolean {
-  return [
-    ...(config.allowExchanges ?? []),
-    ...(config.denyExchanges ?? []),
-    ...(config.preferExchanges ?? []),
-  ].some((value) => isBroadLifiExchangeFilter(value));
-}
+export { hasBroadLifiPolicyExchangeFilter as hasBroadExchangeFilter } from './filters';
 
 export function resolveLifiRouteCanaryConfig(input: {
   env?: LifiRouteCanaryEnv;

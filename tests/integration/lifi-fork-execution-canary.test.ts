@@ -14,24 +14,22 @@ import {
   MockPoolDeployer__factory,
 } from '../../typechain-types/factories/contracts/mocks';
 import { LifiKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
+import { LiquiditySource } from '../../src/config';
 import {
-  KeeperConfig,
-  LifiDexConfig,
-  LiquiditySource,
-  readConfigFile,
-} from '../../src/config';
-import { normalizeLifiApiBaseUrl } from '../../src/config/lifi-policy';
-import {
-  DEFAULT_LIFI_API_BASE_URL,
   assertLifiToolsContainFilters,
   fetchLifiQuote,
   fetchLifiTools,
-  isBroadLifiExchangeFilter,
-  normalizeLifiAddressAllowlist,
   normalizeLifiExchangeFilters,
-  normalizeLifiSelectorAllowlistRecord,
   validateLifiQuote,
 } from '../../src/dex/lifi';
+import {
+  ForkCanaryLifiConfig,
+  LIFI_FORK_CANARY_BASE_CHAIN_ID as BASE_CHAIN_ID,
+  getLifiForkCanaryApiKey,
+  loadLifiForkCanaryKeeperConfig,
+  optionalForkCanaryEnv,
+  resolveLifiForkCanaryConfig,
+} from './helpers/lifi-fork-canary-config';
 import { resetHardhat, setBalance } from './test-utils';
 
 const RUN_LIFI_FORK_CANARY =
@@ -46,7 +44,6 @@ const RUN_LIFI_FORK_CANARY =
 const USE_FRESH_DEPLOYMENT =
   process.env.AJNA_AGENT_LIFI_FORK_CANARY_USE_FRESH_DEPLOYMENT === 'true';
 
-const BASE_CHAIN_ID = 8453;
 const BASE_WETH = utils.getAddress(
   '0x4200000000000000000000000000000000000006'
 );
@@ -54,35 +51,6 @@ const BASE_USDC = utils.getAddress(
   '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
 );
 const DEFAULT_BASE_WETH_AMOUNT_RAW = '1000000000000000';
-const MAX_LIFI_CANARY_TIMEOUT_MS = 10_000;
-const MAX_LIFI_CANARY_SLIPPAGE = 0.5;
-const MAX_LIFI_CANARY_PRICE_IMPACT = 0.5;
-const FORK_CANARY_CONFIG_ENVS = [
-  'AJNA_AGENT_LIFI_FORK_CANARY_CONFIG',
-  'AJNA_AGENT_LIFI_CANARY_CONFIG',
-];
-const FORK_CANARY_POLICY_OVERRIDE_ENVS = [
-  'AJNA_AGENT_LIFI_FORK_CANARY_API_BASE_URL',
-  'AJNA_AGENT_LIFI_CANARY_API_BASE_URL',
-  'AJNA_AGENT_LIFI_FORK_CANARY_ALLOW_EXCHANGES',
-  'AJNA_AGENT_LIFI_CANARY_ALLOW_EXCHANGES',
-  'AJNA_AGENT_LIFI_FORK_CANARY_DENY_EXCHANGES',
-  'AJNA_AGENT_LIFI_CANARY_DENY_EXCHANGES',
-  'AJNA_AGENT_LIFI_FORK_CANARY_PREFER_EXCHANGES',
-  'AJNA_AGENT_LIFI_CANARY_PREFER_EXCHANGES',
-  'AJNA_AGENT_LIFI_FORK_CANARY_CALL_TARGET_ALLOWLIST',
-  'AJNA_AGENT_LIFI_CANARY_CALL_TARGET_ALLOWLIST',
-  'AJNA_AGENT_LIFI_FORK_CANARY_APPROVAL_SPENDER_ALLOWLIST',
-  'AJNA_AGENT_LIFI_CANARY_APPROVAL_SPENDER_ALLOWLIST',
-  'AJNA_AGENT_LIFI_FORK_CANARY_SELECTOR_ALLOWLIST_JSON',
-  'AJNA_AGENT_LIFI_CANARY_SELECTOR_ALLOWLIST_JSON',
-  'AJNA_AGENT_LIFI_FORK_CANARY_TIMEOUT_MS',
-  'AJNA_AGENT_LIFI_CANARY_TIMEOUT_MS',
-  'AJNA_AGENT_LIFI_FORK_CANARY_SLIPPAGE',
-  'AJNA_AGENT_LIFI_CANARY_SLIPPAGE',
-  'AJNA_AGENT_LIFI_FORK_CANARY_MAX_PRICE_IMPACT',
-  'AJNA_AGENT_LIFI_CANARY_MAX_PRICE_IMPACT',
-];
 const ERC20_NON_SUBSET_HASH = utils.keccak256(
   utils.toUtf8Bytes('ERC20_NON_SUBSET_HASH')
 );
@@ -98,38 +66,12 @@ const ERC20_ABI = [
   'function allowance(address owner,address spender) view returns (uint256)',
 ];
 
-type ForkCanaryLifiConfig = LifiDexConfig & {
-  mode: 'production';
-  configuredFactoryAddress: string;
-  configuredTakerAddress: string;
-};
-
 function getProvider() {
   return new providers.Web3Provider(network.provider as any);
 }
 
 function optionalEnv(...names: string[]): string | undefined {
-  for (const name of names) {
-    const value = process.env[name];
-    if (value !== undefined && value.trim().length > 0) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function getSetEnvNames(names: readonly string[]): string[] {
-  return names.filter((name) => optionalEnv(name) !== undefined);
-}
-
-async function loadForkCanaryKeeperConfig(): Promise<KeeperConfig> {
-  const configPath = optionalEnv(...FORK_CANARY_CONFIG_ENVS);
-  if (!configPath) {
-    throw new Error(
-      `${FORK_CANARY_CONFIG_ENVS.join(' or ')} is required for RUN_LIFI_FORK_CANARY=true`
-    );
-  }
-  return readConfigFile(configPath);
+  return optionalForkCanaryEnv(process.env, ...names);
 }
 
 function requireConfiguredBaseForkRpc(): void {
@@ -143,96 +85,6 @@ function requireConfiguredBaseForkRpc(): void {
       'Base fork RPC is required for RUN_LIFI_FORK_CANARY=true before hardhat_reset; set AJNA_AGENT_RPC_URL, AJNA_RPC_URL_BASE, BASE_RPC_URL, or ALCHEMY_API_KEY for the configured Base fork URL'
     );
   }
-}
-
-function normalizeApiBaseUrlForGate(value: string): string {
-  return normalizeLifiApiBaseUrl(value, 'LI.FI API base URL');
-}
-
-function requireDefaultLifiApiBaseUrl(apiBaseUrl: string | undefined): void {
-  if (
-    apiBaseUrl !== undefined &&
-    normalizeApiBaseUrlForGate(apiBaseUrl) !==
-      normalizeApiBaseUrlForGate(DEFAULT_LIFI_API_BASE_URL)
-  ) {
-    throw new Error(
-      'LI.FI fork canary requires the default LI.FI API base URL; refusing custom or mocked API base URL'
-    );
-  }
-}
-
-function requireConfiguredAddress(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`LI.FI fork canary requires ${label}`);
-  }
-  let normalized: string;
-  try {
-    normalized = utils.getAddress(value);
-  } catch {
-    throw new Error(`LI.FI fork canary ${label} must be an address`);
-  }
-  if (normalized === constants.AddressZero) {
-    throw new Error(`LI.FI fork canary ${label} cannot be zero address`);
-  }
-  return normalized;
-}
-
-function hasBroadForkExchangeFilter(config: LifiDexConfig): boolean {
-  const filterLists = [
-    config.allowExchanges,
-    config.denyExchanges,
-    config.preferExchanges,
-  ];
-  return filterLists.some((values) =>
-    values?.some((value) => isBroadLifiExchangeFilter(value))
-  );
-}
-
-function requirePositiveIntegerPolicy(params: {
-  value: number | undefined;
-  fallback: number;
-  max: number;
-  label: string;
-}): number {
-  const value = params.value ?? params.fallback;
-  if (!Number.isInteger(value) || value <= 0 || value > params.max) {
-    throw new Error(
-      `${params.label} must be an integer between 1 and ${params.max}`
-    );
-  }
-  return value;
-}
-
-function requireBoundedDecimalPolicy(params: {
-  value: number | undefined;
-  fallback: number;
-  max: number;
-  label: string;
-}): number {
-  const value = params.value ?? params.fallback;
-  if (!Number.isFinite(value) || value <= 0 || value > params.max) {
-    throw new Error(
-      `${params.label} must be greater than 0 and at most ${params.max}`
-    );
-  }
-  return value;
-}
-
-function requireOptionalBoundedDecimalPolicy(params: {
-  value: number | undefined;
-  max: number;
-  label: string;
-}): number | undefined {
-  if (params.value === undefined) {
-    return undefined;
-  }
-  const value = params.value;
-  if (!Number.isFinite(value) || value <= 0 || value > params.max) {
-    throw new Error(
-      `${params.label} must be greater than 0 and at most ${params.max}`
-    );
-  }
-  return value;
 }
 
 async function requireForkContractCode(params: {
@@ -280,29 +132,6 @@ async function requireConfiguredProductionTakerRegistration(params: {
   }
 }
 
-function normalizeSelectorAllowlistConfig(params: {
-  values: Record<string, string[]> | undefined;
-  callTargetAllowlist: readonly string[];
-}): Record<string, string[]> {
-  return normalizeLifiSelectorAllowlistRecord(params.values, {
-    callTargetAllowlist: params.callTargetAllowlist,
-    requireCallTargetCoverage: true,
-    requireNonEmpty: true,
-  });
-}
-
-function getApiKey(config: LifiDexConfig): string | undefined {
-  if (config.apiKeyEnvVar) {
-    return optionalEnv(config.apiKeyEnvVar);
-  }
-  return optionalEnv(
-    'AJNA_AGENT_LIFI_API_KEY',
-    'AJNA_AGENT_LIFI_FORK_CANARY_API_KEY',
-    'AJNA_AGENT_LIFI_CANARY_API_KEY',
-    'LIFI_API_KEY'
-  );
-}
-
 async function requireLifiToolsContainForkFilters(params: {
   config: ForkCanaryLifiConfig;
   apiKey?: string;
@@ -316,119 +145,9 @@ async function requireLifiToolsContainForkFilters(params: {
 }
 
 async function buildForkCanaryConfig(): Promise<ForkCanaryLifiConfig> {
-  const keeperConfig = await loadForkCanaryKeeperConfig();
-  const overrides = getSetEnvNames(FORK_CANARY_POLICY_OVERRIDE_ENVS);
-  if (overrides.length > 0) {
-    throw new Error(
-      `LI.FI fork canary requires reviewed production keeper config; refusing LI.FI policy env overrides: ${overrides.join(', ')}`
-    );
-  }
-
-  if (!keeperConfig.dex?.lifi || keeperConfig.dex.lifi.mode !== 'production') {
-    throw new Error(
-      'LI.FI fork canary requires reviewed production keeper config with production dex.lifi'
-    );
-  }
-  if (!keeperConfig.takers?.factory) {
-    throw new Error('LI.FI fork canary requires config.takers.factory');
-  }
-  if (!keeperConfig.takers?.contracts?.Lifi) {
-    throw new Error('LI.FI fork canary requires config.takers.contracts.Lifi');
-  }
-
-  const configuredFactoryAddress = requireConfiguredAddress(
-    keeperConfig.takers.factory,
-    'config.takers.factory'
-  );
-  const configuredTakerAddress = requireConfiguredAddress(
-    keeperConfig.takers.contracts.Lifi,
-    'config.takers.contracts.Lifi'
-  );
-  const configured = keeperConfig.dex.lifi;
-  requireDefaultLifiApiBaseUrl(configured.apiBaseUrl);
-  if (
-    (configured as { allowBroadExchangeFilters?: unknown })
-      .allowBroadExchangeFilters === true
-  ) {
-    throw new Error(
-      'LI.FI fork canary requires concrete production LI.FI exchange filters; config.dex.lifi.allowBroadExchangeFilters is canary-only'
-    );
-  }
-  if (hasBroadForkExchangeFilter(configured)) {
-    throw new Error(
-      'LI.FI fork canary requires concrete production LI.FI exchange filters; broad filter keywords are not allowed'
-    );
-  }
-  const allowExchanges = configured.allowExchanges;
-  if (!allowExchanges || allowExchanges.length === 0) {
-    throw new Error(
-      'LI.FI fork canary requires config.dex.lifi.allowExchanges'
-    );
-  }
-  const callTargets = normalizeLifiAddressAllowlist(
-    configured.callTargetAllowlist?.[BASE_CHAIN_ID],
-    {
-      label: `config.dex.lifi.callTargetAllowlist.${BASE_CHAIN_ID}`,
-    }
-  );
-  if (callTargets.length === 0) {
-    throw new Error(
-      `LI.FI fork canary requires config.dex.lifi.callTargetAllowlist.${BASE_CHAIN_ID}`
-    );
-  }
-  const approvalSpenders = normalizeLifiAddressAllowlist(
-    configured.approvalSpenderAllowlist?.[BASE_CHAIN_ID],
-    {
-      label: `config.dex.lifi.approvalSpenderAllowlist.${BASE_CHAIN_ID}`,
-    }
-  );
-  if (approvalSpenders.length === 0) {
-    throw new Error(
-      `LI.FI fork canary requires config.dex.lifi.approvalSpenderAllowlist.${BASE_CHAIN_ID}`
-    );
-  }
-  const selectorAllowlist = normalizeSelectorAllowlistConfig({
-    callTargetAllowlist: callTargets,
-    values: configured.selectorAllowlist?.[BASE_CHAIN_ID],
+  return resolveLifiForkCanaryConfig({
+    keeperConfig: await loadLifiForkCanaryKeeperConfig(),
   });
-
-  return {
-    mode: 'production',
-    configuredFactoryAddress,
-    configuredTakerAddress,
-    apiBaseUrl: configured.apiBaseUrl,
-    apiKeyEnvVar: configured.apiKeyEnvVar,
-    quoteTimeoutMs: requirePositiveIntegerPolicy({
-      value: configured.quoteTimeoutMs,
-      fallback: 10000,
-      max: MAX_LIFI_CANARY_TIMEOUT_MS,
-      label: 'config.dex.lifi.quoteTimeoutMs',
-    }),
-    defaultSlippage: requireBoundedDecimalPolicy({
-      value: configured.defaultSlippage,
-      fallback: 0.005,
-      max: MAX_LIFI_CANARY_SLIPPAGE,
-      label: 'config.dex.lifi.defaultSlippage',
-    }),
-    maxPriceImpact: requireOptionalBoundedDecimalPolicy({
-      value: configured.maxPriceImpact,
-      max: MAX_LIFI_CANARY_PRICE_IMPACT,
-      label: 'config.dex.lifi.maxPriceImpact',
-    }),
-    allowExchanges,
-    denyExchanges: configured.denyExchanges,
-    preferExchanges: configured.preferExchanges,
-    feeCostPolicy: configured.feeCostPolicy,
-    callTargetAllowlist: {
-      [BASE_CHAIN_ID]: callTargets,
-    },
-    approvalSpenderAllowlist: {
-      [BASE_CHAIN_ID]: approvalSpenders,
-    },
-    selectorAllowlist: {
-      [BASE_CHAIN_ID]: selectorAllowlist,
-    },
-  };
 }
 
 function encodeLifiSwapDetails(params: {
@@ -541,7 +260,7 @@ describe('LI.FI callback-path fork execution canary', function () {
     await taker.deployed();
     await factory.setTaker(LiquiditySource.LIFI, taker.address);
 
-    const apiKey = getApiKey(lifiConfig);
+    const apiKey = getLifiForkCanaryApiKey(lifiConfig);
     await requireLifiToolsContainForkFilters({
       config: lifiConfig,
       apiKey,

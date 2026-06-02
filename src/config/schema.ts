@@ -1,5 +1,8 @@
 import { Address } from '@ajna-finance/sdk';
 import { FeeAmount } from '@uniswap/v3-sdk';
+import type { LifiFeeCostPolicy } from '../dex/lifi/schema';
+
+export type { LifiFeeCostPolicy } from '../dex/lifi/schema';
 
 export interface AjnaConfigParams {
   erc20PoolFactory: Address;
@@ -533,7 +536,6 @@ export interface OneInchDexConfig {
 }
 
 export type LifiDexMode = 'canary' | 'production';
-export type LifiFeeCostPolicy = 'included_only' | 'reject_all';
 
 export type ChainAddressAllowlist = {
   [chainId: number]: string[];

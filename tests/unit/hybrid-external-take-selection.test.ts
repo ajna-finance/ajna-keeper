@@ -4,7 +4,7 @@ import { LiquiditySource } from '../../src/config';
 import {
   resolveHybridExternalTakeExecutionSelection,
   selectBestExternalTakeQuoteEvaluation,
-} from '../../src/discovery/take-executor';
+} from '../../src/discovery/external-take-selection';
 import { ExternalTakeQuoteEvaluation } from '../../src/take/types';
 
 function quoteEvaluation(

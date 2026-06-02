@@ -9,6 +9,7 @@ import {
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
 } from '../../src/take/factory';
+import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take-quote-approval';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take-policy';
 import { createFactoryQuoteProviderRuntimeCache } from '../../src/take/factory/shared';
 import { getProvider, resetHardhat } from './test-utils';
@@ -92,14 +93,8 @@ describe('Production route selection fork verification', function () {
       quoteTokenScale: USDC_QUOTE_TOKEN_SCALE,
       quoteAmountDue: USDC_QUOTE_AMOUNT_DUE,
     });
-    const {
-      owner,
-      collateralToken,
-      quoteToken,
-      pool,
-      factory,
-      uniswapTaker,
-    } = harness;
+    const { owner, collateralToken, quoteToken, pool, factory, uniswapTaker } =
+      harness;
 
     const router = await deployFundedSwapRouter02(
       harness,
@@ -167,9 +162,7 @@ describe('Production route selection fork verification', function () {
     ).to.be.true;
     expect(
       (await quoteToken.balanceOf(owner.address)).eq(
-        ownerQuoteBefore.add(
-          USDC_ROUTER_AMOUNT_OUT.sub(USDC_QUOTE_AMOUNT_DUE)
-        )
+        ownerQuoteBefore.add(USDC_ROUTER_AMOUNT_OUT.sub(USDC_QUOTE_AMOUNT_DUE))
       )
     ).to.be.true;
     expect(
@@ -218,10 +211,7 @@ describe('Production route selection fork verification', function () {
     const harness = await deployFactoryHarness();
     const { quoteToken, collateralToken, pool, factory, sushiTaker } = harness;
     const staleAmountOut = QUOTE_AMOUNT_DUE.add(utils.parseEther('0.1'));
-    const router = await deployFundedSushiRouter(
-      harness,
-      staleAmountOut
-    );
+    const router = await deployFundedSushiRouter(harness, staleAmountOut);
 
     const poolQuoteBefore = await quoteToken.balanceOf(pool.address);
     const poolCollateralBefore = await collateralToken.balanceOf(pool.address);
@@ -328,10 +318,7 @@ describe('Production route selection fork verification', function () {
       uniswapAmountOut
     );
 
-    const sushiRouter = await deployFundedSushiRouter(
-      harness,
-      sushiAmountOut
-    );
+    const sushiRouter = await deployFundedSushiRouter(harness, sushiAmountOut);
 
     sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
     sinon
@@ -437,6 +424,16 @@ describe('Production route selection fork verification', function () {
         sushiAmountOut.sub(inRangeAuctionPrice).sub(utils.parseEther('0.05'))
       )
     ).to.be.true;
+    const boundInRangeEvaluation = bindExternalTakeRouteForCandidate({
+      quoteEvaluation: inRangeEvaluation,
+      selectedLiquiditySource: inRangeEvaluation.selectedLiquiditySource,
+      configuredLiquiditySource: poolConfig.take.liquiditySource,
+      poolName: poolView.name,
+      borrower: BORROWER,
+    });
+    if (!boundInRangeEvaluation.bound) {
+      throw new Error(boundInRangeEvaluation.reason);
+    }
 
     await pool.setQuoteAmountDue(inRangeAuctionPrice);
     const ownerQuoteBefore = await quoteToken.balanceOf(owner.address);
@@ -453,7 +450,7 @@ describe('Production route selection fork verification', function () {
         auctionPrice: inRangeAuctionPrice,
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: inRangeEvaluation,
+        externalTakeQuoteEvaluation: boundInRangeEvaluation.quoteEvaluation,
       },
       config: {
         dryRun: false,

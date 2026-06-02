@@ -475,7 +475,11 @@ describe('shared arbTake helpers', () => {
         kind: 'oneinch',
         evaluateExternalTake: sinon.stub().resolves({
           isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
           takeablePrice: 1,
+          quoteAmountRaw: BigNumber.from(100),
+          approvedMinOutRaw: BigNumber.from(90),
         }),
         executeExternalTake: executeExternalTakeStub,
       } as any,
@@ -536,7 +540,11 @@ describe('shared arbTake helpers', () => {
         kind: 'oneinch',
         evaluateExternalTake: sinon.stub().resolves({
           isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
           takeablePrice: 1,
+          quoteAmountRaw: BigNumber.from(100),
+          approvedMinOutRaw: BigNumber.from(90),
         }),
         executeExternalTake: executeExternalTakeStub,
       } as any,

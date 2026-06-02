@@ -8,6 +8,7 @@ import {
 import { logger } from '../logging';
 import { isSubsidizedExternalTakeQuote } from '../take/external-take-policy';
 import {
+  BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeLiquidationPlan,
 } from '../take/types';
@@ -19,20 +20,21 @@ import {
 } from './external-take-approval';
 import {
   cloneExternalTakeQuoteEvaluation,
-  isLifiExternalTakeRoute,
-  isOneInchExternalTakeRoute,
   withExternalTakeApprovalContext,
 } from './external-take-evaluation';
-import { DiscoveryExternalExecutionConfig } from './external-take-provider';
-import { DiscoveryExternalTakeProviderRegistry } from './external-take-providers';
 import {
-  AutoDiscoverTakePolicyRuntime,
-  FactoryPathQuoteFn,
-  LifiCircuitOutcome,
-  LifiPathQuoteFn,
-  OneInchCircuitOutcome,
-  OneInchPathQuoteFn,
-} from './external-take-quotes';
+  isLifiExternalTakeRoute,
+  isOneInchExternalTakeRoute,
+} from '../take/external-take-route';
+import {
+  DiscoveryExternalExecutionConfig,
+  ExternalTakeQuoteCircuitOutcome,
+} from './external-take-provider';
+import {
+  DiscoveryExternalTakeProviderRegistry,
+  DiscoveryExternalTakeRouteProvider,
+} from './external-take-providers';
+import { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
 import {
   DiscoveredTakeTargetStats,
   recordSuccessfulExternalTakeRouteStats,
@@ -58,43 +60,18 @@ export interface HybridExternalTakeStats {
 export type HybridExternalTakeProbeResult = {
   path: ExternalTakePathKind;
   durationMs: number;
-  evaluation?: ExternalTakeQuoteEvaluation;
+  evaluation?: BoundExternalTakeRouteEvaluation;
   reason?: string;
   rejectCategory?: ExternalTakeApprovalRejectCategory;
   gasPolicyRejectCode?: GasPolicyResult['rejectCode'];
   gasQuoteAttempts?: GasPolicyResult['gasQuoteAttempts'];
-  oneInchCircuitOutcome?: OneInchCircuitOutcome;
-  lifiCircuitOutcome?: LifiCircuitOutcome;
+  circuitOutcome?: ExternalTakeQuoteCircuitOutcome;
 };
 
 type ProbeControl = {
   abandoned: boolean;
   abortController: AbortController;
 };
-
-function getOneInchCircuitOutcome(
-  evaluation: ExternalTakeQuoteEvaluation
-): OneInchCircuitOutcome | undefined {
-  if (evaluation.reason?.startsWith('1inch quote circuit open')) {
-    return undefined;
-  }
-  if (evaluation.quoteFailureRetryable === true) {
-    return 'failure';
-  }
-  return evaluation.quoteAmountRaw !== undefined ? 'success' : 'neutral';
-}
-
-function getLifiCircuitOutcome(
-  evaluation: ExternalTakeQuoteEvaluation
-): LifiCircuitOutcome | undefined {
-  if (evaluation.reason?.startsWith('LI.FI quote circuit open')) {
-    return undefined;
-  }
-  if (evaluation.quoteFailureRetryable === true) {
-    return 'failure';
-  }
-  return evaluation.quoteAmountRaw !== undefined ? 'success' : 'neutral';
-}
 
 function resolveProbeOrder(params: {
   externalTakePaths: ExternalTakePathKind[];
@@ -121,81 +98,51 @@ function resolveProbeOrder(params: {
 }
 
 async function probeExternalTakePath(params: {
-  path: ExternalTakePathKind;
-  control?: ProbeControl;
+  provider: DiscoveryExternalTakeRouteProvider;
+  control: ProbeControl;
   pool: FungiblePool;
   signer: Signer;
   poolConfig: ResolvedTakeTarget;
   price: number;
   auctionPrice: BigNumber;
   collateral: BigNumber;
-  quoteOneInchPath: OneInchPathQuoteFn;
-  quoteFactoryPath: FactoryPathQuoteFn;
-  quoteLifiPath: LifiPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
 }): Promise<HybridExternalTakeProbeResult> {
   const startedAt = Date.now();
-  let oneInchCircuitOutcome: OneInchCircuitOutcome | undefined;
-  let lifiCircuitOutcome: LifiCircuitOutcome | undefined;
+  let circuitOutcome: ExternalTakeQuoteCircuitOutcome | undefined;
   try {
-    let evaluation: ExternalTakeQuoteEvaluation;
-    if (params.path === 'oneinch') {
-      evaluation = await params.quoteOneInchPath({
-        pool: params.pool,
-        signer: params.signer,
-        poolConfig: params.poolConfig,
-        price: params.price,
-        auctionPrice: params.auctionPrice,
-        collateral: params.collateral,
-        routeProbeAbortSignal: params.control?.abortController.signal,
-      });
-    } else if (params.path === 'factory') {
-      evaluation = await params.quoteFactoryPath({
-        pool: params.pool,
-        signer: params.signer,
-        poolConfig: params.poolConfig,
-        auctionPrice: params.auctionPrice,
-        collateral: params.collateral,
-        routeProbeAbortSignal: params.control?.abortController.signal,
-      });
-    } else {
-      evaluation = await params.quoteLifiPath({
-        pool: params.pool,
-        signer: params.signer,
-        poolConfig: params.poolConfig,
-        price: params.price,
-        auctionPrice: params.auctionPrice,
-        collateral: params.collateral,
-        routeProbeAbortSignal: params.control?.abortController.signal,
-        recordCircuitOutcome: false,
-      });
-    }
-    if (params.control?.abandoned) {
+    const evaluation = await params.provider.quote({
+      pool: params.pool,
+      signer: params.signer,
+      poolConfig: params.poolConfig,
+      price: params.price,
+      auctionPrice: params.auctionPrice,
+      collateral: params.collateral,
+      intent: {
+        kind: 'hybrid_probe',
+        abortSignal: params.control.abortController.signal,
+      },
+    });
+    if (params.control.abandoned) {
       return {
-        path: params.path,
+        path: params.provider.path,
         durationMs: Date.now() - startedAt,
         reason: 'probe abandoned after timeout',
       };
     }
-    oneInchCircuitOutcome =
-      params.path === 'oneinch'
-        ? getOneInchCircuitOutcome(evaluation)
-        : undefined;
-    lifiCircuitOutcome =
-      params.path === 'lifi' ? getLifiCircuitOutcome(evaluation) : undefined;
+    circuitOutcome = params.provider.getQuoteCircuitOutcome?.(evaluation);
     if (!evaluation.isTakeable) {
       const gasPolicyRejectCode =
         evaluation.routeProfitability?.gasPolicyRejectCode;
       return {
-        path: params.path,
+        path: params.provider.path,
         durationMs: Date.now() - startedAt,
         reason: evaluation.reason ?? 'not takeable',
         rejectCategory:
           gasPolicyRejectCode !== undefined ? 'gasPolicy' : undefined,
         gasPolicyRejectCode,
         gasQuoteAttempts: evaluation.routeProfitability?.gasQuoteAttempts,
-        oneInchCircuitOutcome,
-        lifiCircuitOutcome,
+        circuitOutcome,
       };
     }
 
@@ -208,56 +155,50 @@ async function probeExternalTakePath(params: {
     });
     if (!approval.approved) {
       return {
-        path: params.path,
+        path: params.provider.path,
         durationMs: Date.now() - startedAt,
         reason: approval.reason ?? 'policy rejected path',
         rejectCategory: approval.rejectCategory,
         gasPolicyRejectCode: approval.gasPolicyRejectCode,
         gasQuoteAttempts: approval.gasQuoteAttempts,
-        oneInchCircuitOutcome,
-        lifiCircuitOutcome,
+        circuitOutcome,
       };
     }
     return {
-      path: params.path,
+      path: params.provider.path,
       durationMs: Date.now() - startedAt,
-      evaluation: approval.quoteEvaluation ?? evaluation,
-      oneInchCircuitOutcome,
-      lifiCircuitOutcome,
+      evaluation: approval.quoteEvaluation,
+      circuitOutcome,
     };
   } catch (error) {
     return {
-      path: params.path,
+      path: params.provider.path,
       durationMs: Date.now() - startedAt,
       reason: getErrorMessage(error),
-      oneInchCircuitOutcome:
-        params.path === 'oneinch'
-          ? (oneInchCircuitOutcome ?? 'failure')
+      circuitOutcome:
+        params.provider.recordQuoteCircuitOutcome !== undefined
+          ? (circuitOutcome ?? 'failure')
           : undefined,
-      lifiCircuitOutcome:
-        params.path === 'lifi' ? (lifiCircuitOutcome ?? 'failure') : undefined,
     };
   }
 }
 
 function recordProbeCircuitOutcome(params: {
   result: HybridExternalTakeProbeResult;
-  recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
-  recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
+  providerRegistry: DiscoveryExternalTakeProviderRegistry;
 }): void {
-  if (params.result.oneInchCircuitOutcome) {
-    params.recordOneInchCircuitOutcome(params.result.oneInchCircuitOutcome);
-  }
-  if (params.result.lifiCircuitOutcome) {
-    params.recordLifiCircuitOutcome(params.result.lifiCircuitOutcome);
+  if (params.result.circuitOutcome) {
+    params.providerRegistry
+      .selectExternalTakeProvider({ selectedPath: params.result.path })
+      .recordQuoteCircuitOutcome?.(params.result.circuitOutcome);
   }
 }
 
 async function withProbeTimeout(params: {
-  path: ExternalTakePathKind;
+  provider: DiscoveryExternalTakeRouteProvider;
   probeTimeoutMs: number;
   probe: (
-    path: ExternalTakePathKind,
+    provider: DiscoveryExternalTakeRouteProvider,
     control: ProbeControl
   ) => Promise<HybridExternalTakeProbeResult>;
 }): Promise<HybridExternalTakeProbeResult> {
@@ -266,7 +207,7 @@ async function withProbeTimeout(params: {
     abandoned: false,
     abortController: new AbortController(),
   };
-  const probe = params.probe(params.path, control);
+  const probe = params.probe(params.provider, control);
   probe.catch(() => undefined);
   try {
     return await Promise.race([
@@ -280,12 +221,13 @@ async function withProbeTimeout(params: {
             new Error(`probe timed out after ${params.probeTimeoutMs}ms`)
           );
           resolve({
-            path: params.path,
+            path: params.provider.path,
             durationMs: params.probeTimeoutMs,
             reason: `probe timed out after ${params.probeTimeoutMs}ms`,
-            oneInchCircuitOutcome:
-              params.path === 'oneinch' ? 'failure' : undefined,
-            lifiCircuitOutcome: params.path === 'lifi' ? 'failure' : undefined,
+            circuitOutcome:
+              params.provider.recordQuoteCircuitOutcome !== undefined
+                ? 'failure'
+                : undefined,
           });
         }, params.probeTimeoutMs);
       }),
@@ -307,18 +249,17 @@ async function runHybridExternalTakeProbes(params: {
   price: number;
   auctionPrice: BigNumber;
   collateral: BigNumber;
-  quoteOneInchPath: OneInchPathQuoteFn;
-  quoteFactoryPath: FactoryPathQuoteFn;
-  quoteLifiPath: LifiPathQuoteFn;
+  providerRegistry: DiscoveryExternalTakeProviderRegistry;
   approveExternalTake: DiscoveryExternalTakeApprover;
-  recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
-  recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
 }): Promise<HybridExternalTakeProbeResult[]> {
   const probeOrder = resolveProbeOrder(params);
-  const runProbe = async (path: ExternalTakePathKind, control: ProbeControl) =>
+  const runProbe = async (
+    provider: DiscoveryExternalTakeRouteProvider,
+    control: ProbeControl
+  ) =>
     await probeExternalTakePath({
       ...params,
-      path,
+      provider,
       control,
     });
 
@@ -326,7 +267,9 @@ async function runHybridExternalTakeProbes(params: {
     const probeResults = await Promise.all(
       probeOrder.map((path) =>
         withProbeTimeout({
-          path,
+          provider: params.providerRegistry.selectExternalTakeProvider({
+            selectedPath: path,
+          }),
           probeTimeoutMs: params.probeTimeoutMs,
           probe: runProbe,
         })
@@ -335,8 +278,7 @@ async function runHybridExternalTakeProbes(params: {
     probeResults.forEach((result) =>
       recordProbeCircuitOutcome({
         result,
-        recordOneInchCircuitOutcome: params.recordOneInchCircuitOutcome,
-        recordLifiCircuitOutcome: params.recordLifiCircuitOutcome,
+        providerRegistry: params.providerRegistry,
       })
     );
     return probeResults;
@@ -345,15 +287,16 @@ async function runHybridExternalTakeProbes(params: {
   const probeResults: HybridExternalTakeProbeResult[] = [];
   for (const path of probeOrder) {
     const result = await withProbeTimeout({
-      path,
+      provider: params.providerRegistry.selectExternalTakeProvider({
+        selectedPath: path,
+      }),
       probeTimeoutMs: params.probeTimeoutMs,
       probe: runProbe,
     });
     probeResults.push(result);
     recordProbeCircuitOutcome({
       result,
-      recordOneInchCircuitOutcome: params.recordOneInchCircuitOutcome,
-      recordLifiCircuitOutcome: params.recordLifiCircuitOutcome,
+      providerRegistry: params.providerRegistry,
     });
     if (
       result.evaluation &&
@@ -433,10 +376,10 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
   price: number;
   auctionPrice: BigNumber;
   collateral: BigNumber;
-  quoteFactoryPath: FactoryPathQuoteFn;
+  providerRegistry: DiscoveryExternalTakeProviderRegistry;
   approveExternalTake: DiscoveryExternalTakeApprover;
   probeResults: HybridExternalTakeProbeResult[];
-}): Promise<ExternalTakeQuoteEvaluation | undefined> {
+}): Promise<BoundExternalTakeRouteEvaluation | undefined> {
   const factoryNativeToQuoteReject = params.probeResults.find(
     (result) =>
       result.path === 'factory' &&
@@ -462,13 +405,14 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
       factoryNativeToQuoteReject?.gasQuoteAttempts
     )}"`
   );
-  const fallbackQuote = await params.quoteFactoryPath({
+  const fallbackQuote = await params.providerRegistry.factoryProvider.quote({
     pool: params.pool,
     signer: params.signer,
     poolConfig: params.poolConfig,
+    price: params.price,
     auctionPrice: params.auctionPrice,
     collateral: params.collateral,
-    factoryGasQuoteFallback: true,
+    intent: { kind: 'hybrid_gas_quote_fallback' },
   });
   if (!fallbackQuote.isTakeable) {
     logger.debug(
@@ -493,8 +437,8 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
     return undefined;
   }
 
-  const approvedFallback = fallbackApproval.quoteEvaluation ?? fallbackQuote;
-  const markedFallback: ExternalTakeQuoteEvaluation = {
+  const approvedFallback = fallbackApproval.quoteEvaluation;
+  const markedFallback: BoundExternalTakeRouteEvaluation = {
     ...approvedFallback,
     approvalMode: 'factory_gas_quote_fallback',
   };
@@ -528,15 +472,13 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   price: number;
   auctionPrice: BigNumber;
   collateral: BigNumber;
-  quoteOneInchPath: OneInchPathQuoteFn;
-  quoteFactoryPath: FactoryPathQuoteFn;
-  quoteLifiPath: LifiPathQuoteFn;
+  providerRegistry: DiscoveryExternalTakeProviderRegistry;
   approveExternalTake: DiscoveryExternalTakeApprover;
-  recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
-  recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
   stats: HybridExternalTakeStats;
 }): Promise<ExternalTakeQuoteEvaluation> {
-  const probeResults = await runHybridExternalTakeProbes(params);
+  const probeResults = await runHybridExternalTakeProbes({
+    ...params,
+  });
   const rejectedReasons = formatRejectedProbeReasons(probeResults);
 
   if (params.routeSelectionMode === 'factory_first') {
@@ -549,7 +491,7 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
           continue;
         }
         logger.debug(
-          `Hybrid external take factory-first selected path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${result.evaluation.approvedMinOutRaw?.toString() ?? 'n/a'} priorRejectedPaths=${
+          `Hybrid external take factory-first selected path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} routeExecutionFloorRaw=${result.evaluation.routeExecutionFloorRaw.toString()} priorRejectedPaths=${
             probeResults
               .filter((probeResult) => !probeResult.evaluation)
               .map(
@@ -566,7 +508,7 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   const approvedEvaluations = probeResults
     .map((result) => result.evaluation)
     .filter(
-      (evaluation): evaluation is ExternalTakeQuoteEvaluation =>
+      (evaluation): evaluation is BoundExternalTakeRouteEvaluation =>
         evaluation !== undefined
     );
   const buildGasQuoteFallbackEvaluation = async () =>
@@ -583,9 +525,8 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   const selected = sortedApprovedEvaluations[0];
   if (selected) {
     const selectedWithFallbacks = cloneExternalTakeQuoteEvaluation(selected);
-    const fallbackEvaluations = sortedApprovedEvaluations
-      .slice(1)
-      .map((evaluation) => {
+    const fallbackEvaluations: BoundExternalTakeRouteEvaluation[] =
+      sortedApprovedEvaluations.slice(1).map((evaluation) => {
         const fallback = cloneExternalTakeQuoteEvaluation(evaluation);
         fallback.fallbackExternalTakeQuoteEvaluations = undefined;
         return fallback;
@@ -602,7 +543,7 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
     selectedWithFallbacks.fallbackExternalTakeQuoteEvaluations =
       fallbackEvaluations;
     logger.debug(
-      `Hybrid external take selected path=${selected.externalTakePath} source=${formatLiquiditySource(selected.selectedLiquiditySource)} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${selected.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} approvedMinOutRaw=${selected.approvedMinOutRaw?.toString() ?? 'n/a'} rejectedPaths=${rejectedReasons.join(', ') || 'none'} for pool ${params.pool.name}`
+      `Hybrid external take selected path=${selected.externalTakePath} source=${formatLiquiditySource(selected.selectedLiquiditySource)} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${selected.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} routeExecutionFloorRaw=${selected.routeExecutionFloorRaw.toString()} rejectedPaths=${rejectedReasons.join(', ') || 'none'} for pool ${params.pool.name}`
     );
     return selectedWithFallbacks;
   }
@@ -649,12 +590,15 @@ export async function executeHybridExternalTakeForDiscovery(params: {
     primaryEvaluation,
     ...(primaryEvaluation?.fallbackExternalTakeQuoteEvaluations ?? []),
   ].filter(
-    (evaluation): evaluation is ExternalTakeQuoteEvaluation =>
+    (evaluation): evaluation is BoundExternalTakeRouteEvaluation =>
       evaluation !== undefined
   );
 
   for (let index = 0; index < executionCandidates.length; index += 1) {
     const candidateEvaluation = executionCandidates[index];
+    if (!candidateEvaluation) {
+      continue;
+    }
     const selection = resolveHybridExternalTakeExecutionSelection({
       quoteEvaluation: candidateEvaluation,
       allowedExternalTakePaths: params.externalTakePaths,
@@ -723,8 +667,7 @@ export async function executeHybridExternalTakeForDiscovery(params: {
         continue;
       }
       approvedEvaluation = withExternalTakeApprovalContext({
-        quoteEvaluation:
-          fallbackApproval.quoteEvaluation ?? candidateEvaluation,
+        quoteEvaluation: fallbackApproval.quoteEvaluation,
         auctionPrice: executionLiquidation.auctionPrice,
         collateral: executionLiquidation.collateral,
       });

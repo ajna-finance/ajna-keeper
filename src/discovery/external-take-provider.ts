@@ -1,8 +1,27 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
+import { BigNumber } from 'ethers';
 import { ExternalTakePathKind, LiquiditySource } from '../config';
 import { TakeWriteTransport } from '../take/write-transport';
-import { TakeActionConfig, TakeLiquidationPlan } from '../take/types';
+import {
+  ExternalTakeQuoteEvaluation,
+  TakeActionConfig,
+  TakeLiquidationPlan,
+} from '../take/types';
 import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
+
+export type ExternalTakeQuoteCircuitOutcome = 'success' | 'failure' | 'neutral';
+
+export type ExternalTakeExecutionFailureResult = {
+  preBroadcast: boolean;
+  error?: string;
+};
+
+export type ExternalTakeQuoteResult = {
+  success: boolean;
+  retryable?: boolean;
+  errorCode?: number | string;
+  error?: string;
+};
 
 /**
  * Result of a single external-take provider execution attempt.
@@ -40,22 +59,40 @@ export interface ExternalTakeExecuteParams<
   selectedSource?: LiquiditySource;
 }
 
+export type ExternalTakeQuoteIntent =
+  | { kind: 'direct' }
+  | { kind: 'hybrid_probe'; abortSignal: AbortSignal }
+  | { kind: 'hybrid_gas_quote_fallback' };
+
+export interface ExternalTakeQuoteParams<TPoolConfig extends TakeActionConfig> {
+  pool: FungiblePool;
+  signer: Signer;
+  poolConfig: TPoolConfig;
+  price: number;
+  auctionPrice: BigNumber;
+  collateral: BigNumber;
+  intent: ExternalTakeQuoteIntent;
+}
+
 /**
- * A provider owns one external-take path end to end on the execution side:
- * its failure classification, any provider-circuit gating, and dispatch to its
- * execution module. The hybrid executor and the single-path direct adapters
- * both dispatch through these provider instances instead of branching on path
- * identity, so path-specific mechanics (e.g. the LI.FI execution_refresh gate)
- * live behind one boundary rather than being duplicated at each call site.
- *
- * Route quoting/ranking still lives in the discovery quote machinery; this
- * abstraction intentionally covers execution dispatch only.
+ * A provider owns one external-take path end to end for discovery: route
+ * quoting, quote-circuit accounting, execution dispatch, and execution failure
+ * classification. The hybrid executor and single-path direct adapters dispatch
+ * through these provider instances instead of rebuilding path-specific logic at
+ * each call site.
  */
 export interface ExternalTakeRouteProvider<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
 > {
   readonly path: ExternalTakePathKind;
+  quote(
+    params: ExternalTakeQuoteParams<TPoolConfig>
+  ): Promise<ExternalTakeQuoteEvaluation>;
+  getQuoteCircuitOutcome?(
+    evaluation: ExternalTakeQuoteEvaluation
+  ): ExternalTakeQuoteCircuitOutcome | undefined;
+  recordQuoteCircuitOutcome?(outcome: ExternalTakeQuoteCircuitOutcome): void;
   execute(
     params: ExternalTakeExecuteParams<TPoolConfig, TExecutionConfig>
   ): Promise<ExternalTakeExecutionAttemptResult>;
@@ -88,25 +125,54 @@ export type DiscoveryExternalExecutionConfig = Pick<
     errorCode?: number | string;
     error?: string;
   }) => void;
-  onOneInchExecutionFailure?: (result: {
-    preBroadcast: boolean;
-    error?: string;
-  }) => void;
-  onFactoryExecutionFailure?: (result: {
-    preBroadcast: boolean;
-    error?: string;
-  }) => void;
-  onLifiQuoteResult?: (result: {
-    success: boolean;
-    retryable?: boolean;
-    errorCode?: number | string;
-    error?: string;
-  }) => void;
-  onLifiExecutionFailure?: (result: {
-    preBroadcast: boolean;
-    error?: string;
-  }) => void;
+  onOneInchExecutionFailure?: (
+    result: ExternalTakeExecutionFailureResult
+  ) => void;
+  onFactoryExecutionFailure?: (
+    result: ExternalTakeExecutionFailureResult
+  ) => void;
+  onLifiQuoteResult?: (result: ExternalTakeQuoteResult) => void;
+  onLifiExecutionFailure?: (result: ExternalTakeExecutionFailureResult) => void;
 };
+
+export function createPreBroadcastFailureCapture(
+  original?: (result: ExternalTakeExecutionFailureResult) => void
+): {
+  handler(result: ExternalTakeExecutionFailureResult): void;
+  didFailPreBroadcast(): boolean;
+} {
+  let preBroadcastFailed = false;
+  return {
+    handler: (result) => {
+      original?.(result);
+      if (result.preBroadcast) {
+        preBroadcastFailed = true;
+      }
+    },
+    didFailPreBroadcast: () => preBroadcastFailed,
+  };
+}
+
+export function createPreSubmitResultCapture<T extends { success: boolean }>(
+  original?: (result: T) => void
+): {
+  handler(result: T): void;
+  didRejectBeforeSubmit(): boolean;
+} {
+  let preSubmitRejected = false;
+  let preSubmitSucceeded = false;
+  return {
+    handler: (result) => {
+      original?.(result);
+      if (result.success) {
+        preSubmitSucceeded = true;
+      } else {
+        preSubmitRejected = true;
+      }
+    },
+    didRejectBeforeSubmit: () => preSubmitRejected && !preSubmitSucceeded,
+  };
+}
 
 export function withTakeLiquiditySource<T extends TakeActionConfig>(
   target: T,

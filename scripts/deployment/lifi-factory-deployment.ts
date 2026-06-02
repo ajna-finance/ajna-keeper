@@ -7,7 +7,7 @@ import {
   normalizeLifiSelectorAllowlistRecord,
 } from '../../src/dex/lifi';
 
-interface LifiProductionAllowlists {
+export interface LifiProductionAllowlists {
   callTargets: string[];
   approvalSpenders: string[];
   selectorAllowlist: Record<string, string[]>;
@@ -51,7 +51,7 @@ function toLowerSet(values: readonly string[]): Set<string> {
   return new Set(values.map((value) => value.toLowerCase()));
 }
 
-function getLifiProductionAllowlists(
+export function getLifiProductionAllowlists(
   config: KeeperConfig,
   chainId: number
 ): LifiProductionAllowlists {
@@ -73,6 +73,17 @@ function getLifiProductionAllowlists(
 
 export function hasProductionLifiConfig(config: KeeperConfig): boolean {
   return config.dex?.lifi?.mode === 'production';
+}
+
+export function getLifiProductionDeploymentGateMessages(
+  configPath: string
+): string[] {
+  return [
+    `Run the LI.FI route-shape gate: AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary -- --config ${configPath}`,
+    `Run the LI.FI callback-path fork gate: AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=${configPath} npm run lifi-fork-execution-canary`,
+    'For non-Base LI.FI production support, run an equivalent reviewed chain-specific fork canary before live use',
+    `After both LI.FI gates pass, test startup with: yarn start --config ${configPath}`,
+  ];
 }
 
 function assertExactSet(

@@ -12,7 +12,10 @@ import {
   getErrorMessage,
   withTimeoutAbort,
 } from '../utils';
-import { withTakeLiquiditySource } from './external-take-provider';
+import {
+  ExternalTakeQuoteCircuitOutcome,
+  withTakeLiquiditySource,
+} from './external-take-provider';
 import {
   getLifiCircuitOpenReason,
   recordLifiQuoteFailure,
@@ -35,8 +38,8 @@ import {
 export type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy
 >;
-export type OneInchCircuitOutcome = 'success' | 'failure' | 'neutral';
-export type LifiCircuitOutcome = 'success' | 'failure' | 'neutral';
+export type OneInchCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
+export type LifiCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
 
 export interface FactoryPathQuoteInput {
   pool: FungiblePool;
@@ -50,6 +53,7 @@ export interface FactoryPathQuoteInput {
 
 export interface OneInchPathQuoteInput extends FactoryPathQuoteInput {
   price: number;
+  recordCircuitOutcome?: boolean;
 }
 
 export interface LifiPathQuoteInput extends FactoryPathQuoteInput {
@@ -249,11 +253,12 @@ export async function quoteFactoryPathForDiscovery(
   };
 }
 
-type CircuitGuardedQuoteOutcome = 'success' | 'failure' | 'neutral';
-
-function getCircuitGuardedQuoteOutcome(
+export function getCircuitGuardedQuoteOutcome(
   evaluation: ExternalTakeQuoteEvaluation
-): CircuitGuardedQuoteOutcome {
+): ExternalTakeQuoteCircuitOutcome | undefined {
+  if (evaluation.quoteCircuitOpen === true) {
+    return undefined;
+  }
   if (evaluation.quoteFailureRetryable === true) {
     return 'failure';
   }
@@ -275,7 +280,7 @@ async function quoteCircuitGuardedPath(params: {
   abortErrorMessage: string;
   timeoutLabel: string;
   evaluate: (signal?: AbortSignal) => Promise<ExternalTakeQuoteEvaluation>;
-  recordOutcome: (outcome: CircuitGuardedQuoteOutcome) => void;
+  recordOutcome: (outcome: ExternalTakeQuoteCircuitOutcome) => void;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (params.circuitOpenReason) {
     return {
@@ -284,6 +289,7 @@ async function quoteCircuitGuardedPath(params: {
       selectedLiquiditySource: params.selectedLiquiditySource,
       quotedAuctionPriceWad: params.auctionPrice,
       quotedCollateralWad: params.collateral,
+      quoteCircuitOpen: true,
       reason: params.circuitOpenReason,
     };
   }
@@ -330,7 +336,10 @@ async function quoteCircuitGuardedPath(params: {
   }
 
   if (params.recordCircuitOutcome !== false) {
-    params.recordOutcome(getCircuitGuardedQuoteOutcome(evaluation));
+    const outcome = getCircuitGuardedQuoteOutcome(evaluation);
+    if (outcome) {
+      params.recordOutcome(outcome);
+    }
   }
 
   return {

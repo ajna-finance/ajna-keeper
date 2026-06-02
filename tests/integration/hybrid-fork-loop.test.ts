@@ -54,21 +54,16 @@ import {
 import { LifiKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
 import ERC20_ABI from '../../src/abis/erc20.abi.json';
 import {
-  AutoDiscoverConfig,
-  ExternalTakePathKind,
   KeeperConfig,
-  LifiDexConfig,
   LiquiditySource,
   PoolConfig,
   PriceOriginSource,
   configureAjna,
   readConfigFile,
 } from '../../src/config';
-import { normalizeLifiApiBaseUrl } from '../../src/config/lifi-policy';
 import { validateAutoDiscoverConfig } from '../../src/config/validation';
 import { SECONDS_PER_DAY } from '../../src/constants';
 import {
-  DEFAULT_LIFI_API_BASE_URL,
   assertLifiToolsContainFilters,
   fetchLifiQuote,
   fetchLifiTools,
@@ -104,12 +99,25 @@ import {
   resetHardhat,
   setBalance,
 } from './test-utils';
+import {
+  HYBRID_FORK_CONFIG_ENV,
+  HybridForkFixture,
+  ProductionLifiDexConfig,
+  buildForcedDiscoveryPolicy,
+  defaultSourceForHybridPaths,
+  getHybridLifiApiKey,
+  loadHybridForkFixture,
+  optionalHybridEnv,
+  requireDefaultHybridLifiApiBaseUrl,
+  requireHybridEnv,
+  requireProductionLifi,
+  shouldRunLifiCallbackProof,
+} from './helpers/hybrid-fork-loop-config';
 
 const RUN_HYBRID_FORK_LOOP = process.env.RUN_HYBRID_FORK_LOOP === 'true';
 const HYBRID_FORK_TIMEOUT_MS = 900_000;
 const BASE_CHAIN_ID = 8453;
 const FIXTURE_SUBGRAPH_SENTINEL_URL = 'http://hybrid-fork-loop.invalid';
-const HYBRID_FORK_CONFIG_ENV = 'AJNA_AGENT_HYBRID_FORK_CONFIG';
 const BASE_WETH = utils.getAddress(
   '0x4200000000000000000000000000000000000006'
 );
@@ -146,39 +154,8 @@ const BASE_AJNA_CONFIG = {
   lenderHelper: '',
 };
 
-const DEFAULT_BASE_WETH_USDC_POOL =
-  '0x0b17159f2486f669a1f930926638008e2ccb4287';
-
 function optionalEnv(...names: string[]): string | undefined {
-  for (const name of names) {
-    const value = process.env[name];
-    if (value !== undefined && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-function requireEnv(name: string, hint: string): string {
-  const value = optionalEnv(name);
-  if (!value) {
-    throw new Error(
-      `${name} is required for RUN_HYBRID_FORK_LOOP=true (${hint})`
-    );
-  }
-  return value;
-}
-
-function envNumber(name: string, fallback: number): number {
-  const value = optionalEnv(name);
-  if (value === undefined) {
-    return fallback;
-  }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`${name} must be a finite number`);
-  }
-  return parsed;
+  return optionalHybridEnv(process.env, ...names);
 }
 
 function requireConfiguredBaseForkRpc(): void {
@@ -196,150 +173,12 @@ function requireConfiguredBaseForkRpc(): void {
 }
 
 async function loadHybridKeeperConfig(): Promise<KeeperConfig> {
-  const configPath = requireEnv(
+  const configPath = requireHybridEnv(
+    process.env,
     HYBRID_FORK_CONFIG_ENV,
     'path to a reviewed production keeper config enabling oneinch + factory + lifi'
   );
   return readConfigFile(configPath);
-}
-
-type ProductionLifiDexConfig = Extract<LifiDexConfig, { mode: 'production' }>;
-
-function requireProductionLifi(lifi: LifiDexConfig): ProductionLifiDexConfig {
-  if (lifi.mode !== 'production') {
-    throw new Error('reviewed config dex.lifi must be production mode');
-  }
-  return lifi;
-}
-
-function normalizeApiBaseUrlForGate(value: string): string {
-  return normalizeLifiApiBaseUrl(value, 'LI.FI API base URL');
-}
-
-function requireDefaultLifiApiBaseUrl(apiBaseUrl: string | undefined): void {
-  if (
-    apiBaseUrl !== undefined &&
-    normalizeApiBaseUrlForGate(apiBaseUrl) !==
-      normalizeApiBaseUrlForGate(DEFAULT_LIFI_API_BASE_URL)
-  ) {
-    throw new Error(
-      'hybrid LI.FI fork execution proof requires the default LI.FI API base URL; refusing custom or mocked API base URL'
-    );
-  }
-}
-
-function getHybridLifiApiKey(config: LifiDexConfig): string | undefined {
-  if (config.apiKeyEnvVar) {
-    return optionalEnv(config.apiKeyEnvVar);
-  }
-  return optionalEnv(
-    'AJNA_AGENT_LIFI_API_KEY',
-    'AJNA_AGENT_HYBRID_LIFI_API_KEY',
-    'LIFI_API_KEY'
-  );
-}
-
-interface HybridForkFixture {
-  poolAddress: string;
-  lenderWhale: string;
-  borrowerWhale: string;
-  kickerWhale: string;
-  depositQuoteAmount: number;
-  depositPrice: number;
-  borrowAmount: number;
-  collateralToPledge: number;
-  timeToKick: number;
-  timeAfterKick: number;
-  maxWarps: number;
-  warpSeconds: number;
-  marketPriceFactor: number;
-  minCollateral: number;
-  liveTake: boolean;
-  paths: ExternalTakePathKind[];
-}
-
-// Override the competing external-take paths (default: all three). Set e.g.
-// AJNA_AGENT_HYBRID_PATHS=lifi to force LI.FI to be the executed path so the LI.FI
-// path can be validated end-to-end through the keeper loop without a 1inch key.
-function parseHybridPaths(): ExternalTakePathKind[] {
-  const all: ExternalTakePathKind[] = ['oneinch', 'factory', 'lifi'];
-  const raw = optionalEnv('AJNA_AGENT_HYBRID_PATHS');
-  if (!raw) {
-    return all;
-  }
-  const parsed = raw
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .filter((value) => value.length > 0);
-  const valid = parsed.filter((value): value is ExternalTakePathKind =>
-    (all as string[]).includes(value)
-  );
-  if (valid.length === 0 || valid.length !== parsed.length) {
-    throw new Error(
-      'AJNA_AGENT_HYBRID_PATHS must be a non-empty CSV subset of: oneinch,factory,lifi'
-    );
-  }
-  return valid;
-}
-
-function defaultSourceForPaths(paths: ExternalTakePathKind[]): LiquiditySource {
-  if (paths.includes('factory')) {
-    return LiquiditySource.UNISWAPV3;
-  }
-  if (paths.includes('lifi')) {
-    return LiquiditySource.LIFI;
-  }
-  return LiquiditySource.ONEINCH;
-}
-
-function loadHybridForkFixture(): HybridForkFixture {
-  const lenderWhale = requireEnv(
-    'AJNA_AGENT_HYBRID_LENDER_WHALE',
-    "an account holding the pool's quote token at the fork block"
-  );
-  return {
-    poolAddress: utils.getAddress(
-      optionalEnv('AJNA_AGENT_HYBRID_POOL') ?? DEFAULT_BASE_WETH_USDC_POOL
-    ),
-    lenderWhale: utils.getAddress(lenderWhale),
-    borrowerWhale: utils.getAddress(
-      requireEnv(
-        'AJNA_AGENT_HYBRID_BORROWER_WHALE',
-        "an account holding the pool's collateral token at the fork block"
-      )
-    ),
-    kickerWhale: utils.getAddress(
-      optionalEnv('AJNA_AGENT_HYBRID_KICKER_WHALE') ?? lenderWhale
-    ),
-    depositQuoteAmount: envNumber(
-      'AJNA_AGENT_HYBRID_DEPOSIT_QUOTE_AMOUNT',
-      5000
-    ),
-    // Defaults are the validated values for the Base WETH/USDC pool at a recent
-    // fork block (WETH ~= 2008 USDC). depositPrice should track current market;
-    // the Base Ajna WETH/USDC pool has a very low interest rate, so a large
-    // timeToKick is needed for accrual to push the borrower's TP above the LUP.
-    depositPrice: envNumber('AJNA_AGENT_HYBRID_DEPOSIT_PRICE', 2010),
-    borrowAmount: envNumber('AJNA_AGENT_HYBRID_BORROW_AMOUNT', 1900),
-    collateralToPledge: envNumber('AJNA_AGENT_HYBRID_COLLATERAL_PLEDGE', 1),
-    timeToKick:
-      SECONDS_PER_DAY * envNumber('AJNA_AGENT_HYBRID_TIME_TO_KICK_DAYS', 10950),
-    timeAfterKick:
-      3600 * envNumber('AJNA_AGENT_HYBRID_TIME_AFTER_KICK_HOURS', 24),
-    maxWarps: envNumber('AJNA_AGENT_HYBRID_MAX_WARPS', 24),
-    warpSeconds: 3600 * envNumber('AJNA_AGENT_HYBRID_WARP_HOURS', 6),
-    marketPriceFactor: envNumber('AJNA_AGENT_HYBRID_MARKET_PRICE_FACTOR', 0.99),
-    minCollateral: envNumber('AJNA_AGENT_HYBRID_MIN_COLLATERAL', 0.0001),
-    liveTake: process.env.AJNA_AGENT_HYBRID_FORK_LIVE_TAKE === 'true',
-    paths: parseHybridPaths(),
-  };
-}
-
-function shouldRunLifiCallbackProof(fixture: HybridForkFixture): boolean {
-  return (
-    fixture.paths.includes('lifi') &&
-    process.env.AJNA_AGENT_HYBRID_LIFI_CALLBACK_PROOF === 'true'
-  );
 }
 
 // Subgraph reader that serves the keeper's discovery loop from the fork pool,
@@ -488,7 +327,7 @@ async function runLifiCallbackExecutionProof(params: {
   owner: Wallet;
   lifi: ProductionLifiDexConfig;
 }): Promise<void> {
-  requireDefaultLifiApiBaseUrl(params.lifi.apiBaseUrl);
+  requireDefaultHybridLifiApiBaseUrl(params.lifi.apiBaseUrl);
   const fromToken = utils.getAddress(
     optionalEnv('AJNA_AGENT_HYBRID_LIFI_CALLBACK_FROM_TOKEN') ?? BASE_WETH
   );
@@ -648,46 +487,6 @@ async function runLifiCallbackExecutionProof(params: {
   ).to.equal(true);
 }
 
-// The forced all-three-paths discovery policy, in KeeperConfig.discovery shape
-// so validateAutoDiscoverConfig validates exactly what we run.
-function buildForcedDiscoveryPolicy(
-  fixture: HybridForkFixture
-): AutoDiscoverConfig {
-  const paths = fixture.paths;
-  const take: Record<string, unknown> = {
-    enabled: true,
-    allowedExternalTakePaths: paths,
-    externalTakeRouteSelectionMode: 'maximize_profit',
-    validateRouteDeployments: true,
-    maxGasCostNative: 0.05,
-    externalTakeProbeTimeoutMs: 8000,
-    oneInchQuoteTimeoutMs: 8000,
-  };
-  // Factory-specific policy is only valid (and only required) when the factory
-  // path is enabled; allowedLiquiditySources requires a factory path. Factory
-  // source = Uniswap V3 only, so the harness needs no Sushi/Curve dex config.
-  if (paths.includes('factory')) {
-    take.defaultFactoryLiquiditySource = LiquiditySource.UNISWAPV3;
-    take.allowedLiquiditySources = [LiquiditySource.UNISWAPV3];
-  }
-  // dexGasOverrides[LIFI] is mandatory whenever the LI.FI path is enabled.
-  if (paths.includes('lifi')) {
-    take.dexGasOverrides = { [LiquiditySource.LIFI]: '900000' };
-  }
-  return {
-    enabled: true,
-    logSkips: true,
-    defaults: {
-      take: {
-        liquiditySource: defaultSourceForPaths(paths),
-        marketPriceFactor: fixture.marketPriceFactor,
-        minCollateral: fixture.minCollateral,
-      },
-    },
-    take,
-  } as AutoDiscoverConfig;
-}
-
 function buildKickPoolConfig(
   fixture: HybridForkFixture
 ): RequireFields<PoolConfig, 'kick' | 'take'> {
@@ -775,7 +574,7 @@ function buildHybridTakeTarget(params: {
     dryRun: !params.fixture.liveTake,
     take: {
       minCollateral: params.fixture.minCollateral,
-      liquiditySource: defaultSourceForPaths(params.fixture.paths),
+      liquiditySource: defaultSourceForHybridPaths(params.fixture.paths),
       marketPriceFactor: params.fixture.marketPriceFactor,
     },
     candidates: [

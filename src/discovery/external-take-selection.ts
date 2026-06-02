@@ -2,11 +2,16 @@ import { BigNumber } from 'ethers';
 import {
   ExternalTakePathKind,
   LiquiditySource,
-  formatLiquiditySource,
-  isFactoryDynamicSource,
 } from '../config';
 import { compareExternalTakeBySubsidyThenRank } from '../take/external-take-policy';
 import { ExternalTakeQuoteEvaluation } from '../take/types';
+import {
+  bindExternalTakeRoute,
+  formatExternalTakeRouteSelectionFailure,
+  getExternalTakeRouteBindingFailurePath,
+  getExternalTakeRouteBindingFailureSource,
+  resolveExternalTakeRouteIdentity,
+} from '../take/external-take-route';
 
 function rankExternalTakeQuote(
   evaluation: ExternalTakeQuoteEvaluation
@@ -47,10 +52,12 @@ function compareExternalTakeQuoteSelection(
   });
 }
 
-export function sortExternalTakeQuoteEvaluationsForSelection(params: {
-  evaluations: ExternalTakeQuoteEvaluation[];
+export function sortExternalTakeQuoteEvaluationsForSelection<
+  TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
+>(params: {
+  evaluations: TQuoteEvaluation[];
   externalTakePaths: readonly ExternalTakePathKind[];
-}): ExternalTakeQuoteEvaluation[] {
+}): TQuoteEvaluation[] {
   const pathOrder = new Map<ExternalTakePathKind, number>(
     params.externalTakePaths.map((path, index) => [path, index])
   );
@@ -60,11 +67,15 @@ export function sortExternalTakeQuoteEvaluationsForSelection(params: {
       return policyCompare;
     }
 
+    const leftPath = resolveExternalTakeRouteIdentity(left)?.path;
+    const rightPath = resolveExternalTakeRouteIdentity(right)?.path;
     const orderCompare =
-      (pathOrder.get(left.externalTakePath ?? 'factory') ??
-        Number.MAX_SAFE_INTEGER) -
-      (pathOrder.get(right.externalTakePath ?? 'factory') ??
-        Number.MAX_SAFE_INTEGER);
+      (leftPath !== undefined
+        ? (pathOrder.get(leftPath) ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER) -
+      (rightPath !== undefined
+        ? (pathOrder.get(rightPath) ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER);
     if (orderCompare !== 0) {
       return orderCompare;
     }
@@ -76,10 +87,12 @@ export function sortExternalTakeQuoteEvaluationsForSelection(params: {
   });
 }
 
-export function selectBestExternalTakeQuoteEvaluation(params: {
-  evaluations: ExternalTakeQuoteEvaluation[];
+export function selectBestExternalTakeQuoteEvaluation<
+  TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
+>(params: {
+  evaluations: TQuoteEvaluation[];
   externalTakePaths: readonly ExternalTakePathKind[];
-}): ExternalTakeQuoteEvaluation | undefined {
+}): TQuoteEvaluation | undefined {
   return sortExternalTakeQuoteEvaluationsForSelection(params)[0];
 }
 
@@ -96,86 +109,26 @@ export type HybridExternalTakeExecutionSelection =
       reason: string;
     };
 
-function getDefaultSourceForPath(
-  path: ExternalTakePathKind
-): LiquiditySource | undefined {
-  if (path === 'oneinch') {
-    return LiquiditySource.ONEINCH;
-  }
-  if (path === 'lifi') {
-    return LiquiditySource.LIFI;
-  }
-  return undefined;
-}
-
 export function resolveHybridExternalTakeExecutionSelection(params: {
   quoteEvaluation?: ExternalTakeQuoteEvaluation;
   allowedExternalTakePaths: ExternalTakePathKind[];
 }): HybridExternalTakeExecutionSelection {
-  const selectedPath = params.quoteEvaluation?.externalTakePath;
-  const selectedSource = params.quoteEvaluation?.selectedLiquiditySource;
-  const sourceSelectedPath =
-    selectedSource === LiquiditySource.ONEINCH
-      ? 'oneinch'
-      : selectedSource === LiquiditySource.LIFI
-        ? 'lifi'
-        : selectedSource !== undefined && isFactoryDynamicSource(selectedSource)
-          ? 'factory'
-          : undefined;
-  if (
-    selectedPath !== undefined &&
-    sourceSelectedPath !== undefined &&
-    selectedPath !== sourceSelectedPath
-  ) {
+  const route = bindExternalTakeRoute({
+    quoteEvaluation: params.quoteEvaluation,
+    allowedExternalTakePaths: params.allowedExternalTakePaths,
+    inferSourceFromPath: true,
+  });
+  if (!route.bound) {
     return {
       approved: false,
-      reason: `selected inconsistent path=${selectedPath} source=${formatLiquiditySource(selectedSource)}`,
-    };
-  }
-
-  const effectiveSelectedPath = selectedPath ?? sourceSelectedPath;
-  if (
-    effectiveSelectedPath !== undefined &&
-    !params.allowedExternalTakePaths.includes(effectiveSelectedPath)
-  ) {
-    return {
-      approved: false,
-      effectiveSelectedPath,
-      selectedSource,
-      reason: `selected disabled path=${effectiveSelectedPath}`,
-    };
-  }
-  if (effectiveSelectedPath === undefined) {
-    return {
-      approved: false,
-      selectedSource,
-      reason: 'hybrid external take selection missing selected path',
-    };
-  }
-  if (
-    effectiveSelectedPath === 'factory' &&
-    (selectedSource === undefined || !isFactoryDynamicSource(selectedSource))
-  ) {
-    return {
-      approved: false,
-      effectiveSelectedPath,
-      selectedSource,
-      reason: 'selected factory path without a concrete factory source',
-    };
-  }
-  const effectiveSelectedSource =
-    selectedSource ?? getDefaultSourceForPath(effectiveSelectedPath);
-  if (effectiveSelectedSource === undefined) {
-    return {
-      approved: false,
-      effectiveSelectedPath,
-      selectedSource,
-      reason: `selected path=${effectiveSelectedPath} without a concrete source`,
+      effectiveSelectedPath: getExternalTakeRouteBindingFailurePath(route),
+      selectedSource: getExternalTakeRouteBindingFailureSource(route),
+      reason: formatExternalTakeRouteSelectionFailure(route),
     };
   }
   return {
     approved: true,
-    effectiveSelectedPath,
-    selectedSource: effectiveSelectedSource,
+    effectiveSelectedPath: route.path,
+    selectedSource: route.source,
   };
 }

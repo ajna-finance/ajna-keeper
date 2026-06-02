@@ -1,11 +1,11 @@
 import { BigNumber, ethers } from 'ethers';
-import { LifiFeeCostPolicy } from '../../config';
 import { validateLifiFeeCosts } from './fee-policy';
 import { normalizeLifiAddressAllowlistSet } from './address-allowlist';
 import {
   ApprovedLifiQuote,
   DEFAULT_LIFI_FEE_COST_POLICY,
   LifiEstimate,
+  LifiFeeCostPolicy,
   LifiQuoteResponse,
   LifiTransactionRequest,
 } from './schema';
@@ -168,7 +168,7 @@ export function validateLifiQuote(
   }
 
   const feeCosts = validateLifiFeeCosts({
-    topLevelFeeCosts: estimate.feeCosts,
+    topLevelFeeCosts: routeShape.topLevelFeeCosts,
     feeCollectionStepFeeCosts:
       routeShape.kind === 'fee-collection-swap'
         ? routeShape.feeCollectionStepFeeCosts

@@ -10,6 +10,7 @@ import {
 import { ArbTakeStrategy } from './arb-strategy';
 import { TakeWriteTransport } from './write-transport';
 import {
+  BoundExternalTakeRouteEvaluation,
   ArbTakeEvaluation,
   ExternalTakeQuoteEvaluation,
   ExternalTakeStrategyKind,
@@ -19,6 +20,7 @@ import {
   TakeExecutionResult,
   TakeLiquidationPlan,
 } from './types';
+import { bindExternalTakeRouteForCandidate } from './external-take-quote-approval';
 import {
   TakeAuctionStatus,
   TakeAuctionStatusReader,
@@ -67,11 +69,13 @@ export interface ExternalTakeAdapter<
  * against external market liquidity before falling back to arbTake.
  */
 
-interface TakeApprovalResult {
-  approved: boolean;
-  reason?: string;
-  quoteEvaluation?: ExternalTakeQuoteEvaluation;
-}
+type TakeExternalApprovalResult =
+  | { approved: true; quoteEvaluation: BoundExternalTakeRouteEvaluation }
+  | { approved: false; reason?: string };
+
+type TakeArbApprovalResult =
+  | { approved: true }
+  | { approved: false; reason?: string };
 
 interface EvaluateTakeDecisionParams<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
@@ -95,7 +99,7 @@ interface EvaluateTakeDecisionParams<
     auctionPrice: BigNumber;
     collateral: BigNumber;
     quoteEvaluation: ExternalTakeQuoteEvaluation;
-  }) => Promise<TakeApprovalResult>;
+  }) => Promise<TakeExternalApprovalResult>;
   approveArbTake?: (params: {
     pool: FungiblePool;
     signer: Signer;
@@ -105,7 +109,7 @@ interface EvaluateTakeDecisionParams<
     auctionPrice: BigNumber;
     collateral: BigNumber;
     arbEvaluation: ArbTakeEvaluation;
-  }) => Promise<TakeApprovalResult>;
+  }) => Promise<TakeArbApprovalResult>;
 }
 
 interface ExecuteTakeDecisionParams<
@@ -325,7 +329,7 @@ export async function evaluateTakeDecision<
   let hpbIndex = 0;
   let takeablePrice: number | undefined;
   let maxArbTakePrice: number | undefined;
-  let selectedQuoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
+  let selectedQuoteEvaluation: BoundExternalTakeRouteEvaluation | undefined;
   const evaluateExternalTake = externalTakeAdapter.evaluateExternalTake;
   const externalTakeConfigured =
     poolConfig.take.marketPriceFactor !== undefined &&
@@ -345,7 +349,7 @@ export async function evaluateTakeDecision<
     if (!quoteEvaluation.isTakeable) {
       reason = quoteEvaluation.reason;
     } else {
-      const approval = approveExternalTake
+      const approval: TakeExternalApprovalResult = approveExternalTake
         ? await approveExternalTake({
             pool,
             signer,
@@ -356,11 +360,28 @@ export async function evaluateTakeDecision<
             collateral,
             quoteEvaluation,
           })
-        : { approved: true };
+        : (() => {
+            const binding = bindExternalTakeRouteForCandidate({
+              quoteEvaluation,
+              selectedLiquiditySource: quoteEvaluation.selectedLiquiditySource,
+              configuredLiquiditySource: poolConfig.take.liquiditySource,
+              poolName: pool.name,
+              borrower: candidate.borrower,
+            });
+            return binding.bound
+              ? {
+                  approved: true,
+                  quoteEvaluation: binding.quoteEvaluation,
+                }
+              : {
+                  approved: false,
+                  reason: binding.reason,
+                };
+          })();
 
       if (approval.approved) {
         approvedTake = true;
-        selectedQuoteEvaluation = approval.quoteEvaluation ?? quoteEvaluation;
+        selectedQuoteEvaluation = approval.quoteEvaluation;
         takeablePrice = selectedQuoteEvaluation.takeablePrice;
       } else {
         reason = approval.reason ?? reason;
@@ -384,7 +405,7 @@ export async function evaluateTakeDecision<
         reason = arbEvaluation.reason ?? reason;
       }
     } else {
-      const approval = approveArbTake
+      const approval: TakeArbApprovalResult = approveArbTake
         ? await approveArbTake({
             pool,
             signer,
@@ -550,9 +571,7 @@ export async function executeTakeDecision<
         });
         return getExecutionResult();
       }
-      if (approval.quoteEvaluation) {
-        decision.quoteEvaluation = approval.quoteEvaluation;
-      }
+      decision.quoteEvaluation = approval.quoteEvaluation;
     }
   }
 

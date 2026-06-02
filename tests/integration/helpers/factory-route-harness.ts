@@ -14,7 +14,7 @@ import {
   takeLiquidationFactory,
 } from '../../../src/take/factory';
 import { deriveApprovedMinOutRaw } from '../../../src/take/factory/shared';
-import { ExternalTakeQuoteEvaluation } from '../../../src/take/types';
+import { ApprovedFactoryQuoteEvaluation } from '../../../src/take/types';
 import { RequireFields } from '../../../src/utils';
 import { setBalance } from '../test-utils';
 import { AjnaKeeperTakerFactory } from '../../../typechain-types/contracts/factories';
@@ -265,7 +265,7 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
     tokenInIndex: number;
     tokenOutIndex: number;
   };
-}): ExternalTakeQuoteEvaluation {
+}): ApprovedFactoryQuoteEvaluation & { routeExecutionFloorRaw: BigNumber } {
   const approvedMinOutRaw =
     params.approvedMinOutRaw ??
     deriveApprovedMinOutRaw({
@@ -276,18 +276,47 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
     throw new Error('Test factory quote evaluation missing approved min-out');
   }
 
-  return {
-    isTakeable: true,
-    externalTakePath: 'factory',
+  const base = {
+    isTakeable: true as const,
+    externalTakePath: 'factory' as const,
     quoteAmountRaw: params.quoteAmountRaw,
-    selectedLiquiditySource: params.source,
-    selectedFeeTier: params.selectedFeeTier,
     routeMinOutRaw: params.routeMinOutRaw,
     profitMinOutRaw: params.profitMinOutRaw,
+    routeExecutionFloorRaw: approvedMinOutRaw,
     approvedMinOutRaw,
-    curvePool: params.curvePool,
     reason: 'test-approved route',
   };
+  if (params.source === LiquiditySource.UNISWAPV3) {
+    if (params.selectedFeeTier === undefined) {
+      throw new Error('Test Uniswap V3 factory quote missing fee tier');
+    }
+    return {
+      ...base,
+      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      selectedFeeTier: params.selectedFeeTier,
+    };
+  }
+  if (params.source === LiquiditySource.SUSHISWAP) {
+    if (params.selectedFeeTier === undefined) {
+      throw new Error('Test SushiSwap factory quote missing fee tier');
+    }
+    return {
+      ...base,
+      selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+      selectedFeeTier: params.selectedFeeTier,
+    };
+  }
+  if (params.source === LiquiditySource.CURVE) {
+    if (!params.curvePool) {
+      throw new Error('Test Curve factory quote missing curve pool');
+    }
+    return {
+      ...base,
+      selectedLiquiditySource: LiquiditySource.CURVE,
+      curvePool: params.curvePool,
+    };
+  }
+  throw new Error(`Unsupported test factory quote source: ${params.source}`);
 }
 
 export async function deployFundedSwapRouter02(

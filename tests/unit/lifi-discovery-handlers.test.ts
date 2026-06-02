@@ -4,343 +4,26 @@ import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../src/config';
 import * as erc20 from '../../src/erc20';
 import { handleDiscoveredTakeTarget } from '../../src/discovery/handlers';
+import type { DiscoveryRpcCache } from '../../src/discovery/handlers';
 import { logger } from '../../src/logging';
 import * as lifiExecutionModule from '../../src/take/lifi-execution';
 import * as takeFactoryModule from '../../src/take/factory';
 import { createDiscoveryTransports } from '../helpers/discovery';
+import {
+  createHybridGasFallbackFactoryQuote,
+  createHybridLifiFallbackScenario,
+  createNativeToQuoteGasConversionReject,
+  getDiscoveredTakeSummary,
+  makeDiscoveredTakeParams,
+  runLifiHybridGasFallbackScenario,
+} from './helpers/lifi-discovery-scenarios';
 
-function getDiscoveredTakeSummary(loggerInfoStub: sinon.SinonStub): string {
-  const isSummaryMessage = (message: unknown): message is string =>
-    typeof message === 'string' &&
-    message.includes('Discovered take target summary:');
-  const summaryLog = loggerInfoStub
-    .getCalls()
-    .map((call) => call.args[0] as unknown)
-    .find(isSummaryMessage);
-  if (summaryLog === undefined) {
-    expect.fail('Expected a discovered take target summary log');
-  }
-  return summaryLog;
-}
-
-function createHybridGasFallbackFactoryQuote(
-  overrides: Record<string, unknown> = {}
-) {
-  return {
-    isTakeable: true,
-    externalTakePath: 'factory' as const,
-    selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-    selectedFeeTier: 500,
-    quoteAmount: 125,
-    quoteAmountRaw: ethers.utils.parseUnits('125', 6),
-    collateralAmount: 1,
-    marketPrice: 125,
-    takeablePrice: 123.75,
-    approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
-    quotedAuctionPriceWad: ethers.utils.parseEther('100'),
-    quotedCollateralWad: ethers.utils.parseEther('1'),
-    ...overrides,
-  };
-}
-
-function createNativeToQuoteGasConversionReject(
-  overrides: Record<string, unknown> = {}
-) {
-  return {
-    isTakeable: false,
-    externalTakePath: 'factory' as const,
-    selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-    reason: 'failed to quote gas cost into quote token',
-    routeProfitability: {
-      gasPolicyRejectCode: 'native_to_quote_conversion_unavailable' as const,
-      gasQuoteAttempts: [
-        {
-          source: LiquiditySource.UNISWAPV3,
-          tokenIn: '0x4200000000000000000000000000000000000006',
-          tokenOut: '0x2222222222222222222222222222222222222222',
-          amountIn: '900000000000000',
-          feeTiers: [3000, 100, 500, 10000],
-          success: false,
-          reason: 'no factory pool at configured fee tiers',
-        },
-      ],
-    },
-    ...overrides,
-  };
-}
-
-async function runLifiHybridGasFallbackScenario(
-  options: {
-    factoryEvaluations?: any[];
-  } = {}
-) {
-  sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
-  const takeLiquidationLifiStub = sinon
-    .stub(lifiExecutionModule, 'takeLiquidationLifi')
-    .resolves(true);
-  const takeLiquidationFactoryStub = sinon
-    .stub(takeFactoryModule, 'takeLiquidationFactory')
-    .resolves(true);
-  const lifiQuoteStub = sinon
-    .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
-    .resolves({
-      isTakeable: false,
-      externalTakePath: 'lifi',
-      selectedLiquiditySource: LiquiditySource.LIFI,
-      reason: 'LI.FI unavailable',
-    });
-  const factoryEvaluations = options.factoryEvaluations ?? [
-    createNativeToQuoteGasConversionReject(),
-    createHybridGasFallbackFactoryQuote(),
-  ];
-  let factoryCallIndex = 0;
-  const factoryQuoteStub = sinon
-    .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
-    .callsFake(async () => {
-      const evaluation =
-        factoryEvaluations[
-          Math.min(factoryCallIndex, factoryEvaluations.length - 1)
-        ];
-      factoryCallIndex += 1;
-      return evaluation;
-    });
-  const gasPrice = ethers.utils.parseUnits('1', 'gwei');
-  const wethAddress = '0x4200000000000000000000000000000000000006';
-  const pool = {
-    name: 'LI.FI Hybrid Gas Fallback Pool',
-    poolAddress: '0x7777777777777777777777777777777777777792',
-    quoteAddress: wethAddress,
-    collateralAddress: '0x3333333333333333333333333333333333333333',
-    getLiquidation: sinon.stub().returns({
-      getStatus: sinon.stub().resolves({
-        collateral: ethers.utils.parseEther('1'),
-        price: ethers.utils.parseEther('100'),
-      }),
-    }),
-  };
-
-  await handleDiscoveredTakeTarget({
-    pool: pool as any,
-    signer: {
-      provider: {
-        getGasPrice: sinon.stub().resolves(gasPrice),
-      },
-      getChainId: sinon.stub().resolves(1),
-    } as any,
-    target: {
-      source: 'discovered',
-      poolAddress: pool.poolAddress,
-      name: pool.name,
-      dryRun: false,
-      take: {
-        liquiditySource: LiquiditySource.LIFI,
-        marketPriceFactor: 0.99,
-      },
-      candidates: [
-        {
-          poolAddress: pool.poolAddress,
-          borrower: '0xBorrowerHybridLifiGasFallback',
-          kickTime: Date.now(),
-          debtRemaining: '1',
-          collateralRemaining: '1',
-          neutralPrice: '1',
-          debt: '1',
-          collateral: '1',
-          heuristicScore: 1,
-        },
-      ],
-    },
-    config: {
-      autoDiscover: {
-        enabled: true,
-        take: {
-          enabled: true,
-          allowedExternalTakePaths: ['lifi', 'factory'],
-          externalTakeRouteSelectionMode: 'maximize_profit',
-          defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-          hybridGasQuoteFailureFallbackMode: 'factory_first',
-          maxGasCostNative: 1,
-        },
-      },
-      tokenAddresses: {
-        weth: wethAddress,
-      },
-      subgraphUrl: 'http://example-subgraph',
-    } as any,
-    transports: createDiscoveryTransports(gasPrice),
-    rpcCache: {
-      chainId: 1,
-      gasPrice,
-      gasPriceFetchedAt: Date.now(),
-      factoryQuoteProviders:
-        takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
-    },
-  });
-
-  return {
-    factoryQuoteStub,
-    lifiQuoteStub,
-    takeLiquidationLifiStub,
-    takeLiquidationFactoryStub,
-  };
-}
-
-function createHybridLifiFallbackScenario(
-  options: {
-    lifiExpectedNetProfitRaw?: BigNumber;
-    factoryExpectedNetProfitRaw?: BigNumber;
-    refreshedCollateral?: BigNumber;
-    refreshedAuctionPrice?: BigNumber;
-  } = {}
-) {
-  const wethAddress = '0x4200000000000000000000000000000000000006';
-  const gasPrice = ethers.utils.parseUnits('1', 'gwei');
-  const gasPolicyEvaluatedAt = Date.now();
-  const refreshedCollateral =
-    options.refreshedCollateral ?? ethers.utils.parseEther('1');
-  const refreshedAuctionPrice =
-    options.refreshedAuctionPrice ?? ethers.utils.parseEther('100');
-  sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-
-  const lifiQuoteStub = sinon
-    .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
-    .resolves({
-      isTakeable: true,
-      externalTakePath: 'lifi',
-      selectedLiquiditySource: LiquiditySource.LIFI,
-      quoteAmount: 130,
-      quoteAmountRaw: ethers.utils.parseEther('130'),
-      routeMinOutRaw: ethers.utils.parseEther('128'),
-      collateralAmount: 1,
-      marketPrice: 130,
-      takeablePrice: 128.7,
-      approvedMinOutRaw: ethers.utils.parseEther('100'),
-      quotedAuctionPriceWad: ethers.utils.parseEther('100'),
-      quotedCollateralWad: ethers.utils.parseEther('1'),
-      routeProfitability: {
-        expectedNetProfitQuoteRaw:
-          options.lifiExpectedNetProfitRaw ?? ethers.utils.parseEther('29'),
-        expectedSubsidyQuoteRaw: BigNumber.from(0),
-        subsidyAllowed: false,
-        gasPriceWei: gasPrice,
-        gasPolicyEvaluatedAt,
-      },
-    } as any);
-  const factoryQuoteStub = sinon
-    .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
-    .resolves({
-      isTakeable: true,
-      externalTakePath: 'factory',
-      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-      selectedFeeTier: 500,
-      quoteAmount: 120,
-      quoteAmountRaw: ethers.utils.parseEther('120'),
-      routeMinOutRaw: ethers.utils.parseEther('118'),
-      collateralAmount: 1,
-      marketPrice: 120,
-      takeablePrice: 118.8,
-      approvedMinOutRaw: ethers.utils.parseEther('100'),
-      quotedAuctionPriceWad: ethers.utils.parseEther('100'),
-      quotedCollateralWad: ethers.utils.parseEther('1'),
-      routeProfitability: {
-        expectedNetProfitQuoteRaw:
-          options.factoryExpectedNetProfitRaw ?? ethers.utils.parseEther('19'),
-        expectedSubsidyQuoteRaw: BigNumber.from(0),
-        subsidyAllowed: false,
-        gasPriceWei: gasPrice,
-        gasPolicyEvaluatedAt,
-      },
-    } as any);
-  const takeLiquidationFactoryStub = sinon
-    .stub(takeFactoryModule, 'takeLiquidationFactory')
-    .resolves(true);
-
-  const pool = {
-    name: 'Hybrid LI.FI Fallback Pool',
-    poolAddress: '0x7777777777777777777777777777777777786',
-    quoteAddress: wethAddress,
-    collateralAddress: '0x3333333333333333333333333333333333333333',
-    getLiquidation: sinon.stub().returns({
-      getStatus: sinon.stub().resolves({
-        collateral: refreshedCollateral,
-        price: refreshedAuctionPrice,
-      }),
-    }),
-  };
-
-  return {
-    lifiQuoteStub,
-    factoryQuoteStub,
-    takeLiquidationFactoryStub,
-    params: {
-      pool: pool as any,
-      signer: {
-        provider: {
-          getGasPrice: sinon.stub().resolves(gasPrice),
-        },
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      target: {
-        source: 'discovered',
-        poolAddress: pool.poolAddress,
-        name: pool.name,
-        dryRun: false,
-        take: {
-          liquiditySource: LiquiditySource.LIFI,
-          marketPriceFactor: 0.99,
-        },
-        candidates: [
-          {
-            poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerHybridLifiFallback',
-            kickTime: Date.now(),
-            debtRemaining: '1',
-            collateralRemaining: '1',
-            neutralPrice: '1',
-            debt: '1',
-            collateral: '1',
-            heuristicScore: 1,
-          },
-        ],
-      },
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            allowedExternalTakePaths: ['lifi', 'factory'],
-            externalTakeRouteSelectionMode: 'maximize_profit',
-            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-            dexGasOverrides: {
-              [LiquiditySource.LIFI]: '900000',
-              [LiquiditySource.UNISWAPV3]: '900000',
-            },
-          },
-        },
-        tokenAddresses: {
-          weth: wethAddress,
-        },
-        lifi: {
-          mode: 'production',
-          allowExchanges: ['uniswap'],
-          callTargetAllowlist: {},
-          approvalSpenderAllowlist: {},
-          selectorAllowlist: {},
-        },
-        lifiTaker: '0x4444444444444444444444444444444444444444',
-        subgraphUrl: 'http://example-subgraph',
-      } as any,
-      transports: createDiscoveryTransports(gasPrice),
-      rpcCache: {
-        chainId: 8453,
-        gasPrice,
-        gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
-      },
-    },
-  };
-}
+type LifiTakeParams = Parameters<
+  typeof lifiExecutionModule.takeLiquidationLifi
+>[0];
+type FactoryTakeParams = Parameters<
+  typeof takeFactoryModule.takeLiquidationFactory
+>[0];
 
 describe('LI.FI discovery handlers', () => {
   afterEach(() => {
@@ -353,7 +36,7 @@ describe('LI.FI discovery handlers', () => {
     const wethAddress = '0x4200000000000000000000000000000000000006';
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
-      .callsFake(async (params: any) => {
+      .callsFake(async (params: LifiTakeParams) => {
         params.config.onLifiExecutionFailure?.({
           preBroadcast: true,
           error: 'LI.FI refresh unavailable',
@@ -396,67 +79,68 @@ describe('LI.FI discovery handlers', () => {
       }),
     };
 
-    await handleDiscoveredTakeTarget({
-      pool: pool as any,
-      signer: {
-        provider: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-        getChainId: sinon.stub().resolves(1),
-      } as any,
-      target: {
-        source: 'discovered',
-        poolAddress: pool.poolAddress,
-        name: pool.name,
-        dryRun: false,
-        take: {
-          liquiditySource: LiquiditySource.LIFI,
-          marketPriceFactor: 0.99,
-        },
-        candidates: [
-          {
-            poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerHybridLifiThenFactoryFallback',
-            kickTime: Date.now(),
-            debtRemaining: '1',
-            collateralRemaining: '1',
-            neutralPrice: '1',
-            debt: '1',
-            collateral: '1',
-            heuristicScore: 1,
+    await handleDiscoveredTakeTarget(
+      makeDiscoveredTakeParams({
+        pool,
+        signer: {
+          provider: {
+            getGasPrice: sinon
+              .stub()
+              .resolves(ethers.utils.parseUnits('1', 'gwei')),
           },
-        ],
-      },
-      config: {
-        autoDiscover: {
-          enabled: true,
+          getChainId: sinon.stub().resolves(1),
+        },
+        target: {
+          source: 'discovered',
+          poolAddress: pool.poolAddress,
+          name: pool.name,
+          dryRun: false,
           take: {
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.99,
+          },
+          candidates: [
+            {
+              poolAddress: pool.poolAddress,
+              borrower: '0xBorrowerHybridLifiThenFactoryFallback',
+              kickTime: Date.now(),
+              debtRemaining: '1',
+              collateralRemaining: '1',
+              neutralPrice: '1',
+              debt: '1',
+              collateral: '1',
+              heuristicScore: 1,
+            },
+          ],
+        },
+        config: {
+          autoDiscover: {
             enabled: true,
-            allowedExternalTakePaths: ['lifi', 'factory'],
-            externalTakeRouteSelectionMode: 'maximize_profit',
-            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-            hybridGasQuoteFailureFallbackMode: 'factory_first',
-            maxGasCostNative: 1,
+            take: {
+              enabled: true,
+              allowedExternalTakePaths: ['lifi', 'factory'],
+              externalTakeRouteSelectionMode: 'maximize_profit',
+              defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+              hybridGasQuoteFailureFallbackMode: 'factory_first',
+              maxGasCostNative: 1,
+            },
+          },
+          tokenAddresses: {
+            weth: wethAddress,
           },
         },
-        tokenAddresses: {
-          weth: wethAddress,
+        transports: createDiscoveryTransports(
+          ethers.utils.parseUnits('1', 'gwei')
+        ),
+        rpcCache: {
+          chainId: 1,
+          gasPrice: ethers.utils.parseUnits('1', 'gwei'),
+          gasPriceFetchedAt: Date.now(),
+          factoryQuoteProviders:
+            takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
         },
-        subgraphUrl: 'http://example-subgraph',
-      } as any,
-      transports: createDiscoveryTransports(
-        ethers.utils.parseUnits('1', 'gwei')
-      ),
-      rpcCache: {
-        chainId: 1,
-        gasPrice: ethers.utils.parseUnits('1', 'gwei'),
-        gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
-      },
-    });
+      })
+    );
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
     expect(takeLiquidationFactoryStub.calledOnce).to.equal(true);
@@ -518,54 +202,55 @@ describe('LI.FI discovery handlers', () => {
       }),
     };
 
-    const stats = await handleDiscoveredTakeTarget({
-      pool: pool as any,
-      signer: {
-        provider: {
-          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
-        },
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      target: {
-        source: 'discovered',
-        poolAddress: pool.poolAddress,
-        name: pool.name,
-        dryRun: true,
-        take: {
-          liquiditySource: LiquiditySource.LIFI,
-          marketPriceFactor: 0.99,
-        },
-        candidates: [
-          {
-            poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerLifi',
-            kickTime: Date.now(),
-            debtRemaining: '100',
-            collateralRemaining: '1',
-            neutralPrice: '100',
-            debt: '100',
-            collateral: '1',
-            heuristicScore: 1,
+    const stats = await handleDiscoveredTakeTarget(
+      makeDiscoveredTakeParams({
+        pool,
+        signer: {
+          provider: {
+            getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
           },
-        ],
-      },
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: true,
+          getChainId: sinon.stub().resolves(8453),
         },
-        lifi: {
-          mode: 'production',
-          allowExchanges: ['uniswap'],
-          callTargetAllowlist: {},
-          approvalSpenderAllowlist: {},
-          selectorAllowlist: {},
+        target: {
+          source: 'discovered',
+          poolAddress: pool.poolAddress,
+          name: pool.name,
+          dryRun: true,
+          take: {
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.99,
+          },
+          candidates: [
+            {
+              poolAddress: pool.poolAddress,
+              borrower: '0xBorrowerLifi',
+              kickTime: Date.now(),
+              debtRemaining: '100',
+              collateralRemaining: '1',
+              neutralPrice: '100',
+              debt: '100',
+              collateral: '1',
+              heuristicScore: 1,
+            },
+          ],
         },
-        lifiTaker: '0x4444444444444444444444444444444444444444',
-        subgraphUrl: 'http://example-subgraph',
-      } as any,
-      transports: createDiscoveryTransports(),
-    });
+        config: {
+          autoDiscover: {
+            enabled: true,
+            take: true,
+          },
+          lifi: {
+            mode: 'production',
+            allowExchanges: ['uniswap'],
+            callTargetAllowlist: {},
+            approvalSpenderAllowlist: {},
+            selectorAllowlist: {},
+          },
+          lifiTaker: '0x4444444444444444444444444444444444444444',
+        },
+        transports: createDiscoveryTransports(),
+      })
+    );
 
     expect(lifiQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
@@ -608,68 +293,69 @@ describe('LI.FI discovery handlers', () => {
       }),
     };
 
-    await handleDiscoveredTakeTarget({
-      pool: pool as any,
-      signer: {
-        provider: {
-          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
-        },
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      target: {
-        source: 'discovered',
-        poolAddress: pool.poolAddress,
-        name: pool.name,
-        dryRun: false,
-        take: {
-          liquiditySource: LiquiditySource.LIFI,
-          marketPriceFactor: 0.99,
-        },
-        candidates: [
-          {
-            poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerDirectLifiReapproval',
-            kickTime: Date.now(),
-            debtRemaining: '100',
-            collateralRemaining: '1',
-            neutralPrice: '100',
-            debt: '100',
-            collateral: '1',
-            heuristicScore: 1,
+    await handleDiscoveredTakeTarget(
+      makeDiscoveredTakeParams({
+        pool,
+        signer: {
+          provider: {
+            getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
           },
-        ],
-      },
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: true,
+          getChainId: sinon.stub().resolves(8453),
         },
-        lifi: {
-          mode: 'production',
-          allowExchanges: ['uniswap'],
-          callTargetAllowlist: {},
-          approvalSpenderAllowlist: {},
-          selectorAllowlist: {},
+        target: {
+          source: 'discovered',
+          poolAddress: pool.poolAddress,
+          name: pool.name,
+          dryRun: false,
+          take: {
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.99,
+          },
+          candidates: [
+            {
+              poolAddress: pool.poolAddress,
+              borrower: '0xBorrowerDirectLifiReapproval',
+              kickTime: Date.now(),
+              debtRemaining: '100',
+              collateralRemaining: '1',
+              neutralPrice: '100',
+              debt: '100',
+              collateral: '1',
+              heuristicScore: 1,
+            },
+          ],
         },
-        lifiTaker: '0x4444444444444444444444444444444444444444',
-        subgraphUrl: 'http://example-subgraph',
-      } as any,
-      transports: createDiscoveryTransports(),
-    });
+        config: {
+          autoDiscover: {
+            enabled: true,
+            take: true,
+          },
+          lifi: {
+            mode: 'production',
+            allowExchanges: ['uniswap'],
+            callTargetAllowlist: {},
+            approvalSpenderAllowlist: {},
+            selectorAllowlist: {},
+          },
+          lifiTaker: '0x4444444444444444444444444444444444444444',
+        },
+        transports: createDiscoveryTransports(),
+      })
+    );
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
-    const lifiLiquidation = takeLiquidationLifiStub.firstCall.args[0]
-      .liquidation as any;
+    const lifiLiquidation =
+      takeLiquidationLifiStub.firstCall.args[0].liquidation;
     expect(lifiLiquidation.auctionPrice.eq(refreshedAuctionPrice)).to.equal(
       true
     );
     expect(
-      lifiLiquidation.externalTakeQuoteEvaluation.quotedAuctionPriceWad.eq(
+      lifiLiquidation.externalTakeQuoteEvaluation!.quotedAuctionPriceWad!.eq(
         refreshedAuctionPrice
       )
     ).to.equal(true);
     expect(
-      lifiLiquidation.externalTakeQuoteEvaluation.quotedCollateralWad.eq(
+      lifiLiquidation.externalTakeQuoteEvaluation!.quotedCollateralWad!.eq(
         ethers.utils.parseEther('1')
       )
     ).to.equal(true);
@@ -710,86 +396,87 @@ describe('LI.FI discovery handlers', () => {
       }),
     };
 
-    await handleDiscoveredTakeTarget({
-      pool: pool as any,
-      signer: {
-        provider: {
-          getGasPrice: sinon.stub().resolves(gasPrice),
-        },
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      target: {
-        source: 'discovered',
-        poolAddress: pool.poolAddress,
-        name: pool.name,
-        dryRun: true,
-        take: {
-          liquiditySource: LiquiditySource.LIFI,
-          marketPriceFactor: 1,
-        },
-        candidates: [
-          {
-            poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerDirectLifiProfitFloor',
-            kickTime: Date.now(),
-            debtRemaining: '100',
-            collateralRemaining: '1',
-            neutralPrice: '100',
-            debt: '100',
-            collateral: '1',
-            heuristicScore: 1,
+    await handleDiscoveredTakeTarget(
+      makeDiscoveredTakeParams({
+        pool,
+        signer: {
+          provider: {
+            getGasPrice: sinon.stub().resolves(gasPrice),
           },
-        ],
-      },
-      config: {
-        autoDiscover: {
-          enabled: true,
+          getChainId: sinon.stub().resolves(8453),
+        },
+        target: {
+          source: 'discovered',
+          poolAddress: pool.poolAddress,
+          name: pool.name,
+          dryRun: true,
           take: {
-            enabled: true,
-            dexGasOverrides: {
-              [LiquiditySource.LIFI]: '1000000',
-            },
-            minExpectedProfitQuote: 1,
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 1,
           },
+          candidates: [
+            {
+              poolAddress: pool.poolAddress,
+              borrower: '0xBorrowerDirectLifiProfitFloor',
+              kickTime: Date.now(),
+              debtRemaining: '100',
+              collateralRemaining: '1',
+              neutralPrice: '100',
+              debt: '100',
+              collateral: '1',
+              heuristicScore: 1,
+            },
+          ],
         },
-        tokenAddresses: {
-          weth: wethAddress,
+        config: {
+          autoDiscover: {
+            enabled: true,
+            take: {
+              enabled: true,
+              dexGasOverrides: {
+                [LiquiditySource.LIFI]: '1000000',
+              },
+              minExpectedProfitQuote: 1,
+            },
+          },
+          tokenAddresses: {
+            weth: wethAddress,
+          },
+          lifi: {
+            mode: 'production',
+            allowExchanges: ['uniswap'],
+            callTargetAllowlist: {},
+            approvalSpenderAllowlist: {},
+            selectorAllowlist: {},
+          },
+          lifiTaker: '0x4444444444444444444444444444444444444444',
         },
-        lifi: {
-          mode: 'production',
-          allowExchanges: ['uniswap'],
-          callTargetAllowlist: {},
-          approvalSpenderAllowlist: {},
-          selectorAllowlist: {},
+        transports: createDiscoveryTransports(gasPrice),
+        rpcCache: {
+          chainId: 8453,
+          gasPrice,
+          gasPriceFetchedAt: Date.now(),
         },
-        lifiTaker: '0x4444444444444444444444444444444444444444',
-        subgraphUrl: 'http://example-subgraph',
-      } as any,
-      transports: createDiscoveryTransports(gasPrice),
-      rpcCache: {
-        chainId: 8453,
-        gasPrice,
-        gasPriceFetchedAt: Date.now(),
-      } as any,
-    });
+      })
+    );
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
-    const approvedEvaluation: any =
+    const approvedEvaluation =
       takeLiquidationLifiStub.firstCall.args[0].liquidation
-        .externalTakeQuoteEvaluation;
+        .externalTakeQuoteEvaluation!;
     expect(
-      approvedEvaluation.approvedMinOutRaw.eq(expectedApprovedMinOutRaw)
+      approvedEvaluation.approvedMinOutRaw!.eq(expectedApprovedMinOutRaw)
     ).to.equal(true);
     expect(
-      approvedEvaluation.profitMinOutRaw.eq(expectedApprovedMinOutRaw)
+      approvedEvaluation.profitMinOutRaw!.eq(expectedApprovedMinOutRaw)
     ).to.equal(true);
     expect(
-      approvedEvaluation.routeProfitability.routeExecutionCostQuoteRaw.eq(
+      approvedEvaluation.routeProfitability!.routeExecutionCostQuoteRaw!.eq(
         ethers.utils.parseEther('0.0013')
       )
     ).to.equal(true);
     expect(
-      approvedEvaluation.routeProfitability.configuredProfitFloorQuoteRaw.eq(
+      approvedEvaluation.routeProfitability!.configuredProfitFloorQuoteRaw!.eq(
         ethers.utils.parseEther('1')
       )
     ).to.equal(true);
@@ -840,67 +527,68 @@ describe('LI.FI discovery handlers', () => {
       }),
     };
 
-    const stats = await handleDiscoveredTakeTarget({
-      pool: pool as any,
-      signer: {
-        provider: {
-          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
-        },
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      target: {
-        source: 'discovered',
-        poolAddress: pool.poolAddress,
-        name: pool.name,
-        dryRun: false,
-        take: {
-          liquiditySource: LiquiditySource.LIFI,
-          marketPriceFactor: 0.99,
-        },
-        candidates: [
-          {
-            poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerDirectLifiCircuit',
-            kickTime: Date.now(),
-            debtRemaining: '100',
-            collateralRemaining: '1',
-            neutralPrice: '100',
-            debt: '100',
-            collateral: '1',
-            heuristicScore: 1,
+    const stats = await handleDiscoveredTakeTarget(
+      makeDiscoveredTakeParams({
+        pool,
+        signer: {
+          provider: {
+            getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
           },
-        ],
-      },
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: true,
+          getChainId: sinon.stub().resolves(8453),
         },
-        lifi: {
-          mode: 'production',
-          allowExchanges: ['uniswap'],
-          callTargetAllowlist: {},
-          approvalSpenderAllowlist: {},
-          selectorAllowlist: {},
+        target: {
+          source: 'discovered',
+          poolAddress: pool.poolAddress,
+          name: pool.name,
+          dryRun: false,
+          take: {
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.99,
+          },
+          candidates: [
+            {
+              poolAddress: pool.poolAddress,
+              borrower: '0xBorrowerDirectLifiCircuit',
+              kickTime: Date.now(),
+              debtRemaining: '100',
+              collateralRemaining: '1',
+              neutralPrice: '100',
+              debt: '100',
+              collateral: '1',
+              heuristicScore: 1,
+            },
+          ],
         },
-        lifiTaker: '0x4444444444444444444444444444444444444444',
-        subgraphUrl: 'http://example-subgraph',
-      } as any,
-      transports: createDiscoveryTransports(),
-      rpcCache: {
-        chainId: 8453,
-        gasPrice: BigNumber.from(1),
-        gasPriceFetchedAt: Date.now(),
-        providerCircuits: {
+        config: {
+          autoDiscover: {
+            enabled: true,
+            take: true,
+          },
           lifi: {
-            execution_refresh: {
-              failures: 1,
-              cooldownUntilMs: Date.now() + 30_000,
+            mode: 'production',
+            allowExchanges: ['uniswap'],
+            callTargetAllowlist: {},
+            approvalSpenderAllowlist: {},
+            selectorAllowlist: {},
+          },
+          lifiTaker: '0x4444444444444444444444444444444444444444',
+        },
+        transports: createDiscoveryTransports(),
+        rpcCache: {
+          chainId: 8453,
+          gasPrice: BigNumber.from(1),
+          gasPriceFetchedAt: Date.now(),
+          providerCircuits: {
+            lifi: {
+              execution_refresh: {
+                failures: 1,
+                cooldownUntilMs: Date.now() + 30_000,
+              },
             },
           },
         },
-      } as any,
-    });
+      })
+    );
 
     expect(lifiQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.called).to.equal(false);
@@ -943,20 +631,20 @@ describe('LI.FI discovery handlers', () => {
         }),
       }),
     };
-    const rpcCache: any = {
+    const rpcCache: DiscoveryRpcCache = {
       chainId: 8453,
       oneInchQuoteCircuit: {
         failures: 1,
       },
     };
-    const params = {
-      pool: pool as any,
+    const params = makeDiscoveredTakeParams({
+      pool,
       signer: {
         provider: {
           getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
         },
         getChainId: sinon.stub().resolves(8453),
-      } as any,
+      },
       target: {
         source: 'discovered',
         poolAddress: pool.poolAddress,
@@ -995,23 +683,22 @@ describe('LI.FI discovery handlers', () => {
           quoteFailureCooldownMs: 30_000,
         },
         lifiTaker: '0x4444444444444444444444444444444444444444',
-        subgraphUrl: 'http://example-subgraph',
-      } as any,
+      },
       transports: createDiscoveryTransports(),
       rpcCache,
-    };
+    });
 
-    await handleDiscoveredTakeTarget(params as any);
+    await handleDiscoveredTakeTarget(params);
     expect(lifiQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.called).to.equal(false);
-    expect(rpcCache.providerCircuits.lifi.route_quote.failures).to.equal(1);
-    expect(rpcCache.providerCircuits.lifi.route_quote.cooldownUntilMs).to.be.a(
-      'number'
-    );
-    expect(rpcCache.oneInchQuoteCircuit.failures).to.equal(1);
+    expect(rpcCache.providerCircuits!.lifi!.route_quote!.failures).to.equal(1);
+    expect(
+      rpcCache.providerCircuits!.lifi!.route_quote!.cooldownUntilMs
+    ).to.be.a('number');
+    expect(rpcCache.oneInchQuoteCircuit!.failures).to.equal(1);
 
     lifiQuoteStub.resetHistory();
-    await handleDiscoveredTakeTarget(params as any);
+    await handleDiscoveredTakeTarget(params);
     expect(lifiQuoteStub.called).to.equal(false);
   });
 
@@ -1020,7 +707,7 @@ describe('LI.FI discovery handlers', () => {
     const scenario = createHybridLifiFallbackScenario();
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
-      .callsFake(async (params: any) => {
+      .callsFake(async (params: LifiTakeParams) => {
         params.config.onLifiExecutionFailure?.({
           preBroadcast: true,
           error: 'LI.FI fresh quote min output below execution floor',
@@ -1028,7 +715,7 @@ describe('LI.FI discovery handlers', () => {
         return false;
       });
 
-    const stats = await handleDiscoveredTakeTarget(scenario.params as any);
+    const stats = await handleDiscoveredTakeTarget(scenario.params);
 
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
     expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
@@ -1053,7 +740,7 @@ describe('LI.FI discovery handlers', () => {
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
       .resolves(true);
-    (scenario.params.rpcCache as any).providerCircuits = {
+    scenario.params.rpcCache!.providerCircuits = {
       lifi: {
         execution_refresh: {
           failures: 1,
@@ -1062,7 +749,7 @@ describe('LI.FI discovery handlers', () => {
       },
     };
 
-    const stats = await handleDiscoveredTakeTarget(scenario.params as any);
+    const stats = await handleDiscoveredTakeTarget(scenario.params);
 
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
     expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
@@ -1091,18 +778,20 @@ describe('LI.FI discovery handlers', () => {
       refreshedCollateral,
       refreshedAuctionPrice,
     });
-    scenario.takeLiquidationFactoryStub.callsFake(async (params: any) => {
-      params.config.onFactoryExecutionFailure?.({
-        preBroadcast: true,
-        error: 'factory gas estimate failed',
-      });
-      return false;
-    });
+    scenario.takeLiquidationFactoryStub.callsFake(
+      async (params: FactoryTakeParams) => {
+        params.config.onFactoryExecutionFailure?.({
+          preBroadcast: true,
+          error: 'factory gas estimate failed',
+        });
+        return false;
+      }
+    );
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
       .resolves(true);
 
-    const stats = await handleDiscoveredTakeTarget(scenario.params as any);
+    const stats = await handleDiscoveredTakeTarget(scenario.params);
 
     expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
@@ -1111,19 +800,19 @@ describe('LI.FI discovery handlers', () => {
     expect(stats.hybridFallbackAttempts).to.equal(1);
     expect(stats.hybridFallbackSuccesses).to.equal(1);
 
-    const lifiLiquidation = takeLiquidationLifiStub.firstCall.args[0]
-      .liquidation as any;
+    const lifiLiquidation =
+      takeLiquidationLifiStub.firstCall.args[0].liquidation;
     expect(lifiLiquidation.collateral.eq(refreshedCollateral)).to.equal(true);
     expect(lifiLiquidation.auctionPrice.eq(refreshedAuctionPrice)).to.equal(
       true
     );
     expect(
-      lifiLiquidation.externalTakeQuoteEvaluation.quotedCollateralWad.eq(
+      lifiLiquidation.externalTakeQuoteEvaluation!.quotedCollateralWad!.eq(
         refreshedCollateral
       )
     ).to.equal(true);
     expect(
-      lifiLiquidation.externalTakeQuoteEvaluation.quotedAuctionPriceWad.eq(
+      lifiLiquidation.externalTakeQuoteEvaluation!.quotedAuctionPriceWad!.eq(
         refreshedAuctionPrice
       )
     ).to.equal(true);
@@ -1133,7 +822,7 @@ describe('LI.FI discovery handlers', () => {
     const scenario = createHybridLifiFallbackScenario();
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
-      .callsFake(async (params: any) => {
+      .callsFake(async (params: LifiTakeParams) => {
         params.config.onLifiExecutionFailure?.({
           preBroadcast: false,
           error: 'relay accepted LI.FI take before timeout',
@@ -1141,7 +830,7 @@ describe('LI.FI discovery handlers', () => {
         return false;
       });
 
-    const stats = await handleDiscoveredTakeTarget(scenario.params as any);
+    const stats = await handleDiscoveredTakeTarget(scenario.params);
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
     expect(scenario.takeLiquidationFactoryStub.called).to.equal(false);

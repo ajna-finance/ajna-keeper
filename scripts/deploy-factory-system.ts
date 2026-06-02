@@ -11,6 +11,7 @@ import {
 import {
   configureLifiAllowlists,
   deployLifiKeeperTaker,
+  getLifiProductionDeploymentGateMessages,
   hasProductionLifiConfig,
   registerLifiTakerInFactory,
   validateDetectedChainLifiProductionConfig,
@@ -730,18 +731,11 @@ function generateConfigUpdate(
   console.log('\n🚀 Next Steps:');
   console.log('1. Update your config file with the addresses above');
   if (addresses.lifiTaker) {
-    console.log(
-      `2. Run the LI.FI route-shape gate: AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary -- --config ${configPath}`
-    );
-    console.log(
-      `3. Run the LI.FI callback-path fork gate: AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=${configPath} npm run lifi-fork-execution-canary`
-    );
-    console.log(
-      '4. For non-Base LI.FI production support, run an equivalent reviewed chain-specific fork canary before live use'
-    );
-    console.log(
-      `5. After both LI.FI gates pass, test startup with: yarn start --config ${configPath}`
-    );
+    const gateMessages = getLifiProductionDeploymentGateMessages(configPath);
+    for (let index = 0; index < gateMessages.length; index++) {
+      const message = gateMessages[index];
+      console.log(`${index + 2}. ${message}`);
+    }
   } else {
     console.log(`2. Test with: yarn start --config ${configPath}`);
     console.log('3. Expected result: "Type: factory, Valid: true"');

@@ -6,6 +6,7 @@ import {
 import {
   LifiAction,
   LifiEstimate,
+  LifiFeeCost,
   LifiQuoteResponse,
   LifiStep,
 } from './schema';
@@ -22,6 +23,7 @@ export type NormalizedLifiRouteShape =
       kind: 'direct-swap';
       topLevelTool: string;
       executableTool: string;
+      topLevelFeeCosts?: readonly LifiFeeCost[];
       effectiveSwapFromAmount: BigNumber;
       hasFeeCollectionStep: false;
     }
@@ -30,7 +32,8 @@ export type NormalizedLifiRouteShape =
       topLevelTool: string;
       executableTool: string;
       executableSwapEstimate: LifiEstimate;
-      executableSwapStepFeeCosts: unknown;
+      topLevelFeeCosts?: readonly LifiFeeCost[];
+      executableSwapStepFeeCosts?: readonly LifiFeeCost[];
       effectiveSwapFromAmount: BigNumber;
       hasFeeCollectionStep: false;
     }
@@ -39,8 +42,9 @@ export type NormalizedLifiRouteShape =
       topLevelTool: string;
       executableTool: string;
       executableSwapEstimate: LifiEstimate;
-      executableSwapStepFeeCosts: unknown;
-      feeCollectionStepFeeCosts: unknown;
+      topLevelFeeCosts?: readonly LifiFeeCost[];
+      executableSwapStepFeeCosts?: readonly LifiFeeCost[];
+      feeCollectionStepFeeCosts?: readonly LifiFeeCost[];
       effectiveSwapFromAmount: BigNumber;
       sourceTokenFeeRaw: BigNumber;
       hasFeeCollectionStep: true;
@@ -70,21 +74,45 @@ export function normalizeLifiAllowedToolSet(
   return normalized;
 }
 
-function assertStepSemantics(params: {
+type ExpectedLifiStepType = 'swap' | 'lifi' | 'protocol';
+
+type NormalizedLifiStepSemantics = {
+  action: LifiAction;
+  estimate: LifiEstimate;
+  tool?: string;
+  actionFromAmount: BigNumber;
+};
+
+function normalizeLifiStepSemantics(params: {
   step: LifiStep;
   label: string;
-  expectedType: 'swap' | 'lifi';
+  expectedType: ExpectedLifiStepType;
+  expectedTool?: string;
   chainId: number;
   fromToken: string;
   toToken: string;
   fromAmount: BigNumber;
   takerAddress: string;
-  allowedTools: Set<string>;
-  requireAllowedTool: boolean;
+  allowedTools?: Set<string>;
+  requireAllowedTool?: boolean;
   requireTakerAddresses?: boolean;
-}): string | undefined {
+  expectedToolError?: string;
+}): NormalizedLifiStepSemantics {
   if (params.step.type !== params.expectedType) {
     throw new Error(`${params.label}.type must be ${params.expectedType}`);
+  }
+  const tool =
+    typeof params.step.tool === 'string'
+      ? params.step.tool.trim().toLowerCase()
+      : undefined;
+  if (
+    params.expectedTool !== undefined &&
+    tool !== params.expectedTool.toLowerCase()
+  ) {
+    throw new Error(
+      params.expectedToolError ??
+        `${params.label}.tool must be ${params.expectedTool}`
+    );
   }
   const action = requireObject<LifiAction>(
     params.step.action,
@@ -159,16 +187,17 @@ function assertStepSemantics(params: {
     });
   }
 
-  const tool =
-    typeof params.step.tool === 'string'
-      ? params.step.tool.trim().toLowerCase()
-      : undefined;
   if (params.requireAllowedTool) {
-    if (!tool || !params.allowedTools.has(tool)) {
+    if (!tool || !params.allowedTools?.has(tool)) {
       throw new Error(`${params.label}.tool is not allowlisted`);
     }
   }
-  return tool;
+  return {
+    action,
+    estimate,
+    tool,
+    actionFromAmount,
+  };
 }
 
 function getIncludedSteps(quote: LifiQuoteResponse, label: string): LifiStep[] {
@@ -229,68 +258,23 @@ function assertFeeCollectionStep(params: {
   chainId: number;
   sourceToken: string;
   fromAmount: BigNumber;
+  takerAddress: string;
 }): BigNumber {
-  if (!isFeeCollectionStep(params.step)) {
-    throw new Error(`${params.label} must be feeCollection protocol step`);
-  }
-  const action = requireObject<LifiAction>(
-    params.step.action,
-    `${params.label}.action`
-  );
-  const estimate = requireObject<LifiEstimate>(
-    params.step.estimate,
-    `${params.label}.estimate`
-  );
-  assertTokenAddress({
-    token: action.fromToken,
-    expected: params.sourceToken,
-    label: `${params.label}.action.fromToken`,
+  const step = normalizeLifiStepSemantics({
+    step: params.step,
+    label: params.label,
+    expectedType: 'protocol',
+    expectedTool: 'feecollection',
+    expectedToolError: `${params.label} must be feeCollection protocol step`,
     chainId: params.chainId,
+    fromToken: params.sourceToken,
+    toToken: params.sourceToken,
+    fromAmount: params.fromAmount,
+    takerAddress: params.takerAddress,
+    requireTakerAddresses: false,
   });
-  assertTokenAddress({
-    token: action.toToken,
-    expected: params.sourceToken,
-    label: `${params.label}.action.toToken`,
-    chainId: params.chainId,
-  });
-  const fromChainId = requireOptionalChainId(
-    action.fromChainId,
-    `${params.label}.action.fromChainId`
-  );
-  const toChainId = requireOptionalChainId(
-    action.toChainId,
-    `${params.label}.action.toChainId`
-  );
-  if (fromChainId !== undefined && fromChainId !== params.chainId) {
-    throw new Error(`${params.label}.action.fromChainId mismatch`);
-  }
-  if (toChainId !== undefined && toChainId !== params.chainId) {
-    throw new Error(`${params.label}.action.toChainId mismatch`);
-  }
-  if (
-    action.destinationCall !== undefined &&
-    action.destinationCall !== false
-  ) {
-    throw new Error(`${params.label}.action.destinationCall is not supported`);
-  }
-  const feeInput = requirePositiveAmount(
-    action.fromAmount,
-    `${params.label}.action.fromAmount`
-  );
-  if (!feeInput.eq(params.fromAmount)) {
-    throw new Error(`${params.label}.action.fromAmount mismatch`);
-  }
-  if (estimate.fromAmount !== undefined) {
-    const estimateFromAmount = requirePositiveAmount(
-      estimate.fromAmount,
-      `${params.label}.estimate.fromAmount`
-    );
-    if (!estimateFromAmount.eq(params.fromAmount)) {
-      throw new Error(`${params.label}.estimate.fromAmount mismatch`);
-    }
-  }
   const { quoteAmountRaw, routeMinOutRaw } = parseLifiEstimateOutputs({
-    estimate,
+    estimate: step.estimate,
     label: params.label,
   });
   if (!quoteAmountRaw.eq(routeMinOutRaw)) {
@@ -308,6 +292,7 @@ function getExecutableIncludedSwap(params: {
   chainId: number;
   fromToken: string;
   fromAmount: BigNumber;
+  takerAddress: string;
 }): {
   swapStep?: LifiStep;
   feeCollectionStep?: LifiStep;
@@ -344,6 +329,7 @@ function getExecutableIncludedSwap(params: {
       chainId: params.chainId,
       sourceToken: params.fromToken,
       fromAmount: params.fromAmount,
+      takerAddress: params.takerAddress,
     });
     return {
       swapStep: params.includedSteps[1],
@@ -362,8 +348,35 @@ function requireStepEstimate(step: LifiStep, label: string): LifiEstimate {
   return requireObject<LifiEstimate>(step.estimate, `${label}.estimate`);
 }
 
-function getLifiEstimateFeeCosts(estimate: LifiEstimate): unknown {
-  return estimate.feeCosts;
+function normalizeLifiFeeCosts(
+  value: unknown,
+  fieldName: string
+): readonly LifiFeeCost[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${fieldName} must be an array`);
+  }
+  return value as LifiFeeCost[];
+}
+
+function getOptionalLifiStepFeeCosts(
+  step: LifiStep,
+  fieldName: string
+): readonly LifiFeeCost[] | undefined {
+  if (
+    step.estimate === undefined ||
+    step.estimate === null ||
+    typeof step.estimate !== 'object' ||
+    Array.isArray(step.estimate)
+  ) {
+    return undefined;
+  }
+  return normalizeLifiFeeCosts(
+    (step.estimate as LifiEstimate).feeCosts,
+    fieldName
+  );
 }
 
 function requireStepTool(tool: string | undefined, label: string): string {
@@ -394,8 +407,12 @@ export function normalizeLifiRouteShape(params: {
   ) {
     throw new Error('LI.FI quote.tool must be a non-empty string');
   }
+  const topLevelFeeCosts = getOptionalLifiStepFeeCosts(
+    params.quote,
+    'LI.FI top-level feeCosts'
+  );
 
-  const topLevelTool = assertStepSemantics({
+  const topLevelStep = normalizeLifiStepSemantics({
     step: params.quote,
     label: 'LI.FI quote',
     expectedType: quoteType,
@@ -411,12 +428,14 @@ export function normalizeLifiRouteShape(params: {
         typeof params.quote.tool === 'string' &&
         params.quote.tool.trim().toLowerCase() !== 'lifi'),
   });
+  const topLevelTool = topLevelStep.tool;
   const included = getExecutableIncludedSwap({
     quote: params.quote,
     includedSteps: getIncludedSteps(params.quote, 'LI.FI quote'),
     chainId: params.chainId,
     fromToken: params.fromToken,
     fromAmount: params.fromAmount,
+    takerAddress: params.takerAddress,
   });
 
   if (!included.swapStep) {
@@ -425,13 +444,14 @@ export function normalizeLifiRouteShape(params: {
       kind: 'direct-swap',
       topLevelTool: directTopLevelTool,
       executableTool: directTopLevelTool,
+      topLevelFeeCosts,
       effectiveSwapFromAmount: included.effectiveSwapFromAmount,
       hasFeeCollectionStep: false,
     };
   }
   const resolvedTopLevelTool = requireStepTool(topLevelTool, 'LI.FI quote');
 
-  const executableTool = assertStepSemantics({
+  const executableStep = normalizeLifiStepSemantics({
     step: included.swapStep,
     label: 'LI.FI included swap step',
     expectedType: 'swap',
@@ -445,13 +465,10 @@ export function normalizeLifiRouteShape(params: {
     requireTakerAddresses: false,
   });
   const resolvedExecutableTool = requireStepTool(
-    executableTool,
+    executableStep.tool,
     'LI.FI included swap step'
   );
-  const executableSwapEstimate = requireStepEstimate(
-    included.swapStep,
-    'LI.FI included swap step'
-  );
+  const executableSwapEstimate = executableStep.estimate;
 
   if (included.hasFeeCollectionStep) {
     if (!included.feeCollectionStep) {
@@ -468,11 +485,14 @@ export function normalizeLifiRouteShape(params: {
       topLevelTool: resolvedTopLevelTool,
       executableTool: resolvedExecutableTool,
       executableSwapEstimate,
-      executableSwapStepFeeCosts: getLifiEstimateFeeCosts(
-        executableSwapEstimate
+      topLevelFeeCosts,
+      executableSwapStepFeeCosts: normalizeLifiFeeCosts(
+        executableSwapEstimate.feeCosts,
+        'LI.FI included executable swap step feeCosts'
       ),
-      feeCollectionStepFeeCosts: getLifiEstimateFeeCosts(
-        feeCollectionStepEstimate
+      feeCollectionStepFeeCosts: normalizeLifiFeeCosts(
+        feeCollectionStepEstimate.feeCosts,
+        'LI.FI included feeCollection step feeCosts'
       ),
       effectiveSwapFromAmount: included.effectiveSwapFromAmount,
       sourceTokenFeeRaw: params.fromAmount.sub(
@@ -487,7 +507,11 @@ export function normalizeLifiRouteShape(params: {
     topLevelTool: resolvedTopLevelTool,
     executableTool: resolvedExecutableTool,
     executableSwapEstimate,
-    executableSwapStepFeeCosts: getLifiEstimateFeeCosts(executableSwapEstimate),
+    topLevelFeeCosts,
+    executableSwapStepFeeCosts: normalizeLifiFeeCosts(
+      executableSwapEstimate.feeCosts,
+      'LI.FI included executable swap step feeCosts'
+    ),
     effectiveSwapFromAmount: included.effectiveSwapFromAmount,
     hasFeeCollectionStep: false,
   };

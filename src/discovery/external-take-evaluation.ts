@@ -1,60 +1,24 @@
 import { BigNumber } from 'ethers';
-import {
-  ExternalTakePathKind,
-  LiquiditySource,
-  isFactoryDynamicSource,
-} from '../config';
 import { ExternalTakeQuoteEvaluation } from '../take/types';
 
-export function isOneInchExternalTakeRoute(
-  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
-): boolean {
-  return (
-    quoteEvaluation?.externalTakePath === 'oneinch' ||
-    quoteEvaluation?.selectedLiquiditySource === LiquiditySource.ONEINCH
-  );
-}
+export {
+  bindExternalTakeRoute,
+  isFactoryExternalTakeRoute,
+  isLifiExternalTakeRoute,
+  isOneInchExternalTakeRoute,
+  resolveExternalTakePathFromEvaluation,
+  resolveExternalTakePathFromSource,
+  resolveExternalTakeRouteIdentity,
+} from '../take/external-take-route';
+export type {
+  ExternalTakeRouteBinding,
+  ExternalTakeRouteBindingFailure,
+  ExternalTakeRouteIdentity,
+} from '../take/external-take-route';
 
-export function isFactoryExternalTakeRoute(
-  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
-): boolean {
-  const source = quoteEvaluation?.selectedLiquiditySource;
-  return (
-    quoteEvaluation?.externalTakePath === 'factory' ||
-    (source !== undefined && isFactoryDynamicSource(source))
-  );
-}
-
-export function isLifiExternalTakeRoute(
-  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
-): boolean {
-  return (
-    quoteEvaluation?.externalTakePath === 'lifi' ||
-    quoteEvaluation?.selectedLiquiditySource === LiquiditySource.LIFI
-  );
-}
-
-export function resolveExternalTakePathFromEvaluation(
-  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
-): ExternalTakePathKind | undefined {
-  if (quoteEvaluation?.externalTakePath !== undefined) {
-    return quoteEvaluation.externalTakePath;
-  }
-  const source = quoteEvaluation?.selectedLiquiditySource;
-  if (source === LiquiditySource.ONEINCH) {
-    return 'oneinch';
-  }
-  if (source === LiquiditySource.LIFI) {
-    return 'lifi';
-  }
-  return source !== undefined && isFactoryDynamicSource(source)
-    ? 'factory'
-    : undefined;
-}
-
-export function cloneExternalTakeQuoteEvaluation(
-  quoteEvaluation: ExternalTakeQuoteEvaluation
-): ExternalTakeQuoteEvaluation {
+export function cloneExternalTakeQuoteEvaluation<
+  TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
+>(quoteEvaluation: TQuoteEvaluation): TQuoteEvaluation {
   return {
     ...quoteEvaluation,
     routeProfitability: quoteEvaluation.routeProfitability
@@ -70,11 +34,13 @@ export function cloneExternalTakeQuoteEvaluation(
   };
 }
 
-export function withExternalTakeApprovalContext(params: {
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
+export function withExternalTakeApprovalContext<
+  TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
+>(params: {
+  quoteEvaluation: TQuoteEvaluation;
   auctionPrice: BigNumber;
   collateral: BigNumber;
-}): ExternalTakeQuoteEvaluation {
+}): TQuoteEvaluation {
   return {
     ...params.quoteEvaluation,
     quotedAuctionPriceWad: params.auctionPrice,

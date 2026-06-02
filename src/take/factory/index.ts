@@ -13,6 +13,7 @@ import {
   TakeLiquidationPlan,
 } from '../types';
 import { ExternalTakeAdapter } from '../engine';
+import { approveFactoryQuoteForExecution } from '../external-take-quote-approval';
 import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
@@ -22,7 +23,6 @@ import {
   FactoryTakeParams,
   applyFactoryRouteProfitabilityPolicy,
   buildFactoryRouteEvaluationContext,
-  deriveApprovedMinOutRaw,
   filterFactoryRouteCandidatesByAvailability,
   formatFactoryRouteCandidate,
   getFactoryRouteCandidates,
@@ -464,128 +464,6 @@ export async function getFactoryTakeQuoteEvaluation(
 function failFactoryTakeExecution(message: string): false {
   logger.error(message);
   return false;
-}
-
-type FactoryQuoteApprovalResult =
-  | { approved: true; quoteEvaluation: ApprovedFactoryQuoteEvaluation }
-  | { approved: false; reason: string };
-
-function approveFactoryQuoteForExecution(params: {
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
-  poolName: string;
-  borrower: string;
-}): FactoryQuoteApprovalResult {
-  const { quoteEvaluation, poolName, borrower } = params;
-
-  if (!quoteEvaluation.isTakeable) {
-    return {
-      approved: false,
-      reason: `Factory: Take quote no longer satisfies execution policy for ${poolName}/${borrower}: ${quoteEvaluation.reason ?? 'not takeable'}`,
-    };
-  }
-
-  if (!quoteEvaluation.quoteAmountRaw) {
-    return {
-      approved: false,
-      reason: `Factory: Missing raw quote amount for ${poolName}/${borrower}; refusing to send an unbounded swap`,
-    };
-  }
-
-  const selectedLiquiditySource = quoteEvaluation.selectedLiquiditySource;
-  if (selectedLiquiditySource === undefined) {
-    return {
-      approved: false,
-      reason: `Factory: Missing selected liquidity source for ${poolName}/${borrower}; refusing to execute an unbound route`,
-    };
-  }
-
-  if (
-    quoteEvaluation.externalTakePath !== undefined &&
-    quoteEvaluation.externalTakePath !== 'factory'
-  ) {
-    return {
-      approved: false,
-      reason: `Factory: Received non-factory approved path for ${poolName}/${borrower}; refusing to execute an unbound route`,
-    };
-  }
-
-  const approvedMinOutRaw = deriveApprovedMinOutRaw({
-    routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
-    profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
-    fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-  });
-  if (!approvedMinOutRaw) {
-    return {
-      approved: false,
-      reason: `Factory: Missing approved min-out floor for ${poolName}/${borrower}; refusing to execute an unbound swap`,
-    };
-  }
-
-  const approvedBase = {
-    ...quoteEvaluation,
-    isTakeable: true as const,
-    quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
-    approvedMinOutRaw,
-  };
-
-  if (selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
-    if (quoteEvaluation.selectedFeeTier === undefined) {
-      return {
-        approved: false,
-        reason: `Factory: Missing selected fee tier for ${poolName}/${borrower}; refusing to execute an unbound route`,
-      };
-    }
-    return {
-      approved: true,
-      quoteEvaluation: {
-        ...approvedBase,
-        externalTakePath: 'factory',
-        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-        selectedFeeTier: quoteEvaluation.selectedFeeTier,
-      },
-    };
-  }
-
-  if (selectedLiquiditySource === LiquiditySource.SUSHISWAP) {
-    if (quoteEvaluation.selectedFeeTier === undefined) {
-      return {
-        approved: false,
-        reason: `Factory: Missing selected fee tier for ${poolName}/${borrower}; refusing to execute an unbound route`,
-      };
-    }
-    return {
-      approved: true,
-      quoteEvaluation: {
-        ...approvedBase,
-        externalTakePath: 'factory',
-        selectedLiquiditySource: LiquiditySource.SUSHISWAP,
-        selectedFeeTier: quoteEvaluation.selectedFeeTier,
-      },
-    };
-  }
-
-  if (selectedLiquiditySource === LiquiditySource.CURVE) {
-    if (!quoteEvaluation.curvePool) {
-      return {
-        approved: false,
-        reason: `Factory: Missing selected Curve pool for ${poolName}/${borrower}; refusing to execute an unbound route`,
-      };
-    }
-    return {
-      approved: true,
-      quoteEvaluation: {
-        ...approvedBase,
-        externalTakePath: 'factory',
-        selectedLiquiditySource: LiquiditySource.CURVE,
-        curvePool: quoteEvaluation.curvePool,
-      },
-    };
-  }
-
-  return {
-    approved: false,
-    reason: `Factory: Unsupported liquidity source: ${selectedLiquiditySource}`,
-  };
 }
 
 function recordExecutedFactoryRouteSuccess(params: {

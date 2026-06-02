@@ -2,21 +2,18 @@ import {
   ActiveExternalTakeRouteSelectionMode,
   ExternalTakePathKind,
   LiquiditySource,
+  isFactoryDynamicSource,
 } from '../config';
 import { logger } from '../logging';
 import { ExternalTakeAdapter } from '../take/engine';
 import { createNoExternalTakeAdapter } from '../take/one-inch-adapter';
 import { DiscoveryExternalTakeApprover } from './external-take-approval';
-import { createDiscoveryExternalTakeProviderRegistry } from './external-take-providers';
-import { DiscoveryExternalExecutionConfig } from './external-take-provider';
 import {
-  AutoDiscoverTakePolicyRuntime,
-  FactoryPathQuoteFn,
-  LifiCircuitOutcome,
-  LifiPathQuoteFn,
-  OneInchCircuitOutcome,
-  OneInchPathQuoteFn,
-} from './external-take-quotes';
+  DiscoveryExternalTakeProviderRegistry,
+  DiscoveryExternalTakeRouteProvider,
+} from './external-take-providers';
+import { DiscoveryExternalExecutionConfig } from './external-take-provider';
+import { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
 import {
   DiscoveredTakeTargetStats,
   recordSuccessfulExternalTakeRouteStats,
@@ -26,7 +23,67 @@ import {
   executeHybridExternalTakeForDiscovery,
 } from './hybrid-external-take';
 import { ResolvedTakeTarget } from './targets';
-import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
+
+function createProviderBackedDirectAdapter(params: {
+  kind: 'oneinch' | 'lifi' | 'factory';
+  provider: DiscoveryExternalTakeRouteProvider;
+  stats: DiscoveredTakeTargetStats;
+  onFailedAttempt?: (params: {
+    poolName: string;
+    borrower: string;
+    circuitOpenReason?: string;
+  }) => void;
+}): ExternalTakeAdapter<ResolvedTakeTarget, DiscoveryExternalExecutionConfig> {
+  return {
+    kind: params.kind,
+    evaluateExternalTake: async ({
+      pool,
+      signer,
+      poolConfig,
+      price,
+      auctionPrice,
+      collateral,
+    }) =>
+      params.provider.quote({
+        pool,
+        signer,
+        poolConfig,
+        price,
+        auctionPrice,
+        collateral,
+        intent: { kind: 'direct' },
+      }),
+    executeExternalTake: async ({
+      pool,
+      signer,
+      poolConfig,
+      liquidation,
+      config,
+    }) => {
+      const attempt = await params.provider.execute({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config,
+      });
+      if (attempt.succeeded) {
+        recordSuccessfulExternalTakeRouteStats(
+          params.stats,
+          liquidation.externalTakeQuoteEvaluation,
+          config.dryRun === true
+        );
+      } else {
+        params.onFailedAttempt?.({
+          poolName: pool.name,
+          borrower: liquidation.borrower,
+          circuitOpenReason: attempt.circuitOpenReason,
+        });
+      }
+      return attempt.succeeded;
+    },
+  };
+}
 
 export function createExternalTakeAdapterForDiscovery(params: {
   target: ResolvedTakeTarget;
@@ -34,22 +91,10 @@ export function createExternalTakeAdapterForDiscovery(params: {
   externalTakePaths: ExternalTakePathKind[];
   routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   probeTimeoutMs: number;
-  quoteOneInchPath: OneInchPathQuoteFn;
-  quoteKeeperTakerOneInchTake: OneInchPathQuoteFn;
-  quoteFactoryPath: FactoryPathQuoteFn;
-  quoteLifiPath: LifiPathQuoteFn;
   approveExternalTake: DiscoveryExternalTakeApprover;
-  recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
-  recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
   stats: DiscoveredTakeTargetStats;
-  config: DiscoveryExecutionConfig;
-  rpcCache?: DiscoveryRpcCache;
+  providerRegistry: DiscoveryExternalTakeProviderRegistry;
 }): ExternalTakeAdapter<ResolvedTakeTarget, DiscoveryExternalExecutionConfig> {
-  const providerRegistry = createDiscoveryExternalTakeProviderRegistry({
-    config: params.config,
-    rpcCache: params.rpcCache,
-  });
-
   if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
     return {
       kind: 'hybrid',
@@ -72,12 +117,8 @@ export function createExternalTakeAdapterForDiscovery(params: {
           price,
           auctionPrice,
           collateral,
-          quoteOneInchPath: params.quoteOneInchPath,
-          quoteFactoryPath: params.quoteFactoryPath,
-          quoteLifiPath: params.quoteLifiPath,
+          providerRegistry: params.providerRegistry,
           approveExternalTake: params.approveExternalTake,
-          recordOneInchCircuitOutcome: params.recordOneInchCircuitOutcome,
-          recordLifiCircuitOutcome: params.recordLifiCircuitOutcome,
           stats: params.stats,
         }),
       executeExternalTake: async ({
@@ -94,7 +135,7 @@ export function createExternalTakeAdapterForDiscovery(params: {
           liquidation,
           config,
           externalTakePaths: params.externalTakePaths,
-          providerRegistry,
+          providerRegistry: params.providerRegistry,
           approveExternalTake: params.approveExternalTake,
           stats: params.stats,
         }),
@@ -102,140 +143,34 @@ export function createExternalTakeAdapterForDiscovery(params: {
   }
 
   if (params.target.take.liquiditySource === LiquiditySource.ONEINCH) {
-    return {
+    return createProviderBackedDirectAdapter({
       kind: 'oneinch',
-      evaluateExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-      }) =>
-        params.quoteKeeperTakerOneInchTake({
-          pool,
-          signer,
-          poolConfig,
-          price,
-          auctionPrice,
-          collateral,
-        }),
-      executeExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config,
-      }) => {
-        const attempt = await providerRegistry.oneInchProvider.execute({
-          pool,
-          signer,
-          poolConfig,
-          liquidation,
-          config,
-        });
-        if (attempt.succeeded) {
-          recordSuccessfulExternalTakeRouteStats(
-            params.stats,
-            liquidation.externalTakeQuoteEvaluation,
-            config.dryRun === true
-          );
-        }
-        return attempt.succeeded;
-      },
-    };
+      provider: params.providerRegistry.oneInchProvider,
+      stats: params.stats,
+    });
   }
 
   if (params.target.take.liquiditySource === LiquiditySource.LIFI) {
-    return {
+    return createProviderBackedDirectAdapter({
       kind: 'lifi',
-      evaluateExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-      }) =>
-        params.quoteLifiPath({
-          pool,
-          signer,
-          poolConfig,
-          price,
-          auctionPrice,
-          collateral,
-        }),
-      executeExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config,
-      }) => {
-        const attempt = await providerRegistry.lifiProvider.execute({
-          pool,
-          signer,
-          poolConfig,
-          liquidation,
-          config,
-        });
-        if (attempt.succeeded) {
-          recordSuccessfulExternalTakeRouteStats(
-            params.stats,
-            liquidation.externalTakeQuoteEvaluation,
-            config.dryRun === true
-          );
-        } else if (attempt.circuitOpenReason) {
+      provider: params.providerRegistry.lifiProvider,
+      stats: params.stats,
+      onFailedAttempt: ({ poolName, borrower, circuitOpenReason }) => {
+        if (circuitOpenReason) {
           logger.warn(
-            `LI.FI execution refresh circuit is open for ${pool.name}/${liquidation.borrower}; skipping direct LI.FI external take`
+            `LI.FI execution refresh circuit is open for ${poolName}/${borrower}; skipping direct LI.FI external take`
           );
         }
-        return attempt.succeeded;
       },
-    };
+    });
   }
 
-  if (params.target.take.liquiditySource !== undefined) {
-    return {
+  if (isFactoryDynamicSource(params.target.take.liquiditySource)) {
+    return createProviderBackedDirectAdapter({
       kind: 'factory',
-      evaluateExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        auctionPrice,
-        collateral,
-      }) =>
-        params.quoteFactoryPath({
-          pool,
-          signer,
-          poolConfig,
-          auctionPrice,
-          collateral,
-        }),
-      executeExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config,
-      }) => {
-        const attempt = await providerRegistry.factoryProvider.execute({
-          pool,
-          signer,
-          poolConfig,
-          liquidation,
-          config,
-        });
-        if (attempt.succeeded) {
-          recordSuccessfulExternalTakeRouteStats(
-            params.stats,
-            liquidation.externalTakeQuoteEvaluation,
-            config.dryRun === true
-          );
-        }
-        return attempt.succeeded;
-      },
-    };
+      provider: params.providerRegistry.factoryProvider,
+      stats: params.stats,
+    });
   }
 
   return createNoExternalTakeAdapter();

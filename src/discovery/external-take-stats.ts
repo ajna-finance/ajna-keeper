@@ -4,7 +4,8 @@ import {
   isFactoryExternalTakeRoute,
   isOneInchExternalTakeRoute,
   resolveExternalTakePathFromEvaluation,
-} from './external-take-evaluation';
+  resolveExternalTakeRouteIdentity,
+} from '../take/external-take-route';
 
 export interface ExternalTakePathCounters {
   approved: number;
@@ -157,6 +158,42 @@ export function getExternalTakePathCounter(params: {
   return params.stats.externalTakeByPath[params.path]?.[params.field] ?? 0;
 }
 
+export function recordExternalTakePathFailureStats(params: {
+  stats: Pick<
+    DiscoveredTakeTargetStats,
+    | 'externalTakeByPath'
+    | 'oneInchPreBroadcastFailures'
+    | 'oneInchPostSubmissionFailures'
+    | 'factoryPreBroadcastFailures'
+    | 'factoryPostSubmissionFailures'
+  >;
+  path: ExternalTakePathKind;
+  preBroadcast: boolean;
+}): void {
+  const field = params.preBroadcast
+    ? 'preBroadcastFailures'
+    : 'postSubmissionFailures';
+  const pathCounters = getExternalTakePathCounters(params.stats, params.path);
+  pathCounters[field] += 1;
+
+  if (params.path === 'oneinch') {
+    if (params.preBroadcast) {
+      params.stats.oneInchPreBroadcastFailures += 1;
+    } else {
+      params.stats.oneInchPostSubmissionFailures += 1;
+    }
+    return;
+  }
+
+  if (params.path === 'factory') {
+    if (params.preBroadcast) {
+      params.stats.factoryPreBroadcastFailures += 1;
+    } else {
+      params.stats.factoryPostSubmissionFailures += 1;
+    }
+  }
+}
+
 export function incrementExternalTakeRouteStats(params: {
   stats: ExternalTakeRouteCounterStats;
   quoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
@@ -164,6 +201,7 @@ export function incrementExternalTakeRouteStats(params: {
   pathCounter?: ExternalTakePathCounterField;
 }): void {
   const { stats, quoteEvaluation, keys } = params;
+  const routeIdentity = resolveExternalTakeRouteIdentity(quoteEvaluation);
   if (params.pathCounter !== undefined) {
     incrementExternalTakePathCounter({
       stats,
@@ -178,7 +216,7 @@ export function incrementExternalTakeRouteStats(params: {
     stats[keys.factory] += 1;
   }
 
-  switch (quoteEvaluation?.selectedLiquiditySource) {
+  switch (routeIdentity?.source) {
     case LiquiditySource.UNISWAPV3:
       stats[keys.uniswapV3] += 1;
       break;

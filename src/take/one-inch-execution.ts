@@ -42,6 +42,7 @@ import {
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
 } from './external-take-policy';
+import { approveOneInchQuoteForExecution } from './external-take-quote-approval';
 
 async function getOneInchTokenDecimals(params: {
   signer: Signer;
@@ -303,76 +304,6 @@ async function computeOneInchAtomicMinReturnAmount(params: {
   return approvedMinOutRaw;
 }
 
-type OneInchQuoteApprovalResult =
-  | { approved: true; quoteEvaluation: ApprovedOneInchQuoteEvaluation }
-  | { approved: false; reason: string };
-
-function approveOneInchQuoteForExecution(params: {
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
-  poolName: string;
-  borrower: string;
-}): OneInchQuoteApprovalResult {
-  const { quoteEvaluation, poolName, borrower } = params;
-
-  if (!quoteEvaluation.isTakeable) {
-    return {
-      approved: false,
-      reason: `1inch atomic take quote no longer satisfies execution policy for ${poolName}/${borrower}: ${quoteEvaluation.reason ?? 'not takeable'}`,
-    };
-  }
-
-  if (!quoteEvaluation.quoteAmountRaw) {
-    return {
-      approved: false,
-      reason: `1inch atomic take is missing raw quote amount for ${poolName}/${borrower}; refusing to send an unbounded swap`,
-    };
-  }
-
-  if (
-    quoteEvaluation.externalTakePath !== undefined &&
-    quoteEvaluation.externalTakePath !== 'oneinch'
-  ) {
-    return {
-      approved: false,
-      reason: `1inch atomic take received non-1inch approved path for ${poolName}/${borrower}`,
-    };
-  }
-
-  if (
-    quoteEvaluation.selectedLiquiditySource !== undefined &&
-    quoteEvaluation.selectedLiquiditySource !== LiquiditySource.ONEINCH
-  ) {
-    return {
-      approved: false,
-      reason: `1inch atomic take received non-1inch approved source for ${poolName}/${borrower}`,
-    };
-  }
-
-  const approvedMinOutRaw = factoryShared.deriveApprovedMinOutRaw({
-    routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
-    profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
-    fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-  });
-  if (!approvedMinOutRaw) {
-    return {
-      approved: false,
-      reason: `1inch atomic take is missing approved min-out floor for ${poolName}/${borrower}; refusing to execute an unbound swap`,
-    };
-  }
-
-  return {
-    approved: true,
-    quoteEvaluation: {
-      ...quoteEvaluation,
-      isTakeable: true,
-      externalTakePath: 'oneinch',
-      quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
-      selectedLiquiditySource: LiquiditySource.ONEINCH,
-      approvedMinOutRaw,
-    },
-  };
-}
-
 interface TakeLiquidationParams {
   pool: FungiblePool;
   signer: Signer;
@@ -394,9 +325,7 @@ export async function takeLiquidation({
   const suppliedQuoteEvaluation = liquidation.externalTakeQuoteEvaluation;
   const usesOneInchExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ||
-    suppliedQuoteEvaluation?.externalTakePath === 'oneinch' ||
-    suppliedQuoteEvaluation?.selectedLiquiditySource ===
-      LiquiditySource.ONEINCH;
+    suppliedQuoteEvaluation?.externalTakePath === 'oneinch';
   if (!usesOneInchExecutionPath) {
     logger.error(
       `Valid liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`

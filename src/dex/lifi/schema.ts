@@ -1,10 +1,11 @@
 import { BigNumber } from 'ethers';
-import { LifiFeeCostPolicy } from '../../config';
 
 export const DEFAULT_LIFI_API_BASE_URL = 'https://li.quest/v1';
 export const DEFAULT_LIFI_SLIPPAGE = 0.005;
 export const DEFAULT_LIFI_QUOTE_TIMEOUT_MS = 2_000;
 export const DEFAULT_LIFI_QUOTE_MAX_AGE_MS = 30_000;
+
+export type LifiFeeCostPolicy = 'included_only' | 'reject_all';
 export const DEFAULT_LIFI_FEE_COST_POLICY: LifiFeeCostPolicy = 'included_only';
 
 export interface LifiQuoteRequest {

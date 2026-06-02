@@ -1,12 +1,66 @@
 import fs from 'fs';
 import path from 'path';
 import { expect } from 'chai';
+import { KeeperConfig, LifiDexConfig } from '../../src/config';
+import {
+  LIFI_FORK_CANARY_BASE_CHAIN_ID,
+  getLifiForkCanaryApiKey,
+  resolveLifiForkCanaryConfig,
+} from '../integration/helpers/lifi-fork-canary-config';
+
+const CALL_TARGET = '0x1111111111111111111111111111111111111111';
+const APPROVAL_SPENDER = '0x2222222222222222222222222222222222222222';
+const FACTORY = '0x3333333333333333333333333333333333333333';
+const LIFI_TAKER = '0x4444444444444444444444444444444444444444';
+const SELECTOR = '0xABCDEF12';
+
+function keeperConfigWithLifi(lifi: LifiDexConfig): KeeperConfig {
+  return {
+    network: {
+      rpcUrl: 'http://localhost:8545',
+      subgraph: { url: 'http://localhost:8000' },
+    },
+    signer: { keystore: '/tmp/keeper.json' },
+    runtime: { logLevel: 'info', delayBetweenRuns: 60 },
+    ajna: {
+      erc20PoolFactory: '0x5555555555555555555555555555555555555555',
+      erc721PoolFactory: '0x6666666666666666666666666666666666666666',
+      poolUtils: '0x7777777777777777777777777777777777777777',
+      positionManager: '0x8888888888888888888888888888888888888888',
+      ajnaToken: '0x9999999999999999999999999999999999999999',
+      grantFund: '',
+      burnWrapper: '',
+      lenderHelper: '',
+    },
+    manual: { pools: [] },
+    takers: {
+      factory: FACTORY,
+      contracts: { Lifi: LIFI_TAKER },
+    },
+    dex: { lifi },
+  };
+}
+
+function productionConfig(
+  overrides: Partial<Extract<LifiDexConfig, { mode: 'production' }>> = {}
+): KeeperConfig {
+  return keeperConfigWithLifi({
+    mode: 'production',
+    allowExchanges: ['Uniswap'],
+    callTargetAllowlist: {
+      [LIFI_FORK_CANARY_BASE_CHAIN_ID]: [CALL_TARGET],
+    },
+    approvalSpenderAllowlist: {
+      [LIFI_FORK_CANARY_BASE_CHAIN_ID]: [APPROVAL_SPENDER],
+    },
+    selectorAllowlist: {
+      [LIFI_FORK_CANARY_BASE_CHAIN_ID]: { [CALL_TARGET]: [SELECTOR] },
+    },
+    ...overrides,
+  });
+}
 
 describe('LI.FI fork execution canary', () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, '../integration/lifi-fork-execution-canary.test.ts'),
-    'utf8'
-  );
   const hardhatConfig = fs.readFileSync(
     path.join(__dirname, '../../hardhat.config.ts'),
     'utf8'
@@ -25,17 +79,6 @@ describe('LI.FI fork execution canary', () => {
       'npx hardhat test tests/integration/lifi-fork-execution-canary.test.ts'
     );
     expect(script).to.not.include('--network');
-    expect(source).to.include("network.name !== 'hardhat'");
-    expect(source).to.include("process.env.FORK_NETWORK ?? 'mainnet'");
-    expect(source).to.include("process.env.HARDHAT_CHAIN_ID ?? '31337'");
-    expect(source).to.include('function requireConfiguredBaseForkRpc');
-    expect(source).to.include('Base fork RPC is required');
-    expect(source).to.include('AJNA_AGENT_RPC_URL');
-    expect(source).to.include('AJNA_RPC_URL_BASE');
-    expect(source).to.include('BASE_RPC_URL');
-    expect(source).to.include('ALCHEMY_API_KEY');
-    expect(source).to.include('requireConfiguredBaseForkRpc();');
-    expect(source).to.include('buildForkCanaryConfig();');
   });
 
   it('allows the Base fork canary to use documented Base RPC env fallbacks', () => {
@@ -50,148 +93,157 @@ describe('LI.FI fork execution canary', () => {
     );
   });
 
-  it('requires reviewed production keeper config before fetching executable calldata', () => {
-    expect(source).to.include('readConfigFile');
-    expect(source).to.include('function loadForkCanaryKeeperConfig');
-    expect(source).to.include('AJNA_AGENT_LIFI_FORK_CANARY_CONFIG');
-    expect(source).to.include('AJNA_AGENT_LIFI_CANARY_CONFIG');
-    expect(source).to.include(
-      'LI.FI fork canary requires reviewed production keeper config with production dex.lifi'
-    );
-    expect(source).to.include(
-      'LI.FI fork canary requires reviewed production keeper config'
-    );
-    expect(source).to.include(
-      'LI.FI fork canary requires config.takers.contracts.Lifi'
-    );
-    expect(source).to.include(
-      'LI.FI fork canary requires config.takers.factory'
-    );
-    expect(source).to.include(
-      'LI.FI fork canary requires config.dex.lifi.allowExchanges'
-    );
-    expect(source).to.include(
-      'config.dex.lifi.callTargetAllowlist.${BASE_CHAIN_ID}'
-    );
-    expect(source).to.include(
-      'config.dex.lifi.approvalSpenderAllowlist.${BASE_CHAIN_ID}'
-    );
-    expect(source).to.include('FORK_CANARY_POLICY_OVERRIDE_ENVS');
-    expect(source).to.include('refusing LI.FI policy env overrides');
-    expect(source).to.include('AJNA_AGENT_LIFI_FORK_CANARY_PROFIT_FLOOR_RAW');
-    expect(source).to.include('approvedMinOutRaw');
-    expect(source).to.include('validateLifiQuote');
-    expect(source).to.include('setCallTarget');
-    expect(source).to.include('setApprovalSpender');
-    expect(source).to.include('setCallSelector');
+  it('resolves reviewed production keeper config before executable calldata fetching', () => {
+    const config = resolveLifiForkCanaryConfig({
+      keeperConfig: productionConfig(),
+      env: {},
+    });
+
+    expect(config.mode).to.equal('production');
+    expect(config.configuredFactoryAddress).to.equal(FACTORY);
+    expect(config.configuredTakerAddress).to.equal(LIFI_TAKER);
+    expect(config.allowExchanges).to.deep.equal(['Uniswap']);
+    expect(
+      config.callTargetAllowlist[LIFI_FORK_CANARY_BASE_CHAIN_ID]
+    ).to.deep.equal([CALL_TARGET]);
+    expect(
+      config.approvalSpenderAllowlist[LIFI_FORK_CANARY_BASE_CHAIN_ID]
+    ).to.deep.equal([APPROVAL_SPENDER]);
+    expect(
+      config.selectorAllowlist[LIFI_FORK_CANARY_BASE_CHAIN_ID]
+    ).to.deep.equal({
+      [CALL_TARGET]: ['0xabcdef12'],
+    });
   });
 
-  it('verifies configured production factory registration before local callback setup', () => {
-    expect(source).to.include(
-      'function requireConfiguredProductionTakerRegistration'
+  it('rejects policy env overrides for the fork execution canary', () => {
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig(),
+        env: { AJNA_AGENT_LIFI_FORK_CANARY_ALLOW_EXCHANGES: 'sushiswap' },
+      })
+    ).to.throw('refusing LI.FI policy env overrides');
+  });
+
+  it('requires production mode, configured factory, and configured LI.FI taker', () => {
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: keeperConfigWithLifi({
+          mode: 'canary',
+          allowExchanges: ['uniswap'],
+        }),
+        env: {},
+      })
+    ).to.throw(
+      'LI.FI fork canary requires reviewed production keeper config with production dex.lifi'
     );
-    expect(source).to.include(
-      'configuredFactory.takerContracts(LiquiditySource.LIFI)'
-    );
-    expect(source).to.include(
-      'LI.FI configured factory registration mismatch'
-    );
-    expect(source).to.include(
-      'config.takers.contracts.Lifi'
-    );
-    const registrationCheckIndex = source.indexOf(
-      'await requireConfiguredProductionTakerRegistration({'
-    );
-    const localPoolDeployIndex = source.indexOf(
-      'const pool = await new MockAtomicSwapPool__factory(owner).deploy'
-    );
-    const quoteFetchIndex = source.indexOf('await fetchLifiQuote({');
-    expect(registrationCheckIndex).to.be.greaterThan(-1);
-    expect(localPoolDeployIndex).to.be.greaterThan(registrationCheckIndex);
-    expect(quoteFetchIndex).to.be.greaterThan(registrationCheckIndex);
+
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: {
+          ...productionConfig(),
+          takers: { contracts: { Lifi: LIFI_TAKER } },
+        },
+        env: {},
+      })
+    ).to.throw('LI.FI fork canary requires config.takers.factory');
   });
 
   it('requires the default LI.FI API base URL before fetching executable calldata', () => {
-    expect(source).to.include('DEFAULT_LIFI_API_BASE_URL');
-    expect(source).to.include('function normalizeApiBaseUrlForGate');
-    expect(source).to.include('function requireDefaultLifiApiBaseUrl');
-    expect(source).to.include(
-      'requireDefaultLifiApiBaseUrl(configured.apiBaseUrl);'
-    );
-    expect(source).to.include(
-      'LI.FI fork canary requires the default LI.FI API base URL'
-    );
-    const apiBaseCheckIndex = source.indexOf(
-      'requireDefaultLifiApiBaseUrl(configured.apiBaseUrl);'
-    );
-    const quoteFetchIndex = source.indexOf('await fetchLifiQuote({');
-    expect(apiBaseCheckIndex).to.be.greaterThan(-1);
-    expect(quoteFetchIndex).to.be.greaterThan(apiBaseCheckIndex);
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig({
+          apiBaseUrl: 'https://mock.lifi.local/v1',
+        }),
+        env: {},
+      })
+    ).to.throw('requires the default LI.FI API base URL');
   });
 
   it('rejects broad exchange filters before fetching executable calldata', () => {
-    expect(source).to.include('isBroadLifiExchangeFilter');
-    expect(source).to.include('function hasBroadForkExchangeFilter');
-    expect(source).to.include(
-      'config.dex.lifi.allowBroadExchangeFilters is canary-only'
-    );
-    expect(source).to.include('broad filter keywords are not allowed');
-    const broadModeCheckIndex = source.indexOf(
-      'config.dex.lifi.allowBroadExchangeFilters is canary-only'
-    );
-    const broadFilterCheckIndex = source.indexOf(
-      'hasBroadForkExchangeFilter(configured)'
-    );
-    const quoteFetchIndex = source.indexOf('await fetchLifiQuote({');
-    expect(broadModeCheckIndex).to.be.greaterThan(-1);
-    expect(broadFilterCheckIndex).to.be.greaterThan(-1);
-    expect(quoteFetchIndex).to.be.greaterThan(broadModeCheckIndex);
-    expect(quoteFetchIndex).to.be.greaterThan(broadFilterCheckIndex);
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig({
+          allowBroadExchangeFilters: true as false,
+        }),
+        env: {},
+      })
+    ).to.throw('config.dex.lifi.allowBroadExchangeFilters is canary-only');
+
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig({ allowExchanges: ['all'] }),
+        env: {},
+      })
+    ).to.throw('broad filter keywords are not allowed');
   });
 
-  it('validates LI.FI exchange filters with tools before fetching executable calldata', () => {
-    expect(source).to.include('fetchLifiTools');
-    expect(source).to.include('assertLifiToolsContainFilters');
-    expect(source).to.include('normalizeLifiExchangeFilters');
-    expect(source).to.include('function requireLifiToolsContainForkFilters');
-    const toolsCheckIndex = source.indexOf(
-      'await requireLifiToolsContainForkFilters({'
-    );
-    const quoteFetchIndex = source.indexOf('await fetchLifiQuote({');
-    expect(toolsCheckIndex).to.be.greaterThan(-1);
-    expect(quoteFetchIndex).to.be.greaterThan(toolsCheckIndex);
-  });
+  it('validates selector policy coverage before fetching executable calldata', () => {
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig({
+          selectorAllowlist: {
+            [LIFI_FORK_CANARY_BASE_CHAIN_ID]: {},
+          },
+        }),
+        env: {},
+      })
+    ).to.throw('config.dex.lifi.selectorAllowlist.8453 must be non-empty');
 
-  it('validates selector policy before fetching executable calldata', () => {
-    expect(source).to.include('normalizeLifiAddressAllowlist');
-    expect(source).to.include('normalizeLifiSelectorAllowlistRecord');
-    expect(source).to.include('function normalizeSelectorAllowlistConfig');
-    expect(source).to.include(
-      'callTargetAllowlist: params.callTargetAllowlist'
-    );
-    expect(source).to.include('requireCallTargetCoverage: true');
-    expect(source).to.include('requireNonEmpty: true');
-    const configIndex = source.indexOf(
-      'const lifiConfig = await buildForkCanaryConfig();'
-    );
-    const quoteFetchIndex = source.indexOf('await fetchLifiQuote({');
-    expect(configIndex).to.be.greaterThan(-1);
-    expect(quoteFetchIndex).to.be.greaterThan(configIndex);
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig({
+          selectorAllowlist: {
+            [LIFI_FORK_CANARY_BASE_CHAIN_ID]: {
+              [APPROVAL_SPENDER]: [SELECTOR],
+            },
+          },
+        }),
+        env: {},
+      })
+    ).to.throw('is not present in callTargetAllowlist');
   });
 
   it('bounds fork canary LI.FI numeric policy before quote fetching', () => {
-    expect(source).to.include('function requirePositiveIntegerPolicy');
-    expect(source).to.include('function requireBoundedDecimalPolicy');
-    expect(source).to.include('function requireOptionalBoundedDecimalPolicy');
-    expect(source).to.include('MAX_LIFI_CANARY_TIMEOUT_MS');
-    expect(source).to.include('MAX_LIFI_CANARY_SLIPPAGE');
-    expect(source).to.include('MAX_LIFI_CANARY_PRICE_IMPACT');
-    expect(source).to.include('quoteTimeoutMs: requirePositiveIntegerPolicy');
-    expect(source).to.include('defaultSlippage: requireBoundedDecimalPolicy');
-    expect(source).to.include(
-      'maxPriceImpact: requireOptionalBoundedDecimalPolicy'
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig({ quoteTimeoutMs: 10_001 }),
+        env: {},
+      })
+    ).to.throw(
+      'config.dex.lifi.quoteTimeoutMs must be an integer between 1 and 10000'
     );
-    expect(source).to.not.include('quoteTimeoutMs: Number(');
-    expect(source).to.not.include('defaultSlippage: Number(');
+
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig({ defaultSlippage: 0.51 }),
+        env: {},
+      })
+    ).to.throw(
+      'config.dex.lifi.defaultSlippage must be greater than 0 and at most 0.5'
+    );
+
+    expect(() =>
+      resolveLifiForkCanaryConfig({
+        keeperConfig: productionConfig({ maxPriceImpact: 0.51 }),
+        env: {},
+      })
+    ).to.throw(
+      'config.dex.lifi.maxPriceImpact must be greater than 0 and at most 0.5'
+    );
+  });
+
+  it('resolves the LI.FI API key from the reviewed config env var before generic fallbacks', () => {
+    const config = resolveLifiForkCanaryConfig({
+      keeperConfig: productionConfig({ apiKeyEnvVar: 'LIFI_PRIMARY_KEY' }),
+      env: {},
+    });
+
+    expect(
+      getLifiForkCanaryApiKey(config, {
+        LIFI_PRIMARY_KEY: 'primary',
+        LIFI_API_KEY: 'fallback',
+      })
+    ).to.equal('primary');
   });
 });

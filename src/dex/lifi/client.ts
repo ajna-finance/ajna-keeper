@@ -1,12 +1,14 @@
 import axios, { AxiosResponse } from 'axios';
 import { ethers } from 'ethers';
-import type { LifiDexConfig } from '../../config';
 import {
   normalizeLifiApiBaseUrl,
   validateLifiIntegrator,
-} from '../../config/lifi-policy';
+} from './api-policy';
 import { getErrorMessage } from '../../utils';
-import { normalizeLifiExchangeFilters } from './filters';
+import {
+  normalizeLifiExchangeFilters,
+  type LifiExchangeFilterConfig,
+} from './filters';
 import {
   DEFAULT_LIFI_API_BASE_URL,
   DEFAULT_LIFI_QUOTE_TIMEOUT_MS,
@@ -17,6 +19,14 @@ import {
 } from './schema';
 
 const MAX_LIFI_DECIMAL_POLICY_VALUE = 0.5;
+
+export interface LifiQuoteClientConfig extends LifiExchangeFilterConfig {
+  apiBaseUrl?: string;
+  defaultSlippage?: number;
+  quoteTimeoutMs?: number;
+  maxPriceImpact?: number;
+  integrator?: string;
+}
 
 function requirePositiveChainId(chainId: number): number {
   if (!Number.isSafeInteger(chainId) || chainId <= 0) {
@@ -130,7 +140,7 @@ function appendCsvParam(
 }
 
 function resolveLifiIntegrator(params: {
-  config: LifiDexConfig;
+  config: LifiQuoteClientConfig;
   request: LifiQuoteRequest;
 }): string | undefined {
   if (params.request.integrator !== undefined) {
@@ -149,7 +159,7 @@ function resolveLifiIntegrator(params: {
 }
 
 export function buildLifiQuoteUrl(params: {
-  config: LifiDexConfig;
+  config: LifiQuoteClientConfig;
   request: LifiQuoteRequest;
 }): string {
   const request = normalizeLifiQuoteRequest(params.request);
@@ -205,7 +215,7 @@ export function buildLifiQuoteUrl(params: {
 }
 
 export async function fetchLifiQuote(params: {
-  config: LifiDexConfig;
+  config: LifiQuoteClientConfig;
   request: LifiQuoteRequest;
   apiKey?: string;
   signal?: AbortSignal;
@@ -257,7 +267,7 @@ export async function fetchLifiQuote(params: {
 }
 
 export async function fetchLifiTools(params: {
-  config: Pick<LifiDexConfig, 'apiBaseUrl' | 'quoteTimeoutMs'>;
+  config: Pick<LifiQuoteClientConfig, 'apiBaseUrl' | 'quoteTimeoutMs'>;
   apiKey?: string;
   signal?: AbortSignal;
 }): Promise<unknown> {

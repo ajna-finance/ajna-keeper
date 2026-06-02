@@ -246,6 +246,7 @@ export function mergeRoutePolicyIntoEvaluation(params: {
     ...params.evaluation,
     routeMinOutRaw: params.policy.routeMinOutRaw,
     profitMinOutRaw: params.policy.profitMinOutRaw,
+    routeExecutionFloorRaw: params.policy.approvedMinOutRaw,
     approvedMinOutRaw: params.policy.approvedMinOutRaw,
     takeablePrice:
       params.evaluation.marketPrice !== undefined

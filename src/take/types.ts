@@ -80,19 +80,21 @@ export interface ExternalTakeQuoteEvaluation {
   takeablePrice?: number;
   quoteAmount?: number;
   quoteAmountRaw?: BigNumber;
+  quoteCircuitOpen?: boolean;
   quoteFailureRetryable?: boolean;
   quoteFailureCode?: number | string;
   selectedLiquiditySource?: LiquiditySource;
   selectedFeeTier?: number;
   routeMinOutRaw?: BigNumber;
   profitMinOutRaw?: BigNumber;
+  routeExecutionFloorRaw?: BigNumber;
   approvedMinOutRaw?: BigNumber;
   routeProfitability?: RouteProfitabilityBreakdown;
   collateralAmount?: number;
   quotedAuctionPriceWad?: BigNumber;
   quotedCollateralWad?: BigNumber;
   auctionIdentity?: string;
-  fallbackExternalTakeQuoteEvaluations?: ExternalTakeQuoteEvaluation[];
+  fallbackExternalTakeQuoteEvaluations?: BoundExternalTakeRouteEvaluation[];
   curvePool?: CurvePoolSelection;
   lifiQuote?: ApprovedLifiQuote;
   reason?: string;
@@ -105,6 +107,14 @@ export interface CurvePoolSelection {
   tokenOutIndex: number;
 }
 
+interface BoundExternalTakeRouteBase<TSource extends LiquiditySource>
+  extends ExternalTakeQuoteEvaluation {
+  isTakeable: true;
+  quoteAmountRaw: BigNumber;
+  selectedLiquiditySource: TSource;
+  routeExecutionFloorRaw: BigNumber;
+}
+
 interface ApprovedExternalTakeQuoteBase<TSource extends LiquiditySource>
   extends ExternalTakeQuoteEvaluation {
   isTakeable: true;
@@ -113,9 +123,20 @@ interface ApprovedExternalTakeQuoteBase<TSource extends LiquiditySource>
   approvedMinOutRaw: BigNumber;
 }
 
+export interface BoundOneInchRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.ONEINCH> {
+  externalTakePath: 'oneinch';
+}
+
 export interface ApprovedOneInchQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.ONEINCH> {
   externalTakePath: 'oneinch';
+}
+
+export interface BoundUniswapV3FactoryRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.UNISWAPV3> {
+  externalTakePath: 'factory';
+  selectedFeeTier: number;
 }
 
 export interface ApprovedUniswapV3FactoryQuoteEvaluation
@@ -124,10 +145,22 @@ export interface ApprovedUniswapV3FactoryQuoteEvaluation
   selectedFeeTier: number;
 }
 
+export interface BoundSushiSwapFactoryRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.SUSHISWAP> {
+  externalTakePath: 'factory';
+  selectedFeeTier: number;
+}
+
 export interface ApprovedSushiSwapFactoryQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.SUSHISWAP> {
   externalTakePath: 'factory';
   selectedFeeTier: number;
+}
+
+export interface BoundCurveFactoryRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.CURVE> {
+  externalTakePath: 'factory';
+  curvePool: CurvePoolSelection;
 }
 
 export interface ApprovedCurveFactoryQuoteEvaluation
@@ -142,10 +175,26 @@ export interface ApprovedLifiQuoteEvaluation
   lifiQuote: ApprovedLifiQuote;
 }
 
+export interface BoundLifiRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.LIFI> {
+  externalTakePath: 'lifi';
+  lifiQuote?: ApprovedLifiQuote;
+}
+
+export type BoundFactoryRouteEvaluation =
+  | BoundUniswapV3FactoryRouteEvaluation
+  | BoundSushiSwapFactoryRouteEvaluation
+  | BoundCurveFactoryRouteEvaluation;
+
 export type ApprovedFactoryQuoteEvaluation =
   | ApprovedUniswapV3FactoryQuoteEvaluation
   | ApprovedSushiSwapFactoryQuoteEvaluation
   | ApprovedCurveFactoryQuoteEvaluation;
+
+export type BoundExternalTakeRouteEvaluation =
+  | BoundOneInchRouteEvaluation
+  | BoundFactoryRouteEvaluation
+  | BoundLifiRouteEvaluation;
 
 export type ApprovedExternalTakeQuoteEvaluation =
   | ApprovedOneInchQuoteEvaluation
@@ -166,7 +215,7 @@ export interface TakeLiquidationPlan {
   auctionPrice: BigNumber; // WAD
   isTakeable: boolean;
   isArbTakeable: boolean;
-  externalTakeQuoteEvaluation?: ExternalTakeQuoteEvaluation;
+  externalTakeQuoteEvaluation?: BoundExternalTakeRouteEvaluation;
 }
 
 export interface TakeDecision {
@@ -178,7 +227,7 @@ export interface TakeDecision {
   auctionPrice: BigNumber;
   takeablePrice?: number;
   maxArbTakePrice?: number;
-  quoteEvaluation?: ExternalTakeQuoteEvaluation;
+  quoteEvaluation?: BoundExternalTakeRouteEvaluation;
   reason?: string;
 }
 
