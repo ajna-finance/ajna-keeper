@@ -6,13 +6,11 @@ import {
   UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
+  normalizeLifiProductionChainPolicy,
   resolveExternalTakePaths,
   resolveFactoryRouteSelectionSources,
 } from '../config';
-import {
-  normalizeLifiAddressAllowlist,
-  normalizeLifiSelectorAllowlistRecord,
-} from '../dex/lifi';
+import { normalizeLifiAddressAllowlist } from '../dex/lifi';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
 
@@ -243,31 +241,6 @@ function normalizeSelectorList(
   ).sort();
 }
 
-function normalizeSelectorConfig(params: {
-  selectorsByTarget: Record<string, string[]> | undefined;
-  chainId: number;
-  callTargets: readonly string[];
-  errors: string[];
-}): Record<string, string[]> {
-  if (params.callTargets.length === 0) {
-    return {};
-  }
-
-  try {
-    return normalizeLifiSelectorAllowlistRecord(params.selectorsByTarget, {
-      label: `LI.FI selectorAllowlist.${params.chainId}`,
-      requireNonEmpty: true,
-      callTargetAllowlist: params.callTargets,
-      requireCallTargetCoverage: true,
-    });
-  } catch (error) {
-    params.errors.push(
-      `LI.FI selectorAllowlist.${params.chainId} is invalid: ${getErrorMessage(error)}`
-    );
-    return {};
-  }
-}
-
 function assertExactSet(params: {
   label: string;
   expected: readonly string[];
@@ -320,32 +293,26 @@ async function validateLifiAllowlistPreflight(params: {
     return;
   }
 
-  const expectedTargets = normalizeAddressList(
-    lifi.callTargetAllowlist?.[params.chainId],
-    `LI.FI callTargetAllowlist.${params.chainId}`,
-    params.errors
-  );
-  const expectedSpenders = normalizeAddressList(
-    lifi.approvalSpenderAllowlist?.[params.chainId],
-    `LI.FI approvalSpenderAllowlist.${params.chainId}`,
-    params.errors
-  );
-  const expectedSelectorsByTarget = normalizeSelectorConfig({
-    selectorsByTarget: lifi.selectorAllowlist?.[params.chainId],
-    chainId: params.chainId,
-    callTargets: expectedTargets,
-    errors: params.errors,
-  });
-  if (expectedTargets.length === 0) {
+  let policy;
+  try {
+    policy = normalizeLifiProductionChainPolicy({
+      config: lifi,
+      fieldName: 'LI.FI',
+      chainId: params.chainId,
+    });
+  } catch (error) {
     params.errors.push(
-      `LI.FI callTargetAllowlist.${params.chainId} is not configured`
+      `LI.FI production policy for chain ${params.chainId} is invalid: ${getErrorMessage(error)}`
     );
+    return;
   }
-  if (expectedSpenders.length === 0) {
-    params.errors.push(
-      `LI.FI approvalSpenderAllowlist.${params.chainId} is not configured`
-    );
-  }
+  const expectedTargets = policy.callTargets
+    .map((target) => target.toLowerCase())
+    .sort();
+  const expectedSpenders = policy.approvalSpenders
+    .map((spender) => spender.toLowerCase())
+    .sort();
+  const expectedSelectorsByTarget = policy.selectorAllowlist;
 
   for (const target of expectedTargets) {
     await requireContractCode({

@@ -585,7 +585,7 @@ describe('route deployment preflight', () => {
     } catch (error) {
       expect(error).to.be.instanceOf(Error);
       expect((error as Error).message).to.include(
-        'LI.FI selectorAllowlist.1 is invalid'
+        'LI.FI production policy for chain 1 is invalid'
       );
       expect((error as Error).message).to.include(
         'is not present in callTargetAllowlist'
@@ -595,7 +595,6 @@ describe('route deployment preflight', () => {
 
   it('fails LI.FI preflight when a configured call target has no selector policy', async () => {
     const { config, provider } = lifiProviderStub();
-    const target = config.dex!.lifi!.callTargetAllowlist![1][0];
     (config.dex!.lifi! as any).selectorAllowlist = {
       1: {},
     };
@@ -610,8 +609,9 @@ describe('route deployment preflight', () => {
     } catch (error) {
       expect(error).to.be.instanceOf(Error);
       expect((error as Error).message).to.include(
-        `LI.FI selectorAllowlist.1.${target.toLowerCase()} is not configured`
+        'LI.FI production policy for chain 1 is invalid'
       );
+      expect((error as Error).message).to.include('must be non-empty');
     }
   });
 
@@ -630,7 +630,7 @@ describe('route deployment preflight', () => {
     } catch (error) {
       expect(error).to.be.instanceOf(Error);
       expect((error as Error).message).to.include(
-        'LI.FI callTargetAllowlist.1 is invalid'
+        'LI.FI production policy for chain 1 is invalid'
       );
       expect((error as Error).message).to.include(
         'cannot contain duplicate addresses'

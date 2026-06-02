@@ -8,6 +8,7 @@ import {
   KeeperConfig,
   LiquiditySource,
 } from '../src/config';
+import { normalizeLifiProductionChainPolicy } from '../src/config/lifi-policy';
 import {
   normalizeLifiAddressAllowlist,
   normalizeLifiSelectorAllowlistRecord,
@@ -139,33 +140,19 @@ function getLifiProductionAllowlists(
   chainId: number
 ): LifiProductionAllowlists {
   const lifi = config.dex?.lifi;
-  if (!lifi || lifi.mode !== 'production') {
+  if (!lifi) {
     throw new Error('LI.FI production config is required for deployment');
   }
-  const callTargets = normalizeLifiAddressAllowlist(
-    lifi.callTargetAllowlist?.[chainId],
-    {
-      label: `LI.FI callTargetAllowlist.${chainId}`,
-      requireNonEmpty: true,
-    }
-  );
-  const approvalSpenders = normalizeLifiAddressAllowlist(
-    lifi.approvalSpenderAllowlist?.[chainId],
-    {
-      label: `LI.FI approvalSpenderAllowlist.${chainId}`,
-      requireNonEmpty: true,
-    }
-  );
-  const selectorAllowlist = normalizeLifiSelectorAllowlistRecord(
-    lifi.selectorAllowlist?.[chainId],
-    {
-      label: `LI.FI selectorAllowlist.${chainId}`,
-      requireNonEmpty: true,
-      callTargetAllowlist: callTargets,
-      requireCallTargetCoverage: true,
-    }
-  );
-  return { callTargets, approvalSpenders, selectorAllowlist };
+  const policy = normalizeLifiProductionChainPolicy({
+    config: lifi,
+    fieldName: 'LI.FI',
+    chainId,
+  });
+  return {
+    callTargets: policy.callTargets,
+    approvalSpenders: policy.approvalSpenders,
+    selectorAllowlist: policy.selectorAllowlist,
+  };
 }
 
 function hasProductionLifiConfig(config: KeeperConfig): boolean {

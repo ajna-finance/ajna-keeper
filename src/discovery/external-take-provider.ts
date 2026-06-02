@@ -1,7 +1,12 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { ExternalTakePathKind, LiquiditySource } from '../config';
+import { TakeWriteTransport } from '../take/write-transport';
 import { TakeActionConfig, TakeLiquidationPlan } from '../take/types';
-import { ExternalTakeCircuitPurpose } from './types';
+import {
+  DiscoveryExecutionConfig,
+  DiscoveryRpcCache,
+  ExternalTakeCircuitPurpose,
+} from './types';
 
 /**
  * Result of a single external-take provider execution attempt.
@@ -60,4 +65,64 @@ export interface ExternalTakeRouteProvider<
   execute(
     params: ExternalTakeExecuteParams<TPoolConfig, TExecutionConfig>
   ): Promise<ExternalTakeExecutionAttemptResult>;
+}
+
+export type DiscoveryExternalExecutionConfig = Pick<
+  DiscoveryExecutionConfig,
+  | 'connectorTokens'
+  | 'curveRouterOverrides'
+  | 'dryRun'
+  | 'keeperTaker'
+  | 'keeperTakerFactory'
+  | 'lifi'
+  | 'lifiTaker'
+  | 'oneInchAggregationExecutorAllowlist'
+  | 'oneInchDefaultSlippage'
+  | 'oneInchRouters'
+  | 'sushiswapRouterOverrides'
+  | 'tokenAddresses'
+  | 'uniswapV3RouterOverrides'
+> & {
+  takeWriteTransport?: TakeWriteTransport;
+  runtimeCache?: DiscoveryRpcCache['factoryQuoteProviders'];
+  oneInchRequestTimeoutMs?: number;
+  chainId?: number;
+  tokenDecimalsCache?: Map<string, number>;
+  onOneInchSwapDataResult?: (result: {
+    success: boolean;
+    retryable?: boolean;
+    errorCode?: number | string;
+    error?: string;
+  }) => void;
+  onOneInchExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
+  onFactoryExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
+  onLifiQuoteResult?: (result: {
+    success: boolean;
+    retryable?: boolean;
+    errorCode?: number | string;
+    error?: string;
+  }) => void;
+  onLifiExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
+};
+
+export function withTakeLiquiditySource<T extends TakeActionConfig>(
+  target: T,
+  liquiditySource: LiquiditySource
+): T {
+  return {
+    ...target,
+    take: {
+      ...target.take,
+      liquiditySource,
+    },
+  };
 }

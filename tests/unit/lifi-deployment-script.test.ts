@@ -25,12 +25,10 @@ describe('LI.FI factory deployment script support', () => {
 
   it('configures reviewed LI.FI allowlists from the same production config', () => {
     expect(source).to.include('configureLifiAllowlists');
-    expect(source).to.include('callTargetAllowlist');
-    expect(source).to.include('approvalSpenderAllowlist');
+    expect(source).to.include('normalizeLifiProductionChainPolicy');
+    expect(source).to.include('policy.callTargets');
+    expect(source).to.include('policy.approvalSpenders');
     expect(source).to.include('selectorAllowlist');
-    expect(source).to.include('normalizeLifiAddressAllowlist');
-    expect(source).to.include('normalizeLifiSelectorAllowlistRecord');
-    expect(source).to.include('requireCallTargetCoverage: true');
     expect(source).to.include('setCallTarget');
     expect(source).to.include('setApprovalSpender');
     expect(source).to.include('setCallSelector');
@@ -42,7 +40,9 @@ describe('LI.FI factory deployment script support', () => {
 
   it('validates target-chain LI.FI production allowlists before wallet/deploy actions', () => {
     expect(source).to.include('validateDetectedChainLifiProductionConfig');
-    expect(source).to.include('getLifiProductionAllowlists(config, chainInfo.chainId)');
+    expect(source).to.include(
+      'getLifiProductionAllowlists(config, chainInfo.chainId)'
+    );
 
     const validationIndex = source.indexOf(
       'validateDetectedChainLifiProductionConfig(config, chainInfo);'
