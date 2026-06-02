@@ -295,7 +295,8 @@ export async function evaluateTakeDecision<
   TPoolConfig,
   TExecutionConfig
 >): Promise<TakeDecision> {
-  const statusReader = takeAuctionStatusReader ?? defaultTakeAuctionStatusReader;
+  const statusReader =
+    takeAuctionStatusReader ?? defaultTakeAuctionStatusReader;
   const liquidationStatus =
     auctionStatus ??
     (await statusReader.read({
@@ -752,7 +753,9 @@ export async function processTakeCandidates<
         arbTakeStrategy,
         takeAuctionStatusReader,
         auctionStatus: preloadedStatusesValid
-          ? windowCandidateStatuses?.get(normalizeBorrowerKey(candidate.borrower))
+          ? windowCandidateStatuses?.get(
+              normalizeBorrowerKey(candidate.borrower)
+            )
           : undefined,
         approveExternalTake,
         approveArbTake,
@@ -876,13 +879,17 @@ export function formatTakeStrategyLog(
   approvedTake: boolean,
   approvedArbTake: boolean
 ): string {
+  const takeLabel =
+    strategyKind === 'factory'
+      ? 'factory take'
+      : strategyKind === 'lifi'
+        ? 'LI.FI take'
+        : 'take';
   if (approvedTake && approvedArbTake) {
-    return strategyKind === 'factory'
-      ? 'factory take and arbTake'
-      : 'take and arbTake';
+    return `${takeLabel} and arbTake`;
   }
   if (approvedTake) {
-    return strategyKind === 'factory' ? 'factory take' : 'take';
+    return takeLabel;
   }
   if (approvedArbTake) {
     return 'arbTake';

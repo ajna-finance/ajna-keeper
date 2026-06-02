@@ -1,3 +1,4 @@
+import { BigNumber } from 'ethers';
 import {
   ExternalTakePathKind,
   LiquiditySource,
@@ -66,5 +67,17 @@ export function cloneExternalTakeQuoteEvaluation(
     curvePool: quoteEvaluation.curvePool
       ? { ...quoteEvaluation.curvePool }
       : undefined,
+  };
+}
+
+export function withExternalTakeApprovalContext(params: {
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  auctionPrice: BigNumber;
+  collateral: BigNumber;
+}): ExternalTakeQuoteEvaluation {
+  return {
+    ...params.quoteEvaluation,
+    quotedAuctionPriceWad: params.auctionPrice,
+    quotedCollateralWad: params.collateral,
   };
 }

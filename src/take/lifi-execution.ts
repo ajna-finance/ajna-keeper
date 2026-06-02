@@ -2,6 +2,7 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
 import { LifiDexConfig, LiquiditySource } from '../config';
+import { normalizeLifiProductionChainPolicy } from '../config/lifi-policy';
 import {
   ApprovedLifiQuote,
   DEFAULT_LIFI_QUOTE_MAX_AGE_MS,
@@ -165,29 +166,6 @@ function getLifiTopLevelQuoteTool(quote: ApprovedLifiQuote): string {
     : 'n/a';
 }
 
-function getChainAllowlist(
-  values: { [chainId: number]: string[] } | undefined,
-  chainId: number,
-  label: string
-): string[] {
-  const allowlist = values?.[chainId] ?? [];
-  if (allowlist.length === 0) {
-    throw new Error(`LI.FI ${label}.${chainId} is not configured`);
-  }
-  return allowlist;
-}
-
-function getChainSelectorAllowlist(
-  values: { [chainId: number]: { [callTarget: string]: string[] } } | undefined,
-  chainId: number
-): Record<string, string[]> {
-  const selectorsByTarget = values?.[chainId] ?? {};
-  if (Object.keys(selectorsByTarget).length === 0) {
-    throw new Error(`LI.FI selectorAllowlist.${chainId} is not configured`);
-  }
-  return selectorsByTarget;
-}
-
 async function requestValidatedLifiQuote(params: {
   pool: FungiblePool;
   lifiConfig: LifiDexConfig;
@@ -197,6 +175,11 @@ async function requestValidatedLifiQuote(params: {
   signal?: AbortSignal;
 }): Promise<ApprovedLifiQuote> {
   const productionConfig = requireProductionLifiConfig(params.lifiConfig);
+  const chainPolicy = normalizeLifiProductionChainPolicy({
+    config: productionConfig,
+    fieldName: 'LI.FI',
+    chainId: params.chainId,
+  });
   const result = await fetchLifiQuote({
     config: productionConfig,
     apiKey: getLifiApiKey(productionConfig),
@@ -221,20 +204,9 @@ async function requestValidatedLifiQuote(params: {
     fromAmount: params.collateralInTokenDecimals,
     takerAddress: params.lifiTaker,
     allowedExchangeTools: productionConfig.allowExchanges,
-    callTargetAllowlist: getChainAllowlist(
-      productionConfig.callTargetAllowlist,
-      params.chainId,
-      'callTargetAllowlist'
-    ),
-    approvalSpenderAllowlist: getChainAllowlist(
-      productionConfig.approvalSpenderAllowlist,
-      params.chainId,
-      'approvalSpenderAllowlist'
-    ),
-    selectorAllowlist: getChainSelectorAllowlist(
-      productionConfig.selectorAllowlist,
-      params.chainId
-    ),
+    callTargetAllowlist: chainPolicy.callTargets,
+    approvalSpenderAllowlist: chainPolicy.approvalSpenders,
+    selectorAllowlist: chainPolicy.selectorAllowlist,
     feeCostPolicy: productionConfig.feeCostPolicy,
   });
 }

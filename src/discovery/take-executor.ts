@@ -5,7 +5,6 @@ import {
   LiquiditySource,
   LiquiditySourceMap,
   TakeWriteTransportMode,
-  ActiveExternalTakeRouteSelectionMode,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
   isFactoryDynamicSource,
@@ -19,7 +18,6 @@ import {
   DiscoveryExternalExecutionConfig,
   withTakeLiquiditySource,
 } from './external-take-provider';
-import { createDiscoveryExternalTakeProviderRegistry } from './external-take-providers';
 import { logger } from '../logging';
 import {
   createDiscoveryTransportsForConfig,
@@ -38,13 +36,8 @@ import {
 } from './types';
 import { DiscoveryReadTransports } from '../read-transports';
 import * as lifiExecutionModule from '../take/lifi-execution';
-import * as oneInchAdapterModule from '../take/one-inch-adapter';
 import { createArbTakeStrategy } from '../take/arb-strategy';
-import {
-  ExternalTakeAdapter,
-  processTakeCandidates,
-  TAKE_SKIP_REASONS,
-} from '../take/engine';
+import { processTakeCandidates, TAKE_SKIP_REASONS } from '../take/engine';
 import {
   ExternalTakeQuoteEvaluation,
   RouteProfitabilityBreakdown,
@@ -76,7 +69,6 @@ import { convertWadToTokenDecimalsCeil, getDecimalsErc20 } from '../erc20';
 import { createTakeAuctionStatusReader } from '../take/liquidation-status';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import { getOneInchQuoteTimeoutMs } from './one-inch-circuit';
-import { resolveHybridExternalTakeExecutionSelection } from './external-take-selection';
 import {
   DiscoveryExternalTakeApprovalMode,
   DiscoveryExternalTakeApprover,
@@ -85,10 +77,9 @@ import {
 } from './external-take-approval';
 import {
   cloneExternalTakeQuoteEvaluation,
-  isFactoryExternalTakeRoute,
-  isOneInchExternalTakeRoute,
-  resolveExternalTakePathFromEvaluation,
+  withExternalTakeApprovalContext,
 } from './external-take-evaluation';
+import { createExternalTakeAdapterForDiscovery } from './external-take-discovery-adapter';
 import {
   AutoDiscoverTakePolicyRuntime,
   FactoryPathQuoteFn,
@@ -103,7 +94,13 @@ import {
   recordLifiCircuitOutcomeForDiscovery,
   recordOneInchCircuitOutcomeForDiscovery,
 } from './external-take-quotes';
-import { evaluateHybridExternalTakeForDiscovery } from './hybrid-external-take';
+import {
+  APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
+  type DiscoveredTakeTargetStats,
+  getExternalTakePathCounter,
+  getExternalTakePathCounters,
+  incrementExternalTakeRouteStats,
+} from './external-take-stats';
 import { BASIS_POINTS_DENOMINATOR_BN, WAD, ZERO_BN } from '../constants';
 
 export {
@@ -111,6 +108,7 @@ export {
   selectBestExternalTakeQuoteEvaluation,
   sortExternalTakeQuoteEvaluationsForSelection,
 } from './external-take-selection';
+export type { DiscoveredTakeTargetStats } from './external-take-stats';
 
 // Conservative per-route execution limits used for profitability screening.
 // Operators can override these with autoDiscover.take.dexGasOverrides.
@@ -661,119 +659,6 @@ async function buildFactoryRouteProfitabilityContext(params: {
   };
 }
 
-interface ExternalTakePathCounters {
-  approved: number;
-  executed: number;
-  dryRun: number;
-  preBroadcastFailures: number;
-  postSubmissionFailures: number;
-}
-
-export interface DiscoveredTakeTargetStats {
-  candidateCount: number;
-  approvedTakeDecisions: number;
-  approvedArbTakeDecisions: number;
-  approvedOneInchTakeDecisions: number;
-  approvedFactoryTakeDecisions: number;
-  approvedUniswapV3TakeDecisions: number;
-  approvedSushiswapTakeDecisions: number;
-  approvedCurveTakeDecisions: number;
-  evaluationSkips: number;
-  revalidationSkips: number;
-  executionSkips: number;
-  gasPolicyRejects: number;
-  profitFloorRejects: number;
-  arbProfitUnavailableRejects: number;
-  // Real successful external executions. Dry-run "would execute" outcomes are
-  // tracked separately so production counters are not inflated by rehearsals.
-  executedExternalTakes: number;
-  executedArbTakes: number;
-  executedOneInchTakes: number;
-  executedFactoryTakes: number;
-  executedUniswapV3Takes: number;
-  executedSushiswapTakes: number;
-  executedCurveTakes: number;
-  dryRunExternalTakes: number;
-  dryRunArbTakes: number;
-  dryRunOneInchTakes: number;
-  dryRunFactoryTakes: number;
-  dryRunUniswapV3Takes: number;
-  dryRunSushiswapTakes: number;
-  dryRunCurveTakes: number;
-  oneInchSwapDataFailures: number;
-  oneInchPreBroadcastFailures: number;
-  oneInchPostSubmissionFailures: number;
-  factoryPreBroadcastFailures: number;
-  factoryPostSubmissionFailures: number;
-  externalTakeByPath: Partial<
-    Record<ExternalTakePathKind, ExternalTakePathCounters>
-  >;
-  hybridFallbackAttempts: number;
-  hybridFallbackSuccesses: number;
-  hybridGasQuoteFallbackAttempts: number;
-  hybridGasQuoteFallbackSuccesses: number;
-  hotAuctionCandidateRemovals: number;
-}
-
-type ExecutedExternalTakeRouteStats = Pick<
-  DiscoveredTakeTargetStats,
-  | 'executedOneInchTakes'
-  | 'executedFactoryTakes'
-  | 'executedUniswapV3Takes'
-  | 'executedSushiswapTakes'
-  | 'executedCurveTakes'
->;
-
-type ExternalTakeRouteStatKey =
-  | 'approvedOneInchTakeDecisions'
-  | 'approvedFactoryTakeDecisions'
-  | 'approvedUniswapV3TakeDecisions'
-  | 'approvedSushiswapTakeDecisions'
-  | 'approvedCurveTakeDecisions'
-  | keyof ExecutedExternalTakeRouteStats
-  | 'dryRunOneInchTakes'
-  | 'dryRunFactoryTakes'
-  | 'dryRunUniswapV3Takes'
-  | 'dryRunSushiswapTakes'
-  | 'dryRunCurveTakes';
-
-interface ExternalTakeRouteStatKeys {
-  oneInch: ExternalTakeRouteStatKey;
-  factory: ExternalTakeRouteStatKey;
-  uniswapV3: ExternalTakeRouteStatKey;
-  sushiswap: ExternalTakeRouteStatKey;
-  curve: ExternalTakeRouteStatKey;
-}
-
-type ExternalTakeRouteCounterStats = Pick<
-  DiscoveredTakeTargetStats,
-  ExternalTakeRouteStatKey | 'externalTakeByPath'
->;
-
-const APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
-  oneInch: 'approvedOneInchTakeDecisions',
-  factory: 'approvedFactoryTakeDecisions',
-  uniswapV3: 'approvedUniswapV3TakeDecisions',
-  sushiswap: 'approvedSushiswapTakeDecisions',
-  curve: 'approvedCurveTakeDecisions',
-};
-
-const EXECUTED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
-  oneInch: 'executedOneInchTakes',
-  factory: 'executedFactoryTakes',
-  uniswapV3: 'executedUniswapV3Takes',
-  sushiswap: 'executedSushiswapTakes',
-  curve: 'executedCurveTakes',
-};
-
-const DRY_RUN_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
-  oneInch: 'dryRunOneInchTakes',
-  factory: 'dryRunFactoryTakes',
-  uniswapV3: 'dryRunUniswapV3Takes',
-  sushiswap: 'dryRunSushiswapTakes',
-  curve: 'dryRunCurveTakes',
-};
-
 interface HandleDiscoveredTakeTargetParamsBase {
   pool: FungiblePool;
   signer: Signer;
@@ -960,104 +845,6 @@ function logDiscoveredTakeTargetSummary(params: {
     stats.hotAuctionCandidateRemovals
   );
   logger.info(`Discovered take target summary: ${fields.join(' ')}`);
-}
-
-function withExternalTakeApprovalContext(params: {
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
-}): ExternalTakeQuoteEvaluation {
-  return {
-    ...params.quoteEvaluation,
-    quotedAuctionPriceWad: params.auctionPrice,
-    quotedCollateralWad: params.collateral,
-  };
-}
-
-type ExternalTakePathCounterField = keyof ExternalTakePathCounters;
-
-function getExternalTakePathCounters(
-  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByPath'>,
-  path: ExternalTakePathKind
-): ExternalTakePathCounters {
-  stats.externalTakeByPath[path] ??= {
-    approved: 0,
-    executed: 0,
-    dryRun: 0,
-    preBroadcastFailures: 0,
-    postSubmissionFailures: 0,
-  };
-  return stats.externalTakeByPath[path]!;
-}
-
-function incrementExternalTakePathCounter(params: {
-  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByPath'>;
-  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
-  field: ExternalTakePathCounterField;
-}): void {
-  const path = resolveExternalTakePathFromEvaluation(params.quoteEvaluation);
-  if (!path) {
-    return;
-  }
-  const counters = getExternalTakePathCounters(params.stats, path);
-  counters[params.field] += 1;
-}
-
-function getExternalTakePathCounter(params: {
-  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByPath'>;
-  path: ExternalTakePathKind;
-  field: ExternalTakePathCounterField;
-}): number {
-  return params.stats.externalTakeByPath[params.path]?.[params.field] ?? 0;
-}
-
-function incrementExternalTakeRouteStats(params: {
-  stats: ExternalTakeRouteCounterStats;
-  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined;
-  keys: ExternalTakeRouteStatKeys;
-  pathCounter?: ExternalTakePathCounterField;
-}): void {
-  const { stats, quoteEvaluation, keys } = params;
-  if (params.pathCounter !== undefined) {
-    incrementExternalTakePathCounter({
-      stats,
-      quoteEvaluation,
-      field: params.pathCounter,
-    });
-  }
-  if (isOneInchExternalTakeRoute(quoteEvaluation)) {
-    stats[keys.oneInch] += 1;
-  }
-  if (isFactoryExternalTakeRoute(quoteEvaluation)) {
-    stats[keys.factory] += 1;
-  }
-
-  switch (quoteEvaluation?.selectedLiquiditySource) {
-    case LiquiditySource.UNISWAPV3:
-      stats[keys.uniswapV3] += 1;
-      break;
-    case LiquiditySource.SUSHISWAP:
-      stats[keys.sushiswap] += 1;
-      break;
-    case LiquiditySource.CURVE:
-      stats[keys.curve] += 1;
-      break;
-  }
-}
-
-function recordSuccessfulExternalTakeRouteStats(
-  stats: ExternalTakeRouteCounterStats,
-  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined,
-  dryRun: boolean
-): void {
-  incrementExternalTakeRouteStats({
-    stats,
-    quoteEvaluation,
-    keys: dryRun
-      ? DRY_RUN_EXTERNAL_TAKE_ROUTE_STAT_KEYS
-      : EXECUTED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
-    pathCounter: dryRun ? 'dryRun' : 'executed',
-  });
 }
 
 const INACTIVE_AUCTION_SKIP_REASONS = new Set<string>([
@@ -1675,349 +1462,6 @@ async function approveExternalTakeForDiscovery(
     )}`
   );
   return { approved: true, quoteEvaluation: approvedQuoteEvaluation };
-}
-
-function createExternalTakeAdapterForDiscovery(params: {
-  target: ResolvedTakeTarget;
-  takePolicy: AutoDiscoverTakePolicyRuntime;
-  externalTakePaths: ExternalTakePathKind[];
-  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
-  probeTimeoutMs: number;
-  quoteOneInchPath: OneInchPathQuoteFn;
-  quoteKeeperTakerOneInchTake: OneInchPathQuoteFn;
-  quoteFactoryPath: FactoryPathQuoteFn;
-  quoteLifiPath: LifiPathQuoteFn;
-  approveExternalTake: DiscoveryExternalTakeApprover;
-  recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
-  recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
-  stats: DiscoveredTakeTargetStats;
-  config: DiscoveryExecutionConfig;
-  rpcCache?: DiscoveryRpcCache;
-}): ExternalTakeAdapter<ResolvedTakeTarget, DiscoveryExternalExecutionConfig> {
-  const providerRegistry = createDiscoveryExternalTakeProviderRegistry({
-    config: params.config,
-    rpcCache: params.rpcCache,
-  });
-
-  const PROVIDER_WARN_LABEL: Record<ExternalTakePathKind, string> = {
-    oneinch: '1inch',
-    lifi: 'LI.FI',
-    factory: 'factory',
-  };
-
-  if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
-    return {
-      kind: 'hybrid',
-      evaluateExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-      }) =>
-        evaluateHybridExternalTakeForDiscovery({
-          pool,
-          signer,
-          poolConfig,
-          takePolicy: params.takePolicy,
-          externalTakePaths: params.externalTakePaths,
-          routeSelectionMode: params.routeSelectionMode,
-          probeTimeoutMs: params.probeTimeoutMs,
-          price,
-          auctionPrice,
-          collateral,
-          quoteOneInchPath: params.quoteOneInchPath,
-          quoteFactoryPath: params.quoteFactoryPath,
-          quoteLifiPath: params.quoteLifiPath,
-          approveExternalTake: params.approveExternalTake,
-          recordOneInchCircuitOutcome: params.recordOneInchCircuitOutcome,
-          recordLifiCircuitOutcome: params.recordLifiCircuitOutcome,
-          stats: params.stats,
-        }),
-      executeExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config,
-      }) => {
-        const primaryEvaluation = liquidation.externalTakeQuoteEvaluation;
-        const executionCandidates = [
-          primaryEvaluation,
-          ...(primaryEvaluation?.fallbackExternalTakeQuoteEvaluations ?? []),
-        ].filter(
-          (evaluation): evaluation is ExternalTakeQuoteEvaluation =>
-            evaluation !== undefined
-        );
-
-        for (let index = 0; index < executionCandidates.length; index += 1) {
-          const candidateEvaluation = executionCandidates[index];
-          const selection = resolveHybridExternalTakeExecutionSelection({
-            quoteEvaluation: candidateEvaluation,
-            allowedExternalTakePaths: params.externalTakePaths,
-          });
-          if (!selection.approved) {
-            logger.error(
-              `Hybrid external take ${selection.reason}; refusing execution for ${pool.name}/${liquidation.borrower}`
-            );
-            if (index === 0) {
-              return false;
-            }
-            continue;
-          }
-
-          const isExecutionFallbackCandidate = index > 0;
-          const isGasQuoteFallbackCandidate =
-            candidateEvaluation.approvalMode === 'factory_gas_quote_fallback';
-          const requiresFallbackReapproval =
-            isExecutionFallbackCandidate || isGasQuoteFallbackCandidate;
-          if (isExecutionFallbackCandidate) {
-            params.stats.hybridFallbackAttempts += 1;
-          }
-          if (isGasQuoteFallbackCandidate) {
-            params.stats.hybridGasQuoteFallbackAttempts += 1;
-          }
-
-          let approvedEvaluation = candidateEvaluation;
-          let executionLiquidation = liquidation;
-          if (requiresFallbackReapproval) {
-            // The primary path already passed the engine's final approval hook.
-            // Fallbacks are selected inside this executor, so refresh and
-            // reapprove them immediately before attempting execution.
-            let refreshedStatus;
-            try {
-              refreshedStatus = await pool
-                .getLiquidation(liquidation.borrower)
-                .getStatus();
-            } catch (error) {
-              logger.warn(
-                `Hybrid fallback path could not refresh auction state for ${pool.name}/${liquidation.borrower}: ${getErrorMessage(error)}`
-              );
-              continue;
-            }
-            executionLiquidation = {
-              ...liquidation,
-              auctionPrice: refreshedStatus.price,
-              collateral: refreshedStatus.collateral,
-            };
-            const fallbackApproval = await params.approveExternalTake({
-              price: Number(
-                ethers.utils.formatEther(executionLiquidation.auctionPrice)
-              ),
-              auctionPrice: executionLiquidation.auctionPrice,
-              collateral: executionLiquidation.collateral,
-              quoteEvaluation: candidateEvaluation,
-              countStats: false,
-              forceGasRefresh: true,
-            });
-            if (!fallbackApproval.approved) {
-              logger.debug(
-                `Hybrid fallback path rejected during final approval for ${pool.name}/${liquidation.borrower}: ${
-                  fallbackApproval.reason ?? 'policy rejected fallback path'
-                }`
-              );
-              continue;
-            }
-            approvedEvaluation = withExternalTakeApprovalContext({
-              quoteEvaluation:
-                fallbackApproval.quoteEvaluation ?? candidateEvaluation,
-              auctionPrice: executionLiquidation.auctionPrice,
-              collateral: executionLiquidation.collateral,
-            });
-          }
-
-          const selectedPath = selection.effectiveSelectedPath;
-          const selectedSource = selection.selectedSource;
-          const liquidationForCandidate = {
-            ...executionLiquidation,
-            externalTakeQuoteEvaluation: approvedEvaluation,
-          };
-
-          const provider = providerRegistry.selectExternalTakeProvider({
-            selectedPath,
-            selectedSource,
-          });
-          const attempt = await provider.execute({
-            pool,
-            signer,
-            poolConfig,
-            liquidation: liquidationForCandidate,
-            config,
-            selectedSource,
-          });
-          if (attempt.succeeded) {
-            recordSuccessfulExternalTakeRouteStats(
-              params.stats,
-              approvedEvaluation,
-              config.dryRun === true
-            );
-            if (isExecutionFallbackCandidate) {
-              params.stats.hybridFallbackSuccesses += 1;
-            }
-            if (isGasQuoteFallbackCandidate) {
-              params.stats.hybridGasQuoteFallbackSuccesses += 1;
-            }
-            return true;
-          }
-          if (
-            attempt.preBroadcastFailed &&
-            index < executionCandidates.length - 1
-          ) {
-            logger.warn(
-              `Hybrid ${PROVIDER_WARN_LABEL[provider.path]} path failed before submission for ${pool.name}/${liquidation.borrower}; trying next approved fallback path`
-            );
-            continue;
-          }
-          return false;
-        }
-
-        logger.error(
-          `Hybrid external take had no executable approved path for ${pool.name}/${liquidation.borrower}`
-        );
-        return false;
-      },
-    };
-  }
-
-  if (params.target.take.liquiditySource === LiquiditySource.ONEINCH) {
-    return {
-      kind: 'oneinch',
-      evaluateExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-      }) =>
-        params.quoteKeeperTakerOneInchTake({
-          pool,
-          signer,
-          poolConfig,
-          price,
-          auctionPrice,
-          collateral,
-        }),
-      executeExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config,
-      }) => {
-        const attempt = await providerRegistry.oneInchProvider.execute({
-          pool,
-          signer,
-          poolConfig,
-          liquidation,
-          config,
-        });
-        if (attempt.succeeded) {
-          recordSuccessfulExternalTakeRouteStats(
-            params.stats,
-            liquidation.externalTakeQuoteEvaluation,
-            config.dryRun === true
-          );
-        }
-        return attempt.succeeded;
-      },
-    };
-  }
-
-  if (params.target.take.liquiditySource === LiquiditySource.LIFI) {
-    return {
-      kind: 'hybrid',
-      evaluateExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-      }) =>
-        params.quoteLifiPath({
-          pool,
-          signer,
-          poolConfig,
-          price,
-          auctionPrice,
-          collateral,
-        }),
-      executeExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config,
-      }) => {
-        const attempt = await providerRegistry.lifiProvider.execute({
-          pool,
-          signer,
-          poolConfig,
-          liquidation,
-          config,
-        });
-        if (attempt.succeeded) {
-          recordSuccessfulExternalTakeRouteStats(
-            params.stats,
-            liquidation.externalTakeQuoteEvaluation,
-            config.dryRun === true
-          );
-        } else if (attempt.circuitOpenReason) {
-          logger.warn(
-            `LI.FI execution refresh circuit is open for ${pool.name}/${liquidation.borrower}; skipping direct LI.FI external take`
-          );
-        }
-        return attempt.succeeded;
-      },
-    };
-  }
-
-  if (params.target.take.liquiditySource !== undefined) {
-    return {
-      kind: 'factory',
-      evaluateExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        auctionPrice,
-        collateral,
-      }) =>
-        params.quoteFactoryPath({
-          pool,
-          signer,
-          poolConfig,
-          auctionPrice,
-          collateral,
-        }),
-      executeExternalTake: async ({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config,
-      }) => {
-        const attempt = await providerRegistry.factoryProvider.execute({
-          pool,
-          signer,
-          poolConfig,
-          liquidation,
-          config,
-        });
-        if (attempt.succeeded) {
-          recordSuccessfulExternalTakeRouteStats(
-            params.stats,
-            liquidation.externalTakeQuoteEvaluation,
-            config.dryRun === true
-          );
-        }
-        return attempt.succeeded;
-      },
-    };
-  }
-
-  return oneInchAdapterModule.createNoExternalTakeAdapter();
 }
 
 export async function handleDiscoveredTakeTarget(

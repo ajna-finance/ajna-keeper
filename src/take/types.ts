@@ -64,6 +64,7 @@ export interface TakeActionConfig {
 export type ExternalTakeStrategyKind =
   | 'none'
   | 'oneinch'
+  | 'lifi'
   | 'factory'
   | 'hybrid';
 

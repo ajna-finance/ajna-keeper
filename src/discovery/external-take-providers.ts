@@ -1,8 +1,4 @@
-import {
-  FACTORY_DYNAMIC_SOURCES,
-  LiquiditySource,
-  isFactoryDynamicSource,
-} from '../config';
+import { isFactoryDynamicSource } from '../config';
 import * as takeFactoryModule from '../take/factory';
 import * as lifiExecutionModule from '../take/lifi-execution';
 import * as oneInchExecutionModule from '../take/one-inch-execution';
@@ -25,8 +21,7 @@ export interface DiscoveryExternalTakeProviderRegistry {
   lifiProvider: DiscoveryExternalTakeRouteProvider;
   factoryProvider: DiscoveryExternalTakeRouteProvider;
   selectExternalTakeProvider(params: {
-    selectedPath?: DiscoveryExternalTakeRouteProvider['path'];
-    selectedSource?: LiquiditySource;
+    selectedPath: DiscoveryExternalTakeRouteProvider['path'];
   }): DiscoveryExternalTakeRouteProvider;
 }
 
@@ -49,12 +44,6 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
 
   const oneInchProvider: DiscoveryExternalTakeRouteProvider = {
     path: 'oneinch',
-    supportedSources: () => [LiquiditySource.ONEINCH],
-    supportedCircuitPurposes: () => [
-      'route_quote',
-      'swap_data',
-      'gas_conversion',
-    ],
     execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
       let oneInchPreSubmitRejected = false;
       let oneInchSwapDataSucceeded = false;
@@ -104,8 +93,6 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
 
   const lifiProvider: DiscoveryExternalTakeRouteProvider = {
     path: 'lifi',
-    supportedSources: () => [LiquiditySource.LIFI],
-    supportedCircuitPurposes: () => ['route_quote', 'execution_refresh'],
     execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
       let lifiPreBroadcastFailed = false;
       const originalLifiExecutionFailure = config.onLifiExecutionFailure;
@@ -147,8 +134,6 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
 
   const factoryProvider: DiscoveryExternalTakeRouteProvider = {
     path: 'factory',
-    supportedSources: () => FACTORY_DYNAMIC_SOURCES,
-    supportedCircuitPurposes: () => [],
     execute: async ({
       pool,
       signer,
@@ -190,17 +175,17 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
     oneInchProvider,
     lifiProvider,
     factoryProvider,
-    selectExternalTakeProvider: ({ selectedPath, selectedSource }) => {
-      if (
-        selectedPath === 'oneinch' ||
-        selectedSource === LiquiditySource.ONEINCH
-      ) {
-        return oneInchProvider;
+    selectExternalTakeProvider: ({ selectedPath }) => {
+      switch (selectedPath) {
+        case 'oneinch':
+          return oneInchProvider;
+        case 'lifi':
+          return lifiProvider;
+        case 'factory':
+          return factoryProvider;
       }
-      if (selectedPath === 'lifi' || selectedSource === LiquiditySource.LIFI) {
-        return lifiProvider;
-      }
-      return factoryProvider;
+      const exhaustivePath: never = selectedPath;
+      throw new Error(`Unsupported external take path: ${exhaustivePath}`);
     },
   };
 }

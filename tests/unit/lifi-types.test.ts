@@ -23,8 +23,8 @@ type IsEqual<A, B> =
 type _LifiQuoteIsApprovedExternalTake = Expect<
   IsAssignable<ApprovedLifiQuoteEvaluation, ApprovedExternalTakeQuoteEvaluation>
 >;
-type _LifiDoesNotBecomeExecutionStrategy = Expect<
-  IsAssignable<'lifi', ExternalTakeStrategyKind> extends false ? true : false
+type _LifiIsExecutionStrategy = Expect<
+  IsAssignable<'lifi', ExternalTakeStrategyKind>
 >;
 type _HybridRemainsExecutionStrategy = Expect<
   IsAssignable<'hybrid', ExternalTakeStrategyKind>
@@ -83,7 +83,7 @@ function makeApprovedLifiQuote(): ApprovedLifiQuote {
 }
 
 describe('LI.FI type surface', () => {
-  it('keeps LI.FI as an external take path without adding a strategy kind', () => {
+  it('keeps LI.FI typed as both an external take path and strategy kind', () => {
     const approvedLifiQuote = {
       isTakeable: true,
       externalTakePath: 'lifi',

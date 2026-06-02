@@ -249,6 +249,100 @@ export async function quoteFactoryPathForDiscovery(
   };
 }
 
+type CircuitGuardedQuoteOutcome = 'success' | 'failure' | 'neutral';
+
+function getCircuitGuardedQuoteOutcome(
+  evaluation: ExternalTakeQuoteEvaluation
+): CircuitGuardedQuoteOutcome {
+  if (evaluation.quoteFailureRetryable === true) {
+    return 'failure';
+  }
+  return evaluation.quoteAmountRaw !== undefined ? 'success' : 'neutral';
+}
+
+async function quoteCircuitGuardedPath(params: {
+  poolName: string;
+  label: string;
+  externalTakePath: 'oneinch' | 'lifi';
+  selectedLiquiditySource: LiquiditySource;
+  auctionPrice: BigNumber;
+  collateral: BigNumber;
+  circuitOpenReason?: string;
+  recordCircuitOutcome?: boolean;
+  routeProbeLimiter?: AsyncOperationLimiter;
+  routeProbeAbortSignal?: AbortSignal;
+  probeTimeoutMs: number;
+  abortErrorMessage: string;
+  timeoutLabel: string;
+  evaluate: (signal?: AbortSignal) => Promise<ExternalTakeQuoteEvaluation>;
+  recordOutcome: (outcome: CircuitGuardedQuoteOutcome) => void;
+}): Promise<ExternalTakeQuoteEvaluation> {
+  if (params.circuitOpenReason) {
+    return {
+      isTakeable: false,
+      externalTakePath: params.externalTakePath,
+      selectedLiquiditySource: params.selectedLiquiditySource,
+      quotedAuctionPriceWad: params.auctionPrice,
+      quotedCollateralWad: params.collateral,
+      reason: params.circuitOpenReason,
+    };
+  }
+
+  let evaluation: ExternalTakeQuoteEvaluation;
+  try {
+    evaluation = await withTimeoutAbort(
+      async (timeoutSignal) =>
+        await withCombinedAbortSignal(
+          [timeoutSignal, params.routeProbeAbortSignal],
+          async (signal) => {
+            if (signal?.aborted) {
+              throw signal.reason instanceof Error
+                ? signal.reason
+                : new Error(params.abortErrorMessage);
+            }
+            const evaluateQuote = async () => await params.evaluate(signal);
+            return params.routeProbeLimiter
+              ? await params.routeProbeLimiter.run(
+                  `${params.label} quote ${params.poolName}`,
+                  evaluateQuote,
+                  { signal }
+                )
+              : await evaluateQuote();
+          }
+        ),
+      params.probeTimeoutMs,
+      params.timeoutLabel
+    );
+  } catch (error) {
+    if (params.recordCircuitOutcome !== false) {
+      params.recordOutcome('failure');
+    }
+    return {
+      isTakeable: false,
+      externalTakePath: params.externalTakePath,
+      selectedLiquiditySource: params.selectedLiquiditySource,
+      quotedAuctionPriceWad: params.auctionPrice,
+      quotedCollateralWad: params.collateral,
+      reason: getErrorMessage(error),
+      quoteFailureRetryable: true,
+      quoteFailureCode: 'exception',
+    };
+  }
+
+  if (params.recordCircuitOutcome !== false) {
+    params.recordOutcome(getCircuitGuardedQuoteOutcome(evaluation));
+  }
+
+  return {
+    ...evaluation,
+    externalTakePath: params.externalTakePath,
+    selectedLiquiditySource:
+      evaluation.selectedLiquiditySource ?? params.selectedLiquiditySource,
+    quotedAuctionPriceWad: params.auctionPrice,
+    quotedCollateralWad: params.collateral,
+  };
+}
+
 async function quoteOneInchForDiscovery(
   params: {
     rpcCache?: DiscoveryRpcCache;
@@ -264,92 +358,35 @@ async function quoteOneInchForDiscovery(
     rpcCache: params.rpcCache,
     takePolicy: params.takePolicy,
   });
-  if (circuitOpenReason) {
-    return {
-      isTakeable: false,
-      externalTakePath: 'oneinch',
-      selectedLiquiditySource: LiquiditySource.ONEINCH,
-      quotedAuctionPriceWad: params.auctionPrice,
-      quotedCollateralWad: params.collateral,
-      reason: circuitOpenReason,
-    };
-  }
-
-  let evaluation: ExternalTakeQuoteEvaluation;
   const oneInchRequestTimeoutMs = getOneInchQuoteTimeoutMs(params.takePolicy);
-  try {
-    evaluation = await withTimeoutAbort(
-      async (timeoutSignal) =>
-        await withCombinedAbortSignal(
-          [timeoutSignal, params.routeProbeAbortSignal],
-          async (signal) => {
-            if (signal?.aborted) {
-              throw signal.reason instanceof Error
-                ? signal.reason
-                : new Error('1inch external take quote aborted');
-            }
-            const evaluateOneInchQuote = async () =>
-              await params.evaluate({
-                oneInchRequestTimeoutMs,
-                oneInchRequestAbortSignal: signal,
-                chainId: params.rpcCache?.chainId,
-                tokenDecimalsCache: params.getTokenDecimalsCache(
-                  params.rpcCache
-                ),
-              });
-            return params.routeProbeLimiter
-              ? await params.routeProbeLimiter.run(
-                  `1inch quote ${params.pool.name}`,
-                  evaluateOneInchQuote,
-                  { signal }
-                )
-              : await evaluateOneInchQuote();
-          }
-        ),
-      params.probeTimeoutMs,
-      '1inch external take quote'
-    );
-  } catch (error) {
-    if (params.recordCircuitOutcome !== false) {
+  return quoteCircuitGuardedPath({
+    poolName: params.pool.name,
+    label: '1inch',
+    externalTakePath: 'oneinch',
+    selectedLiquiditySource: LiquiditySource.ONEINCH,
+    auctionPrice: params.auctionPrice,
+    collateral: params.collateral,
+    circuitOpenReason,
+    recordCircuitOutcome: params.recordCircuitOutcome,
+    routeProbeLimiter: params.routeProbeLimiter,
+    routeProbeAbortSignal: params.routeProbeAbortSignal,
+    probeTimeoutMs: params.probeTimeoutMs,
+    abortErrorMessage: '1inch external take quote aborted',
+    timeoutLabel: '1inch external take quote',
+    evaluate: async (signal) =>
+      await params.evaluate({
+        oneInchRequestTimeoutMs,
+        oneInchRequestAbortSignal: signal,
+        chainId: params.rpcCache?.chainId,
+        tokenDecimalsCache: params.getTokenDecimalsCache(params.rpcCache),
+      }),
+    recordOutcome: (outcome) =>
       recordOneInchCircuitOutcomeForDiscovery({
         rpcCache: params.rpcCache,
         takePolicy: params.takePolicy,
-        outcome: 'failure',
-      });
-    }
-    return {
-      isTakeable: false,
-      externalTakePath: 'oneinch',
-      selectedLiquiditySource: LiquiditySource.ONEINCH,
-      quotedAuctionPriceWad: params.auctionPrice,
-      quotedCollateralWad: params.collateral,
-      reason: getErrorMessage(error),
-      quoteFailureRetryable: true,
-      quoteFailureCode: 'exception',
-    };
-  }
-
-  if (params.recordCircuitOutcome !== false) {
-    recordOneInchCircuitOutcomeForDiscovery({
-      rpcCache: params.rpcCache,
-      takePolicy: params.takePolicy,
-      outcome:
-        evaluation.quoteFailureRetryable === true
-          ? 'failure'
-          : evaluation.quoteAmountRaw !== undefined
-            ? 'success'
-            : 'neutral',
-    });
-  }
-
-  return {
-    ...evaluation,
-    externalTakePath: 'oneinch',
-    selectedLiquiditySource:
-      evaluation.selectedLiquiditySource ?? LiquiditySource.ONEINCH,
-    quotedAuctionPriceWad: params.auctionPrice,
-    quotedCollateralWad: params.collateral,
-  };
+        outcome,
+      }),
+  });
 }
 
 export async function quoteOneInchPathForDiscovery(
@@ -428,102 +465,45 @@ export async function quoteLifiPathForDiscovery(
     rpcCache: params.rpcCache,
     lifiConfig: params.config.lifi,
   });
-  if (circuitOpenReason) {
-    return {
-      isTakeable: false,
-      externalTakePath: 'lifi',
-      selectedLiquiditySource: LiquiditySource.LIFI,
-      quotedAuctionPriceWad: params.auctionPrice,
-      quotedCollateralWad: params.collateral,
-      reason: circuitOpenReason,
-    };
-  }
-
-  let evaluation: ExternalTakeQuoteEvaluation;
-  try {
-    evaluation = await withTimeoutAbort(
-      async (timeoutSignal) =>
-        await withCombinedAbortSignal(
-          [timeoutSignal, params.routeProbeAbortSignal],
-          async (signal) => {
-            if (signal?.aborted) {
-              throw signal.reason instanceof Error
-                ? signal.reason
-                : new Error('LI.FI external take quote aborted');
-            }
-            const evaluateLifiQuote = async () =>
-              await lifiExecutionModule.getLifiPathQuoteEvaluation(
-                params.pool,
-                params.price,
-                params.collateral,
-                params.poolConfig,
-                {
-                  lifi: params.config.lifi,
-                  lifiTaker:
-                    params.config.lifiTaker ??
-                    lifiExecutionModule.getLifiTakerAddress(
-                      params.config.takerContracts
-                    ),
-                  lifiRequestAbortSignal: signal,
-                  chainId: params.rpcCache?.chainId,
-                  tokenDecimalsCache: params.getTokenDecimalsCache(
-                    params.rpcCache
-                  ),
-                },
-                params.signer,
-                params.auctionPrice
-              );
-            return params.routeProbeLimiter
-              ? await params.routeProbeLimiter.run(
-                  `LI.FI quote ${params.pool.name}`,
-                  evaluateLifiQuote,
-                  { signal }
-                )
-              : await evaluateLifiQuote();
-          }
-        ),
-      params.probeTimeoutMs,
-      'LI.FI external take quote'
-    );
-  } catch (error) {
-    if (params.recordCircuitOutcome !== false) {
+  return quoteCircuitGuardedPath({
+    poolName: params.pool.name,
+    label: 'LI.FI',
+    externalTakePath: 'lifi',
+    selectedLiquiditySource: LiquiditySource.LIFI,
+    auctionPrice: params.auctionPrice,
+    collateral: params.collateral,
+    circuitOpenReason,
+    recordCircuitOutcome: params.recordCircuitOutcome,
+    routeProbeLimiter: params.routeProbeLimiter,
+    routeProbeAbortSignal: params.routeProbeAbortSignal,
+    probeTimeoutMs: params.probeTimeoutMs,
+    abortErrorMessage: 'LI.FI external take quote aborted',
+    timeoutLabel: 'LI.FI external take quote',
+    evaluate: async (signal) =>
+      await lifiExecutionModule.getLifiPathQuoteEvaluation(
+        params.pool,
+        params.price,
+        params.collateral,
+        params.poolConfig,
+        {
+          lifi: params.config.lifi,
+          lifiTaker:
+            params.config.lifiTaker ??
+            lifiExecutionModule.getLifiTakerAddress(
+              params.config.takerContracts
+            ),
+          lifiRequestAbortSignal: signal,
+          chainId: params.rpcCache?.chainId,
+          tokenDecimalsCache: params.getTokenDecimalsCache(params.rpcCache),
+        },
+        params.signer,
+        params.auctionPrice
+      ),
+    recordOutcome: (outcome) =>
       recordLifiCircuitOutcomeForDiscovery({
         rpcCache: params.rpcCache,
         config: params.config,
-        outcome: 'failure',
-      });
-    }
-    return {
-      isTakeable: false,
-      externalTakePath: 'lifi',
-      selectedLiquiditySource: LiquiditySource.LIFI,
-      quotedAuctionPriceWad: params.auctionPrice,
-      quotedCollateralWad: params.collateral,
-      reason: getErrorMessage(error),
-      quoteFailureRetryable: true,
-      quoteFailureCode: 'exception',
-    };
-  }
-
-  if (params.recordCircuitOutcome !== false) {
-    recordLifiCircuitOutcomeForDiscovery({
-      rpcCache: params.rpcCache,
-      config: params.config,
-      outcome:
-        evaluation.quoteFailureRetryable === true
-          ? 'failure'
-          : evaluation.quoteAmountRaw !== undefined
-            ? 'success'
-            : 'neutral',
-    });
-  }
-
-  return {
-    ...evaluation,
-    externalTakePath: 'lifi',
-    selectedLiquiditySource:
-      evaluation.selectedLiquiditySource ?? LiquiditySource.LIFI,
-    quotedAuctionPriceWad: params.auctionPrice,
-    quotedCollateralWad: params.collateral,
-  };
+        outcome,
+      }),
+  });
 }

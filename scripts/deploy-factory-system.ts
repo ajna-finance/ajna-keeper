@@ -8,11 +8,13 @@ import {
   KeeperConfig,
   LiquiditySource,
 } from '../src/config';
-import { normalizeLifiProductionChainPolicy } from '../src/config/lifi-policy';
 import {
-  normalizeLifiAddressAllowlist,
-  normalizeLifiSelectorAllowlistRecord,
-} from '../src/dex/lifi';
+  configureLifiAllowlists,
+  deployLifiKeeperTaker,
+  hasProductionLifiConfig,
+  registerLifiTakerInFactory,
+  validateDetectedChainLifiProductionConfig,
+} from './deployment/lifi-factory-deployment';
 
 /**
  * Universal Factory System Deployment Script
@@ -37,12 +39,6 @@ interface DeploymentAddresses {
   curveTaker?: string;
   lifiTaker?: string;
   // Future: uniswapV4, pancakeswap, balancer, izumi, etc.
-}
-
-interface LifiProductionAllowlists {
-  callTargets: string[];
-  approvalSpenders: string[];
-  selectorAllowlist: Record<string, string[]>;
 }
 
 // Gas configuration for different networks
@@ -113,67 +109,6 @@ function getGasConfig(chainId: number) {
     return { gasLimit: '5000000' }; // Default 5M gas
   }
   return config;
-}
-
-function normalizeLifiSelectorsForTarget(
-  target: string,
-  selectors: readonly string[],
-  label: string,
-  requireNonEmpty = true
-): string[] {
-  if (!requireNonEmpty && selectors.length === 0) {
-    return [];
-  }
-  const normalized = normalizeLifiSelectorAllowlistRecord(
-    { [target]: selectors },
-    { label, requireNonEmpty }
-  );
-  return normalized[ethers.utils.getAddress(target).toLowerCase()] ?? [];
-}
-
-function toLowerSet(values: readonly string[]): Set<string> {
-  return new Set(values.map((value) => value.toLowerCase()));
-}
-
-function getLifiProductionAllowlists(
-  config: KeeperConfig,
-  chainId: number
-): LifiProductionAllowlists {
-  const lifi = config.dex?.lifi;
-  if (!lifi) {
-    throw new Error('LI.FI production config is required for deployment');
-  }
-  const policy = normalizeLifiProductionChainPolicy({
-    config: lifi,
-    fieldName: 'LI.FI',
-    chainId,
-  });
-  return {
-    callTargets: policy.callTargets,
-    approvalSpenders: policy.approvalSpenders,
-    selectorAllowlist: policy.selectorAllowlist,
-  };
-}
-
-function hasProductionLifiConfig(config: KeeperConfig): boolean {
-  return config.dex?.lifi?.mode === 'production';
-}
-
-function assertExactSet(
-  label: string,
-  expectedValues: readonly string[],
-  actualValues: readonly string[]
-): void {
-  const expected = expectedValues.map((value) => value.toLowerCase()).sort();
-  const actual = actualValues.map((value) => value.toLowerCase()).sort();
-  if (
-    expected.length !== actual.length ||
-    expected.some((value, index) => value !== actual[index])
-  ) {
-    throw new Error(
-      `${label} mismatch. expected=[${expected.join(',')}] actual=[${actual.join(',')}]`
-    );
-  }
 }
 
 async function validateConfig(config: KeeperConfig): Promise<void> {
@@ -284,21 +219,6 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
   }
 
   console.log('Configuration validation passed');
-}
-
-function validateDetectedChainLifiProductionConfig(
-  config: KeeperConfig,
-  chainInfo: { chainId: number; name: string }
-): void {
-  if (!hasProductionLifiConfig(config)) {
-    return;
-  }
-
-  const { callTargets, approvalSpenders, selectorAllowlist } =
-    getLifiProductionAllowlists(config, chainInfo.chainId);
-  console.log(
-    `✅ LI.FI production allowlists validated for ${chainInfo.name} (${chainInfo.chainId}): targets=${callTargets.length}, spenders=${approvalSpenders.length}, selectorTargets=${Object.keys(selectorAllowlist).length}`
-  );
 }
 
 async function deployFactory(
@@ -540,53 +460,6 @@ async function deployCurveKeeperTaker(
   return taker.address;
 }
 
-async function deployLifiKeeperTaker(
-  deployer: ethers.Wallet,
-  ajnaPoolFactory: string,
-  factoryAddress: string,
-  chainId: number
-): Promise<string> {
-  console.log('\n📦 Step 2d: Deploying LifiKeeperTaker...');
-
-  const takerArtifactPath = path.join(
-    __dirname,
-    '..',
-    'artifacts',
-    'contracts',
-    'takers',
-    'LifiKeeperTaker.sol',
-    'LifiKeeperTaker.json'
-  );
-  const takerArtifact = require(takerArtifactPath);
-
-  const LifiKeeperTaker = new ethers.ContractFactory(
-    takerArtifact.abi,
-    takerArtifact.bytecode,
-    deployer
-  );
-
-  const gasConfig = getGasConfig(chainId);
-  const deployOptions: any = {
-    gasLimit: gasConfig.gasLimit,
-  };
-
-  if (gasConfig.gasPrice) {
-    deployOptions.gasPrice = gasConfig.gasPrice;
-  }
-
-  const taker = await LifiKeeperTaker.deploy(
-    ajnaPoolFactory,
-    factoryAddress,
-    deployOptions
-  );
-
-  console.log('✅ LI.FI taker deployment tx:', taker.deployTransaction.hash);
-  await taker.deployed();
-  console.log('🎉 LifiKeeperTaker deployed to:', taker.address);
-
-  return taker.address;
-}
-
 async function configureFactory(
   deployer: ethers.Wallet,
   factoryAddress: string,
@@ -645,204 +518,6 @@ async function configureFactory(
   // on-chain allowlists are incomplete or unverified.
   // ADD DELAY AFTER CONFIGURATION
   await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
-}
-
-// Register the LI.FI taker in the factory. Must run only after
-// configureLifiAllowlists has succeeded (allowlists applied and reconciled),
-// keeping factory enablement strictly downstream of verified config/on-chain
-// agreement per the LI.FI plan's atomic operational runbook.
-async function registerLifiTakerInFactory(
-  deployer: ethers.Wallet,
-  factoryAddress: string,
-  addresses: DeploymentAddresses
-): Promise<void> {
-  if (!addresses.lifiTaker) {
-    return;
-  }
-  console.log('\n⚙️  Step 3c: Registering LI.FI taker in factory...');
-  const factoryArtifact = require(
-    path.join(
-      __dirname,
-      '..',
-      'artifacts',
-      'contracts',
-      'factories',
-      'AjnaKeeperTakerFactory.sol',
-      'AjnaKeeperTakerFactory.json'
-    )
-  );
-  const factory = new ethers.Contract(
-    factoryAddress,
-    factoryArtifact.abi,
-    deployer
-  );
-  // Register LI.FI taker (LiquiditySource.LIFI = 5)
-  const setLifiTakerTx = await factory.setTaker(
-    LiquiditySource.LIFI,
-    addresses.lifiTaker
-  );
-  console.log('✅ LI.FI configuration tx:', setLifiTakerTx.hash);
-  await setLifiTakerTx.wait();
-  console.log('🎉 Factory configured with LI.FI taker');
-  await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
-}
-
-async function configureLifiAllowlists(
-  deployer: ethers.Wallet,
-  takerAddress: string,
-  config: KeeperConfig,
-  chainId: number
-): Promise<void> {
-  if (!hasProductionLifiConfig(config)) {
-    return;
-  }
-
-  console.log('\n⚙️  Step 3b: Configuring LI.FI taker allowlists...');
-
-  const takerArtifactPath = path.join(
-    __dirname,
-    '..',
-    'artifacts',
-    'contracts',
-    'takers',
-    'LifiKeeperTaker.sol',
-    'LifiKeeperTaker.json'
-  );
-  const takerArtifact = require(takerArtifactPath);
-  const taker = new ethers.Contract(takerAddress, takerArtifact.abi, deployer);
-
-  const { callTargets, approvalSpenders, selectorAllowlist } =
-    getLifiProductionAllowlists(config, chainId);
-  const configuredCallTargets = toLowerSet(callTargets);
-  const configuredApprovalSpenders = toLowerSet(approvalSpenders);
-  const currentCallTargets = normalizeLifiAddressAllowlist(
-    await taker.getAllowedCallTargets(),
-    {
-      label: 'on-chain LI.FI call target allowlist',
-    }
-  );
-  const currentApprovalSpenders = normalizeLifiAddressAllowlist(
-    await taker.getAllowedApprovalSpenders(),
-    {
-      label: 'on-chain LI.FI approval spender allowlist',
-    }
-  );
-  const currentCallTargetSet = toLowerSet(currentCallTargets);
-  const currentApprovalSpenderSet = toLowerSet(currentApprovalSpenders);
-
-  for (const target of currentCallTargets) {
-    if (!configuredCallTargets.has(target.toLowerCase())) {
-      const tx = await taker.setCallTarget(target, false);
-      console.log(`Disabled stale LI.FI call target ${target} tx:`, tx.hash);
-      await tx.wait();
-    }
-  }
-
-  for (const spender of currentApprovalSpenders) {
-    if (!configuredApprovalSpenders.has(spender.toLowerCase())) {
-      const tx = await taker.setApprovalSpender(spender, false);
-      console.log(
-        `Disabled stale LI.FI approval spender ${spender} tx:`,
-        tx.hash
-      );
-      await tx.wait();
-    }
-  }
-
-  const selectorTargets = new Map<string, string>();
-  for (const target of [...currentCallTargets, ...callTargets]) {
-    selectorTargets.set(target.toLowerCase(), target);
-  }
-
-  for (const target of Array.from(selectorTargets.values())) {
-    const configuredSelectors = toLowerSet(
-      selectorAllowlist[target.toLowerCase()] ?? []
-    );
-    const currentSelectors = normalizeLifiSelectorsForTarget(
-      target,
-      await taker.getAllowedCallSelectors(target),
-      `on-chain LI.FI selector allowlist for ${target}`,
-      false
-    );
-
-    for (const selector of currentSelectors) {
-      if (!configuredSelectors.has(selector.toLowerCase())) {
-        const tx = await taker.setCallSelector(target, selector, false);
-        console.log(
-          `Disabled stale LI.FI selector ${selector} for ${target} tx:`,
-          tx.hash
-        );
-        await tx.wait();
-      }
-    }
-  }
-
-  for (const target of callTargets) {
-    if (currentCallTargetSet.has(target.toLowerCase())) {
-      continue;
-    }
-    const tx = await taker.setCallTarget(target, true);
-    console.log(`✅ LI.FI call target ${target} tx:`, tx.hash);
-    await tx.wait();
-  }
-
-  for (const spender of approvalSpenders) {
-    if (currentApprovalSpenderSet.has(spender.toLowerCase())) {
-      continue;
-    }
-    const tx = await taker.setApprovalSpender(spender, true);
-    console.log(`✅ LI.FI approval spender ${spender} tx:`, tx.hash);
-    await tx.wait();
-  }
-
-  for (const [target, selectors] of Object.entries(selectorAllowlist)) {
-    const currentSelectors = toLowerSet(
-      normalizeLifiSelectorsForTarget(
-        target,
-        await taker.getAllowedCallSelectors(target),
-        `on-chain LI.FI selector allowlist for ${target}`,
-        false
-      )
-    );
-    for (const selector of selectors) {
-      if (currentSelectors.has(selector.toLowerCase())) {
-        continue;
-      }
-      const tx = await taker.setCallSelector(target, selector, true);
-      console.log(`✅ LI.FI selector ${selector} for ${target} tx:`, tx.hash);
-      await tx.wait();
-    }
-  }
-
-  assertExactSet(
-    'LI.FI call target allowlist',
-    callTargets,
-    normalizeLifiAddressAllowlist(await taker.getAllowedCallTargets(), {
-      label: 'on-chain LI.FI call target allowlist',
-    })
-  );
-  assertExactSet(
-    'LI.FI approval spender allowlist',
-    approvalSpenders,
-    normalizeLifiAddressAllowlist(await taker.getAllowedApprovalSpenders(), {
-      label: 'on-chain LI.FI approval spender allowlist',
-    })
-  );
-  for (const target of callTargets) {
-    assertExactSet(
-      `LI.FI selector allowlist for ${target}`,
-      selectorAllowlist[target.toLowerCase()] ?? [],
-      normalizeLifiSelectorsForTarget(
-        target,
-        await taker.getAllowedCallSelectors(target),
-        `on-chain LI.FI selector allowlist for ${target}`
-      )
-    );
-  }
-
-  console.log(
-    `🎉 LI.FI allowlists configured: targets=${callTargets.length}, spenders=${approvalSpenders.length}, selectorTargets=${Object.keys(selectorAllowlist).length}`
-  );
 }
 
 async function verifyDeployment(
@@ -1208,7 +883,8 @@ async function main() {
         deployer,
         config.ajna.erc20PoolFactory,
         addresses.factory,
-        chainInfo.chainId
+        chainInfo.chainId,
+        getGasConfig
       );
       // ADD DELAY AFTER LI.FI DEPLOYMENT
       await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay

@@ -83,15 +83,35 @@ export function selectBestExternalTakeQuoteEvaluation(params: {
   return sortExternalTakeQuoteEvaluationsForSelection(params)[0];
 }
 
+export type HybridExternalTakeExecutionSelection =
+  | {
+      approved: true;
+      effectiveSelectedPath: ExternalTakePathKind;
+      selectedSource: LiquiditySource;
+    }
+  | {
+      approved: false;
+      effectiveSelectedPath?: ExternalTakePathKind;
+      selectedSource?: LiquiditySource;
+      reason: string;
+    };
+
+function getDefaultSourceForPath(
+  path: ExternalTakePathKind
+): LiquiditySource | undefined {
+  if (path === 'oneinch') {
+    return LiquiditySource.ONEINCH;
+  }
+  if (path === 'lifi') {
+    return LiquiditySource.LIFI;
+  }
+  return undefined;
+}
+
 export function resolveHybridExternalTakeExecutionSelection(params: {
   quoteEvaluation?: ExternalTakeQuoteEvaluation;
   allowedExternalTakePaths: ExternalTakePathKind[];
-}): {
-  approved: boolean;
-  effectiveSelectedPath?: ExternalTakePathKind;
-  selectedSource?: LiquiditySource;
-  reason?: string;
-} {
+}): HybridExternalTakeExecutionSelection {
   const selectedPath = params.quoteEvaluation?.externalTakePath;
   const selectedSource = params.quoteEvaluation?.selectedLiquiditySource;
   const sourceSelectedPath =
@@ -143,9 +163,19 @@ export function resolveHybridExternalTakeExecutionSelection(params: {
       reason: 'selected factory path without a concrete factory source',
     };
   }
+  const effectiveSelectedSource =
+    selectedSource ?? getDefaultSourceForPath(effectiveSelectedPath);
+  if (effectiveSelectedSource === undefined) {
+    return {
+      approved: false,
+      effectiveSelectedPath,
+      selectedSource,
+      reason: `selected path=${effectiveSelectedPath} without a concrete source`,
+    };
+  }
   return {
     approved: true,
     effectiveSelectedPath,
-    selectedSource,
+    selectedSource: effectiveSelectedSource,
   };
 }

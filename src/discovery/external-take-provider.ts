@@ -2,11 +2,7 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { ExternalTakePathKind, LiquiditySource } from '../config';
 import { TakeWriteTransport } from '../take/write-transport';
 import { TakeActionConfig, TakeLiquidationPlan } from '../take/types';
-import {
-  DiscoveryExecutionConfig,
-  DiscoveryRpcCache,
-  ExternalTakeCircuitPurpose,
-} from './types';
+import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
 
 /**
  * Result of a single external-take provider execution attempt.
@@ -60,8 +56,6 @@ export interface ExternalTakeRouteProvider<
   TExecutionConfig = unknown,
 > {
   readonly path: ExternalTakePathKind;
-  supportedSources(): readonly LiquiditySource[];
-  supportedCircuitPurposes(): readonly ExternalTakeCircuitPurpose[];
   execute(
     params: ExternalTakeExecuteParams<TPoolConfig, TExecutionConfig>
   ): Promise<ExternalTakeExecutionAttemptResult>;

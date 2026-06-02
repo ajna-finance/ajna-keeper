@@ -1,12 +1,18 @@
 import fs from 'fs';
 import path from 'path';
 import { expect } from 'chai';
+import { buildLifiAllowlistReconciliationPlan } from '../../scripts/deployment/lifi-factory-deployment';
 
 describe('LI.FI factory deployment script support', () => {
-  const source = fs.readFileSync(
+  const deploySource = fs.readFileSync(
     path.join(__dirname, '../../scripts/deploy-factory-system.ts'),
     'utf8'
   );
+  const lifiDeploymentSource = fs.readFileSync(
+    path.join(__dirname, '../../scripts/deployment/lifi-factory-deployment.ts'),
+    'utf8'
+  );
+  const source = `${deploySource}\n${lifiDeploymentSource}`;
 
   it('deploys and registers the canonical LI.FI taker for production dex.lifi config', () => {
     expect(source).to.include('deployLifiKeeperTaker');
@@ -44,10 +50,10 @@ describe('LI.FI factory deployment script support', () => {
       'getLifiProductionAllowlists(config, chainInfo.chainId)'
     );
 
-    const validationIndex = source.indexOf(
+    const validationIndex = deploySource.indexOf(
       'validateDetectedChainLifiProductionConfig(config, chainInfo);'
     );
-    const walletIndex = source.indexOf(
+    const walletIndex = deploySource.indexOf(
       "console.log('\\n🔐 Loading wallet from keystore...');"
     );
 
@@ -58,13 +64,47 @@ describe('LI.FI factory deployment script support', () => {
   it('reconciles stale LI.FI allowlist entries before final exact verification', () => {
     expect(source).to.include('currentCallTargets');
     expect(source).to.include('currentApprovalSpenders');
-    expect(source).to.include('selectorTargets');
+    expect(source).to.include('buildLifiAllowlistReconciliationPlan');
+    expect(source).to.include('assertContainsSet');
     expect(source).to.include('setCallTarget(target, false)');
     expect(source).to.include('setApprovalSpender(spender, false)');
     expect(source).to.include('setCallSelector(target, selector, false)');
     expect(source).to.include('Disabled stale LI.FI call target');
     expect(source).to.include('Disabled stale LI.FI approval spender');
     expect(source).to.include('Disabled stale LI.FI selector');
+  });
+
+  it('plans desired LI.FI allowlist additions before stale removals', () => {
+    const targetA = '0x1111111111111111111111111111111111111111';
+    const targetB = '0x2222222222222222222222222222222222222222';
+    const spenderA = '0x3333333333333333333333333333333333333333';
+    const spenderB = '0x4444444444444444444444444444444444444444';
+
+    const plan = buildLifiAllowlistReconciliationPlan({
+      desired: {
+        callTargets: [targetB],
+        approvalSpenders: [spenderB],
+        selectorAllowlist: {
+          [targetB]: ['0xbbbbbbbb'],
+        },
+      },
+      currentCallTargets: [targetA],
+      currentApprovalSpenders: [spenderA],
+      currentSelectorsByTarget: {
+        [targetA]: ['0xaaaaaaaa'],
+      },
+    });
+
+    expect(plan.callTargetsToEnable).to.deep.equal([targetB]);
+    expect(plan.approvalSpendersToEnable).to.deep.equal([spenderB]);
+    expect(plan.selectorsToEnable).to.deep.equal([
+      { target: targetB, selector: '0xbbbbbbbb' },
+    ]);
+    expect(plan.selectorsToDisable).to.deep.equal([
+      { target: targetA, selector: '0xaaaaaaaa' },
+    ]);
+    expect(plan.callTargetsToDisable).to.deep.equal([targetA]);
+    expect(plan.approvalSpendersToDisable).to.deep.equal([spenderA]);
   });
 
   it('does not silently truncate configured LI.FI selectors during deployment', () => {
