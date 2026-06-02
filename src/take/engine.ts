@@ -12,6 +12,8 @@ import { TakeWriteTransport } from './write-transport';
 import {
   BoundExternalTakeRouteEvaluation,
   ArbTakeEvaluation,
+  ExternalTakeEvaluationResult,
+  ExternalTakeExecutionPlan,
   ExternalTakeQuoteEvaluation,
   ExternalTakeStrategyKind,
   TakeActionConfig,
@@ -20,6 +22,7 @@ import {
   TakeExecutionResult,
   TakeLiquidationPlan,
 } from './types';
+import { bindExternalTakeExecutionPlanPrimary } from './external-take-execution-plan';
 import { bindExternalTakeRouteForCandidate } from './external-take-quote-approval';
 import {
   TakeAuctionStatus,
@@ -40,6 +43,7 @@ export const TAKE_SKIP_REASONS = {
 export interface ExternalTakeAdapter<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
+  TApprovalContext = unknown,
 > {
   kind: ExternalTakeStrategyKind;
   evaluateExternalTake?: (params: {
@@ -49,12 +53,12 @@ export interface ExternalTakeAdapter<
     price: number;
     auctionPrice: BigNumber;
     collateral: BigNumber;
-  }) => Promise<ExternalTakeQuoteEvaluation>;
+  }) => Promise<ExternalTakeEvaluationResult<TApprovalContext>>;
   executeExternalTake?: (params: {
     pool: FungiblePool;
     signer: Signer;
     poolConfig: TPoolConfig;
-    liquidation: TakeLiquidationPlan;
+    liquidation: TakeLiquidationPlan<TApprovalContext>;
     config: TExecutionConfig;
   }) => Promise<boolean | void>;
 }
@@ -80,13 +84,18 @@ type TakeArbApprovalResult =
 interface EvaluateTakeDecisionParams<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
+  TApprovalContext = unknown,
 > {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: TPoolConfig;
   candidate: TakeBorrowerCandidate;
   subgraph: SubgraphReader;
-  externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
+  externalTakeAdapter: ExternalTakeAdapter<
+    TPoolConfig,
+    TExecutionConfig,
+    TApprovalContext
+  >;
   arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   takeAuctionStatusReader?: TakeAuctionStatusReader;
   auctionStatus?: TakeAuctionStatus;
@@ -99,6 +108,7 @@ interface EvaluateTakeDecisionParams<
     auctionPrice: BigNumber;
     collateral: BigNumber;
     quoteEvaluation: ExternalTakeQuoteEvaluation;
+    externalTakeApprovalContext?: TApprovalContext;
   }) => Promise<TakeExternalApprovalResult>;
   approveArbTake?: (params: {
     pool: FungiblePool;
@@ -115,12 +125,17 @@ interface EvaluateTakeDecisionParams<
 interface ExecuteTakeDecisionParams<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
+  TApprovalContext = unknown,
 > {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: TPoolConfig;
-  decision: TakeDecision;
-  externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
+  decision: TakeDecision<TApprovalContext>;
+  externalTakeAdapter: ExternalTakeAdapter<
+    TPoolConfig,
+    TExecutionConfig,
+    TApprovalContext
+  >;
   externalExecutionConfig: TExecutionConfig;
   subgraph: SubgraphReader;
   dryRun: boolean;
@@ -129,16 +144,17 @@ interface ExecuteTakeDecisionParams<
   revalidateBeforeExecution?: boolean;
   reapproveExternalTakeBeforeExecution?: EvaluateTakeDecisionParams<
     TPoolConfig,
-    TExecutionConfig
+    TExecutionConfig,
+    TApprovalContext
   >['approveExternalTake'];
   onSkip?: (params: {
     candidate: TakeBorrowerCandidate;
     stage: 'evaluation' | 'revalidation' | 'execution';
     reason: string;
-    decision?: TakeDecision;
+    decision?: TakeDecision<TApprovalContext>;
   }) => void;
   onExecuted?: (params: {
-    decision: TakeDecision;
+    decision: TakeDecision<TApprovalContext>;
     executedTake: boolean;
     executedArbTake: boolean;
   }) => void;
@@ -148,8 +164,9 @@ interface ExecuteTakeDecisionParams<
 interface ProcessTakeCandidatesParams<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
+  TApprovalContext = unknown,
 > extends Omit<
-      EvaluateTakeDecisionParams<TPoolConfig, TExecutionConfig>,
+      EvaluateTakeDecisionParams<TPoolConfig, TExecutionConfig, TApprovalContext>,
       | 'candidate'
       | 'approveExternalTake'
       | 'approveArbTake'
@@ -157,7 +174,7 @@ interface ProcessTakeCandidatesParams<
       | 'arbTakeStrategy'
     >,
     Pick<
-      ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig>,
+      ExecuteTakeDecisionParams<TPoolConfig, TExecutionConfig, TApprovalContext>,
       | 'externalExecutionConfig'
       | 'dryRun'
       | 'revalidateBeforeExecution'
@@ -173,22 +190,29 @@ interface ProcessTakeCandidatesParams<
   maxConcurrentCandidateEvaluations?: number;
   resetExternalTakeAttemptSubmission?: () => void;
   didExternalTakeAttemptSubmission?: () => boolean;
-  externalTakeAdapter: ExternalTakeAdapter<TPoolConfig, TExecutionConfig>;
+  externalTakeAdapter: ExternalTakeAdapter<
+    TPoolConfig,
+    TExecutionConfig,
+    TApprovalContext
+  >;
   arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
   approveExternalTake?: EvaluateTakeDecisionParams<
     TPoolConfig,
-    TExecutionConfig
+    TExecutionConfig,
+    TApprovalContext
   >['approveExternalTake'];
   approveArbTake?: EvaluateTakeDecisionParams<
     TPoolConfig,
-    TExecutionConfig
+    TExecutionConfig,
+    TApprovalContext
   >['approveArbTake'];
   reapproveExternalTakeBeforeExecution?: ExecuteTakeDecisionParams<
     TPoolConfig,
-    TExecutionConfig
+    TExecutionConfig,
+    TApprovalContext
   >['reapproveExternalTakeBeforeExecution'];
-  onFound?: (decision: TakeDecision) => void;
-  onExecutionAttempt?: (decision: TakeDecision) => void;
+  onFound?: (decision: TakeDecision<TApprovalContext>) => void;
+  onExecutionAttempt?: (decision: TakeDecision<TApprovalContext>) => void;
 }
 
 export async function getTakeBorrowerCandidates(params: {
@@ -283,6 +307,7 @@ export async function revalidateTakeDecision<
 export async function evaluateTakeDecision<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
+  TApprovalContext = unknown,
 >({
   pool,
   signer,
@@ -297,8 +322,9 @@ export async function evaluateTakeDecision<
   approveArbTake,
 }: EvaluateTakeDecisionParams<
   TPoolConfig,
-  TExecutionConfig
->): Promise<TakeDecision> {
+  TExecutionConfig,
+  TApprovalContext
+>): Promise<TakeDecision<TApprovalContext>> {
   const statusReader =
     takeAuctionStatusReader ?? defaultTakeAuctionStatusReader;
   const liquidationStatus =
@@ -330,6 +356,9 @@ export async function evaluateTakeDecision<
   let takeablePrice: number | undefined;
   let maxArbTakePrice: number | undefined;
   let selectedQuoteEvaluation: BoundExternalTakeRouteEvaluation | undefined;
+  let selectedExternalTakeExecutionPlan:
+    | ExternalTakeExecutionPlan<TApprovalContext>
+    | undefined;
   const evaluateExternalTake = externalTakeAdapter.evaluateExternalTake;
   const externalTakeConfigured =
     poolConfig.take.marketPriceFactor !== undefined &&
@@ -337,7 +366,7 @@ export async function evaluateTakeDecision<
   const arbTakeConfigured = arbTakeStrategy.isEnabled(poolConfig);
 
   if (externalTakeConfigured) {
-    const quoteEvaluation = await evaluateExternalTake({
+    const externalTakeEvaluation = await evaluateExternalTake({
       pool,
       signer,
       poolConfig,
@@ -345,6 +374,7 @@ export async function evaluateTakeDecision<
       auctionPrice,
       collateral,
     });
+    const quoteEvaluation = externalTakeEvaluation.quoteEvaluation;
 
     if (!quoteEvaluation.isTakeable) {
       reason = quoteEvaluation.reason;
@@ -359,6 +389,8 @@ export async function evaluateTakeDecision<
             auctionPrice,
             collateral,
             quoteEvaluation,
+            externalTakeApprovalContext:
+              externalTakeEvaluation.executionPlan?.primary.approvalContext,
           })
         : (() => {
             const binding = bindExternalTakeRouteForCandidate({
@@ -382,6 +414,12 @@ export async function evaluateTakeDecision<
       if (approval.approved) {
         approvedTake = true;
         selectedQuoteEvaluation = approval.quoteEvaluation;
+        selectedExternalTakeExecutionPlan = externalTakeEvaluation.executionPlan
+          ? bindExternalTakeExecutionPlanPrimary({
+              plan: externalTakeEvaluation.executionPlan,
+              primaryEvaluation: approval.quoteEvaluation,
+            })
+          : undefined;
         takeablePrice = selectedQuoteEvaluation.takeablePrice;
       } else {
         reason = approval.reason ?? reason;
@@ -444,6 +482,7 @@ export async function evaluateTakeDecision<
     takeablePrice,
     maxArbTakePrice,
     quoteEvaluation: selectedQuoteEvaluation,
+    externalTakeExecutionPlan: selectedExternalTakeExecutionPlan,
     reason,
   };
 }
@@ -451,6 +490,7 @@ export async function evaluateTakeDecision<
 export async function executeTakeDecision<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
+  TApprovalContext = unknown,
 >({
   pool,
   signer,
@@ -469,7 +509,8 @@ export async function executeTakeDecision<
   takeAuctionStatusReader,
 }: ExecuteTakeDecisionParams<
   TPoolConfig,
-  TExecutionConfig
+  TExecutionConfig,
+  TApprovalContext
 >): Promise<TakeExecutionResult> {
   let approvedTake = decision.approvedTake;
   let approvedArbTake = decision.approvedArbTake;
@@ -559,6 +600,8 @@ export async function executeTakeDecision<
         auctionPrice,
         collateral,
         quoteEvaluation,
+        externalTakeApprovalContext:
+          decision.externalTakeExecutionPlan?.primary.approvalContext,
       });
       if (!approval.approved) {
         onSkip?.({
@@ -572,6 +615,13 @@ export async function executeTakeDecision<
         return getExecutionResult();
       }
       decision.quoteEvaluation = approval.quoteEvaluation;
+      if (decision.externalTakeExecutionPlan) {
+        decision.externalTakeExecutionPlan =
+          bindExternalTakeExecutionPlanPrimary({
+            plan: decision.externalTakeExecutionPlan,
+            primaryEvaluation: approval.quoteEvaluation,
+          });
+      }
     }
   }
 
@@ -589,6 +639,7 @@ export async function executeTakeDecision<
           isTakeable: true,
           isArbTakeable: approvedArbTake,
           externalTakeQuoteEvaluation: decision.quoteEvaluation,
+          externalTakeExecutionPlan: decision.externalTakeExecutionPlan,
         },
         config: externalExecutionConfig,
       }
@@ -664,6 +715,7 @@ export async function executeTakeDecision<
 export async function processTakeCandidates<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
+  TApprovalContext = unknown,
 >({
   pool,
   signer,
@@ -691,17 +743,21 @@ export async function processTakeCandidates<
   onFound,
   onExecutionAttempt,
   takeWriteTransport,
-}: ProcessTakeCandidatesParams<TPoolConfig, TExecutionConfig>): Promise<void> {
+}: ProcessTakeCandidatesParams<
+  TPoolConfig,
+  TExecutionConfig,
+  TApprovalContext
+>): Promise<void> {
   type CandidateEvaluationOutcome =
     | {
         kind: 'approved';
         candidate: TakeBorrowerCandidate;
-        decision: TakeDecision;
+        decision: TakeDecision<TApprovalContext>;
       }
     | {
         kind: 'skipped';
         candidate: TakeBorrowerCandidate;
-        decision?: TakeDecision;
+        decision?: TakeDecision<TApprovalContext>;
         reason: string;
       };
   const requestedCandidateEvaluationConcurrency =

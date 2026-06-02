@@ -10,7 +10,17 @@ import {
 } from '../../src/take/arb-strategy';
 import { processTakeCandidates } from '../../src/take/engine';
 import { createNoExternalTakeAdapter } from '../../src/take';
+import {
+  ExternalTakeEvaluationResult,
+  ExternalTakeQuoteEvaluation,
+} from '../../src/take/types';
 import * as transactions from '../../src/transactions';
+
+function externalTakeEvaluation(
+  quoteEvaluation: ExternalTakeQuoteEvaluation
+): ExternalTakeEvaluationResult {
+  return { quoteEvaluation };
+}
 
 describe('shared arbTake helpers', () => {
   afterEach(() => {
@@ -332,15 +342,17 @@ describe('shared arbTake helpers', () => {
       subgraph: { cacheKey: 'test-subgraph' } as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          takeablePrice: 2,
-          quoteAmountRaw: BigNumber.from(100),
-          quotedCollateralWad: quotedCollateral,
-          quotedAuctionPriceWad: ethers.utils.parseEther('1'),
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            externalTakePath: 'oneinch',
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            takeablePrice: 2,
+            quoteAmountRaw: BigNumber.from(100),
+            quotedCollateralWad: quotedCollateral,
+            quotedAuctionPriceWad: ethers.utils.parseEther('1'),
+          })
+        ),
         executeExternalTake: executeExternalTakeStub,
       } as any,
       arbTakeStrategy: createArbTakeStrategy(),
@@ -396,15 +408,17 @@ describe('shared arbTake helpers', () => {
       subgraph: { cacheKey: 'test-subgraph' } as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          takeablePrice: 2,
-          quoteAmountRaw: BigNumber.from(100),
-          quotedCollateralWad: quotedCollateral,
-          quotedAuctionPriceWad: quotedAuctionPrice,
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            externalTakePath: 'oneinch',
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            takeablePrice: 2,
+            quoteAmountRaw: BigNumber.from(100),
+            quotedCollateralWad: quotedCollateral,
+            quotedAuctionPriceWad: quotedAuctionPrice,
+          })
+        ),
         executeExternalTake: executeExternalTakeStub,
       } as any,
       arbTakeStrategy: createArbTakeStrategy(),
@@ -473,14 +487,16 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          takeablePrice: 1,
-          quoteAmountRaw: BigNumber.from(100),
-          approvedMinOutRaw: BigNumber.from(90),
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            externalTakePath: 'oneinch',
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            takeablePrice: 1,
+            quoteAmountRaw: BigNumber.from(100),
+            approvedMinOutRaw: BigNumber.from(90),
+          })
+        ),
         executeExternalTake: executeExternalTakeStub,
       } as any,
       arbTakeStrategy: createArbTakeStrategy(),
@@ -538,14 +554,16 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          takeablePrice: 1,
-          quoteAmountRaw: BigNumber.from(100),
-          approvedMinOutRaw: BigNumber.from(90),
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            externalTakePath: 'oneinch',
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            takeablePrice: 1,
+            quoteAmountRaw: BigNumber.from(100),
+            approvedMinOutRaw: BigNumber.from(90),
+          })
+        ),
         executeExternalTake: executeExternalTakeStub,
       } as any,
       arbTakeStrategy: createArbTakeStrategy(),
@@ -625,12 +643,14 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(100),
-          takeablePrice: 1,
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(100),
+            takeablePrice: 1,
+          })
+        ),
         executeExternalTake: sinon.stub().callsFake(async ({ liquidation }) => {
           executionOrder.push(liquidation.borrower);
           executionInFlight += 1;
@@ -694,12 +714,14 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(100),
-          takeablePrice: 1,
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(100),
+            takeablePrice: 1,
+          })
+        ),
         executeExternalTake: sinon.stub().callsFake(async ({ liquidation }) => {
           executionOrder.push(liquidation.borrower);
           return true;
@@ -757,12 +779,14 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(100),
-          takeablePrice: 1,
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(100),
+            takeablePrice: 1,
+          })
+        ),
         executeExternalTake,
       } as any,
       arbTakeStrategy: createArbTakeStrategy(),
@@ -823,12 +847,14 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(100),
-          takeablePrice: 1,
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(100),
+            takeablePrice: 1,
+          })
+        ),
         executeExternalTake: sinon.stub().callsFake(async ({ liquidation }) => {
           executionOrder.push(liquidation.borrower);
           return true;
@@ -878,12 +904,14 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(100),
-          takeablePrice: 1,
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(100),
+            takeablePrice: 1,
+          })
+        ),
         executeExternalTake: sinon.stub().callsFake(async ({ liquidation }) => {
           executionOrder.push(liquidation.borrower);
           return true;
@@ -937,12 +965,14 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(100),
-          takeablePrice: 1,
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(100),
+            takeablePrice: 1,
+          })
+        ),
         executeExternalTake,
       } as any,
       arbTakeStrategy: createArbTakeStrategy(),
@@ -1004,12 +1034,14 @@ describe('shared arbTake helpers', () => {
       subgraph: {} as any,
       externalTakeAdapter: {
         kind: 'oneinch',
-        evaluateExternalTake: sinon.stub().resolves({
-          isTakeable: true,
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(100),
-          takeablePrice: 1,
-        }),
+        evaluateExternalTake: sinon.stub().resolves(
+          externalTakeEvaluation({
+            isTakeable: true,
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(100),
+            takeablePrice: 1,
+          })
+        ),
         executeExternalTake,
       } as any,
       arbTakeStrategy: createArbTakeStrategy(),

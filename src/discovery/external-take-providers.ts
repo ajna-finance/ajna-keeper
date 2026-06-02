@@ -24,6 +24,7 @@ import {
 } from './external-take-quotes';
 import { getLifiCircuitOpenReason } from './lifi-circuit';
 import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
+import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './external-take-approval';
 
 export type DiscoveryExternalTakeRouteProvider = ExternalTakeRouteProvider<
   ResolvedTakeTarget,
@@ -64,7 +65,7 @@ function getFactoryQuoteIntentOptions(
     return { routeProbeAbortSignal: intent.abortSignal };
   }
   return {
-    factoryGasQuoteFallback: intent.kind === 'hybrid_gas_quote_fallback',
+    factoryGasQuoteFallback: intent.kind === HYBRID_GAS_QUOTE_FALLBACK_KIND,
   };
 }
 

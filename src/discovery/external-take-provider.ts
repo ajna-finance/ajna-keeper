@@ -7,6 +7,7 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../take/types';
+import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './external-take-approval';
 import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
 
 export type ExternalTakeQuoteCircuitOutcome = 'success' | 'failure' | 'neutral';
@@ -62,7 +63,7 @@ export interface ExternalTakeExecuteParams<
 export type ExternalTakeQuoteIntent =
   | { kind: 'direct' }
   | { kind: 'hybrid_probe'; abortSignal: AbortSignal }
-  | { kind: 'hybrid_gas_quote_fallback' };
+  | { kind: typeof HYBRID_GAS_QUOTE_FALLBACK_KIND };
 
 export interface ExternalTakeQuoteParams<TPoolConfig extends TakeActionConfig> {
   pool: FungiblePool;

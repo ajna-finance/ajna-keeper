@@ -13,7 +13,11 @@ import { TakeWriteTransport } from '../take/write-transport';
 import { AsyncOperationLimiter } from '../utils';
 import { DiscoveryReadTransports } from '../read-transports';
 import { DiscoveryExternalExecutionConfig } from './external-take-provider';
-import { DiscoveryExternalTakeApprover } from './external-take-approval';
+import {
+  DiscoveryExternalTakeApprovalContext,
+  DiscoveryExternalTakeApprover,
+  resolveDiscoveryExternalTakeApprovalMode,
+} from './external-take-approval';
 import { createExternalTakeAdapterForDiscovery } from './external-take-discovery-adapter';
 import { createDiscoveryExternalTakeProviderRegistry } from './external-take-providers';
 import {
@@ -63,7 +67,8 @@ export interface DiscoveredTakeTargetRuntime {
   externalTakeProbeTimeoutMs: number;
   externalTakeAdapter: ExternalTakeAdapter<
     ResolvedTakeTarget,
-    DiscoveryExternalExecutionConfig
+    DiscoveryExternalExecutionConfig,
+    DiscoveryExternalTakeApprovalContext
   >;
   externalExecutionConfig: DiscoveryExternalExecutionConfig;
   approveExternalTake: DiscoveryExternalTakeApprover;
@@ -105,6 +110,7 @@ export function createDiscoveredTakeTargetRuntime(params: {
     auctionPrice,
     collateral,
     quoteEvaluation,
+    externalTakeApprovalContext,
     approvalMode,
     countStats = true,
     forceGasRefresh = false,
@@ -123,7 +129,10 @@ export function createDiscoveredTakeTargetRuntime(params: {
       auctionPrice,
       collateral,
       quoteEvaluation,
-      approvalMode,
+      approvalMode: resolveDiscoveryExternalTakeApprovalMode({
+        approvalMode,
+        externalTakeApprovalContext,
+      }),
       countStats,
       forceGasRefresh,
     });

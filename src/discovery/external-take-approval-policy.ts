@@ -3,6 +3,8 @@ import {
   LiquiditySource,
   isFactoryDynamicSource,
   normalizeExternalTakeRouteSelectionMode,
+  resolveExternalTakePaths,
+  resolveHybridGasQuoteFallbackPolicy,
 } from '../config';
 import { ZERO_BN } from '../constants';
 import { getDecimalsErc20 } from '../erc20';
@@ -16,6 +18,7 @@ import { decimaledToWei } from '../utils';
 import {
   ExternalTakeApprovalInput,
   ExternalTakeApprovalResult,
+  HYBRID_GAS_QUOTE_FALLBACK_KIND,
 } from './external-take-approval';
 import {
   evaluateGasPolicy,
@@ -161,29 +164,27 @@ export async function approveExternalTakeForDiscovery(
   let candidateQuoteEvaluation = cloneExternalTakeQuoteEvaluation(
     quoteEvaluation
   );
-  const approvalMode =
-    params.approvalMode ??
-    candidateQuoteEvaluation.approvalMode ??
-    'strict_hybrid';
+  const approvalMode = params.approvalMode ?? 'strict_hybrid';
 
-  if (approvalMode === 'factory_gas_quote_fallback') {
-    if (
-      takePolicy?.maxGasCostQuote !== undefined ||
-      takePolicy?.minExpectedProfitQuote !== undefined ||
-      takePolicy?.minProfitNative !== undefined
-    ) {
+  if (approvalMode === HYBRID_GAS_QUOTE_FALLBACK_KIND) {
+    const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
+      fallbackMode: takePolicy?.hybridGasQuoteFailureFallbackMode,
+      routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
+        takePolicy?.externalTakeRouteSelectionMode
+      ),
+      externalTakePaths: resolveExternalTakePaths({
+        defaultLiquiditySource: target.take.liquiditySource,
+        allowedExternalTakePaths: takePolicy?.allowedExternalTakePaths,
+      }),
+      maxGasCostNative: takePolicy?.maxGasCostNative,
+      maxGasCostQuote: takePolicy?.maxGasCostQuote,
+      minExpectedProfitQuote: takePolicy?.minExpectedProfitQuote,
+      minProfitNative: takePolicy?.minProfitNative,
+    });
+    if (!fallbackEligibility.eligible) {
       return {
         approved: false,
-        reason:
-          'hybrid gas quote fallback ineligible because quote-denominated gas/profit policy is configured',
-        rejectCategory: 'gasPolicy',
-      };
-    }
-    if (takePolicy?.maxGasCostNative === undefined) {
-      return {
-        approved: false,
-        reason:
-          'hybrid gas quote fallback ineligible because maxGasCostNative is not configured',
+        reason: `hybrid gas quote fallback ineligible because ${fallbackEligibility.reason}`,
         rejectCategory: 'gasPolicy',
       };
     }
@@ -218,7 +219,7 @@ export async function approveExternalTakeForDiscovery(
   }
   let approvedQuoteEvaluation = executableApproval.quoteEvaluation;
   const fallbackInputWasSubsidized =
-    approvalMode === 'factory_gas_quote_fallback' &&
+    approvalMode === HYBRID_GAS_QUOTE_FALLBACK_KIND &&
     isSubsidizedExternalTakeQuote(approvedQuoteEvaluation);
   if (selectedLiquiditySource !== undefined && !params.forceGasRefresh) {
     const freshness = hasFreshExternalTakeGasPolicy({
@@ -306,7 +307,7 @@ export async function approveExternalTakeForDiscovery(
     preferredLiquiditySource: selectedLiquiditySource,
     useProfitFloor: true,
     requireGasCostQuote:
-      approvalMode === 'factory_gas_quote_fallback'
+      approvalMode === HYBRID_GAS_QUOTE_FALLBACK_KIND
         ? false
         : requiresHybridNetProfitRanking(takePolicy),
     gasPrice: rpcCache?.gasPrice,
@@ -440,7 +441,7 @@ export async function approveExternalTakeForDiscovery(
   approvedQuoteEvaluation = profitabilityApproval.quoteEvaluation;
 
   if (
-    approvalMode === 'factory_gas_quote_fallback' &&
+    approvalMode === HYBRID_GAS_QUOTE_FALLBACK_KIND &&
     (fallbackInputWasSubsidized ||
       isSubsidizedExternalTakeQuote(approvedQuoteEvaluation))
   ) {

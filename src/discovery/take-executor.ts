@@ -62,6 +62,7 @@ import {
   getExternalTakeGasLimit,
   refreshDiscoveryGasPriceIfStale,
 } from './external-take-approval-policy';
+import { DiscoveryExternalTakeApprovalContext } from './external-take-approval';
 
 export type { DiscoveredTakeTargetStats } from './external-take-stats';
 export { refreshDiscoveryGasPriceIfStale } from './external-take-approval-policy';
@@ -673,7 +674,8 @@ export async function handleDiscoveredTakeTarget(
         }
         await processTakeCandidates<
           ResolvedTakeTarget,
-          DiscoveryExternalExecutionConfig
+          DiscoveryExternalExecutionConfig,
+          DiscoveryExternalTakeApprovalContext
         >({
           pool: params.pool,
           signer: params.signer,
@@ -700,24 +702,28 @@ export async function handleDiscoveredTakeTarget(
             auctionPrice,
             collateral,
             quoteEvaluation,
+            externalTakeApprovalContext,
           }) =>
             approveExternalTake({
               price,
               auctionPrice,
               collateral,
               quoteEvaluation,
+              externalTakeApprovalContext,
             }),
           reapproveExternalTakeBeforeExecution: async ({
             price,
             auctionPrice,
             collateral,
             quoteEvaluation,
+            externalTakeApprovalContext,
           }) => {
             const approval = await approveExternalTake({
               price,
               auctionPrice,
               collateral,
               quoteEvaluation,
+              externalTakeApprovalContext,
               forceGasRefresh: true,
             });
             if (!approval.approved) {

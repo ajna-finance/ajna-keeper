@@ -21,6 +21,7 @@ import {
 import {
   DiscoveryExternalTakeApprovalMode,
   ExternalTakeApprovalResult,
+  HYBRID_GAS_QUOTE_FALLBACK_KIND,
 } from './external-take-approval';
 import { GasPolicyResult } from './gas-policy';
 import { DiscoveryRpcCache } from './types';
@@ -125,7 +126,7 @@ export function applyDiscoveryApprovalProfitabilityPolicy(params: {
   const canApplyRawRoutePolicy =
     params.quoteAmountRaw !== undefined &&
     (params.gasCostQuoteRaw !== undefined ||
-      params.approvalMode === 'factory_gas_quote_fallback') &&
+      params.approvalMode === HYBRID_GAS_QUOTE_FALLBACK_KIND) &&
     params.auctionCostQuoteRaw !== undefined &&
     configuredMarketPriceFactor !== undefined;
   const gasTelemetryFields = getApprovalGasTelemetryFields({

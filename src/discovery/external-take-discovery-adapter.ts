@@ -7,7 +7,10 @@ import {
 import { logger } from '../logging';
 import { ExternalTakeAdapter } from '../take/engine';
 import { createNoExternalTakeAdapter } from '../take/one-inch-adapter';
-import { DiscoveryExternalTakeApprover } from './external-take-approval';
+import {
+  DiscoveryExternalTakeApprovalContext,
+  DiscoveryExternalTakeApprover,
+} from './external-take-approval';
 import {
   DiscoveryExternalTakeProviderRegistry,
   DiscoveryExternalTakeRouteProvider,
@@ -33,7 +36,11 @@ function createProviderBackedDirectAdapter(params: {
     borrower: string;
     circuitOpenReason?: string;
   }) => void;
-}): ExternalTakeAdapter<ResolvedTakeTarget, DiscoveryExternalExecutionConfig> {
+}): ExternalTakeAdapter<
+  ResolvedTakeTarget,
+  DiscoveryExternalExecutionConfig,
+  DiscoveryExternalTakeApprovalContext
+> {
   return {
     kind: params.kind,
     evaluateExternalTake: async ({
@@ -43,8 +50,8 @@ function createProviderBackedDirectAdapter(params: {
       price,
       auctionPrice,
       collateral,
-    }) =>
-      params.provider.quote({
+    }) => ({
+      quoteEvaluation: await params.provider.quote({
         pool,
         signer,
         poolConfig,
@@ -53,6 +60,7 @@ function createProviderBackedDirectAdapter(params: {
         collateral,
         intent: { kind: 'direct' },
       }),
+    }),
     executeExternalTake: async ({
       pool,
       signer,
@@ -94,7 +102,11 @@ export function createExternalTakeAdapterForDiscovery(params: {
   approveExternalTake: DiscoveryExternalTakeApprover;
   stats: DiscoveredTakeTargetStats;
   providerRegistry: DiscoveryExternalTakeProviderRegistry;
-}): ExternalTakeAdapter<ResolvedTakeTarget, DiscoveryExternalExecutionConfig> {
+}): ExternalTakeAdapter<
+  ResolvedTakeTarget,
+  DiscoveryExternalExecutionConfig,
+  DiscoveryExternalTakeApprovalContext
+> {
   if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
     return {
       kind: 'hybrid',
@@ -173,5 +185,5 @@ export function createExternalTakeAdapterForDiscovery(params: {
     });
   }
 
-  return createNoExternalTakeAdapter();
+  return createNoExternalTakeAdapter<DiscoveryExternalTakeApprovalContext>();
 }

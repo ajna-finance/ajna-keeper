@@ -6,9 +6,12 @@ import {
 import { OneInchExecutionConfig, OneInchQuoteConfig } from './one-inch-types';
 import { TakeActionConfig } from './types';
 
-export function createNoExternalTakeAdapter(): ExternalTakeAdapter<
+export function createNoExternalTakeAdapter<
+  TApprovalContext = unknown,
+>(): ExternalTakeAdapter<
   TakeActionConfig,
-  OneInchExecutionConfig
+  OneInchExecutionConfig,
+  TApprovalContext
 > {
   return {
     kind: 'none',
@@ -27,8 +30,8 @@ export function createOneInchTakeAdapter(
       price,
       auctionPrice,
       collateral,
-    }) =>
-      getOneInchTakeQuoteEvaluation(
+    }) => ({
+      quoteEvaluation: await getOneInchTakeQuoteEvaluation(
         pool,
         price,
         collateral,
@@ -43,6 +46,7 @@ export function createOneInchTakeAdapter(
         quoteConfig.connectorTokens,
         auctionPrice
       ),
+    }),
     executeExternalTake: async ({
       pool,
       signer,

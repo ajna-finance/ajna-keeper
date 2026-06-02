@@ -1,5 +1,8 @@
 import { BigNumber } from 'ethers';
-import { ExternalTakeQuoteEvaluation } from '../take/types';
+import {
+  BoundExternalTakeRouteEvaluation,
+  ExternalTakeQuoteEvaluation,
+} from '../take/types';
 
 export {
   bindExternalTakeRoute,
@@ -24,10 +27,6 @@ export function cloneExternalTakeQuoteEvaluation<
     routeProfitability: quoteEvaluation.routeProfitability
       ? { ...quoteEvaluation.routeProfitability }
       : undefined,
-    fallbackExternalTakeQuoteEvaluations:
-      quoteEvaluation.fallbackExternalTakeQuoteEvaluations?.map(
-        cloneExternalTakeQuoteEvaluation
-      ),
     curvePool: quoteEvaluation.curvePool
       ? { ...quoteEvaluation.curvePool }
       : undefined,
@@ -35,7 +34,7 @@ export function cloneExternalTakeQuoteEvaluation<
 }
 
 export function withExternalTakeApprovalContext<
-  TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
+  TQuoteEvaluation extends BoundExternalTakeRouteEvaluation,
 >(params: {
   quoteEvaluation: TQuoteEvaluation;
   auctionPrice: BigNumber;

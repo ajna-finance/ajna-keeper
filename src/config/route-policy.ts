@@ -34,6 +34,10 @@ export const HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES =
 export const DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE: ActiveExternalTakeRouteSelectionMode =
   'maximize_profit';
 
+export type HybridGasQuoteFallbackPolicyResolution =
+  | { eligible: true }
+  | { eligible: false; reason: string };
+
 export function isFactoryDynamicSource(
   source: LiquiditySource | undefined
 ): source is FactoryLiquiditySource {
@@ -66,6 +70,50 @@ export function resolveExternalTakePaths(params: {
     return ['factory'];
   }
   return [];
+}
+
+export function resolveHybridGasQuoteFallbackPolicy(params: {
+  fallbackMode: HybridGasQuoteFailureFallbackMode | undefined;
+  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+  externalTakePaths: readonly ExternalTakePathKind[];
+  maxGasCostNative?: number;
+  maxGasCostQuote?: number;
+  minExpectedProfitQuote?: number;
+  minProfitNative?: string;
+}): HybridGasQuoteFallbackPolicyResolution {
+  if (params.fallbackMode !== 'factory_first') {
+    return { eligible: false, reason: 'fallback disabled' };
+  }
+  if (params.routeSelectionMode !== 'maximize_profit') {
+    return {
+      eligible: false,
+      reason: 'route selection mode is not maximize_profit',
+    };
+  }
+  if (
+    !params.externalTakePaths.includes('factory') ||
+    (!params.externalTakePaths.includes('oneinch') &&
+      !params.externalTakePaths.includes('lifi'))
+  ) {
+    return {
+      eligible: false,
+      reason:
+        'hybrid paths do not include factory and at least one aggregator path',
+    };
+  }
+  if (params.maxGasCostNative === undefined) {
+    return { eligible: false, reason: 'maxGasCostNative is not configured' };
+  }
+  if (params.maxGasCostQuote !== undefined) {
+    return { eligible: false, reason: 'maxGasCostQuote is configured' };
+  }
+  if (params.minExpectedProfitQuote !== undefined) {
+    return { eligible: false, reason: 'minExpectedProfitQuote is configured' };
+  }
+  if (params.minProfitNative !== undefined) {
+    return { eligible: false, reason: 'minProfitNative is configured' };
+  }
+  return { eligible: true };
 }
 
 export function resolveDefaultFactoryLiquiditySource(params: {

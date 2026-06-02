@@ -5,11 +5,24 @@ import {
   ExternalTakeQuoteEvaluation,
 } from '../take/types';
 
+export const HYBRID_GAS_QUOTE_FALLBACK_KIND =
+  'hybrid_gas_quote_fallback' as const;
+
+export interface DiscoveryExternalTakeApprovalContext {
+  kind: typeof HYBRID_GAS_QUOTE_FALLBACK_KIND;
+}
+
+export const HYBRID_GAS_QUOTE_FALLBACK_CONTEXT: DiscoveryExternalTakeApprovalContext =
+  {
+    kind: HYBRID_GAS_QUOTE_FALLBACK_KIND,
+  };
+
 export interface ExternalTakeApprovalInput {
   price: number;
   auctionPrice: BigNumber;
   collateral: BigNumber;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
+  externalTakeApprovalContext?: DiscoveryExternalTakeApprovalContext;
   approvalMode?: DiscoveryExternalTakeApprovalMode;
   countStats?: boolean;
   forceGasRefresh?: boolean;
@@ -18,7 +31,7 @@ export interface ExternalTakeApprovalInput {
 export type ExternalTakeApprovalRejectCategory = 'gasPolicy' | 'profitFloor';
 export type DiscoveryExternalTakeApprovalMode =
   | 'strict_hybrid'
-  | 'factory_gas_quote_fallback';
+  | typeof HYBRID_GAS_QUOTE_FALLBACK_KIND;
 
 export type ExternalTakeApprovalResult =
   | {
@@ -36,3 +49,13 @@ export type ExternalTakeApprovalResult =
 export type DiscoveryExternalTakeApprover = (
   approvalParams: ExternalTakeApprovalInput
 ) => Promise<ExternalTakeApprovalResult>;
+
+export function resolveDiscoveryExternalTakeApprovalMode(params: {
+  approvalMode?: DiscoveryExternalTakeApprovalMode;
+  externalTakeApprovalContext?: DiscoveryExternalTakeApprovalContext;
+}): DiscoveryExternalTakeApprovalMode | undefined {
+  if (params.approvalMode) {
+    return params.approvalMode;
+  }
+  return params.externalTakeApprovalContext?.kind;
+}

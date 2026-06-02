@@ -4,19 +4,25 @@ import {
   ActiveExternalTakeRouteSelectionMode,
   ExternalTakePathKind,
   formatLiquiditySource,
+  resolveHybridGasQuoteFallbackPolicy,
 } from '../config';
 import { logger } from '../logging';
 import { isSubsidizedExternalTakeQuote } from '../take/external-take-policy';
 import {
   BoundExternalTakeRouteEvaluation,
-  ExternalTakeQuoteEvaluation,
+  ExternalTakeEvaluationResult,
+  ExternalTakeExecutionCandidate,
   TakeLiquidationPlan,
 } from '../take/types';
+import { resolveExternalTakeExecutionCandidates } from '../take/external-take-execution-plan';
 import { getErrorMessage } from '../utils';
 import {
+  DiscoveryExternalTakeApprovalContext,
   DiscoveryExternalTakeApprover,
   ExternalTakeApprovalRejectCategory,
   ExternalTakeApprovalResult,
+  HYBRID_GAS_QUOTE_FALLBACK_CONTEXT,
+  HYBRID_GAS_QUOTE_FALLBACK_KIND,
 } from './external-take-approval';
 import {
   cloneExternalTakeQuoteEvaluation,
@@ -327,43 +333,12 @@ function formatGasQuoteAttempts(
     .join('; ');
 }
 
-function getFallbackIneligibleReason(params: {
-  takePolicy: AutoDiscoverTakePolicyRuntime;
-  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
-  externalTakePaths: ExternalTakePathKind[];
+function resolveHybridGasQuoteFallbackTriggerReason(params: {
   factoryNativeToQuoteReject?: HybridExternalTakeProbeResult;
 }): string | undefined {
-  if (
-    params.takePolicy?.hybridGasQuoteFailureFallbackMode !== 'factory_first'
-  ) {
-    return 'fallback disabled';
-  }
-  if (params.routeSelectionMode !== 'maximize_profit') {
-    return 'route selection mode is not maximize_profit';
-  }
-  if (
-    !params.externalTakePaths.includes('factory') ||
-    (!params.externalTakePaths.includes('oneinch') &&
-      !params.externalTakePaths.includes('lifi'))
-  ) {
-    return 'hybrid paths do not include factory and at least one aggregator path';
-  }
-  if (params.takePolicy?.maxGasCostNative === undefined) {
-    return 'maxGasCostNative is not configured';
-  }
-  if (params.takePolicy?.maxGasCostQuote !== undefined) {
-    return 'maxGasCostQuote is configured';
-  }
-  if (params.takePolicy?.minExpectedProfitQuote !== undefined) {
-    return 'minExpectedProfitQuote is configured';
-  }
-  if (params.takePolicy?.minProfitNative !== undefined) {
-    return 'minProfitNative is configured';
-  }
-  if (!params.factoryNativeToQuoteReject) {
-    return 'factory path was not rejected only by native-to-quote gas conversion';
-  }
-  return undefined;
+  return params.factoryNativeToQuoteReject === undefined
+    ? 'factory path was not rejected only by native-to-quote gas conversion'
+    : undefined;
 }
 
 async function buildHybridGasQuoteFallbackEvaluation(params: {
@@ -379,18 +354,28 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
   providerRegistry: DiscoveryExternalTakeProviderRegistry;
   approveExternalTake: DiscoveryExternalTakeApprover;
   probeResults: HybridExternalTakeProbeResult[];
-}): Promise<BoundExternalTakeRouteEvaluation | undefined> {
+}): Promise<
+  ExternalTakeExecutionCandidate<DiscoveryExternalTakeApprovalContext> | undefined
+> {
   const factoryNativeToQuoteReject = params.probeResults.find(
     (result) =>
       result.path === 'factory' &&
       result.gasPolicyRejectCode === 'native_to_quote_conversion_unavailable'
   );
-  const fallbackIneligibleReason = getFallbackIneligibleReason({
-    takePolicy: params.takePolicy,
+  const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
+    fallbackMode: params.takePolicy?.hybridGasQuoteFailureFallbackMode,
     routeSelectionMode: params.routeSelectionMode,
     externalTakePaths: params.externalTakePaths,
-    factoryNativeToQuoteReject,
+    maxGasCostNative: params.takePolicy?.maxGasCostNative,
+    maxGasCostQuote: params.takePolicy?.maxGasCostQuote,
+    minExpectedProfitQuote: params.takePolicy?.minExpectedProfitQuote,
+    minProfitNative: params.takePolicy?.minProfitNative,
   });
+  const fallbackIneligibleReason = fallbackEligibility.eligible
+    ? resolveHybridGasQuoteFallbackTriggerReason({
+        factoryNativeToQuoteReject,
+      })
+    : fallbackEligibility.reason;
   if (factoryNativeToQuoteReject && fallbackIneligibleReason) {
     logger.debug(
       `Hybrid gas quote fallback skipped for pool ${params.pool.name}: ${fallbackIneligibleReason}`
@@ -412,7 +397,7 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
     price: params.price,
     auctionPrice: params.auctionPrice,
     collateral: params.collateral,
-    intent: { kind: 'hybrid_gas_quote_fallback' },
+    intent: { kind: HYBRID_GAS_QUOTE_FALLBACK_KIND },
   });
   if (!fallbackQuote.isTakeable) {
     logger.debug(
@@ -426,7 +411,7 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
     auctionPrice: params.auctionPrice,
     collateral: params.collateral,
     quoteEvaluation: fallbackQuote,
-    approvalMode: 'factory_gas_quote_fallback',
+    externalTakeApprovalContext: HYBRID_GAS_QUOTE_FALLBACK_CONTEXT,
     countStats: false,
     forceGasRefresh: true,
   });
@@ -438,16 +423,21 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
   }
 
   const approvedFallback = fallbackApproval.quoteEvaluation;
-  const markedFallback: BoundExternalTakeRouteEvaluation = {
-    ...approvedFallback,
-    approvalMode: 'factory_gas_quote_fallback',
-  };
   logger.warn(
-    `Hybrid gas quote fallback activated: factory_first path=${markedFallback.externalTakePath} source=${formatLiquiditySource(markedFallback.selectedLiquiditySource)} pool=${params.pool.name} attempts="${formatGasQuoteAttempts(
+    `Hybrid gas quote fallback activated: factory_first path=${approvedFallback.externalTakePath} source=${formatLiquiditySource(approvedFallback.selectedLiquiditySource)} pool=${params.pool.name} attempts="${formatGasQuoteAttempts(
       factoryNativeToQuoteReject?.gasQuoteAttempts
     )}"`
   );
-  return markedFallback;
+  return {
+    evaluation: approvedFallback,
+    approvalContext: HYBRID_GAS_QUOTE_FALLBACK_CONTEXT,
+  };
+}
+
+function isHybridGasQuoteFallbackCandidate(
+  candidate: ExternalTakeExecutionCandidate<DiscoveryExternalTakeApprovalContext>
+): boolean {
+  return candidate.approvalContext?.kind === HYBRID_GAS_QUOTE_FALLBACK_KIND;
 }
 
 function formatRejectedProbeReasons(
@@ -475,7 +465,7 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   providerRegistry: DiscoveryExternalTakeProviderRegistry;
   approveExternalTake: DiscoveryExternalTakeApprover;
   stats: HybridExternalTakeStats;
-}): Promise<ExternalTakeQuoteEvaluation> {
+}): Promise<ExternalTakeEvaluationResult<DiscoveryExternalTakeApprovalContext>> {
   const probeResults = await runHybridExternalTakeProbes({
     ...params,
   });
@@ -501,7 +491,7 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
               .join(', ') || 'none'
           } for pool ${params.pool.name}`
         );
-        return result.evaluation;
+        return { quoteEvaluation: result.evaluation };
       }
     }
   }
@@ -525,32 +515,42 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   const selected = sortedApprovedEvaluations[0];
   if (selected) {
     const selectedWithFallbacks = cloneExternalTakeQuoteEvaluation(selected);
-    const fallbackEvaluations: BoundExternalTakeRouteEvaluation[] =
-      sortedApprovedEvaluations.slice(1).map((evaluation) => {
-        const fallback = cloneExternalTakeQuoteEvaluation(evaluation);
-        fallback.fallbackExternalTakeQuoteEvaluations = undefined;
-        return fallback;
-      });
+    const fallbackCandidates: ExternalTakeExecutionCandidate<DiscoveryExternalTakeApprovalContext>[] =
+      sortedApprovedEvaluations.slice(1).map((evaluation) => ({
+        evaluation: cloneExternalTakeQuoteEvaluation(evaluation),
+      }));
     if (
       isOneInchExternalTakeRoute(selected) ||
       isLifiExternalTakeRoute(selected)
     ) {
       const gasQuoteFallback = await buildGasQuoteFallbackEvaluation();
       if (gasQuoteFallback) {
-        fallbackEvaluations.push(gasQuoteFallback);
+        fallbackCandidates.push(gasQuoteFallback);
       }
     }
-    selectedWithFallbacks.fallbackExternalTakeQuoteEvaluations =
-      fallbackEvaluations;
     logger.debug(
       `Hybrid external take selected path=${selected.externalTakePath} source=${formatLiquiditySource(selected.selectedLiquiditySource)} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${selected.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} routeExecutionFloorRaw=${selected.routeExecutionFloorRaw.toString()} rejectedPaths=${rejectedReasons.join(', ') || 'none'} for pool ${params.pool.name}`
     );
-    return selectedWithFallbacks;
+    return {
+      quoteEvaluation: selectedWithFallbacks,
+      executionPlan: {
+        primary: {
+          evaluation: selectedWithFallbacks,
+        },
+        fallbacks: fallbackCandidates,
+      },
+    };
   }
 
   const gasQuoteFallback = await buildGasQuoteFallbackEvaluation();
   if (gasQuoteFallback) {
-    return gasQuoteFallback;
+    return {
+      quoteEvaluation: gasQuoteFallback.evaluation,
+      executionPlan: {
+        primary: gasQuoteFallback,
+        fallbacks: [],
+      },
+    };
   }
 
   const hasGasPolicyReject = probeResults.some(
@@ -567,10 +567,12 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   }
 
   return {
-    isTakeable: false,
-    reason: rejectedReasons.length
-      ? `no viable external take path: ${rejectedReasons.join('; ')}`
-      : 'no external take paths configured',
+    quoteEvaluation: {
+      isTakeable: false,
+      reason: rejectedReasons.length
+        ? `no viable external take path: ${rejectedReasons.join('; ')}`
+        : 'no external take paths configured',
+    },
   };
 }
 
@@ -578,27 +580,24 @@ export async function executeHybridExternalTakeForDiscovery(params: {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: ResolvedTakeTarget;
-  liquidation: TakeLiquidationPlan;
+  liquidation: TakeLiquidationPlan<DiscoveryExternalTakeApprovalContext>;
   config: DiscoveryExternalExecutionConfig;
   externalTakePaths: ExternalTakePathKind[];
   providerRegistry: DiscoveryExternalTakeProviderRegistry;
   approveExternalTake: DiscoveryExternalTakeApprover;
   stats: DiscoveredTakeTargetStats;
 }): Promise<boolean> {
-  const primaryEvaluation = params.liquidation.externalTakeQuoteEvaluation;
-  const executionCandidates = [
-    primaryEvaluation,
-    ...(primaryEvaluation?.fallbackExternalTakeQuoteEvaluations ?? []),
-  ].filter(
-    (evaluation): evaluation is BoundExternalTakeRouteEvaluation =>
-      evaluation !== undefined
-  );
+  const executionCandidates = resolveExternalTakeExecutionCandidates({
+    primaryEvaluation: params.liquidation.externalTakeQuoteEvaluation,
+    executionPlan: params.liquidation.externalTakeExecutionPlan,
+  });
 
   for (let index = 0; index < executionCandidates.length; index += 1) {
-    const candidateEvaluation = executionCandidates[index];
-    if (!candidateEvaluation) {
+    const candidate = executionCandidates[index];
+    if (!candidate) {
       continue;
     }
+    const candidateEvaluation = candidate.evaluation;
     const selection = resolveHybridExternalTakeExecutionSelection({
       quoteEvaluation: candidateEvaluation,
       allowedExternalTakePaths: params.externalTakePaths,
@@ -615,7 +614,7 @@ export async function executeHybridExternalTakeForDiscovery(params: {
 
     const isExecutionFallbackCandidate = index > 0;
     const isGasQuoteFallbackCandidate =
-      candidateEvaluation.approvalMode === 'factory_gas_quote_fallback';
+      isHybridGasQuoteFallbackCandidate(candidate);
     const requiresFallbackReapproval =
       isExecutionFallbackCandidate || isGasQuoteFallbackCandidate;
     if (isExecutionFallbackCandidate) {
@@ -655,6 +654,7 @@ export async function executeHybridExternalTakeForDiscovery(params: {
           auctionPrice: executionLiquidation.auctionPrice,
           collateral: executionLiquidation.collateral,
           quoteEvaluation: candidateEvaluation,
+          externalTakeApprovalContext: candidate.approvalContext,
           countStats: false,
           forceGasRefresh: true,
         });

@@ -71,8 +71,8 @@ export function createFactoryTakeAdapter(params: {
       poolConfig,
       auctionPrice,
       collateral,
-    }) =>
-      getFactoryTakeQuoteEvaluation(
+    }) => ({
+      quoteEvaluation: await getFactoryTakeQuoteEvaluation(
         pool,
         auctionPrice,
         collateral,
@@ -82,6 +82,7 @@ export function createFactoryTakeAdapter(params: {
         params.runtimeCache,
         params.routeSelection
       ),
+    }),
     executeExternalTake: async ({
       pool,
       signer,

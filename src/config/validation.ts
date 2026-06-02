@@ -23,8 +23,10 @@ import {
   FACTORY_DYNAMIC_SOURCES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
   isFactoryDynamicSource,
+  normalizeExternalTakeRouteSelectionMode,
   resolveExternalTakePaths,
   resolveFactoryRouteSelectionSources,
+  resolveHybridGasQuoteFallbackPolicy,
 } from './route-policy';
 import {
   formatLiquiditySource,
@@ -947,20 +949,23 @@ export function validateAutoDiscoverConfig(
       takePolicy.allowedExternalTakePaths
     );
     if (takePolicy.hybridGasQuoteFailureFallbackMode === 'factory_first') {
-      if (takePolicy.maxGasCostNative === undefined) {
-        throw new Error(
-          'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first requires maxGasCostNative'
-        );
-      }
-      if (
-        !externalTakePaths.has('factory') ||
-        (!externalTakePaths.has('oneinch') && !externalTakePaths.has('lifi')) ||
-        (takePolicy.externalTakeRouteSelectionMode !== undefined &&
-          takePolicy.externalTakeRouteSelectionMode !== 'maximize_profit')
-      ) {
-        logger.warn(
-          'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first is only eligible for hybrid maximize_profit routes with factory and at least one aggregator path enabled'
-        );
+      const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
+        fallbackMode: takePolicy.hybridGasQuoteFailureFallbackMode,
+        routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
+          takePolicy.externalTakeRouteSelectionMode
+        ),
+        externalTakePaths: Array.from(externalTakePaths),
+        maxGasCostNative: takePolicy.maxGasCostNative,
+        maxGasCostQuote: takePolicy.maxGasCostQuote,
+        minExpectedProfitQuote: takePolicy.minExpectedProfitQuote,
+        minProfitNative: takePolicy.minProfitNative,
+      });
+      if (!fallbackEligibility.eligible) {
+        const reason =
+          fallbackEligibility.reason === 'maxGasCostNative is not configured'
+            ? 'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first requires maxGasCostNative'
+            : `AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first is ineligible because ${fallbackEligibility.reason}`;
+        throw new Error(reason);
       }
     }
     if (

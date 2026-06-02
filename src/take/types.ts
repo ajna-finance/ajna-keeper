@@ -75,7 +75,6 @@ export interface TakeBorrowerCandidate {
 export interface ExternalTakeQuoteEvaluation {
   isTakeable: boolean;
   externalTakePath?: ExternalTakePathKind;
-  approvalMode?: 'strict_hybrid' | 'factory_gas_quote_fallback';
   marketPrice?: number;
   takeablePrice?: number;
   quoteAmount?: number;
@@ -94,7 +93,6 @@ export interface ExternalTakeQuoteEvaluation {
   quotedAuctionPriceWad?: BigNumber;
   quotedCollateralWad?: BigNumber;
   auctionIdentity?: string;
-  fallbackExternalTakeQuoteEvaluations?: BoundExternalTakeRouteEvaluation[];
   curvePool?: CurvePoolSelection;
   lifiQuote?: ApprovedLifiQuote;
   reason?: string;
@@ -196,6 +194,21 @@ export type BoundExternalTakeRouteEvaluation =
   | BoundFactoryRouteEvaluation
   | BoundLifiRouteEvaluation;
 
+export interface ExternalTakeExecutionCandidate<TApprovalContext = unknown> {
+  readonly evaluation: BoundExternalTakeRouteEvaluation;
+  readonly approvalContext?: TApprovalContext;
+}
+
+export interface ExternalTakeExecutionPlan<TApprovalContext = unknown> {
+  readonly primary: ExternalTakeExecutionCandidate<TApprovalContext>;
+  readonly fallbacks: readonly ExternalTakeExecutionCandidate<TApprovalContext>[];
+}
+
+export interface ExternalTakeEvaluationResult<TApprovalContext = unknown> {
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  executionPlan?: ExternalTakeExecutionPlan<TApprovalContext>;
+}
+
 export type ApprovedExternalTakeQuoteEvaluation =
   | ApprovedOneInchQuoteEvaluation
   | ApprovedFactoryQuoteEvaluation
@@ -208,7 +221,7 @@ export interface ArbTakeEvaluation {
   reason?: string;
 }
 
-export interface TakeLiquidationPlan {
+export interface TakeLiquidationPlan<TApprovalContext = unknown> {
   borrower: string;
   hpbIndex: number;
   collateral: BigNumber; // WAD
@@ -216,9 +229,10 @@ export interface TakeLiquidationPlan {
   isTakeable: boolean;
   isArbTakeable: boolean;
   externalTakeQuoteEvaluation?: BoundExternalTakeRouteEvaluation;
+  externalTakeExecutionPlan?: ExternalTakeExecutionPlan<TApprovalContext>;
 }
 
-export interface TakeDecision {
+export interface TakeDecision<TApprovalContext = unknown> {
   approvedTake: boolean;
   approvedArbTake: boolean;
   borrower: string;
@@ -228,6 +242,7 @@ export interface TakeDecision {
   takeablePrice?: number;
   maxArbTakePrice?: number;
   quoteEvaluation?: BoundExternalTakeRouteEvaluation;
+  externalTakeExecutionPlan?: ExternalTakeExecutionPlan<TApprovalContext>;
   reason?: string;
 }
 
