@@ -1,4 +1,4 @@
-import { isFactoryDynamicSource } from '../config';
+import { ExternalTakePathKind, isFactoryDynamicSource } from '../config';
 import { logger } from '../logging';
 import * as takeFactoryModule from '../take/factory';
 import {
@@ -262,22 +262,25 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       };
     },
   };
+  const providersByPath: Record<
+    ExternalTakePathKind,
+    DiscoveryExternalTakeRouteProvider
+  > = {
+    oneinch: oneInchProvider,
+    lifi: lifiProvider,
+    factory: factoryProvider,
+  };
 
   return {
     oneInchProvider,
     lifiProvider,
     factoryProvider,
     selectExternalTakeProvider: ({ selectedPath }) => {
-      switch (selectedPath) {
-        case 'oneinch':
-          return oneInchProvider;
-        case 'lifi':
-          return lifiProvider;
-        case 'factory':
-          return factoryProvider;
+      const provider = providersByPath[selectedPath];
+      if (provider === undefined) {
+        throw new Error(`Unsupported external take path: ${selectedPath}`);
       }
-      const exhaustivePath: never = selectedPath;
-      throw new Error(`Unsupported external take path: ${exhaustivePath}`);
+      return provider;
     },
   };
 }

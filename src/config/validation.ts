@@ -20,7 +20,6 @@ import {
 import {
   EXTERNAL_TAKE_PATHS,
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
-  FACTORY_DYNAMIC_SOURCES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
   isFactoryDynamicSource,
   normalizeExternalTakeRouteSelectionMode,
@@ -28,6 +27,15 @@ import {
   resolveFactoryRouteSelectionSources,
   resolveHybridGasQuoteFallbackPolicy,
 } from './route-policy';
+import {
+  formatSupportedExternalTakeLiquiditySources,
+  formatSupportedExternalTakePaths,
+  getExternalTakePathDefaultSource,
+  getExternalTakePathDescriptor,
+  getExternalTakePathDescriptors,
+  isExternalTakeLiquiditySource,
+  resolveExternalTakePathFromSource,
+} from './external-take-registry';
 import {
   formatLiquiditySource,
   getLiquiditySourceConfig,
@@ -291,11 +299,11 @@ function getEffectiveTakeGasOverrideSources(
     allowedLiquiditySources,
     defaultFactoryLiquiditySource
   );
-  if (externalTakePaths.has('oneinch')) {
-    sources.add(LiquiditySource.ONEINCH);
-  }
-  if (externalTakePaths.has('lifi')) {
-    sources.add(LiquiditySource.LIFI);
+  for (const path of Array.from(externalTakePaths)) {
+    const defaultSource = getExternalTakePathDefaultSource(path);
+    if (defaultSource !== undefined) {
+      sources.add(defaultSource);
+    }
   }
   return sources;
 }
@@ -327,7 +335,7 @@ function validateAllowedExternalTakePaths(
   for (const path of paths) {
     if (!EXTERNAL_TAKE_PATHS.has(path)) {
       throw new Error(
-        'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch, factory, and lifi'
+        `AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only ${formatSupportedExternalTakePaths()}`
       );
     }
     if (seen.has(path)) {
@@ -514,15 +522,9 @@ export function validateTakeSettings(
       throw new Error('TakeSettings: liquiditySource cannot be NONE');
     }
 
-    if (
-      config.liquiditySource !== LiquiditySource.ONEINCH &&
-      config.liquiditySource !== LiquiditySource.UNISWAPV3 &&
-      config.liquiditySource !== LiquiditySource.SUSHISWAP &&
-      config.liquiditySource !== LiquiditySource.CURVE &&
-      config.liquiditySource !== LiquiditySource.LIFI
-    ) {
+    if (!isExternalTakeLiquiditySource(config.liquiditySource)) {
       throw new Error(
-        'TakeSettings: liquiditySource must be ONEINCH or UNISWAPV3 or SUSHISWAP or CURVE or LIFI'
+        `TakeSettings: liquiditySource must be ${formatSupportedExternalTakeLiquiditySources()}`
       );
     }
 
@@ -998,13 +1000,15 @@ export function validateAutoDiscoverConfig(
         'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
       );
     }
-    if (
-      externalTakePaths.has('lifi') &&
-      takePolicy.validateRouteDeployments !== true
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include lifi'
-      );
+    for (const descriptor of getExternalTakePathDescriptors(externalTakePaths)) {
+      if (
+        descriptor.requiresRouteDeploymentValidation &&
+        takePolicy.validateRouteDeployments !== true
+      ) {
+        throw new Error(
+          `AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include ${descriptor.path}`
+        );
+      }
     }
     if (externalTakePaths.has('oneinch')) {
       if (
@@ -1024,10 +1028,15 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
-    if (externalTakePaths.has('lifi')) {
-      if (takePolicy.dexGasOverrides?.[LiquiditySource.LIFI] === undefined) {
+    for (const descriptor of getExternalTakePathDescriptors(externalTakePaths)) {
+      const defaultSource = descriptor.defaultSource;
+      if (
+        descriptor.requiresDexGasOverride &&
+        defaultSource !== undefined &&
+        takePolicy.dexGasOverrides?.[defaultSource] === undefined
+      ) {
         throw new Error(
-          'AutoDiscoverConfig.take: dexGasOverrides.LIFI required when resolved external take paths include lifi'
+          `AutoDiscoverConfig.take: dexGasOverrides.${formatLiquiditySource(defaultSource)} required when resolved external take paths include ${descriptor.path}`
         );
       }
     }
@@ -1112,22 +1121,15 @@ export function validateAutoDiscoverConfig(
       }
     }
 
-    if (externalTakePaths.has('oneinch')) {
+    for (const descriptor of getExternalTakePathDescriptors(externalTakePaths)) {
+      const defaultSource = descriptor.defaultSource;
+      if (defaultSource === undefined) {
+        continue;
+      }
       validateTakeSettings(
         {
           ...discoveredTake,
-          liquiditySource: LiquiditySource.ONEINCH,
-        },
-        config,
-        chainId
-      );
-    }
-
-    if (externalTakePaths.has('lifi')) {
-      validateTakeSettings(
-        {
-          ...discoveredTake,
-          liquiditySource: LiquiditySource.LIFI,
+          liquiditySource: defaultSource,
         },
         config,
         chainId
@@ -1183,12 +1185,14 @@ export function validateAutoDiscoverConfig(
             `AutoDiscoverConfig.take: dexGasOverrides.${source} is not a valid LiquiditySource`
           );
         }
+        const sourcePath = resolveExternalTakePathFromSource(liquiditySource);
         if (
-          liquiditySource === LiquiditySource.ONEINCH &&
+          sourcePath !== undefined &&
+          sourcePath !== 'factory' &&
           !effectiveTakeGasOverrideSources.has(liquiditySource)
         ) {
           throw new Error(
-            'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires an enabled 1inch external take path'
+            `AutoDiscoverConfig.take: dexGasOverrides.${sourceLabel} requires an enabled ${getExternalTakePathDescriptor(sourcePath).label} external take path`
           );
         }
         if (!effectiveTakeGasOverrideSources.has(liquiditySource)) {

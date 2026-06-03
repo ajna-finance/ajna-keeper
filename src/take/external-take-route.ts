@@ -3,7 +3,9 @@ import {
   FactoryLiquiditySource,
   LiquiditySource,
   formatLiquiditySource,
+  getExternalTakePathDefaultSource,
   isFactoryDynamicSource,
+  resolveExternalTakePathFromSource as resolveConfiguredExternalTakePathFromSource,
 } from '../config';
 import { ExternalTakeQuoteEvaluation } from './types';
 
@@ -128,25 +130,7 @@ export type ExternalTakeRouteBinding<
 export function resolveExternalTakePathFromSource(
   source: LiquiditySource | undefined
 ): ExternalTakePathKind | undefined {
-  if (source === LiquiditySource.ONEINCH) {
-    return 'oneinch';
-  }
-  if (source === LiquiditySource.LIFI) {
-    return 'lifi';
-  }
-  return isFactoryDynamicSource(source) ? 'factory' : undefined;
-}
-
-function getDefaultSourceForPath(
-  path: ExternalTakePathKind
-): LiquiditySource.ONEINCH | LiquiditySource.LIFI | undefined {
-  if (path === 'oneinch') {
-    return LiquiditySource.ONEINCH;
-  }
-  if (path === 'lifi') {
-    return LiquiditySource.LIFI;
-  }
-  return undefined;
+  return resolveConfiguredExternalTakePathFromSource(source);
 }
 
 export function resolveExternalTakeRouteIdentityFromParts(params: {
@@ -296,7 +280,7 @@ export function bindExternalTakeRoute<
   const source =
     explicitSource ??
     (params.inferSourceFromPath !== false
-      ? getDefaultSourceForPath(path)
+      ? getExternalTakePathDefaultSource(path)
       : undefined);
   const concreteSourcePath = resolveExternalTakePathFromSource(source);
   if (source === undefined || concreteSourcePath !== path) {

@@ -4,26 +4,37 @@ import {
   HybridGasQuoteFailureFallbackMode,
   LiquiditySource,
 } from './schema';
+import {
+  isAggregatorExternalTakePath,
+  isFactoryLiquiditySource,
+  resolveExternalTakePathFromSource,
+} from './external-take-registry';
+import type { FactoryLiquiditySource } from './external-take-registry';
 
-export type FactoryLiquiditySource =
-  | LiquiditySource.UNISWAPV3
-  | LiquiditySource.SUSHISWAP
-  | LiquiditySource.CURVE;
+export {
+  EXTERNAL_TAKE_PATH_DESCRIPTORS,
+  EXTERNAL_TAKE_PATHS,
+  FACTORY_DYNAMIC_SOURCES,
+  SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES,
+  SUPPORTED_EXTERNAL_TAKE_PATHS,
+  formatSupportedExternalTakeLiquiditySources,
+  formatSupportedExternalTakePaths,
+  getExternalTakePathDefaultSource,
+  getExternalTakePathDescriptor,
+  getExternalTakePathDescriptors,
+  isAggregatorExternalTakePath,
+  isExternalTakeLiquiditySource,
+  isExternalTakePath,
+  resolveExternalTakePathFromSource,
+} from './external-take-registry';
+export type {
+  ExternalTakePathDescriptor,
+  ExternalTakePathCategory,
+  FactoryLiquiditySource,
+} from './external-take-registry';
 
 export type ActiveExternalTakeRouteSelectionMode =
   ExternalTakeRouteSelectionMode;
-
-export const FACTORY_DYNAMIC_SOURCES: readonly FactoryLiquiditySource[] = [
-  LiquiditySource.UNISWAPV3,
-  LiquiditySource.SUSHISWAP,
-  LiquiditySource.CURVE,
-];
-
-export const EXTERNAL_TAKE_PATHS = new Set<ExternalTakePathKind>([
-  'oneinch',
-  'factory',
-  'lifi',
-]);
 
 export const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
   new Set<ExternalTakeRouteSelectionMode>(['maximize_profit', 'factory_first']);
@@ -41,10 +52,7 @@ export type HybridGasQuoteFallbackPolicyResolution =
 export function isFactoryDynamicSource(
   source: LiquiditySource | undefined
 ): source is FactoryLiquiditySource {
-  return (
-    source !== undefined &&
-    FACTORY_DYNAMIC_SOURCES.includes(source as FactoryLiquiditySource)
-  );
+  return isFactoryLiquiditySource(source);
 }
 
 export function normalizeExternalTakeRouteSelectionMode(
@@ -60,16 +68,8 @@ export function resolveExternalTakePaths(params: {
   if (params.allowedExternalTakePaths !== undefined) {
     return Array.from(new Set(params.allowedExternalTakePaths));
   }
-  if (params.defaultLiquiditySource === LiquiditySource.ONEINCH) {
-    return ['oneinch'];
-  }
-  if (params.defaultLiquiditySource === LiquiditySource.LIFI) {
-    return ['lifi'];
-  }
-  if (isFactoryDynamicSource(params.defaultLiquiditySource)) {
-    return ['factory'];
-  }
-  return [];
+  const path = resolveExternalTakePathFromSource(params.defaultLiquiditySource);
+  return path !== undefined ? [path] : [];
 }
 
 export function resolveHybridGasQuoteFallbackPolicy(params: {
@@ -92,8 +92,7 @@ export function resolveHybridGasQuoteFallbackPolicy(params: {
   }
   if (
     !params.externalTakePaths.includes('factory') ||
-    (!params.externalTakePaths.includes('oneinch') &&
-      !params.externalTakePaths.includes('lifi'))
+    !params.externalTakePaths.some(isAggregatorExternalTakePath)
   ) {
     return {
       eligible: false,

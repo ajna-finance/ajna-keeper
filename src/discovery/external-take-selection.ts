@@ -1,15 +1,10 @@
 import { BigNumber } from 'ethers';
-import {
-  ExternalTakePathKind,
-  LiquiditySource,
-} from '../config';
+import { ExternalTakePathKind } from '../config';
 import { compareExternalTakeBySubsidyThenRank } from '../take/external-take-policy';
 import { ExternalTakeQuoteEvaluation } from '../take/types';
 import {
   bindExternalTakeRoute,
   formatExternalTakeRouteSelectionFailure,
-  getExternalTakeRouteBindingFailurePath,
-  getExternalTakeRouteBindingFailureSource,
   resolveExternalTakeRouteIdentity,
 } from '../take/external-take-route';
 
@@ -100,12 +95,9 @@ export type HybridExternalTakeExecutionSelection =
   | {
       approved: true;
       effectiveSelectedPath: ExternalTakePathKind;
-      selectedSource: LiquiditySource;
     }
   | {
       approved: false;
-      effectiveSelectedPath?: ExternalTakePathKind;
-      selectedSource?: LiquiditySource;
       reason: string;
     };
 
@@ -121,14 +113,11 @@ export function resolveHybridExternalTakeExecutionSelection(params: {
   if (!route.bound) {
     return {
       approved: false,
-      effectiveSelectedPath: getExternalTakeRouteBindingFailurePath(route),
-      selectedSource: getExternalTakeRouteBindingFailureSource(route),
       reason: formatExternalTakeRouteSelectionFailure(route),
     };
   }
   return {
     approved: true,
     effectiveSelectedPath: route.path,
-    selectedSource: route.source,
   };
 }

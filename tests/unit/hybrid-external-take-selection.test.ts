@@ -34,8 +34,6 @@ describe('hybrid external take selection', () => {
 
     expect(disabledPath).to.deep.include({
       approved: false,
-      effectiveSelectedPath: 'oneinch',
-      selectedSource: LiquiditySource.ONEINCH,
       reason: 'selected disabled path=oneinch',
     });
 
@@ -53,7 +51,6 @@ describe('hybrid external take selection', () => {
 
     expect(missingFactorySource).to.deep.include({
       approved: false,
-      effectiveSelectedPath: 'factory',
       reason: 'selected factory path without a concrete factory source',
     });
 
@@ -88,7 +85,6 @@ describe('hybrid external take selection', () => {
     expect(lifiSourceOnly).to.deep.include({
       approved: true,
       effectiveSelectedPath: 'lifi',
-      selectedSource: LiquiditySource.LIFI,
     });
 
     const inconsistentLifiPath = resolveHybridExternalTakeExecutionSelection({
