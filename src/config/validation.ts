@@ -36,6 +36,7 @@ import {
   isExternalTakeLiquiditySource,
   resolveExternalTakePathFromSource,
 } from './external-take-registry';
+import type { ExternalTakeLiquiditySource } from './external-take-registry';
 import {
   formatLiquiditySource,
   getLiquiditySourceConfig,
@@ -502,6 +503,173 @@ export function validatePostAuctionDex(
   }
 }
 
+interface ExternalTakeSourceValidationParams {
+  keeperConfig: KeeperConfig;
+  chainId?: number;
+}
+
+type ExternalTakeSourceValidator = (
+  params: ExternalTakeSourceValidationParams
+) => void;
+
+type FactoryTakerContractKey = 'UniswapV3' | 'SushiSwap' | 'Curve' | 'Lifi';
+
+function requireFactoryTakerContract(params: {
+  keeperConfig: KeeperConfig;
+  sourceName: string;
+  contractKey: FactoryTakerContractKey;
+}): void {
+  if (!params.keeperConfig.takers?.factory) {
+    throw new Error(
+      `TakeSettings: takers.factory required when liquiditySource is ${params.sourceName}`
+    );
+  }
+  if (!params.keeperConfig.takers.contracts?.[params.contractKey]) {
+    throw new Error(
+      `TakeSettings: takers.contracts.${params.contractKey} required when liquiditySource is ${params.sourceName}`
+    );
+  }
+}
+
+function validateOneInchTakeSource({
+  keeperConfig,
+  chainId,
+}: ExternalTakeSourceValidationParams): void {
+  if (!keeperConfig.takers?.oneInch) {
+    throw new Error(
+      'TakeSettings: takers.oneInch required when liquiditySource is ONEINCH'
+    );
+  }
+  if (
+    !keeperConfig.dex?.oneInch?.routers ||
+    Object.keys(keeperConfig.dex.oneInch.routers).length === 0
+  ) {
+    throw new Error(
+      'TakeSettings: dex.oneInch.routers required when liquiditySource is ONEINCH'
+    );
+  }
+  if (chainId !== undefined && !keeperConfig.dex.oneInch.routers[chainId]) {
+    throw new Error(
+      `TakeSettings: dex.oneInch.routers missing router for chain ${chainId}`
+    );
+  }
+}
+
+function validateUniswapV3TakeSource({
+  keeperConfig,
+}: ExternalTakeSourceValidationParams): void {
+  requireFactoryTakerContract({
+    keeperConfig,
+    sourceName: 'UNISWAPV3',
+    contractKey: 'UniswapV3',
+  });
+  if (!keeperConfig.dex?.uniswapV3?.router) {
+    throw new Error(
+      'TakeSettings: dex.uniswapV3.router required when liquiditySource is UNISWAPV3'
+    );
+  }
+  const routerOverrides = keeperConfig.dex.uniswapV3.router;
+  if (getMissingUniswapV3FactoryRouteConfigFields(routerOverrides).length > 0) {
+    throw new Error(
+      'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
+    );
+  }
+}
+
+function validateSushiSwapTakeSource({
+  keeperConfig,
+}: ExternalTakeSourceValidationParams): void {
+  requireFactoryTakerContract({
+    keeperConfig,
+    sourceName: 'SUSHISWAP',
+    contractKey: 'SushiSwap',
+  });
+  if (!keeperConfig.dex?.sushiswap) {
+    throw new Error(
+      'TakeSettings: dex.sushiswap required when liquiditySource is SUSHISWAP'
+    );
+  }
+  const routerOverrides = keeperConfig.dex.sushiswap;
+  if (
+    !routerOverrides.swapRouterAddress ||
+    !routerOverrides.factoryAddress ||
+    !routerOverrides.wethAddress ||
+    !routerOverrides.quoterV2Address
+  ) {
+    throw new Error(
+      'TakeSettings: dex.sushiswap.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
+    );
+  }
+}
+
+function validateCurveTakeSource({
+  keeperConfig,
+}: ExternalTakeSourceValidationParams): void {
+  requireFactoryTakerContract({
+    keeperConfig,
+    sourceName: 'CURVE',
+    contractKey: 'Curve',
+  });
+  if (!keeperConfig.dex?.curve) {
+    throw new Error(
+      'TakeSettings: dex.curve required when liquiditySource is CURVE'
+    );
+  }
+  const routerOverrides = keeperConfig.dex.curve;
+  if (
+    !hasNonEmptyObject(routerOverrides.poolConfigs) ||
+    !routerOverrides.wethAddress
+  ) {
+    throw new Error(
+      'TakeSettings: dex.curve.poolConfigs and wethAddress required when liquiditySource is CURVE'
+    );
+  }
+  if (
+    !keeperConfig.network.tokenAddresses ||
+    Object.keys(keeperConfig.network.tokenAddresses).length === 0
+  ) {
+    throw new Error(
+      'TakeSettings: network.tokenAddresses required when liquiditySource is CURVE'
+    );
+  }
+}
+
+function validateLifiTakeSource({
+  keeperConfig,
+  chainId,
+}: ExternalTakeSourceValidationParams): void {
+  requireFactoryTakerContract({
+    keeperConfig,
+    sourceName: 'LIFI',
+    contractKey: 'Lifi',
+  });
+  assertValidLifiDexConfig({
+    config: keeperConfig.dex?.lifi,
+    fieldName: 'KeeperConfig.dex.lifi',
+    chainId,
+    requireProduction: keeperConfig.runtime?.dryRun !== true,
+  });
+}
+
+const EXTERNAL_TAKE_SOURCE_VALIDATORS = {
+  [LiquiditySource.ONEINCH]: validateOneInchTakeSource,
+  [LiquiditySource.UNISWAPV3]: validateUniswapV3TakeSource,
+  [LiquiditySource.SUSHISWAP]: validateSushiSwapTakeSource,
+  [LiquiditySource.CURVE]: validateCurveTakeSource,
+  [LiquiditySource.LIFI]: validateLifiTakeSource,
+} satisfies Record<ExternalTakeLiquiditySource, ExternalTakeSourceValidator>;
+
+function validateExternalTakeSourceRequirements(params: {
+  source: ExternalTakeLiquiditySource;
+  keeperConfig: KeeperConfig;
+  chainId?: number;
+}): void {
+  EXTERNAL_TAKE_SOURCE_VALIDATORS[params.source]({
+    keeperConfig: params.keeperConfig,
+    chainId: params.chainId,
+  });
+}
+
 export function validateTakeSettings(
   config: TakeSettings,
   keeperConfig: KeeperConfig,
@@ -518,11 +686,12 @@ export function validateTakeSettings(
   }
 
   if (hasTake) {
-    if (config.liquiditySource === LiquiditySource.NONE) {
+    const liquiditySource = config.liquiditySource;
+    if (liquiditySource === LiquiditySource.NONE) {
       throw new Error('TakeSettings: liquiditySource cannot be NONE');
     }
 
-    if (!isExternalTakeLiquiditySource(config.liquiditySource)) {
+    if (!isExternalTakeLiquiditySource(liquiditySource)) {
       throw new Error(
         `TakeSettings: liquiditySource must be ${formatSupportedExternalTakeLiquiditySources()}`
       );
@@ -553,144 +722,11 @@ export function validateTakeSettings(
       'TakeSettings: allowSubsidy must be a boolean'
     );
 
-    if (config.liquiditySource === LiquiditySource.ONEINCH) {
-      if (!keeperConfig.takers?.oneInch) {
-        throw new Error(
-          'TakeSettings: takers.oneInch required when liquiditySource is ONEINCH'
-        );
-      }
-      if (
-        !keeperConfig.dex?.oneInch?.routers ||
-        Object.keys(keeperConfig.dex.oneInch.routers).length === 0
-      ) {
-        throw new Error(
-          'TakeSettings: dex.oneInch.routers required when liquiditySource is ONEINCH'
-        );
-      }
-      if (chainId !== undefined && !keeperConfig.dex.oneInch.routers[chainId]) {
-        throw new Error(
-          `TakeSettings: dex.oneInch.routers missing router for chain ${chainId}`
-        );
-      }
-    }
-
-    if (config.liquiditySource === LiquiditySource.UNISWAPV3) {
-      if (!keeperConfig.takers?.factory) {
-        throw new Error(
-          'TakeSettings: takers.factory required when liquiditySource is UNISWAPV3'
-        );
-      }
-      if (
-        !keeperConfig.takers.contracts ||
-        !keeperConfig.takers.contracts['UniswapV3']
-      ) {
-        throw new Error(
-          'TakeSettings: takers.contracts.UniswapV3 required when liquiditySource is UNISWAPV3'
-        );
-      }
-      if (!keeperConfig.dex?.uniswapV3?.router) {
-        throw new Error(
-          'TakeSettings: dex.uniswapV3.router required when liquiditySource is UNISWAPV3'
-        );
-      }
-      const routerOverrides = keeperConfig.dex.uniswapV3.router;
-      if (
-        getMissingUniswapV3FactoryRouteConfigFields(routerOverrides).length > 0
-      ) {
-        throw new Error(
-          'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
-        );
-      }
-    }
-
-    if (config.liquiditySource === LiquiditySource.SUSHISWAP) {
-      if (!keeperConfig.takers?.factory) {
-        throw new Error(
-          'TakeSettings: takers.factory required when liquiditySource is SUSHISWAP'
-        );
-      }
-      if (
-        !keeperConfig.takers.contracts ||
-        !keeperConfig.takers.contracts['SushiSwap']
-      ) {
-        throw new Error(
-          'TakeSettings: takers.contracts.SushiSwap required when liquiditySource is SUSHISWAP'
-        );
-      }
-      if (!keeperConfig.dex?.sushiswap) {
-        throw new Error(
-          'TakeSettings: dex.sushiswap required when liquiditySource is SUSHISWAP'
-        );
-      }
-      const routerOverrides = keeperConfig.dex.sushiswap;
-      if (
-        !routerOverrides.swapRouterAddress ||
-        !routerOverrides.factoryAddress ||
-        !routerOverrides.wethAddress ||
-        !routerOverrides.quoterV2Address
-      ) {
-        throw new Error(
-          'TakeSettings: dex.sushiswap.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
-        );
-      }
-    }
-
-    if (config.liquiditySource === LiquiditySource.CURVE) {
-      if (!keeperConfig.takers?.factory) {
-        throw new Error(
-          'TakeSettings: takers.factory required when liquiditySource is CURVE'
-        );
-      }
-      if (
-        !keeperConfig.takers.contracts ||
-        !keeperConfig.takers.contracts['Curve']
-      ) {
-        throw new Error(
-          'TakeSettings: takers.contracts.Curve required when liquiditySource is CURVE'
-        );
-      }
-      if (!keeperConfig.dex?.curve) {
-        throw new Error(
-          'TakeSettings: dex.curve required when liquiditySource is CURVE'
-        );
-      }
-      const routerOverrides = keeperConfig.dex.curve;
-      if (
-        !hasNonEmptyObject(routerOverrides.poolConfigs) ||
-        !routerOverrides.wethAddress
-      ) {
-        throw new Error(
-          'TakeSettings: dex.curve.poolConfigs and wethAddress required when liquiditySource is CURVE'
-        );
-      }
-      if (
-        !keeperConfig.network.tokenAddresses ||
-        Object.keys(keeperConfig.network.tokenAddresses).length === 0
-      ) {
-        throw new Error(
-          'TakeSettings: network.tokenAddresses required when liquiditySource is CURVE'
-        );
-      }
-    }
-
-    if (config.liquiditySource === LiquiditySource.LIFI) {
-      if (!keeperConfig.takers?.factory) {
-        throw new Error(
-          'TakeSettings: takers.factory required when liquiditySource is LIFI'
-        );
-      }
-      if (!keeperConfig.takers.contracts?.['Lifi']) {
-        throw new Error(
-          'TakeSettings: takers.contracts.Lifi required when liquiditySource is LIFI'
-        );
-      }
-      assertValidLifiDexConfig({
-        config: keeperConfig.dex?.lifi,
-        fieldName: 'KeeperConfig.dex.lifi',
-        chainId,
-        requireProduction: keeperConfig.runtime?.dryRun !== true,
-      });
-    }
+    validateExternalTakeSourceRequirements({
+      source: liquiditySource,
+      keeperConfig,
+      chainId,
+    });
   }
 
   if (hasArbTake) {
@@ -1000,7 +1036,9 @@ export function validateAutoDiscoverConfig(
         'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
       );
     }
-    for (const descriptor of getExternalTakePathDescriptors(externalTakePaths)) {
+    for (const descriptor of getExternalTakePathDescriptors(
+      externalTakePaths
+    )) {
       if (
         descriptor.requiresRouteDeploymentValidation &&
         takePolicy.validateRouteDeployments !== true
@@ -1028,7 +1066,9 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
-    for (const descriptor of getExternalTakePathDescriptors(externalTakePaths)) {
+    for (const descriptor of getExternalTakePathDescriptors(
+      externalTakePaths
+    )) {
       const defaultSource = descriptor.defaultSource;
       if (
         descriptor.requiresDexGasOverride &&
@@ -1121,7 +1161,9 @@ export function validateAutoDiscoverConfig(
       }
     }
 
-    for (const descriptor of getExternalTakePathDescriptors(externalTakePaths)) {
+    for (const descriptor of getExternalTakePathDescriptors(
+      externalTakePaths
+    )) {
       const defaultSource = descriptor.defaultSource;
       if (defaultSource === undefined) {
         continue;

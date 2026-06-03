@@ -1,5 +1,6 @@
 import {
   CurveRouterOverrides,
+  LifiDexConfig,
   LiquiditySource,
   PoolConfig,
   SushiswapRouterOverrides,
@@ -18,6 +19,9 @@ import {
   createOneInchTakeAdapter,
 } from './one-inch-adapter';
 import { OneInchExecutionConfig } from './one-inch-types';
+import { createLifiTakeAdapter } from './lifi-adapter';
+import { getLifiTakerAddress } from './lifi-execution';
+import { LifiExecutionConfig } from './lifi-types';
 import { TakeWriteTransportConfig } from './write-transport';
 import { TakeActionConfig } from './types';
 
@@ -41,6 +45,13 @@ export interface ManualFactoryContextConfig
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
+}
+
+export interface ManualLifiContextConfig extends ManualTakeCommonContextConfig {
+  keeperTakerFactory?: string;
+  lifi?: LifiDexConfig;
+  lifiTaker?: string;
+  takerContracts?: { [source: string]: string };
 }
 
 export interface ManualTakeContext<TExecutionConfig> {
@@ -72,6 +83,12 @@ export function isFactoryExternalTakeSource(
     liquiditySource === LiquiditySource.SUSHISWAP ||
     liquiditySource === LiquiditySource.CURVE
   );
+}
+
+export function isLifiExternalTakeSource(
+  liquiditySource: LiquiditySource | undefined
+): liquiditySource is LiquiditySource.LIFI {
+  return liquiditySource === LiquiditySource.LIFI;
 }
 
 export function createManualOneInchTakeContext(params: {
@@ -134,5 +151,36 @@ export function createManualFactoryTakeContext(params: {
     },
     logPrefix: 'Factory: ',
     foundLogLevel: 'debug',
+  };
+}
+
+export function createManualLifiTakeContext(params: {
+  config: ManualLifiContextConfig;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}): ManualTakeContext<LifiExecutionConfig> {
+  const tokenDecimalsCache = new Map<string, number>();
+  const lifiTaker =
+    params.config.lifiTaker ??
+    getLifiTakerAddress(params.config.takerContracts);
+  return {
+    externalTakeAdapter: createLifiTakeAdapter({
+      lifi: params.config.lifi,
+      lifiTaker,
+      tokenDecimalsCache,
+    }),
+    arbTakeStrategy: createArbTakeStrategy({
+      actionLabel: 'LI.FI ArbTake',
+      logPrefix: 'LI.FI: ',
+    }),
+    externalExecutionConfig: {
+      dryRun: params.config.dryRun,
+      keeperTakerFactory: params.config.keeperTakerFactory,
+      lifi: params.config.lifi,
+      lifiTaker,
+      takeWriteTransport: params.takeWriteTransport,
+      tokenDecimalsCache,
+    },
+    logPrefix: 'LI.FI: ',
+    foundLogLevel: 'info',
   };
 }

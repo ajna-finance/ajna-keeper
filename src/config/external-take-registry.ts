@@ -5,6 +5,11 @@ export type FactoryLiquiditySource =
   | LiquiditySource.SUSHISWAP
   | LiquiditySource.CURVE;
 
+export type ExternalTakeLiquiditySource =
+  | LiquiditySource.ONEINCH
+  | FactoryLiquiditySource
+  | LiquiditySource.LIFI;
+
 export type ExternalTakePathCategory = 'aggregator' | 'factory';
 
 export interface ExternalTakePathDescriptor {
@@ -33,12 +38,8 @@ export const EXTERNAL_TAKE_PATHS: ReadonlySet<ExternalTakePathKind> = new Set(
   SUPPORTED_EXTERNAL_TAKE_PATHS
 );
 
-export const SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES: readonly LiquiditySource[] =
-  [
-    LiquiditySource.ONEINCH,
-    ...FACTORY_DYNAMIC_SOURCES,
-    LiquiditySource.LIFI,
-  ];
+export const SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES: readonly ExternalTakeLiquiditySource[] =
+  [LiquiditySource.ONEINCH, ...FACTORY_DYNAMIC_SOURCES, LiquiditySource.LIFI];
 
 export const EXTERNAL_TAKE_PATH_DESCRIPTORS = {
   oneinch: {
@@ -119,10 +120,12 @@ export function isFactoryLiquiditySource(
 
 export function isExternalTakeLiquiditySource(
   source: LiquiditySource | undefined
-): source is LiquiditySource {
+): source is ExternalTakeLiquiditySource {
   return (
     source !== undefined &&
-    SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES.includes(source)
+    SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES.includes(
+      source as ExternalTakeLiquiditySource
+    )
   );
 }
 

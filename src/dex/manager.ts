@@ -1,15 +1,16 @@
 // src/dex/manager.ts
 import { Signer } from 'ethers';
-import { PoolConfig, LiquiditySource } from '../config';
+import { LifiDexConfig, PoolConfig, LiquiditySource } from '../config';
 import { logger } from '../logging';
 
 /**
  * Deployment types supported by the smart detection system
  * - oneinch: Use the manual 1inch keeperTaker atomic path
  * - factory: Use factory pattern with multiple DEX implementations (newer chains)
+ * - lifi: Use the factory-registered LI.FI taker path
  * - none: No DEX integration available, arbTake/settlement only
  */
-export type DeploymentType = 'factory' | 'oneinch' | 'none';
+export type DeploymentType = 'factory' | 'oneinch' | 'lifi' | 'none';
 
 /**
  * Minimal config interface for smart detection - only the fields we actually need
@@ -17,6 +18,8 @@ export type DeploymentType = 'factory' | 'oneinch' | 'none';
 interface SmartDexConfig {
   keeperTaker?: string;
   keeperTakerFactory?: string;
+  lifi?: LifiDexConfig;
+  lifiTaker?: string;
   takerContracts?: { [source: string]: string };
   oneInchRouters?: { [chainId: number]: string };
 }
@@ -27,6 +30,10 @@ function isFactoryLiquiditySource(liquiditySource?: LiquiditySource): boolean {
     liquiditySource === LiquiditySource.SUSHISWAP ||
     liquiditySource === LiquiditySource.CURVE
   );
+}
+
+function getConfiguredLifiTaker(config: SmartDexConfig): string | undefined {
+  return config.lifiTaker ?? config.takerContracts?.Lifi;
 }
 
 /**
@@ -75,6 +82,22 @@ export class SmartDexManager {
       return 'none';
     }
 
+    if (liquiditySource === LiquiditySource.LIFI) {
+      if (
+        this.config.keeperTakerFactory &&
+        getConfiguredLifiTaker(this.config)
+      ) {
+        logger.debug(
+          `Smart Detection: Using LI.FI factory deployment for pool ${poolConfig.name}`
+        );
+        return 'lifi';
+      }
+      logger.warn(
+        `Smart Detection: LI.FI requested for pool ${poolConfig.name} but factory/Lifi taker contracts are not configured`
+      );
+      return 'none';
+    }
+
     logger.debug(
       `Smart Detection: No external liquidity source configured for pool ${poolConfig.name}`
     );
@@ -108,6 +131,14 @@ export class SmartDexManager {
           `Factory deployment - can take: ${canTakeFactory} for pool ${poolConfig.name}`
         );
         return canTakeFactory;
+
+      case 'lifi':
+        const canTakeLifi =
+          liquiditySource === LiquiditySource.LIFI && hasExternalTakeConfig;
+        logger.debug(
+          `LI.FI factory deployment - can take: ${canTakeLifi} for pool ${poolConfig.name}`
+        );
+        return canTakeLifi;
 
       case 'none':
         // No external DEX - only arbTake possible
@@ -150,6 +181,17 @@ export class SmartDexManager {
           errors.push(
             'Factory deployment requires at least one takerContracts entry'
           );
+        }
+        break;
+      case 'lifi':
+        if (!this.config.keeperTakerFactory) {
+          errors.push('LI.FI deployment requires keeperTakerFactory address');
+        }
+        if (!getConfiguredLifiTaker(this.config)) {
+          errors.push('LI.FI deployment requires takerContracts.Lifi address');
+        }
+        if (!this.config.lifi) {
+          errors.push('LI.FI deployment requires dex.lifi configuration');
         }
         break;
       case 'none':

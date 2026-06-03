@@ -51,6 +51,23 @@ describe('SmartDexManager', () => {
       expect(result).to.equal('factory');
     });
 
+    it('returns lifi for a LI.FI pool when factory and LI.FI taker are configured', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { Lifi: '0xLifiTaker123' },
+      });
+
+      const result = await manager.detectDeploymentTypeForPool({
+        name: 'LI.FI Pool',
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result).to.equal('lifi');
+    });
+
     it('returns none for arb-only pools', async () => {
       const manager = new SmartDexManager(mockSigner, {});
 
@@ -69,7 +86,10 @@ describe('SmartDexManager', () => {
       const manager = new SmartDexManager(mockSigner, {
         keeperTaker: '0xOldTaker123',
         keeperTakerFactory: '0xFactory123',
-        takerContracts: { UniswapV3: '0xNewTaker123' },
+        takerContracts: {
+          UniswapV3: '0xNewTaker123',
+          Lifi: '0xLifiTaker123',
+        },
         oneInchRouters: { 43114: '0xRouter123' },
       });
 
@@ -87,9 +107,17 @@ describe('SmartDexManager', () => {
           marketPriceFactor: 0.99,
         },
       } as any);
+      const lifiResult = await manager.detectDeploymentTypeForPool({
+        name: 'LI.FI Pool',
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
 
       expect(oneInchResult).to.equal('oneinch');
       expect(uniswapResult).to.equal('factory');
+      expect(lifiResult).to.equal('lifi');
     });
   });
 
@@ -147,6 +175,45 @@ describe('SmartDexManager', () => {
 
       expect(result.valid).to.be.true;
       expect(result.errors).to.be.empty;
+    });
+
+    it('validates a complete LI.FI pool deployment', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { Lifi: '0xLifiTaker123' },
+        lifi: { mode: 'canary' },
+      });
+
+      const result = await manager.validateDeploymentForPool({
+        name: 'LI.FI Pool',
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result.valid).to.be.true;
+      expect(result.errors).to.be.empty;
+    });
+
+    it('reports missing LI.FI policy config when the LI.FI deployment is configured', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { Lifi: '0xLifiTaker123' },
+      });
+
+      const result = await manager.validateDeploymentForPool({
+        name: 'LI.FI Pool',
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result.valid).to.be.false;
+      expect(result.errors).to.include(
+        'LI.FI deployment requires dex.lifi configuration'
+      );
     });
 
     it('treats missing factory config as arb-only fallback instead of a valid factory deployment', async () => {
@@ -210,6 +277,24 @@ describe('SmartDexManager', () => {
         name: 'Factory Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.99,
+        },
+      } as any);
+
+      expect(result).to.be.true;
+    });
+
+    it('returns true for LI.FI external takes when the factory LI.FI deployment is available', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xFactory123',
+        takerContracts: { Lifi: '0xLifiTaker123' },
+        lifi: { mode: 'canary' },
+      });
+
+      const result = await manager.canTakeLiquidation({
+        name: 'LI.FI Pool',
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
           marketPriceFactor: 0.99,
         },
       } as any);

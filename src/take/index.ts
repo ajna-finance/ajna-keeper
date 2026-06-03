@@ -2,6 +2,7 @@ import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import { RequireFields, weiToDecimaled } from '../utils';
 import {
   CurveRouterOverrides,
+  LifiDexConfig,
   LiquiditySource,
   PoolConfig,
   SushiswapRouterOverrides,
@@ -29,8 +30,10 @@ import {
 } from './engine';
 import {
   createManualFactoryTakeContext,
+  createManualLifiTakeContext,
   createManualOneInchTakeContext,
   isFactoryExternalTakeSource,
+  isLifiExternalTakeSource,
   ManualTakeContext,
   stripExternalTakeSettings,
 } from './manual-context';
@@ -38,6 +41,7 @@ import {
   createNoExternalTakeAdapter,
   createOneInchTakeAdapter,
 } from './one-inch-adapter';
+import { createLifiTakeAdapter } from './lifi-adapter';
 import { createArbTakeStrategy } from './arb-strategy';
 
 export type {
@@ -53,7 +57,11 @@ export {
   createNoExternalTakeAdapter,
   createOneInchTakeAdapter,
 } from './one-inch-adapter';
-export type { TakeAuctionStatus, TakeAuctionStatusReader } from './liquidation-status';
+export { createLifiTakeAdapter } from './lifi-adapter';
+export type {
+  TakeAuctionStatus,
+  TakeAuctionStatusReader,
+} from './liquidation-status';
 export {
   createTakeAuctionStatusReader,
   defaultTakeAuctionStatusReader,
@@ -66,6 +74,8 @@ interface HandleTakeConfigBase {
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   keeperTaker?: string;
   keeperTakerFactory?: string;
+  lifi?: LifiDexConfig;
+  lifiTaker?: string;
   takerContracts?: { [source: string]: string };
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
@@ -123,6 +133,12 @@ export async function handleTakes({
       );
       break;
 
+    case 'lifi':
+      logger.debug(
+        `Using manual LI.FI external take strategy for pool: ${pool.name}`
+      );
+      break;
+
     case 'none':
       logger.warn(
         `External liquidity source ${requestedLiquiditySource ?? 'none'} unavailable for pool ${pool.name} - checking arbTake only`
@@ -169,6 +185,27 @@ async function runResolvedManualTakeCandidates({
       `Manual factory external take context starting for pool: ${pool.name}`
     );
     const context = createManualFactoryTakeContext({
+      config,
+      takeWriteTransport,
+    });
+    await runManualTakeCandidateEngine({
+      pool,
+      signer,
+      poolConfig,
+      candidates,
+      subgraph: config.subgraph,
+      dryRun: config.dryRun ?? false,
+      takeWriteTransport,
+      context,
+    });
+    return;
+  }
+
+  if (isLifiExternalTakeSource(poolConfig.take.liquiditySource)) {
+    logger.debug(
+      `Manual LI.FI external take context starting for pool: ${pool.name}`
+    );
+    const context = createManualLifiTakeContext({
       config,
       takeWriteTransport,
     });
@@ -256,6 +293,9 @@ interface GetLiquidationsToTakeParams
   config: SubgraphConfigInput<
     Pick<HandleTakeConfigBase, 'oneInchRouters' | 'connectorTokens'> & {
       oneInchDefaultSlippage?: number;
+      lifi?: LifiDexConfig;
+      lifiTaker?: string;
+      takerContracts?: { [source: string]: string };
     }
   >;
 }
@@ -279,7 +319,13 @@ export async function* getLiquidationsToTake({
           oneInchRouters: resolvedConfig.oneInchRouters,
           connectorTokens: resolvedConfig.connectorTokens,
         })
-      : createNoExternalTakeAdapter();
+      : poolConfig.take.liquiditySource === LiquiditySource.LIFI
+        ? createLifiTakeAdapter({
+            lifi: resolvedConfig.lifi,
+            lifiTaker:
+              resolvedConfig.lifiTaker ?? resolvedConfig.takerContracts?.Lifi,
+          })
+        : createNoExternalTakeAdapter();
   const arbTakeStrategy = createArbTakeStrategy();
 
   for (const candidate of candidates) {

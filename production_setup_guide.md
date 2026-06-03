@@ -497,6 +497,20 @@ yarn start --config your-config.ts
 # Expected log: "Detection Results - Type: factory, Valid: true"
 ```
 
+**For LI.FI Same-Chain Aggregator:**
+
+```bash
+# Required-live no-broadcast route-shape canary. Fails closed if production
+# LI.FI config, reviewed allowlists, or required env are missing.
+AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary -- --config your-config.ts
+
+# Base callback-path fork canary. Non-Base chains need an equivalent reviewed
+# chain-specific fork canary before production support is claimed.
+AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=your-config.ts npm run lifi-fork-execution-canary
+```
+
+These LI.FI gates validate route shape, production policy, configured factory registration, and callback-path execution under the reviewed config. They are required before claiming LI.FI production support for a chain/pair; they do not replace normal dry-run rollout and monitoring.
+
 **Production verification fork tests:**
 
 ```bash

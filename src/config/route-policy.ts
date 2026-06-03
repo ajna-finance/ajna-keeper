@@ -30,6 +30,7 @@ export {
 export type {
   ExternalTakePathDescriptor,
   ExternalTakePathCategory,
+  ExternalTakeLiquiditySource,
   FactoryLiquiditySource,
 } from './external-take-registry';
 

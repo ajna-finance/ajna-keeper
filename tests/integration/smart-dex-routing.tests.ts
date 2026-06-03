@@ -53,6 +53,25 @@ describe('Smart DEX Routing Integration Tests', () => {
       expect(deploymentType).to.equal('factory');
     });
 
+    it('detects LI.FI factory deployment for LI.FI pools', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+        takerContracts: {
+          Lifi: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
+        },
+      });
+
+      const deploymentType = await manager.detectDeploymentTypeForPool({
+        name: 'LI.FI Pool',
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
+          marketPriceFactor: 0.95,
+        },
+      } as any);
+
+      expect(deploymentType).to.equal('lifi');
+    });
+
     it('routes mixed configs by pool source instead of preferring factory globally', async () => {
       const manager = new SmartDexManager(mockSigner, {
         keeperTaker: '0x1111111111111111111111111111111111111111',
@@ -60,6 +79,7 @@ describe('Smart DEX Routing Integration Tests', () => {
         keeperTakerFactory: '0x2222222222222222222222222222222222222222',
         takerContracts: {
           UniswapV3: '0x3333333333333333333333333333333333333333',
+          Lifi: '0x4444444444444444444444444444444444444444',
         },
       });
 
@@ -77,9 +97,17 @@ describe('Smart DEX Routing Integration Tests', () => {
           marketPriceFactor: 0.95,
         },
       } as any);
+      const lifiDeployment = await manager.detectDeploymentTypeForPool({
+        name: 'LI.FI Pool',
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
+          marketPriceFactor: 0.95,
+        },
+      } as any);
 
       expect(oneInchDeployment).to.equal('oneinch');
       expect(factoryDeployment).to.equal('factory');
+      expect(lifiDeployment).to.equal('lifi');
     });
   });
 
@@ -116,6 +144,27 @@ describe('Smart DEX Routing Integration Tests', () => {
         name: 'Factory Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
+          marketPriceFactor: 0.95,
+        },
+      } as any);
+
+      expect(validation.valid).to.be.true;
+      expect(validation.errors).to.be.empty;
+    });
+
+    it('validates a complete LI.FI pool config', async () => {
+      const manager = new SmartDexManager(mockSigner, {
+        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+        takerContracts: {
+          Lifi: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
+        },
+        lifi: { mode: 'canary' },
+      });
+
+      const validation = await manager.validateDeploymentForPool({
+        name: 'LI.FI Pool',
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
           marketPriceFactor: 0.95,
         },
       } as any);
@@ -199,6 +248,37 @@ describe('Smart DEX Routing Integration Tests', () => {
             hpbPriceFactor: 0.98,
           },
           oneInchConfig as any
+        );
+      }).to.not.throw();
+    });
+
+    it('validates LI.FI take settings with factory taker config in dry run', async () => {
+      const lifiConfig = {
+        runtime: {
+          dryRun: true,
+        },
+        takers: {
+          factory: '0x1234567890123456789012345678901234567890',
+          contracts: {
+            Lifi: '0x2234567890123456789012345678901234567890',
+          },
+        },
+        dex: {
+          lifi: {
+            mode: 'canary',
+          },
+        },
+      };
+
+      expect(() => {
+        validateTakeSettings(
+          {
+            minCollateral: 0.1,
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.95,
+            hpbPriceFactor: 0.98,
+          },
+          lifiConfig as any
         );
       }).to.not.throw();
     });

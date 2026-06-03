@@ -2,8 +2,10 @@ import { expect } from 'chai';
 import { CurvePoolType, LiquiditySource } from '../../src/config';
 import {
   createManualFactoryTakeContext,
+  createManualLifiTakeContext,
   createManualOneInchTakeContext,
   isFactoryExternalTakeSource,
+  isLifiExternalTakeSource,
 } from '../../src/take/manual-context';
 
 describe('manual take context helpers', () => {
@@ -19,6 +21,13 @@ describe('manual take context helpers', () => {
       false
     );
     expect(isFactoryExternalTakeSource(undefined)).to.equal(false);
+  });
+
+  it('classifies LI.FI external take sources explicitly', () => {
+    expect(isLifiExternalTakeSource(LiquiditySource.LIFI)).to.equal(true);
+    expect(isLifiExternalTakeSource(LiquiditySource.ONEINCH)).to.equal(false);
+    expect(isLifiExternalTakeSource(LiquiditySource.UNISWAPV3)).to.equal(false);
+    expect(isLifiExternalTakeSource(undefined)).to.equal(false);
   });
 
   it('builds the manual 1inch adapter only for 1inch pools', () => {
@@ -77,5 +86,27 @@ describe('manual take context helpers', () => {
       '0xfactory'
     );
     expect(context.foundLogLevel).to.equal('debug');
+  });
+
+  it('builds a LI.FI context with factory execution config', () => {
+    const context = createManualLifiTakeContext({
+      config: {
+        dryRun: true,
+        keeperTakerFactory: '0xfactory',
+        lifi: { mode: 'canary' },
+        takerContracts: { Lifi: '0xlifi' },
+      },
+    });
+
+    expect(context.externalTakeAdapter.kind).to.equal('lifi');
+    expect(context.externalExecutionConfig.keeperTakerFactory).to.equal(
+      '0xfactory'
+    );
+    expect(context.externalExecutionConfig.lifi).to.deep.equal({
+      mode: 'canary',
+    });
+    expect(context.externalExecutionConfig.lifiTaker).to.equal('0xlifi');
+    expect(context.logPrefix).to.equal('LI.FI: ');
+    expect(context.foundLogLevel).to.equal('info');
   });
 });

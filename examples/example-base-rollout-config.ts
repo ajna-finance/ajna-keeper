@@ -46,17 +46,25 @@ const config: KeeperConfig = {
         // maxGasCostQuote: 1,
         // minExpectedProfitQuote: 1,
         // If discovery.defaults.take enables factory external takes later, import
-        // LiquiditySource and list every factory route that may execute:
+        // LiquiditySource and list every direct-DEX factory route that may execute:
         // allowedLiquiditySources: [LiquiditySource.UNISWAPV3, LiquiditySource.SUSHISWAP],
-        // To compare 1inch against the best factory route for discovered takes:
+        // To compare aggregators against the best factory route for discovered takes:
         // allowedExternalTakePaths: ['oneinch', 'factory'],
+        // allowedExternalTakePaths: ['factory', 'lifi'],
+        // allowedExternalTakePaths: ['oneinch', 'factory', 'lifi'],
         // defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
         // externalTakeProbeTimeoutMs: 2_000,
-        // externalTakeRouteSelectionMode: 'factory_first', // lower 1inch API use, can skip a better 1inch route
+        // externalTakeRouteSelectionMode: 'factory_first', // lower aggregator API use, can skip a better aggregator route
         // takeRouteQuoteBudgetPerCandidate: 2,
         // minProfitNative: '1000000000000000', // 0.001 ETH minimum net profit
-        // dexGasOverrides: { [LiquiditySource.SUSHISWAP]: '700000' },
-        // validateRouteDeployments: true,
+        // LI.FI is an aggregator path, not a factory source. Before enabling it,
+        // configure production dex.lifi allowlists, takers.contracts.Lifi, both
+        // LI.FI production gates, and a conservative LI.FI gas override:
+        // dexGasOverrides: {
+        //   [LiquiditySource.SUSHISWAP]: '700000',
+        //   [LiquiditySource.LIFI]: '900000',
+        // },
+        // validateRouteDeployments: true, // required for LI.FI and mixed factory/aggregator paths
         // gasPriceDriftToleranceBasisPoints: 2_000,
       },
       settlement: {

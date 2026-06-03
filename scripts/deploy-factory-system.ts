@@ -27,7 +27,7 @@ import {
  * - Chain-agnostic (works on any chain with proper config)
  * - Config-driven (reads all addresses from config file)
  * - Fixed deployment order (factory → taker with factory authorization)
- * - Production LI.FI configs deploy and register LifiKeeperTaker, then apply reviewed allowlists
+ * - Production LI.FI configs deploy LifiKeeperTaker, apply reviewed allowlists, then register the verified taker
  * - Interactive password input (same as main bot)
  * - Comprehensive validation and error handling
  * - Manual gas limits for problematic networks

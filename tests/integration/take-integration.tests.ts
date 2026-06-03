@@ -136,6 +136,60 @@ describe('Take Integration Tests', () => {
     ).to.be.false;
   });
 
+  it('routes LI.FI pools through the manual LI.FI take path', async () => {
+    const debugSpy = sinon.spy(logger, 'debug');
+    const config = {
+      dryRun: true,
+      subgraphUrl: 'http://test-url',
+      keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+      takerContracts: {
+        Lifi: '0x2234567890123456789012345678901234567890',
+      },
+      lifi: { mode: 'canary' },
+    };
+
+    const poolConfig: PoolConfig = {
+      ...basePoolConfig,
+      take: {
+        minCollateral: 0.1,
+        liquiditySource: LiquiditySource.LIFI,
+        marketPriceFactor: 0.95,
+        hpbPriceFactor: 0.98,
+      },
+    };
+
+    await handleTakes({
+      signer,
+      pool: basePool as any,
+      poolConfig: poolConfig as any,
+      config: config as any,
+    });
+
+    expect(
+      (subgraph.getLiquidations as sinon.SinonStub).calledOnceWithExactly(
+        'http://test-url',
+        basePool.poolAddress,
+        0.1,
+        { fallbackUrls: undefined }
+      )
+    ).to.be.true;
+    expect(
+      debugSpy.calledWithMatch(
+        sinon.match('Manual LI.FI external take context starting')
+      )
+    ).to.be.true;
+    expect(
+      debugSpy.calledWithMatch(
+        sinon.match('Manual factory external take context starting')
+      )
+    ).to.be.false;
+    expect(
+      debugSpy.calledWithMatch(
+        sinon.match('Manual 1inch take context starting')
+      )
+    ).to.be.false;
+  });
+
   it('routes arb-only pools through the shared take candidate path', async () => {
     const debugSpy = sinon.spy(logger, 'debug');
     const config = {
@@ -178,7 +232,9 @@ describe('Take Integration Tests', () => {
       keeperTakerFactory: '0x2222222222222222222222222222222222222222',
       takerContracts: {
         UniswapV3: '0x3333333333333333333333333333333333333333',
+        Lifi: '0x4444444444444444444444444444444444444444',
       },
+      lifi: { mode: 'canary' },
     };
 
     await handleTakes({
@@ -207,8 +263,21 @@ describe('Take Integration Tests', () => {
       } as any,
       config: config as any,
     });
+    await handleTakes({
+      signer,
+      pool: basePool as any,
+      poolConfig: {
+        ...basePoolConfig,
+        take: {
+          minCollateral: 0.1,
+          liquiditySource: LiquiditySource.LIFI,
+          marketPriceFactor: 0.95,
+        },
+      } as any,
+      config: config as any,
+    });
 
-    expect((subgraph.getLiquidations as sinon.SinonStub).calledTwice).to.be
+    expect((subgraph.getLiquidations as sinon.SinonStub).calledThrice).to.be
       .true;
     expect(
       debugSpy.calledWithMatch(
@@ -218,6 +287,11 @@ describe('Take Integration Tests', () => {
     expect(
       debugSpy.calledWithMatch(
         sinon.match('Manual 1inch take context starting')
+      )
+    ).to.be.true;
+    expect(
+      debugSpy.calledWithMatch(
+        sinon.match('Manual LI.FI external take context starting')
       )
     ).to.be.true;
   });
