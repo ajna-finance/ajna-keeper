@@ -15,6 +15,9 @@ import {
   runLifiSubmissionBoundaryScenario,
   stubLifiQuoteResponse,
 } from './helpers/lifi-execution-scenarios';
+import {
+  malformedSingleExternalTakeExecutionPlan,
+} from '../helpers/external-take-plan';
 
 describe('LI.FI execution', () => {
   const LIFI_DETAILS_ABI =
@@ -58,12 +61,12 @@ describe('LI.FI execution', () => {
         borrower: '0x2222222222222222222222222222222222222222',
         auctionPrice: ethers.utils.parseEther('100'),
         collateral: ethers.utils.parseEther('1'),
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: false,
           externalTakePath: 'lifi',
           selectedLiquiditySource: LiquiditySource.LIFI,
           reason: 'LI.FI fresh quote min output below execution floor',
-        },
+        }),
       } as any,
       config: {
         onLifiExecutionFailure,
@@ -317,7 +320,7 @@ describe('LI.FI execution', () => {
         borrower: '0x2222222222222222222222222222222222222222',
         auctionPrice: ethers.utils.parseEther('100'),
         collateral: ethers.utils.parseEther('2'),
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'lifi',
           selectedLiquiditySource: LiquiditySource.LIFI,
@@ -330,7 +333,7 @@ describe('LI.FI execution', () => {
             quoteAmountRaw,
             routeMinOutRaw,
           },
-        },
+        }),
       } as any,
       config: {
         onLifiExecutionFailure,
@@ -417,7 +420,7 @@ describe('LI.FI execution', () => {
         borrower: '0x8888888888888888888888888888888888888888',
         auctionPrice: ethers.utils.parseEther('100'),
         collateral: fromAmount,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'lifi',
           selectedLiquiditySource: LiquiditySource.LIFI,
@@ -428,7 +431,7 @@ describe('LI.FI execution', () => {
             quoteAmountRaw,
             routeMinOutRaw,
           },
-        },
+        }),
       } as any,
       config: {
         keeperTakerFactory: '0x9999999999999999999999999999999999999999',
@@ -552,7 +555,7 @@ describe('LI.FI execution', () => {
         borrower: '0x8888888888888888888888888888888888888888',
         auctionPrice: ethers.utils.parseEther('100'),
         collateral: fromAmount,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'lifi',
           selectedLiquiditySource: LiquiditySource.LIFI,
@@ -563,7 +566,7 @@ describe('LI.FI execution', () => {
             quoteAmountRaw,
             routeMinOutRaw,
           },
-        },
+        }),
       } as any,
       config: {
         keeperTakerFactory: '0x9999999999999999999999999999999999999999',
@@ -746,7 +749,7 @@ describe('LI.FI execution', () => {
         borrower: '0x8888888888888888888888888888888888888888',
         auctionPrice: ethers.utils.parseEther('100'),
         collateral: collateralWad,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'lifi',
           selectedLiquiditySource: LiquiditySource.LIFI,
@@ -757,7 +760,7 @@ describe('LI.FI execution', () => {
             quoteAmountRaw,
             routeMinOutRaw,
           },
-        },
+        }),
       } as any,
       config: {
         keeperTakerFactory: '0x9999999999999999999999999999999999999999',

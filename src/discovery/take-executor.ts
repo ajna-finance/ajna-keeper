@@ -30,6 +30,7 @@ import {
 import { DiscoveryReadTransports } from '../read-transports';
 import { createArbTakeStrategy } from '../take/arb-strategy';
 import { processTakeCandidates, TAKE_SKIP_REASONS } from '../take/engine';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../take/external-take-execution-plan';
 import { TakeWriteTransport } from '../take/write-transport';
 import { FactoryRouteProfitabilityContext } from '../take/factory';
 import {
@@ -790,7 +791,9 @@ export async function handleDiscoveredTakeTarget(
               stats.approvedTakeDecisions += 1;
               incrementExternalTakeRouteStats({
                 stats,
-                quoteEvaluation: decision.quoteEvaluation,
+                quoteEvaluation: getExternalTakeExecutionPlanPrimaryEvaluation(
+                  decision.externalTakeExecutionPlan
+                ),
                 keys: APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
                 pathCounter: 'approved',
               });

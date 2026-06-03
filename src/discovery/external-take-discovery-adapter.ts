@@ -6,6 +6,10 @@ import {
 } from '../config';
 import { logger } from '../logging';
 import { ExternalTakeAdapter } from '../take/engine';
+import {
+  bindExternalTakeQuoteToExecutionResult,
+  getExternalTakeExecutionPlanPrimaryEvaluation,
+} from '../take/external-take-execution-plan';
 import { createNoExternalTakeAdapter } from '../take/one-inch-adapter';
 import {
   DiscoveryExternalTakeApprovalContext,
@@ -47,11 +51,12 @@ function createProviderBackedDirectAdapter(params: {
       pool,
       signer,
       poolConfig,
+      candidate,
       price,
       auctionPrice,
       collateral,
-    }) => ({
-      quoteEvaluation: await params.provider.quote({
+    }) => {
+      const quoteEvaluation = await params.provider.quote({
         pool,
         signer,
         poolConfig,
@@ -59,8 +64,14 @@ function createProviderBackedDirectAdapter(params: {
         auctionPrice,
         collateral,
         intent: { kind: 'direct' },
-      }),
-    }),
+      });
+      return bindExternalTakeQuoteToExecutionResult({
+        quoteEvaluation,
+        configuredLiquiditySource: poolConfig.take.liquiditySource,
+        poolName: pool.name,
+        borrower: candidate.borrower,
+      });
+    },
     executeExternalTake: async ({
       pool,
       signer,
@@ -78,7 +89,9 @@ function createProviderBackedDirectAdapter(params: {
       if (attempt.succeeded) {
         recordSuccessfulExternalTakeRouteStats(
           params.stats,
-          liquidation.externalTakeQuoteEvaluation,
+          getExternalTakeExecutionPlanPrimaryEvaluation(
+            liquidation.externalTakeExecutionPlan
+          ),
           config.dryRun === true
         );
       } else {

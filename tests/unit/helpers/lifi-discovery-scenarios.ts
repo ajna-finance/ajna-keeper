@@ -9,6 +9,7 @@ import {
   type DiscoveryExecutionConfig,
   type DiscoveryRpcCache,
 } from '../../../src/discovery/handlers';
+import type { ApprovedLifiQuote } from '../../../src/dex/lifi';
 import type { ResolvedTakeTarget } from '../../../src/discovery/targets';
 import type { HandleDiscoveredTakeTargetParams } from '../../../src/discovery/take-executor';
 import type { DiscoveryReadTransports } from '../../../src/read-transports';
@@ -76,6 +77,35 @@ export function getDiscoveredTakeSummary(
     expect.fail('Expected a discovered take target summary log');
   }
   return summaryLog;
+}
+
+export function makeTestApprovedLifiQuote(
+  overrides: Partial<ApprovedLifiQuote> = {}
+): ApprovedLifiQuote {
+  return {
+    raw: {} as any,
+    quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+    routeMinOutRaw: ethers.utils.parseUnits('120', 6),
+    amountInTokenUnits: ethers.utils.parseEther('1'),
+    srcToken: '0x3333333333333333333333333333333333333333',
+    dstToken: '0x2222222222222222222222222222222222222222',
+    dstReceiver: '0x4444444444444444444444444444444444444444',
+    approvalSpender: '0x5555555555555555555555555555555555555555',
+    transactionTarget: '0x6666666666666666666666666666666666666666',
+    transactionRequest: {
+      to: '0x6666666666666666666666666666666666666666',
+      data: '0xabcdef12',
+      value: '0',
+      from: '0x4444444444444444444444444444444444444444',
+      chainId: 8453,
+    },
+    tool: 'uniswap',
+    topLevelTool: 'lifi',
+    feeCosts: [],
+    selector: '0xabcdef12',
+    quotedAtMs: Date.now(),
+    ...overrides,
+  };
 }
 
 export function createHybridGasFallbackFactoryQuote(
@@ -273,6 +303,10 @@ export function createHybridLifiFallbackScenario(
       approvedMinOutRaw: ethers.utils.parseEther('100'),
       quotedAuctionPriceWad: ethers.utils.parseEther('100'),
       quotedCollateralWad: ethers.utils.parseEther('1'),
+      lifiQuote: makeTestApprovedLifiQuote({
+        quoteAmountRaw: ethers.utils.parseEther('130'),
+        routeMinOutRaw: ethers.utils.parseEther('128'),
+      }),
       routeProfitability: {
         expectedNetProfitQuoteRaw:
           options.lifiExpectedNetProfitRaw ?? ethers.utils.parseEther('29'),

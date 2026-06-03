@@ -13,6 +13,10 @@ import {
   TakeLiquidationPlan,
 } from '../types';
 import { ExternalTakeAdapter } from '../engine';
+import {
+  bindExternalTakeQuoteToExecutionResult,
+  getExternalTakeExecutionPlanPrimaryEvaluation,
+} from '../external-take-execution-plan';
 import { approveFactoryQuoteForExecution } from '../external-take-quote-approval';
 import {
   FactoryExecutionConfig,
@@ -69,10 +73,11 @@ export function createFactoryTakeAdapter(params: {
       pool,
       signer,
       poolConfig,
+      candidate,
       auctionPrice,
       collateral,
-    }) => ({
-      quoteEvaluation: await getFactoryTakeQuoteEvaluation(
+    }) => {
+      const quoteEvaluation = await getFactoryTakeQuoteEvaluation(
         pool,
         auctionPrice,
         collateral,
@@ -81,8 +86,14 @@ export function createFactoryTakeAdapter(params: {
         signer,
         params.runtimeCache,
         params.routeSelection
-      ),
-    }),
+      );
+      return bindExternalTakeQuoteToExecutionResult({
+        quoteEvaluation,
+        configuredLiquiditySource: poolConfig.take.liquiditySource,
+        poolName: pool.name,
+        borrower: candidate.borrower,
+      });
+    },
     executeExternalTake: async ({
       pool,
       signer,
@@ -563,7 +574,9 @@ export async function takeLiquidationFactory({
   const { dryRun, keeperTakerFactory } = config;
 
   const externalTakeQuoteEvaluation =
-    liquidation.externalTakeQuoteEvaluation ??
+    getExternalTakeExecutionPlanPrimaryEvaluation(
+      liquidation.externalTakeExecutionPlan
+    ) ??
     (await getFactoryTakeQuoteEvaluation(
       pool,
       liquidation.auctionPrice,

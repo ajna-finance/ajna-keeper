@@ -311,7 +311,7 @@ export async function* getLiquidationsToTake({
         auctionPrice: decision.auctionPrice,
         isTakeable: decision.approvedTake,
         isArbTakeable: decision.approvedArbTake,
-        externalTakeQuoteEvaluation: decision.quoteEvaluation,
+        externalTakeExecutionPlan: decision.externalTakeExecutionPlan,
       };
       continue;
     }

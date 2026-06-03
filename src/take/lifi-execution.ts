@@ -12,6 +12,7 @@ import {
   weiToDecimaled,
 } from '../utils';
 import { approveLifiQuoteForExecution } from './external-take-quote-approval';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from './external-take-execution-plan';
 import { LifiExecutionConfig } from './lifi-types';
 import {
   getLifiPathQuoteEvaluation as evaluateLifiPathQuote,
@@ -186,7 +187,9 @@ async function resolveApprovedLifiExecutionQuote(params: {
 > {
   const { pool, signer, poolConfig, liquidation, config } = params;
   const quoteEvaluation =
-    liquidation.externalTakeQuoteEvaluation ??
+    getExternalTakeExecutionPlanPrimaryEvaluation(
+      liquidation.externalTakeExecutionPlan
+    ) ??
     (await getLifiPathQuoteEvaluation(
       pool,
       Number(weiToDecimaled(liquidation.auctionPrice)),
@@ -469,7 +472,9 @@ export async function takeLiquidationLifi(params: {
 }): Promise<boolean> {
   const { pool, signer, poolConfig, liquidation, config } = params;
   const { borrower } = liquidation;
-  const suppliedQuoteEvaluation = liquidation.externalTakeQuoteEvaluation;
+  const suppliedQuoteEvaluation = getExternalTakeExecutionPlanPrimaryEvaluation(
+    liquidation.externalTakeExecutionPlan
+  );
   const usesLifiExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.LIFI ||
     suppliedQuoteEvaluation?.externalTakePath === 'lifi';

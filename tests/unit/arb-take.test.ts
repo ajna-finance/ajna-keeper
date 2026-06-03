@@ -15,11 +15,17 @@ import {
   ExternalTakeQuoteEvaluation,
 } from '../../src/take/types';
 import * as transactions from '../../src/transactions';
+import { bindExternalTakeQuoteToExecutionResult } from '../../src/take/external-take-execution-plan';
 
 function externalTakeEvaluation(
   quoteEvaluation: ExternalTakeQuoteEvaluation
 ): ExternalTakeEvaluationResult {
-  return { quoteEvaluation };
+  return bindExternalTakeQuoteToExecutionResult({
+    quoteEvaluation,
+    configuredLiquiditySource: quoteEvaluation.selectedLiquiditySource,
+    poolName: 'Execution Pool',
+    borrower: '0xBorrower',
+  });
 }
 
 describe('shared arbTake helpers', () => {

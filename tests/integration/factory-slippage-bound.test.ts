@@ -23,6 +23,7 @@ import {
   resetHardhat,
   setBalance,
 } from './test-utils';
+import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { NonceTracker } from '../../src/nonce';
 import { configureAjna } from '../../src/config';
 import {
@@ -230,7 +231,7 @@ describe('Factory slippage bound', function () {
         auctionPrice: liquidationStatus.price,
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'factory',
           quoteAmountRaw: quotedAmountRaw,
@@ -242,7 +243,7 @@ describe('Factory slippage bound', function () {
           collateralAmount: Number(
             utils.formatEther(liquidationStatus.collateral)
           ),
-        },
+        }),
       },
       config: {
         dryRun: false,

@@ -176,7 +176,7 @@ export interface ApprovedLifiQuoteEvaluation
 export interface BoundLifiRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.LIFI> {
   externalTakePath: 'lifi';
-  lifiQuote?: ApprovedLifiQuote;
+  lifiQuote: ApprovedLifiQuote;
 }
 
 export type BoundFactoryRouteEvaluation =
@@ -204,10 +204,16 @@ export interface ExternalTakeExecutionPlan<TApprovalContext = unknown> {
   readonly fallbacks: readonly ExternalTakeExecutionCandidate<TApprovalContext>[];
 }
 
-export interface ExternalTakeEvaluationResult<TApprovalContext = unknown> {
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
-  executionPlan?: ExternalTakeExecutionPlan<TApprovalContext>;
-}
+export type ExternalTakeEvaluationResult<TApprovalContext = unknown> =
+  | {
+      takeable: false;
+      quoteEvaluation: ExternalTakeQuoteEvaluation;
+      reason?: string;
+    }
+  | {
+      takeable: true;
+      executionPlan: ExternalTakeExecutionPlan<TApprovalContext>;
+    };
 
 export type ApprovedExternalTakeQuoteEvaluation =
   | ApprovedOneInchQuoteEvaluation
@@ -228,23 +234,30 @@ export interface TakeLiquidationPlan<TApprovalContext = unknown> {
   auctionPrice: BigNumber; // WAD
   isTakeable: boolean;
   isArbTakeable: boolean;
-  externalTakeQuoteEvaluation?: BoundExternalTakeRouteEvaluation;
   externalTakeExecutionPlan?: ExternalTakeExecutionPlan<TApprovalContext>;
 }
 
-export interface TakeDecision<TApprovalContext = unknown> {
-  approvedTake: boolean;
+interface TakeDecisionBase {
   approvedArbTake: boolean;
   borrower: string;
   hpbIndex: number;
   collateral: BigNumber;
   auctionPrice: BigNumber;
-  takeablePrice?: number;
   maxArbTakePrice?: number;
-  quoteEvaluation?: BoundExternalTakeRouteEvaluation;
-  externalTakeExecutionPlan?: ExternalTakeExecutionPlan<TApprovalContext>;
   reason?: string;
 }
+
+export type TakeDecision<TApprovalContext = unknown> =
+  | (TakeDecisionBase & {
+      approvedTake: true;
+      takeablePrice?: number;
+      externalTakeExecutionPlan: ExternalTakeExecutionPlan<TApprovalContext>;
+    })
+  | (TakeDecisionBase & {
+      approvedTake: false;
+      takeablePrice?: undefined;
+      externalTakeExecutionPlan?: undefined;
+    });
 
 export interface TakeExecutionResult {
   executedTake: boolean;

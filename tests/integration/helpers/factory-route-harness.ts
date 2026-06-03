@@ -17,6 +17,7 @@ import { deriveApprovedMinOutRaw } from '../../../src/take/factory/shared';
 import { ApprovedFactoryQuoteEvaluation } from '../../../src/take/types';
 import { RequireFields } from '../../../src/utils';
 import { setBalance } from '../test-utils';
+import { singleExternalTakeExecutionPlan } from '../../helpers/external-take-plan';
 import { AjnaKeeperTakerFactory } from '../../../typechain-types/contracts/factories';
 import {
   CurveKeeperTaker,
@@ -548,7 +549,9 @@ async function expectRejectedFactoryExecutionWithPreparedRoute(
       auctionPrice: AUCTION_PRICE,
       isTakeable: true,
       isArbTakeable: false,
-      externalTakeQuoteEvaluation: quoteEvaluation,
+      externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+        quoteEvaluation
+      ),
     },
     config,
   });

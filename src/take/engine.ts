@@ -22,14 +22,14 @@ import {
   TakeExecutionResult,
   TakeLiquidationPlan,
 } from './types';
-import { bindExternalTakeExecutionPlanPrimary } from './external-take-execution-plan';
-import { bindExternalTakeRouteForCandidate } from './external-take-quote-approval';
+import { replaceExternalTakeExecutionPlanPrimary } from './external-take-execution-plan';
 import {
   TakeAuctionStatus,
   TakeAuctionStatusReader,
   defaultTakeAuctionStatusReader,
   normalizeBorrowerKey,
 } from './liquidation-status';
+import { revalidateTakeDecision } from './take-decision-revalidation';
 
 export const TAKE_SKIP_REASONS = {
   auctionInactive: 'auction no longer has collateral onchain',
@@ -50,6 +50,7 @@ export interface ExternalTakeAdapter<
     pool: FungiblePool;
     signer: Signer;
     poolConfig: TPoolConfig;
+    candidate: TakeBorrowerCandidate;
     price: number;
     auctionPrice: BigNumber;
     collateral: BigNumber;
@@ -80,6 +81,53 @@ type TakeExternalApprovalResult =
 type TakeArbApprovalResult =
   | { approved: true }
   | { approved: false; reason?: string };
+
+type ExternalTakeExecutionState<TApprovalContext> =
+  | {
+      approvedTake: true;
+      executionPlan: ExternalTakeExecutionPlan<TApprovalContext>;
+    }
+  | { approvedTake: false; executionPlan?: undefined };
+
+function createExecutionDecisionSnapshot<TApprovalContext>(params: {
+  decision: TakeDecision<TApprovalContext>;
+  externalTakeState: ExternalTakeExecutionState<TApprovalContext>;
+  approvedArbTake: boolean;
+  hpbIndex: number;
+  collateral: BigNumber;
+  auctionPrice: BigNumber;
+  maxArbTakePrice?: number;
+}): TakeDecision<TApprovalContext> {
+  const decisionBase = {
+    approvedArbTake: params.approvedArbTake,
+    borrower: params.decision.borrower,
+    hpbIndex: params.hpbIndex,
+    collateral: params.collateral,
+    auctionPrice: params.auctionPrice,
+    ...(params.maxArbTakePrice === undefined
+      ? {}
+      : { maxArbTakePrice: params.maxArbTakePrice }),
+    ...(params.decision.reason === undefined
+      ? {}
+      : { reason: params.decision.reason }),
+  };
+
+  if (!params.externalTakeState.approvedTake) {
+    return {
+      ...decisionBase,
+      approvedTake: false,
+    };
+  }
+
+  const takeablePrice =
+    params.externalTakeState.executionPlan.primary.evaluation.takeablePrice;
+  return {
+    ...decisionBase,
+    approvedTake: true,
+    ...(takeablePrice === undefined ? {} : { takeablePrice }),
+    externalTakeExecutionPlan: params.externalTakeState.executionPlan,
+  };
+}
 
 interface EvaluateTakeDecisionParams<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
@@ -230,80 +278,6 @@ export async function getTakeBorrowerCandidates(params: {
   return liquidationAuctions.map(({ borrower }) => ({ borrower }));
 }
 
-export async function revalidateTakeDecision<
-  TPoolConfig extends TakeActionConfig = TakeActionConfig,
->(params: {
-  pool: FungiblePool;
-  signer: Signer;
-  borrower: string;
-  subgraph: SubgraphReader;
-  poolConfig: TPoolConfig;
-  arbTakeStrategy: ArbTakeStrategy<TPoolConfig>;
-  takeAuctionStatusReader?: TakeAuctionStatusReader;
-  takeablePrice?: number;
-  hpbIndex?: number;
-  maxArbTakePrice?: number;
-}): Promise<{
-  approvedTake: boolean;
-  approvedArbTake: boolean;
-  collateral: BigNumber;
-  auctionPrice: BigNumber;
-  hpbIndex: number;
-  maxArbTakePrice?: number;
-}> {
-  const statusReader =
-    params.takeAuctionStatusReader ?? defaultTakeAuctionStatusReader;
-  const liquidationStatus = await statusReader.read({
-    pool: params.pool,
-    borrower: params.borrower,
-  });
-  const currentPrice = Number(weiToDecimaled(liquidationStatus.auctionPrice));
-  const collateral = liquidationStatus.collateral;
-  if (!collateral.gt(0)) {
-    return {
-      approvedTake: false,
-      approvedArbTake: false,
-      collateral,
-      auctionPrice: liquidationStatus.auctionPrice,
-      hpbIndex: 0,
-    };
-  }
-
-  let approvedArbTake = false;
-  let hpbIndex = params.hpbIndex ?? 0;
-  let maxArbTakePrice = params.maxArbTakePrice;
-
-  if (
-    params.maxArbTakePrice !== undefined &&
-    params.arbTakeStrategy.isEnabled(params.poolConfig)
-  ) {
-    const arbEvaluation = await params.arbTakeStrategy.evaluateArbTake({
-      pool: params.pool,
-      signer: params.signer,
-      poolConfig: params.poolConfig,
-      subgraph: params.subgraph,
-      price: currentPrice,
-      auctionPrice: liquidationStatus.auctionPrice,
-      collateral,
-    });
-
-    approvedArbTake = arbEvaluation.isArbTakeable;
-    hpbIndex = arbEvaluation.hpbIndex;
-    maxArbTakePrice = arbEvaluation.maxArbTakePrice;
-  }
-
-  return {
-    approvedTake:
-      params.takeablePrice !== undefined &&
-      currentPrice <= params.takeablePrice,
-    approvedArbTake,
-    collateral,
-    auctionPrice: liquidationStatus.auctionPrice,
-    hpbIndex,
-    maxArbTakePrice,
-  };
-}
-
 export async function evaluateTakeDecision<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
   TExecutionConfig = unknown,
@@ -355,7 +329,6 @@ export async function evaluateTakeDecision<
   let hpbIndex = 0;
   let takeablePrice: number | undefined;
   let maxArbTakePrice: number | undefined;
-  let selectedQuoteEvaluation: BoundExternalTakeRouteEvaluation | undefined;
   let selectedExternalTakeExecutionPlan:
     | ExternalTakeExecutionPlan<TApprovalContext>
     | undefined;
@@ -370,15 +343,23 @@ export async function evaluateTakeDecision<
       pool,
       signer,
       poolConfig,
+      candidate,
       price,
       auctionPrice,
       collateral,
     });
-    const quoteEvaluation = externalTakeEvaluation.quoteEvaluation;
 
-    if (!quoteEvaluation.isTakeable) {
-      reason = quoteEvaluation.reason;
+    if (!externalTakeEvaluation.takeable) {
+      reason =
+        externalTakeEvaluation.reason ??
+        externalTakeEvaluation.quoteEvaluation.reason;
     } else {
+      const externalTakeExecutionPlan =
+        externalTakeEvaluation.executionPlan;
+      const quoteEvaluation =
+        externalTakeExecutionPlan.primary.evaluation;
+      const primaryApprovalContext =
+        externalTakeExecutionPlan.primary.approvalContext;
       const approval: TakeExternalApprovalResult = approveExternalTake
         ? await approveExternalTake({
             pool,
@@ -389,38 +370,22 @@ export async function evaluateTakeDecision<
             auctionPrice,
             collateral,
             quoteEvaluation,
-            externalTakeApprovalContext:
-              externalTakeEvaluation.executionPlan?.primary.approvalContext,
+            externalTakeApprovalContext: primaryApprovalContext,
           })
-        : (() => {
-            const binding = bindExternalTakeRouteForCandidate({
-              quoteEvaluation,
-              selectedLiquiditySource: quoteEvaluation.selectedLiquiditySource,
-              configuredLiquiditySource: poolConfig.take.liquiditySource,
-              poolName: pool.name,
-              borrower: candidate.borrower,
-            });
-            return binding.bound
-              ? {
-                  approved: true,
-                  quoteEvaluation: binding.quoteEvaluation,
-                }
-              : {
-                  approved: false,
-                  reason: binding.reason,
-                };
-          })();
+        : {
+            approved: true,
+            quoteEvaluation,
+          };
 
       if (approval.approved) {
         approvedTake = true;
-        selectedQuoteEvaluation = approval.quoteEvaluation;
-        selectedExternalTakeExecutionPlan = externalTakeEvaluation.executionPlan
-          ? bindExternalTakeExecutionPlanPrimary({
-              plan: externalTakeEvaluation.executionPlan,
-              primaryEvaluation: approval.quoteEvaluation,
-            })
-          : undefined;
-        takeablePrice = selectedQuoteEvaluation.takeablePrice;
+        selectedExternalTakeExecutionPlan =
+          replaceExternalTakeExecutionPlanPrimary({
+            plan: externalTakeExecutionPlan,
+            primaryEvaluation: approval.quoteEvaluation,
+            primaryApprovalContext,
+          });
+        takeablePrice = approval.quoteEvaluation.takeablePrice;
       } else {
         reason = approval.reason ?? reason;
       }
@@ -472,18 +437,29 @@ export async function evaluateTakeDecision<
         : 'no external take or arbTake strategy is configured';
   }
 
-  return {
-    approvedTake,
+  const decisionBase = {
     approvedArbTake,
     borrower: candidate.borrower,
     hpbIndex,
     collateral,
     auctionPrice,
-    takeablePrice,
     maxArbTakePrice,
-    quoteEvaluation: selectedQuoteEvaluation,
-    externalTakeExecutionPlan: selectedExternalTakeExecutionPlan,
     reason,
+  };
+  if (approvedTake) {
+    if (!selectedExternalTakeExecutionPlan) {
+      throw new Error('approved external take is missing an execution plan');
+    }
+    return {
+      ...decisionBase,
+      approvedTake: true,
+      takeablePrice,
+      externalTakeExecutionPlan: selectedExternalTakeExecutionPlan,
+    };
+  }
+  return {
+    ...decisionBase,
+    approvedTake: false,
   };
 }
 
@@ -512,7 +488,13 @@ export async function executeTakeDecision<
   TExecutionConfig,
   TApprovalContext
 >): Promise<TakeExecutionResult> {
-  let approvedTake = decision.approvedTake;
+  let externalTakeState: ExternalTakeExecutionState<TApprovalContext> =
+    decision.approvedTake
+      ? {
+          approvedTake: true,
+          executionPlan: decision.externalTakeExecutionPlan,
+        }
+      : { approvedTake: false };
   let approvedArbTake = decision.approvedArbTake;
   let collateral = decision.collateral;
   let auctionPrice = decision.auctionPrice;
@@ -528,6 +510,16 @@ export async function executeTakeDecision<
     submittedTransaction,
     poolStateMayHaveChanged,
   });
+  const getCurrentDecision = (): TakeDecision<TApprovalContext> =>
+    createExecutionDecisionSnapshot({
+      decision,
+      externalTakeState,
+      approvedArbTake,
+      hpbIndex,
+      collateral,
+      auctionPrice,
+      maxArbTakePrice,
+    });
 
   if (revalidateBeforeExecution) {
     const revalidated = await revalidateTakeDecision({
@@ -543,89 +535,93 @@ export async function executeTakeDecision<
       maxArbTakePrice,
     });
 
-    approvedTake = approvedTake && revalidated.approvedTake;
+    externalTakeState =
+      externalTakeState.approvedTake && revalidated.approvedTake
+        ? externalTakeState
+        : { approvedTake: false };
     approvedArbTake = approvedArbTake && revalidated.approvedArbTake;
     collateral = revalidated.collateral;
     auctionPrice = revalidated.auctionPrice;
     hpbIndex = revalidated.hpbIndex;
     maxArbTakePrice = revalidated.maxArbTakePrice;
 
-    if (!approvedTake && !approvedArbTake) {
+    if (!externalTakeState.approvedTake && !approvedArbTake) {
       onSkip?.({
         candidate: { borrower: decision.borrower },
         stage: 'revalidation',
         reason: !collateral.gt(0)
           ? TAKE_SKIP_REASONS.auctionInactive
           : TAKE_SKIP_REASONS.auctionStateChanged,
-        decision,
+        decision: getCurrentDecision(),
       });
       return getExecutionResult();
     }
 
-    const quoteEvaluation = decision.quoteEvaluation;
-    if (approvedTake && quoteEvaluation?.quotedCollateralWad) {
-      if (!collateral.eq(quoteEvaluation.quotedCollateralWad)) {
-        onSkip?.({
-          candidate: { borrower: decision.borrower },
-          stage: 'revalidation',
-          reason: TAKE_SKIP_REASONS.quoteCollateralMismatch,
-          decision,
-        });
-        return getExecutionResult();
-      }
-    }
-    if (approvedTake && quoteEvaluation?.quotedAuctionPriceWad) {
-      if (auctionPrice.gt(quoteEvaluation.quotedAuctionPriceWad)) {
-        onSkip?.({
-          candidate: { borrower: decision.borrower },
-          stage: 'revalidation',
-          reason: TAKE_SKIP_REASONS.quoteAuctionPriceStale,
-          decision,
-        });
-        return getExecutionResult();
-      }
-    }
-
-    if (
-      approvedTake &&
-      quoteEvaluation &&
-      reapproveExternalTakeBeforeExecution
-    ) {
-      const approval = await reapproveExternalTakeBeforeExecution({
-        pool,
-        signer,
-        poolConfig,
-        candidate: { borrower: decision.borrower },
-        price: Number(weiToDecimaled(auctionPrice)),
-        auctionPrice,
-        collateral,
-        quoteEvaluation,
-        externalTakeApprovalContext:
-          decision.externalTakeExecutionPlan?.primary.approvalContext,
-      });
-      if (!approval.approved) {
-        onSkip?.({
-          candidate: { borrower: decision.borrower },
-          stage: 'revalidation',
-          reason:
-            approval.reason ??
-            'approved external take failed final pre-submission policy check',
-          decision,
-        });
-        return getExecutionResult();
-      }
-      decision.quoteEvaluation = approval.quoteEvaluation;
-      if (decision.externalTakeExecutionPlan) {
-        decision.externalTakeExecutionPlan =
-          bindExternalTakeExecutionPlanPrimary({
-            plan: decision.externalTakeExecutionPlan,
-            primaryEvaluation: approval.quoteEvaluation,
+    if (externalTakeState.approvedTake) {
+      const quoteEvaluation = externalTakeState.executionPlan.primary.evaluation;
+      if (quoteEvaluation.quotedCollateralWad) {
+        if (!collateral.eq(quoteEvaluation.quotedCollateralWad)) {
+          onSkip?.({
+            candidate: { borrower: decision.borrower },
+            stage: 'revalidation',
+            reason: TAKE_SKIP_REASONS.quoteCollateralMismatch,
+            decision: getCurrentDecision(),
           });
+          return getExecutionResult();
+        }
+      }
+      if (quoteEvaluation.quotedAuctionPriceWad) {
+        if (auctionPrice.gt(quoteEvaluation.quotedAuctionPriceWad)) {
+          onSkip?.({
+            candidate: { borrower: decision.borrower },
+            stage: 'revalidation',
+            reason: TAKE_SKIP_REASONS.quoteAuctionPriceStale,
+            decision: getCurrentDecision(),
+          });
+          return getExecutionResult();
+        }
+      }
+
+      if (reapproveExternalTakeBeforeExecution) {
+        const approval = await reapproveExternalTakeBeforeExecution({
+          pool,
+          signer,
+          poolConfig,
+          candidate: { borrower: decision.borrower },
+          price: Number(weiToDecimaled(auctionPrice)),
+          auctionPrice,
+          collateral,
+          quoteEvaluation,
+          externalTakeApprovalContext:
+            externalTakeState.executionPlan.primary.approvalContext,
+        });
+        if (!approval.approved) {
+          onSkip?.({
+            candidate: { borrower: decision.borrower },
+            stage: 'revalidation',
+            reason:
+              approval.reason ??
+              'approved external take failed final pre-submission policy check',
+            decision: getCurrentDecision(),
+          });
+          return getExecutionResult();
+        }
+        const primaryApprovalContext =
+          externalTakeState.executionPlan.primary.approvalContext;
+        externalTakeState = {
+          approvedTake: true,
+          executionPlan: replaceExternalTakeExecutionPlanPrimary({
+            plan: externalTakeState.executionPlan,
+            primaryEvaluation: approval.quoteEvaluation,
+            primaryApprovalContext,
+          }),
+        };
       }
     }
   }
 
-  if (approvedTake && externalTakeAdapter.executeExternalTake) {
+  if (externalTakeState.approvedTake && externalTakeAdapter.executeExternalTake) {
+    const externalTakeExecutionPlan = externalTakeState.executionPlan;
     const externalTakeSucceeded = await externalTakeAdapter.executeExternalTake(
       {
         pool,
@@ -638,8 +634,7 @@ export async function executeTakeDecision<
           auctionPrice,
           isTakeable: true,
           isArbTakeable: approvedArbTake,
-          externalTakeQuoteEvaluation: decision.quoteEvaluation,
-          externalTakeExecutionPlan: decision.externalTakeExecutionPlan,
+          externalTakeExecutionPlan,
         },
         config: externalExecutionConfig,
       }
@@ -705,7 +700,7 @@ export async function executeTakeDecision<
   }
 
   onExecuted?.({
-    decision,
+    decision: getCurrentDecision(),
     executedTake,
     executedArbTake,
   });

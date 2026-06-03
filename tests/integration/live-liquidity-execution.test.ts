@@ -28,8 +28,12 @@ import {
   getFactoryRouteCandidates,
 } from '../../src/take/factory/shared';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take-policy';
-import { TakeLiquidationPlan } from '../../src/take/types';
+import {
+  BoundExternalTakeRouteEvaluation,
+  TakeLiquidationPlan,
+} from '../../src/take/types';
 import { arrayFromAsync, RequireFields, weiToDecimaled } from '../../src/utils';
+import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import './subgraph-mock';
 import {
@@ -205,7 +209,7 @@ async function createLiveAjnaLiquidation(params: {
 async function buildLiveFactoryLiquidationPlan(params: {
   pool: FungiblePool;
   borrower: string;
-  quoteEvaluation: TakeLiquidationPlan['externalTakeQuoteEvaluation'];
+  quoteEvaluation: BoundExternalTakeRouteEvaluation;
 }): Promise<TakeLiquidationPlan> {
   const liquidationStatus = await params.pool
     .getLiquidation(params.borrower)
@@ -219,7 +223,9 @@ async function buildLiveFactoryLiquidationPlan(params: {
     auctionPrice: liquidationStatus.price,
     isTakeable: true,
     isArbTakeable: false,
-    externalTakeQuoteEvaluation: params.quoteEvaluation,
+    externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+      params.quoteEvaluation
+    ),
   };
 }
 

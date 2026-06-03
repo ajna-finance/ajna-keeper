@@ -42,6 +42,7 @@ import {
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
 } from './external-take-policy';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from './external-take-execution-plan';
 import { approveOneInchQuoteForExecution } from './external-take-quote-approval';
 
 async function getOneInchTokenDecimals(params: {
@@ -322,7 +323,9 @@ export async function takeLiquidation({
   const { borrower } = liquidation;
   const { dryRun } = config;
 
-  const suppliedQuoteEvaluation = liquidation.externalTakeQuoteEvaluation;
+  const suppliedQuoteEvaluation = getExternalTakeExecutionPlanPrimaryEvaluation(
+    liquidation.externalTakeExecutionPlan
+  );
   const usesOneInchExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ||
     suppliedQuoteEvaluation?.externalTakePath === 'oneinch';

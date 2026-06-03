@@ -12,6 +12,7 @@ import {
 import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take-quote-approval';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take-policy';
 import { createFactoryQuoteProviderRuntimeCache } from '../../src/take/factory/shared';
+import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { getProvider, resetHardhat } from './test-utils';
 import {
   APPROVED_MIN_OUT,
@@ -132,7 +133,9 @@ describe('Production route selection fork verification', function () {
         auctionPrice: AUCTION_PRICE,
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: quoteEvaluation,
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+          quoteEvaluation
+        ),
       },
       config: {
         dryRun: false,
@@ -450,7 +453,9 @@ describe('Production route selection fork verification', function () {
         auctionPrice: inRangeAuctionPrice,
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: boundInRangeEvaluation.quoteEvaluation,
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+          boundInRangeEvaluation.quoteEvaluation
+        ),
       },
       config: {
         dryRun: false,

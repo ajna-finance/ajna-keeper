@@ -1,4 +1,5 @@
 import { ExternalTakeAdapter } from './engine';
+import { bindExternalTakeQuoteToExecutionResult } from './external-take-execution-plan';
 import {
   getOneInchTakeQuoteEvaluation,
   takeLiquidation,
@@ -27,11 +28,12 @@ export function createOneInchTakeAdapter(
       pool,
       signer,
       poolConfig,
+      candidate,
       price,
       auctionPrice,
       collateral,
-    }) => ({
-      quoteEvaluation: await getOneInchTakeQuoteEvaluation(
+    }) => {
+      const quoteEvaluation = await getOneInchTakeQuoteEvaluation(
         pool,
         price,
         collateral,
@@ -45,8 +47,14 @@ export function createOneInchTakeAdapter(
         quoteConfig.oneInchRouters,
         quoteConfig.connectorTokens,
         auctionPrice
-      ),
-    }),
+      );
+      return bindExternalTakeQuoteToExecutionResult({
+        quoteEvaluation,
+        configuredLiquiditySource: poolConfig.take.liquiditySource,
+        poolName: pool.name,
+        borrower: candidate.borrower,
+      });
+    },
     executeExternalTake: async ({
       pool,
       signer,

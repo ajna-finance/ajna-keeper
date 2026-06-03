@@ -14,7 +14,11 @@ import {
   ExternalTakeExecutionCandidate,
   TakeLiquidationPlan,
 } from '../take/types';
-import { resolveExternalTakeExecutionCandidates } from '../take/external-take-execution-plan';
+import {
+  createExternalTakeExecutionCandidate,
+  createExternalTakeExecutionPlan,
+  resolveExternalTakeExecutionCandidates,
+} from '../take/external-take-execution-plan';
 import { getErrorMessage } from '../utils';
 import {
   DiscoveryExternalTakeApprovalContext,
@@ -491,7 +495,12 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
               .join(', ') || 'none'
           } for pool ${params.pool.name}`
         );
-        return { quoteEvaluation: result.evaluation };
+        return {
+          takeable: true,
+          executionPlan: createExternalTakeExecutionPlan({
+            primaryEvaluation: result.evaluation,
+          }),
+        };
       }
     }
   }
@@ -516,9 +525,13 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   if (selected) {
     const selectedWithFallbacks = cloneExternalTakeQuoteEvaluation(selected);
     const fallbackCandidates: ExternalTakeExecutionCandidate<DiscoveryExternalTakeApprovalContext>[] =
-      sortedApprovedEvaluations.slice(1).map((evaluation) => ({
-        evaluation: cloneExternalTakeQuoteEvaluation(evaluation),
-      }));
+      sortedApprovedEvaluations
+        .slice(1)
+        .map((evaluation) =>
+          createExternalTakeExecutionCandidate({
+            evaluation: cloneExternalTakeQuoteEvaluation(evaluation),
+          })
+        );
     if (
       isOneInchExternalTakeRoute(selected) ||
       isLifiExternalTakeRoute(selected)
@@ -532,24 +545,22 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
       `Hybrid external take selected path=${selected.externalTakePath} source=${formatLiquiditySource(selected.selectedLiquiditySource)} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${selected.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} routeExecutionFloorRaw=${selected.routeExecutionFloorRaw.toString()} rejectedPaths=${rejectedReasons.join(', ') || 'none'} for pool ${params.pool.name}`
     );
     return {
-      quoteEvaluation: selectedWithFallbacks,
-      executionPlan: {
-        primary: {
-          evaluation: selectedWithFallbacks,
-        },
+      takeable: true,
+      executionPlan: createExternalTakeExecutionPlan({
+        primaryEvaluation: selectedWithFallbacks,
         fallbacks: fallbackCandidates,
-      },
+      }),
     };
   }
 
   const gasQuoteFallback = await buildGasQuoteFallbackEvaluation();
   if (gasQuoteFallback) {
     return {
-      quoteEvaluation: gasQuoteFallback.evaluation,
-      executionPlan: {
-        primary: gasQuoteFallback,
-        fallbacks: [],
-      },
+      takeable: true,
+      executionPlan: createExternalTakeExecutionPlan({
+        primaryEvaluation: gasQuoteFallback.evaluation,
+        primaryApprovalContext: gasQuoteFallback.approvalContext,
+      }),
     };
   }
 
@@ -567,6 +578,7 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   }
 
   return {
+    takeable: false,
     quoteEvaluation: {
       isTakeable: false,
       reason: rejectedReasons.length
@@ -588,7 +600,6 @@ export async function executeHybridExternalTakeForDiscovery(params: {
   stats: DiscoveredTakeTargetStats;
 }): Promise<boolean> {
   const executionCandidates = resolveExternalTakeExecutionCandidates({
-    primaryEvaluation: params.liquidation.externalTakeQuoteEvaluation,
     executionPlan: params.liquidation.externalTakeExecutionPlan,
   });
 
@@ -677,7 +688,10 @@ export async function executeHybridExternalTakeForDiscovery(params: {
     const selectedSource = selection.selectedSource;
     const liquidationForCandidate = {
       ...executionLiquidation,
-      externalTakeQuoteEvaluation: approvedEvaluation,
+      externalTakeExecutionPlan: createExternalTakeExecutionPlan({
+        primaryEvaluation: approvedEvaluation,
+        primaryApprovalContext: candidate.approvalContext,
+      }),
     };
 
     const provider = params.providerRegistry.selectExternalTakeProvider({

@@ -6,6 +6,7 @@ import * as erc20 from '../../src/erc20';
 import { handleDiscoveredTakeTarget } from '../../src/discovery/handlers';
 import type { DiscoveryRpcCache } from '../../src/discovery/handlers';
 import { logger } from '../../src/logging';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../src/take/external-take-execution-plan';
 import * as lifiExecutionModule from '../../src/take/lifi-execution';
 import * as takeFactoryModule from '../../src/take/factory';
 import { createDiscoveryTransports } from '../helpers/discovery';
@@ -15,6 +16,7 @@ import {
   createNativeToQuoteGasConversionReject,
   getDiscoveredTakeSummary,
   makeDiscoveredTakeParams,
+  makeTestApprovedLifiQuote,
   runLifiHybridGasFallbackScenario,
 } from './helpers/lifi-discovery-scenarios';
 
@@ -58,6 +60,9 @@ describe('LI.FI discovery handlers', () => {
       approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
       quotedAuctionPriceWad: ethers.utils.parseEther('100'),
       quotedCollateralWad: ethers.utils.parseEther('1'),
+      lifiQuote: makeTestApprovedLifiQuote({
+        quoteAmountRaw: ethers.utils.parseUnits('130', 6),
+      }),
     });
     const factoryQuoteStub = sinon
       .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
@@ -184,6 +189,9 @@ describe('LI.FI discovery handlers', () => {
         takeablePrice: 123.75,
         quotedCollateralWad: ethers.utils.parseEther('1'),
         quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        lifiQuote: makeTestApprovedLifiQuote({
+          quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        }),
       });
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
@@ -276,6 +284,10 @@ describe('LI.FI discovery handlers', () => {
       takeablePrice: 123.75,
       quotedCollateralWad: ethers.utils.parseEther('1'),
       quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+      lifiQuote: makeTestApprovedLifiQuote({
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        routeMinOutRaw: ethers.utils.parseUnits('120', 6),
+      }),
     });
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
@@ -346,18 +358,17 @@ describe('LI.FI discovery handlers', () => {
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
     const lifiLiquidation =
       takeLiquidationLifiStub.firstCall.args[0].liquidation;
+    const lifiQuoteEvaluation = getExternalTakeExecutionPlanPrimaryEvaluation(
+      lifiLiquidation.externalTakeExecutionPlan
+    )!;
     expect(lifiLiquidation.auctionPrice.eq(refreshedAuctionPrice)).to.equal(
       true
     );
     expect(
-      lifiLiquidation.externalTakeQuoteEvaluation!.quotedAuctionPriceWad!.eq(
-        refreshedAuctionPrice
-      )
+      lifiQuoteEvaluation.quotedAuctionPriceWad!.eq(refreshedAuctionPrice)
     ).to.equal(true);
     expect(
-      lifiLiquidation.externalTakeQuoteEvaluation!.quotedCollateralWad!.eq(
-        ethers.utils.parseEther('1')
-      )
+      lifiQuoteEvaluation.quotedCollateralWad!.eq(ethers.utils.parseEther('1'))
     ).to.equal(true);
   });
 
@@ -378,6 +389,10 @@ describe('LI.FI discovery handlers', () => {
       takeablePrice: 125,
       quotedCollateralWad: ethers.utils.parseEther('1'),
       quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+      lifiQuote: makeTestApprovedLifiQuote({
+        quoteAmountRaw: ethers.utils.parseEther('125'),
+        routeMinOutRaw: ethers.utils.parseEther('100'),
+      }),
     });
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
@@ -462,8 +477,10 @@ describe('LI.FI discovery handlers', () => {
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
     const approvedEvaluation =
-      takeLiquidationLifiStub.firstCall.args[0].liquidation
-        .externalTakeQuoteEvaluation!;
+      getExternalTakeExecutionPlanPrimaryEvaluation(
+        takeLiquidationLifiStub.firstCall.args[0].liquidation
+          .externalTakeExecutionPlan
+      )!;
     expect(
       approvedEvaluation.approvedMinOutRaw!.eq(expectedApprovedMinOutRaw)
     ).to.equal(true);
@@ -509,6 +526,9 @@ describe('LI.FI discovery handlers', () => {
         takeablePrice: 123.75,
         quotedCollateralWad: ethers.utils.parseEther('1'),
         quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        lifiQuote: makeTestApprovedLifiQuote({
+          quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        }),
       });
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
@@ -802,19 +822,18 @@ describe('LI.FI discovery handlers', () => {
 
     const lifiLiquidation =
       takeLiquidationLifiStub.firstCall.args[0].liquidation;
+    const lifiQuoteEvaluation = getExternalTakeExecutionPlanPrimaryEvaluation(
+      lifiLiquidation.externalTakeExecutionPlan
+    )!;
     expect(lifiLiquidation.collateral.eq(refreshedCollateral)).to.equal(true);
     expect(lifiLiquidation.auctionPrice.eq(refreshedAuctionPrice)).to.equal(
       true
     );
     expect(
-      lifiLiquidation.externalTakeQuoteEvaluation!.quotedCollateralWad!.eq(
-        refreshedCollateral
-      )
+      lifiQuoteEvaluation.quotedCollateralWad!.eq(refreshedCollateral)
     ).to.equal(true);
     expect(
-      lifiLiquidation.externalTakeQuoteEvaluation!.quotedAuctionPriceWad!.eq(
-        refreshedAuctionPrice
-      )
+      lifiQuoteEvaluation.quotedAuctionPriceWad!.eq(refreshedAuctionPrice)
     ).to.equal(true);
   });
 

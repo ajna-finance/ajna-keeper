@@ -4,6 +4,7 @@ import sinon from 'sinon';
 import { LiquiditySource, TakeWriteTransportMode } from '../../../src/config';
 import { takeLiquidationLifi } from '../../../src/take/lifi-execution';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
+import { malformedSingleExternalTakeExecutionPlan } from '../../helpers/external-take-plan';
 
 export interface ValidLifiQuoteResponseParams {
   chainId: number;
@@ -158,7 +159,7 @@ export async function runLifiSubmissionBoundaryScenario(params: {
       borrower: '0x8888888888888888888888888888888888888888',
       auctionPrice: ethers.utils.parseEther('100'),
       collateral: fromAmount,
-      externalTakeQuoteEvaluation: {
+      externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
         isTakeable: true,
         externalTakePath: 'lifi',
         selectedLiquiditySource: LiquiditySource.LIFI,
@@ -169,7 +170,7 @@ export async function runLifiSubmissionBoundaryScenario(params: {
           quoteAmountRaw,
           routeMinOutRaw,
         },
-      },
+      }),
     } as any,
     config: {
       keeperTakerFactory: '0x9999999999999999999999999999999999999999',

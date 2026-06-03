@@ -516,6 +516,12 @@ export function bindExternalTakeRouteForDiscovery(params: {
     };
   }
   if (route.route.identity.source === LiquiditySource.LIFI) {
+    if (!route.route.quoteEvaluation.lifiQuote) {
+      return {
+        bound: false,
+        reason: `LI.FI route is missing validated route details for ${context}`,
+      };
+    }
     return {
       bound: true,
       quoteEvaluation: {

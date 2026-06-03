@@ -21,6 +21,7 @@ import {
   AjnaKeeperTaker__factory,
   AjnaKeeperTakerFactory__factory,
 } from '../../typechain-types';
+import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 
 function malformedBoundRoute(
   quoteEvaluation: ExternalTakeQuoteEvaluation
@@ -112,14 +113,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'oneinch',
           selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(11),
           routeExecutionFloorRaw: BigNumber.from(10),
           approvedMinOutRaw: BigNumber.from(10),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -532,14 +533,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'oneinch',
           selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(11),
           routeExecutionFloorRaw: BigNumber.from(10),
           approvedMinOutRaw: BigNumber.from(10),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -669,14 +670,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
           quoteAmountRaw: BigNumber.from(11),
           routeExecutionFloorRaw: BigNumber.from(10),
           approvedMinOutRaw: BigNumber.from(10),
           externalTakePath: 'oneinch',
           selectedLiquiditySource: LiquiditySource.ONEINCH,
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -727,12 +728,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: malformedBoundRoute({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(11),
-        }),
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+          malformedBoundRoute({
+            isTakeable: true,
+            externalTakePath: 'oneinch',
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(11),
+          })
+        ),
       },
       config: {
         dryRun: true,
@@ -828,14 +831,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'oneinch',
           selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(1000),
           routeExecutionFloorRaw: BigNumber.from(1100),
           approvedMinOutRaw: BigNumber.from(1100),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -920,14 +923,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'oneinch',
           selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(1000),
           routeExecutionFloorRaw: BigNumber.from(1100),
           approvedMinOutRaw: BigNumber.from(1100),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -1006,14 +1009,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
           externalTakePath: 'oneinch',
           selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(1000),
           routeExecutionFloorRaw: BigNumber.from(900),
           approvedMinOutRaw: BigNumber.from(900),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -1232,7 +1235,9 @@ describe('take write submission', () => {
         signer: {} as any,
         liquidation: {
           ...baseLiquidation,
-          externalTakeQuoteEvaluation: malformedBoundRoute(quoteEvaluation),
+          externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+            malformedBoundRoute(quoteEvaluation)
+          ),
         },
         config: {
           dryRun: false,
@@ -1270,13 +1275,15 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: malformedBoundRoute({
-          isTakeable: true,
-          externalTakePath: 'factory',
-          quoteAmountRaw: BigNumber.from(11),
-          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-          selectedFeeTier: 3000,
-        }),
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+          malformedBoundRoute({
+            isTakeable: true,
+            externalTakePath: 'factory',
+            quoteAmountRaw: BigNumber.from(11),
+            selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+            selectedFeeTier: 3000,
+          })
+        ),
       },
       config: {
         dryRun: true,
