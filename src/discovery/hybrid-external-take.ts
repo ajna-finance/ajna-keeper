@@ -1,5 +1,5 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber, ethers } from 'ethers';
+import { BigNumber } from 'ethers';
 import {
   ActiveExternalTakeRouteSelectionMode,
   ExternalTakePathKind,
@@ -19,19 +19,17 @@ import {
   createExternalTakeExecutionPlan,
   resolveExternalTakeExecutionCandidates,
 } from '../take/external-take-execution-plan';
+import { TakeAuctionStatusReader } from '../take/liquidation-status';
 import { getErrorMessage } from '../utils';
 import {
   DiscoveryExternalTakeApprovalContext,
   DiscoveryExternalTakeApprover,
   ExternalTakeApprovalRejectCategory,
-  ExternalTakeApprovalResult,
   HYBRID_GAS_QUOTE_FALLBACK_CONTEXT,
   HYBRID_GAS_QUOTE_FALLBACK_KIND,
 } from './external-take-approval';
-import {
-  cloneExternalTakeQuoteEvaluation,
-  withExternalTakeApprovalContext,
-} from './external-take-evaluation';
+import { cloneExternalTakeQuoteEvaluation } from './external-take-evaluation';
+import { refreshAndReapproveDiscoveryExternalTake } from './external-take-final-approval';
 import {
   isLifiExternalTakeRoute,
   isOneInchExternalTakeRoute,
@@ -597,6 +595,7 @@ export async function executeHybridExternalTakeForDiscovery(params: {
   externalTakePaths: ExternalTakePathKind[];
   providerRegistry: DiscoveryExternalTakeProviderRegistry;
   approveExternalTake: DiscoveryExternalTakeApprover;
+  takeAuctionStatusReader: TakeAuctionStatusReader;
   stats: DiscoveredTakeTargetStats;
 }): Promise<boolean> {
   const executionCandidates = resolveExternalTakeExecutionCandidates({
@@ -638,54 +637,33 @@ export async function executeHybridExternalTakeForDiscovery(params: {
     let approvedEvaluation = candidateEvaluation;
     let executionLiquidation = params.liquidation;
     if (requiresFallbackReapproval) {
-      // The primary path already passed the engine's final approval hook.
-      // Fallbacks are selected inside this executor, so refresh and reapprove
-      // them immediately before attempting execution.
-      let refreshedStatus;
-      try {
-        refreshedStatus = await params.pool
-          .getLiquidation(params.liquidation.borrower)
-          .getStatus();
-      } catch (error) {
-        logger.warn(
-          `Hybrid fallback path could not refresh auction state for ${params.pool.name}/${params.liquidation.borrower}: ${getErrorMessage(error)}`
-        );
-        continue;
-      }
-      executionLiquidation = {
-        ...params.liquidation,
-        auctionPrice: refreshedStatus.price,
-        collateral: refreshedStatus.collateral,
-      };
-      const fallbackApproval: ExternalTakeApprovalResult =
-        await params.approveExternalTake({
-          price: Number(
-            ethers.utils.formatEther(executionLiquidation.auctionPrice)
-          ),
-          auctionPrice: executionLiquidation.auctionPrice,
-          collateral: executionLiquidation.collateral,
-          quoteEvaluation: candidateEvaluation,
-          externalTakeApprovalContext: candidate.approvalContext,
-          countStats: false,
-          forceGasRefresh: true,
-        });
-      if (!fallbackApproval.approved) {
-        logger.debug(
-          `Hybrid fallback path rejected during final approval for ${params.pool.name}/${params.liquidation.borrower}: ${
-            fallbackApproval.reason ?? 'policy rejected fallback path'
-          }`
-        );
-        continue;
-      }
-      approvedEvaluation = withExternalTakeApprovalContext({
-        quoteEvaluation: fallbackApproval.quoteEvaluation,
-        auctionPrice: executionLiquidation.auctionPrice,
-        collateral: executionLiquidation.collateral,
+      const fallbackApproval = await refreshAndReapproveDiscoveryExternalTake({
+        pool: params.pool,
+        takeAuctionStatusReader: params.takeAuctionStatusReader,
+        liquidation: params.liquidation,
+        quoteEvaluation: candidateEvaluation,
+        externalTakeApprovalContext: candidate.approvalContext,
+        approveExternalTake: params.approveExternalTake,
+        countStats: false,
+        forceGasRefresh: true,
       });
+      if (!fallbackApproval.approved) {
+        if (fallbackApproval.kind === 'auction_refresh_failed') {
+          logger.warn(
+            `Hybrid fallback path could not refresh auction state for ${params.pool.name}/${params.liquidation.borrower}: ${fallbackApproval.reason}`
+          );
+          continue;
+        }
+        logger.debug(
+          `Hybrid fallback path rejected during final approval for ${params.pool.name}/${params.liquidation.borrower}: ${fallbackApproval.reason}`
+        );
+        continue;
+      }
+      executionLiquidation = fallbackApproval.liquidation;
+      approvedEvaluation = fallbackApproval.quoteEvaluation;
     }
 
     const selectedPath = selection.effectiveSelectedPath;
-    const selectedSource = selection.selectedSource;
     const liquidationForCandidate = {
       ...executionLiquidation,
       externalTakeExecutionPlan: createExternalTakeExecutionPlan({
@@ -703,7 +681,6 @@ export async function executeHybridExternalTakeForDiscovery(params: {
       poolConfig: params.poolConfig,
       liquidation: liquidationForCandidate,
       config: params.config,
-      selectedSource,
     });
     if (attempt.succeeded) {
       recordSuccessfulExternalTakeRouteStats(

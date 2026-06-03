@@ -48,7 +48,7 @@ import { getDecimalsErc20 } from '../erc20';
 import { createTakeAuctionStatusReader } from '../take/liquidation-status';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import { getOneInchQuoteTimeoutMs } from './one-inch-circuit';
-import { withExternalTakeApprovalContext } from './external-take-evaluation';
+import { reapproveDiscoveryExternalTakeForAuction } from './external-take-final-approval';
 import { createDiscoveredTakeTargetRuntime } from './discovered-take-target-runtime';
 import { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
 import {
@@ -614,6 +614,9 @@ export async function handleDiscoveredTakeTarget(
     return stats;
   }
   const externalTakeProbeTimeoutMs = getExternalTakeProbeTimeoutMs(takePolicy);
+  const takeAuctionStatusReader = createTakeAuctionStatusReader({
+    stats: rpcCache?.stats,
+  });
   const runtime = createDiscoveredTakeTargetRuntime({
     pool: params.pool,
     signer: params.signer,
@@ -625,6 +628,7 @@ export async function handleDiscoveredTakeTarget(
     takeWriteTransport: params.takeWriteTransport,
     stats,
     routeProbeLimiter,
+    takeAuctionStatusReader,
     externalTakeProbeTimeoutMs,
     buildFactoryRouteProfitabilityContext,
   });
@@ -641,9 +645,6 @@ export async function handleDiscoveredTakeTarget(
     const candidates = params.target.candidates.map(({ borrower }) => ({
       borrower,
     }));
-    const takeAuctionStatusReader = createTakeAuctionStatusReader({
-      stats: rpcCache?.stats,
-    });
     await withFactoryRuntimeStats(
       rpcCache?.factoryQuoteProviders,
       rpcCache?.stats?.factory,
@@ -718,27 +719,16 @@ export async function handleDiscoveredTakeTarget(
             collateral,
             quoteEvaluation,
             externalTakeApprovalContext,
-          }) => {
-            const approval = await approveExternalTake({
+          }) =>
+            await reapproveDiscoveryExternalTakeForAuction({
+              approveExternalTake,
               price,
               auctionPrice,
               collateral,
               quoteEvaluation,
               externalTakeApprovalContext,
               forceGasRefresh: true,
-            });
-            if (!approval.approved) {
-              return approval;
-            }
-            return {
-              ...approval,
-              quoteEvaluation: withExternalTakeApprovalContext({
-                quoteEvaluation: approval.quoteEvaluation,
-                auctionPrice,
-                collateral,
-              }),
-            };
-          },
+            }),
           approveArbTake: async () => {
             if (
               takePolicy?.minExpectedProfitQuote !== undefined ||

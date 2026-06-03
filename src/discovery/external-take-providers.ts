@@ -1,5 +1,9 @@
 import { isFactoryDynamicSource } from '../config';
+import { logger } from '../logging';
 import * as takeFactoryModule from '../take/factory';
+import {
+  getExternalTakeExecutionPlanPrimaryEvaluation,
+} from '../take/external-take-execution-plan';
 import * as lifiExecutionModule from '../take/lifi-execution';
 import * as oneInchExecutionModule from '../take/one-inch-execution';
 import { ResolvedTakeTarget } from './targets';
@@ -180,6 +184,9 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       const circuitOpenReason =
         getLifiExecutionRefreshCircuitOpenReason(config);
       if (circuitOpenReason) {
+        logger.warn(
+          `LI.FI execution refresh circuit is open for ${pool.name}/${liquidation.borrower}; skipping LI.FI external take attempt`
+        );
         lifiConfig.onLifiExecutionFailure?.({
           preBroadcast: true,
           error: circuitOpenReason,
@@ -187,7 +194,6 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
         return {
           succeeded: false,
           preBroadcastFailed: true,
-          circuitOpenReason,
         };
       }
       const succeeded = await lifiExecutionModule.takeLiquidationLifi({
@@ -228,8 +234,10 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       poolConfig,
       liquidation,
       config,
-      selectedSource,
     }) => {
+      const selectedSource = getExternalTakeExecutionPlanPrimaryEvaluation(
+        liquidation.externalTakeExecutionPlan
+      )?.selectedLiquiditySource;
       const factoryPoolConfig =
         selectedSource !== undefined && isFactoryDynamicSource(selectedSource)
           ? withTakeLiquiditySource(poolConfig, selectedSource)

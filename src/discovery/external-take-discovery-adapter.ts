@@ -4,8 +4,8 @@ import {
   LiquiditySource,
   isFactoryDynamicSource,
 } from '../config';
-import { logger } from '../logging';
 import { ExternalTakeAdapter } from '../take/engine';
+import { TakeAuctionStatusReader } from '../take/liquidation-status';
 import {
   bindExternalTakeQuoteToExecutionResult,
   getExternalTakeExecutionPlanPrimaryEvaluation,
@@ -35,11 +35,6 @@ function createProviderBackedDirectAdapter(params: {
   kind: 'oneinch' | 'lifi' | 'factory';
   provider: DiscoveryExternalTakeRouteProvider;
   stats: DiscoveredTakeTargetStats;
-  onFailedAttempt?: (params: {
-    poolName: string;
-    borrower: string;
-    circuitOpenReason?: string;
-  }) => void;
 }): ExternalTakeAdapter<
   ResolvedTakeTarget,
   DiscoveryExternalExecutionConfig,
@@ -94,12 +89,6 @@ function createProviderBackedDirectAdapter(params: {
           ),
           config.dryRun === true
         );
-      } else {
-        params.onFailedAttempt?.({
-          poolName: pool.name,
-          borrower: liquidation.borrower,
-          circuitOpenReason: attempt.circuitOpenReason,
-        });
       }
       return attempt.succeeded;
     },
@@ -113,6 +102,7 @@ export function createExternalTakeAdapterForDiscovery(params: {
   routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   probeTimeoutMs: number;
   approveExternalTake: DiscoveryExternalTakeApprover;
+  takeAuctionStatusReader: TakeAuctionStatusReader;
   stats: DiscoveredTakeTargetStats;
   providerRegistry: DiscoveryExternalTakeProviderRegistry;
 }): ExternalTakeAdapter<
@@ -162,6 +152,7 @@ export function createExternalTakeAdapterForDiscovery(params: {
           externalTakePaths: params.externalTakePaths,
           providerRegistry: params.providerRegistry,
           approveExternalTake: params.approveExternalTake,
+          takeAuctionStatusReader: params.takeAuctionStatusReader,
           stats: params.stats,
         }),
     };
@@ -180,13 +171,6 @@ export function createExternalTakeAdapterForDiscovery(params: {
       kind: 'lifi',
       provider: params.providerRegistry.lifiProvider,
       stats: params.stats,
-      onFailedAttempt: ({ poolName, borrower, circuitOpenReason }) => {
-        if (circuitOpenReason) {
-          logger.warn(
-            `LI.FI execution refresh circuit is open for ${poolName}/${borrower}; skipping direct LI.FI external take`
-          );
-        }
-      },
     });
   }
 

@@ -9,6 +9,7 @@ import {
 import { logger } from '../logging';
 import * as lifiExecutionModule from '../take/lifi-execution';
 import { ExternalTakeAdapter } from '../take/engine';
+import { TakeAuctionStatusReader } from '../take/liquidation-status';
 import { TakeWriteTransport } from '../take/write-transport';
 import { AsyncOperationLimiter } from '../utils';
 import { DiscoveryReadTransports } from '../read-transports';
@@ -87,6 +88,7 @@ export function createDiscoveredTakeTargetRuntime(params: {
   takeWriteTransport?: TakeWriteTransport;
   stats: DiscoveredTakeTargetStats;
   routeProbeLimiter?: AsyncOperationLimiter;
+  takeAuctionStatusReader: TakeAuctionStatusReader;
   externalTakeProbeTimeoutMs: number;
   buildFactoryRouteProfitabilityContext: DiscoveryFactoryRouteProfitabilityContextBuilder;
 }): DiscoveredTakeTargetRuntime {
@@ -237,6 +239,7 @@ export function createDiscoveredTakeTargetRuntime(params: {
     ),
     probeTimeoutMs: params.externalTakeProbeTimeoutMs,
     approveExternalTake,
+    takeAuctionStatusReader: params.takeAuctionStatusReader,
     stats: params.stats,
     providerRegistry: externalTakeProviderRegistry,
   });

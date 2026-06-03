@@ -33,16 +33,10 @@ export type ExternalTakeQuoteResult = {
  * fallback path. Once a submission is accepted or maybe-accepted, the execution
  * module reports `preBroadcast: false` and this stays false so no double-submit
  * or fallback occurs.
- *
- * `circuitOpenReason` is set only when a provider short-circuited on an open
- * provider circuit (today: the LI.FI execution_refresh circuit). It lets the
- * direct (non-hybrid) caller emit its distinct "circuit is open" log without the
- * provider needing to know whether it was invoked from the hybrid loop.
  */
 export interface ExternalTakeExecutionAttemptResult {
   succeeded: boolean;
   preBroadcastFailed: boolean;
-  circuitOpenReason?: string;
 }
 
 export interface ExternalTakeExecuteParams<
@@ -54,10 +48,6 @@ export interface ExternalTakeExecuteParams<
   poolConfig: TPoolConfig;
   liquidation: TakeLiquidationPlan;
   config: TExecutionConfig;
-  // Concrete factory source selected for this candidate. Only the factory
-  // provider consumes it (to switch the dynamic direct-DEX adapter); undefined
-  // for single-source providers and for the direct factory adapter.
-  selectedSource?: LiquiditySource;
 }
 
 export type ExternalTakeQuoteIntent =
