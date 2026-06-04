@@ -6,7 +6,7 @@ import {
   resolveUniswapV3FactoryRouteConfig,
 } from '../../config';
 import { logger } from '../../logging';
-import { NonceTracker } from '../../nonce';
+import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
 import {
   ApprovedUniswapV3FactoryQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
@@ -335,8 +335,13 @@ export async function executeUniswapV3FactoryTake({
             nonce: nonce.toString(),
           }
         );
-        attemptedSubmission = true;
-        return await submitTakeTransaction(takeWriteTransport, txRequest);
+        return await submitTakeTransaction(
+          takeWriteTransport,
+          txRequest,
+          () => {
+            attemptedSubmission = true;
+          }
+        );
       }
     );
     logTakeExecutionTelemetry({
@@ -361,7 +366,8 @@ export async function executeUniswapV3FactoryTake({
       error
     );
     config.onFactoryExecutionFailure?.({
-      preBroadcast: !attemptedSubmission,
+      preBroadcast:
+        !attemptedSubmission && !isNonceConsumedTransactionError(error),
       error: getErrorMessage(error),
     });
     throw error;

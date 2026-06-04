@@ -4,7 +4,7 @@ import { network } from 'hardhat';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
-} from '../../src/take/external-take-policy';
+} from '../../src/take/external-take/policy';
 
 const RUN_BASE_CADC_REPLAY = process.env.RUN_BASE_CADC_REPLAY === 'true';
 const BASE_POOL_INFO_UTILS = '0x97fa9b0909C238D170C1ab3B5c728A3a45BBEcBa';

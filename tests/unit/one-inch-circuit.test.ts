@@ -4,7 +4,8 @@ import {
   MAX_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS,
   getOneInchCircuitOpenReason,
   recordOneInchQuoteFailure,
-} from '../../src/discovery/one-inch-circuit';
+  recordOneInchQuoteSuccess,
+} from '../../src/discovery/external-take/one-inch-circuit';
 import { DiscoveryRpcCache } from '../../src/discovery/types';
 import { logger } from '../../src/logging';
 
@@ -32,6 +33,9 @@ describe('1inch quote circuit', () => {
 
     expect(cache.oneInchQuoteCircuit?.failures).to.equal(1);
     expect(cache.oneInchQuoteCircuit?.cooldownUntilMs).to.be.undefined;
+    expect(cache.providerCircuits?.oneinch?.route_quote).to.equal(
+      cache.oneInchQuoteCircuit
+    );
   });
 
   it('clamps excessive cooldowns and emits bounded open-heartbeat logs', () => {
@@ -54,6 +58,9 @@ describe('1inch quote circuit', () => {
 
     expect(cache.oneInchQuoteCircuit?.cooldownUntilMs).to.equal(
       10_000 + MAX_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS
+    );
+    expect(cache.providerCircuits?.oneinch?.route_quote).to.equal(
+      cache.oneInchQuoteCircuit
     );
     expect(
       getOneInchCircuitOpenReason({
@@ -118,6 +125,9 @@ describe('1inch quote circuit', () => {
       takePolicy: policy,
       nowMs: 11_002,
     });
+    expect(cache.providerCircuits?.oneinch?.route_quote).to.equal(
+      cache.oneInchQuoteCircuit
+    );
     expect(
       getOneInchCircuitOpenReason({
         rpcCache: cache,
@@ -158,5 +168,41 @@ describe('1inch quote circuit', () => {
         nowMs: 10_001,
       })
     ).to.be.undefined;
+    expect(cache.providerCircuits?.oneinch?.gas_conversion).to.equal(
+      cache.oneInchQuoteCircuits?.gas_conversion
+    );
+    expect(cache.providerCircuits?.oneinch?.route_quote).to.equal(
+      cache.oneInchQuoteCircuit
+    );
+    expect(cache.providerCircuits?.oneinch?.gas_conversion).to.not.equal(
+      cache.providerCircuits?.oneinch?.route_quote
+    );
+  });
+
+  it('clears provider-keyed route state while restoring legacy aliases', () => {
+    const providerRouteState = {
+      failures: 2,
+      cooldownUntilMs: 5_000,
+      lastOpenLogAtMs: 1_000,
+    };
+    const cache = {
+      providerCircuits: {
+        oneinch: {
+          route_quote: providerRouteState,
+        },
+      },
+    } as DiscoveryRpcCache;
+
+    recordOneInchQuoteSuccess(cache);
+
+    expect(cache.oneInchQuoteCircuit).to.equal(providerRouteState);
+    expect(cache.oneInchQuoteCircuits?.route_quote).to.equal(
+      providerRouteState
+    );
+    expect(cache.providerCircuits?.oneinch?.route_quote?.failures).to.equal(0);
+    expect(cache.providerCircuits?.oneinch?.route_quote?.cooldownUntilMs).to.be
+      .undefined;
+    expect(cache.providerCircuits?.oneinch?.route_quote?.lastOpenLogAtMs).to.be
+      .undefined;
   });
 });

@@ -4,7 +4,7 @@ import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../src/config';
 import * as erc20 from '../../src/erc20';
 import * as oneInch from '../../src/dex/one-inch';
-import { NonceTracker } from '../../src/nonce';
+import { NonceConsumedTransactionError, NonceTracker } from '../../src/nonce';
 import { takeLiquidation } from '../../src/take';
 import { takeLiquidationFactory } from '../../src/take/factory';
 import { DexRouter } from '../../src/dex/router';
@@ -14,14 +14,228 @@ import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider
 import { CurvePoolType } from '../../src/config';
 import * as shared from '../../src/take/factory/shared';
 import {
+  BoundExternalTakeRouteEvaluation,
+  ExternalTakeQuoteEvaluation,
+} from '../../src/take/types';
+import {
   AjnaKeeperTaker__factory,
   AjnaKeeperTakerFactory__factory,
 } from '../../typechain-types';
+import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
+
+function malformedBoundRoute(
+  quoteEvaluation: ExternalTakeQuoteEvaluation
+): BoundExternalTakeRouteEvaluation {
+  return quoteEvaluation as unknown as BoundExternalTakeRouteEvaluation;
+}
 
 describe('take write submission', () => {
   afterEach(() => {
     sinon.restore();
   });
+
+  async function runOneInchSubmissionBoundaryScenario(params: {
+    submitTransaction: sinon.SinonStub;
+    onOneInchExecutionFailure: sinon.SinonSpy;
+  }) {
+    const readSigner = {
+      getChainId: sinon.stub().resolves(1),
+    };
+    const writeSigner = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getTransactionCount: sinon.stub().resolves(0),
+    };
+    const takeWriteTransport = {
+      mode: 'private_rpc',
+      signer: writeSigner,
+      submitTransaction: params.submitTransaction,
+    };
+    const estimateGasStub = sinon.stub().resolves(BigNumber.from(100_000));
+    const populateTransactionStub = sinon.stub().resolves({
+      to: '0x00000000000000000000000000000000000000dd',
+      data: '0x1234',
+    });
+    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns({
+      address: '0x00000000000000000000000000000000000000bb',
+      estimateGas: {
+        takeWithAtomicSwap: estimateGasStub,
+      },
+      populateTransaction: {
+        takeWithAtomicSwap: populateTransactionStub,
+      },
+    } as any);
+    sinon
+      .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
+      .resolves({ success: true, data: '0xdeadbeef' } as any);
+    sinon
+      .stub(DexRouter.prototype, 'getRouter')
+      .returns('0x00000000000000000000000000000000000000cc');
+    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').returns({
+      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
+      swapDescription: {
+        srcToken: '0x0000000000000000000000000000000000000002',
+        dstToken: '0x0000000000000000000000000000000000000003',
+        srcReceiver: '0x00000000000000000000000000000000000000cc',
+        dstReceiver: '0x00000000000000000000000000000000000000bb',
+        amount: ethers.utils.parseEther('1'),
+        minReturnAmount: BigNumber.from(1),
+        flags: BigNumber.from(0),
+      },
+      opaqueData: '0x1234',
+    } as any);
+    sinon.stub(shared, 'getQuoteAmountDueRaw').resolves(BigNumber.from(10));
+    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
+    sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (_, txFn) => {
+      return await txFn(7);
+    });
+
+    const result = await takeLiquidation({
+      pool: {
+        name: '1inch Boundary Pool',
+        poolAddress: '0x0000000000000000000000000000000000000001',
+        collateralAddress: '0x0000000000000000000000000000000000000002',
+        quoteAddress: '0x0000000000000000000000000000000000000003',
+      } as any,
+      poolConfig: {
+        name: '1inch Boundary Pool',
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.95,
+        },
+      },
+      signer: readSigner as any,
+      liquidation: {
+        borrower: '0xBorrower',
+        hpbIndex: 0,
+        collateral: ethers.utils.parseEther('1'),
+        auctionPrice: ethers.utils.parseEther('1'),
+        isTakeable: true,
+        isArbTakeable: false,
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
+          isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
+          quoteAmountRaw: BigNumber.from(11),
+          routeExecutionFloorRaw: BigNumber.from(10),
+          approvedMinOutRaw: BigNumber.from(10),
+        }),
+      },
+      config: {
+        dryRun: false,
+        connectorTokens: [],
+        oneInchRouters: {
+          1: '0x00000000000000000000000000000000000000cc',
+        },
+        keeperTaker: '0x00000000000000000000000000000000000000dd',
+        takeWriteTransport: takeWriteTransport as any,
+        onOneInchExecutionFailure: params.onOneInchExecutionFailure,
+      },
+    });
+
+    return {
+      result,
+      estimateGasStub,
+      populateTransactionStub,
+    };
+  }
+
+  async function runUniswapFactorySubmissionBoundaryScenario(params: {
+    submitTransaction: sinon.SinonStub;
+    onFactoryExecutionFailure: sinon.SinonSpy;
+  }) {
+    const readSigner = {
+      provider: {
+        getBlock: sinon.stub().resolves({ timestamp: 123 }),
+      },
+    };
+    const writeSigner = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000ee'),
+      getTransactionCount: sinon.stub().resolves(0),
+    };
+    const takeWriteTransport = {
+      mode: 'private_rpc',
+      signer: writeSigner,
+      submitTransaction: params.submitTransaction,
+    };
+    const estimateGasStub = sinon.stub().resolves(BigNumber.from(120_000));
+    const populateTransactionStub = sinon.stub().resolves({
+      to: '0x0000000000000000000000000000000000000013',
+      data: '0x5678',
+    });
+    sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns({
+      estimateGas: {
+        takeWithAtomicSwap: estimateGasStub,
+      },
+      populateTransaction: {
+        takeWithAtomicSwap: populateTransactionStub,
+      },
+    } as any);
+    sinon
+      .stub(shared, 'computeFactoryAmountOutMinimum')
+      .resolves(BigNumber.from(10));
+    sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (_, txFn) => {
+      return await txFn(3);
+    });
+
+    let thrown: unknown;
+    try {
+      await executeUniswapV3FactoryTake({
+        pool: {
+          name: 'Factory Boundary Pool',
+          poolAddress: '0x0000000000000000000000000000000000000011',
+          quoteAddress: '0x0000000000000000000000000000000000000012',
+        } as any,
+        poolConfig: {
+          name: 'Factory Boundary Pool',
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.95,
+          },
+        },
+        signer: readSigner as any,
+        liquidation: {
+          borrower: '0xBorrower',
+          hpbIndex: 0,
+          collateral: ethers.utils.parseEther('1'),
+          auctionPrice: ethers.utils.parseEther('1'),
+          isTakeable: true,
+          isArbTakeable: false,
+        },
+        quoteEvaluation: {
+          isTakeable: true,
+          externalTakePath: 'factory',
+          quoteAmountRaw: BigNumber.from(11),
+          approvedMinOutRaw: BigNumber.from(10),
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+          selectedFeeTier: 3000,
+        },
+        config: {
+          keeperTakerFactory: '0x0000000000000000000000000000000000000013',
+          uniswapV3RouterOverrides: {
+            swapRouter02Address: '0x0000000000000000000000000000000000000014',
+            poolFactoryAddress: '0x0000000000000000000000000000000000000015',
+            wethAddress: '0x0000000000000000000000000000000000000016',
+            quoterV2Address: '0x0000000000000000000000000000000000000017',
+            defaultFeeTier: 3000,
+          },
+          takeWriteTransport: takeWriteTransport as any,
+          onFactoryExecutionFailure: params.onFactoryExecutionFailure,
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    return {
+      thrown,
+      estimateGasStub,
+      populateTransactionStub,
+    };
+  }
 
   it('validates 1inch atomic swap details against the atomic take invariants', () => {
     const validDetails = {
@@ -319,11 +533,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(11),
+          routeExecutionFloorRaw: BigNumber.from(10),
           approvedMinOutRaw: BigNumber.from(10),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -349,6 +566,71 @@ describe('take write submission', () => {
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
     expect(getSwapDataStub.calledOnce).to.be.true;
     expect(getSwapDataStub.firstCall.args[4]).to.equal(2.5);
+  });
+
+  it('reports 1inch transport rejection before acceptance as pre-broadcast', async () => {
+    const submitTransaction = sinon
+      .stub()
+      .rejects(new Error('local send rejected'));
+    const onOneInchExecutionFailure = sinon.spy();
+
+    const result = await runOneInchSubmissionBoundaryScenario({
+      submitTransaction,
+      onOneInchExecutionFailure,
+    });
+
+    expect(result.result).to.equal(false);
+    expect(result.estimateGasStub.calledOnce).to.equal(true);
+    expect(result.populateTransactionStub.calledOnce).to.equal(true);
+    expect(submitTransaction.calledOnce).to.equal(true);
+    expect(onOneInchExecutionFailure.calledOnce).to.equal(true);
+    expect(onOneInchExecutionFailure.firstCall.args[0]).to.deep.equal({
+      preBroadcast: true,
+      error: 'local send rejected',
+    });
+  });
+
+  it('does not report accepted 1inch submission wait failure as pre-broadcast', async () => {
+    const submitTransaction = sinon.stub().resolves({
+      txHash: '0xhash',
+      wait: sinon.stub().rejects(new Error('receipt wait failed')),
+    });
+    const onOneInchExecutionFailure = sinon.spy();
+
+    const result = await runOneInchSubmissionBoundaryScenario({
+      submitTransaction,
+      onOneInchExecutionFailure,
+    });
+
+    expect(result.result).to.equal(false);
+    expect(submitTransaction.calledOnce).to.equal(true);
+    expect(onOneInchExecutionFailure.calledOnce).to.equal(true);
+    expect(onOneInchExecutionFailure.firstCall.args[0]).to.deep.equal({
+      preBroadcast: false,
+      error: 'receipt wait failed',
+    });
+  });
+
+  it('does not report nonce-consumed 1inch submission errors as pre-broadcast', async () => {
+    const submitTransaction = sinon.stub().rejects(
+      new NonceConsumedTransactionError('relay accepted 1inch take', {
+        txHash: '0xhash',
+      })
+    );
+    const onOneInchExecutionFailure = sinon.spy();
+
+    const result = await runOneInchSubmissionBoundaryScenario({
+      submitTransaction,
+      onOneInchExecutionFailure,
+    });
+
+    expect(result.result).to.equal(false);
+    expect(submitTransaction.calledOnce).to.equal(true);
+    expect(onOneInchExecutionFailure.calledOnce).to.equal(true);
+    expect(onOneInchExecutionFailure.firstCall.args[0]).to.deep.equal({
+      preBroadcast: false,
+      error: 'relay accepted 1inch take',
+    });
   });
 
   it('fails 1inch atomic execution before API calls when the router is not configured', async () => {
@@ -388,13 +670,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
           quoteAmountRaw: BigNumber.from(11),
+          routeExecutionFloorRaw: BigNumber.from(10),
           approvedMinOutRaw: BigNumber.from(10),
           externalTakePath: 'oneinch',
           selectedLiquiditySource: LiquiditySource.ONEINCH,
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -445,12 +728,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(11),
-        },
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+          malformedBoundRoute({
+            isTakeable: true,
+            externalTakePath: 'oneinch',
+            selectedLiquiditySource: LiquiditySource.ONEINCH,
+            quoteAmountRaw: BigNumber.from(11),
+          })
+        ),
       },
       config: {
         dryRun: true,
@@ -546,11 +831,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(1000),
+          routeExecutionFloorRaw: BigNumber.from(1100),
           approvedMinOutRaw: BigNumber.from(1100),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -635,11 +923,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(1000),
+          routeExecutionFloorRaw: BigNumber.from(1100),
           approvedMinOutRaw: BigNumber.from(1100),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -718,11 +1009,14 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
+          externalTakePath: 'oneinch',
+          selectedLiquiditySource: LiquiditySource.ONEINCH,
           quoteAmountRaw: BigNumber.from(1000),
+          routeExecutionFloorRaw: BigNumber.from(900),
           approvedMinOutRaw: BigNumber.from(900),
-        },
+        }),
       },
       config: {
         dryRun: false,
@@ -875,8 +1169,9 @@ describe('take write submission', () => {
     expect(decoded[2]).to.equal(1);
     expect(decoded[3]).to.equal(0);
     expect(decoded[5].toNumber()).to.equal(1923);
-    expect((readSigner as any).provider.getBlock.calledOnceWithExactly('latest'))
-      .to.be.true;
+    expect(
+      (readSigner as any).provider.getBlock.calledOnceWithExactly('latest')
+    ).to.be.true;
   });
 
   it('refuses factory execution when an approved quote is missing route-binding fields', async () => {
@@ -940,7 +1235,9 @@ describe('take write submission', () => {
         signer: {} as any,
         liquidation: {
           ...baseLiquidation,
-          externalTakeQuoteEvaluation: quoteEvaluation,
+          externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+            malformedBoundRoute(quoteEvaluation)
+          ),
         },
         config: {
           dryRun: false,
@@ -978,12 +1275,15 @@ describe('take write submission', () => {
         auctionPrice: ethers.utils.parseEther('1'),
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeQuoteEvaluation: {
-          isTakeable: true,
-          quoteAmountRaw: BigNumber.from(11),
-          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-          selectedFeeTier: 3000,
-        },
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+          malformedBoundRoute({
+            isTakeable: true,
+            externalTakePath: 'factory',
+            quoteAmountRaw: BigNumber.from(11),
+            selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+            selectedFeeTier: 3000,
+          })
+        ),
       },
       config: {
         dryRun: true,
@@ -1096,13 +1396,9 @@ describe('take write submission', () => {
     expect(queueTransactionStub.calledOnce).to.be.true;
     expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
     const takeArgs = populateTransactionStub.firstCall.args;
-    expect(takeArgs[0]).to.equal(
-      '0x0000000000000000000000000000000000000011'
-    );
+    expect(takeArgs[0]).to.equal('0x0000000000000000000000000000000000000011');
     expect(takeArgs[4]).to.equal(Number(LiquiditySource.UNISWAPV3));
-    expect(takeArgs[5]).to.equal(
-      '0x0000000000000000000000000000000000000014'
-    );
+    expect(takeArgs[5]).to.equal('0x0000000000000000000000000000000000000014');
     const decoded = ethers.utils.defaultAbiCoder.decode(
       ['(address,address,uint24,uint256,uint256)'],
       takeArgs[6]
@@ -1116,7 +1412,75 @@ describe('take write submission', () => {
     expect(decoded[0][2]).to.equal(3000);
     expect(decoded[0][3].eq(approvedExecutionFloor)).to.be.true;
     expect(decoded[0][4].toNumber()).to.equal(1923);
-    expect((readSigner as any).provider.getBlock.calledOnceWithExactly('latest'))
-      .to.be.true;
+    expect(
+      (readSigner as any).provider.getBlock.calledOnceWithExactly('latest')
+    ).to.be.true;
+  });
+
+  it('reports factory transport rejection before acceptance as pre-broadcast', async () => {
+    const submitTransaction = sinon
+      .stub()
+      .rejects(new Error('local send rejected'));
+    const onFactoryExecutionFailure = sinon.spy();
+
+    const result = await runUniswapFactorySubmissionBoundaryScenario({
+      submitTransaction,
+      onFactoryExecutionFailure,
+    });
+
+    expect(result.thrown).to.be.instanceOf(Error);
+    expect((result.thrown as Error).message).to.equal('local send rejected');
+    expect(result.estimateGasStub.calledOnce).to.equal(true);
+    expect(result.populateTransactionStub.calledOnce).to.equal(true);
+    expect(submitTransaction.calledOnce).to.equal(true);
+    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
+    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+      preBroadcast: true,
+      error: 'local send rejected',
+    });
+  });
+
+  it('does not report accepted factory submission wait failure as pre-broadcast', async () => {
+    const submitTransaction = sinon.stub().resolves({
+      txHash: '0xhash',
+      wait: sinon.stub().rejects(new Error('receipt wait failed')),
+    });
+    const onFactoryExecutionFailure = sinon.spy();
+
+    const result = await runUniswapFactorySubmissionBoundaryScenario({
+      submitTransaction,
+      onFactoryExecutionFailure,
+    });
+
+    expect(result.thrown).to.be.instanceOf(Error);
+    expect((result.thrown as Error).message).to.equal('receipt wait failed');
+    expect(submitTransaction.calledOnce).to.equal(true);
+    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
+    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+      preBroadcast: false,
+      error: 'receipt wait failed',
+    });
+  });
+
+  it('does not report nonce-consumed factory submission errors as pre-broadcast', async () => {
+    const submitTransaction = sinon.stub().rejects(
+      new NonceConsumedTransactionError('relay accepted factory take', {
+        txHash: '0xhash',
+      })
+    );
+    const onFactoryExecutionFailure = sinon.spy();
+
+    const result = await runUniswapFactorySubmissionBoundaryScenario({
+      submitTransaction,
+      onFactoryExecutionFailure,
+    });
+
+    expect((result.thrown as any).nonceConsumed).to.equal(true);
+    expect(submitTransaction.calledOnce).to.equal(true);
+    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
+    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+      preBroadcast: false,
+      error: 'relay accepted factory take',
+    });
   });
 });

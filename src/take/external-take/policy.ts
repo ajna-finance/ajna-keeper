@@ -1,10 +1,10 @@
 import { BigNumber } from 'ethers';
-import { MARKET_FACTOR_SCALE, ZERO_BN } from '../constants';
-import { maxBigNumber } from '../utils';
+import { MARKET_FACTOR_SCALE, ZERO_BN } from '../../constants';
+import { maxBigNumber } from '../../utils';
 import type {
   ExternalTakeQuoteEvaluation,
   RouteProfitabilityBreakdown,
-} from './types';
+} from '../types';
 
 export const EXTERNAL_TAKE_REJECTION_REASONS = {
   auctionPriceAboveThreshold: 'auction price above external take threshold',
@@ -246,6 +246,7 @@ export function mergeRoutePolicyIntoEvaluation(params: {
     ...params.evaluation,
     routeMinOutRaw: params.policy.routeMinOutRaw,
     profitMinOutRaw: params.policy.profitMinOutRaw,
+    routeExecutionFloorRaw: params.policy.approvedMinOutRaw,
     approvedMinOutRaw: params.policy.approvedMinOutRaw,
     takeablePrice:
       params.evaluation.marketPrice !== undefined

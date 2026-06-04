@@ -20,12 +20,24 @@ import {
 import {
   EXTERNAL_TAKE_PATHS,
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
-  FACTORY_DYNAMIC_SOURCES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
   isFactoryDynamicSource,
+  normalizeExternalTakeRouteSelectionMode,
   resolveExternalTakePaths,
   resolveFactoryRouteSelectionSources,
+  resolveHybridGasQuoteFallbackPolicy,
 } from './route-policy';
+import {
+  formatSupportedExternalTakeLiquiditySources,
+  formatSupportedExternalTakePaths,
+  getExternalTakeTakerContractKeyForSource,
+  getExternalTakePathDefaultSource,
+  getExternalTakePathDescriptor,
+  getExternalTakePathDescriptors,
+  isExternalTakeLiquiditySource,
+  resolveExternalTakePathFromSource,
+} from './external-take-registry';
+import type { ExternalTakeLiquiditySource } from './external-take-registry';
 import {
   formatLiquiditySource,
   getLiquiditySourceConfig,
@@ -38,6 +50,7 @@ import {
 import { logger } from '../logging';
 import { ethers } from 'ethers';
 import { MARKET_FACTOR_SCALE } from '../constants';
+import { LIFI_POLICY_BOUNDS, assertValidLifiDexConfig } from './lifi-policy';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -65,6 +78,7 @@ const VALIDATION_BOUNDS = {
   maxExecutionsPerPoolPerRun: 10,
   maxInFlightRouteProbes: 16,
   maxOneInchAggregationExecutorAllowlistEntries: 64,
+  maxLifiQuoteTimeoutMs: LIFI_POLICY_BOUNDS.maxQuoteTimeoutMs,
 };
 
 function validateQuoteDenominatedGasPolicy(
@@ -287,8 +301,11 @@ function getEffectiveTakeGasOverrideSources(
     allowedLiquiditySources,
     defaultFactoryLiquiditySource
   );
-  if (externalTakePaths.has('oneinch')) {
-    sources.add(LiquiditySource.ONEINCH);
+  for (const path of Array.from(externalTakePaths)) {
+    const defaultSource = getExternalTakePathDefaultSource(path);
+    if (defaultSource !== undefined) {
+      sources.add(defaultSource);
+    }
   }
   return sources;
 }
@@ -320,7 +337,7 @@ function validateAllowedExternalTakePaths(
   for (const path of paths) {
     if (!EXTERNAL_TAKE_PATHS.has(path)) {
       throw new Error(
-        'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch and factory'
+        `AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only ${formatSupportedExternalTakePaths()}`
       );
     }
     if (seen.has(path)) {
@@ -487,6 +504,173 @@ export function validatePostAuctionDex(
   }
 }
 
+interface ExternalTakeSourceValidationParams {
+  keeperConfig: KeeperConfig;
+  chainId?: number;
+}
+
+type ExternalTakeSourceValidator = (
+  params: ExternalTakeSourceValidationParams
+) => void;
+
+function requireRegisteredTakerContract(params: {
+  keeperConfig: KeeperConfig;
+  source: ExternalTakeLiquiditySource;
+}): void {
+  const sourceName = LiquiditySource[params.source];
+  const contractKey = getExternalTakeTakerContractKeyForSource(params.source);
+  if (!contractKey) {
+    throw new Error(
+      `TakeSettings: liquiditySource ${sourceName} does not use a registered taker contract`
+    );
+  }
+  if (!params.keeperConfig.takers?.factory) {
+    throw new Error(
+      `TakeSettings: takers.factory required when liquiditySource is ${sourceName}`
+    );
+  }
+  if (!params.keeperConfig.takers.contracts?.[contractKey]) {
+    throw new Error(
+      `TakeSettings: takers.contracts.${contractKey} required when liquiditySource is ${sourceName}`
+    );
+  }
+}
+
+function validateOneInchTakeSource({
+  keeperConfig,
+  chainId,
+}: ExternalTakeSourceValidationParams): void {
+  if (!keeperConfig.takers?.oneInch) {
+    throw new Error(
+      'TakeSettings: takers.oneInch required when liquiditySource is ONEINCH'
+    );
+  }
+  if (
+    !keeperConfig.dex?.oneInch?.routers ||
+    Object.keys(keeperConfig.dex.oneInch.routers).length === 0
+  ) {
+    throw new Error(
+      'TakeSettings: dex.oneInch.routers required when liquiditySource is ONEINCH'
+    );
+  }
+  if (chainId !== undefined && !keeperConfig.dex.oneInch.routers[chainId]) {
+    throw new Error(
+      `TakeSettings: dex.oneInch.routers missing router for chain ${chainId}`
+    );
+  }
+}
+
+function validateUniswapV3TakeSource({
+  keeperConfig,
+}: ExternalTakeSourceValidationParams): void {
+  requireRegisteredTakerContract({
+    keeperConfig,
+    source: LiquiditySource.UNISWAPV3,
+  });
+  if (!keeperConfig.dex?.uniswapV3?.router) {
+    throw new Error(
+      'TakeSettings: dex.uniswapV3.router required when liquiditySource is UNISWAPV3'
+    );
+  }
+  const routerOverrides = keeperConfig.dex.uniswapV3.router;
+  if (getMissingUniswapV3FactoryRouteConfigFields(routerOverrides).length > 0) {
+    throw new Error(
+      'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
+    );
+  }
+}
+
+function validateSushiSwapTakeSource({
+  keeperConfig,
+}: ExternalTakeSourceValidationParams): void {
+  requireRegisteredTakerContract({
+    keeperConfig,
+    source: LiquiditySource.SUSHISWAP,
+  });
+  if (!keeperConfig.dex?.sushiswap) {
+    throw new Error(
+      'TakeSettings: dex.sushiswap required when liquiditySource is SUSHISWAP'
+    );
+  }
+  const routerOverrides = keeperConfig.dex.sushiswap;
+  if (
+    !routerOverrides.swapRouterAddress ||
+    !routerOverrides.factoryAddress ||
+    !routerOverrides.wethAddress ||
+    !routerOverrides.quoterV2Address
+  ) {
+    throw new Error(
+      'TakeSettings: dex.sushiswap.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
+    );
+  }
+}
+
+function validateCurveTakeSource({
+  keeperConfig,
+}: ExternalTakeSourceValidationParams): void {
+  requireRegisteredTakerContract({
+    keeperConfig,
+    source: LiquiditySource.CURVE,
+  });
+  if (!keeperConfig.dex?.curve) {
+    throw new Error(
+      'TakeSettings: dex.curve required when liquiditySource is CURVE'
+    );
+  }
+  const routerOverrides = keeperConfig.dex.curve;
+  if (
+    !hasNonEmptyObject(routerOverrides.poolConfigs) ||
+    !routerOverrides.wethAddress
+  ) {
+    throw new Error(
+      'TakeSettings: dex.curve.poolConfigs and wethAddress required when liquiditySource is CURVE'
+    );
+  }
+  if (
+    !keeperConfig.network.tokenAddresses ||
+    Object.keys(keeperConfig.network.tokenAddresses).length === 0
+  ) {
+    throw new Error(
+      'TakeSettings: network.tokenAddresses required when liquiditySource is CURVE'
+    );
+  }
+}
+
+function validateLifiTakeSource({
+  keeperConfig,
+  chainId,
+}: ExternalTakeSourceValidationParams): void {
+  requireRegisteredTakerContract({
+    keeperConfig,
+    source: LiquiditySource.LIFI,
+  });
+  assertValidLifiDexConfig({
+    config: keeperConfig.dex?.lifi,
+    fieldName: 'KeeperConfig.dex.lifi',
+    chainId,
+    requireProduction: keeperConfig.runtime?.dryRun !== true,
+  });
+}
+
+const EXTERNAL_TAKE_SOURCE_VALIDATORS = {
+  [LiquiditySource.ONEINCH]: validateOneInchTakeSource,
+  [LiquiditySource.UNISWAPV3]: validateUniswapV3TakeSource,
+  [LiquiditySource.SUSHISWAP]: validateSushiSwapTakeSource,
+  [LiquiditySource.CURVE]: validateCurveTakeSource,
+  [LiquiditySource.LIFI]: validateLifiTakeSource,
+} satisfies Record<ExternalTakeLiquiditySource, ExternalTakeSourceValidator>;
+
+function validateExternalTakeSourceRequirements(params: {
+  source: ExternalTakeLiquiditySource;
+  keeperConfig: KeeperConfig;
+  chainId?: number;
+}): void {
+  EXTERNAL_TAKE_SOURCE_VALIDATORS[params.source]({
+    keeperConfig: params.keeperConfig,
+    chainId: params.chainId,
+  });
+}
+
 export function validateTakeSettings(
   config: TakeSettings,
   keeperConfig: KeeperConfig,
@@ -503,18 +687,14 @@ export function validateTakeSettings(
   }
 
   if (hasTake) {
-    if (config.liquiditySource === LiquiditySource.NONE) {
+    const liquiditySource = config.liquiditySource;
+    if (liquiditySource === LiquiditySource.NONE) {
       throw new Error('TakeSettings: liquiditySource cannot be NONE');
     }
 
-    if (
-      config.liquiditySource !== LiquiditySource.ONEINCH &&
-      config.liquiditySource !== LiquiditySource.UNISWAPV3 &&
-      config.liquiditySource !== LiquiditySource.SUSHISWAP &&
-      config.liquiditySource !== LiquiditySource.CURVE
-    ) {
+    if (!isExternalTakeLiquiditySource(liquiditySource)) {
       throw new Error(
-        'TakeSettings: liquiditySource must be ONEINCH or UNISWAPV3 or SUSHISWAP or CURVE'
+        `TakeSettings: liquiditySource must be ${formatSupportedExternalTakeLiquiditySources()}`
       );
     }
 
@@ -543,125 +723,11 @@ export function validateTakeSettings(
       'TakeSettings: allowSubsidy must be a boolean'
     );
 
-    if (config.liquiditySource === LiquiditySource.ONEINCH) {
-      if (!keeperConfig.takers?.oneInch) {
-        throw new Error(
-          'TakeSettings: takers.oneInch required when liquiditySource is ONEINCH'
-        );
-      }
-      if (
-        !keeperConfig.dex?.oneInch?.routers ||
-        Object.keys(keeperConfig.dex.oneInch.routers).length === 0
-      ) {
-        throw new Error(
-          'TakeSettings: dex.oneInch.routers required when liquiditySource is ONEINCH'
-        );
-      }
-      if (chainId !== undefined && !keeperConfig.dex.oneInch.routers[chainId]) {
-        throw new Error(
-          `TakeSettings: dex.oneInch.routers missing router for chain ${chainId}`
-        );
-      }
-    }
-
-    if (config.liquiditySource === LiquiditySource.UNISWAPV3) {
-      if (!keeperConfig.takers?.factory) {
-        throw new Error(
-          'TakeSettings: takers.factory required when liquiditySource is UNISWAPV3'
-        );
-      }
-      if (
-        !keeperConfig.takers.contracts ||
-        !keeperConfig.takers.contracts['UniswapV3']
-      ) {
-        throw new Error(
-          'TakeSettings: takers.contracts.UniswapV3 required when liquiditySource is UNISWAPV3'
-        );
-      }
-      if (!keeperConfig.dex?.uniswapV3?.router) {
-        throw new Error(
-          'TakeSettings: dex.uniswapV3.router required when liquiditySource is UNISWAPV3'
-        );
-      }
-      const routerOverrides = keeperConfig.dex.uniswapV3.router;
-      if (
-        getMissingUniswapV3FactoryRouteConfigFields(routerOverrides).length > 0
-      ) {
-        throw new Error(
-          'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
-        );
-      }
-    }
-
-    if (config.liquiditySource === LiquiditySource.SUSHISWAP) {
-      if (!keeperConfig.takers?.factory) {
-        throw new Error(
-          'TakeSettings: takers.factory required when liquiditySource is SUSHISWAP'
-        );
-      }
-      if (
-        !keeperConfig.takers.contracts ||
-        !keeperConfig.takers.contracts['SushiSwap']
-      ) {
-        throw new Error(
-          'TakeSettings: takers.contracts.SushiSwap required when liquiditySource is SUSHISWAP'
-        );
-      }
-      if (!keeperConfig.dex?.sushiswap) {
-        throw new Error(
-          'TakeSettings: dex.sushiswap required when liquiditySource is SUSHISWAP'
-        );
-      }
-      const routerOverrides = keeperConfig.dex.sushiswap;
-      if (
-        !routerOverrides.swapRouterAddress ||
-        !routerOverrides.factoryAddress ||
-        !routerOverrides.wethAddress ||
-        !routerOverrides.quoterV2Address
-      ) {
-        throw new Error(
-          'TakeSettings: dex.sushiswap.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
-        );
-      }
-    }
-
-    if (config.liquiditySource === LiquiditySource.CURVE) {
-      if (!keeperConfig.takers?.factory) {
-        throw new Error(
-          'TakeSettings: takers.factory required when liquiditySource is CURVE'
-        );
-      }
-      if (
-        !keeperConfig.takers.contracts ||
-        !keeperConfig.takers.contracts['Curve']
-      ) {
-        throw new Error(
-          'TakeSettings: takers.contracts.Curve required when liquiditySource is CURVE'
-        );
-      }
-      if (!keeperConfig.dex?.curve) {
-        throw new Error(
-          'TakeSettings: dex.curve required when liquiditySource is CURVE'
-        );
-      }
-      const routerOverrides = keeperConfig.dex.curve;
-      if (
-        !hasNonEmptyObject(routerOverrides.poolConfigs) ||
-        !routerOverrides.wethAddress
-      ) {
-        throw new Error(
-          'TakeSettings: dex.curve.poolConfigs and wethAddress required when liquiditySource is CURVE'
-        );
-      }
-      if (
-        !keeperConfig.network.tokenAddresses ||
-        Object.keys(keeperConfig.network.tokenAddresses).length === 0
-      ) {
-        throw new Error(
-          'TakeSettings: network.tokenAddresses required when liquiditySource is CURVE'
-        );
-      }
-    }
+    validateExternalTakeSourceRequirements({
+      source: liquiditySource,
+      keeperConfig,
+      chainId,
+    });
   }
 
   if (hasArbTake) {
@@ -922,20 +988,23 @@ export function validateAutoDiscoverConfig(
       takePolicy.allowedExternalTakePaths
     );
     if (takePolicy.hybridGasQuoteFailureFallbackMode === 'factory_first') {
-      if (takePolicy.maxGasCostNative === undefined) {
-        throw new Error(
-          'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first requires maxGasCostNative'
-        );
-      }
-      if (
-        !externalTakePaths.has('oneinch') ||
-        !externalTakePaths.has('factory') ||
-        (takePolicy.externalTakeRouteSelectionMode !== undefined &&
-          takePolicy.externalTakeRouteSelectionMode !== 'maximize_profit')
-      ) {
-        logger.warn(
-          'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first is only eligible for hybrid maximize_profit routes with both oneinch and factory enabled'
-        );
+      const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
+        fallbackMode: takePolicy.hybridGasQuoteFailureFallbackMode,
+        routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
+          takePolicy.externalTakeRouteSelectionMode
+        ),
+        externalTakePaths: Array.from(externalTakePaths),
+        maxGasCostNative: takePolicy.maxGasCostNative,
+        maxGasCostQuote: takePolicy.maxGasCostQuote,
+        minExpectedProfitQuote: takePolicy.minExpectedProfitQuote,
+        minProfitNative: takePolicy.minProfitNative,
+      });
+      if (!fallbackEligibility.eligible) {
+        const reason =
+          fallbackEligibility.reason === 'maxGasCostNative is not configured'
+            ? 'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first requires maxGasCostNative'
+            : `AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first is ineligible because ${fallbackEligibility.reason}`;
+        throw new Error(reason);
       }
     }
     if (
@@ -968,6 +1037,18 @@ export function validateAutoDiscoverConfig(
         'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
       );
     }
+    for (const descriptor of getExternalTakePathDescriptors(
+      externalTakePaths
+    )) {
+      if (
+        descriptor.requiresRouteDeploymentValidation &&
+        takePolicy.validateRouteDeployments !== true
+      ) {
+        throw new Error(
+          `AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include ${descriptor.path}`
+        );
+      }
+    }
     if (externalTakePaths.has('oneinch')) {
       if (
         !config.dex?.oneInch?.aggregationExecutorAllowlist ||
@@ -986,7 +1067,24 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
-    if (externalTakePaths.has('factory') && externalTakePaths.has('oneinch')) {
+    for (const descriptor of getExternalTakePathDescriptors(
+      externalTakePaths
+    )) {
+      const defaultSource = descriptor.defaultSource;
+      if (
+        descriptor.requiresDexGasOverride &&
+        defaultSource !== undefined &&
+        takePolicy.dexGasOverrides?.[defaultSource] === undefined
+      ) {
+        throw new Error(
+          `AutoDiscoverConfig.take: dexGasOverrides.${formatLiquiditySource(defaultSource)} required when resolved external take paths include ${descriptor.path}`
+        );
+      }
+    }
+    if (
+      externalTakePaths.size > 1 ||
+      (externalTakePaths.has('factory') && externalTakePaths.has('oneinch'))
+    ) {
       validateQuoteDenominatedGasPolicy(
         config,
         'AutoDiscoverConfig.take: hybrid external take route ranking',
@@ -1064,11 +1162,17 @@ export function validateAutoDiscoverConfig(
       }
     }
 
-    if (externalTakePaths.has('oneinch')) {
+    for (const descriptor of getExternalTakePathDescriptors(
+      externalTakePaths
+    )) {
+      const defaultSource = descriptor.defaultSource;
+      if (defaultSource === undefined) {
+        continue;
+      }
       validateTakeSettings(
         {
           ...discoveredTake,
-          liquiditySource: LiquiditySource.ONEINCH,
+          liquiditySource: defaultSource,
         },
         config,
         chainId
@@ -1124,12 +1228,14 @@ export function validateAutoDiscoverConfig(
             `AutoDiscoverConfig.take: dexGasOverrides.${source} is not a valid LiquiditySource`
           );
         }
+        const sourcePath = resolveExternalTakePathFromSource(liquiditySource);
         if (
-          liquiditySource === LiquiditySource.ONEINCH &&
+          sourcePath !== undefined &&
+          sourcePath !== 'factory' &&
           !effectiveTakeGasOverrideSources.has(liquiditySource)
         ) {
           throw new Error(
-            'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires an enabled 1inch external take path'
+            `AutoDiscoverConfig.take: dexGasOverrides.${sourceLabel} requires an enabled ${getExternalTakePathDescriptor(sourcePath).label} external take path`
           );
         }
         if (!effectiveTakeGasOverrideSources.has(liquiditySource)) {

@@ -39,7 +39,10 @@ import {
   PoolMap,
 } from './discovery/targets';
 import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery/runtime';
-import { validateAutoDiscoverRouteDeployments } from './discovery/route-preflight';
+import {
+  resolveExternalTakeRouteDeploymentPreflight,
+  validateExternalTakeRouteDeployments,
+} from './discovery/route-preflight';
 import {
   createSubgraphReader,
   getSubgraphTransportConfig,
@@ -256,8 +259,15 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     signer,
     chainId,
   });
-  if (getAutoDiscoverTakePolicy(config.discovery)?.validateRouteDeployments) {
-    await validateAutoDiscoverRouteDeployments({ config, provider, chainId });
+  const routeDeploymentPreflight =
+    resolveExternalTakeRouteDeploymentPreflight(config);
+  if (routeDeploymentPreflight.shouldValidate) {
+    await validateExternalTakeRouteDeployments({
+      config,
+      provider,
+      chainId,
+      requirements: routeDeploymentPreflight.requirements,
+    });
   }
 
   // Subgraph chain-consistency check runs BEFORE any pool hydration so a

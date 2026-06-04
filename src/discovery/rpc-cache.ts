@@ -4,7 +4,11 @@ import {
   FactoryQuoteProviderRuntimeCache,
   createFactoryQuoteProviderRuntimeCache,
 } from '../take/factory';
-import { DiscoveryRpcCache, OneInchQuoteCircuitState } from './types';
+import {
+  DiscoveryRpcCache,
+  ExternalProviderCircuits,
+  OneInchQuoteCircuitState,
+} from './types';
 
 export async function createDiscoveryRpcCache(params: {
   signer: Signer;
@@ -12,6 +16,7 @@ export async function createDiscoveryRpcCache(params: {
   includeFactoryQuoteProviders?: boolean;
   factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
   oneInchQuoteCircuit?: OneInchQuoteCircuitState;
+  providerCircuits?: ExternalProviderCircuits;
 }): Promise<DiscoveryRpcCache | undefined> {
   if (!params.signer.provider) {
     return undefined;
@@ -32,6 +37,13 @@ export async function createDiscoveryRpcCache(params: {
   if (factoryQuoteProviders && chainId !== undefined) {
     factoryQuoteProviders.chainId = chainId;
   }
+  const providerCircuits = params.includeFactoryQuoteProviders
+    ? params.providerCircuits
+    : undefined;
+  if (providerCircuits && params.oneInchQuoteCircuit) {
+    providerCircuits.oneinch ??= {};
+    providerCircuits.oneinch.route_quote = params.oneInchQuoteCircuit;
+  }
 
   return {
     chainId,
@@ -48,6 +60,11 @@ export async function createDiscoveryRpcCache(params: {
     ...(params.oneInchQuoteCircuit
       ? {
           oneInchQuoteCircuit: params.oneInchQuoteCircuit,
+        }
+      : {}),
+    ...(providerCircuits
+      ? {
+          providerCircuits,
         }
       : {}),
   };

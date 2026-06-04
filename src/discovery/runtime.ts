@@ -24,7 +24,11 @@ import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from './handlers';
-import { getDiscoveryExecutionConfig, OneInchQuoteCircuitState } from './types';
+import {
+  ExternalProviderCircuits,
+  getDiscoveryExecutionConfig,
+  OneInchQuoteCircuitState,
+} from './types';
 import { logger } from '../logging';
 import {
   createDiscoveryReadTransports,
@@ -83,6 +87,7 @@ type BoundDiscoveryRuntimeState = DiscoveryRuntimeState & {
   hotAuctionCandidateCache?: HotAuctionCandidateCache;
   factoryQuoteProviders: FactoryQuoteProviderRuntimeCache;
   oneInchQuoteCircuit: OneInchQuoteCircuitState;
+  providerCircuits: ExternalProviderCircuits;
   lastDiscoveredSettlementCycleStartedAtMs?: number;
   lastDiscoveredSettlementFailureAtMs?: number;
 };
@@ -406,6 +411,9 @@ async function createDiscoveryCycleRpcCache(params: {
       : undefined,
     oneInchQuoteCircuit: params.includeFactoryQuoteProviders
       ? params.state.oneInchQuoteCircuit
+      : undefined,
+    providerCircuits: params.includeFactoryQuoteProviders
+      ? params.state.providerCircuits
       : undefined,
   });
 }
@@ -983,6 +991,7 @@ export function createDiscoveryRuntime(
     ),
     factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
     oneInchQuoteCircuit: { failures: 0 },
+    providerCircuits: {},
     readTransports: createDiscoveryReadTransports(
       getDiscoveryReadTransportConfig(params.config),
       params.signer.provider,

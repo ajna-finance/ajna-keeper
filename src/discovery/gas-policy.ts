@@ -38,7 +38,7 @@ import {
   getOneInchCircuitOpenReason,
   recordOneInchQuoteFailure,
   recordOneInchQuoteSuccess,
-} from './one-inch-circuit';
+} from './external-take/one-inch-circuit';
 import { ceilDivBigNumber, getErrorMessage, withTimeout } from '../utils';
 import { BASIS_POINTS_DENOMINATOR_BN } from '../constants';
 

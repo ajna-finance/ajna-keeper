@@ -119,6 +119,8 @@ const config: KeeperConfig = {
           // liquiditySource: LiquiditySource.ONEINCH,      // Use 1inch (requires takers.oneInch)
           // liquiditySource: LiquiditySource.UNISWAPV3,    // Use Uniswap V3 (requires takers.factory)
           // liquiditySource: LiquiditySource.SUSHISWAP,    // Use SushiSwap (requires takers.factory)
+          // liquiditySource: LiquiditySource.LIFI,         // Use LI.FI same-chain aggregation
+          // Requires takers.factory, takers.contracts.Lifi, production dex.lifi allowlists, and LI.FI production gates.
           // marketPriceFactor: 0.98,                       // Take when auction < market * 0.98
           // allowSubsidy: false,                           // Default: require route-derived repayment + gas/profit coverage
         },
@@ -162,8 +164,9 @@ const config: KeeperConfig = {
           hpbPriceFactor: 0.9,
 
           // Example external take configuration for major pool
-          // liquiditySource: LiquiditySource.ONEINCH,     // 1inch for best pricing
-          // liquiditySource: LiquiditySource.SUSHISWAP,   // SushiSwap for lower fees
+          // liquiditySource: LiquiditySource.ONEINCH,     // 1inch aggregator path
+          // liquiditySource: LiquiditySource.LIFI,        // LI.FI aggregator path after production canary/fork gates
+          // liquiditySource: LiquiditySource.SUSHISWAP,   // SushiSwap direct-DEX factory path
           // marketPriceFactor: 0.99,  // More conservative for volatile pairs
           // allowSubsidy: false,      // Set true only for reviewed defensive pools
         },
@@ -225,6 +228,7 @@ const config: KeeperConfig = {
 
           // Stable pair external take example - multiple options
           liquiditySource: LiquiditySource.ONEINCH, // 1inch for aggregation
+          // liquiditySource: LiquiditySource.LIFI,      // LI.FI for reviewed same-chain aggregation; external-take only, not LP rewards
           // liquiditySource: LiquiditySource.SUSHISWAP,   // SushiSwap for direct routing
           marketPriceFactor: 0.98, // Stable pairs can be more aggressive
           allowSubsidy: false,

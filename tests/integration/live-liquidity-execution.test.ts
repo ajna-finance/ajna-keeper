@@ -22,13 +22,18 @@ import {
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
 } from '../../src/take/factory';
+import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval';
 import {
   filterFactoryRouteCandidatesByAvailability,
   getFactoryRouteCandidates,
 } from '../../src/take/factory/shared';
-import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take-policy';
-import { TakeLiquidationPlan } from '../../src/take/types';
+import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
+import {
+  BoundExternalTakeRouteEvaluation,
+  TakeLiquidationPlan,
+} from '../../src/take/types';
 import { arrayFromAsync, RequireFields, weiToDecimaled } from '../../src/utils';
+import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { depositQuoteToken, drawDebt } from './loan-helpers';
 import './subgraph-mock';
 import {
@@ -204,7 +209,7 @@ async function createLiveAjnaLiquidation(params: {
 async function buildLiveFactoryLiquidationPlan(params: {
   pool: FungiblePool;
   borrower: string;
-  quoteEvaluation: TakeLiquidationPlan['externalTakeQuoteEvaluation'];
+  quoteEvaluation: BoundExternalTakeRouteEvaluation;
 }): Promise<TakeLiquidationPlan> {
   const liquidationStatus = await params.pool
     .getLiquidation(params.borrower)
@@ -218,7 +223,9 @@ async function buildLiveFactoryLiquidationPlan(params: {
     auctionPrice: liquidationStatus.price,
     isTakeable: true,
     isArbTakeable: false,
-    externalTakeQuoteEvaluation: params.quoteEvaluation,
+    externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+      params.quoteEvaluation
+    ),
   };
 }
 
@@ -255,16 +262,15 @@ async function expectLiveUniswapRoutesAvailable(params: {
     'expected configured Uniswap route candidates'
   ).to.be.greaterThan(0);
 
-  const { availableRoutes } =
-    await filterFactoryRouteCandidatesByAvailability({
-      routes,
-      pool: params.pool,
-      signer: params.signer,
-      config: {
-        uniswapV3RouterOverrides: params.fixture.uniswap,
-      },
-      runtimeCache: params.runtimeCache,
-    });
+  const { availableRoutes } = await filterFactoryRouteCandidatesByAvailability({
+    routes,
+    pool: params.pool,
+    signer: params.signer,
+    config: {
+      uniswapV3RouterOverrides: params.fixture.uniswap,
+    },
+    runtimeCache: params.runtimeCache,
+  });
 
   expect(
     availableRoutes.length,
@@ -389,11 +395,21 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
     'route quote should exceed Ajna repayment floor before execution'
   ).to.be.true;
   expectApprovedMinOutInvariants(quoteEvaluation);
+  const boundQuoteEvaluation = bindExternalTakeRouteForCandidate({
+    quoteEvaluation,
+    selectedLiquiditySource: quoteEvaluation.selectedLiquiditySource,
+    configuredLiquiditySource: poolConfig.take.liquiditySource,
+    poolName: pool.name,
+    borrower: fixture.borrower,
+  });
+  if (!boundQuoteEvaluation.bound) {
+    throw new Error(boundQuoteEvaluation.reason);
+  }
 
   const liquidation = await buildLiveFactoryLiquidationPlan({
     pool,
     borrower: fixture.borrower,
-    quoteEvaluation,
+    quoteEvaluation: boundQuoteEvaluation.quoteEvaluation,
   });
   const signerQuoteBefore: BigNumber = await quoteToken.balanceOf(
     signer.address
@@ -451,8 +467,6 @@ describe('Live liquidity end-to-end factory execution', function () {
   });
 
   it('executes a live Ajna liquidation after automatic Uniswap V3 fee-tier probing', async () => {
-    await executeLiveUniswapFixture(
-      MAINNET_UNISWAP_SOL_WETH_AUTOPROBE_FIXTURE
-    );
+    await executeLiveUniswapFixture(MAINNET_UNISWAP_SOL_WETH_AUTOPROBE_FIXTURE);
   });
 });

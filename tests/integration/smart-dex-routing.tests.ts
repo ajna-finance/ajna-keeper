@@ -1,144 +1,159 @@
 // tests/integration/smart-dex-routing.test.ts
 import { expect } from 'chai';
-import { Wallet } from 'ethers';
 import { LiquiditySource, validateTakeSettings } from '../../src/config';
-import { SmartDexManager } from '../../src/dex/manager';
-import { USER1_MNEMONIC } from './test-config';
-import { getProvider } from './test-utils';
+import {
+  resolveManualTakeDeployment,
+  type ManualTakeDeploymentResolution,
+} from '../../src/take/manual-context';
 
-describe('Smart DEX Routing Integration Tests', () => {
-  let mockSigner: any;
+function expectManualDeploymentType<
+  TDeploymentType extends ManualTakeDeploymentResolution['deploymentType'],
+>(
+  resolution: ManualTakeDeploymentResolution,
+  deploymentType: TDeploymentType
+): asserts resolution is ManualTakeDeploymentResolution & {
+  deploymentType: TDeploymentType;
+} {
+  expect(resolution.deploymentType).to.equal(deploymentType);
+}
 
-  beforeEach(() => {
-    const wallet = Wallet.fromMnemonic(USER1_MNEMONIC);
-    mockSigner = wallet.connect(getProvider());
-  });
-
-  describe('Per-Pool Detection', () => {
-    it('detects the 1inch keeperTaker deployment', async () => {
-      const manager = new SmartDexManager(mockSigner, {
-        keeperTaker: '0x1234567890123456789012345678901234567890',
-        oneInchRouters: {
-          43114: '0x111111125421ca6dc452d289314280a0f8842a65',
+describe('Manual External Take Routing Integration Tests', () => {
+  describe('Per-Pool Resolution', () => {
+    it('resolves a complete 1inch pool config', () => {
+      const resolution = resolveManualTakeDeployment({
+        poolConfig: {
+          take: {
+            liquiditySource: LiquiditySource.ONEINCH,
+            marketPriceFactor: 0.95,
+          },
+        },
+        config: {
+          keeperTaker: '0x1234567890123456789012345678901234567890',
         },
       });
 
-      const deploymentType = await manager.detectDeploymentTypeForPool({
-        name: '1inch Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      } as any);
-
-      expect(deploymentType).to.equal('oneinch');
+      expectManualDeploymentType(resolution, 'oneinch');
+      expect(resolution.requestedLiquiditySource).to.equal(
+        LiquiditySource.ONEINCH
+      );
+      expect(resolution.resolvedTakerAddress).to.equal(
+        '0x1234567890123456789012345678901234567890'
+      );
     });
 
-    it('detects factory deployment for factory-backed pools', async () => {
-      const manager = new SmartDexManager(mockSigner, {
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
-        takerContracts: {
-          UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
+    it('resolves a complete factory-backed pool config', () => {
+      const resolution = resolveManualTakeDeployment({
+        poolConfig: {
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.95,
+          },
+        },
+        config: {
+          keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+          takerContracts: {
+            UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
+          },
         },
       });
 
-      const deploymentType = await manager.detectDeploymentTypeForPool({
-        name: 'Factory Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95,
-        },
-      } as any);
-
-      expect(deploymentType).to.equal('factory');
+      expectManualDeploymentType(resolution, 'factory');
+      expect(resolution.requestedLiquiditySource).to.equal(
+        LiquiditySource.UNISWAPV3
+      );
+      expect(resolution.resolvedTakerAddress).to.equal(
+        '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
+      );
     });
 
-    it('routes mixed configs by pool source instead of preferring factory globally', async () => {
-      const manager = new SmartDexManager(mockSigner, {
+    it('resolves a complete LI.FI pool config', () => {
+      const resolution = resolveManualTakeDeployment({
+        poolConfig: {
+          take: {
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.95,
+          },
+        },
+        config: {
+          keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+          takerContracts: {
+            Lifi: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
+          },
+        },
+      });
+
+      expectManualDeploymentType(resolution, 'lifi');
+      expect(resolution.requestedLiquiditySource).to.equal(
+        LiquiditySource.LIFI
+      );
+      expect(resolution.resolvedTakerAddress).to.equal(
+        '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
+      );
+    });
+
+    it('routes mixed configs by pool source instead of preferring factory globally', () => {
+      const config = {
         keeperTaker: '0x1111111111111111111111111111111111111111',
-        oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
         keeperTakerFactory: '0x2222222222222222222222222222222222222222',
         takerContracts: {
           UniswapV3: '0x3333333333333333333333333333333333333333',
+          Lifi: '0x4444444444444444444444444444444444444444',
         },
+      };
+
+      const oneInchDeployment = resolveManualTakeDeployment({
+        poolConfig: {
+          take: {
+            liquiditySource: LiquiditySource.ONEINCH,
+            marketPriceFactor: 0.95,
+          },
+        },
+        config,
+      });
+      const factoryDeployment = resolveManualTakeDeployment({
+        poolConfig: {
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.95,
+          },
+        },
+        config,
+      });
+      const lifiDeployment = resolveManualTakeDeployment({
+        poolConfig: {
+          take: {
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.95,
+          },
+        },
+        config,
       });
 
-      const oneInchDeployment = await manager.detectDeploymentTypeForPool({
-        name: 'Legacy Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      } as any);
-      const factoryDeployment = await manager.detectDeploymentTypeForPool({
-        name: 'Factory Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95,
-        },
-      } as any);
-
-      expect(oneInchDeployment).to.equal('oneinch');
-      expect(factoryDeployment).to.equal('factory');
-    });
-  });
-
-  describe('Per-Pool Validation', () => {
-    it('validates a complete 1inch pool config', async () => {
-      const manager = new SmartDexManager(mockSigner, {
-        keeperTaker: '0x1234567890123456789012345678901234567890',
-        oneInchRouters: {
-          43114: '0x111111125421ca6dc452d289314280a0f8842a65',
-        },
-      });
-
-      const validation = await manager.validateDeploymentForPool({
-        name: '1inch Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      } as any);
-
-      expect(validation.valid).to.be.true;
-      expect(validation.errors).to.be.empty;
+      expect(oneInchDeployment.deploymentType).to.equal('oneinch');
+      expect(factoryDeployment.deploymentType).to.equal('factory');
+      expect(lifiDeployment.deploymentType).to.equal('lifi');
     });
 
-    it('validates a complete factory-backed pool config', async () => {
-      const manager = new SmartDexManager(mockSigner, {
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
-        takerContracts: {
-          UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
+    it('resolves missing requested external deployment as arb-only fallback', () => {
+      const resolution = resolveManualTakeDeployment({
+        poolConfig: {
+          take: {
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.95,
+          },
+        },
+        config: {
+          keeperTakerFactory: '0x1234567890123456789012345678901234567890',
         },
       });
 
-      const validation = await manager.validateDeploymentForPool({
-        name: 'Factory Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95,
-        },
-      } as any);
-
-      expect(validation.valid).to.be.true;
-      expect(validation.errors).to.be.empty;
-    });
-
-    it('falls back to arb-only validation when a requested external deployment is missing', async () => {
-      const manager = new SmartDexManager(mockSigner, {
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
-      });
-
-      const validation = await manager.validateDeploymentForPool({
-        name: 'Factory Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.95,
-        },
-      } as any);
-
-      expect(validation.valid).to.be.true;
-      expect(validation.errors).to.be.empty;
+      expectManualDeploymentType(resolution, 'none');
+      expect(resolution.requestedLiquiditySource).to.equal(
+        LiquiditySource.UNISWAPV3
+      );
+      expect(resolution.unavailableReason).to.equal(
+        'takerContracts.UniswapV3 is not configured'
+      );
     });
   });
 
@@ -199,6 +214,37 @@ describe('Smart DEX Routing Integration Tests', () => {
             hpbPriceFactor: 0.98,
           },
           oneInchConfig as any
+        );
+      }).to.not.throw();
+    });
+
+    it('validates LI.FI take settings with factory taker config in dry run', async () => {
+      const lifiConfig = {
+        runtime: {
+          dryRun: true,
+        },
+        takers: {
+          factory: '0x1234567890123456789012345678901234567890',
+          contracts: {
+            Lifi: '0x2234567890123456789012345678901234567890',
+          },
+        },
+        dex: {
+          lifi: {
+            mode: 'canary',
+          },
+        },
+      };
+
+      expect(() => {
+        validateTakeSettings(
+          {
+            minCollateral: 0.1,
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.95,
+            hpbPriceFactor: 0.98,
+          },
+          lifiConfig as any
         );
       }).to.not.throw();
     });

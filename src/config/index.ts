@@ -4,3 +4,4 @@ export * from './validation';
 export * from './liquidity-source';
 export * from './lp-reward';
 export * from './route-policy';
+export * from './lifi-policy';

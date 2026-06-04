@@ -1,4 +1,5 @@
 import { BigNumber } from 'ethers';
+import { ApprovedLifiQuote } from '../dex/lifi';
 import {
   CurvePoolType,
   ExternalTakePathKind,
@@ -63,6 +64,7 @@ export interface TakeActionConfig {
 export type ExternalTakeStrategyKind =
   | 'none'
   | 'oneinch'
+  | 'lifi'
   | 'factory'
   | 'hybrid';
 
@@ -73,25 +75,26 @@ export interface TakeBorrowerCandidate {
 export interface ExternalTakeQuoteEvaluation {
   isTakeable: boolean;
   externalTakePath?: ExternalTakePathKind;
-  approvalMode?: 'strict_hybrid' | 'factory_gas_quote_fallback';
   marketPrice?: number;
   takeablePrice?: number;
   quoteAmount?: number;
   quoteAmountRaw?: BigNumber;
+  quoteCircuitOpen?: boolean;
   quoteFailureRetryable?: boolean;
   quoteFailureCode?: number | string;
   selectedLiquiditySource?: LiquiditySource;
   selectedFeeTier?: number;
   routeMinOutRaw?: BigNumber;
   profitMinOutRaw?: BigNumber;
+  routeExecutionFloorRaw?: BigNumber;
   approvedMinOutRaw?: BigNumber;
   routeProfitability?: RouteProfitabilityBreakdown;
   collateralAmount?: number;
   quotedAuctionPriceWad?: BigNumber;
   quotedCollateralWad?: BigNumber;
   auctionIdentity?: string;
-  fallbackExternalTakeQuoteEvaluations?: ExternalTakeQuoteEvaluation[];
   curvePool?: CurvePoolSelection;
+  lifiQuote?: ApprovedLifiQuote;
   reason?: string;
 }
 
@@ -102,6 +105,14 @@ export interface CurvePoolSelection {
   tokenOutIndex: number;
 }
 
+interface BoundExternalTakeRouteBase<TSource extends LiquiditySource>
+  extends ExternalTakeQuoteEvaluation {
+  isTakeable: true;
+  quoteAmountRaw: BigNumber;
+  selectedLiquiditySource: TSource;
+  routeExecutionFloorRaw: BigNumber;
+}
+
 interface ApprovedExternalTakeQuoteBase<TSource extends LiquiditySource>
   extends ExternalTakeQuoteEvaluation {
   isTakeable: true;
@@ -110,13 +121,30 @@ interface ApprovedExternalTakeQuoteBase<TSource extends LiquiditySource>
   approvedMinOutRaw: BigNumber;
 }
 
+export interface BoundOneInchRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.ONEINCH> {
+  externalTakePath: 'oneinch';
+}
+
 export interface ApprovedOneInchQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.ONEINCH> {
   externalTakePath: 'oneinch';
 }
 
+export interface BoundUniswapV3FactoryRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.UNISWAPV3> {
+  externalTakePath: 'factory';
+  selectedFeeTier: number;
+}
+
 export interface ApprovedUniswapV3FactoryQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.UNISWAPV3> {
+  externalTakePath: 'factory';
+  selectedFeeTier: number;
+}
+
+export interface BoundSushiSwapFactoryRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.SUSHISWAP> {
   externalTakePath: 'factory';
   selectedFeeTier: number;
 }
@@ -127,20 +155,70 @@ export interface ApprovedSushiSwapFactoryQuoteEvaluation
   selectedFeeTier: number;
 }
 
+export interface BoundCurveFactoryRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.CURVE> {
+  externalTakePath: 'factory';
+  curvePool: CurvePoolSelection;
+}
+
 export interface ApprovedCurveFactoryQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.CURVE> {
   externalTakePath: 'factory';
   curvePool: CurvePoolSelection;
 }
 
+export interface ApprovedLifiQuoteEvaluation
+  extends ApprovedExternalTakeQuoteBase<LiquiditySource.LIFI> {
+  externalTakePath: 'lifi';
+  lifiQuote: ApprovedLifiQuote;
+}
+
+export interface BoundLifiRouteEvaluation
+  extends BoundExternalTakeRouteBase<LiquiditySource.LIFI> {
+  externalTakePath: 'lifi';
+  lifiQuote: ApprovedLifiQuote;
+}
+
+export type BoundFactoryRouteEvaluation =
+  | BoundUniswapV3FactoryRouteEvaluation
+  | BoundSushiSwapFactoryRouteEvaluation
+  | BoundCurveFactoryRouteEvaluation;
+
 export type ApprovedFactoryQuoteEvaluation =
   | ApprovedUniswapV3FactoryQuoteEvaluation
   | ApprovedSushiSwapFactoryQuoteEvaluation
   | ApprovedCurveFactoryQuoteEvaluation;
 
+export type BoundExternalTakeRouteEvaluation =
+  | BoundOneInchRouteEvaluation
+  | BoundFactoryRouteEvaluation
+  | BoundLifiRouteEvaluation;
+
+export interface ExternalTakeExecutionCandidate<TApprovalContext = unknown> {
+  readonly evaluation: BoundExternalTakeRouteEvaluation;
+  readonly approvalContext?: TApprovalContext;
+}
+
+export interface ExternalTakeExecutionPlan<TApprovalContext = unknown> {
+  readonly primary: ExternalTakeExecutionCandidate<TApprovalContext>;
+  readonly fallbacks: readonly ExternalTakeExecutionCandidate<TApprovalContext>[];
+}
+
+export type ExternalTakeEvaluationResult<TApprovalContext = unknown> =
+  | {
+      takeable: false;
+      quoteEvaluation: ExternalTakeQuoteEvaluation;
+      reason?: string;
+    }
+  | {
+      takeable: true;
+      executionPlan: ExternalTakeExecutionPlan<TApprovalContext>;
+    };
+
 export type ApprovedExternalTakeQuoteEvaluation =
   | ApprovedOneInchQuoteEvaluation
-  | ApprovedFactoryQuoteEvaluation;
+  | ApprovedFactoryQuoteEvaluation
+  | ApprovedLifiQuoteEvaluation;
 
 export interface ArbTakeEvaluation {
   isArbTakeable: boolean;
@@ -149,28 +227,37 @@ export interface ArbTakeEvaluation {
   reason?: string;
 }
 
-export interface TakeLiquidationPlan {
+export interface TakeLiquidationPlan<TApprovalContext = unknown> {
   borrower: string;
   hpbIndex: number;
   collateral: BigNumber; // WAD
   auctionPrice: BigNumber; // WAD
   isTakeable: boolean;
   isArbTakeable: boolean;
-  externalTakeQuoteEvaluation?: ExternalTakeQuoteEvaluation;
+  externalTakeExecutionPlan?: ExternalTakeExecutionPlan<TApprovalContext>;
 }
 
-export interface TakeDecision {
-  approvedTake: boolean;
+interface TakeDecisionBase {
   approvedArbTake: boolean;
   borrower: string;
   hpbIndex: number;
   collateral: BigNumber;
   auctionPrice: BigNumber;
-  takeablePrice?: number;
   maxArbTakePrice?: number;
-  quoteEvaluation?: ExternalTakeQuoteEvaluation;
   reason?: string;
 }
+
+export type TakeDecision<TApprovalContext = unknown> =
+  | (TakeDecisionBase & {
+      approvedTake: true;
+      takeablePrice?: number;
+      externalTakeExecutionPlan: ExternalTakeExecutionPlan<TApprovalContext>;
+    })
+  | (TakeDecisionBase & {
+      approvedTake: false;
+      takeablePrice?: undefined;
+      externalTakeExecutionPlan?: undefined;
+    });
 
 export interface TakeExecutionResult {
   executedTake: boolean;

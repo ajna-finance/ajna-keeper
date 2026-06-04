@@ -5,16 +5,14 @@ import {
   handleDiscoveredSettlementTarget,
   handleDiscoveredTakeTarget,
 } from '../../src/discovery/handlers';
-import {
-  refreshDiscoveryGasPriceIfStale,
-  resolveHybridExternalTakeExecutionSelection,
-  selectBestExternalTakeQuoteEvaluation,
-} from '../../src/discovery/take-executor';
+import { refreshDiscoveryGasPriceIfStale } from '../../src/discovery/take-executor';
 import * as oneInchExecutionModule from '../../src/take/one-inch-execution';
 import * as takeFactoryModule from '../../src/take/factory';
+import * as lifiExecutionModule from '../../src/take/lifi/execution';
 import * as settlementModule from '../../src/settlement';
 import * as arbModule from '../../src/take/arb';
 import { LiquiditySource } from '../../src/config';
+import { ExternalTakeQuoteEvaluation } from '../../src/take/types';
 import * as erc20 from '../../src/erc20';
 import { DexRouter } from '../../src/dex/router';
 import { logger } from '../../src/logging';
@@ -37,6 +35,23 @@ function getDiscoveredTakeSummary(loggerInfoStub: sinon.SinonStub): string {
   return summaryLog;
 }
 
+function buildTakeableOneInchQuote(
+  overrides: Partial<ExternalTakeQuoteEvaluation> = {}
+): ExternalTakeQuoteEvaluation {
+  return {
+    isTakeable: true,
+    externalTakePath: 'oneinch',
+    selectedLiquiditySource: LiquiditySource.ONEINCH,
+    quoteAmount: 10,
+    quoteAmountRaw: BigNumber.from(10),
+    approvedMinOutRaw: BigNumber.from(10),
+    collateralAmount: 1,
+    marketPrice: 10,
+    takeablePrice: 12,
+    ...overrides,
+  };
+}
+
 describe('Discovery Handlers', () => {
   afterEach(() => {
     sinon.restore();
@@ -49,13 +64,7 @@ describe('Discovery Handlers', () => {
     const onCandidateInactive = sinon.spy();
     sinon
       .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
-      .resolves({
-        isTakeable: true,
-        quoteAmount: 10,
-        collateralAmount: 1,
-        marketPrice: 10,
-        takeablePrice: 12,
-      });
+      .resolves(buildTakeableOneInchQuote());
 
     const getStatusStub = sinon.stub();
     getStatusStub
@@ -137,13 +146,7 @@ describe('Discovery Handlers', () => {
       .resolves(true);
     sinon
       .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
-      .resolves({
-        isTakeable: true,
-        quoteAmount: 10,
-        collateralAmount: 1,
-        marketPrice: 10,
-        takeablePrice: 12,
-      });
+      .resolves(buildTakeableOneInchQuote());
     const borrowers = ['0xBorrowerA', '0xBorrowerB'];
     const statusCalls: string[] = [];
     let preloadFailed = false;
@@ -224,13 +227,7 @@ describe('Discovery Handlers', () => {
       .resolves(true);
     sinon
       .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
-      .resolves({
-        isTakeable: true,
-        quoteAmount: 10,
-        collateralAmount: 1,
-        marketPrice: 10,
-        takeablePrice: 12,
-      });
+      .resolves(buildTakeableOneInchQuote());
     const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
     const statusCalls: string[] = [];
     const pool = {
@@ -313,15 +310,12 @@ describe('Discovery Handlers', () => {
     const onCandidateInactive = sinon.spy();
     sinon
       .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
-      .resolves({
-        isTakeable: true,
-        quoteAmount: 10,
-        collateralAmount: 1,
-        marketPrice: 10,
-        takeablePrice: 12,
-        quotedAuctionPriceWad: ethers.utils.parseEther('1'),
-        quotedCollateralWad: ethers.utils.parseEther('1'),
-      });
+      .resolves(
+        buildTakeableOneInchQuote({
+          quotedAuctionPriceWad: ethers.utils.parseEther('1'),
+          quotedCollateralWad: ethers.utils.parseEther('1'),
+        })
+      );
 
     const getStatusStub = sinon.stub();
     getStatusStub
@@ -2396,7 +2390,7 @@ describe('Discovery Handlers', () => {
     selectedLiquiditySource: LiquiditySource.UNISWAPV3,
     reason: 'failed to quote gas cost into quote token',
     routeProfitability: {
-      gasPolicyRejectCode: 'native_to_quote_conversion_unavailable',
+      gasPolicyRejectCode: 'native_to_quote_conversion_unavailable' as const,
       gasQuoteAttempts: [
         {
           source: LiquiditySource.UNISWAPV3,
@@ -2734,6 +2728,14 @@ describe('Discovery Handlers', () => {
     const takeLiquidationFactoryStub = sinon
       .stub(takeFactoryModule, 'takeLiquidationFactory')
       .resolves(true);
+    const lifiQuoteStub = sinon
+      .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+      .resolves({
+        isTakeable: false,
+        externalTakePath: 'lifi',
+        selectedLiquiditySource: LiquiditySource.LIFI,
+        reason: 'LI.FI unavailable',
+      });
     sinon
       .stub(oneInchExecutionModule, 'getOneInchPathQuoteEvaluation')
       .resolves({
@@ -2838,6 +2840,7 @@ describe('Discovery Handlers', () => {
       debugStub,
       warnStub,
       factoryQuoteStub,
+      lifiQuoteStub,
       takeLiquidationStub,
       takeLiquidationFactoryStub,
     };
@@ -2869,11 +2872,12 @@ describe('Discovery Handlers', () => {
       expectedLog: 'route selection mode is not maximize_profit',
     },
     {
-      name: 'hybrid paths do not include both oneinch and factory',
+      name: 'hybrid paths do not include factory and at least one aggregator path',
       takePolicyOverrides: {
         allowedExternalTakePaths: ['factory'],
       },
-      expectedLog: 'hybrid paths do not include both oneinch and factory',
+      expectedLog:
+        'hybrid paths do not include factory and at least one aggregator path',
     },
   ]) {
     it(`does not execute hybrid gas quote fallback when ${name}`, async () => {
@@ -3072,129 +3076,6 @@ describe('Discovery Handlers', () => {
     ).to.deep.equal([LiquiditySource.UNISWAPV3]);
   });
 
-  it('rejects disabled hybrid execution paths before dispatch', () => {
-    const disabledPath = resolveHybridExternalTakeExecutionSelection({
-      allowedExternalTakePaths: ['factory'],
-      quoteEvaluation: {
-        isTakeable: true,
-        externalTakePath: 'oneinch',
-        selectedLiquiditySource: LiquiditySource.ONEINCH,
-        quoteAmount: 125,
-        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
-        collateralAmount: 1,
-        marketPrice: 125,
-        takeablePrice: 123.75,
-      } as any,
-    });
-
-    expect(disabledPath).to.deep.include({
-      approved: false,
-      effectiveSelectedPath: 'oneinch',
-      selectedSource: LiquiditySource.ONEINCH,
-      reason: 'selected disabled path=oneinch',
-    });
-
-    const missingFactorySource = resolveHybridExternalTakeExecutionSelection({
-      allowedExternalTakePaths: ['factory'],
-      quoteEvaluation: {
-        isTakeable: true,
-        externalTakePath: 'factory',
-        quoteAmount: 125,
-        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
-        collateralAmount: 1,
-        marketPrice: 125,
-        takeablePrice: 123.75,
-      } as any,
-    });
-
-    expect(missingFactorySource).to.deep.include({
-      approved: false,
-      effectiveSelectedPath: 'factory',
-      reason: 'selected factory path without a concrete factory source',
-    });
-
-    const missingSelectedPath = resolveHybridExternalTakeExecutionSelection({
-      allowedExternalTakePaths: ['oneinch', 'factory'],
-      quoteEvaluation: {
-        isTakeable: true,
-        quoteAmount: 125,
-        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
-        collateralAmount: 1,
-        marketPrice: 125,
-        takeablePrice: 123.75,
-      } as any,
-    });
-
-    expect(missingSelectedPath).to.deep.include({
-      approved: false,
-      reason: 'hybrid external take selection missing selected path',
-    });
-  });
-
-  it('prefers non-subsidized hybrid external take quotes over higher-profit subsidized quotes', () => {
-    const nonSubsidized = {
-      isTakeable: true,
-      externalTakePath: 'factory',
-      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-      quoteAmountRaw: BigNumber.from(125),
-      routeProfitability: {
-        expectedNetProfitQuoteRaw: BigNumber.from(20),
-        expectedSubsidyQuoteRaw: BigNumber.from(0),
-        subsidyAllowed: false,
-      },
-    } as any;
-    const subsidized = {
-      isTakeable: true,
-      externalTakePath: 'oneinch',
-      selectedLiquiditySource: LiquiditySource.ONEINCH,
-      quoteAmountRaw: BigNumber.from(140),
-      routeProfitability: {
-        expectedNetProfitQuoteRaw: BigNumber.from(35),
-        expectedSubsidyQuoteRaw: BigNumber.from(5),
-        subsidyAllowed: true,
-      },
-    } as any;
-
-    expect(
-      selectBestExternalTakeQuoteEvaluation({
-        evaluations: [subsidized, nonSubsidized],
-        externalTakePaths: ['oneinch', 'factory'],
-      })
-    ).to.equal(nonSubsidized);
-  });
-
-  it('chooses the smallest subsidy among subsidized hybrid external take quotes', () => {
-    const smallerSubsidy = {
-      isTakeable: true,
-      externalTakePath: 'factory',
-      selectedLiquiditySource: LiquiditySource.SUSHISWAP,
-      quoteAmountRaw: BigNumber.from(130),
-      routeProfitability: {
-        expectedNetProfitQuoteRaw: BigNumber.from(15),
-        expectedSubsidyQuoteRaw: BigNumber.from(2),
-        subsidyAllowed: true,
-      },
-    } as any;
-    const largerSubsidy = {
-      isTakeable: true,
-      externalTakePath: 'oneinch',
-      selectedLiquiditySource: LiquiditySource.ONEINCH,
-      quoteAmountRaw: BigNumber.from(150),
-      routeProfitability: {
-        expectedNetProfitQuoteRaw: BigNumber.from(40),
-        expectedSubsidyQuoteRaw: BigNumber.from(8),
-        subsidyAllowed: true,
-      },
-    } as any;
-
-    expect(
-      selectBestExternalTakeQuoteEvaluation({
-        evaluations: [largerSubsidy, smallerSubsidy],
-        externalTakePaths: ['oneinch', 'factory'],
-      })
-    ).to.equal(smallerSubsidy);
-  });
-
   it('does not clear 1inch circuit failures for local policy quote rejects', async () => {
     sinon.stub(oneInchExecutionModule, 'takeLiquidation').resolves(true);
     const oneInchQuoteStub = sinon
@@ -3279,7 +3160,7 @@ describe('Discovery Handlers', () => {
   });
 
   it('refuses execution when a hybrid quote resolves to an inconsistent path and source', async () => {
-    const errorStub = sinon.stub(logger, 'error');
+    const debugStub = sinon.stub(logger, 'debug');
     const takeLiquidationStub = sinon
       .stub(oneInchExecutionModule, 'takeLiquidation')
       .resolves(true);
@@ -3289,7 +3170,7 @@ describe('Discovery Handlers', () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
       isTakeable: true,
-      externalTakePath: 'oneinch',
+      externalTakePath: 'factory',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       quoteAmount: 125,
       quoteAmountRaw: ethers.utils.parseUnits('125', 6),
@@ -3376,7 +3257,7 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationStub.called).to.be.false;
     expect(takeLiquidationFactoryStub.called).to.be.false;
     expect(
-      errorStub
+      debugStub
         .getCalls()
         .some((call) =>
           String(call.args[0]).includes('selected inconsistent path=factory')
@@ -3385,7 +3266,7 @@ describe('Discovery Handlers', () => {
   });
 
   it('refuses execution when a factory hybrid quote has no selected factory source', async () => {
-    const errorStub = sinon.stub(logger, 'error');
+    const debugStub = sinon.stub(logger, 'debug');
     const takeLiquidationFactoryStub = sinon
       .stub(takeFactoryModule, 'takeLiquidationFactory')
       .resolves(true);
@@ -3478,7 +3359,7 @@ describe('Discovery Handlers', () => {
 
     expect(takeLiquidationFactoryStub.called).to.be.false;
     expect(
-      errorStub
+      debugStub
         .getCalls()
         .some((call) =>
           String(call.args[0]).includes(
@@ -3630,6 +3511,122 @@ describe('Discovery Handlers', () => {
       await clock.tickAsync(0);
       expect(rpcCache.oneInchQuoteCircuit?.failures).to.equal(1);
       expect(transports.readRpc.getGasPrice.called).to.be.false;
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it('does not let an abandoned LI.FI probe overwrite circuit state after timeout', async () => {
+    const clock = sinon.useFakeTimers();
+    try {
+      const lifiDeferred = createDeferred<any>();
+      sinon
+        .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+        .returns(lifiDeferred.promise);
+      const takeLiquidationLifiStub = sinon
+        .stub(lifiExecutionModule, 'takeLiquidationLifi')
+        .resolves(true);
+      const rpcCache: any = {
+        chainId: 8453,
+      };
+      const transports = createDiscoveryTransports(
+        ethers.utils.parseUnits('1', 'gwei')
+      );
+      const pool = {
+        name: 'Hybrid LI.FI Timeout Pool',
+        poolAddress: '0x7777777777777777777777777777777777785',
+        quoteAddress: '0x2222222222222222222222222222222222222222',
+        collateralAddress: '0x3333333333333333333333333333333333333333',
+        getLiquidation: sinon.stub().returns({
+          getStatus: sinon.stub().resolves({
+            collateral: ethers.utils.parseEther('1'),
+            price: ethers.utils.parseEther('100'),
+          }),
+        }),
+      };
+
+      const handlePromise = handleDiscoveredTakeTarget({
+        pool: pool as any,
+        signer: {
+          provider: {
+            getGasPrice: sinon
+              .stub()
+              .resolves(ethers.utils.parseUnits('1', 'gwei')),
+          },
+          getChainId: sinon.stub().resolves(8453),
+        } as any,
+        target: {
+          source: 'discovered',
+          poolAddress: pool.poolAddress,
+          name: pool.name,
+          dryRun: false,
+          take: {
+            liquiditySource: LiquiditySource.LIFI,
+            marketPriceFactor: 0.99,
+          },
+          candidates: [
+            {
+              poolAddress: pool.poolAddress,
+              borrower: '0xBorrowerHybridLifiTimeout',
+              kickTime: Date.now(),
+              debtRemaining: '1',
+              collateralRemaining: '1',
+              neutralPrice: '1',
+              debt: '1',
+              collateral: '1',
+              heuristicScore: 1,
+            },
+          ],
+        },
+        config: {
+          autoDiscover: {
+            enabled: true,
+            take: {
+              enabled: true,
+              allowedExternalTakePaths: ['lifi'],
+              externalTakeRouteSelectionMode: 'factory_first',
+              externalTakeProbeTimeoutMs: 50,
+            },
+          },
+          lifi: {
+            mode: 'production',
+            allowExchanges: ['uniswap'],
+            callTargetAllowlist: {},
+            approvalSpenderAllowlist: {},
+            selectorAllowlist: {},
+            quoteFailureThreshold: 2,
+          },
+          lifiTaker: '0x4444444444444444444444444444444444444444',
+          subgraphUrl: 'http://example-subgraph',
+        } as any,
+        transports,
+        rpcCache,
+      });
+
+      await clock.tickAsync(50);
+      await handlePromise;
+      expect(rpcCache.providerCircuits?.lifi?.route_quote?.failures).to.equal(
+        1
+      );
+      expect(takeLiquidationLifiStub.called).to.be.false;
+
+      lifiDeferred.resolve({
+        isTakeable: true,
+        externalTakePath: 'lifi',
+        selectedLiquiditySource: LiquiditySource.LIFI,
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+        approvedMinOutRaw: ethers.utils.parseUnits('123', 6),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+      });
+      await clock.tickAsync(0);
+      expect(rpcCache.providerCircuits?.lifi?.route_quote?.failures).to.equal(
+        1
+      );
     } finally {
       clock.restore();
     }
@@ -4783,13 +4780,7 @@ describe('Discovery Handlers', () => {
     sinon.stub(oneInchExecutionModule, 'takeLiquidation').resolves();
     sinon
       .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
-      .resolves({
-        isTakeable: true,
-        quoteAmount: 10,
-        collateralAmount: 1,
-        marketPrice: 10,
-        takeablePrice: 12,
-      });
+      .resolves(buildTakeableOneInchQuote());
     const loggerInfoStub = sinon.stub(logger, 'info');
 
     const getStatusStub = sinon.stub();
@@ -4869,15 +4860,7 @@ describe('Discovery Handlers', () => {
     sinon.stub(oneInchExecutionModule, 'takeLiquidation').resolves(true);
     sinon
       .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
-      .resolves({
-        isTakeable: true,
-        externalTakePath: 'oneinch',
-        selectedLiquiditySource: LiquiditySource.ONEINCH,
-        quoteAmount: 10,
-        collateralAmount: 1,
-        marketPrice: 10,
-        takeablePrice: 12,
-      });
+      .resolves(buildTakeableOneInchQuote());
     const loggerInfoStub = sinon.stub(logger, 'info');
 
     const getStatusStub = sinon.stub().resolves({
@@ -4948,13 +4931,7 @@ describe('Discovery Handlers', () => {
       .rejects(new Error('execution boom'));
     sinon
       .stub(oneInchExecutionModule, 'getOneInchTakeQuoteEvaluation')
-      .resolves({
-        isTakeable: true,
-        quoteAmount: 10,
-        collateralAmount: 1,
-        marketPrice: 10,
-        takeablePrice: 12,
-      });
+      .resolves(buildTakeableOneInchQuote());
     const loggerInfoStub = sinon.stub(logger, 'info');
 
     const getStatusStub = sinon.stub();

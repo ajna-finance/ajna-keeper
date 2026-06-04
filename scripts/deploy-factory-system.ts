@@ -2,7 +2,20 @@ import { ethers } from 'ethers';
 import { readFileSync } from 'fs';
 import * as path from 'path';
 import { password } from '@inquirer/prompts';
-import { getManualPools, readConfigFile, KeeperConfig } from '../src/config';
+import {
+  getManualPools,
+  readConfigFile,
+  KeeperConfig,
+  LiquiditySource,
+} from '../src/config';
+import {
+  configureLifiAllowlists,
+  deployLifiKeeperTaker,
+  getLifiProductionDeploymentGateMessages,
+  hasProductionLifiConfig,
+  registerLifiTakerInFactory,
+  validateDetectedChainLifiProductionConfig,
+} from './deployment/lifi-factory-deployment';
 
 /**
  * Universal Factory System Deployment Script
@@ -14,6 +27,7 @@ import { getManualPools, readConfigFile, KeeperConfig } from '../src/config';
  * - Chain-agnostic (works on any chain with proper config)
  * - Config-driven (reads all addresses from config file)
  * - Fixed deployment order (factory → taker with factory authorization)
+ * - Production LI.FI configs deploy LifiKeeperTaker, apply reviewed allowlists, then register the verified taker
  * - Interactive password input (same as main bot)
  * - Comprehensive validation and error handling
  * - Manual gas limits for problematic networks
@@ -24,6 +38,7 @@ interface DeploymentAddresses {
   uniswapTaker?: string;
   sushiTaker?: string;
   curveTaker?: string;
+  lifiTaker?: string;
   // Future: uniswapV4, pancakeswap, balancer, izumi, etc.
 }
 
@@ -132,6 +147,25 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     throw new Error('Contract artifacts not found. Please run: yarn compile');
   }
 
+  if (hasProductionLifiConfig(config)) {
+    const lifiArtifactPath = path.join(
+      __dirname,
+      '..',
+      'artifacts',
+      'contracts',
+      'takers',
+      'LifiKeeperTaker.sol',
+      'LifiKeeperTaker.json'
+    );
+    try {
+      require(lifiArtifactPath);
+    } catch (error) {
+      throw new Error(
+        'LI.FI contract artifact not found. Please run: yarn compile'
+      );
+    }
+  }
+
   // Check if any pools are configured for Uniswap V3 takes
   const uniswapPools = getManualPools(config).filter(
     (pool) => pool.take?.liquiditySource === 2 // LiquiditySource.UNISWAPV3
@@ -145,9 +179,7 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     // Validate Uniswap V3 configuration
     const uniswapConfig = config.dex?.uniswapV3?.router;
     if (!uniswapConfig) {
-      throw new Error(
-        'dex.uniswapV3.router required for Uniswap V3 pools'
-      );
+      throw new Error('dex.uniswapV3.router required for Uniswap V3 pools');
     }
 
     const required = [
@@ -159,9 +191,7 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
 
     for (const field of required) {
       if (!uniswapConfig[field as keyof typeof uniswapConfig]) {
-        throw new Error(
-          `Missing dex.uniswapV3.router.${field} for Uniswap V3`
-        );
+        throw new Error(`Missing dex.uniswapV3.router.${field} for Uniswap V3`);
       }
     }
   }
@@ -473,11 +503,20 @@ async function configureFactory(
 
   // Register Curve taker (LiquiditySource.CURVE = 4)
   if (addresses.curveTaker) {
-    const setCurveTakerTx = await factory.setTaker(4, addresses.curveTaker);
+    const setCurveTakerTx = await factory.setTaker(
+      LiquiditySource.CURVE,
+      addresses.curveTaker
+    );
     console.log('✅ Curve configuration tx:', setCurveTakerTx.hash);
     await setCurveTakerTx.wait();
     console.log('🎉 Factory configured with Curve taker');
   }
+
+  // LI.FI taker registration is intentionally NOT done here. It is registered
+  // by registerLifiTakerInFactory only AFTER configureLifiAllowlists has
+  // applied and exactly verified the call-target/approval-spender/selector
+  // allowlists, so the factory never maps LiquiditySource.LIFI to a taker whose
+  // on-chain allowlists are incomplete or unverified.
   // ADD DELAY AFTER CONFIGURATION
   await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
 }
@@ -561,6 +600,58 @@ async function verifyDeployment(
     }
   }
 
+  if (addresses.lifiTaker) {
+    const hasLifiTaker = await factory.hasConfiguredTaker(LiquiditySource.LIFI);
+    const registeredLifiTaker = await factory.takerContracts(
+      LiquiditySource.LIFI
+    );
+    console.log(`- LI.FI Configured: ${hasLifiTaker}`);
+    console.log(`- Registered LI.FI Taker: ${registeredLifiTaker}`);
+    console.log(`- Expected LI.FI Taker: ${addresses.lifiTaker}`);
+
+    const takerArtifact = require(
+      path.join(
+        __dirname,
+        '..',
+        'artifacts',
+        'contracts',
+        'takers',
+        'LifiKeeperTaker.sol',
+        'LifiKeeperTaker.json'
+      )
+    );
+    const taker = new ethers.Contract(
+      addresses.lifiTaker,
+      takerArtifact.abi,
+      deployer
+    );
+
+    const takerOwner = await taker.owner();
+    const authorizedFactory = await taker.authorizedFactory();
+
+    console.log(`- LI.FI Taker Owner: ${takerOwner}`);
+    console.log(`- LI.FI Authorized Factory: ${authorizedFactory}`);
+    console.log(`- Expected Factory: ${addresses.factory}`);
+
+    if (
+      !hasLifiTaker ||
+      registeredLifiTaker.toLowerCase() !== addresses.lifiTaker.toLowerCase()
+    ) {
+      throw new Error('❌ LI.FI factory configuration verification failed');
+    }
+
+    if (authorizedFactory.toLowerCase() !== addresses.factory.toLowerCase()) {
+      throw new Error('❌ LI.FI taker authorization verification failed');
+    }
+
+    if (
+      takerOwner.toLowerCase() !== deployer.address.toLowerCase() ||
+      factoryOwner.toLowerCase() !== deployer.address.toLowerCase()
+    ) {
+      throw new Error('❌ LI.FI owner verification failed');
+    }
+  }
+
   console.log('✅ All verification checks passed');
 }
 
@@ -579,7 +670,8 @@ function generateConfigUpdate(
     addresses.factory ||
     addresses.uniswapTaker ||
     addresses.sushiTaker ||
-    addresses.curveTaker
+    addresses.curveTaker ||
+    addresses.lifiTaker
   ) {
     console.log('takers: {');
   }
@@ -587,7 +679,12 @@ function generateConfigUpdate(
     console.log(`  factory: '${addresses.factory}',`);
   }
 
-  if (addresses.uniswapTaker || addresses.sushiTaker || addresses.curveTaker) {
+  if (
+    addresses.uniswapTaker ||
+    addresses.sushiTaker ||
+    addresses.curveTaker ||
+    addresses.lifiTaker
+  ) {
     console.log('  contracts: {');
     if (addresses.uniswapTaker) {
       console.log(`    UniswapV3: '${addresses.uniswapTaker}',`);
@@ -598,13 +695,17 @@ function generateConfigUpdate(
     if (addresses.curveTaker) {
       console.log(`    Curve: '${addresses.curveTaker}',`);
     }
+    if (addresses.lifiTaker) {
+      console.log(`    Lifi: '${addresses.lifiTaker}',`);
+    }
     console.log('  },');
   }
   if (
     addresses.factory ||
     addresses.uniswapTaker ||
     addresses.sushiTaker ||
-    addresses.curveTaker
+    addresses.curveTaker ||
+    addresses.lifiTaker
   ) {
     console.log('},');
   }
@@ -620,12 +721,26 @@ function generateConfigUpdate(
   if (addresses.sushiTaker) {
     console.log(`🍣 SushiSwapKeeperTaker: ${addresses.sushiTaker}`);
   }
+  if (addresses.curveTaker) {
+    console.log(`🌊 CurveKeeperTaker: ${addresses.curveTaker}`);
+  }
+  if (addresses.lifiTaker) {
+    console.log(`🔁 LifiKeeperTaker: ${addresses.lifiTaker}`);
+  }
 
   console.log('\n🚀 Next Steps:');
   console.log('1. Update your config file with the addresses above');
-  console.log('2. Test with: yarn start --config your-config-file.ts');
-  console.log('3. Expected result: "Type: factory, Valid: true"');
-  console.log(`4. Factory system ready for ${chainName}! 🎊`);
+  if (addresses.lifiTaker) {
+    const gateMessages = getLifiProductionDeploymentGateMessages(configPath);
+    for (let index = 0; index < gateMessages.length; index++) {
+      const message = gateMessages[index];
+      console.log(`${index + 2}. ${message}`);
+    }
+  } else {
+    console.log(`2. Test with: yarn start --config ${configPath}`);
+    console.log('3. Expected result: "Type: factory, Valid: true"');
+  }
+  console.log(`Factory system deployment complete for ${chainName}`);
 }
 
 async function main() {
@@ -661,6 +776,7 @@ async function main() {
     console.log(
       `🌐 Target Network: ${chainInfo.name} (Chain ID: ${chainInfo.chainId})`
     );
+    validateDetectedChainLifiProductionConfig(config, chainInfo);
 
     // Step 3: Load wallet from keystore
     console.log('\n🔐 Loading wallet from keystore...');
@@ -753,6 +869,20 @@ async function main() {
       // ADD DELAY AFTER CURVE DEPLOYMENT
       await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
     }
+
+    // Deploy LI.FI taker only for production configs. Canary configs are
+    // for route-shape discovery and fork validation, not live registration.
+    if (hasProductionLifiConfig(config)) {
+      addresses.lifiTaker = await deployLifiKeeperTaker(
+        deployer,
+        config.ajna.erc20PoolFactory,
+        addresses.factory,
+        chainInfo.chainId,
+        getGasConfig
+      );
+      // ADD DELAY AFTER LI.FI DEPLOYMENT
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
+    }
     // ADD DELAY BEFORE CONFIGURATION
     console.log('\n⏳ Waiting before configuration...');
     await new Promise((resolve) => setTimeout(resolve, 3000)); // 3 second delay
@@ -762,6 +892,20 @@ async function main() {
       throw new Error('Missing factory address for configuration');
     }
     await configureFactory(deployer, addresses.factory, addresses);
+    if (addresses.lifiTaker) {
+      // Configure + exactly verify the LI.FI taker allowlists FIRST, then
+      // register the taker in the factory. This keeps factory enablement
+      // strictly downstream of verified config/on-chain agreement: a failure
+      // while applying or reconciling allowlists aborts before the factory ever
+      // maps LiquiditySource.LIFI to a misconfigured taker.
+      await configureLifiAllowlists(
+        deployer,
+        addresses.lifiTaker,
+        config,
+        chainInfo.chainId
+      );
+      await registerLifiTakerInFactory(deployer, addresses.factory, addresses);
+    }
 
     // Step 8: Verify everything works
     await verifyDeployment(deployer, addresses);

@@ -1,14 +1,28 @@
 import { ethers, providers } from 'ethers';
 import {
+  ExternalTakeLiquiditySource,
   ExternalTakePathKind,
   KeeperConfig,
   LiquiditySource,
   UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
+  getExternalTakeTakerContractKeyForSource,
+  getExternalTakePathDefaultSource,
+  getExternalTakePathDescriptor,
+  getManualPools,
+  isExternalTakeLiquiditySource,
   resolveExternalTakePaths,
+  resolveExternalTakePathFromSource,
   resolveFactoryRouteSelectionSources,
 } from '../config';
+import {
+  LIFI_TAKER_ALLOWLIST_ABI,
+  compareLifiTakerAllowlistPolicy,
+  createLifiTakerAllowlistReader,
+  readLifiTakerAllowlistSnapshot,
+} from '../dex/lifi';
+import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
 
@@ -17,31 +31,202 @@ const FACTORY_TAKER_REGISTRY_ABI = [
 ];
 const FACTORY_REGISTRY_READ_RETRY_DELAYS_MS = [100, 250, 500];
 
-const TAKER_CONTRACT_KEYS: Record<LiquiditySource, string[]> = {
-  [LiquiditySource.NONE]: [],
-  [LiquiditySource.ONEINCH]: ['OneInch', 'ONEINCH', 'oneinch', '1'],
-  [LiquiditySource.UNISWAPV3]: [
-    'UniswapV3',
-    'UNISWAPV3',
-    'uniswapV3',
-    'uniswapv3',
-    '2',
-  ],
-  [LiquiditySource.SUSHISWAP]: ['SushiSwap', 'SUSHISWAP', 'sushiswap', '3'],
-  [LiquiditySource.CURVE]: ['Curve', 'CURVE', 'curve', '4'],
-};
+export interface ExternalTakeRoutePreflightRequirement {
+  readonly path: ExternalTakePathKind;
+  readonly source: ExternalTakeLiquiditySource;
+}
 
-function getEffectiveExternalTakePaths(
+export interface ExternalTakeRouteDeploymentPreflightPlan {
+  readonly shouldValidate: boolean;
+  readonly requirements: readonly ExternalTakeRoutePreflightRequirement[];
+}
+
+interface ContractCodePreflightRequirement {
+  readonly label: string;
+  readonly address: string | undefined;
+}
+
+interface ExternalTakeSourcePreflightInput {
+  readonly config: KeeperConfig;
+  readonly chainId: number;
+  readonly source: ExternalTakeLiquiditySource;
+}
+
+interface ExternalTakeSourcePreflightValidationInput
+  extends ExternalTakeSourcePreflightInput {
+  readonly provider: providers.Provider;
+  readonly takerAddress: string | undefined;
+  readonly errors: string[];
+}
+
+interface ExternalTakeSourcePreflightDescriptor {
+  readonly usesFactoryRegistry: boolean;
+  readonly takerLabel: (source: ExternalTakeLiquiditySource) => string;
+  readonly getTakerAddress: (
+    params: ExternalTakeSourcePreflightInput
+  ) => string | undefined;
+  readonly getContractCodeRequirements: (
+    params: ExternalTakeSourcePreflightInput
+  ) => ContractCodePreflightRequirement[];
+  readonly validateAdditional?: (
+    params: ExternalTakeSourcePreflightValidationInput
+  ) => Promise<void>;
+}
+
+function getAutodiscoverExternalTakePaths(
   config: KeeperConfig
-): Set<ExternalTakePathKind> {
+): ExternalTakePathKind[] {
   const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
+  if (!config.discovery?.enabled || !takePolicy) {
+    return [];
+  }
   const discoveredTake = config.discovery?.defaults?.take;
-  return new Set(
-    resolveExternalTakePaths({
-      defaultLiquiditySource: discoveredTake?.liquiditySource,
-      allowedExternalTakePaths: takePolicy?.allowedExternalTakePaths,
-    })
+  return resolveExternalTakePaths({
+    defaultLiquiditySource: discoveredTake?.liquiditySource,
+    allowedExternalTakePaths: takePolicy?.allowedExternalTakePaths,
+  });
+}
+
+function addPreflightRequirement(
+  requirements: Map<string, ExternalTakeRoutePreflightRequirement>,
+  source: LiquiditySource | undefined
+): void {
+  if (!isExternalTakeLiquiditySource(source)) {
+    return;
+  }
+  const path = resolveExternalTakePathFromSource(source);
+  if (!path) {
+    return;
+  }
+  requirements.set(`${path}:${source}`, { path, source });
+}
+
+function addExternalTakePathRequirements(
+  requirements: Map<string, ExternalTakeRoutePreflightRequirement>,
+  config: KeeperConfig,
+  paths: readonly ExternalTakePathKind[]
+): void {
+  const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
+  for (const path of paths) {
+    if (path === 'factory') {
+      for (const source of resolveFactoryRouteSelectionSources({
+        defaultLiquiditySource:
+          config.discovery?.defaults?.take?.liquiditySource,
+        allowedLiquiditySources: takePolicy?.allowedLiquiditySources,
+        configuredDefaultFactoryLiquiditySource:
+          takePolicy?.defaultFactoryLiquiditySource,
+      })) {
+        addPreflightRequirement(requirements, source);
+      }
+      continue;
+    }
+
+    addPreflightRequirement(
+      requirements,
+      getExternalTakePathDefaultSource(path)
+    );
+  }
+}
+
+function addManualTakeRequirements(
+  requirements: Map<string, ExternalTakeRoutePreflightRequirement>,
+  config: KeeperConfig,
+  options: { onlyRequired?: boolean } = {}
+): void {
+  for (const poolConfig of getManualPools(config)) {
+    const source = poolConfig.take?.liquiditySource;
+    const path = resolveExternalTakePathFromSource(source);
+    if (
+      options.onlyRequired &&
+      (path === undefined ||
+        getExternalTakePathDescriptor(path).requiresRouteDeploymentValidation !==
+          true)
+    ) {
+      continue;
+    }
+    addPreflightRequirement(requirements, source);
+  }
+}
+
+function getPreflightRequirements(
+  requirements: Map<string, ExternalTakeRoutePreflightRequirement>
+): ExternalTakeRoutePreflightRequirement[] {
+  return Array.from(requirements.values());
+}
+
+export function resolveManualRequiredRoutePreflightRequirements(
+  config: KeeperConfig
+): ExternalTakeRoutePreflightRequirement[] {
+  const requirements = new Map<
+    string,
+    ExternalTakeRoutePreflightRequirement
+  >();
+  addManualTakeRequirements(requirements, config, { onlyRequired: true });
+  return getPreflightRequirements(requirements);
+}
+
+export function resolveAutodiscoverRoutePreflightRequirements(
+  config: KeeperConfig
+): ExternalTakeRoutePreflightRequirement[] {
+  const requirements = new Map<
+    string,
+    ExternalTakeRoutePreflightRequirement
+  >();
+  addExternalTakePathRequirements(
+    requirements,
+    config,
+    getAutodiscoverExternalTakePaths(config)
   );
+  return getPreflightRequirements(requirements);
+}
+
+export function resolveExternalTakeRoutePreflightRequirements(
+  config: KeeperConfig
+): ExternalTakeRoutePreflightRequirement[] {
+  const requirements = new Map<
+    string,
+    ExternalTakeRoutePreflightRequirement
+  >();
+  addManualTakeRequirements(requirements, config);
+  addExternalTakePathRequirements(
+    requirements,
+    config,
+    getAutodiscoverExternalTakePaths(config)
+  );
+  return getPreflightRequirements(requirements);
+}
+
+export function resolveExternalTakeRouteDeploymentPreflight(
+  config: KeeperConfig
+): ExternalTakeRouteDeploymentPreflightPlan {
+  const requirements = new Map<
+    string,
+    ExternalTakeRoutePreflightRequirement
+  >();
+  if (
+    getAutoDiscoverTakePolicy(config.discovery)?.validateRouteDeployments ===
+    true
+  ) {
+    addExternalTakePathRequirements(
+      requirements,
+      config,
+      getAutodiscoverExternalTakePaths(config)
+    );
+  }
+  if (!config.runtime.dryRun) {
+    addManualTakeRequirements(requirements, config, { onlyRequired: true });
+  }
+  const resolvedRequirements = getPreflightRequirements(requirements);
+  return {
+    shouldValidate: resolvedRequirements.length > 0,
+    requirements: resolvedRequirements,
+  };
+}
+
+export function shouldValidateExternalTakeRouteDeployments(
+  config: KeeperConfig
+): boolean {
+  return resolveExternalTakeRouteDeploymentPreflight(config).shouldValidate;
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -104,32 +289,15 @@ async function retryRpcRead<T>(operation: () => Promise<T>): Promise<{
   return { error: lastError };
 }
 
-function getEffectiveFactorySources(config: KeeperConfig): LiquiditySource[] {
-  const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
-  return resolveFactoryRouteSelectionSources({
-    defaultLiquiditySource: config.discovery?.defaults?.take?.liquiditySource,
-    allowedLiquiditySources: takePolicy?.allowedLiquiditySources,
-    configuredDefaultFactoryLiquiditySource:
-      takePolicy?.defaultFactoryLiquiditySource,
-  });
-}
-
 function getConfiguredTakerAddress(
   config: KeeperConfig,
   source: LiquiditySource
 ): string | undefined {
-  const takerContracts = config.takers?.contracts;
-  if (!takerContracts) {
+  const contractKey = getExternalTakeTakerContractKeyForSource(source);
+  if (!contractKey) {
     return undefined;
   }
-
-  for (const key of TAKER_CONTRACT_KEYS[source]) {
-    const address = takerContracts[key];
-    if (address) {
-      return address;
-    }
-  }
-  return undefined;
+  return config.takers?.contracts?.[contractKey];
 }
 
 async function requireContractCode(params: {
@@ -210,119 +378,285 @@ async function validateFactoryRegistry(params: {
   }
 }
 
-/**
- * Performs startup-only checks for the contracts required by the enabled
- * autodiscover external-take paths. This is intentionally fail-fast: route
- * deployment mismatches should be fixed before the keeper enters a hot cycle.
- */
-export async function validateAutoDiscoverRouteDeployments(params: {
+async function validateLifiAllowlistPreflight(params: {
   config: KeeperConfig;
   provider: providers.Provider;
   chainId: number;
+  takerAddress: string | undefined;
+  errors: string[];
 }): Promise<void> {
-  const paths = getEffectiveExternalTakePaths(params.config);
-  if (paths.size === 0) {
+  const lifi = params.config.dex?.lifi;
+  if (!lifi || lifi.mode !== 'production' || !params.takerAddress) {
+    return;
+  }
+
+  let policy;
+  try {
+    policy = normalizeLifiProductionChainPolicy({
+      config: lifi,
+      fieldName: 'LI.FI',
+      chainId: params.chainId,
+    });
+  } catch (error) {
+    params.errors.push(
+      `LI.FI production policy for chain ${params.chainId} is invalid: ${getErrorMessage(error)}`
+    );
+    return;
+  }
+  const expectedTargets = policy.callTargets
+    .map((target) => target.toLowerCase())
+    .sort();
+  const expectedSpenders = policy.approvalSpenders
+    .map((spender) => spender.toLowerCase())
+    .sort();
+
+  for (const target of expectedTargets) {
+    await requireContractCode({
+      provider: params.provider,
+      label: `LI.FI call target ${target}`,
+      address: target,
+      errors: params.errors,
+    });
+  }
+  for (const spender of expectedSpenders) {
+    await requireContractCode({
+      provider: params.provider,
+      label: `LI.FI approval spender ${spender}`,
+      address: spender,
+      errors: params.errors,
+    });
+  }
+
+  try {
+    const taker = new ethers.Contract(
+      params.takerAddress,
+      LIFI_TAKER_ALLOWLIST_ABI,
+      params.provider
+    );
+    const actual = await readLifiTakerAllowlistSnapshot({
+      reader: createLifiTakerAllowlistReader(taker),
+      selectorTargets: [
+        ...expectedTargets,
+        ...Object.keys(policy.selectorAllowlist),
+      ],
+      labelPrefix: 'LI.FI taker',
+      read: async ({ label, operation }) => {
+        const { value, error } = await retryRpcRead(operation);
+        if (value === undefined) {
+          throw new Error(
+            `${label} could not be read after retries: ${getErrorMessage(error)}`
+          );
+        }
+        return value;
+      },
+    });
+    params.errors.push(
+      ...compareLifiTakerAllowlistPolicy({
+        expected: policy,
+        actual,
+        mode: 'exact',
+      })
+    );
+  } catch (error) {
+    params.errors.push(getErrorMessage(error));
+  }
+}
+
+const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
+  [LiquiditySource.ONEINCH]: {
+    usesFactoryRegistry: false,
+    takerLabel: () => 'takers.oneInch',
+    getTakerAddress: ({ config }) => config.takers?.oneInch,
+    getContractCodeRequirements: ({ config, chainId }) => [
+      {
+        label: `1inch router for chain ${chainId}`,
+        address: config.dex?.oneInch?.routers?.[chainId],
+      },
+    ],
+  },
+  [LiquiditySource.UNISWAPV3]: {
+    usesFactoryRegistry: true,
+    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: ({ config }) => {
+      const routerConfig = config.dex?.uniswapV3?.router;
+      return UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS.map((field) => ({
+        label: `Uniswap V3 ${field}`,
+        address: routerConfig?.[field],
+      }));
+    },
+  },
+  [LiquiditySource.SUSHISWAP]: {
+    usesFactoryRegistry: true,
+    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: ({ config }) => [
+      {
+        label: 'SushiSwap swapRouterAddress',
+        address: config.dex?.sushiswap?.swapRouterAddress,
+      },
+      {
+        label: 'SushiSwap factoryAddress',
+        address: config.dex?.sushiswap?.factoryAddress,
+      },
+      {
+        label: 'SushiSwap quoterV2Address',
+        address: config.dex?.sushiswap?.quoterV2Address,
+      },
+      {
+        label: 'SushiSwap wethAddress',
+        address: config.dex?.sushiswap?.wethAddress,
+      },
+    ],
+  },
+  [LiquiditySource.CURVE]: {
+    usesFactoryRegistry: true,
+    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: ({ config }) => [
+      {
+        label: 'Curve wethAddress',
+        address: config.dex?.curve?.wethAddress,
+      },
+      ...Object.entries(config.dex?.curve?.poolConfigs ?? {}).map(
+        ([pairName, poolConfig]) => ({
+          label: `Curve pool ${pairName}`,
+          address: poolConfig.address,
+        })
+      ),
+    ],
+  },
+  [LiquiditySource.LIFI]: {
+    usesFactoryRegistry: true,
+    takerLabel: () => 'LI.FI taker',
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: () => [],
+    validateAdditional: async ({
+      config,
+      provider,
+      chainId,
+      takerAddress,
+      errors,
+    }) => {
+      await validateLifiAllowlistPreflight({
+        config,
+        provider,
+        chainId,
+        takerAddress,
+        errors,
+      });
+    },
+  },
+} satisfies Record<
+  ExternalTakeLiquiditySource,
+  ExternalTakeSourcePreflightDescriptor
+>;
+
+function getExternalTakeSourcePreflightDescriptor(
+  source: ExternalTakeLiquiditySource
+): ExternalTakeSourcePreflightDescriptor {
+  return EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS[source];
+}
+
+async function validateExternalTakeSourcePreflight(params: {
+  config: KeeperConfig;
+  provider: providers.Provider;
+  chainId: number;
+  source: ExternalTakeLiquiditySource;
+  descriptor: ExternalTakeSourcePreflightDescriptor;
+  errors: string[];
+}): Promise<void> {
+  const descriptorInput = {
+    config: params.config,
+    chainId: params.chainId,
+    source: params.source,
+  };
+  const takerAddress = params.descriptor.getTakerAddress(descriptorInput);
+  await requireContractCode({
+    provider: params.provider,
+    label: params.descriptor.takerLabel(params.source),
+    address: takerAddress,
+    errors: params.errors,
+  });
+
+  if (params.descriptor.usesFactoryRegistry) {
+    await validateFactoryRegistry({
+      provider: params.provider,
+      factoryAddress: params.config.takers?.factory,
+      source: params.source,
+      expectedTaker: takerAddress,
+      errors: params.errors,
+    });
+  }
+
+  for (const requirement of params.descriptor.getContractCodeRequirements(
+    descriptorInput
+  )) {
+    await requireContractCode({
+      provider: params.provider,
+      label: requirement.label,
+      address: requirement.address,
+      errors: params.errors,
+    });
+  }
+
+  await params.descriptor.validateAdditional?.({
+    ...descriptorInput,
+    provider: params.provider,
+    takerAddress,
+    errors: params.errors,
+  });
+}
+
+/**
+ * Performs startup-only checks for the contracts required by the enabled
+ * external-take paths. This is intentionally fail-fast: route
+ * deployment mismatches should be fixed before the keeper enters a hot cycle.
+ */
+export async function validateExternalTakeRouteDeployments(params: {
+  config: KeeperConfig;
+  provider: providers.Provider;
+  chainId: number;
+  requirements?: readonly ExternalTakeRoutePreflightRequirement[];
+}): Promise<void> {
+  const requirements =
+    params.requirements ??
+    resolveExternalTakeRoutePreflightRequirements(params.config);
+  if (requirements.length === 0) {
     return;
   }
 
   const errors: string[] = [];
-  if (paths.has('oneinch')) {
-    await requireContractCode({
-      provider: params.provider,
-      label: `1inch router for chain ${params.chainId}`,
-      address: params.config.dex?.oneInch?.routers?.[params.chainId],
-      errors,
-    });
-    await requireContractCode({
-      provider: params.provider,
-      label: 'takers.oneInch',
-      address: params.config.takers?.oneInch,
-      errors,
-    });
-  }
-
-  if (paths.has('factory')) {
+  const sourcePreflights = requirements.map((requirement) => ({
+    source: requirement.source,
+    descriptor: getExternalTakeSourcePreflightDescriptor(requirement.source),
+  }));
+  if (
+    sourcePreflights.some(
+      ({ descriptor }) => descriptor.usesFactoryRegistry
+    )
+  ) {
     await requireContractCode({
       provider: params.provider,
       label: 'takers.factory',
       address: params.config.takers?.factory,
       errors,
     });
+  }
 
-    for (const source of getEffectiveFactorySources(params.config)) {
-      const takerAddress = getConfiguredTakerAddress(params.config, source);
-      await requireContractCode({
-        provider: params.provider,
-        label: `${formatLiquiditySource(source)} taker`,
-        address: takerAddress,
-        errors,
-      });
-      await validateFactoryRegistry({
-        provider: params.provider,
-        factoryAddress: params.config.takers?.factory,
-        source,
-        expectedTaker: takerAddress,
-        errors,
-      });
-
-      if (source === LiquiditySource.UNISWAPV3) {
-        const routerConfig = params.config.dex?.uniswapV3?.router;
-        for (const field of UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS) {
-          await requireContractCode({
-            provider: params.provider,
-            label: `Uniswap V3 ${field}`,
-            address: routerConfig?.[field],
-            errors,
-          });
-        }
-      }
-
-      if (source === LiquiditySource.SUSHISWAP) {
-        await requireContractCode({
-          provider: params.provider,
-          label: 'SushiSwap swapRouterAddress',
-          address: params.config.dex?.sushiswap?.swapRouterAddress,
-          errors,
-        });
-        await requireContractCode({
-          provider: params.provider,
-          label: 'SushiSwap factoryAddress',
-          address: params.config.dex?.sushiswap?.factoryAddress,
-          errors,
-        });
-        await requireContractCode({
-          provider: params.provider,
-          label: 'SushiSwap quoterV2Address',
-          address: params.config.dex?.sushiswap?.quoterV2Address,
-          errors,
-        });
-        await requireContractCode({
-          provider: params.provider,
-          label: 'SushiSwap wethAddress',
-          address: params.config.dex?.sushiswap?.wethAddress,
-          errors,
-        });
-      }
-
-      if (source === LiquiditySource.CURVE) {
-        await requireContractCode({
-          provider: params.provider,
-          label: 'Curve wethAddress',
-          address: params.config.dex?.curve?.wethAddress,
-          errors,
-        });
-        for (const [pairName, poolConfig] of Object.entries(
-          params.config.dex?.curve?.poolConfigs ?? {}
-        )) {
-          await requireContractCode({
-            provider: params.provider,
-            label: `Curve pool ${pairName}`,
-            address: poolConfig.address,
-            errors,
-          });
-        }
-      }
-    }
+  for (const { source, descriptor } of sourcePreflights) {
+    await validateExternalTakeSourcePreflight({
+      config: params.config,
+      provider: params.provider,
+      chainId: params.chainId,
+      source,
+      descriptor,
+      errors,
+    });
   }
 
   if (errors.length > 0) {
@@ -334,4 +668,15 @@ export async function validateAutoDiscoverRouteDeployments(params: {
   }
 
   logger.info('Route deployment preflight passed');
+}
+
+export async function validateAutoDiscoverRouteDeployments(params: {
+  config: KeeperConfig;
+  provider: providers.Provider;
+  chainId: number;
+}): Promise<void> {
+  await validateExternalTakeRouteDeployments({
+    ...params,
+    requirements: resolveAutodiscoverRoutePreflightRequirements(params.config),
+  });
 }

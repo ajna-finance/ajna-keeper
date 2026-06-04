@@ -11,10 +11,13 @@ import {
 import {
   convertWadToTokenDecimals,
   convertWadToTokenDecimalsCeil,
-  getDecimalsErc20,
 } from '../erc20';
+import {
+  getCachedTokenDecimals,
+  resolveExternalTakeChainId,
+} from './external-take/chain';
 import { logger } from '../logging';
-import { NonceTracker } from '../nonce';
+import { isNonceConsumedTransactionError, NonceTracker } from '../nonce';
 import {
   decimaledToWei,
   estimateGasWithBuffer,
@@ -38,19 +41,9 @@ import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
-} from './external-take-policy';
-
-const MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES = 512;
-
-interface VerifiedOneInchChainCheck {
-  provider?: object;
-  pending: Promise<void>;
-}
-
-const verifiedOneInchChainIds = new WeakMap<
-  object,
-  Map<number, VerifiedOneInchChainCheck>
->();
+} from './external-take/policy';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from './external-take/execution-plan';
+import { approveOneInchQuoteForExecution } from './external-take/quote-approval';
 
 async function getOneInchTokenDecimals(params: {
   signer: Signer;
@@ -58,79 +51,14 @@ async function getOneInchTokenDecimals(params: {
   chainId?: number;
   cache?: Map<string, number>;
 }): Promise<number> {
-  const cacheKey = `${params.chainId ?? 'unknown'}:${params.tokenAddress.toLowerCase()}`;
-  const cached = params.cache?.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const decimals = await getDecimalsErc20(
-    params.signer,
-    params.tokenAddress,
-    params.chainId
-  );
-  if (params.cache) {
-    params.cache.set(cacheKey, decimals);
-    while (params.cache.size > MAX_ONEINCH_TOKEN_DECIMAL_CACHE_ENTRIES) {
-      const oldestKey = params.cache.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      params.cache.delete(oldestKey);
-    }
-  }
-  return decimals;
-}
-
-async function assertConfiguredChainIdMatchesSigner(
-  signer: Signer,
-  configuredChainId: number
-): Promise<void> {
-  if (typeof signer !== 'object' || signer === null) {
-    return;
-  }
-  const provider = (signer as { provider?: object }).provider;
-  let signerChecks = verifiedOneInchChainIds.get(signer);
-  if (!signerChecks) {
-    signerChecks = new Map();
-    verifiedOneInchChainIds.set(signer, signerChecks);
-  }
-  const cached = signerChecks.get(configuredChainId);
-  if (cached !== undefined && cached.provider === provider) {
-    await cached.pending;
-    return;
-  }
-
-  const check: VerifiedOneInchChainCheck = {
-    provider,
-    pending: (async () => {
-      const signerChainId = await signer.getChainId();
-      if (signerChainId !== configuredChainId) {
-        throw new Error(
-          `configured 1inch chainId ${configuredChainId} does not match signer chainId ${signerChainId}`
-        );
-      }
-    })(),
-  };
-  signerChecks.set(configuredChainId, check);
-  try {
-    await check.pending;
-  } catch (error) {
-    if (signerChecks.get(configuredChainId) === check) {
-      signerChecks.delete(configuredChainId);
-    }
-    throw error;
-  }
+  return getCachedTokenDecimals(params);
 }
 
 async function resolveOneInchChainId(
   config: Partial<Pick<OneInchQuoteConfig, 'chainId'>>,
   signer: Signer
 ): Promise<number> {
-  if (config.chainId === undefined) {
-    return await signer.getChainId();
-  }
-  await assertConfiguredChainIdMatchesSigner(signer, config.chainId);
-  return config.chainId;
+  return resolveExternalTakeChainId(config, signer, '1inch');
 }
 
 function getQuoteAmountDueRawFromDecimals(params: {
@@ -377,76 +305,6 @@ async function computeOneInchAtomicMinReturnAmount(params: {
   return approvedMinOutRaw;
 }
 
-type OneInchQuoteApprovalResult =
-  | { approved: true; quoteEvaluation: ApprovedOneInchQuoteEvaluation }
-  | { approved: false; reason: string };
-
-function approveOneInchQuoteForExecution(params: {
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
-  poolName: string;
-  borrower: string;
-}): OneInchQuoteApprovalResult {
-  const { quoteEvaluation, poolName, borrower } = params;
-
-  if (!quoteEvaluation.isTakeable) {
-    return {
-      approved: false,
-      reason: `1inch atomic take quote no longer satisfies execution policy for ${poolName}/${borrower}: ${quoteEvaluation.reason ?? 'not takeable'}`,
-    };
-  }
-
-  if (!quoteEvaluation.quoteAmountRaw) {
-    return {
-      approved: false,
-      reason: `1inch atomic take is missing raw quote amount for ${poolName}/${borrower}; refusing to send an unbounded swap`,
-    };
-  }
-
-  if (
-    quoteEvaluation.externalTakePath !== undefined &&
-    quoteEvaluation.externalTakePath !== 'oneinch'
-  ) {
-    return {
-      approved: false,
-      reason: `1inch atomic take received non-1inch approved path for ${poolName}/${borrower}`,
-    };
-  }
-
-  if (
-    quoteEvaluation.selectedLiquiditySource !== undefined &&
-    quoteEvaluation.selectedLiquiditySource !== LiquiditySource.ONEINCH
-  ) {
-    return {
-      approved: false,
-      reason: `1inch atomic take received non-1inch approved source for ${poolName}/${borrower}`,
-    };
-  }
-
-  const approvedMinOutRaw = factoryShared.deriveApprovedMinOutRaw({
-    routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
-    profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
-    fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-  });
-  if (!approvedMinOutRaw) {
-    return {
-      approved: false,
-      reason: `1inch atomic take is missing approved min-out floor for ${poolName}/${borrower}; refusing to execute an unbound swap`,
-    };
-  }
-
-  return {
-    approved: true,
-    quoteEvaluation: {
-      ...quoteEvaluation,
-      isTakeable: true,
-      externalTakePath: 'oneinch',
-      quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
-      selectedLiquiditySource: LiquiditySource.ONEINCH,
-      approvedMinOutRaw,
-    },
-  };
-}
-
 interface TakeLiquidationParams {
   pool: FungiblePool;
   signer: Signer;
@@ -465,12 +323,12 @@ export async function takeLiquidation({
   const { borrower } = liquidation;
   const { dryRun } = config;
 
-  const suppliedQuoteEvaluation = liquidation.externalTakeQuoteEvaluation;
+  const suppliedQuoteEvaluation = getExternalTakeExecutionPlanPrimaryEvaluation(
+    liquidation.externalTakeExecutionPlan
+  );
   const usesOneInchExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ||
-    suppliedQuoteEvaluation?.externalTakePath === 'oneinch' ||
-    suppliedQuoteEvaluation?.selectedLiquiditySource ===
-      LiquiditySource.ONEINCH;
+    suppliedQuoteEvaluation?.externalTakePath === 'oneinch';
   if (!usesOneInchExecutionPath) {
     logger.error(
       `Valid liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
@@ -680,10 +538,12 @@ export async function takeLiquidation({
             gasLimit,
             nonce: nonce.toString(),
           });
-        attemptedSubmission = true;
         const receipt = await submitTakeTransaction(
           takeWriteTransport,
-          txRequest
+          txRequest,
+          () => {
+            attemptedSubmission = true;
+          }
         );
         logTakeExecutionTelemetry({
           path: 'oneinch',
@@ -705,7 +565,8 @@ export async function takeLiquidation({
     return true;
   } catch (error) {
     config.onOneInchExecutionFailure?.({
-      preBroadcast: !attemptedSubmission,
+      preBroadcast:
+        !attemptedSubmission && !isNonceConsumedTransactionError(error),
       error: getErrorMessage(error),
     });
     logger.error(

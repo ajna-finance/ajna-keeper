@@ -129,9 +129,11 @@ export async function createTakeWriteTransport(params: {
 
 export async function submitTakeTransaction(
   transport: TakeWriteTransport,
-  txRequest: providers.TransactionRequest
+  txRequest: providers.TransactionRequest,
+  onAccepted?: (submission: TakeWriteSubmission) => void
 ): Promise<providers.TransactionReceipt> {
   const submission = await transport.submitTransaction(txRequest);
+  onAccepted?.(submission);
   return await submission.wait();
 }
 

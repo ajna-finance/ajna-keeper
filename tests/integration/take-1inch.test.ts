@@ -250,6 +250,7 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
+          keeperTaker: keeperTakerAddress,
         },
       })
     );
@@ -276,6 +277,7 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
+          keeperTaker: keeperTakerAddress,
         },
       })
     );
@@ -358,6 +360,7 @@ describe('Take with 1inch Integration', () => {
           subgraphUrl: '',
           oneInchRouters: { 31337: mockRouterAddress },
           connectorTokens: [],
+          keeperTaker: keeperTakerAddress,
         },
       })
     );

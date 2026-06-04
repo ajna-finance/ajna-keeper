@@ -4,9 +4,11 @@ import {
   CurveRouterOverrides,
   DiscoveredDefaultsConfig,
   KeeperConfig,
+  LifiDexConfig,
   LiquiditySource,
   SushiswapRouterOverrides,
   UniswapV3RouterOverrides,
+  resolveExternalTakeDeployment,
 } from '../config';
 import {
   FactoryQuoteProviderRuntimeCache,
@@ -25,11 +27,12 @@ export interface DiscoveryExecutionConfig {
   discoveredDefaults?: DiscoveredDefaultsConfig;
   keeperTaker?: string;
   keeperTakerFactory?: string;
+  lifi?: LifiDexConfig;
+  lifiTaker?: string;
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
-  takerContracts?: { [source: string]: string };
   tokenAddresses?: { [tokenSymbol: string]: string };
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
 }
@@ -40,6 +43,13 @@ export type DiscoveryExecutionTransportConfig = DiscoveryExecutionConfig &
 export function getDiscoveryExecutionConfig(
   config: KeeperConfig
 ): DiscoveryExecutionConfig {
+  const lifiDeployment = resolveExternalTakeDeployment({
+    liquiditySource: LiquiditySource.LIFI,
+    config: {
+      keeperTakerFactory: config.takers?.factory,
+      takerContracts: config.takers?.contracts,
+    },
+  });
   return {
     autoDiscover: config.discovery,
     connectorTokens: config.dex?.oneInch?.connectorTokens,
@@ -48,12 +58,16 @@ export function getDiscoveryExecutionConfig(
     discoveredDefaults: config.discovery?.defaults,
     keeperTaker: config.takers?.oneInch,
     keeperTakerFactory: config.takers?.factory,
+    lifi: config.dex?.lifi,
+    lifiTaker:
+      lifiDeployment.deploymentType === 'lifi'
+        ? lifiDeployment.resolvedTakerAddress
+        : undefined,
     oneInchAggregationExecutorAllowlist:
       config.dex?.oneInch?.aggregationExecutorAllowlist,
     oneInchDefaultSlippage: config.dex?.oneInch?.defaultSlippage,
     oneInchRouters: config.dex?.oneInch?.routers,
     sushiswapRouterOverrides: config.dex?.sushiswap,
-    takerContracts: config.takers?.contracts,
     tokenAddresses: config.network.tokenAddresses,
     uniswapV3RouterOverrides: config.dex?.uniswapV3?.router,
   };
@@ -79,6 +93,35 @@ export type OneInchQuoteCircuitPurpose =
   | 'swap_data'
   | 'gas_conversion';
 
+export interface ExternalProviderCircuitState {
+  failures: number;
+  cooldownUntilMs?: number;
+  lastOpenLogAtMs?: number;
+}
+
+export type ExternalProviderCircuitPath = 'oneinch' | 'lifi';
+export type LifiCircuitPurpose = 'route_quote' | 'execution_refresh';
+
+// Union of every provider's circuit purposes, used by ExternalTakeRouteProvider
+// metadata so a provider can declare which circuits it participates in.
+export type ExternalTakeCircuitPurpose =
+  | OneInchQuoteCircuitPurpose
+  | LifiCircuitPurpose;
+
+export type ExternalProviderCircuitPurposeByPath = {
+  oneinch: OneInchQuoteCircuitPurpose;
+  lifi: LifiCircuitPurpose;
+};
+
+export type ExternalProviderCircuits = {
+  [Path in ExternalProviderCircuitPath]?: Partial<
+    Record<
+      ExternalProviderCircuitPurposeByPath[Path],
+      ExternalProviderCircuitState
+    >
+  >;
+};
+
 export interface DiscoveryRpcCache {
   chainId?: number;
   gasPrice?: BigNumber;
@@ -92,6 +135,7 @@ export interface DiscoveryRpcCache {
     Record<OneInchQuoteCircuitPurpose, OneInchQuoteCircuitState>
   >;
   oneInchQuoteCircuit?: OneInchQuoteCircuitState;
+  providerCircuits?: ExternalProviderCircuits;
 }
 
 export interface DiscoveryRpcCacheStats {
