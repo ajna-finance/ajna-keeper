@@ -27,6 +27,24 @@ function baseRpcUrl(): string {
   );
 }
 
+function forkBlockNumber(
+  envName: string,
+  fallback?: number
+): number | undefined {
+  const rawValue = process.env[envName];
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    return fallback;
+  }
+  if (rawValue.trim().toLowerCase() === 'latest') {
+    return undefined;
+  }
+  const value = Number(rawValue);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${envName} must be a positive integer or "latest"`);
+  }
+  return value;
+}
+
 const forkConfigs: Record<string, { url: string; blockNumber?: number }> = {
   mainnet: {
     url: alchemyRpcUrl('eth-mainnet'),
@@ -34,7 +52,7 @@ const forkConfigs: Record<string, { url: string; blockNumber?: number }> = {
   },
   base: {
     url: baseRpcUrl(),
-    blockNumber: Number(process.env.BASE_FORK_BLOCK ?? 30000000),
+    blockNumber: forkBlockNumber('BASE_FORK_BLOCK', 30000000),
   },
   avalanche: {
     url: alchemyRpcUrl('avax-mainnet'),

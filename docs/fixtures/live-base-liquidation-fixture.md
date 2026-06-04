@@ -50,6 +50,18 @@ npm run run-fixture-keeper-harness -- \
   --dry-run
 ```
 
+Run the no-spend Base-fork replay:
+
+```bash
+npm run no-spend-validation
+```
+
+This starts a local Base fork, creates and kicks a fresh mock-token fixture,
+runs the discovery harness in dry-run mode, reverts that dry run, then executes
+the same discovered factory/Uniswap take path on the local fork. It uses the
+Hardhat default key and temporary files, so it does not change the live fixture
+command or spend live Base gas.
+
 The fixture script writes a summary JSON to `AJNA_AGENT_OUTPUT_PATH`, or to a
 temporary directory when that variable is unset.
 
