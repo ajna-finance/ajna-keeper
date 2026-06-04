@@ -46,6 +46,7 @@ import {
 } from '../utils';
 import { getDecimalsErc20 } from '../erc20';
 import { createTakeAuctionStatusReader } from '../take/liquidation-status';
+import type { TakeDecision } from '../take/types';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import { getOneInchQuoteTimeoutMs } from './external-take/one-inch-circuit';
 import { reapproveDiscoveryExternalTakeForAuction } from './external-take/final-approval';
@@ -305,6 +306,23 @@ interface HandleDiscoveredTakeTargetParamsBase {
   takeWriteTransport?: TakeWriteTransport;
   target: ResolvedTakeTarget;
   rpcCache?: DiscoveryRpcCache;
+  onExecutionAttempt?: (
+    decision: TakeDecision<DiscoveryExternalTakeApprovalContext>
+  ) => void;
+  onExecuted?: (params: {
+    decision: TakeDecision<DiscoveryExternalTakeApprovalContext>;
+    executedTake: boolean;
+    executedArbTake: boolean;
+  }) => void;
+  onSkip?: (params: {
+    candidate: {
+      poolAddress: string;
+      borrower: string;
+    };
+    stage: 'evaluation' | 'revalidation' | 'execution';
+    reason: string;
+    decision?: TakeDecision<DiscoveryExternalTakeApprovalContext>;
+  }) => void;
   onCandidateInactive?: (candidate: {
     poolAddress: string;
     borrower: string;
@@ -791,8 +809,18 @@ export async function handleDiscoveredTakeTarget(
             if (decision.approvedArbTake) {
               stats.approvedArbTakeDecisions += 1;
             }
+            params.onExecutionAttempt?.(decision);
           },
-          onSkip: ({ candidate, stage, reason }) => {
+          onSkip: ({ candidate, stage, reason, decision }) => {
+            params.onSkip?.({
+              candidate: {
+                poolAddress: params.target.poolAddress,
+                borrower: candidate.borrower,
+              },
+              stage,
+              reason,
+              decision,
+            });
             if (isInactiveAuctionSkipReason(reason)) {
               const removed = params.onCandidateInactive?.({
                 poolAddress: params.target.poolAddress,
@@ -822,7 +850,7 @@ export async function handleDiscoveredTakeTarget(
               `Skipping discovered take candidate ${params.pool.poolAddress}/${candidate.borrower}: ${reason}`
             );
           },
-          onExecuted: ({ executedTake, executedArbTake }) => {
+          onExecuted: ({ decision, executedTake, executedArbTake }) => {
             if (executedTake) {
               if (params.target.dryRun) {
                 stats.dryRunExternalTakes += 1;
@@ -837,6 +865,11 @@ export async function handleDiscoveredTakeTarget(
                 stats.executedArbTakes += 1;
               }
             }
+            params.onExecuted?.({
+              decision,
+              executedTake,
+              executedArbTake,
+            });
           },
         });
       }
