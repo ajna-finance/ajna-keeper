@@ -41,6 +41,38 @@ export interface ExternalTakeRouteDeploymentPreflightPlan {
   readonly requirements: readonly ExternalTakeRoutePreflightRequirement[];
 }
 
+interface ContractCodePreflightRequirement {
+  readonly label: string;
+  readonly address: string | undefined;
+}
+
+interface ExternalTakeSourcePreflightInput {
+  readonly config: KeeperConfig;
+  readonly chainId: number;
+  readonly source: ExternalTakeLiquiditySource;
+}
+
+interface ExternalTakeSourcePreflightValidationInput
+  extends ExternalTakeSourcePreflightInput {
+  readonly provider: providers.Provider;
+  readonly takerAddress: string | undefined;
+  readonly errors: string[];
+}
+
+interface ExternalTakeSourcePreflightDescriptor {
+  readonly usesFactoryRegistry: boolean;
+  readonly takerLabel: (source: ExternalTakeLiquiditySource) => string;
+  readonly getTakerAddress: (
+    params: ExternalTakeSourcePreflightInput
+  ) => string | undefined;
+  readonly getContractCodeRequirements: (
+    params: ExternalTakeSourcePreflightInput
+  ) => ContractCodePreflightRequirement[];
+  readonly validateAdditional?: (
+    params: ExternalTakeSourcePreflightValidationInput
+  ) => Promise<void>;
+}
+
 function getAutodiscoverExternalTakePaths(
   config: KeeperConfig
 ): ExternalTakePathKind[] {
@@ -430,104 +462,154 @@ async function validateLifiAllowlistPreflight(params: {
   }
 }
 
-function formatTakerLabel(source: LiquiditySource): string {
-  return source === LiquiditySource.LIFI
-    ? 'LI.FI taker'
-    : `${formatLiquiditySource(source)} taker`;
+const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
+  [LiquiditySource.ONEINCH]: {
+    usesFactoryRegistry: false,
+    takerLabel: () => 'takers.oneInch',
+    getTakerAddress: ({ config }) => config.takers?.oneInch,
+    getContractCodeRequirements: ({ config, chainId }) => [
+      {
+        label: `1inch router for chain ${chainId}`,
+        address: config.dex?.oneInch?.routers?.[chainId],
+      },
+    ],
+  },
+  [LiquiditySource.UNISWAPV3]: {
+    usesFactoryRegistry: true,
+    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: ({ config }) => {
+      const routerConfig = config.dex?.uniswapV3?.router;
+      return UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS.map((field) => ({
+        label: `Uniswap V3 ${field}`,
+        address: routerConfig?.[field],
+      }));
+    },
+  },
+  [LiquiditySource.SUSHISWAP]: {
+    usesFactoryRegistry: true,
+    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: ({ config }) => [
+      {
+        label: 'SushiSwap swapRouterAddress',
+        address: config.dex?.sushiswap?.swapRouterAddress,
+      },
+      {
+        label: 'SushiSwap factoryAddress',
+        address: config.dex?.sushiswap?.factoryAddress,
+      },
+      {
+        label: 'SushiSwap quoterV2Address',
+        address: config.dex?.sushiswap?.quoterV2Address,
+      },
+      {
+        label: 'SushiSwap wethAddress',
+        address: config.dex?.sushiswap?.wethAddress,
+      },
+    ],
+  },
+  [LiquiditySource.CURVE]: {
+    usesFactoryRegistry: true,
+    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: ({ config }) => [
+      {
+        label: 'Curve wethAddress',
+        address: config.dex?.curve?.wethAddress,
+      },
+      ...Object.entries(config.dex?.curve?.poolConfigs ?? {}).map(
+        ([pairName, poolConfig]) => ({
+          label: `Curve pool ${pairName}`,
+          address: poolConfig.address,
+        })
+      ),
+    ],
+  },
+  [LiquiditySource.LIFI]: {
+    usesFactoryRegistry: true,
+    takerLabel: () => 'LI.FI taker',
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: () => [],
+    validateAdditional: async ({
+      config,
+      provider,
+      chainId,
+      takerAddress,
+      errors,
+    }) => {
+      await validateLifiAllowlistPreflight({
+        config,
+        provider,
+        chainId,
+        takerAddress,
+        errors,
+      });
+    },
+  },
+} satisfies Record<
+  ExternalTakeLiquiditySource,
+  ExternalTakeSourcePreflightDescriptor
+>;
+
+function getExternalTakeSourcePreflightDescriptor(
+  source: ExternalTakeLiquiditySource
+): ExternalTakeSourcePreflightDescriptor {
+  return EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS[source];
 }
 
-async function validateFactoryBackedSourcePreflight(params: {
+async function validateExternalTakeSourcePreflight(params: {
   config: KeeperConfig;
   provider: providers.Provider;
   chainId: number;
   source: ExternalTakeLiquiditySource;
+  descriptor: ExternalTakeSourcePreflightDescriptor;
   errors: string[];
 }): Promise<void> {
-  const takerAddress = getConfiguredTakerAddress(
-    params.config,
-    params.source
-  );
+  const descriptorInput = {
+    config: params.config,
+    chainId: params.chainId,
+    source: params.source,
+  };
+  const takerAddress = params.descriptor.getTakerAddress(descriptorInput);
   await requireContractCode({
     provider: params.provider,
-    label: formatTakerLabel(params.source),
+    label: params.descriptor.takerLabel(params.source),
     address: takerAddress,
     errors: params.errors,
   });
-  await validateFactoryRegistry({
+
+  if (params.descriptor.usesFactoryRegistry) {
+    await validateFactoryRegistry({
+      provider: params.provider,
+      factoryAddress: params.config.takers?.factory,
+      source: params.source,
+      expectedTaker: takerAddress,
+      errors: params.errors,
+    });
+  }
+
+  for (const requirement of params.descriptor.getContractCodeRequirements(
+    descriptorInput
+  )) {
+    await requireContractCode({
+      provider: params.provider,
+      label: requirement.label,
+      address: requirement.address,
+      errors: params.errors,
+    });
+  }
+
+  await params.descriptor.validateAdditional?.({
+    ...descriptorInput,
     provider: params.provider,
-    factoryAddress: params.config.takers?.factory,
-    source: params.source,
-    expectedTaker: takerAddress,
+    takerAddress,
     errors: params.errors,
   });
-
-  if (params.source === LiquiditySource.UNISWAPV3) {
-    const routerConfig = params.config.dex?.uniswapV3?.router;
-    for (const field of UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS) {
-      await requireContractCode({
-        provider: params.provider,
-        label: `Uniswap V3 ${field}`,
-        address: routerConfig?.[field],
-        errors: params.errors,
-      });
-    }
-  }
-
-  if (params.source === LiquiditySource.SUSHISWAP) {
-    await requireContractCode({
-      provider: params.provider,
-      label: 'SushiSwap swapRouterAddress',
-      address: params.config.dex?.sushiswap?.swapRouterAddress,
-      errors: params.errors,
-    });
-    await requireContractCode({
-      provider: params.provider,
-      label: 'SushiSwap factoryAddress',
-      address: params.config.dex?.sushiswap?.factoryAddress,
-      errors: params.errors,
-    });
-    await requireContractCode({
-      provider: params.provider,
-      label: 'SushiSwap quoterV2Address',
-      address: params.config.dex?.sushiswap?.quoterV2Address,
-      errors: params.errors,
-    });
-    await requireContractCode({
-      provider: params.provider,
-      label: 'SushiSwap wethAddress',
-      address: params.config.dex?.sushiswap?.wethAddress,
-      errors: params.errors,
-    });
-  }
-
-  if (params.source === LiquiditySource.CURVE) {
-    await requireContractCode({
-      provider: params.provider,
-      label: 'Curve wethAddress',
-      address: params.config.dex?.curve?.wethAddress,
-      errors: params.errors,
-    });
-    for (const [pairName, poolConfig] of Object.entries(
-      params.config.dex?.curve?.poolConfigs ?? {}
-    )) {
-      await requireContractCode({
-        provider: params.provider,
-        label: `Curve pool ${pairName}`,
-        address: poolConfig.address,
-        errors: params.errors,
-      });
-    }
-  }
-
-  if (params.source === LiquiditySource.LIFI) {
-    await validateLifiAllowlistPreflight({
-      config: params.config,
-      provider: params.provider,
-      chainId: params.chainId,
-      takerAddress,
-      errors: params.errors,
-    });
-  }
 }
 
 /**
@@ -549,43 +631,32 @@ export async function validateExternalTakeRouteDeployments(params: {
   }
 
   const errors: string[] = [];
-  if (requirements.some((requirement) => requirement.path === 'oneinch')) {
-    await requireContractCode({
-      provider: params.provider,
-      label: `1inch router for chain ${params.chainId}`,
-      address: params.config.dex?.oneInch?.routers?.[params.chainId],
-      errors,
-    });
-    await requireContractCode({
-      provider: params.provider,
-      label: 'takers.oneInch',
-      address: params.config.takers?.oneInch,
-      errors,
-    });
-  }
-
-  const factoryBackedRequirements = requirements.filter(
-    (requirement) =>
-      getExternalTakeTakerContractKeyForSource(requirement.source) !==
-      undefined
-  );
-  if (factoryBackedRequirements.length > 0) {
+  const sourcePreflights = requirements.map((requirement) => ({
+    source: requirement.source,
+    descriptor: getExternalTakeSourcePreflightDescriptor(requirement.source),
+  }));
+  if (
+    sourcePreflights.some(
+      ({ descriptor }) => descriptor.usesFactoryRegistry
+    )
+  ) {
     await requireContractCode({
       provider: params.provider,
       label: 'takers.factory',
       address: params.config.takers?.factory,
       errors,
     });
+  }
 
-    for (const { source } of factoryBackedRequirements) {
-      await validateFactoryBackedSourcePreflight({
-        config: params.config,
-        provider: params.provider,
-        chainId: params.chainId,
-        source,
-        errors,
-      });
-    }
+  for (const { source, descriptor } of sourcePreflights) {
+    await validateExternalTakeSourcePreflight({
+      config: params.config,
+      provider: params.provider,
+      chainId: params.chainId,
+      source,
+      descriptor,
+      errors,
+    });
   }
 
   if (errors.length > 0) {

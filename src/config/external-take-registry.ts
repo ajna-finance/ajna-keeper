@@ -40,6 +40,10 @@ export type ExternalTakeDeploymentType =
   | 'oneinch'
   | 'lifi'
   | 'none';
+export type ActiveExternalTakeDeploymentType = Exclude<
+  ExternalTakeDeploymentType,
+  'none'
+>;
 
 export interface ExternalTakeDeploymentRuntimeConfig {
   keeperTaker?: string;
@@ -47,12 +51,36 @@ export interface ExternalTakeDeploymentRuntimeConfig {
   takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
 }
 
-export interface ExternalTakeDeploymentResolution {
-  deploymentType: ExternalTakeDeploymentType;
-  requestedLiquiditySource: LiquiditySource | undefined;
-  resolvedTakerAddress?: string;
-  unavailableReason?: string;
-}
+export type OneInchExternalTakeDeploymentResolution = {
+  deploymentType: 'oneinch';
+  requestedLiquiditySource: LiquiditySource.ONEINCH;
+  resolvedTakerAddress: string;
+};
+
+export type FactoryExternalTakeDeploymentResolution = {
+  deploymentType: 'factory';
+  requestedLiquiditySource: FactoryLiquiditySource;
+  resolvedTakerAddress: string;
+};
+
+export type LifiExternalTakeDeploymentResolution = {
+  deploymentType: 'lifi';
+  requestedLiquiditySource: LiquiditySource.LIFI;
+  resolvedTakerAddress: string;
+};
+
+export type ActiveExternalTakeDeploymentResolution =
+  | OneInchExternalTakeDeploymentResolution
+  | FactoryExternalTakeDeploymentResolution
+  | LifiExternalTakeDeploymentResolution;
+
+export type ExternalTakeDeploymentResolution =
+  | ActiveExternalTakeDeploymentResolution
+  | {
+      deploymentType: 'none';
+      requestedLiquiditySource: LiquiditySource | undefined;
+      unavailableReason?: string;
+    };
 
 export const FACTORY_DYNAMIC_SOURCES: readonly FactoryLiquiditySource[] = [
   LiquiditySource.UNISWAPV3,
@@ -248,8 +276,7 @@ export function resolveExternalTakeDeployment(params: {
     };
   }
 
-  const path = resolveExternalTakePathFromSource(source);
-  if (path === 'oneinch') {
+  if (source === LiquiditySource.ONEINCH) {
     const resolvedTakerAddress = getConfiguredExternalTakeTaker({
       source,
       config: params.config,
@@ -268,38 +295,38 @@ export function resolveExternalTakeDeployment(params: {
     };
   }
 
-  if (path === 'factory' || path === 'lifi') {
-    const contractKey = getExternalTakeTakerContractKeyForSource(source);
-    const resolvedTakerAddress = getConfiguredExternalTakeTaker({
-      source,
-      config: params.config,
-    });
-    if (!params.config.keeperTakerFactory) {
-      return {
-        deploymentType: 'none',
-        requestedLiquiditySource: source,
-        unavailableReason: 'keeperTakerFactory is not configured',
-      };
-    }
-    if (!resolvedTakerAddress) {
-      return {
-        deploymentType: 'none',
-        requestedLiquiditySource: source,
-        unavailableReason: contractKey
-          ? `takerContracts.${contractKey} is not configured`
-          : 'registered taker contract is not configured',
-      };
-    }
+  const contractKey = getExternalTakeTakerContractKeyForSource(source);
+  const resolvedTakerAddress = getConfiguredExternalTakeTaker({
+    source,
+    config: params.config,
+  });
+  if (!params.config.keeperTakerFactory) {
     return {
-      deploymentType: path,
+      deploymentType: 'none',
+      requestedLiquiditySource: source,
+      unavailableReason: 'keeperTakerFactory is not configured',
+    };
+  }
+  if (!resolvedTakerAddress) {
+    return {
+      deploymentType: 'none',
+      requestedLiquiditySource: source,
+      unavailableReason: contractKey
+        ? `takerContracts.${contractKey} is not configured`
+        : 'registered taker contract is not configured',
+    };
+  }
+  if (source === LiquiditySource.LIFI) {
+    return {
+      deploymentType: 'lifi',
       requestedLiquiditySource: source,
       resolvedTakerAddress,
     };
   }
-
   return {
-    deploymentType: 'none',
+    deploymentType: 'factory',
     requestedLiquiditySource: source,
+    resolvedTakerAddress,
   };
 }
 

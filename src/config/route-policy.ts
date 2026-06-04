@@ -32,15 +32,20 @@ export {
   resolveExternalTakePathFromSource,
 } from './external-take-registry';
 export type {
+  ActiveExternalTakeDeploymentResolution,
+  ActiveExternalTakeDeploymentType,
   ExternalTakeDeploymentResolution,
   ExternalTakeDeploymentRuntimeConfig,
   ExternalTakeDeploymentType,
+  FactoryExternalTakeDeploymentResolution,
   ExternalTakePathDescriptor,
   ExternalTakePathCategory,
   ExternalTakeLiquiditySource,
   ExternalTakeLiquiditySourceDescriptor,
   ExternalTakeTakerContractKey,
   FactoryLiquiditySource,
+  LifiExternalTakeDeploymentResolution,
+  OneInchExternalTakeDeploymentResolution,
 } from './external-take-registry';
 
 export type ActiveExternalTakeRouteSelectionMode =

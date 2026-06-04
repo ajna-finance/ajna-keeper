@@ -17,7 +17,6 @@ export interface LifiTakerAllowlistSnapshot {
   callTargets: string[];
   approvalSpenders: string[];
   selectorAllowlist: Record<string, string[]>;
-  selectorTargets: string[];
 }
 
 export interface LifiAllowlistReconciliationPlan {
@@ -192,7 +191,6 @@ export function normalizeLifiTakerAllowlistSnapshot(params: {
     callTargets,
     approvalSpenders,
     selectorAllowlist,
-    selectorTargets,
   };
 }
 
@@ -207,25 +205,33 @@ export async function readLifiTakerAllowlistSnapshot(params: {
     params.read ??
     (async <T>(readParams: { operation: () => Promise<T> }): Promise<T> =>
       await readParams.operation());
-  const callTargets = await read({
-    label: `${labelPrefix} call target allowlist`,
-    operation: () => params.reader.getAllowedCallTargets(),
-  });
-  const approvalSpenders = await read({
-    label: `${labelPrefix} approval spender allowlist`,
-    operation: () => params.reader.getAllowedApprovalSpenders(),
-  });
+  const [callTargets, approvalSpenders] = await Promise.all([
+    read({
+      label: `${labelPrefix} call target allowlist`,
+      operation: () => params.reader.getAllowedCallTargets(),
+    }),
+    read({
+      label: `${labelPrefix} approval spender allowlist`,
+      operation: () => params.reader.getAllowedApprovalSpenders(),
+    }),
+  ]);
   const selectorTargets = getSelectorTargets({
     actual: { callTargets, selectorAllowlist: {} },
     extra: params.selectorTargets,
   });
-  const selectorAllowlist: Record<string, string[]> = {};
-  for (const target of selectorTargets) {
-    selectorAllowlist[target.toLowerCase()] = await read({
-      label: `${labelPrefix} selector allowlist for ${target}`,
-      operation: () => params.reader.getAllowedCallSelectors(target),
-    });
-  }
+  const selectorEntries = await Promise.all(
+    selectorTargets.map(
+      async (target): Promise<[string, string[]]> => [
+        target.toLowerCase(),
+        await read({
+          label: `${labelPrefix} selector allowlist for ${target}`,
+          operation: () => params.reader.getAllowedCallSelectors(target),
+        }),
+      ]
+    )
+  );
+  const selectorAllowlist: Record<string, string[]> =
+    Object.fromEntries(selectorEntries);
   return normalizeLifiTakerAllowlistSnapshot({
     callTargets,
     approvalSpenders,
@@ -276,7 +282,6 @@ export function compareLifiTakerAllowlistPolicy(params: {
   for (const target of getSelectorTargets({
     expected: params.expected,
     actual: params.actual,
-    extra: params.actual.selectorTargets,
   })) {
     const configuredSelectors = getSelectorsForTarget(
       params.expected.selectorAllowlist,
@@ -323,7 +328,6 @@ export function buildLifiTakerAllowlistReconciliationPlan(params: {
   const selectorTargets = getSelectorTargets({
     expected: params.desired,
     actual: params.current,
-    extra: params.current.selectorTargets,
   });
 
   const selectorsToEnable: LifiSelectorEntry[] = [];

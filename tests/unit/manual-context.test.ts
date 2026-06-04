@@ -7,7 +7,19 @@ import {
   formatManualTakeContextStart,
   resolveManualTakeContext,
   resolveManualTakeDeployment,
+  type ManualTakeDeploymentResolution,
 } from '../../src/take/manual-context';
+
+function expectManualDeploymentType<
+  TDeploymentType extends ManualTakeDeploymentResolution['deploymentType'],
+>(
+  resolution: ManualTakeDeploymentResolution,
+  deploymentType: TDeploymentType
+): asserts resolution is ManualTakeDeploymentResolution & {
+  deploymentType: TDeploymentType;
+} {
+  expect(resolution.deploymentType).to.equal(deploymentType);
+}
 
 describe('manual take context helpers', () => {
   it('resolves manual external take deployments from source-specific config', () => {
@@ -35,7 +47,7 @@ describe('manual take context helpers', () => {
         takerContracts: { Lifi: '0xlifi' },
       },
     });
-    expect(lifiDeployment.deploymentType).to.equal('lifi');
+    expectManualDeploymentType(lifiDeployment, 'lifi');
     expect(lifiDeployment.resolvedTakerAddress).to.equal('0xlifi');
 
     const lifiWithoutCanonicalTaker = resolveManualTakeDeployment({
@@ -44,7 +56,7 @@ describe('manual take context helpers', () => {
         keeperTakerFactory: '0xfactory',
       },
     });
-    expect(lifiWithoutCanonicalTaker.deploymentType).to.equal('none');
+    expectManualDeploymentType(lifiWithoutCanonicalTaker, 'none');
     expect(lifiWithoutCanonicalTaker.unavailableReason).to.equal(
       'takerContracts.Lifi is not configured'
     );
@@ -59,7 +71,7 @@ describe('manual take context helpers', () => {
       },
     });
 
-    expect(resolution.deploymentType).to.equal('none');
+    expectManualDeploymentType(resolution, 'none');
     expect(resolution.unavailableReason).to.equal(
       'takerContracts.UniswapV3 is not configured'
     );

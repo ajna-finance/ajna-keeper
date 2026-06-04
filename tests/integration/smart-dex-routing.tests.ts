@@ -1,7 +1,21 @@
 // tests/integration/smart-dex-routing.test.ts
 import { expect } from 'chai';
 import { LiquiditySource, validateTakeSettings } from '../../src/config';
-import { resolveManualTakeDeployment } from '../../src/take/manual-context';
+import {
+  resolveManualTakeDeployment,
+  type ManualTakeDeploymentResolution,
+} from '../../src/take/manual-context';
+
+function expectManualDeploymentType<
+  TDeploymentType extends ManualTakeDeploymentResolution['deploymentType'],
+>(
+  resolution: ManualTakeDeploymentResolution,
+  deploymentType: TDeploymentType
+): asserts resolution is ManualTakeDeploymentResolution & {
+  deploymentType: TDeploymentType;
+} {
+  expect(resolution.deploymentType).to.equal(deploymentType);
+}
 
 describe('Manual External Take Routing Integration Tests', () => {
   describe('Per-Pool Resolution', () => {
@@ -18,11 +32,13 @@ describe('Manual External Take Routing Integration Tests', () => {
         },
       });
 
-      expect(resolution.deploymentType).to.equal('oneinch');
+      expectManualDeploymentType(resolution, 'oneinch');
       expect(resolution.requestedLiquiditySource).to.equal(
         LiquiditySource.ONEINCH
       );
-      expect(resolution.unavailableReason).to.equal(undefined);
+      expect(resolution.resolvedTakerAddress).to.equal(
+        '0x1234567890123456789012345678901234567890'
+      );
     });
 
     it('resolves a complete factory-backed pool config', () => {
@@ -41,11 +57,13 @@ describe('Manual External Take Routing Integration Tests', () => {
         },
       });
 
-      expect(resolution.deploymentType).to.equal('factory');
+      expectManualDeploymentType(resolution, 'factory');
       expect(resolution.requestedLiquiditySource).to.equal(
         LiquiditySource.UNISWAPV3
       );
-      expect(resolution.unavailableReason).to.equal(undefined);
+      expect(resolution.resolvedTakerAddress).to.equal(
+        '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
+      );
     });
 
     it('resolves a complete LI.FI pool config', () => {
@@ -64,11 +82,13 @@ describe('Manual External Take Routing Integration Tests', () => {
         },
       });
 
-      expect(resolution.deploymentType).to.equal('lifi');
+      expectManualDeploymentType(resolution, 'lifi');
       expect(resolution.requestedLiquiditySource).to.equal(
         LiquiditySource.LIFI
       );
-      expect(resolution.unavailableReason).to.equal(undefined);
+      expect(resolution.resolvedTakerAddress).to.equal(
+        '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7'
+      );
     });
 
     it('routes mixed configs by pool source instead of preferring factory globally', () => {
@@ -127,7 +147,7 @@ describe('Manual External Take Routing Integration Tests', () => {
         },
       });
 
-      expect(resolution.deploymentType).to.equal('none');
+      expectManualDeploymentType(resolution, 'none');
       expect(resolution.requestedLiquiditySource).to.equal(
         LiquiditySource.UNISWAPV3
       );
