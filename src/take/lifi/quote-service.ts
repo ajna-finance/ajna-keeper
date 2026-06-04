@@ -1,13 +1,13 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { LifiDexConfig } from '../config';
-import { ApprovedLifiQuote, fetchLifiQuote, validateLifiQuote } from '../dex/lifi';
-import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
+import { LifiDexConfig } from '../../config';
+import { ApprovedLifiQuote, fetchLifiQuote, validateLifiQuote } from '../../dex/lifi';
+import { normalizeLifiProductionChainPolicy } from '../../dex/lifi/chain-policy';
 import {
   getCachedTokenDecimals,
   resolveExternalTakeChainId,
-} from './external-take-chain';
-import { LifiQuoteConfig } from './lifi-types';
+} from '../external-take/chain';
+import { LifiQuoteConfig } from './types';
 
 export function getLifiApiKey(
   config: LifiDexConfig | undefined

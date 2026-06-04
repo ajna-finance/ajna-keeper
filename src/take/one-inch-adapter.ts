@@ -1,5 +1,5 @@
 import { ExternalTakeAdapter } from './engine';
-import { bindExternalTakeQuoteToExecutionResult } from './external-take-execution-plan';
+import { bindExternalTakeQuoteToExecutionResult } from './external-take/execution-plan';
 import {
   getOneInchTakeQuoteEvaluation,
   takeLiquidation,

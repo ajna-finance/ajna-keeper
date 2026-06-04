@@ -45,7 +45,7 @@ export {
   createNoExternalTakeAdapter,
   createOneInchTakeAdapter,
 } from './one-inch-adapter';
-export { createLifiTakeAdapter } from './lifi-adapter';
+export { createLifiTakeAdapter } from './lifi/adapter';
 export type {
   TakeAuctionStatus,
   TakeAuctionStatusReader,

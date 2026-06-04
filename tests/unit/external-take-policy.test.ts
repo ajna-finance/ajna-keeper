@@ -4,7 +4,7 @@ import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
-} from '../../src/take/external-take-policy';
+} from '../../src/take/external-take/policy';
 
 const raw = (value: number): BigNumber => BigNumber.from(value);
 const usdc = (value: string): BigNumber => ethers.utils.parseUnits(value, 18);

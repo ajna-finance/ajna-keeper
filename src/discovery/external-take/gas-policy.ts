@@ -5,23 +5,23 @@ import {
   TakeWriteTransportMode,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
-} from '../config';
-import { BASIS_POINTS_DENOMINATOR_BN } from '../constants';
-import { logger } from '../logging';
-import { DiscoveryReadTransports } from '../read-transports';
+} from '../../config';
+import { BASIS_POINTS_DENOMINATOR_BN } from '../../constants';
+import { logger } from '../../logging';
+import { DiscoveryReadTransports } from '../../read-transports';
 import {
   ExternalTakeQuoteEvaluation,
   RouteProfitabilityBreakdown,
-} from '../take/types';
-import { TakeWriteTransport } from '../take/write-transport';
-import { getErrorMessage } from '../utils';
+} from '../../take/types';
+import { TakeWriteTransport } from '../../take/write-transport';
+import { getErrorMessage } from '../../utils';
 import {
   GasPolicyResult,
   getDiscoveryGasPriceFreshnessTtlMs,
   getEffectiveL2GasCostBufferBasisPoints,
-} from './gas-policy';
-import { DiscoveryRpcCache } from './types';
-import type { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
+} from '../gas-policy';
+import { DiscoveryRpcCache } from '../types';
+import type { AutoDiscoverTakePolicyRuntime } from './quotes';
 
 export const EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(900000);
 const CURVE_EXTERNAL_TAKE_GAS_LIMIT = BigNumber.from(1_500_000);

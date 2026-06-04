@@ -2,7 +2,7 @@ import type {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeExecutionPlan,
 } from '../../src/take/types';
-import { createExternalTakeExecutionPlan } from '../../src/take/external-take-execution-plan';
+import { createExternalTakeExecutionPlan } from '../../src/take/external-take/execution-plan';
 
 export function singleExternalTakeExecutionPlan<TApprovalContext = unknown>(
   evaluation: BoundExternalTakeRouteEvaluation,

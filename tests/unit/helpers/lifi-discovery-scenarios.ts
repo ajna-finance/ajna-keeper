@@ -13,7 +13,7 @@ import type { ApprovedLifiQuote } from '../../../src/dex/lifi';
 import type { ResolvedTakeTarget } from '../../../src/discovery/targets';
 import type { HandleDiscoveredTakeTargetParams } from '../../../src/discovery/take-executor';
 import type { DiscoveryReadTransports } from '../../../src/read-transports';
-import * as lifiExecutionModule from '../../../src/take/lifi-execution';
+import * as lifiExecutionModule from '../../../src/take/lifi/execution';
 import * as takeFactoryModule from '../../../src/take/factory';
 import type { ExternalTakeQuoteEvaluation } from '../../../src/take/types';
 import type { TakeWriteTransport } from '../../../src/take/write-transport';

@@ -6,8 +6,8 @@ import * as erc20 from '../../src/erc20';
 import { handleDiscoveredTakeTarget } from '../../src/discovery/handlers';
 import type { DiscoveryRpcCache } from '../../src/discovery/handlers';
 import { logger } from '../../src/logging';
-import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../src/take/external-take-execution-plan';
-import * as lifiExecutionModule from '../../src/take/lifi-execution';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../src/take/external-take/execution-plan';
+import * as lifiExecutionModule from '../../src/take/lifi/execution';
 import * as takeFactoryModule from '../../src/take/factory';
 import { createDiscoveryTransports } from '../helpers/discovery';
 import {

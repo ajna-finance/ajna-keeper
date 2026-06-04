@@ -6,8 +6,8 @@ import {
   getExternalTakePathDefaultSource,
   isFactoryDynamicSource,
   resolveExternalTakePathFromSource as resolveConfiguredExternalTakePathFromSource,
-} from '../config';
-import { ExternalTakeQuoteEvaluation } from './types';
+} from '../../config';
+import { ExternalTakeQuoteEvaluation } from '../types';
 
 export type ExternalTakeRouteIdentity =
   | {

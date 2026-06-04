@@ -15,7 +15,7 @@ import {
 import {
   getCachedTokenDecimals,
   resolveExternalTakeChainId,
-} from './external-take-chain';
+} from './external-take/chain';
 import { logger } from '../logging';
 import { isNonceConsumedTransactionError, NonceTracker } from '../nonce';
 import {
@@ -41,9 +41,9 @@ import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
-} from './external-take-policy';
-import { getExternalTakeExecutionPlanPrimaryEvaluation } from './external-take-execution-plan';
-import { approveOneInchQuoteForExecution } from './external-take-quote-approval';
+} from './external-take/policy';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from './external-take/execution-plan';
+import { approveOneInchQuoteForExecution } from './external-take/quote-approval';
 
 async function getOneInchTokenDecimals(params: {
   signer: Signer;

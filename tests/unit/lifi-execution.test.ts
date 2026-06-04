@@ -7,7 +7,7 @@ import {
   getLifiPathQuoteEvaluation,
   getLifiTakerAddress,
   takeLiquidationLifi,
-} from '../../src/take/lifi-execution';
+} from '../../src/take/lifi/execution';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
 import { logger } from '../../src/logging';
 import { NonceConsumedTransactionError, NonceTracker } from '../../src/nonce';

@@ -1,21 +1,21 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { LiquiditySource, getAutoDiscoverTakePolicy } from '../config';
-import { DiscoveryReadTransports } from '../read-transports';
-import * as takeFactoryModule from '../take/factory';
-import { FactoryRouteProfitabilityContext } from '../take/factory';
-import * as lifiExecutionModule from '../take/lifi-execution';
-import * as oneInchExecutionModule from '../take/one-inch-execution';
-import { ExternalTakeQuoteEvaluation } from '../take/types';
+import { LiquiditySource, getAutoDiscoverTakePolicy } from '../../config';
+import { DiscoveryReadTransports } from '../../read-transports';
+import * as takeFactoryModule from '../../take/factory';
+import { FactoryRouteProfitabilityContext } from '../../take/factory';
+import * as lifiExecutionModule from '../../take/lifi/execution';
+import * as oneInchExecutionModule from '../../take/one-inch-execution';
+import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import {
   AsyncOperationLimiter,
   getErrorMessage,
   withTimeoutAbort,
-} from '../utils';
+} from '../../utils';
 import {
   ExternalTakeQuoteCircuitOutcome,
   withTakeLiquiditySource,
-} from './external-take-provider';
+} from './provider';
 import {
   getLifiCircuitOpenReason,
   recordLifiQuoteFailure,
@@ -27,13 +27,13 @@ import {
   recordOneInchQuoteFailure,
   recordOneInchQuoteSuccess,
 } from './one-inch-circuit';
-import { ResolvedTakeTarget } from './targets';
+import { ResolvedTakeTarget } from '../targets';
 import {
   DiscoveryExecutionConfig,
   DiscoveryRpcCache,
   LifiCircuitPurpose,
   OneInchQuoteCircuitPurpose,
-} from './types';
+} from '../types';
 
 export type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy

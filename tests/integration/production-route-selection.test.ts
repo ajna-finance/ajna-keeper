@@ -9,8 +9,8 @@ import {
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
 } from '../../src/take/factory';
-import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take-quote-approval';
-import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take-policy';
+import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval';
+import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
 import { createFactoryQuoteProviderRuntimeCache } from '../../src/take/factory/shared';
 import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { getProvider, resetHardhat } from './test-utils';

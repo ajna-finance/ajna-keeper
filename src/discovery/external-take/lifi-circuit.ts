@@ -1,10 +1,10 @@
-import { LifiDexConfig } from '../config';
-import { logger } from '../logging';
+import { LifiDexConfig } from '../../config';
+import { logger } from '../../logging';
 import {
   DiscoveryRpcCache,
   ExternalProviderCircuitState,
   LifiCircuitPurpose,
-} from './types';
+} from '../types';
 
 export const DEFAULT_LIFI_QUOTE_FAILURE_COOLDOWN_MS = 30_000;
 export const DEFAULT_LIFI_QUOTE_FAILURE_THRESHOLD = 2;

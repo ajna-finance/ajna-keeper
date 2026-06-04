@@ -12,14 +12,14 @@ import { TakeAuctionStatusReader } from '../take/liquidation-status';
 import { TakeWriteTransport } from '../take/write-transport';
 import { AsyncOperationLimiter } from '../utils';
 import { DiscoveryReadTransports } from '../read-transports';
-import { DiscoveryExternalExecutionConfig } from './external-take-provider';
+import { DiscoveryExternalExecutionConfig } from './external-take/provider';
 import {
   DiscoveryExternalTakeApprovalContext,
   DiscoveryExternalTakeApprover,
   resolveDiscoveryExternalTakeApprovalMode,
-} from './external-take-approval';
-import { createExternalTakeAdapterForDiscovery } from './external-take-discovery-adapter';
-import { createDiscoveryExternalTakeProviderRegistry } from './external-take-providers';
+} from './external-take/approval';
+import { createExternalTakeAdapterForDiscovery } from './external-take/discovery-adapter';
+import { createDiscoveryExternalTakeProviderRegistry } from './external-take/providers';
 import {
   AutoDiscoverTakePolicyRuntime,
   DiscoveryFactoryQuoteConfig,
@@ -35,12 +35,12 @@ import {
   quoteOneInchPathForDiscovery,
   recordLifiCircuitOutcomeForDiscovery,
   recordOneInchCircuitOutcomeForDiscovery,
-} from './external-take-quotes';
+} from './external-take/quotes';
 import {
   DiscoveredTakeTargetStats,
   recordExternalTakePathFailureStats,
-} from './external-take-stats';
-import { getOneInchQuoteTimeoutMs } from './one-inch-circuit';
+} from './external-take/stats';
+import { getOneInchQuoteTimeoutMs } from './external-take/one-inch-circuit';
 import {
   DiscoveryExecutionConfig,
   DiscoveryRpcCache,
@@ -48,7 +48,7 @@ import {
   OneInchQuoteCircuitPurpose,
 } from './types';
 import { ResolvedTakeTarget } from './targets';
-import { approveExternalTakeForDiscovery } from './external-take-approval-policy';
+import { approveExternalTakeForDiscovery } from './external-take/approval-policy';
 
 function getDiscoveryTokenDecimalsCache(
   rpcCache?: DiscoveryRpcCache

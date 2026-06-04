@@ -2,7 +2,7 @@ import { BigNumber } from 'ethers';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
-} from '../take/types';
+} from '../../take/types';
 
 export {
   bindExternalTakeRoute,
@@ -12,12 +12,12 @@ export {
   resolveExternalTakePathFromEvaluation,
   resolveExternalTakePathFromSource,
   resolveExternalTakeRouteIdentity,
-} from '../take/external-take-route';
+} from '../../take/external-take/route';
 export type {
   ExternalTakeRouteBinding,
   ExternalTakeRouteBindingFailure,
   ExternalTakeRouteIdentity,
-} from '../take/external-take-route';
+} from '../../take/external-take/route';
 
 export function cloneExternalTakeQuoteEvaluation<
   TQuoteEvaluation extends ExternalTakeQuoteEvaluation,

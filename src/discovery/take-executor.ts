@@ -13,7 +13,7 @@ import { ResolvedTakeTarget } from './targets';
 import {
   DiscoveryExternalExecutionConfig,
   withTakeLiquiditySource,
-} from './external-take-provider';
+} from './external-take/provider';
 import { logger } from '../logging';
 import {
   createDiscoveryTransportsForConfig,
@@ -30,7 +30,7 @@ import {
 import { DiscoveryReadTransports } from '../read-transports';
 import { createArbTakeStrategy } from '../take/arb-strategy';
 import { processTakeCandidates, TAKE_SKIP_REASONS } from '../take/engine';
-import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../take/external-take-execution-plan';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../take/external-take/execution-plan';
 import { TakeWriteTransport } from '../take/write-transport';
 import { FactoryRouteProfitabilityContext } from '../take/factory';
 import {
@@ -47,26 +47,26 @@ import {
 import { getDecimalsErc20 } from '../erc20';
 import { createTakeAuctionStatusReader } from '../take/liquidation-status';
 import { createDiscoveryRpcCache } from './rpc-cache';
-import { getOneInchQuoteTimeoutMs } from './one-inch-circuit';
-import { reapproveDiscoveryExternalTakeForAuction } from './external-take-final-approval';
+import { getOneInchQuoteTimeoutMs } from './external-take/one-inch-circuit';
+import { reapproveDiscoveryExternalTakeForAuction } from './external-take/final-approval';
 import { createDiscoveredTakeTargetRuntime } from './discovered-take-target-runtime';
-import { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
+import { AutoDiscoverTakePolicyRuntime } from './external-take/quotes';
 import {
   APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
   type DiscoveredTakeTargetStats,
   type ExternalTakePathCounterField,
   getExternalTakePathCounter,
   incrementExternalTakeRouteStats,
-} from './external-take-stats';
+} from './external-take/stats';
 import { ZERO_BN } from '../constants';
 import {
   getExternalTakeGasLimit,
   refreshDiscoveryGasPriceIfStale,
-} from './external-take-approval-policy';
-import { DiscoveryExternalTakeApprovalContext } from './external-take-approval';
+} from './external-take/approval-policy';
+import { DiscoveryExternalTakeApprovalContext } from './external-take/approval';
 
-export type { DiscoveredTakeTargetStats } from './external-take-stats';
-export { refreshDiscoveryGasPriceIfStale } from './external-take-approval-policy';
+export type { DiscoveredTakeTargetStats } from './external-take/stats';
+export { refreshDiscoveryGasPriceIfStale } from './external-take/approval-policy';
 
 const ARB_TAKE_GAS_LIMIT = BigNumber.from(450000);
 const ZERO = ZERO_BN;

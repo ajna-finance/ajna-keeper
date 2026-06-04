@@ -22,7 +22,7 @@ import {
   TakeExecutionResult,
   TakeLiquidationPlan,
 } from './types';
-import { replaceExternalTakeExecutionPlanPrimary } from './external-take-execution-plan';
+import { replaceExternalTakeExecutionPlanPrimary } from './external-take/execution-plan';
 import {
   TakeAuctionStatus,
   TakeAuctionStatusReader,

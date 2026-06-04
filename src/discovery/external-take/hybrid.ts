@@ -5,54 +5,54 @@ import {
   ExternalTakePathKind,
   formatLiquiditySource,
   resolveHybridGasQuoteFallbackPolicy,
-} from '../config';
-import { logger } from '../logging';
-import { isSubsidizedExternalTakeQuote } from '../take/external-take-policy';
+} from '../../config';
+import { logger } from '../../logging';
+import { isSubsidizedExternalTakeQuote } from '../../take/external-take/policy';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeEvaluationResult,
   ExternalTakeExecutionCandidate,
   TakeLiquidationPlan,
-} from '../take/types';
+} from '../../take/types';
 import {
   createExternalTakeExecutionCandidate,
   createExternalTakeExecutionPlan,
   resolveExternalTakeExecutionCandidates,
-} from '../take/external-take-execution-plan';
-import { TakeAuctionStatusReader } from '../take/liquidation-status';
-import { getErrorMessage } from '../utils';
+} from '../../take/external-take/execution-plan';
+import { TakeAuctionStatusReader } from '../../take/liquidation-status';
+import { getErrorMessage } from '../../utils';
 import {
   DiscoveryExternalTakeApprovalContext,
   DiscoveryExternalTakeApprover,
   ExternalTakeApprovalRejectCategory,
   HYBRID_GAS_QUOTE_FALLBACK_CONTEXT,
   HYBRID_GAS_QUOTE_FALLBACK_KIND,
-} from './external-take-approval';
-import { cloneExternalTakeQuoteEvaluation } from './external-take-evaluation';
-import { refreshAndReapproveDiscoveryExternalTake } from './external-take-final-approval';
+} from './approval';
+import { cloneExternalTakeQuoteEvaluation } from './evaluation';
+import { refreshAndReapproveDiscoveryExternalTake } from './final-approval';
 import {
   isLifiExternalTakeRoute,
   isOneInchExternalTakeRoute,
-} from '../take/external-take-route';
+} from '../../take/external-take/route';
 import {
   DiscoveryExternalExecutionConfig,
   ExternalTakeQuoteCircuitOutcome,
-} from './external-take-provider';
+} from './provider';
 import {
   DiscoveryExternalTakeProviderRegistry,
   DiscoveryExternalTakeRouteProvider,
-} from './external-take-providers';
-import { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
+} from './providers';
+import { AutoDiscoverTakePolicyRuntime } from './quotes';
 import {
   DiscoveredTakeTargetStats,
   recordSuccessfulExternalTakeRouteStats,
-} from './external-take-stats';
+} from './stats';
 import {
   resolveHybridExternalTakeExecutionSelection,
   sortExternalTakeQuoteEvaluationsForSelection,
-} from './external-take-selection';
-import { GasPolicyResult } from './gas-policy';
-import { ResolvedTakeTarget } from './targets';
+} from './selection';
+import { GasPolicyResult } from '../gas-policy';
+import { ResolvedTakeTarget } from '../targets';
 
 const PROVIDER_WARN_LABEL: Record<ExternalTakePathKind, string> = {
   oneinch: '1inch',

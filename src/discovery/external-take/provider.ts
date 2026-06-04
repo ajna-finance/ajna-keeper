@@ -1,14 +1,14 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { ExternalTakePathKind, LiquiditySource } from '../config';
-import { TakeWriteTransport } from '../take/write-transport';
+import { ExternalTakePathKind, LiquiditySource } from '../../config';
+import { TakeWriteTransport } from '../../take/write-transport';
 import {
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
-} from '../take/types';
-import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './external-take-approval';
-import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
+} from '../../take/types';
+import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './approval';
+import { DiscoveryExecutionConfig, DiscoveryRpcCache } from '../types';
 
 export type ExternalTakeQuoteCircuitOutcome = 'success' | 'failure' | 'neutral';
 

@@ -1,5 +1,5 @@
 import { Signer } from '@ajna-finance/sdk';
-import { getDecimalsErc20 } from '../erc20';
+import { getDecimalsErc20 } from '../../erc20';
 
 /**
  * Shared chain-verification and token-decimals helpers for external-take

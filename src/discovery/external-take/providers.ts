@@ -1,12 +1,12 @@
-import { ExternalTakePathKind, isFactoryDynamicSource } from '../config';
-import { logger } from '../logging';
-import * as takeFactoryModule from '../take/factory';
+import { ExternalTakePathKind, isFactoryDynamicSource } from '../../config';
+import { logger } from '../../logging';
+import * as takeFactoryModule from '../../take/factory';
 import {
   getExternalTakeExecutionPlanPrimaryEvaluation,
-} from '../take/external-take-execution-plan';
-import * as lifiExecutionModule from '../take/lifi-execution';
-import * as oneInchExecutionModule from '../take/one-inch-execution';
-import { ResolvedTakeTarget } from './targets';
+} from '../../take/external-take/execution-plan';
+import * as lifiExecutionModule from '../../take/lifi/execution';
+import * as oneInchExecutionModule from '../../take/one-inch-execution';
+import { ResolvedTakeTarget } from '../targets';
 import {
   createPreBroadcastFailureCapture,
   createPreSubmitResultCapture,
@@ -14,7 +14,7 @@ import {
   ExternalTakeQuoteIntent,
   ExternalTakeRouteProvider,
   withTakeLiquiditySource,
-} from './external-take-provider';
+} from './provider';
 import {
   FactoryPathQuoteInput,
   FactoryPathQuoteFn,
@@ -25,10 +25,10 @@ import {
   OneInchCircuitOutcome,
   OneInchPathQuoteInput,
   OneInchPathQuoteFn,
-} from './external-take-quotes';
+} from './quotes';
 import { getLifiCircuitOpenReason } from './lifi-circuit';
-import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
-import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './external-take-approval';
+import { DiscoveryExecutionConfig, DiscoveryRpcCache } from '../types';
+import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './approval';
 
 export type DiscoveryExternalTakeRouteProvider = ExternalTakeRouteProvider<
   ResolvedTakeTarget,

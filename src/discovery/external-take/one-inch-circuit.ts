@@ -1,10 +1,10 @@
-import { AutoDiscoverTakePolicy } from '../config';
-import { logger } from '../logging';
+import { AutoDiscoverTakePolicy } from '../../config';
+import { logger } from '../../logging';
 import {
   DiscoveryRpcCache,
   OneInchQuoteCircuitPurpose,
   OneInchQuoteCircuitState,
-} from './types';
+} from '../types';
 
 export const DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS = 2_000;
 export const DEFAULT_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS = 30_000;

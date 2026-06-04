@@ -3,33 +3,33 @@ import {
   ExternalTakePathKind,
   LiquiditySource,
   isFactoryDynamicSource,
-} from '../config';
-import { ExternalTakeAdapter } from '../take/engine';
-import { TakeAuctionStatusReader } from '../take/liquidation-status';
+} from '../../config';
+import { ExternalTakeAdapter } from '../../take/engine';
+import { TakeAuctionStatusReader } from '../../take/liquidation-status';
 import {
   bindExternalTakeQuoteToExecutionResult,
   getExternalTakeExecutionPlanPrimaryEvaluation,
-} from '../take/external-take-execution-plan';
-import { createNoExternalTakeAdapter } from '../take/one-inch-adapter';
+} from '../../take/external-take/execution-plan';
+import { createNoExternalTakeAdapter } from '../../take/one-inch-adapter';
 import {
   DiscoveryExternalTakeApprovalContext,
   DiscoveryExternalTakeApprover,
-} from './external-take-approval';
+} from './approval';
 import {
   DiscoveryExternalTakeProviderRegistry,
   DiscoveryExternalTakeRouteProvider,
-} from './external-take-providers';
-import { DiscoveryExternalExecutionConfig } from './external-take-provider';
-import { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
+} from './providers';
+import { DiscoveryExternalExecutionConfig } from './provider';
+import { AutoDiscoverTakePolicyRuntime } from './quotes';
 import {
   DiscoveredTakeTargetStats,
   recordSuccessfulExternalTakeRouteStats,
-} from './external-take-stats';
+} from './stats';
 import {
   evaluateHybridExternalTakeForDiscovery,
   executeHybridExternalTakeForDiscovery,
-} from './hybrid-external-take';
-import { ResolvedTakeTarget } from './targets';
+} from './hybrid';
+import { ResolvedTakeTarget } from '../targets';
 
 function createProviderBackedDirectAdapter(params: {
   kind: 'oneinch' | 'lifi' | 'factory';

@@ -4,15 +4,15 @@ import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeLiquidationPlan,
-} from '../take/types';
-import { TakeAuctionStatusReader } from '../take/liquidation-status';
-import { getErrorMessage, weiToDecimaled } from '../utils';
+} from '../../take/types';
+import { TakeAuctionStatusReader } from '../../take/liquidation-status';
+import { getErrorMessage, weiToDecimaled } from '../../utils';
 import {
   DiscoveryExternalTakeApprovalContext,
   DiscoveryExternalTakeApprover,
   ExternalTakeApprovalResult,
-} from './external-take-approval';
-import { withExternalTakeApprovalContext } from './external-take-evaluation';
+} from './approval';
+import { withExternalTakeApprovalContext } from './evaluation';
 
 export async function reapproveDiscoveryExternalTakeForAuction(params: {
   approveExternalTake: DiscoveryExternalTakeApprover;

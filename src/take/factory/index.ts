@@ -16,8 +16,8 @@ import { ExternalTakeAdapter } from '../engine';
 import {
   bindExternalTakeQuoteToExecutionResult,
   getExternalTakeExecutionPlanPrimaryEvaluation,
-} from '../external-take-execution-plan';
-import { approveFactoryQuoteForExecution } from '../external-take-quote-approval';
+} from '../external-take/execution-plan';
+import { approveFactoryQuoteForExecution } from '../external-take/quote-approval';
 import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,

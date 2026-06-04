@@ -24,8 +24,8 @@ import {
   createOneInchTakeAdapter,
 } from './one-inch-adapter';
 import { OneInchExecutionConfig } from './one-inch-types';
-import { createLifiTakeAdapter } from './lifi-adapter';
-import { LifiExecutionConfig } from './lifi-types';
+import { createLifiTakeAdapter } from './lifi/adapter';
+import { LifiExecutionConfig } from './lifi/types';
 import { TakeActionConfig } from './types';
 import { TakeWriteTransportConfig } from './write-transport';
 

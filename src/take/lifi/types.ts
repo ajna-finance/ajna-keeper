@@ -1,5 +1,5 @@
-import { TakeWriteTransportConfig } from './write-transport';
-import { LifiDexConfig } from '../config';
+import { TakeWriteTransportConfig } from '../write-transport';
+import { LifiDexConfig } from '../../config';
 
 export interface LifiQuoteConfig {
   lifi?: LifiDexConfig;

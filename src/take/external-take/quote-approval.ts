@@ -2,12 +2,12 @@ import {
   ExternalTakePathKind,
   LiquiditySource,
   formatLiquiditySource,
-} from '../config';
+} from '../../config';
 import {
   BoundExternalTakeRouteBinding,
   bindExternalTakeRoute,
   formatExternalTakeRouteBindingFailure,
-} from './external-take-route';
+} from './route';
 import {
   ApprovedExternalTakeQuoteEvaluation,
   ApprovedFactoryQuoteEvaluation,
@@ -19,8 +19,8 @@ import {
   BoundOneInchRouteEvaluation,
   CurvePoolSelection,
   ExternalTakeQuoteEvaluation,
-} from './types';
-import { deriveApprovedMinOutRaw } from './factory/shared';
+} from '../types';
+import { deriveApprovedMinOutRaw } from '../factory/shared';
 
 export type ExternalTakeQuoteApprovalResult<
   TQuote extends ApprovedExternalTakeQuoteEvaluation,

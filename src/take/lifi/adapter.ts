@@ -1,11 +1,11 @@
-import { ExternalTakeAdapter } from './engine';
-import { bindExternalTakeQuoteToExecutionResult } from './external-take-execution-plan';
+import { ExternalTakeAdapter } from '../engine';
+import { bindExternalTakeQuoteToExecutionResult } from '../external-take/execution-plan';
 import {
   getLifiPathQuoteEvaluation,
   takeLiquidationLifi,
-} from './lifi-execution';
-import { LifiExecutionConfig, LifiQuoteConfig } from './lifi-types';
-import { TakeActionConfig } from './types';
+} from './execution';
+import { LifiExecutionConfig, LifiQuoteConfig } from './types';
+import { TakeActionConfig } from '../types';
 
 export function createLifiTakeAdapter(
   quoteConfig: LifiQuoteConfig

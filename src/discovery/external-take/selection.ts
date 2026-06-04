@@ -1,12 +1,12 @@
 import { BigNumber } from 'ethers';
-import { ExternalTakePathKind } from '../config';
-import { compareExternalTakeBySubsidyThenRank } from '../take/external-take-policy';
-import { ExternalTakeQuoteEvaluation } from '../take/types';
+import { ExternalTakePathKind } from '../../config';
+import { compareExternalTakeBySubsidyThenRank } from '../../take/external-take/policy';
+import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import {
   bindExternalTakeRoute,
   formatExternalTakeRouteSelectionFailure,
   resolveExternalTakeRouteIdentity,
-} from '../take/external-take-route';
+} from '../../take/external-take/route';
 
 function rankExternalTakeQuote(
   evaluation: ExternalTakeQuoteEvaluation

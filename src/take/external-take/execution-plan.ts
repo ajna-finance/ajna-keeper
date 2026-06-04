@@ -1,12 +1,12 @@
-import { LiquiditySource } from '../config';
+import { LiquiditySource } from '../../config';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeEvaluationResult,
   ExternalTakeExecutionCandidate,
   ExternalTakeExecutionPlan,
   ExternalTakeQuoteEvaluation,
-} from './types';
-import { bindExternalTakeRouteForCandidate } from './external-take-quote-approval';
+} from '../types';
+import { bindExternalTakeRouteForCandidate } from './quote-approval';
 
 export function createExternalTakeExecutionCandidate<TApprovalContext>(params: {
   evaluation: BoundExternalTakeRouteEvaluation;

@@ -5,7 +5,7 @@ import {
   getOneInchCircuitOpenReason,
   recordOneInchQuoteFailure,
   recordOneInchQuoteSuccess,
-} from '../../src/discovery/one-inch-circuit';
+} from '../../src/discovery/external-take/one-inch-circuit';
 import { DiscoveryRpcCache } from '../../src/discovery/types';
 import { logger } from '../../src/logging';
 

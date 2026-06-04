@@ -5,30 +5,30 @@ import {
   normalizeExternalTakeRouteSelectionMode,
   resolveExternalTakePaths,
   resolveHybridGasQuoteFallbackPolicy,
-} from '../config';
-import { ZERO_BN } from '../constants';
-import { getDecimalsErc20 } from '../erc20';
-import { logger } from '../logging';
-import { DiscoveryReadTransports } from '../read-transports';
-import { isSubsidizedExternalTakeQuote } from '../take/external-take-policy';
-import { bindExternalTakeRouteForDiscovery } from '../take/external-take-quote-approval';
-import { ExternalTakeQuoteEvaluation } from '../take/types';
-import { TakeWriteTransport } from '../take/write-transport';
-import { decimaledToWei } from '../utils';
+} from '../../config';
+import { ZERO_BN } from '../../constants';
+import { getDecimalsErc20 } from '../../erc20';
+import { logger } from '../../logging';
+import { DiscoveryReadTransports } from '../../read-transports';
+import { isSubsidizedExternalTakeQuote } from '../../take/external-take/policy';
+import { bindExternalTakeRouteForDiscovery } from '../../take/external-take/quote-approval';
+import { ExternalTakeQuoteEvaluation } from '../../take/types';
+import { TakeWriteTransport } from '../../take/write-transport';
+import { decimaledToWei } from '../../utils';
 import {
   ExternalTakeApprovalInput,
   ExternalTakeApprovalResult,
   HYBRID_GAS_QUOTE_FALLBACK_KIND,
-} from './external-take-approval';
+} from './approval';
 import {
   evaluateGasPolicy,
   getDiscoveryGasPriceFreshnessTtlMs,
-} from './gas-policy';
-import { DiscoveryRpcCache, DiscoveryExecutionConfig } from './types';
-import { ResolvedTakeTarget } from './targets';
-import type { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
-import type { DiscoveredTakeTargetStats } from './external-take-stats';
-import { cloneExternalTakeQuoteEvaluation } from './external-take-evaluation';
+} from '../gas-policy';
+import { DiscoveryRpcCache, DiscoveryExecutionConfig } from '../types';
+import { ResolvedTakeTarget } from '../targets';
+import type { AutoDiscoverTakePolicyRuntime } from './quotes';
+import type { DiscoveredTakeTargetStats } from './stats';
+import { cloneExternalTakeQuoteEvaluation } from './evaluation';
 import {
   EXTERNAL_TAKE_GAS_LIMIT,
   formatExternalTakeGasTelemetry,
@@ -36,12 +36,12 @@ import {
   getGasPriceAgeMs,
   hasFreshExternalTakeGasPolicy,
   refreshDiscoveryGasPriceIfStale,
-} from './external-take-gas-policy';
+} from './gas-policy';
 import {
   applyDiscoveryApprovalProfitabilityPolicy,
   buildSimpleQuoteProfitability,
   getAuctionCostQuoteRaw,
-} from './external-take-profitability-policy';
+} from './profitability-policy';
 
 export { getExternalTakeGasLimit, refreshDiscoveryGasPriceIfStale };
 

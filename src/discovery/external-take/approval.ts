@@ -1,9 +1,9 @@
 import { BigNumber } from 'ethers';
-import { GasPolicyResult } from './gas-policy';
+import { GasPolicyResult } from '../gas-policy';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
-} from '../take/types';
+} from '../../take/types';
 
 export const HYBRID_GAS_QUOTE_FALLBACK_KIND =
   'hybrid_gas_quote_fallback' as const;

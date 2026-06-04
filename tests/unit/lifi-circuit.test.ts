@@ -3,7 +3,7 @@ import {
   getLifiCircuitOpenReason,
   recordLifiQuoteFailure,
   recordLifiQuoteSuccess,
-} from '../../src/discovery/lifi-circuit';
+} from '../../src/discovery/external-take/lifi-circuit';
 import { DiscoveryRpcCache } from '../../src/discovery/types';
 
 describe('LI.FI quote circuit', () => {

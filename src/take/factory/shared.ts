@@ -47,7 +47,7 @@ import {
   applyExternalTakeRoutePolicy,
   compareExternalTakeBySubsidyThenRank,
   mergeRoutePolicyIntoEvaluation,
-} from '../external-take-policy';
+} from '../external-take/policy';
 import {
   BASIS_POINTS_DENOMINATOR,
   MARKET_FACTOR_SCALE,

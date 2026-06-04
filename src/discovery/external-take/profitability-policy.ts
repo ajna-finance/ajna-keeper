@@ -1,34 +1,34 @@
 import { BigNumber } from 'ethers';
-import { LiquiditySource } from '../config';
-import { WAD, ZERO_BN } from '../constants';
-import { convertWadToTokenDecimalsCeil } from '../erc20';
+import { LiquiditySource } from '../../config';
+import { WAD, ZERO_BN } from '../../constants';
+import { convertWadToTokenDecimalsCeil } from '../../erc20';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
-} from '../take/external-take-policy';
+} from '../../take/external-take/policy';
 import {
   applyFactoryRouteProfitabilityPolicy,
   ceilDiv,
   getMarketPriceFactorUnits,
   MARKET_FACTOR_SCALE,
-} from '../take/factory/shared';
+} from '../../take/factory/shared';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
   RouteProfitabilityBreakdown,
-} from '../take/types';
+} from '../../take/types';
 import {
   DiscoveryExternalTakeApprovalMode,
   ExternalTakeApprovalResult,
   HYBRID_GAS_QUOTE_FALLBACK_KIND,
-} from './external-take-approval';
-import { GasPolicyResult } from './gas-policy';
-import { DiscoveryRpcCache } from './types';
-import { ResolvedTakeTarget } from './targets';
-import type { AutoDiscoverTakePolicyRuntime } from './external-take-quotes';
-import type { DiscoveredTakeTargetStats } from './external-take-stats';
-import { getApprovalGasTelemetryFields } from './external-take-gas-policy';
+} from './approval';
+import { GasPolicyResult } from '../gas-policy';
+import { DiscoveryRpcCache } from '../types';
+import { ResolvedTakeTarget } from '../targets';
+import type { AutoDiscoverTakePolicyRuntime } from './quotes';
+import type { DiscoveredTakeTargetStats } from './stats';
+import { getApprovalGasTelemetryFields } from './gas-policy';
 
 const ZERO = ZERO_BN;
 

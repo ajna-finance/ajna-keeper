@@ -1,25 +1,25 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { LiquiditySource } from '../config';
-import { ApprovedLifiQuote } from '../dex/lifi';
-import { convertWadToTokenDecimals } from '../erc20';
-import { logger } from '../logging';
-import { decimaledToWei, getErrorMessage } from '../utils';
+import { LiquiditySource } from '../../config';
+import { ApprovedLifiQuote } from '../../dex/lifi';
+import { convertWadToTokenDecimals } from '../../erc20';
+import { logger } from '../../logging';
+import { decimaledToWei, getErrorMessage } from '../../utils';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
-} from './external-take-policy';
-import * as factoryShared from './factory/shared';
-import { LifiQuoteConfig } from './lifi-types';
+} from '../external-take/policy';
+import * as factoryShared from '../factory/shared';
+import { LifiQuoteConfig } from './types';
 import {
   getLifiQuoteFailureMetadata,
   getLifiTokenDecimals,
   requestValidatedLifiQuote,
   requireProductionLifiConfig,
   resolveLifiChainId,
-} from './lifi-quote-service';
-import { ExternalTakeQuoteEvaluation, TakeActionConfig } from './types';
+} from './quote-service';
+import { ExternalTakeQuoteEvaluation, TakeActionConfig } from '../types';
 
 function getLifiTopLevelQuoteType(quote: ApprovedLifiQuote): string {
   return typeof quote.raw.type === 'string' && quote.raw.type.trim().length > 0

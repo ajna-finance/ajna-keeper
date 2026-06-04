@@ -15,7 +15,7 @@ import {
   ExternalTakeQuoteEvaluation,
 } from '../../src/take/types';
 import * as transactions from '../../src/transactions';
-import { bindExternalTakeQuoteToExecutionResult } from '../../src/take/external-take-execution-plan';
+import { bindExternalTakeQuoteToExecutionResult } from '../../src/take/external-take/execution-plan';
 
 function externalTakeEvaluation(
   quoteEvaluation: ExternalTakeQuoteEvaluation

@@ -1,11 +1,11 @@
-import { ExternalTakePathKind, LiquiditySource } from '../config';
-import { ExternalTakeQuoteEvaluation } from '../take/types';
+import { ExternalTakePathKind, LiquiditySource } from '../../config';
+import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import {
   isFactoryExternalTakeRoute,
   isOneInchExternalTakeRoute,
   resolveExternalTakePathFromEvaluation,
   resolveExternalTakeRouteIdentity,
-} from '../take/external-take-route';
+} from '../../take/external-take/route';
 
 export interface ExternalTakePathCounters {
   approved: number;

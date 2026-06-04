@@ -1,40 +1,40 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
-import { LifiDexConfig, LiquiditySource } from '../config';
-import type { ExternalTakeTakerContractKey } from '../config';
-import { ApprovedLifiQuote, DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../dex/lifi';
-import { convertWadToTokenDecimals } from '../erc20';
-import { logger } from '../logging';
-import { isNonceConsumedTransactionError, NonceTracker } from '../nonce';
+import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
+import { LifiDexConfig, LiquiditySource } from '../../config';
+import type { ExternalTakeTakerContractKey } from '../../config';
+import { ApprovedLifiQuote, DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../../dex/lifi';
+import { convertWadToTokenDecimals } from '../../erc20';
+import { logger } from '../../logging';
+import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
 import {
   estimateGasWithBuffer,
   getErrorMessage,
   weiToDecimaled,
-} from '../utils';
-import { approveLifiQuoteForExecution } from './external-take-quote-approval';
-import { getExternalTakeExecutionPlanPrimaryEvaluation } from './external-take-execution-plan';
-import { LifiExecutionConfig } from './lifi-types';
-import { getLifiPathQuoteEvaluation as evaluateLifiPathQuote } from './lifi-quote-evaluation';
+} from '../../utils';
+import { approveLifiQuoteForExecution } from '../external-take/quote-approval';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../external-take/execution-plan';
+import { LifiExecutionConfig } from './types';
+import { getLifiPathQuoteEvaluation as evaluateLifiPathQuote } from './quote-evaluation';
 import {
   getLifiQuoteFailureMetadata,
   getLifiTokenDecimals,
   requestValidatedLifiQuote,
   requireProductionLifiConfig,
   resolveLifiChainId,
-} from './lifi-quote-service';
+} from './quote-service';
 import {
   ApprovedLifiQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
-} from './types';
+} from '../types';
 import {
   TakeWriteTransport,
   resolveTakeWriteTransport,
   submitTakeTransaction,
-} from './write-transport';
-import { logTakeExecutionTelemetry } from './execution-telemetry';
+} from '../write-transport';
+import { logTakeExecutionTelemetry } from '../execution-telemetry';
 
 export const getLifiPathQuoteEvaluation = evaluateLifiPathQuote;
 

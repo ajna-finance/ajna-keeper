@@ -2,7 +2,7 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 import sinon from 'sinon';
 import { LiquiditySource, TakeWriteTransportMode } from '../../../src/config';
-import { takeLiquidationLifi } from '../../../src/take/lifi-execution';
+import { takeLiquidationLifi } from '../../../src/take/lifi/execution';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
 import { malformedSingleExternalTakeExecutionPlan } from '../../helpers/external-take-plan';
 

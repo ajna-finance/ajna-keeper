@@ -22,12 +22,12 @@ import {
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
 } from '../../src/take/factory';
-import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take-quote-approval';
+import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval';
 import {
   filterFactoryRouteCandidatesByAvailability,
   getFactoryRouteCandidates,
 } from '../../src/take/factory/shared';
-import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take-policy';
+import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
 import {
   BoundExternalTakeRouteEvaluation,
   TakeLiquidationPlan,
