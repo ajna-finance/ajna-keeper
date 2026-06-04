@@ -1,8 +1,18 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { ethers } from 'ethers';
-import { LiquiditySource, KeeperConfig } from '../../src/config';
-import { validateAutoDiscoverRouteDeployments } from '../../src/discovery/route-preflight';
+import {
+  LiquiditySource,
+  KeeperConfig,
+  PriceOriginSource,
+} from '../../src/config';
+import {
+  resolveExternalTakeRouteDeploymentPreflight,
+  resolveExternalTakeRoutePreflightRequirements,
+  shouldValidateExternalTakeRouteDeployments,
+  validateAutoDiscoverRouteDeployments,
+  validateExternalTakeRouteDeployments,
+} from '../../src/discovery/route-preflight';
 
 describe('route deployment preflight', () => {
   afterEach(() => {
@@ -165,6 +175,26 @@ describe('route deployment preflight', () => {
     };
   }
 
+  function addManualLifiPool(config: KeeperConfig): KeeperConfig {
+    config.manual.pools = [
+      {
+        address: '0x8888888888888888888888888888888888888888',
+        price: { source: PriceOriginSource.FIXED, value: 1 },
+        take: {
+          liquiditySource: LiquiditySource.LIFI,
+          marketPriceFactor: 0.99,
+        },
+      },
+    ];
+    return config;
+  }
+
+  function manualLifiConfig(): KeeperConfig {
+    const config = addManualLifiPool(lifiConfig());
+    delete config.discovery;
+    return config;
+  }
+
   it('passes when enabled route contracts have bytecode and factory registry matches', async () => {
     const config = baseConfig();
     const provider = {
@@ -192,24 +222,19 @@ describe('route deployment preflight', () => {
 
   it('fails startup preflight when a configured taker has no bytecode', async () => {
     const config = baseConfig();
+    const uniswapTaker = config.takers!.contracts!.UniswapV3!;
     const provider = {
       _isProvider: true,
       resolveName: sinon.stub().callsFake(async (name: string) => name),
       getCode: sinon
         .stub()
         .callsFake(async (address: string) =>
-          address.toLowerCase() ===
-          config.takers!.contracts!.UniswapV3.toLowerCase()
-            ? '0x'
-            : '0x6000'
+          address.toLowerCase() === uniswapTaker.toLowerCase() ? '0x' : '0x6000'
         ),
       call: sinon
         .stub()
         .resolves(
-          ethers.utils.defaultAbiCoder.encode(
-            ['address'],
-            [config.takers!.contracts!.UniswapV3]
-          )
+          ethers.utils.defaultAbiCoder.encode(['address'], [uniswapTaker])
         ),
     };
 
@@ -404,6 +429,67 @@ describe('route deployment preflight', () => {
 
     expect(provider.getCode.callCount).to.equal(4);
     expect(provider.call.callCount).to.equal(4);
+  });
+
+  it('requires route preflight for manual live LI.FI even without autodiscovery', () => {
+    const config = manualLifiConfig();
+
+    expect(resolveExternalTakeRoutePreflightRequirements(config)).to.deep.equal(
+      [{ path: 'lifi', source: LiquiditySource.LIFI }]
+    );
+    expect(shouldValidateExternalTakeRouteDeployments(config)).to.equal(true);
+
+    config.runtime.dryRun = true;
+    expect(shouldValidateExternalTakeRouteDeployments(config)).to.equal(false);
+  });
+
+  it('passes manual LI.FI preflight when factory registry and on-chain allowlists match config', async () => {
+    const { config, provider } = lifiProviderStub();
+    addManualLifiPool(config);
+    delete config.discovery;
+
+    await validateExternalTakeRouteDeployments({
+      config,
+      provider: provider as any,
+      chainId: 1,
+    });
+
+    expect(provider.getCode.callCount).to.equal(4);
+    expect(provider.call.callCount).to.equal(4);
+  });
+
+  it('deduplicates LI.FI preflight requirements across manual pools and autodiscovery', () => {
+    const config = addManualLifiPool(lifiConfig());
+
+    expect(resolveExternalTakeRoutePreflightRequirements(config)).to.deep.equal(
+      [{ path: 'lifi', source: LiquiditySource.LIFI }]
+    );
+  });
+
+  it('scopes startup validation to autodiscovery requirements and manual required paths', () => {
+    const config = baseConfig();
+    config.manual.pools = [
+      {
+        address: '0x8888888888888888888888888888888888888888',
+        price: { source: PriceOriginSource.FIXED, value: 1 },
+        take: {
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      },
+    ];
+
+    expect(resolveExternalTakeRoutePreflightRequirements(config)).to.deep.equal(
+      [
+        { path: 'oneinch', source: LiquiditySource.ONEINCH },
+        { path: 'factory', source: LiquiditySource.UNISWAPV3 },
+      ]
+    );
+    expect(
+      resolveExternalTakeRouteDeploymentPreflight(config).requirements
+    ).to.deep.equal([
+      { path: 'factory', source: LiquiditySource.UNISWAPV3 },
+    ]);
   });
 
   it('fails LI.FI preflight when a partial allowlist update leaves only a subset on chain', async () => {

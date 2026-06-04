@@ -1,10 +1,16 @@
 import {
   CurveRouterOverrides,
+  ExternalTakeDeploymentResolution,
+  ExternalTakeDeploymentRuntimeConfig,
+  ExternalTakeDeploymentType,
   LifiDexConfig,
   LiquiditySource,
   PoolConfig,
   SushiswapRouterOverrides,
   UniswapV3RouterOverrides,
+  formatLiquiditySource,
+  resolveExternalTakeDeployment,
+  resolveExternalTakePathFromSource,
 } from '../config';
 import { RequireFields } from '../utils';
 import { ArbTakeStrategy, createArbTakeStrategy } from './arb-strategy';
@@ -20,10 +26,9 @@ import {
 } from './one-inch-adapter';
 import { OneInchExecutionConfig } from './one-inch-types';
 import { createLifiTakeAdapter } from './lifi-adapter';
-import { getLifiTakerAddress } from './lifi-execution';
 import { LifiExecutionConfig } from './lifi-types';
-import { TakeWriteTransportConfig } from './write-transport';
 import { TakeActionConfig } from './types';
+import { TakeWriteTransportConfig } from './write-transport';
 
 interface ManualTakeCommonContextConfig {
   dryRun?: boolean;
@@ -51,8 +56,13 @@ export interface ManualLifiContextConfig extends ManualTakeCommonContextConfig {
   keeperTakerFactory?: string;
   lifi?: LifiDexConfig;
   lifiTaker?: string;
-  takerContracts?: { [source: string]: string };
 }
+
+export interface ManualTakeRuntimeConfig
+  extends ExternalTakeDeploymentRuntimeConfig,
+    ManualOneInchContextConfig,
+    ManualFactoryContextConfig,
+    ManualLifiContextConfig {}
 
 export interface ManualTakeContext<TExecutionConfig> {
   externalTakeAdapter: ExternalTakeAdapter<TakeActionConfig, TExecutionConfig>;
@@ -62,7 +72,28 @@ export interface ManualTakeContext<TExecutionConfig> {
   foundLogLevel: 'debug' | 'info';
 }
 
-export function stripExternalTakeSettings(
+export type ResolvedManualTakeContext =
+  | ManualTakeContext<OneInchExecutionConfig>
+  | ManualTakeContext<FactoryExecutionConfig>
+  | ManualTakeContext<LifiExecutionConfig>;
+
+export interface ManualTakeDeploymentResolution
+  extends ExternalTakeDeploymentResolution {
+  requestedLiquiditySourceLabel: string;
+}
+
+export interface ManualTakeDeploymentResolutionLog {
+  level: 'debug' | 'warn';
+  message: string;
+}
+
+export interface ResolvedManualTakeRuntimeContext {
+  deploymentResolution: ManualTakeDeploymentResolution;
+  effectivePoolConfig: RequireFields<PoolConfig, 'take'>;
+  context: ResolvedManualTakeContext;
+}
+
+function stripExternalTakeSettings(
   poolConfig: RequireFields<PoolConfig, 'take'>
 ): RequireFields<PoolConfig, 'take'> {
   return {
@@ -75,23 +106,95 @@ export function stripExternalTakeSettings(
   };
 }
 
-export function isFactoryExternalTakeSource(
-  liquiditySource: LiquiditySource | undefined
-): boolean {
-  return (
-    liquiditySource === LiquiditySource.UNISWAPV3 ||
-    liquiditySource === LiquiditySource.SUSHISWAP ||
-    liquiditySource === LiquiditySource.CURVE
+export function resolveManualTakeDeployment(params: {
+  poolConfig: Pick<PoolConfig, 'take'>;
+  config: ExternalTakeDeploymentRuntimeConfig;
+}): ManualTakeDeploymentResolution {
+  const requestedLiquiditySource = params.poolConfig.take?.liquiditySource;
+  const resolution = resolveExternalTakeDeployment({
+    liquiditySource: requestedLiquiditySource,
+    config: params.config,
+  });
+  return {
+    ...resolution,
+    requestedLiquiditySourceLabel:
+      requestedLiquiditySource !== undefined
+        ? formatLiquiditySource(requestedLiquiditySource)
+        : 'arb-only',
+  };
+}
+
+export function formatManualExternalTakeDeployment(params: {
+  deploymentType: ExternalTakeDeploymentType;
+  poolName: string;
+}): string {
+  switch (params.deploymentType) {
+    case 'oneinch':
+      return `Using manual 1inch external take strategy for pool: ${params.poolName}`;
+    case 'factory':
+      return `Using factory external take strategy for pool: ${params.poolName}`;
+    case 'lifi':
+      return `Using manual LI.FI external take strategy for pool: ${params.poolName}`;
+    case 'none':
+      return `No external take deployment available for pool: ${params.poolName}`;
+  }
+}
+
+export function formatManualTakeDeploymentResolutionLog(params: {
+  resolution: ManualTakeDeploymentResolution;
+  poolName: string;
+}): ManualTakeDeploymentResolutionLog {
+  if (params.resolution.deploymentType !== 'none') {
+    return {
+      level: 'debug',
+      message: `Smart Detection: ${formatManualExternalTakeDeployment({
+        deploymentType: params.resolution.deploymentType,
+        poolName: params.poolName,
+      })}`,
+    };
+  }
+  if (params.resolution.unavailableReason) {
+    return {
+      level: 'warn',
+      message: `Smart Detection: external liquidity source ${params.resolution.requestedLiquiditySourceLabel} requested for pool ${params.poolName} but ${params.resolution.unavailableReason}`,
+    };
+  }
+
+  return {
+    level: 'debug',
+    message: `Smart Detection: No external liquidity source configured for pool ${params.poolName}`,
+  };
+}
+
+export function formatManualTakeDeploymentFallback(params: {
+  resolution: ManualTakeDeploymentResolution;
+  poolName: string;
+}): string {
+  return params.resolution.requestedLiquiditySource !== undefined
+    ? `External liquidity source ${params.resolution.requestedLiquiditySourceLabel} unavailable for pool ${params.poolName} - checking arbTake only`
+    : `No external liquidity source configured for pool ${params.poolName} - checking arbTake only`;
+}
+
+export function formatManualTakeContextStart(params: {
+  poolConfig: TakeActionConfig;
+  poolName: string;
+}): string {
+  const path = resolveExternalTakePathFromSource(
+    params.poolConfig.take.liquiditySource
   );
+  switch (path) {
+    case 'factory':
+      return `Manual factory external take context starting for pool: ${params.poolName}`;
+    case 'lifi':
+      return `Manual LI.FI external take context starting for pool: ${params.poolName}`;
+    case 'oneinch':
+      return `Manual 1inch take context starting for pool: ${params.poolName}`;
+    default:
+      return `Manual arbTake context starting for pool: ${params.poolName}`;
+  }
 }
 
-export function isLifiExternalTakeSource(
-  liquiditySource: LiquiditySource | undefined
-): liquiditySource is LiquiditySource.LIFI {
-  return liquiditySource === LiquiditySource.LIFI;
-}
-
-export function createManualOneInchTakeContext(params: {
+function createManualOneInchTakeContext(params: {
   poolConfig: TakeActionConfig;
   config: ManualOneInchContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
@@ -120,7 +223,7 @@ export function createManualOneInchTakeContext(params: {
   };
 }
 
-export function createManualFactoryTakeContext(params: {
+function createManualFactoryTakeContext(params: {
   config: ManualFactoryContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
 }): ManualTakeContext<FactoryExecutionConfig> {
@@ -154,14 +257,12 @@ export function createManualFactoryTakeContext(params: {
   };
 }
 
-export function createManualLifiTakeContext(params: {
+function createManualLifiTakeContext(params: {
   config: ManualLifiContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
 }): ManualTakeContext<LifiExecutionConfig> {
   const tokenDecimalsCache = new Map<string, number>();
-  const lifiTaker =
-    params.config.lifiTaker ??
-    getLifiTakerAddress(params.config.takerContracts);
+  const lifiTaker = params.config.lifiTaker;
   return {
     externalTakeAdapter: createLifiTakeAdapter({
       lifi: params.config.lifi,
@@ -182,5 +283,64 @@ export function createManualLifiTakeContext(params: {
     },
     logPrefix: 'LI.FI: ',
     foundLogLevel: 'info',
+  };
+}
+
+function createManualTakeContext(params: {
+  poolConfig: TakeActionConfig;
+  config: ManualTakeRuntimeConfig;
+  deploymentResolution: ManualTakeDeploymentResolution;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}): ResolvedManualTakeContext {
+  const path = resolveExternalTakePathFromSource(
+    params.poolConfig.take.liquiditySource
+  );
+  switch (path) {
+    case 'factory':
+      return createManualFactoryTakeContext({
+        config: params.config,
+        takeWriteTransport: params.takeWriteTransport,
+      });
+    case 'lifi':
+      return createManualLifiTakeContext({
+        config: {
+          ...params.config,
+          lifiTaker: params.deploymentResolution.resolvedTakerAddress,
+        },
+        takeWriteTransport: params.takeWriteTransport,
+      });
+    case 'oneinch':
+    default:
+      return createManualOneInchTakeContext({
+        poolConfig: params.poolConfig,
+        config: params.config,
+        takeWriteTransport: params.takeWriteTransport,
+      });
+  }
+}
+
+export function resolveManualTakeContext(params: {
+  poolConfig: RequireFields<PoolConfig, 'take'>;
+  config: ManualTakeRuntimeConfig;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}): ResolvedManualTakeRuntimeContext {
+  const deploymentResolution = resolveManualTakeDeployment({
+    poolConfig: params.poolConfig,
+    config: params.config,
+  });
+  const effectivePoolConfig =
+    deploymentResolution.deploymentType === 'none'
+      ? stripExternalTakeSettings(params.poolConfig)
+      : params.poolConfig;
+
+  return {
+    deploymentResolution,
+    effectivePoolConfig,
+    context: createManualTakeContext({
+      poolConfig: effectivePoolConfig,
+      config: params.config,
+      deploymentResolution,
+      takeWriteTransport: params.takeWriteTransport,
+    }),
   };
 }

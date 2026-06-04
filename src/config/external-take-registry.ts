@@ -5,6 +5,12 @@ export type FactoryLiquiditySource =
   | LiquiditySource.SUSHISWAP
   | LiquiditySource.CURVE;
 
+export type ExternalTakeTakerContractKey =
+  | 'UniswapV3'
+  | 'SushiSwap'
+  | 'Curve'
+  | 'Lifi';
+
 export type ExternalTakeLiquiditySource =
   | LiquiditySource.ONEINCH
   | FactoryLiquiditySource
@@ -20,6 +26,32 @@ export interface ExternalTakePathDescriptor {
   readonly sources: readonly LiquiditySource[];
   readonly requiresRouteDeploymentValidation?: boolean;
   readonly requiresDexGasOverride?: boolean;
+}
+
+export interface ExternalTakeLiquiditySourceDescriptor {
+  readonly source: ExternalTakeLiquiditySource;
+  readonly path: ExternalTakePathKind;
+  readonly label: string;
+  readonly takerContractKey?: ExternalTakeTakerContractKey;
+}
+
+export type ExternalTakeDeploymentType =
+  | 'factory'
+  | 'oneinch'
+  | 'lifi'
+  | 'none';
+
+export interface ExternalTakeDeploymentRuntimeConfig {
+  keeperTaker?: string;
+  keeperTakerFactory?: string;
+  takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
+}
+
+export interface ExternalTakeDeploymentResolution {
+  deploymentType: ExternalTakeDeploymentType;
+  requestedLiquiditySource: LiquiditySource | undefined;
+  resolvedTakerAddress?: string;
+  unavailableReason?: string;
 }
 
 export const FACTORY_DYNAMIC_SOURCES: readonly FactoryLiquiditySource[] = [
@@ -65,6 +97,41 @@ export const EXTERNAL_TAKE_PATH_DESCRIPTORS = {
     requiresDexGasOverride: true,
   },
 } satisfies Record<ExternalTakePathKind, ExternalTakePathDescriptor>;
+
+export const EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS = {
+  [LiquiditySource.ONEINCH]: {
+    source: LiquiditySource.ONEINCH,
+    path: 'oneinch',
+    label: '1inch',
+  },
+  [LiquiditySource.UNISWAPV3]: {
+    source: LiquiditySource.UNISWAPV3,
+    path: 'factory',
+    label: 'Uniswap V3',
+    takerContractKey: 'UniswapV3',
+  },
+  [LiquiditySource.SUSHISWAP]: {
+    source: LiquiditySource.SUSHISWAP,
+    path: 'factory',
+    label: 'SushiSwap',
+    takerContractKey: 'SushiSwap',
+  },
+  [LiquiditySource.CURVE]: {
+    source: LiquiditySource.CURVE,
+    path: 'factory',
+    label: 'Curve',
+    takerContractKey: 'Curve',
+  },
+  [LiquiditySource.LIFI]: {
+    source: LiquiditySource.LIFI,
+    path: 'lifi',
+    label: 'LI.FI',
+    takerContractKey: 'Lifi',
+  },
+} satisfies Record<
+  ExternalTakeLiquiditySource,
+  ExternalTakeLiquiditySourceDescriptor
+>;
 
 function formatList(values: readonly string[]): string {
   if (values.length <= 1) {
@@ -129,15 +196,111 @@ export function isExternalTakeLiquiditySource(
   );
 }
 
+export function getExternalTakeLiquiditySourceDescriptor(
+  source: ExternalTakeLiquiditySource
+): ExternalTakeLiquiditySourceDescriptor {
+  return EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS[source];
+}
+
+export function getExternalTakeTakerContractKeyForSource(
+  source: LiquiditySource | undefined
+): ExternalTakeTakerContractKey | undefined {
+  if (!isExternalTakeLiquiditySource(source)) {
+    return undefined;
+  }
+  return getExternalTakeLiquiditySourceDescriptor(source).takerContractKey;
+}
+
 export function resolveExternalTakePathFromSource(
   source: LiquiditySource | undefined
 ): ExternalTakePathKind | undefined {
-  if (source === undefined) {
+  if (!isExternalTakeLiquiditySource(source)) {
     return undefined;
   }
-  return getExternalTakePathDescriptors().find((descriptor) =>
-    descriptor.sources.includes(source)
-  )?.path;
+  return getExternalTakeLiquiditySourceDescriptor(source).path;
+}
+
+function getConfiguredExternalTakeTaker(params: {
+  source: ExternalTakeLiquiditySource;
+  config: ExternalTakeDeploymentRuntimeConfig;
+}): string | undefined {
+  if (params.source === LiquiditySource.ONEINCH) {
+    return params.config.keeperTaker;
+  }
+
+  const contractKey = getExternalTakeTakerContractKeyForSource(params.source);
+  if (!contractKey) {
+    return undefined;
+  }
+
+  return params.config.takerContracts?.[contractKey];
+}
+
+export function resolveExternalTakeDeployment(params: {
+  liquiditySource: LiquiditySource | undefined;
+  config: ExternalTakeDeploymentRuntimeConfig;
+}): ExternalTakeDeploymentResolution {
+  const source = params.liquiditySource;
+  if (!isExternalTakeLiquiditySource(source)) {
+    return {
+      deploymentType: 'none',
+      requestedLiquiditySource: source,
+    };
+  }
+
+  const path = resolveExternalTakePathFromSource(source);
+  if (path === 'oneinch') {
+    const resolvedTakerAddress = getConfiguredExternalTakeTaker({
+      source,
+      config: params.config,
+    });
+    if (resolvedTakerAddress) {
+      return {
+        deploymentType: 'oneinch',
+        requestedLiquiditySource: source,
+        resolvedTakerAddress,
+      };
+    }
+    return {
+      deploymentType: 'none',
+      requestedLiquiditySource: source,
+      unavailableReason: 'keeperTaker is not configured',
+    };
+  }
+
+  if (path === 'factory' || path === 'lifi') {
+    const contractKey = getExternalTakeTakerContractKeyForSource(source);
+    const resolvedTakerAddress = getConfiguredExternalTakeTaker({
+      source,
+      config: params.config,
+    });
+    if (!params.config.keeperTakerFactory) {
+      return {
+        deploymentType: 'none',
+        requestedLiquiditySource: source,
+        unavailableReason: 'keeperTakerFactory is not configured',
+      };
+    }
+    if (!resolvedTakerAddress) {
+      return {
+        deploymentType: 'none',
+        requestedLiquiditySource: source,
+        unavailableReason: contractKey
+          ? `takerContracts.${contractKey} is not configured`
+          : 'registered taker contract is not configured',
+      };
+    }
+    return {
+      deploymentType: path,
+      requestedLiquiditySource: source,
+      resolvedTakerAddress,
+    };
+  }
+
+  return {
+    deploymentType: 'none',
+    requestedLiquiditySource: source,
+  };
 }
 
 export function formatSupportedExternalTakePaths(): string {

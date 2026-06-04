@@ -15,9 +15,7 @@ import {
   runLifiSubmissionBoundaryScenario,
   stubLifiQuoteResponse,
 } from './helpers/lifi-execution-scenarios';
-import {
-  malformedSingleExternalTakeExecutionPlan,
-} from '../helpers/external-take-plan';
+import { malformedSingleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 
 describe('LI.FI execution', () => {
   const LIFI_DETAILS_ABI =
@@ -29,19 +27,20 @@ describe('LI.FI execution', () => {
   });
 
   it('uses only canonical takers.contracts.Lifi for LI.FI taker lookup', () => {
-    expect(
-      getLifiTakerAddress({
-        Lifi: '0x1111111111111111111111111111111111111111',
-        LIFI: '0x2222222222222222222222222222222222222222',
-        lifi: '0x3333333333333333333333333333333333333333',
-      })
-    ).to.equal('0x1111111111111111111111111111111111111111');
-    expect(
-      getLifiTakerAddress({
-        LIFI: '0x2222222222222222222222222222222222222222',
-        lifi: '0x3333333333333333333333333333333333333333',
-      })
-    ).to.equal(undefined);
+    const canonicalAndAliasContracts: Record<string, string> = {
+      Lifi: '0x1111111111111111111111111111111111111111',
+      LIFI: '0x2222222222222222222222222222222222222222',
+      lifi: '0x3333333333333333333333333333333333333333',
+    };
+    const aliasOnlyContracts: Record<string, string> = {
+      LIFI: '0x2222222222222222222222222222222222222222',
+      lifi: '0x3333333333333333333333333333333333333333',
+    };
+
+    expect(getLifiTakerAddress(canonicalAndAliasContracts)).to.equal(
+      '0x1111111111111111111111111111111111111111'
+    );
+    expect(getLifiTakerAddress(aliasOnlyContracts)).to.equal(undefined);
   });
 
   it('reports policy rejection as a pre-broadcast failure for hybrid fallback', async () => {

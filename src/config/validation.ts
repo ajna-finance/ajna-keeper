@@ -30,6 +30,7 @@ import {
 import {
   formatSupportedExternalTakeLiquiditySources,
   formatSupportedExternalTakePaths,
+  getExternalTakeTakerContractKeyForSource,
   getExternalTakePathDefaultSource,
   getExternalTakePathDescriptor,
   getExternalTakePathDescriptors,
@@ -512,21 +513,25 @@ type ExternalTakeSourceValidator = (
   params: ExternalTakeSourceValidationParams
 ) => void;
 
-type FactoryTakerContractKey = 'UniswapV3' | 'SushiSwap' | 'Curve' | 'Lifi';
-
-function requireFactoryTakerContract(params: {
+function requireRegisteredTakerContract(params: {
   keeperConfig: KeeperConfig;
-  sourceName: string;
-  contractKey: FactoryTakerContractKey;
+  source: ExternalTakeLiquiditySource;
 }): void {
-  if (!params.keeperConfig.takers?.factory) {
+  const sourceName = LiquiditySource[params.source];
+  const contractKey = getExternalTakeTakerContractKeyForSource(params.source);
+  if (!contractKey) {
     throw new Error(
-      `TakeSettings: takers.factory required when liquiditySource is ${params.sourceName}`
+      `TakeSettings: liquiditySource ${sourceName} does not use a registered taker contract`
     );
   }
-  if (!params.keeperConfig.takers.contracts?.[params.contractKey]) {
+  if (!params.keeperConfig.takers?.factory) {
     throw new Error(
-      `TakeSettings: takers.contracts.${params.contractKey} required when liquiditySource is ${params.sourceName}`
+      `TakeSettings: takers.factory required when liquiditySource is ${sourceName}`
+    );
+  }
+  if (!params.keeperConfig.takers.contracts?.[contractKey]) {
+    throw new Error(
+      `TakeSettings: takers.contracts.${contractKey} required when liquiditySource is ${sourceName}`
     );
   }
 }
@@ -558,10 +563,9 @@ function validateOneInchTakeSource({
 function validateUniswapV3TakeSource({
   keeperConfig,
 }: ExternalTakeSourceValidationParams): void {
-  requireFactoryTakerContract({
+  requireRegisteredTakerContract({
     keeperConfig,
-    sourceName: 'UNISWAPV3',
-    contractKey: 'UniswapV3',
+    source: LiquiditySource.UNISWAPV3,
   });
   if (!keeperConfig.dex?.uniswapV3?.router) {
     throw new Error(
@@ -579,10 +583,9 @@ function validateUniswapV3TakeSource({
 function validateSushiSwapTakeSource({
   keeperConfig,
 }: ExternalTakeSourceValidationParams): void {
-  requireFactoryTakerContract({
+  requireRegisteredTakerContract({
     keeperConfig,
-    sourceName: 'SUSHISWAP',
-    contractKey: 'SushiSwap',
+    source: LiquiditySource.SUSHISWAP,
   });
   if (!keeperConfig.dex?.sushiswap) {
     throw new Error(
@@ -605,10 +608,9 @@ function validateSushiSwapTakeSource({
 function validateCurveTakeSource({
   keeperConfig,
 }: ExternalTakeSourceValidationParams): void {
-  requireFactoryTakerContract({
+  requireRegisteredTakerContract({
     keeperConfig,
-    sourceName: 'CURVE',
-    contractKey: 'Curve',
+    source: LiquiditySource.CURVE,
   });
   if (!keeperConfig.dex?.curve) {
     throw new Error(
@@ -638,10 +640,9 @@ function validateLifiTakeSource({
   keeperConfig,
   chainId,
 }: ExternalTakeSourceValidationParams): void {
-  requireFactoryTakerContract({
+  requireRegisteredTakerContract({
     keeperConfig,
-    sourceName: 'LIFI',
-    contractKey: 'Lifi',
+    source: LiquiditySource.LIFI,
   });
   assertValidLifiDexConfig({
     config: keeperConfig.dex?.lifi,

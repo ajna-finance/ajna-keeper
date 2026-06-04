@@ -13,24 +13,33 @@ import type { FactoryLiquiditySource } from './external-take-registry';
 
 export {
   EXTERNAL_TAKE_PATH_DESCRIPTORS,
+  EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS,
   EXTERNAL_TAKE_PATHS,
   FACTORY_DYNAMIC_SOURCES,
   SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES,
   SUPPORTED_EXTERNAL_TAKE_PATHS,
   formatSupportedExternalTakeLiquiditySources,
   formatSupportedExternalTakePaths,
+  getExternalTakeLiquiditySourceDescriptor,
   getExternalTakePathDefaultSource,
   getExternalTakePathDescriptor,
   getExternalTakePathDescriptors,
+  getExternalTakeTakerContractKeyForSource,
   isAggregatorExternalTakePath,
   isExternalTakeLiquiditySource,
   isExternalTakePath,
+  resolveExternalTakeDeployment,
   resolveExternalTakePathFromSource,
 } from './external-take-registry';
 export type {
+  ExternalTakeDeploymentResolution,
+  ExternalTakeDeploymentRuntimeConfig,
+  ExternalTakeDeploymentType,
   ExternalTakePathDescriptor,
   ExternalTakePathCategory,
   ExternalTakeLiquiditySource,
+  ExternalTakeLiquiditySourceDescriptor,
+  ExternalTakeTakerContractKey,
   FactoryLiquiditySource,
 } from './external-take-registry';
 

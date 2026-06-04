@@ -7,7 +7,6 @@ import {
   resolveExternalTakePaths,
 } from '../config';
 import { logger } from '../logging';
-import * as lifiExecutionModule from '../take/lifi-execution';
 import { ExternalTakeAdapter } from '../take/engine';
 import { TakeAuctionStatusReader } from '../take/liquidation-status';
 import { TakeWriteTransport } from '../take/write-transport';
@@ -253,9 +252,7 @@ export function createDiscoveredTakeTargetRuntime(params: {
     keeperTaker: params.config.keeperTaker,
     keeperTakerFactory: params.config.keeperTakerFactory,
     lifi: params.config.lifi,
-    lifiTaker:
-      params.config.lifiTaker ??
-      lifiExecutionModule.getLifiTakerAddress(params.config.takerContracts),
+    lifiTaker: params.config.lifiTaker,
     uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
     sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,

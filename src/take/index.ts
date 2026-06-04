@@ -1,15 +1,7 @@
 import { Signer, FungiblePool } from '@ajna-finance/sdk';
 import { RequireFields, weiToDecimaled } from '../utils';
-import {
-  CurveRouterOverrides,
-  LifiDexConfig,
-  LiquiditySource,
-  PoolConfig,
-  SushiswapRouterOverrides,
-  UniswapV3RouterOverrides,
-} from '../config';
+import { PoolConfig } from '../config';
 import { logger } from '../logging';
-import { SmartDexManager } from '../dex/manager';
 import {
   resolveSubgraphConfig,
   SubgraphConfigInput,
@@ -29,19 +21,15 @@ import {
   processTakeCandidates,
 } from './engine';
 import {
-  createManualFactoryTakeContext,
-  createManualLifiTakeContext,
-  createManualOneInchTakeContext,
-  isFactoryExternalTakeSource,
-  isLifiExternalTakeSource,
+  formatManualExternalTakeDeployment,
+  formatManualTakeDeploymentFallback,
+  formatManualTakeDeploymentResolutionLog,
+  formatManualTakeContextStart,
   ManualTakeContext,
-  stripExternalTakeSettings,
+  ManualTakeRuntimeConfig,
+  ResolvedManualTakeContext,
+  resolveManualTakeContext,
 } from './manual-context';
-import {
-  createNoExternalTakeAdapter,
-  createOneInchTakeAdapter,
-} from './one-inch-adapter';
-import { createLifiTakeAdapter } from './lifi-adapter';
 import { createArbTakeStrategy } from './arb-strategy';
 
 export type {
@@ -67,24 +55,8 @@ export {
   defaultTakeAuctionStatusReader,
 } from './liquidation-status';
 
-interface HandleTakeConfigBase {
-  dryRun?: boolean;
-  connectorTokens?: Array<string>;
-  oneInchRouters?: { [chainId: number]: string };
-  oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
-  keeperTaker?: string;
-  keeperTakerFactory?: string;
-  lifi?: LifiDexConfig;
-  lifiTaker?: string;
-  takerContracts?: { [source: string]: string };
-  uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
-  sushiswapRouterOverrides?: SushiswapRouterOverrides;
-  curveRouterOverrides?: CurveRouterOverrides;
-  tokenAddresses?: { [tokenSymbol: string]: string };
-}
-
-type HandleTakeConfig = WithSubgraph<HandleTakeConfigBase>;
-type HandleTakeConfigInput = SubgraphConfigInput<HandleTakeConfigBase>;
+type HandleTakeConfig = WithSubgraph<ManualTakeRuntimeConfig>;
+type HandleTakeConfigInput = SubgraphConfigInput<ManualTakeRuntimeConfig>;
 
 interface HandleTakeParams {
   signer: Signer;
@@ -96,6 +68,7 @@ interface HandleTakeParams {
 
 interface ResolvedHandleTakeParams extends Omit<HandleTakeParams, 'config'> {
   config: HandleTakeConfig;
+  context: ResolvedManualTakeContext;
 }
 
 export async function handleTakes({
@@ -106,64 +79,68 @@ export async function handleTakes({
   config,
 }: HandleTakeParams) {
   const resolvedConfig: HandleTakeConfig = resolveSubgraphConfig(config);
-  const dexManager = new SmartDexManager(signer, resolvedConfig);
-  const requestedLiquiditySource = poolConfig.take.liquiditySource;
-  const deploymentType =
-    await dexManager.detectDeploymentTypeForPool(poolConfig);
-  const validation = await dexManager.validateDeploymentForPool(poolConfig);
+  const resolvedManualTakeContext = resolveManualTakeContext({
+    poolConfig,
+    config: resolvedConfig,
+    takeWriteTransport,
+  });
+  const deploymentResolution = resolvedManualTakeContext.deploymentResolution;
+  const deploymentType = deploymentResolution.deploymentType;
+  const deploymentLog = formatManualTakeDeploymentResolutionLog({
+    resolution: deploymentResolution,
+    poolName: pool.name,
+  });
 
-  logger.debug(
-    `Detection Results - Pool: ${pool.name}, Requested Source: ${requestedLiquiditySource ?? 'arb-only'}, Type: ${deploymentType}, Valid: ${validation.valid}`
-  );
-  if (!validation.valid) {
-    logger.error(`Configuration errors: ${validation.errors.join(', ')}`);
+  if (deploymentLog.level === 'warn') {
+    logger.warn(deploymentLog.message);
+  } else {
+    logger.debug(deploymentLog.message);
   }
 
-  let effectivePoolConfig = poolConfig;
-  switch (deploymentType) {
-    case 'oneinch':
-      logger.debug(
-        `Using manual 1inch external take strategy for pool: ${pool.name}`
-      );
-      break;
+  logger.debug(
+    `Detection Results - Pool: ${pool.name}, Requested Source: ${deploymentResolution.requestedLiquiditySourceLabel}, Type: ${deploymentType}`
+  );
 
-    case 'factory':
-      logger.debug(
-        `Using factory external take strategy for pool: ${pool.name}`
-      );
-      break;
-
-    case 'lifi':
-      logger.debug(
-        `Using manual LI.FI external take strategy for pool: ${pool.name}`
-      );
-      break;
-
-    case 'none':
-      logger.warn(
-        `External liquidity source ${requestedLiquiditySource ?? 'none'} unavailable for pool ${pool.name} - checking arbTake only`
-      );
-      effectivePoolConfig = stripExternalTakeSettings(poolConfig);
-      break;
+  if (deploymentType === 'none') {
+    logger.warn(
+      formatManualTakeDeploymentFallback({
+        resolution: deploymentResolution,
+        poolName: pool.name,
+      })
+    );
+  } else {
+    logger.debug(
+      formatManualExternalTakeDeployment({
+        deploymentType,
+        poolName: pool.name,
+      })
+    );
   }
 
   await runResolvedManualTakeCandidates({
     signer,
     takeWriteTransport,
     pool,
-    poolConfig: effectivePoolConfig,
+    poolConfig: resolvedManualTakeContext.effectivePoolConfig,
     config: resolvedConfig,
+    context: resolvedManualTakeContext.context,
   });
 }
 
 export async function processManualTakeCandidates(
   params: HandleTakeParams
 ): Promise<void> {
-  // Lower-level entrypoint for tests and direct callers; SmartDex deployment
-  // detection is intentionally handled by handleTakes().
+  const resolvedConfig = resolveSubgraphConfig(params.config);
+  const resolvedManualTakeContext = resolveManualTakeContext({
+    poolConfig: params.poolConfig,
+    config: resolvedConfig,
+    takeWriteTransport: params.takeWriteTransport,
+  });
   await runResolvedManualTakeCandidates({
     ...params,
-    config: resolveSubgraphConfig(params.config),
+    poolConfig: resolvedManualTakeContext.effectivePoolConfig,
+    config: resolvedConfig,
+    context: resolvedManualTakeContext.context,
   });
 }
 
@@ -173,6 +150,7 @@ async function runResolvedManualTakeCandidates({
   pool,
   poolConfig,
   config,
+  context,
 }: ResolvedHandleTakeParams): Promise<void> {
   const candidates = await getTakeBorrowerCandidates({
     subgraph: config.subgraph,
@@ -180,56 +158,9 @@ async function runResolvedManualTakeCandidates({
     minCollateral: poolConfig.take.minCollateral ?? 0,
   });
 
-  if (isFactoryExternalTakeSource(poolConfig.take.liquiditySource)) {
-    logger.debug(
-      `Manual factory external take context starting for pool: ${pool.name}`
-    );
-    const context = createManualFactoryTakeContext({
-      config,
-      takeWriteTransport,
-    });
-    await runManualTakeCandidateEngine({
-      pool,
-      signer,
-      poolConfig,
-      candidates,
-      subgraph: config.subgraph,
-      dryRun: config.dryRun ?? false,
-      takeWriteTransport,
-      context,
-    });
-    return;
-  }
-
-  if (isLifiExternalTakeSource(poolConfig.take.liquiditySource)) {
-    logger.debug(
-      `Manual LI.FI external take context starting for pool: ${pool.name}`
-    );
-    const context = createManualLifiTakeContext({
-      config,
-      takeWriteTransport,
-    });
-    await runManualTakeCandidateEngine({
-      pool,
-      signer,
-      poolConfig,
-      candidates,
-      subgraph: config.subgraph,
-      dryRun: config.dryRun ?? false,
-      takeWriteTransport,
-      context,
-    });
-    return;
-  }
-
   logger.debug(
-    `${poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ? 'Manual 1inch take context' : 'Manual arbTake context'} starting for pool: ${pool.name}`
+    formatManualTakeContextStart({ poolConfig, poolName: pool.name })
   );
-  const context = createManualOneInchTakeContext({
-    poolConfig,
-    config,
-    takeWriteTransport,
-  });
   await runManualTakeCandidateEngine({
     pool,
     signer,
@@ -290,14 +221,7 @@ async function runManualTakeCandidateEngine<TExecutionConfig>(params: {
 
 interface GetLiquidationsToTakeParams
   extends Pick<HandleTakeParams, 'pool' | 'poolConfig' | 'signer'> {
-  config: SubgraphConfigInput<
-    Pick<HandleTakeConfigBase, 'oneInchRouters' | 'connectorTokens'> & {
-      oneInchDefaultSlippage?: number;
-      lifi?: LifiDexConfig;
-      lifiTaker?: string;
-      takerContracts?: { [source: string]: string };
-    }
-  >;
+  config: SubgraphConfigInput<ManualTakeRuntimeConfig>;
 }
 
 export async function* getLiquidationsToTake({
@@ -307,32 +231,25 @@ export async function* getLiquidationsToTake({
   config,
 }: GetLiquidationsToTakeParams): AsyncGenerator<TakeLiquidationPlan> {
   const resolvedConfig = resolveSubgraphConfig(config);
+  const resolvedManualTakeContext = resolveManualTakeContext({
+    poolConfig,
+    config: resolvedConfig,
+  });
+  const effectivePoolConfig = resolvedManualTakeContext.effectivePoolConfig;
   const candidates = await getTakeBorrowerCandidates({
     subgraph: resolvedConfig.subgraph,
     poolAddress: pool.poolAddress,
-    minCollateral: poolConfig.take.minCollateral ?? 0,
+    minCollateral: effectivePoolConfig.take.minCollateral ?? 0,
   });
   const externalTakeAdapter =
-    poolConfig.take.liquiditySource === LiquiditySource.ONEINCH
-      ? createOneInchTakeAdapter({
-          oneInchDefaultSlippage: resolvedConfig.oneInchDefaultSlippage,
-          oneInchRouters: resolvedConfig.oneInchRouters,
-          connectorTokens: resolvedConfig.connectorTokens,
-        })
-      : poolConfig.take.liquiditySource === LiquiditySource.LIFI
-        ? createLifiTakeAdapter({
-            lifi: resolvedConfig.lifi,
-            lifiTaker:
-              resolvedConfig.lifiTaker ?? resolvedConfig.takerContracts?.Lifi,
-          })
-        : createNoExternalTakeAdapter();
+    resolvedManualTakeContext.context.externalTakeAdapter;
   const arbTakeStrategy = createArbTakeStrategy();
 
   for (const candidate of candidates) {
     const decision = await evaluateTakeDecision({
       pool,
       signer,
-      poolConfig,
+      poolConfig: effectivePoolConfig,
       candidate,
       subgraph: resolvedConfig.subgraph,
       externalTakeAdapter,

@@ -496,11 +496,7 @@ export async function quoteLifiPathForDiscovery(
         params.poolConfig,
         {
           lifi: params.config.lifi,
-          lifiTaker:
-            params.config.lifiTaker ??
-            lifiExecutionModule.getLifiTakerAddress(
-              params.config.takerContracts
-            ),
+          lifiTaker: params.config.lifiTaker,
           lifiRequestAbortSignal: signal,
           chainId: params.rpcCache?.chainId,
           tokenDecimalsCache: params.getTokenDecimalsCache(params.rpcCache),

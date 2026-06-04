@@ -15,6 +15,7 @@ import {
   getEffectiveV3FeeTiers,
   resolveUniswapV3FactoryRouteConfig,
 } from '../../config';
+import type { ExternalTakeTakerContractKey } from '../../config';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { SubgraphConfigInput, WithSubgraph } from '../../read-transports';
@@ -110,7 +111,7 @@ export interface FactoryRouteProfitabilityContext {
 export interface FactoryTakeConfigBase {
   dryRun?: boolean;
   keeperTakerFactory?: string;
-  takerContracts?: { [source: string]: string };
+  takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;

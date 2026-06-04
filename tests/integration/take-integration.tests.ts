@@ -1,10 +1,13 @@
 // tests/integration/take-integration.test.ts
 import { expect } from 'chai';
+import { BigNumber } from 'ethers';
 import sinon from 'sinon';
 import { LiquiditySource, PoolConfig } from '../../src/config';
 import { logger } from '../../src/logging';
 import subgraph from '../../src/subgraph';
-import { handleTakes } from '../../src/take';
+import { getLiquidationsToTake, handleTakes } from '../../src/take';
+import * as takeArb from '../../src/take/arb';
+import { arrayFromAsync } from '../../src/utils';
 
 describe('Take Integration Tests', () => {
   const basePool = {
@@ -332,9 +335,71 @@ describe('Take Integration Tests', () => {
     expect(
       warnSpy.calledWithMatch(
         sinon.match(
-          `External liquidity source ${LiquiditySource.UNISWAPV3} unavailable for pool ${basePool.name} - checking arbTake only`
+          `External liquidity source UNISWAPV3 unavailable for pool ${basePool.name} - checking arbTake only`
         )
       )
     ).to.be.true;
+  });
+
+  it('uses the same deployment-aware arb fallback for getLiquidationsToTake', async () => {
+    const borrower = '0x4444444444444444444444444444444444444444';
+    (subgraph.getLiquidations as sinon.SinonStub).resolves({
+      pool: {
+        hpb: 1,
+        hpbIndex: 42,
+        liquidationAuctions: [{ borrower }],
+      },
+    } as any);
+    const checkIfArbTakeableStub = sinon
+      .stub(takeArb, 'checkIfArbTakeable')
+      .callsFake(async (_pool, _price, _collateral, poolConfig) => {
+        expect(poolConfig.take.liquiditySource).to.equal(undefined);
+        expect(poolConfig.take.marketPriceFactor).to.equal(undefined);
+        expect(poolConfig.take.hpbPriceFactor).to.equal(0.98);
+        return {
+          isArbTakeable: true,
+          hpbIndex: 42,
+          maxArbTakePrice: 1,
+        };
+      });
+    const pool = {
+      ...basePool,
+      getPrices: sinon.stub().resolves({
+        hpb: BigNumber.from('1000000000000000000'),
+      }),
+      poolInfoContractUtils: {
+        auctionStatus: sinon.stub().resolves({
+          collateral: BigNumber.from('1000000000000000000'),
+          price: BigNumber.from('500000000000000000'),
+        }),
+      },
+    };
+
+    const liquidations = await arrayFromAsync(
+      getLiquidationsToTake({
+        signer,
+        pool: pool as any,
+        poolConfig: {
+          ...basePoolConfig,
+          take: {
+            minCollateral: 0.1,
+            liquiditySource: LiquiditySource.UNISWAPV3,
+            marketPriceFactor: 0.95,
+            hpbPriceFactor: 0.98,
+          },
+        } as any,
+        config: {
+          subgraphUrl: 'http://test-url',
+          keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        } as any,
+      })
+    );
+
+    expect(checkIfArbTakeableStub.calledOnce).to.equal(true);
+    expect(liquidations).to.have.length(1);
+    expect(liquidations[0].borrower).to.equal(borrower);
+    expect(liquidations[0].isTakeable).to.equal(false);
+    expect(liquidations[0].isArbTakeable).to.equal(true);
+    expect(liquidations[0].externalTakeExecutionPlan).to.equal(undefined);
   });
 });

@@ -8,6 +8,7 @@ import {
   LiquiditySource,
   SushiswapRouterOverrides,
   UniswapV3RouterOverrides,
+  resolveExternalTakeDeployment,
 } from '../config';
 import {
   FactoryQuoteProviderRuntimeCache,
@@ -32,7 +33,6 @@ export interface DiscoveryExecutionConfig {
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
   sushiswapRouterOverrides?: SushiswapRouterOverrides;
-  takerContracts?: { [source: string]: string };
   tokenAddresses?: { [tokenSymbol: string]: string };
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
 }
@@ -43,6 +43,13 @@ export type DiscoveryExecutionTransportConfig = DiscoveryExecutionConfig &
 export function getDiscoveryExecutionConfig(
   config: KeeperConfig
 ): DiscoveryExecutionConfig {
+  const lifiDeployment = resolveExternalTakeDeployment({
+    liquiditySource: LiquiditySource.LIFI,
+    config: {
+      keeperTakerFactory: config.takers?.factory,
+      takerContracts: config.takers?.contracts,
+    },
+  });
   return {
     autoDiscover: config.discovery,
     connectorTokens: config.dex?.oneInch?.connectorTokens,
@@ -52,13 +59,15 @@ export function getDiscoveryExecutionConfig(
     keeperTaker: config.takers?.oneInch,
     keeperTakerFactory: config.takers?.factory,
     lifi: config.dex?.lifi,
-    lifiTaker: config.takers?.contracts?.Lifi,
+    lifiTaker:
+      lifiDeployment.deploymentType === 'lifi'
+        ? lifiDeployment.resolvedTakerAddress
+        : undefined,
     oneInchAggregationExecutorAllowlist:
       config.dex?.oneInch?.aggregationExecutorAllowlist,
     oneInchDefaultSlippage: config.dex?.oneInch?.defaultSlippage,
     oneInchRouters: config.dex?.oneInch?.routers,
     sushiswapRouterOverrides: config.dex?.sushiswap,
-    takerContracts: config.takers?.contracts,
     tokenAddresses: config.network.tokenAddresses,
     uniswapV3RouterOverrides: config.dex?.uniswapV3?.router,
   };

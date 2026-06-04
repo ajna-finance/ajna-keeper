@@ -1,5 +1,6 @@
 import { Address } from '@ajna-finance/sdk';
 import { FeeAmount } from '@uniswap/v3-sdk';
+import type { ExternalTakeTakerContractKey } from './external-take-registry';
 import type { LifiFeeCostPolicy } from '../dex/lifi/schema';
 
 export type { LifiFeeCostPolicy } from '../dex/lifi/schema';
@@ -602,9 +603,7 @@ export interface DexConfig {
 export interface TakersConfig {
   oneInch?: string;
   factory?: string;
-  contracts?: {
-    [source: string]: string;
-  };
+  contracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
 }
 
 export interface PricingConfig {

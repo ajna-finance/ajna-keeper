@@ -1,5 +1,4 @@
 export * from './router';
-export * from './manager';
 export * from './uniswap';
 export * from './one-inch';
 export * from './universal-router';

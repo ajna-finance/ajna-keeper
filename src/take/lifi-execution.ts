@@ -2,6 +2,7 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
 import { LifiDexConfig, LiquiditySource } from '../config';
+import type { ExternalTakeTakerContractKey } from '../config';
 import { ApprovedLifiQuote, DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../dex/lifi';
 import { convertWadToTokenDecimals } from '../erc20';
 import { logger } from '../logging';
@@ -14,9 +15,7 @@ import {
 import { approveLifiQuoteForExecution } from './external-take-quote-approval';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from './external-take-execution-plan';
 import { LifiExecutionConfig } from './lifi-types';
-import {
-  getLifiPathQuoteEvaluation as evaluateLifiPathQuote,
-} from './lifi-quote-evaluation';
+import { getLifiPathQuoteEvaluation as evaluateLifiPathQuote } from './lifi-quote-evaluation';
 import {
   getLifiQuoteFailureMetadata,
   getLifiTokenDecimals,
@@ -40,9 +39,28 @@ import { logTakeExecutionTelemetry } from './execution-telemetry';
 export const getLifiPathQuoteEvaluation = evaluateLifiPathQuote;
 
 function getLifiTakerAddress(
-  takerContracts: { [source: string]: string } | undefined
+  takerContracts:
+    | Partial<Record<ExternalTakeTakerContractKey, string>>
+    | undefined
 ): string | undefined {
   return takerContracts?.Lifi;
+}
+
+function resolveLifiTakerAddress(params: {
+  lifiTaker?: string;
+  takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
+}): string | undefined {
+  const canonicalTaker = getLifiTakerAddress(params.takerContracts);
+  if (
+    canonicalTaker &&
+    params.lifiTaker &&
+    canonicalTaker.toLowerCase() !== params.lifiTaker.toLowerCase()
+  ) {
+    throw new Error(
+      'LI.FI runtime lifiTaker override must match takers.contracts.Lifi'
+    );
+  }
+  return canonicalTaker ?? params.lifiTaker;
 }
 
 function recordLifiPreBroadcastFailure(
@@ -529,4 +547,4 @@ export async function takeLiquidationLifi(params: {
   }
 }
 
-export { getLifiTakerAddress };
+export { getLifiTakerAddress, resolveLifiTakerAddress };

@@ -6,4 +6,5 @@ export * from './fee-policy';
 export * from './filters';
 export * from './schema';
 export * from './selector-allowlist';
+export * from './taker-allowlist';
 export * from './validate-route';

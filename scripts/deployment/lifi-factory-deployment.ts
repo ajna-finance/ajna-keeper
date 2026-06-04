@@ -1,54 +1,27 @@
 import { ethers } from 'ethers';
 import * as path from 'path';
-import { KeeperConfig, LiquiditySource } from '../../src/config';
+import {
+  KeeperConfig,
+  LiquiditySource,
+  type NormalizedLifiAllowlistPolicy,
+} from '../../src/config';
 import { normalizeLifiProductionChainPolicy } from '../../src/config/lifi-policy';
 import {
-  normalizeLifiAddressAllowlist,
-  normalizeLifiSelectorAllowlistRecord,
+  assertLifiTakerAllowlistPolicy,
+  buildLifiTakerAllowlistReconciliationPlan,
+  createLifiTakerAllowlistReader,
+  type LifiAllowlistReconciliationPlan,
+  readLifiTakerAllowlistSnapshot,
+  normalizeLifiTakerAllowlistSnapshot,
 } from '../../src/dex/lifi';
 
-export interface LifiProductionAllowlists {
-  callTargets: string[];
-  approvalSpenders: string[];
-  selectorAllowlist: Record<string, string[]>;
-}
-
-type LifiSelectorEntry = { target: string; selector: string };
-
-export interface LifiAllowlistReconciliationPlan {
-  callTargetsToEnable: string[];
-  callTargetsToDisable: string[];
-  approvalSpendersToEnable: string[];
-  approvalSpendersToDisable: string[];
-  selectorsToEnable: LifiSelectorEntry[];
-  selectorsToDisable: LifiSelectorEntry[];
-  selectorTargets: string[];
-}
+export type LifiProductionAllowlists = NormalizedLifiAllowlistPolicy;
+export type { LifiAllowlistReconciliationPlan };
 
 type GasConfig = { gasLimit: string; gasPrice?: string };
 
 function getArtifactPath(...segments: string[]): string {
   return path.join(__dirname, '..', '..', 'artifacts', ...segments);
-}
-
-function normalizeLifiSelectorsForTarget(
-  target: string,
-  selectors: readonly string[],
-  label: string,
-  requireNonEmpty = true
-): string[] {
-  if (!requireNonEmpty && selectors.length === 0) {
-    return [];
-  }
-  const normalized = normalizeLifiSelectorAllowlistRecord(
-    { [target]: selectors },
-    { label, requireNonEmpty }
-  );
-  return normalized[ethers.utils.getAddress(target).toLowerCase()] ?? [];
-}
-
-function toLowerSet(values: readonly string[]): Set<string> {
-  return new Set(values.map((value) => value.toLowerCase()));
 }
 
 export function getLifiProductionAllowlists(
@@ -86,99 +59,25 @@ export function getLifiProductionDeploymentGateMessages(
   ];
 }
 
-function assertExactSet(
-  label: string,
-  expectedValues: readonly string[],
-  actualValues: readonly string[]
-): void {
-  const expected = expectedValues.map((value) => value.toLowerCase()).sort();
-  const actual = actualValues.map((value) => value.toLowerCase()).sort();
-  if (
-    expected.length !== actual.length ||
-    expected.some((value, index) => value !== actual[index])
-  ) {
-    throw new Error(
-      `${label} mismatch. expected=[${expected.join(',')}] actual=[${actual.join(',')}]`
-    );
-  }
-}
-
-function assertContainsSet(
-  label: string,
-  expectedValues: readonly string[],
-  actualValues: readonly string[]
-): void {
-  const actual = toLowerSet(actualValues);
-  const missing = expectedValues.filter(
-    (value) => !actual.has(value.toLowerCase())
-  );
-  if (missing.length > 0) {
-    throw new Error(
-      `${label} missing expected entries: [${missing.join(',')}]`
-    );
-  }
-}
-
 export function buildLifiAllowlistReconciliationPlan(params: {
   desired: LifiProductionAllowlists;
   currentCallTargets: readonly string[];
   currentApprovalSpenders: readonly string[];
   currentSelectorsByTarget: Record<string, readonly string[]>;
 }): LifiAllowlistReconciliationPlan {
-  const desiredCallTargets = toLowerSet(params.desired.callTargets);
-  const desiredApprovalSpenders = toLowerSet(params.desired.approvalSpenders);
-  const currentCallTargets = toLowerSet(params.currentCallTargets);
-  const currentApprovalSpenders = toLowerSet(params.currentApprovalSpenders);
-
-  const selectorTargets = new Map<string, string>();
-  for (const target of [
-    ...params.currentCallTargets,
-    ...params.desired.callTargets,
-    ...Object.keys(params.currentSelectorsByTarget),
-    ...Object.keys(params.desired.selectorAllowlist),
-  ]) {
-    selectorTargets.set(target.toLowerCase(), target);
-  }
-
-  const selectorsToEnable: LifiSelectorEntry[] = [];
-  const selectorsToDisable: LifiSelectorEntry[] = [];
-  for (const target of Array.from(selectorTargets.values())) {
-    const targetKey = target.toLowerCase();
-    const desiredSelectors = toLowerSet(
-      params.desired.selectorAllowlist[targetKey] ?? []
-    );
-    const currentSelectors = toLowerSet(
-      params.currentSelectorsByTarget[targetKey] ?? []
-    );
-    for (const selector of params.desired.selectorAllowlist[targetKey] ?? []) {
-      if (!currentSelectors.has(selector.toLowerCase())) {
-        selectorsToEnable.push({ target, selector });
-      }
-    }
-    for (const selector of params.currentSelectorsByTarget[targetKey] ?? []) {
-      if (!desiredSelectors.has(selector.toLowerCase())) {
-        selectorsToDisable.push({ target, selector });
-      }
-    }
-  }
-
-  return {
-    callTargetsToEnable: params.desired.callTargets.filter(
-      (target) => !currentCallTargets.has(target.toLowerCase())
-    ),
-    callTargetsToDisable: params.currentCallTargets.filter(
-      (target) => !desiredCallTargets.has(target.toLowerCase())
-    ),
-    approvalSpendersToEnable: params.desired.approvalSpenders.filter(
-      (spender) => !currentApprovalSpenders.has(spender.toLowerCase())
-    ),
-    approvalSpendersToDisable: params.currentApprovalSpenders.filter(
-      (spender) => !desiredApprovalSpenders.has(spender.toLowerCase())
-    ),
-    selectorsToEnable,
-    selectorsToDisable,
-    selectorTargets: Array.from(selectorTargets.values()),
-  };
+  return buildLifiTakerAllowlistReconciliationPlan({
+    desired: params.desired,
+    current: normalizeLifiTakerAllowlistSnapshot({
+      callTargets: params.currentCallTargets,
+      approvalSpenders: params.currentApprovalSpenders,
+      selectorAllowlist: params.currentSelectorsByTarget,
+      selectorTargets: [
+        ...params.desired.callTargets,
+        ...Object.keys(params.desired.selectorAllowlist),
+      ],
+      labelPrefix: 'on-chain LI.FI',
+    }),
+  });
 }
 
 export function validateDetectedChainLifiProductionConfig(
@@ -300,43 +199,19 @@ export async function configureLifiAllowlists(
   const taker = new ethers.Contract(takerAddress, takerArtifact.abi, deployer);
 
   const desired = getLifiProductionAllowlists(config, chainId);
-  const currentCallTargets = normalizeLifiAddressAllowlist(
-    await taker.getAllowedCallTargets(),
-    {
-      label: 'on-chain LI.FI call target allowlist',
-    }
-  );
-  const currentApprovalSpenders = normalizeLifiAddressAllowlist(
-    await taker.getAllowedApprovalSpenders(),
-    {
-      label: 'on-chain LI.FI approval spender allowlist',
-    }
-  );
-
-  const selectorTargets = new Map<string, string>();
-  for (const target of [
-    ...currentCallTargets,
+  const desiredSelectorTargets = [
     ...desired.callTargets,
     ...Object.keys(desired.selectorAllowlist),
-  ]) {
-    selectorTargets.set(target.toLowerCase(), target);
-  }
-  const currentSelectorsByTarget: Record<string, string[]> = {};
-  for (const target of Array.from(selectorTargets.values())) {
-    currentSelectorsByTarget[target.toLowerCase()] =
-      normalizeLifiSelectorsForTarget(
-        target,
-        await taker.getAllowedCallSelectors(target),
-        `on-chain LI.FI selector allowlist for ${target}`,
-        false
-      );
-  }
+  ];
+  const current = await readLifiTakerAllowlistSnapshot({
+    reader: createLifiTakerAllowlistReader(taker),
+    selectorTargets: desiredSelectorTargets,
+    labelPrefix: 'on-chain LI.FI',
+  });
 
-  const plan = buildLifiAllowlistReconciliationPlan({
+  const plan = buildLifiTakerAllowlistReconciliationPlan({
     desired,
-    currentCallTargets,
-    currentApprovalSpenders,
-    currentSelectorsByTarget,
+    current,
   });
 
   for (const target of plan.callTargetsToEnable) {
@@ -357,32 +232,15 @@ export async function configureLifiAllowlists(
     await tx.wait();
   }
 
-  assertContainsSet(
-    'LI.FI call target allowlist',
-    desired.callTargets,
-    normalizeLifiAddressAllowlist(await taker.getAllowedCallTargets(), {
-      label: 'on-chain LI.FI call target allowlist',
-    })
-  );
-  assertContainsSet(
-    'LI.FI approval spender allowlist',
-    desired.approvalSpenders,
-    normalizeLifiAddressAllowlist(await taker.getAllowedApprovalSpenders(), {
-      label: 'on-chain LI.FI approval spender allowlist',
-    })
-  );
-  for (const target of desired.callTargets) {
-    assertContainsSet(
-      `LI.FI selector allowlist for ${target}`,
-      desired.selectorAllowlist[target.toLowerCase()] ?? [],
-      normalizeLifiSelectorsForTarget(
-        target,
-        await taker.getAllowedCallSelectors(target),
-        `on-chain LI.FI selector allowlist for ${target}`,
-        false
-      )
-    );
-  }
+  assertLifiTakerAllowlistPolicy({
+    expected: desired,
+    actual: await readLifiTakerAllowlistSnapshot({
+      reader: createLifiTakerAllowlistReader(taker),
+      selectorTargets: desiredSelectorTargets,
+      labelPrefix: 'on-chain LI.FI',
+    }),
+    mode: 'contains',
+  });
 
   for (const { target, selector } of plan.selectorsToDisable) {
     const tx = await taker.setCallSelector(target, selector, false);
@@ -408,32 +266,15 @@ export async function configureLifiAllowlists(
     await tx.wait();
   }
 
-  assertExactSet(
-    'LI.FI call target allowlist',
-    desired.callTargets,
-    normalizeLifiAddressAllowlist(await taker.getAllowedCallTargets(), {
-      label: 'on-chain LI.FI call target allowlist',
-    })
-  );
-  assertExactSet(
-    'LI.FI approval spender allowlist',
-    desired.approvalSpenders,
-    normalizeLifiAddressAllowlist(await taker.getAllowedApprovalSpenders(), {
-      label: 'on-chain LI.FI approval spender allowlist',
-    })
-  );
-  for (const target of plan.selectorTargets) {
-    assertExactSet(
-      `LI.FI selector allowlist for ${target}`,
-      desired.selectorAllowlist[target.toLowerCase()] ?? [],
-      normalizeLifiSelectorsForTarget(
-        target,
-        await taker.getAllowedCallSelectors(target),
-        `on-chain LI.FI selector allowlist for ${target}`,
-        false
-      )
-    );
-  }
+  assertLifiTakerAllowlistPolicy({
+    expected: desired,
+    actual: await readLifiTakerAllowlistSnapshot({
+      reader: createLifiTakerAllowlistReader(taker),
+      selectorTargets: plan.selectorTargets,
+      labelPrefix: 'on-chain LI.FI',
+    }),
+    mode: 'exact',
+  });
 
   console.log(
     `🎉 LI.FI allowlists configured: targets=${desired.callTargets.length}, spenders=${desired.approvalSpenders.length}, selectorTargets=${Object.keys(desired.selectorAllowlist).length}`
