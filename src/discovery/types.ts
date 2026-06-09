@@ -3,6 +3,7 @@ import {
   AutoDiscoverConfig,
   CurveRouterOverrides,
   DiscoveredDefaultsConfig,
+  ExternalTakeTakerContractKey,
   KeeperConfig,
   LifiDexConfig,
   LiquiditySource,
@@ -27,6 +28,7 @@ export interface DiscoveryExecutionConfig {
   discoveredDefaults?: DiscoveredDefaultsConfig;
   keeperTaker?: string;
   keeperTakerFactory?: string;
+  takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
   lifi?: LifiDexConfig;
   lifiTaker?: string;
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
@@ -58,6 +60,7 @@ export function getDiscoveryExecutionConfig(
     discoveredDefaults: config.discovery?.defaults,
     keeperTaker: config.takers?.oneInch,
     keeperTakerFactory: config.takers?.factory,
+    takerContracts: config.takers?.contracts,
     lifi: config.dex?.lifi,
     lifiTaker:
       lifiDeployment.deploymentType === 'lifi'

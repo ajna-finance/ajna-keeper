@@ -839,6 +839,49 @@ function writeJson(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableLocalRpcError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+  return (
+    code === 'SERVER_ERROR' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' ||
+    message.includes('ECONNRESET') ||
+    message.includes('ECONNREFUSED') ||
+    message.includes('missing response') ||
+    message.includes('socket hang up')
+  );
+}
+
+async function sendLocalEvmControl(
+  provider: ethers.providers.JsonRpcProvider,
+  method: string,
+  params: unknown[]
+): Promise<unknown> {
+  const maxAttempts = 4;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await provider.send(method, params);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableLocalRpcError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      await sleep(250 * attempt);
+    }
+  }
+  throw lastError;
+}
+
 function ensureJsonOutputPathWritable(filePath: string, label: string): void {
   const dir = path.dirname(filePath);
   try {
@@ -1309,7 +1352,7 @@ async function assertEvmTimeTravelSupported(
 ): Promise<void> {
   let snapshotId: string | undefined;
   try {
-    snapshotId = String(await provider.send('evm_snapshot', []));
+    snapshotId = String(await sendLocalEvmControl(provider, 'evm_snapshot', []));
   } catch (error) {
     throw new Error(
       `AJNA_AGENT_ALLOW_EVM_TIME_TRAVEL is enabled, but this RPC does not support evm_snapshot: ${error instanceof Error ? error.message : String(error)}`
@@ -1317,7 +1360,9 @@ async function assertEvmTimeTravelSupported(
   }
 
   try {
-    const reverted = await provider.send('evm_revert', [snapshotId]);
+    const reverted = await sendLocalEvmControl(provider, 'evm_revert', [
+      snapshotId,
+    ]);
     if (!reverted) {
       throw new Error(`evm_revert returned ${String(reverted)}`);
     }
@@ -1749,14 +1794,16 @@ async function resolveSafeQuoteRemovalAmount(params: {
 async function createSnapshot(
   provider: ethers.providers.JsonRpcProvider
 ): Promise<string> {
-  return String(await provider.send('evm_snapshot', []));
+  return String(await sendLocalEvmControl(provider, 'evm_snapshot', []));
 }
 
 async function revertSnapshot(
   provider: ethers.providers.JsonRpcProvider,
   snapshotId: string
 ) {
-  const reverted = await provider.send('evm_revert', [snapshotId]);
+  const reverted = await sendLocalEvmControl(provider, 'evm_revert', [
+    snapshotId,
+  ]);
   if (!reverted) {
     throw new Error(`Failed to revert snapshot ${snapshotId}`);
   }
@@ -1871,10 +1918,10 @@ async function simulateBorrowToKickability(params: {
     );
 
     if (!keeperKickEligibleAfterDelay && params.targetKickDelaySeconds > 0) {
-      await params.provider.send('evm_increaseTime', [
+      await sendLocalEvmControl(params.provider, 'evm_increaseTime', [
         params.targetKickDelaySeconds,
       ]);
-      await params.provider.send('evm_mine', []);
+      await sendLocalEvmControl(params.provider, 'evm_mine', []);
       borrowerPosition = await inspectBorrowerDirect(
         params.provider,
         params.poolAddress,
@@ -3482,8 +3529,8 @@ async function main() {
   let timeWarpCount = 0;
 
   while (!keeperKickEligibleByCurrentCode && timeWarpCount < maxTimeWarps) {
-    await provider.send('evm_increaseTime', [timeWarpSeconds]);
-    await provider.send('evm_mine', []);
+    await sendLocalEvmControl(provider, 'evm_increaseTime', [timeWarpSeconds]);
+    await sendLocalEvmControl(provider, 'evm_mine', []);
     timeWarpCount += 1;
     borrowerPosition = inspectBorrower(
       ajnaSkillsRepo,

@@ -2,20 +2,37 @@
 
 import { spawn } from 'child_process';
 import fs from 'fs';
-import http from 'http';
-import net from 'net';
 import os from 'os';
 import path from 'path';
 import process from 'process';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-dotenv.config({ path: path.join(ROOT, '.env') });
+import {
+  ROOT,
+  assertLocalRpcUrl,
+  baseChildEnv,
+  getAllowedHostList,
+  getFreePort,
+  isLocalhostUrl,
+  readJson,
+  readTail,
+  redactUrlForReport,
+  requestJsonRpc,
+  resolveForkBlock,
+  resolveForkRpcUrl,
+  runNodeScript,
+} from './no-spend/runtime.mjs';
+import {
+  assertEgressReport,
+  runNoEgressRequirePositiveControl,
+  withNoEgressGuard,
+} from './no-spend/egress.mjs';
+import { runDaemonSmoke } from './no-spend/daemon-smoke.mjs';
+import {
+  buildReplayCommand,
+  buildStateIntegrityArtifact,
+} from './no-spend/report-artifacts.mjs';
 
 const HARDHAT_DEFAULT_KEEPER_KEY =
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
-const TS_NODE_BIN = path.join(ROOT, 'node_modules', 'ts-node', 'dist', 'bin.js');
 const HARDHAT_BIN = path.join(
   ROOT,
   'node_modules',
@@ -27,12 +44,10 @@ const HARDHAT_BIN = path.join(
 const DEFAULT_RPC_TIMEOUT_MS = 120_000;
 const DEFAULT_BASE_FORK_BLOCK = 'latest';
 
-const LOCALHOST_NAMES = new Set(['127.0.0.1', 'localhost', '::1']);
-
 let hardhatNode;
 
 function usage() {
-  return `Usage: node scripts/run-no-spend-validation.mjs [--port N] [--base-fork-block N|latest]
+  return `Usage: node scripts/run-no-spend-validation.mjs [--port N] [--base-fork-block N|latest] [--scenario NAME] [--mode discovery|manual] [--expect success|skip] [--dry-run-only] [--hybrid-gas-quote-fallback disabled|factory_first] [--run-config-smoke] [--run-daemon-smoke] [--daemon-smoke-only] [--expected-fee-tier N] [--output /path/report.json]
 
 Runs a no-spend Base fork replay:
 1. starts a local Base fork
@@ -62,6 +77,21 @@ function parseArgs(argv) {
       process.env.AJNA_AGENT_NO_SPEND_BASE_FORK_BLOCK ??
       process.env.BASE_FORK_BLOCK ??
       DEFAULT_BASE_FORK_BLOCK,
+    scenarioName: process.env.AJNA_AGENT_NO_SPEND_SCENARIO ?? 'strict-hybrid',
+    harnessMode: process.env.AJNA_AGENT_NO_SPEND_HARNESS_MODE ?? 'discovery',
+    expectedResult: process.env.AJNA_AGENT_NO_SPEND_EXPECT ?? 'success',
+    dryRunOnly: process.env.AJNA_AGENT_NO_SPEND_DRY_RUN_ONLY === '1',
+    hybridGasQuoteFallback:
+      process.env.AJNA_AGENT_NO_SPEND_HYBRID_GAS_QUOTE_FALLBACK ??
+      'factory_first',
+    runConfigSmoke: process.env.AJNA_AGENT_NO_SPEND_CONFIG_SMOKE === '1',
+    runDaemonSmoke: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE === '1',
+    daemonSmokeOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE_ONLY === '1',
+    expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
+      ? Number(process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER)
+      : undefined,
+    outputPath: process.env.AJNA_AGENT_NO_SPEND_OUTPUT_PATH,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -77,6 +107,53 @@ function parseArgs(argv) {
     }
     if (arg === '--base-fork-block') {
       options.baseForkBlock = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--scenario') {
+      options.scenarioName = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--mode') {
+      options.harnessMode = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--expect') {
+      options.expectedResult = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--dry-run-only') {
+      options.dryRunOnly = true;
+      continue;
+    }
+    if (arg === '--hybrid-gas-quote-fallback') {
+      options.hybridGasQuoteFallback = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--run-config-smoke') {
+      options.runConfigSmoke = true;
+      continue;
+    }
+    if (arg === '--run-daemon-smoke') {
+      options.runDaemonSmoke = true;
+      continue;
+    }
+    if (arg === '--daemon-smoke-only') {
+      options.runDaemonSmoke = true;
+      options.daemonSmokeOnly = true;
+      continue;
+    }
+    if (arg === '--expected-fee-tier') {
+      options.expectedFeeTier = Number(argv[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg === '--output') {
+      options.outputPath = argv[i + 1];
       i += 1;
       continue;
     }
@@ -98,163 +175,46 @@ function parseArgs(argv) {
   ) {
     throw new Error('--base-fork-block must be a positive integer or latest');
   }
+  if (options.harnessMode !== 'discovery' && options.harnessMode !== 'manual') {
+    throw new Error('--mode must be discovery or manual');
+  }
+  if (options.expectedResult !== 'success' && options.expectedResult !== 'skip') {
+    throw new Error('--expect must be success or skip');
+  }
+  if (
+    options.hybridGasQuoteFallback !== 'disabled' &&
+    options.hybridGasQuoteFallback !== 'factory_first'
+  ) {
+    throw new Error(
+      '--hybrid-gas-quote-fallback must be disabled or factory_first'
+    );
+  }
+  if (
+    options.expectedFeeTier !== undefined &&
+    (!Number.isInteger(options.expectedFeeTier) || options.expectedFeeTier <= 0)
+  ) {
+    throw new Error('--expected-fee-tier must be a positive integer');
+  }
+  if (options.dryRunOnly && options.expectedResult === 'success') {
+    throw new Error('--dry-run-only requires --expect skip');
+  }
 
   return options;
 }
 
-function envValue(...names) {
-  for (const name of names) {
-    const value = process.env[name];
-    if (value !== undefined && value.trim().length > 0) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function isLocalhostUrl(rawUrl) {
-  try {
-    const parsed = new URL(rawUrl);
-    return LOCALHOST_NAMES.has(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
-
-function assertLocalRpcUrl(rawUrl, label) {
-  let parsed;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error(`${label} is not a valid URL: ${rawUrl}`);
-  }
-  if (!LOCALHOST_NAMES.has(parsed.hostname)) {
-    throw new Error(`${label} must point to localhost, got ${rawUrl}`);
-  }
-}
-
-function resolveForkRpcUrl() {
-  const configured = envValue(
-    'AJNA_AGENT_NO_SPEND_FORK_RPC_URL',
-    'BASE_RPC_URL',
-    'AJNA_RPC_URL_BASE',
-    'AJNA_AGENT_RPC_URL'
-  );
-  const forkRpcUrl =
-    configured ??
-    (process.env.ALCHEMY_API_KEY
-      ? `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`
-      : undefined);
-
-  if (!forkRpcUrl) {
-    throw new Error(
-      'Missing Base fork RPC. Set BASE_RPC_URL, AJNA_RPC_URL_BASE, AJNA_AGENT_RPC_URL, AJNA_AGENT_NO_SPEND_FORK_RPC_URL, or ALCHEMY_API_KEY.'
-    );
-  }
-  if (isLocalhostUrl(forkRpcUrl)) {
-    throw new Error(
-      `Refusing to use localhost as the Base fork source RPC: ${forkRpcUrl}`
-    );
-  }
-  return forkRpcUrl;
-}
-
-async function getFreePort() {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        server.close(() => reject(new Error('Failed to allocate a port')));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-function requestJsonRpc(rpcUrl, method, params = []) {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method,
-      params,
-    });
-    const url = new URL(rpcUrl);
-    const request = http.request(
-      {
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-        },
-        timeout: 1_000,
-      },
-      (response) => {
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', (chunk) => {
-          body += chunk;
-        });
-        response.on('end', () => {
-          try {
-            const parsed = JSON.parse(body);
-            if (parsed.error) {
-              reject(
-                new Error(
-                  `${method} failed: ${JSON.stringify(parsed.error)}`
-                )
-              );
-              return;
-            }
-            resolve(parsed.result);
-          } catch (error) {
-            reject(
-              new Error(
-                `Failed to parse ${method} response: ${
-                  error instanceof Error ? error.message : String(error)
-                }`
-              )
-            );
-          }
-        });
-      }
-    );
-    request.on('timeout', () => {
-      request.destroy(new Error(`${method} timed out`));
-    });
-    request.on('error', reject);
-    request.write(payload);
-    request.end();
-  });
-}
-
-function readTail(filePath, maxBytes = 6_000) {
-  if (!fs.existsSync(filePath)) {
-    return '';
-  }
-  const buffer = fs.readFileSync(filePath);
-  return buffer.subarray(Math.max(0, buffer.length - maxBytes)).toString();
-}
-
 function startHardhatNode(params) {
   const logStream = fs.createWriteStream(params.logPath, { flags: 'a' });
-  const nodeEnv = {
-    ...process.env,
+  const nodeEnv = withNoEgressGuard(baseChildEnv({
     FORK_NETWORK: 'base',
     HARDHAT_CHAIN_ID: '8453',
-    BASE_FORK_BLOCK: params.baseForkBlock,
+    BASE_FORK_BLOCK: String(params.resolvedForkBlockNumber),
     AJNA_AGENT_RPC_URL: params.forkRpcUrl,
     AJNA_RPC_URL_BASE: params.forkRpcUrl,
     BASE_RPC_URL: params.forkRpcUrl,
-  };
+  }), {
+    allowedHosts: params.allowedHosts,
+    reportPath: params.egressReportPath,
+  });
 
   const child = spawn(
     process.execPath,
@@ -291,7 +251,12 @@ async function waitForRpcReady(params) {
       );
     }
     try {
-      const chainId = await requestJsonRpc(params.rpcUrl, 'eth_chainId');
+      const chainId = await requestJsonRpc(
+        params.rpcUrl,
+        'eth_chainId',
+        [],
+        1_000
+      );
       if (chainId !== '0x2105') {
         throw new Error(`expected chainId 0x2105, got ${chainId}`);
       }
@@ -306,48 +271,6 @@ async function waitForRpcReady(params) {
       lastError instanceof Error ? lastError.message : String(lastError)
     }\n${readTail(params.logPath)}`
   );
-}
-
-function runNodeScript(label, scriptPath, args, env, logPath) {
-  return new Promise((resolve, reject) => {
-    process.stdout.write(`[no-spend] ${label}\n`);
-    const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-    const child = spawn(process.execPath, [TS_NODE_BIN, scriptPath, ...args], {
-      cwd: ROOT,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stdout.on('data', (chunk) => logStream.write(chunk));
-    child.stderr.on('data', (chunk) => logStream.write(chunk));
-    child.on('error', reject);
-    child.on('close', (code, signal) => {
-      logStream.end(() => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(
-          new Error(
-            `${label} failed${
-              signal ? ` with signal ${signal}` : ` with exit code ${code}`
-            }\n${readTail(logPath)}`
-          )
-        );
-      });
-    });
-  });
-}
-
-function readJson(filePath, label) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (error) {
-    throw new Error(
-      `Failed to read ${label} at ${filePath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
 }
 
 function sumDiscoveryStats(report, field) {
@@ -369,23 +292,155 @@ function sumPathCounter(report, pathName, field) {
   }, 0);
 }
 
-function assertDryRunReport(report) {
-  if (report.mode !== 'discovery') {
-    throw new Error(`Dry-run harness mode was ${report.mode}, expected discovery`);
+function requireInvariant(condition, message) {
+  if (!condition) {
+    throw new Error(`Missing no-spend invariant: ${message}`);
   }
-  const dryRunExternalTakes = sumDiscoveryStats(report, 'dryRunExternalTakes');
-  const dryRunFactoryPathTakes = sumPathCounter(report, 'factory', 'dryRun');
-  if (dryRunExternalTakes < 1 || dryRunFactoryPathTakes < 1) {
-    throw new Error(
-      `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} factoryDryRuns=${dryRunFactoryPathTakes}`
+}
+
+function assertFixtureSummary(summary) {
+  requireInvariant(summary.network === 'base', 'fixture network is base');
+  requireInvariant(
+    typeof summary.rpcUrl === 'string' && isLocalhostUrl(summary.rpcUrl),
+    'fixture rpcUrl is localhost'
+  );
+  requireInvariant(
+    summary.stages?.createPool?.status === 'created' ||
+      summary.stages?.createPool?.status === 'reused',
+    'pool creation status recorded'
+  );
+  requireInvariant(
+    summary.stages?.deployTokens?.quoteTokenSource === 'deployed' &&
+      summary.stages?.deployTokens?.collateralTokenSource === 'deployed',
+    'token deployment status recorded as deployed'
+  );
+  requireInvariant(
+    summary.stages?.seedUniswap?.status === 'seeded',
+    'Uniswap seeding status recorded as seeded'
+  );
+  requireInvariant(
+    ['deployed', 'reused'].includes(
+      summary.stages?.deployExternalTake?.mode
+    ),
+    'external-take factory/taker deployed or reused'
+  );
+  requireInvariant(
+    ['kicked', 'already_active'].includes(summary.finalKick?.status),
+    'final kick status is kicked or already_active'
+  );
+  requireInvariant(
+    summary.uniswapV3ExternalTake?.routeShapeVerification?.status ===
+      'passed',
+    'route-shape verification passed'
+  );
+  requireInvariant(
+    typeof summary.uniswapV3ExternalTake?.deployment?.keeperTakerFactory ===
+      'string',
+    'keeper taker factory address recorded'
+  );
+  requireInvariant(
+    typeof summary.uniswapV3ExternalTake?.deployment?.uniswapV3Taker ===
+      'string',
+    'Uniswap V3 taker address recorded'
+  );
+}
+
+function assertEnvArtifact(report, label) {
+  requireInvariant(
+    report.transportArtifact?.noEgressGuardEnabled === true,
+    `${label} no-egress guard env marker recorded`
+  );
+  requireInvariant(
+    report.envArtifact?.rawSecretValuesRecorded === false,
+    `${label} env artifact records no raw secret values`
+  );
+  requireInvariant(
+    Array.isArray(report.envArtifact?.unexpectedSecretLikeEnvNames) &&
+      report.envArtifact.unexpectedSecretLikeEnvNames.length === 0,
+    `${label} harness child env contains only expected local secret labels`
+  );
+}
+
+function assertRouteFee(report, expectedFeeTier, label) {
+  requireInvariant(
+    Number.isInteger(report.routeArtifact?.selectedFeeTier),
+    `${label} routeArtifact selected fee tier`
+  );
+  if (expectedFeeTier !== undefined) {
+    requireInvariant(
+      report.routeArtifact.selectedFeeTier === expectedFeeTier,
+      `${label} selected fee tier ${expectedFeeTier}`
     );
   }
 }
 
-function assertExecutionReport(report) {
-  if (report.mode !== 'discovery') {
+function assertSuccessfulDryRunReport(report, options) {
+  if (report.mode !== options.mode) {
     throw new Error(
-      `Execution harness mode was ${report.mode}, expected discovery`
+      `Dry-run harness mode was ${report.mode}, expected ${options.mode}`
+    );
+  }
+  if (options.mode === 'discovery') {
+    const dryRunExternalTakes = sumDiscoveryStats(
+      report,
+      'dryRunExternalTakes'
+    );
+    const dryRunFactoryPathTakes = sumPathCounter(report, 'factory', 'dryRun');
+    if (dryRunExternalTakes < 1 || dryRunFactoryPathTakes < 1) {
+      throw new Error(
+        `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} factoryDryRuns=${dryRunFactoryPathTakes}`
+      );
+    }
+  }
+  requireInvariant(
+    report.routeArtifact?.selectedPath === 'factory',
+    'dry-run routeArtifact selected factory path'
+  );
+  requireInvariant(
+    report.routeArtifact?.selectedLiquiditySource === 'UNISWAPV3',
+    'dry-run routeArtifact selected UNISWAPV3'
+  );
+  assertRouteFee(report, options.expectedFeeTier, 'dry-run');
+  requireInvariant(
+    report.txArtifact?.transactions?.length === 0,
+    'dry-run records no broadcast transactions'
+  );
+  requireInvariant(
+    report.transportArtifact?.selectedWriteTransportMode === 'public_rpc',
+    'dry-run selected transport mode recorded'
+  );
+  assertEnvArtifact(report, 'dry-run');
+}
+
+function assertSkipReport(report, options) {
+  if (report.mode !== options.mode) {
+    throw new Error(
+      `Skip harness mode was ${report.mode}, expected ${options.mode}`
+    );
+  }
+  const totalSkips =
+    Number(report.skipArtifact?.evaluationSkips ?? 0) +
+    Number(report.skipArtifact?.revalidationSkips ?? 0) +
+    Number(report.skipArtifact?.executionSkips ?? 0);
+  requireInvariant(
+    report.takeExecuted === false,
+    'skip scenario did not execute a take'
+  );
+  requireInvariant(
+    report.txArtifact?.transactions?.length === 0,
+    'skip scenario recorded no broadcast transactions'
+  );
+  requireInvariant(
+    totalSkips > 0 || report.skipArtifact?.events?.length > 0,
+    'skip scenario recorded a structured skip reason'
+  );
+  assertEnvArtifact(report, 'skip');
+}
+
+function assertExecutionReport(report, options) {
+  if (report.mode !== options.mode) {
+    throw new Error(
+      `Execution harness mode was ${report.mode}, expected ${options.mode}`
     );
   }
   if (report.takeExecuted !== true || report.collateralReducedByTake !== true) {
@@ -393,21 +448,122 @@ function assertExecutionReport(report) {
       `Execution did not reduce auction collateral. takeExecuted=${report.takeExecuted} collateralReducedByTake=${report.collateralReducedByTake}`
     );
   }
-  const executedExternalTakes = sumDiscoveryStats(
-    report,
-    'executedExternalTakes'
+  if (options.mode === 'discovery') {
+    const executedExternalTakes = sumDiscoveryStats(
+      report,
+      'executedExternalTakes'
+    );
+    const executedFactoryPathTakes = sumPathCounter(
+      report,
+      'factory',
+      'executed'
+    );
+    if (executedExternalTakes < 1 || executedFactoryPathTakes < 1) {
+      throw new Error(
+        `Execution did not record a factory external take. executedExternalTakes=${executedExternalTakes} factoryExecutions=${executedFactoryPathTakes}`
+      );
+    }
+  }
+  requireInvariant(
+    report.routeArtifact?.selectedPath === 'factory',
+    'execution routeArtifact selected factory path'
   );
-  const executedFactoryPathTakes = sumPathCounter(report, 'factory', 'executed');
-  if (executedExternalTakes < 1 || executedFactoryPathTakes < 1) {
-    throw new Error(
-      `Execution did not record a factory external take. executedExternalTakes=${executedExternalTakes} factoryExecutions=${executedFactoryPathTakes}`
+  requireInvariant(
+    report.routeArtifact?.selectedLiquiditySource === 'UNISWAPV3',
+    'execution routeArtifact selected UNISWAPV3'
+  );
+  assertRouteFee(report, options.expectedFeeTier, 'execution');
+  requireInvariant(
+    options.mode !== 'discovery' ||
+      (report.routeArtifact?.counters?.preBroadcastFailures === 0 &&
+        report.routeArtifact?.counters?.postSubmissionFailures === 0),
+    'execution records no factory pre-broadcast or post-submission failures'
+  );
+  requireInvariant(
+    report.receiptArtifact?.transactionHash &&
+      report.receiptArtifact?.status === 1,
+    'execution receipt status is successful'
+  );
+  requireInvariant(
+    Number(report.receiptArtifact?.gasUsed ?? 0) > 0,
+    'execution receipt gas used recorded'
+  );
+  requireInvariant(
+    report.balanceArtifact?.positiveDelta === true,
+    'keeper quote-token balance delta is positive'
+  );
+  requireInvariant(
+    report.stateArtifact?.collateralReduced === true,
+    'auction collateral decreased after execution'
+  );
+  requireInvariant(
+    report.stateArtifact?.debtReducedOrNoCollateralRemaining === true,
+    'auction debt decreased, auction is inactive, or no collateral remains after execution'
+  );
+  requireInvariant(
+    Array.isArray(report.approvalArtifact?.checks) &&
+      report.approvalArtifact.checks.length > 0 &&
+      report.approvalArtifact.checks.every((check) => check.resetToZero),
+    'expected token approvals reset to zero'
+  );
+  requireInvariant(
+    report.transportArtifact?.selectedWriteTransportMode === 'public_rpc',
+    'execution selected transport mode recorded'
+  );
+  assertEnvArtifact(report, 'execution');
+  if (options.mode === 'manual') {
+    requireInvariant(
+      report.manualArtifact?.selectedDeploymentFromManualConfig === true,
+      'manual selected deployment comes from manual config'
+    );
+    requireInvariant(
+      report.manualArtifact?.lifiNoBroadcastPolicyContextResolved === true,
+      'manual LI.FI no-broadcast policy/context resolution recorded'
     );
   }
 }
 
+function assertConfigArtifact(report) {
+  const artifact = report.configArtifact;
+  requireInvariant(artifact?.enabled === true, 'config smoke artifact present');
+  for (const [field, value] of Object.entries({
+    malformedConfigRejected: artifact.malformedConfigRejected,
+    validConfigLoaded: artifact.validConfigLoaded,
+    configValidationPassed: artifact.configValidationPassed,
+    autoDiscoverValidationPassed: artifact.autoDiscoverValidationPassed,
+    routeDeploymentPreflightPassed: artifact.routeDeploymentPreflightPassed,
+    chainConsistencyPreflightPassed: artifact.chainConsistencyPreflightPassed,
+    discoveredTargetBuiltFromConfig: artifact.discoveredTargetBuiltFromConfig,
+    expectedTargetFound: artifact.expectedTargetFound,
+    executionConfigReturnedTakerContracts:
+      artifact.executionConfigReturnedTakerContracts,
+    manualFactoryResolvedThroughExecutionConfig:
+      artifact.manualFactoryResolvedThroughExecutionConfig,
+    wrongDeploymentPoolSkipped: artifact.wrongDeploymentPoolSkipped,
+    hydrationCooldownRecorded: artifact.hydrationCooldownRecorded,
+    hydrationCooldownPreventedRepeat:
+      artifact.hydrationCooldownPreventedRepeat,
+  })) {
+    requireInvariant(value === true, `config smoke ${field}`);
+  }
+}
+
 function fixtureEnv(params) {
-  const env = {
-    ...process.env,
+  const optionalRepoEnv = {};
+  for (const name of [
+    'AJNA_AGENT_TOKEN_DEPLOYER_REPO',
+    'AJNA_AGENT_AJNA_SKILLS_REPO',
+  ]) {
+    if (process.env[name]) {
+      optionalRepoEnv[name] = process.env[name];
+    }
+  }
+  const expectedFeeTierEnv =
+    params.expectedFeeTier ??
+    process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER;
+
+  const env = withNoEgressGuard(baseChildEnv({
+    ...optionalRepoEnv,
     AJNA_AGENT_RPC_URL: params.rpcUrl,
     AJNA_RPC_URL_BASE: params.rpcUrl,
     AJNA_AGENT_KEEPER_KEY: HARDHAT_DEFAULT_KEEPER_KEY,
@@ -429,13 +585,22 @@ function fixtureEnv(params) {
     AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE:
       process.env.AJNA_AGENT_NO_SPEND_UNISWAP_FEE_TIER_TEST_MODE ??
       'all_configured',
+    ...(expectedFeeTierEnv
+      ? {
+          AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER:
+            String(expectedFeeTierEnv),
+        }
+      : {}),
     AJNA_AGENT_UNISWAP_WETH_LIQUIDITY_RAW:
       process.env.AJNA_AGENT_NO_SPEND_UNISWAP_WETH_LIQUIDITY_RAW ??
       '1000000000000000000',
     AJNA_AGENT_UNISWAP_WETH_QUOTE_LIQUIDITY_RAW:
       process.env.AJNA_AGENT_NO_SPEND_UNISWAP_WETH_QUOTE_LIQUIDITY_RAW ??
       '3000000000000000000000',
-  };
+  }), {
+    allowedHosts: params.allowedHosts,
+    reportPath: params.egressReportPath,
+  });
 
   for (const name of [
     'AJNA_AGENT_LENDER_KEY',
@@ -453,13 +618,36 @@ function fixtureEnv(params) {
 }
 
 function harnessEnv(params) {
-  return {
-    ...process.env,
+  const scenarioEnv = {};
+  for (const name of [
+    'AJNA_AGENT_HARNESS_ALLOWED_EXTERNAL_TAKE_PATHS',
+    'AJNA_AGENT_HARNESS_ALLOWED_LIQUIDITY_SOURCES',
+    'AJNA_AGENT_HARNESS_ROUTE_SELECTION_MODE',
+    'AJNA_AGENT_HARNESS_MAX_GAS_COST_NATIVE',
+    'AJNA_AGENT_HARNESS_MIN_EXPECTED_PROFIT_QUOTE',
+    'AJNA_AGENT_HARNESS_MAX_CONCURRENT_CANDIDATE_EVALUATIONS',
+    'AJNA_AGENT_HARNESS_MAX_IN_FLIGHT_ROUTE_PROBES',
+    'AJNA_AGENT_HARNESS_MAX_EXECUTIONS_PER_POOL_PER_RUN',
+    'AJNA_AGENT_HARNESS_TAKE_ROUTE_QUOTE_BUDGET_PER_CANDIDATE',
+    'AJNA_AGENT_HARNESS_TAKE_QUOTE_BUDGET_PER_RUN',
+  ]) {
+    if (process.env[name]) {
+      scenarioEnv[name] = process.env[name];
+    }
+  }
+  if (params.configSmoke) {
+    scenarioEnv.AJNA_AGENT_HARNESS_CONFIG_SMOKE = '1';
+  }
+  return withNoEgressGuard(baseChildEnv({
+    ...scenarioEnv,
     AJNA_AGENT_RPC_URL: params.rpcUrl,
     AJNA_RPC_URL_BASE: params.rpcUrl,
     AJNA_AGENT_KEEPER_KEY: HARDHAT_DEFAULT_KEEPER_KEY,
     AJNA_AGENT_HARNESS_OUTPUT_PATH: params.outputPath,
-  };
+  }), {
+    allowedHosts: params.allowedHosts,
+    reportPath: params.egressReportPath,
+  });
 }
 
 async function stopHardhatNode() {
@@ -480,7 +668,13 @@ async function stopHardhatNode() {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const forkRpcUrl = resolveForkRpcUrl();
+  const { forkRpcUrl, source: forkRpcSource } = resolveForkRpcUrl({
+    rejectLocalhost: true,
+  });
+  const resolvedForkBlock = await resolveForkBlock({
+    forkRpcUrl,
+    requestedForkBlock: options.baseForkBlock,
+  });
   const port = options.port ?? (await getFreePort());
   const rpcUrl = `http://127.0.0.1:${port}`;
   assertLocalRpcUrl(rpcUrl, 'local fixture RPC');
@@ -494,19 +688,38 @@ async function main() {
   const dryRunReportPath = path.join(tempDir, 'dry-run-report.json');
   const executionReportPath = path.join(tempDir, 'execution-report.json');
   const keyFilePath = path.join(tempDir, 'fixture-keys.json');
+  const egressReportPath = path.join(tempDir, 'blocked-egress.jsonl');
+  const validationReportPath = options.outputPath
+    ? path.resolve(options.outputPath)
+    : path.join(tempDir, 'no-spend-report.json');
+  const allowedHosts = getAllowedHostList(rpcUrl, forkRpcUrl);
+  const replayCommand = buildReplayCommand({
+    resolvedForkBlockNumber: resolvedForkBlock.number,
+  });
 
   process.stdout.write(
-    `[no-spend] tempDir=${tempDir}\n` +
+      `[no-spend] tempDir=${tempDir}\n` +
+      `[no-spend] scenario=${options.scenarioName}\n` +
       `[no-spend] localRpc=${rpcUrl}\n` +
-      `[no-spend] baseForkBlock=${options.baseForkBlock}\n`
+      `[no-spend] requestedBaseForkBlock=${options.baseForkBlock}\n` +
+      `[no-spend] resolvedBaseForkBlock=${resolvedForkBlock.number}\n` +
+      `[no-spend] resolvedBaseForkHash=${resolvedForkBlock.hash}\n`
   );
+
+  const egressPositiveControl = await runNoEgressRequirePositiveControl({
+    tempDir,
+    allowedHosts,
+  });
 
   const node = startHardhatNode({
     port,
     forkRpcUrl,
-    baseForkBlock: options.baseForkBlock,
+    resolvedForkBlockNumber: resolvedForkBlock.number,
     logPath: nodeLogPath,
+    allowedHosts,
+    egressReportPath,
   });
+  let hardhatStopped = false;
 
   try {
     await waitForRpcReady({ rpcUrl, child: node, logPath: nodeLogPath });
@@ -519,9 +732,74 @@ async function main() {
         '--allow-evm-time-travel',
         '--final-kick',
       ],
-      fixtureEnv({ rpcUrl, keyFilePath, summaryPath }),
+      fixtureEnv({
+        rpcUrl,
+        keyFilePath,
+        summaryPath,
+        allowedHosts,
+        egressReportPath,
+        expectedFeeTier: options.expectedFeeTier,
+      }),
       fixtureLogPath
     );
+    const fixtureSummary = readJson(summaryPath, 'fixture summary');
+    assertFixtureSummary(fixtureSummary);
+    let daemonArtifact;
+    if (options.runDaemonSmoke) {
+      daemonArtifact = await runDaemonSmoke({
+        summary: fixtureSummary,
+        summaryPath,
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
+    if (options.daemonSmokeOnly) {
+      await stopHardhatNode();
+      hardhatStopped = true;
+      const egress = assertEgressReport(egressReportPath, 'daemon smoke');
+      const validationReport = {
+        status: 'passed',
+        scenario: options.scenarioName,
+        harnessMode: options.harnessMode,
+        daemonSmokeOnly: true,
+        command: ['npm', 'run', 'no-spend-validation'],
+        replayCommand,
+        requestedForkBlock: resolvedForkBlock.requested,
+        resolvedForkBlockNumber: resolvedForkBlock.number,
+        resolvedForkBlockHash: resolvedForkBlock.hash,
+        forkRpc: redactUrlForReport(forkRpcUrl, forkRpcSource),
+        localRpcUrl: rpcUrl,
+        allowedEgressHosts: allowedHosts.split(','),
+        egressReportPath,
+        egress,
+        egressPositiveControl,
+        hardhatStopped,
+        reports: {
+          fixtureSummary: summaryPath,
+        },
+        logs: {
+          fixture: fixtureLogPath,
+          hardhat: nodeLogPath,
+        },
+        daemon: daemonArtifact,
+      };
+      fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
+      fs.writeFileSync(
+        validationReportPath,
+        `${JSON.stringify(validationReport, null, 2)}\n`
+      );
+      process.stdout.write(
+        `[no-spend] daemon smoke passed\n` +
+          `[no-spend] validationReport=${validationReportPath}\n` +
+          `[no-spend] fixtureSummary=${summaryPath}\n` +
+          `[no-spend] fixtureLog=${fixtureLogPath}\n` +
+          `[no-spend] hardhatLog=${nodeLogPath}\n`
+      );
+      return;
+    }
 
     const snapshotId = await requestJsonRpc(rpcUrl, 'evm_snapshot');
     try {
@@ -532,39 +810,145 @@ async function main() {
           '--summary',
           summaryPath,
           '--mode',
-          'discovery',
+          options.harnessMode,
           '--hybrid-gas-quote-fallback',
-          'factory_first',
+          options.hybridGasQuoteFallback,
           '--dry-run',
           '--auto-warp-to-take',
         ],
-        harnessEnv({ rpcUrl, outputPath: dryRunReportPath }),
+        harnessEnv({
+          rpcUrl,
+          outputPath: dryRunReportPath,
+          allowedHosts,
+          egressReportPath,
+          configSmoke:
+            options.runConfigSmoke && options.harnessMode === 'discovery',
+        }),
         dryRunLogPath
       );
-      assertDryRunReport(readJson(dryRunReportPath, 'dry-run report'));
+      const dryRunReport = readJson(dryRunReportPath, 'dry-run report');
+      if (options.expectedResult === 'skip') {
+        assertSkipReport(dryRunReport, {
+          mode: options.harnessMode,
+        });
+      } else {
+        assertSuccessfulDryRunReport(dryRunReport, {
+          mode: options.harnessMode,
+          expectedFeeTier: options.expectedFeeTier,
+        });
+      }
+      if (options.runConfigSmoke && options.harnessMode === 'discovery') {
+        assertConfigArtifact(dryRunReport);
+      }
     } finally {
       await requestJsonRpc(rpcUrl, 'evm_revert', [snapshotId]);
     }
 
-    await runNodeScript(
-      'running discovered-take execution harness on local fork',
-      path.join(ROOT, 'scripts', 'run-fixture-keeper-harness.ts'),
-      [
-        '--summary',
-        summaryPath,
-        '--mode',
-        'discovery',
-        '--hybrid-gas-quote-fallback',
-        'factory_first',
-        '--auto-warp-to-take',
-      ],
-      harnessEnv({ rpcUrl, outputPath: executionReportPath }),
-      executionLogPath
+    const dryRunReport = readJson(dryRunReportPath, 'dry-run report');
+    let executionReport;
+    if (!options.dryRunOnly && options.expectedResult === 'success') {
+      await runNodeScript(
+        'running discovered-take execution harness on local fork',
+        path.join(ROOT, 'scripts', 'run-fixture-keeper-harness.ts'),
+        [
+          '--summary',
+          summaryPath,
+          '--mode',
+          options.harnessMode,
+          '--hybrid-gas-quote-fallback',
+          options.hybridGasQuoteFallback,
+          '--auto-warp-to-take',
+        ],
+        harnessEnv({
+          rpcUrl,
+          outputPath: executionReportPath,
+          allowedHosts,
+          egressReportPath,
+          configSmoke: false,
+        }),
+        executionLogPath
+      );
+      executionReport = readJson(executionReportPath, 'execution report');
+      assertExecutionReport(executionReport, {
+        mode: options.harnessMode,
+        expectedFeeTier: options.expectedFeeTier,
+      });
+    }
+
+    await stopHardhatNode();
+    hardhatStopped = true;
+    const egress = assertEgressReport(egressReportPath, 'no-spend validation');
+    const stateIntegrity = buildStateIntegrityArtifact({
+      dryRunReport,
+      executionReport,
+    });
+    if (stateIntegrity) {
+      requireInvariant(
+        stateIntegrity.dryRunBroadcastTransactions === 0,
+        'dry-run state integrity: no dry-run broadcast transactions'
+      );
+      requireInvariant(
+        stateIntegrity.auctionCollateralRestoredAfterDryRun === true,
+        'dry-run state integrity: auction collateral restored before execution'
+      );
+    }
+
+    const validationReport = {
+      status: 'passed',
+      scenario: options.scenarioName,
+      harnessMode: options.harnessMode,
+      expectedResult: options.expectedResult,
+      dryRunOnly: options.dryRunOnly,
+      hybridGasQuoteFallback: options.hybridGasQuoteFallback,
+      command: ['npm', 'run', 'no-spend-validation'],
+      replayCommand,
+      requestedForkBlock: resolvedForkBlock.requested,
+      resolvedForkBlockNumber: resolvedForkBlock.number,
+      resolvedForkBlockHash: resolvedForkBlock.hash,
+      forkRpc: redactUrlForReport(forkRpcUrl, forkRpcSource),
+      localRpcUrl: rpcUrl,
+      allowedEgressHosts: allowedHosts.split(','),
+      egressReportPath,
+      egress,
+      egressPositiveControl,
+      hardhatStopped,
+      reports: {
+        fixtureSummary: summaryPath,
+        dryRun: dryRunReportPath,
+        execution: executionReport ? executionReportPath : undefined,
+      },
+      logs: {
+        fixture: fixtureLogPath,
+        dryRun: dryRunLogPath,
+        execution: executionReport ? executionLogPath : undefined,
+        hardhat: nodeLogPath,
+      },
+      dryRun: {
+        route: dryRunReport.routeArtifact,
+        skip: dryRunReport.skipArtifact,
+        config: dryRunReport.configArtifact,
+        policy: dryRunReport.policyArtifact,
+      },
+      route: (executionReport ?? dryRunReport).routeArtifact,
+      receipt: executionReport?.receiptArtifact,
+      balance: executionReport?.balanceArtifact ?? dryRunReport.balanceArtifact,
+      approval:
+        executionReport?.approvalArtifact ?? dryRunReport.approvalArtifact,
+      transport:
+        executionReport?.transportArtifact ?? dryRunReport.transportArtifact,
+      env: executionReport?.envArtifact ?? dryRunReport.envArtifact,
+      stateIntegrity,
+      daemon: daemonArtifact,
+    };
+    fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
+    fs.writeFileSync(
+      validationReportPath,
+      `${JSON.stringify(validationReport, null, 2)}\n`
     );
-    assertExecutionReport(readJson(executionReportPath, 'execution report'));
 
     process.stdout.write(
       `[no-spend] validation passed\n` +
+        `[no-spend] validationReport=${validationReportPath}\n` +
         `[no-spend] fixtureSummary=${summaryPath}\n` +
         `[no-spend] dryRunReport=${dryRunReportPath}\n` +
         `[no-spend] executionReport=${executionReportPath}\n` +
@@ -574,7 +958,9 @@ async function main() {
         `[no-spend] hardhatLog=${nodeLogPath}\n`
     );
   } finally {
-    await stopHardhatNode();
+    if (!hardhatStopped) {
+      await stopHardhatNode();
+    }
   }
 }
 

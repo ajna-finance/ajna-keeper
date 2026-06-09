@@ -200,6 +200,18 @@ export function shouldRunSettlementLoop(config: KeeperConfig): boolean {
   return hasManualSettlementTargets || hasDiscoveredSettlementTargets;
 }
 
+export function assertRunOnceLiveAcknowledged(
+  config: KeeperConfig,
+  liveAcknowledged: boolean
+): void {
+  if (config.runtime.dryRun || liveAcknowledged) {
+    return;
+  }
+  throw new Error(
+    'Run-once with runtime.dryRun=false can submit real take and settlement transactions, then exit before kick, bond, and LP reward loops run. Pass --run-once-live-ok only when this live partial-cycle behavior is intended.'
+  );
+}
+
 export async function initializeTakeLoop(params: {
   config: KeeperConfig;
   signer: Wallet;
@@ -308,6 +320,84 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     ajna,
     hydrationCooldowns,
   });
+}
+
+export async function startKeeperRunOnceFromConfig(
+  config: KeeperConfig
+): Promise<{
+  chainId: number;
+  dryRun: boolean;
+  manualPools: number;
+  takeLoopEnabled: boolean;
+  takeCycleCompleted: boolean;
+  settlementLoopEnabled: boolean;
+  settlementCycleCompleted: boolean;
+}> {
+  const { provider, signer } = await getProviderAndSigner(
+    config.signer.keystore,
+    config.network.rpcUrl
+  );
+  const network = await provider.getNetwork();
+  const chainId = network.chainId;
+
+  configureAjna(config.ajna);
+  validateAutoDiscoverConfig(config, chainId);
+  const { takeLoopEnabled, takeWriteTransport } = await initializeTakeLoop({
+    config,
+    signer,
+    chainId,
+  });
+  const routeDeploymentPreflight =
+    resolveExternalTakeRouteDeploymentPreflight(config);
+  if (routeDeploymentPreflight.shouldValidate) {
+    await validateExternalTakeRouteDeployments({
+      config,
+      provider,
+      chainId,
+      requirements: routeDeploymentPreflight.requirements,
+    });
+  }
+
+  const subgraph = createSubgraphReader(getSubgraphTransportConfig(config));
+  await assertSubgraphChainConsistency({ subgraph, provider, chainId });
+
+  const ajna = new AjnaSDK(provider);
+  logger.info('...and pools:');
+  const poolMap = await getPoolsFromConfig(ajna, config);
+  const hydrationCooldowns: PoolHydrationCooldowns = new Map();
+  const discoverySnapshotState = {};
+  const discoveryRuntime = createDiscoveryRuntime({
+    ajna,
+    poolMap,
+    config,
+    signer,
+    takeWriteTransport,
+    hydrationCooldowns,
+    discoverySnapshotState,
+  });
+
+  let takeCycleCompleted = false;
+  if (takeLoopEnabled) {
+    await discoveryRuntime.runTakeCycle();
+    takeCycleCompleted = true;
+  }
+
+  const settlementLoopEnabled = shouldRunSettlementLoop(config);
+  let settlementCycleCompleted = false;
+  if (settlementLoopEnabled) {
+    await discoveryRuntime.runSettlementCycle();
+    settlementCycleCompleted = true;
+  }
+
+  return {
+    chainId,
+    dryRun: !!config.runtime.dryRun,
+    manualPools: poolMap.size,
+    takeLoopEnabled,
+    takeCycleCompleted,
+    settlementLoopEnabled,
+    settlementCycleCompleted,
+  };
 }
 
 async function getPoolsFromConfig(

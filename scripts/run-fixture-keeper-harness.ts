@@ -10,20 +10,49 @@ import type { DiscoveredTakeTargetStats } from '../src/discovery/take-executor';
 import type { ResolvedTakeTarget } from '../src/discovery/targets';
 import { handleKicks } from '../src/kick';
 import { handleTakes } from '../src/take';
-import type {
-  DiscoveryReadTransports,
-  SubgraphReader,
-} from '../src/read-transports';
-import subgraphModule, {
-  GetLiquidationResponse,
-  GetLoanResponse,
-} from '../src/subgraph';
+import type { DiscoveryReadTransports } from '../src/read-transports';
 import {
   LiquiditySource,
   PriceOriginSource,
   configureAjna,
 } from '../src/config';
 import { getBalanceOfErc20 } from '../src/erc20';
+import { isBenignNoLiquidationError } from './no-spend-harness-helpers';
+import {
+  BASE_AJNA_CONFIG,
+  BASE_ONEINCH_ROUTER,
+  FIXTURE_SUBGRAPH_SENTINEL_URL,
+} from './no-spend/fixture-constants';
+import {
+  makeFixtureSubgraphReader,
+  makeGetLiquidationsFromFixture,
+  makeGetLoansFromFixture,
+  overrideGetLiquidations,
+  overrideGetLoans,
+} from './no-spend/fixture-subgraph';
+import {
+  runConfigLoadedDiscoverySmoke,
+  type ConfigArtifact,
+} from './no-spend/config-smoke';
+import {
+  buildBalanceArtifact,
+  buildEnvArtifact,
+  buildPolicyArtifact,
+  buildRouteArtifact,
+  buildSkipArtifact,
+  buildTransportArtifact,
+  collectTransactionArtifact,
+  finalizeApprovalChecks,
+  hasDebtReducedOrNoCollateralRemaining,
+  liquiditySourceLabelsToValues,
+  readApprovalChecks,
+  serializeDecisionEvent,
+  serializeSkipEvent,
+  type HarnessReport,
+  type PolicyArtifact,
+  type RouteDecisionEvent,
+  type RouteSkipEvent,
+} from './no-spend/harness-artifacts';
 
 type LiquidationStatusSnapshot = {
   collateral: string;
@@ -33,6 +62,7 @@ type LiquidationStatusSnapshot = {
 
 type FixtureSummary = {
   rpcUrl: string;
+  tempDir?: string;
   pool: {
     address: string;
   };
@@ -56,6 +86,7 @@ type FixtureSummary = {
       candidateFeeTiers?: number[];
       defaultSlippage: number;
     };
+    expectedExecutionFeeTier?: number;
     deployment: {
       keeperTakerFactory: string;
       uniswapV3Taker: string;
@@ -69,141 +100,8 @@ type FixtureSummary = {
   };
 };
 
-type HarnessReport = {
-  mode: 'manual' | 'discovery';
-  hybridGasQuoteFailureFallbackMode?: 'disabled' | 'factory_first';
-  summaryPath: string;
-  rpcUrl: string;
-  borrower: string;
-  derivedKickReferencePrice: number;
-  keeperKickEligibleBefore: boolean;
-  keeperQuoteBalanceBefore: string;
-  keeperQuoteBalanceAfter: string;
-  kickExecuted: boolean;
-  liquidationStatusAfterKick?: {
-    collateral: string;
-    debtToCover?: string;
-    price: string;
-  };
-  takeExecuted: boolean;
-  liquidationStatusAfterTake?: {
-    collateral: string;
-    debtToCover?: string;
-    price: string;
-  } | null;
-  collateralReducedByTake: boolean;
-  takeWarpCount: number;
-  takeWarpSecondsPerStep: number;
-  takeAttempts: number;
-  discoveryStats?: DiscoveredTakeTargetStats[];
-};
-
-// This harness targets a Base fork by design — the addresses below are
-// Ajna's Base mainnet deployment. If Ajna redeploys on Base, these need to
-// be updated alongside the fixture script's BASE_AJNA_ERC20_POOL_FACTORY.
-// The `erc20PoolFactory` value must match
-// scripts/create-liquidatable-ajna-fixture.ts::BASE_AJNA_ERC20_POOL_FACTORY.
-const BASE_AJNA_CONFIG = {
-  erc20PoolFactory: '0x214f62B5836D83f3D6c4f71F174209097B1A779C',
-  erc721PoolFactory: '0xeefEC5d1Cc4bde97279d01D88eFf9e0fEe981769',
-  poolUtils: '0x97fa9b0909C238D170C1ab3B5c728A3a45BBEcBa',
-  positionManager: '0x59710a4149A27585f1841b5783ac704a08274e64',
-  ajnaToken: '0xf0f326af3b1Ed943ab95C29470730CC8Cf66ae47',
-  grantFund: '',
-  burnWrapper: '',
-  lenderHelper: '',
-};
-
-const BASE_ONEINCH_ROUTER = '0x1111111254EEB25477B68fb85Ed929f73A960582';
-
-// Sentinel URL for the subgraph in harness mode. The subgraph calls that
-// matter (getLoans, getLiquidations) are monkey-patched to read directly
-// from the pool contract. If something bypasses the override and hits the
-// network, the `.invalid` TLD (IANA-reserved, RFC 6761) guarantees DNS
-// failure so we see a loud error rather than a silent real-subgraph call.
-const FIXTURE_SUBGRAPH_SENTINEL_URL =
-  'http://fixture-subgraph.override.invalid';
-
-function overrideGetLoans(fn: typeof subgraphModule.getLoans): () => void {
-  const originalGetLoans = subgraphModule.getLoans;
-  subgraphModule.getLoans = fn;
-  return () => {
-    subgraphModule.getLoans = originalGetLoans;
-  };
-}
-
-function overrideGetLiquidations(
-  fn: typeof subgraphModule.getLiquidations
-): () => void {
-  const originalGetLiquidations = subgraphModule.getLiquidations;
-  subgraphModule.getLiquidations = fn;
-  return () => {
-    subgraphModule.getLiquidations = originalGetLiquidations;
-  };
-}
-
-function makeGetLoansFromFixture(
-  pool: FungiblePool,
-  borrower: string
-): typeof subgraphModule.getLoans {
-  return async (): Promise<GetLoanResponse> => {
-    const loan = await pool.getLoan(borrower);
-    if ((loan as any).isKicked) {
-      return { loans: [] };
-    }
-    return {
-      loans: [
-        {
-          borrower,
-          thresholdPrice: Number(loan.thresholdPrice.toString()) / 1e18,
-        },
-      ],
-    };
-  };
-}
-
-function makeGetLiquidationsFromFixture(
-  pool: FungiblePool,
-  borrower: string
-): typeof subgraphModule.getLiquidations {
-  return async (
-    _subgraphUrl: string,
-    _poolAddress: string,
-    minCollateral: number
-  ): Promise<GetLiquidationResponse> => {
-    const { hpb, hpbIndex } = await pool.getPrices();
-    try {
-      const liquidation = await pool.getLiquidation(borrower);
-      const status = await liquidation.getStatus();
-      const collateral = Number(status.collateral.toString()) / 1e18;
-      return {
-        pool: {
-          hpb: Number(hpb.toString()) / 1e18,
-          hpbIndex,
-          liquidationAuctions: collateral > minCollateral ? [{ borrower }] : [],
-        },
-      };
-    } catch (error) {
-      // Same discipline as `tryGetLiquidationStatus`: benign "no auction"
-      // collapses to an empty list, but real RPC failures surface. If this
-      // ever silently returned [] for an RPC timeout, the harness would
-      // report "no liquidation to take" and pass the test incorrectly.
-      if (!isBenignNoLiquidationError(error)) {
-        throw error;
-      }
-      return {
-        pool: {
-          hpb: Number(hpb.toString()) / 1e18,
-          hpbIndex,
-          liquidationAuctions: [],
-        },
-      };
-    }
-  };
-}
-
 function usage() {
-  return `Usage: ts-node scripts/run-fixture-keeper-harness.ts --summary /path/to/fixture-summary.json [--mode manual|discovery] [--hybrid-gas-quote-fallback disabled|factory_first] [--dry-run] [--auto-warp-to-take] [--take-warp-seconds N] [--max-take-warps N]\n\nRequired env:\n- AJNA_AGENT_KEEPER_KEY\n\nOptional env:\n- AJNA_AGENT_HARNESS_OUTPUT_PATH\n`;
+  return `Usage: ts-node scripts/run-fixture-keeper-harness.ts --summary /path/to/fixture-summary.json [--mode manual|discovery] [--hybrid-gas-quote-fallback disabled|factory_first] [--dry-run] [--state-only] [--auto-warp-to-take] [--take-warp-seconds N] [--max-take-warps N]\n\nRequired env:\n- AJNA_AGENT_KEEPER_KEY\n\nOptional env:\n- AJNA_AGENT_HARNESS_OUTPUT_PATH\n`;
 }
 
 // Defaults calibrated against the verified 1-day/3-day local-fixture
@@ -214,6 +112,48 @@ function usage() {
 // snapshot becomes stale.
 const DEFAULT_TAKE_WARP_SECONDS = 86_400;
 const DEFAULT_MAX_TAKE_WARPS = 3;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableLocalRpcError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+  return (
+    code === 'SERVER_ERROR' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ETIMEDOUT' ||
+    message.includes('ECONNRESET') ||
+    message.includes('ECONNREFUSED') ||
+    message.includes('missing response') ||
+    message.includes('socket hang up')
+  );
+}
+
+async function sendLocalEvmControl(
+  provider: ethers.providers.JsonRpcProvider,
+  method: string,
+  params: unknown[]
+): Promise<unknown> {
+  const maxAttempts = 4;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await provider.send(method, params);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableLocalRpcError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      await sleep(250 * attempt);
+    }
+  }
+  throw lastError;
+}
 
 function parseArgs(argv: string[]) {
   let summaryPath: string | undefined;
@@ -221,6 +161,7 @@ function parseArgs(argv: string[]) {
   let hybridGasQuoteFailureFallbackMode: 'disabled' | 'factory_first' =
     'disabled';
   let dryRun = false;
+  let stateOnly = false;
   let autoWarpToTake = false;
   let takeWarpSeconds = DEFAULT_TAKE_WARP_SECONDS;
   let maxTakeWarps = DEFAULT_MAX_TAKE_WARPS;
@@ -254,6 +195,10 @@ function parseArgs(argv: string[]) {
     }
     if (arg === '--dry-run') {
       dryRun = true;
+      continue;
+    }
+    if (arg === '--state-only') {
+      stateOnly = true;
       continue;
     }
     if (arg === '--auto-warp-to-take') {
@@ -291,10 +236,20 @@ function parseArgs(argv: string[]) {
     mode,
     hybridGasQuoteFailureFallbackMode,
     dryRun,
+    stateOnly,
     autoWarpToTake,
     takeWarpSeconds,
     maxTakeWarps,
   };
+}
+
+function scrubUnexpectedHarnessSecretEnv(): void {
+  const allowed = new Set(['AJNA_AGENT_KEEPER_KEY']);
+  for (const name of Object.keys(process.env)) {
+    if (/KEY|TOKEN|PASSWORD|SECRET/i.test(name) && !allowed.has(name)) {
+      delete process.env[name];
+    }
+  }
 }
 
 async function getLiquidationStatus(
@@ -314,32 +269,6 @@ async function getLiquidationStatus(
   return result;
 }
 
-/**
- * Heuristic: does this error mean "no liquidation auction exists for this
- * borrower right now" (legitimate state to observe) versus a real RPC /
- * chain failure (should be surfaced, not swallowed)?
- *
- * The Ajna SDK's `pool.getLiquidation(...)` throws when no auction row is
- * found. Ethers provider errors (`CALL_EXCEPTION`, `SERVER_ERROR`,
- * `NETWORK_ERROR`, `TIMEOUT`) indicate real problems that silently
- * swallowing would hide. We treat anything lacking one of those ethers
- * error codes as the benign "no auction" case and return undefined.
- */
-function isBenignNoLiquidationError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return true;
-  const code = (error as { code?: string }).code;
-  if (typeof code === 'string') {
-    const hardFailureCodes = new Set([
-      'CALL_EXCEPTION',
-      'SERVER_ERROR',
-      'NETWORK_ERROR',
-      'TIMEOUT',
-    ]);
-    if (hardFailureCodes.has(code)) return false;
-  }
-  return true;
-}
-
 async function tryGetLiquidationStatus(
   pool: FungiblePool,
   borrower: string,
@@ -357,47 +286,6 @@ async function tryGetLiquidationStatus(
     );
     throw error;
   }
-}
-
-function makeFixtureSubgraphReader(
-  pool: FungiblePool,
-  borrower: string
-): SubgraphReader {
-  const getLoans = makeGetLoansFromFixture(pool, borrower);
-  const getLiquidations = makeGetLiquidationsFromFixture(pool, borrower);
-  return {
-    cacheKey: `fixture:${pool.poolAddress}:${borrower.toLowerCase()}`,
-    getLoans(poolAddress) {
-      return getLoans(FIXTURE_SUBGRAPH_SENTINEL_URL, poolAddress);
-    },
-    getLiquidations(poolAddress, minCollateral) {
-      return getLiquidations(
-        FIXTURE_SUBGRAPH_SENTINEL_URL,
-        poolAddress,
-        minCollateral
-      );
-    },
-    async getHighestMeaningfulBucket() {
-      return { buckets: [] } as any;
-    },
-    async getUnsettledAuctions() {
-      return { liquidationAuctions: [] } as any;
-    },
-    async getChainwideLiquidationAuctions() {
-      return { liquidationAuctions: [] } as any;
-    },
-    async getBucketTakeLPAwards() {
-      return { bucketTakeLPAwards: [] } as any;
-    },
-    async getSubgraphMeta() {
-      return {
-        block: {
-          number: 0,
-          timestamp: Math.floor(Date.now() / 1000),
-        },
-      } as any;
-    },
-  };
 }
 
 async function buildDiscoveredTakeTarget(params: {
@@ -447,8 +335,15 @@ async function runDiscoveredTakeAttempt(params: {
   provider: ethers.providers.JsonRpcProvider;
   dryRun: boolean;
   hybridGasQuoteFailureFallbackMode: 'disabled' | 'factory_first';
+  policyArtifact: PolicyArtifact;
   liquidationStatus?: Awaited<ReturnType<typeof getLiquidationStatus>> | null;
-}): Promise<DiscoveredTakeTargetStats> {
+  routeDecisionEvents: RouteDecisionEvent[];
+  routeSkipEvents: RouteSkipEvent[];
+  targetOverride?: ResolvedTakeTarget;
+}): Promise<{
+  stats: DiscoveredTakeTargetStats;
+  rpcCacheStats?: Record<string, unknown>;
+}> {
   const { pool, summary, keeper, provider } = params;
   const uniswapV3ExternalTake = summary.uniswapV3ExternalTake;
   if (!uniswapV3ExternalTake) {
@@ -479,15 +374,17 @@ async function runDiscoveredTakeAttempt(params: {
     rpcCache.oneInchQuoteCircuit = rpcCache.oneInchQuoteCircuits.route_quote;
   }
 
-  return await handleDiscoveredTakeTarget({
+  const stats = await handleDiscoveredTakeTarget({
     pool,
     signer: keeper,
-    target: await buildDiscoveredTakeTarget({
-      pool,
-      summary,
-      dryRun: params.dryRun,
-      liquidationStatus: params.liquidationStatus,
-    }),
+    target:
+      params.targetOverride ??
+      (await buildDiscoveredTakeTarget({
+        pool,
+        summary,
+        dryRun: params.dryRun,
+        liquidationStatus: params.liquidationStatus,
+      })),
     transports,
     rpcCache,
     config: {
@@ -497,17 +394,33 @@ async function runDiscoveredTakeAttempt(params: {
         logSkips: true,
         take: {
           enabled: true,
-          allowedExternalTakePaths: ['oneinch', 'factory'],
+          allowedExternalTakePaths:
+            params.policyArtifact.allowedExternalTakePaths,
           defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-          allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
-          externalTakeRouteSelectionMode: 'maximize_profit',
+          allowedLiquiditySources: liquiditySourceLabelsToValues(
+            params.policyArtifact.allowedLiquiditySources
+          ),
+          externalTakeRouteSelectionMode:
+            params.policyArtifact.externalTakeRouteSelectionMode,
           hybridGasQuoteFailureFallbackMode:
             params.hybridGasQuoteFailureFallbackMode,
-          maxGasCostNative: 1,
+          maxGasCostNative: params.policyArtifact.maxGasCostNative,
+          minExpectedProfitQuote:
+            params.policyArtifact.minExpectedProfitQuote,
           oneInchQuoteTimeoutMs: 25,
           externalTakeProbeTimeoutMs: 1000,
+          maxConcurrentCandidateEvaluations:
+            params.policyArtifact.maxConcurrentCandidateEvaluations,
+          maxInFlightRouteProbes:
+            params.policyArtifact.maxInFlightRouteProbes,
+          maxExecutionsPerPoolPerRun:
+            params.policyArtifact.maxExecutionsPerPoolPerRun,
+          takeRouteQuoteBudgetPerCandidate:
+            params.policyArtifact.takeRouteQuoteBudgetPerCandidate,
+          takeQuoteBudgetPerRun: params.policyArtifact.takeQuoteBudgetPerRun,
         },
       },
+      keeperTaker: uniswapV3ExternalTake.deployment.uniswapV3Taker,
       keeperTakerFactory: uniswapV3ExternalTake.deployment.keeperTakerFactory,
       uniswapV3RouterOverrides: uniswapV3ExternalTake.routerConfig,
       tokenAddresses: {
@@ -519,7 +432,35 @@ async function runDiscoveredTakeAttempt(params: {
       oneInchDefaultSlippage:
         uniswapV3ExternalTake.routerConfig.defaultSlippage,
     },
+    onExecutionAttempt: (decision) => {
+      params.routeDecisionEvents.push(
+        serializeDecisionEvent('attempt', decision)
+      );
+    },
+    onExecuted: ({ decision, executedTake, executedArbTake }) => {
+      params.routeDecisionEvents.push(
+        serializeDecisionEvent('executed', decision, {
+          executedTake,
+          executedArbTake,
+        })
+      );
+    },
+    onSkip: ({ candidate, stage, reason, decision }) => {
+      params.routeSkipEvents.push(
+        serializeSkipEvent({
+          stage,
+          reason,
+          poolAddress: candidate.poolAddress,
+          borrower: candidate.borrower,
+          decision,
+        })
+      );
+    },
   });
+  return {
+    stats,
+    rpcCacheStats: rpcCache?.stats as Record<string, unknown> | undefined,
+  };
 }
 
 async function main() {
@@ -528,6 +469,7 @@ async function main() {
     mode,
     hybridGasQuoteFailureFallbackMode,
     dryRun,
+    stateOnly,
     autoWarpToTake,
     takeWarpSeconds,
     maxTakeWarps,
@@ -536,6 +478,7 @@ async function main() {
   if (!keeperKey) {
     throw new Error('Missing AJNA_AGENT_KEEPER_KEY');
   }
+  scrubUnexpectedHarnessSecretEnv();
 
   const summary = JSON.parse(
     fs.readFileSync(summaryPath, 'utf8')
@@ -596,6 +539,100 @@ async function main() {
       summary.borrower.owner,
       'pre-kick status read'
     );
+    const policyArtifact = buildPolicyArtifact({
+      hybridGasQuoteFailureFallbackMode,
+    });
+
+    if (stateOnly) {
+      const blockNumber = await provider.getBlockNumber();
+      const approvalChecksBefore = await readApprovalChecks({
+        provider,
+        pool,
+        summary,
+      });
+      const approvalArtifact = await finalizeApprovalChecks({
+        provider,
+        checks: approvalChecksBefore,
+      });
+      const routeArtifact = buildRouteArtifact({
+        summary,
+        mode,
+        discoveryStats: [],
+        routeDecisionEvents: [],
+      });
+      const report: HarnessReport = {
+        mode,
+        hybridGasQuoteFailureFallbackMode:
+          mode === 'discovery' ? hybridGasQuoteFailureFallbackMode : undefined,
+        summaryPath,
+        rpcUrl: summary.rpcUrl,
+        borrower: summary.borrower.owner,
+        derivedKickReferencePrice,
+        keeperKickEligibleBefore:
+          summary.liquidationCheck.keeperKickEligibleByCurrentCode,
+        keeperQuoteBalanceBefore: keeperQuoteBalanceBefore.toString(),
+        keeperQuoteBalanceAfter: keeperQuoteBalanceBefore.toString(),
+        kickExecuted: false,
+        liquidationStatusAfterKick: liquidationStatusBeforeKick,
+        takeExecuted: false,
+        liquidationStatusAfterTake: liquidationStatusBeforeKick ?? null,
+        collateralReducedByTake: false,
+        takeWarpCount: 0,
+        takeWarpSecondsPerStep: takeWarpSeconds,
+        takeAttempts: 0,
+        discoveryStats: mode === 'discovery' ? [] : undefined,
+        routeArtifact,
+        txArtifact: {
+          fromBlockExclusive: blockNumber,
+          toBlockInclusive: blockNumber,
+          selectedTransportMode: 'public_rpc',
+          transactions: [],
+        },
+        receiptArtifact: null,
+        balanceArtifact: buildBalanceArtifact({
+          quoteToken: pool.quoteAddress,
+          keeper: keeper.address,
+          before: keeperQuoteBalanceBefore,
+          after: keeperQuoteBalanceBefore,
+        }),
+        approvalArtifact,
+        transportArtifact: buildTransportArtifact(),
+        envArtifact: buildEnvArtifact(),
+        policyArtifact,
+        skipArtifact: buildSkipArtifact({
+          discoveryStats: [],
+          routeSkipEvents: [],
+        }),
+        manualArtifact:
+          mode === 'manual'
+            ? {
+                selectedDeploymentFromManualConfig:
+                  routeArtifact.factoryRegistryAddress ===
+                    summary.uniswapV3ExternalTake.deployment
+                      .keeperTakerFactory &&
+                  routeArtifact.selectedTakerAddress ===
+                    summary.uniswapV3ExternalTake.deployment.uniswapV3Taker,
+                lifiNoBroadcastPolicyContextResolved: true,
+                lifiNoBroadcastReason:
+                  'manual LI.FI canary policy config was built for no-broadcast local validation; fixture mock tokens intentionally do not claim a live LI.FI route',
+              }
+            : undefined,
+        stateArtifact: {
+          auctionBeforeTake: liquidationStatusBeforeKick ?? null,
+          auctionAfterTake: liquidationStatusBeforeKick ?? null,
+          collateralReduced: false,
+          debtReducedOrNoCollateralRemaining: false,
+          blockBeforeTake: blockNumber,
+          blockAfterTake: blockNumber,
+        },
+      };
+      const outputPath = process.env.AJNA_AGENT_HARNESS_OUTPUT_PATH;
+      if (outputPath) {
+        fs.writeFileSync(outputPath, `${JSON.stringify(report, null, 2)}\n`);
+      }
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      return;
+    }
 
     await handleKicks({
       pool,
@@ -620,6 +657,12 @@ async function main() {
     );
 
     const collateralBeforeTake = liquidationStatusAfterKick?.collateral;
+    const blockBeforeTake = await provider.getBlockNumber();
+    const approvalChecksBefore = await readApprovalChecks({
+      provider,
+      pool,
+      summary,
+    });
 
     let takeWarpCount = 0;
     let takeAttempts = 0;
@@ -627,21 +670,45 @@ async function main() {
       liquidationStatusAfterKick ?? null;
     let collateralReducedByTake = false;
     const discoveryStats: DiscoveredTakeTargetStats[] = [];
+    const routeDecisionEvents: RouteDecisionEvent[] = [];
+    const routeSkipEvents: RouteSkipEvent[] = [];
+    let lastRpcCacheStats: Record<string, unknown> | undefined;
+    let configArtifact: ConfigArtifact | undefined;
+    let configTargetOverride: ResolvedTakeTarget | undefined;
+    if (
+      mode === 'discovery' &&
+      dryRun &&
+      process.env.AJNA_AGENT_HARNESS_CONFIG_SMOKE === '1'
+    ) {
+      const configSmoke = await runConfigLoadedDiscoverySmoke({
+        ajna,
+        provider,
+        pool,
+        summary,
+        dryRun,
+      });
+      configArtifact = configSmoke.artifact;
+      configTargetOverride = configSmoke.target;
+    }
 
     while (true) {
       takeAttempts += 1;
       if (mode === 'discovery') {
-        discoveryStats.push(
-          await runDiscoveredTakeAttempt({
+        const attempt = await runDiscoveredTakeAttempt({
             pool,
             summary,
             keeper,
             provider,
             dryRun,
             hybridGasQuoteFailureFallbackMode,
+            policyArtifact,
             liquidationStatus: liquidationStatusAfterTake,
-          })
-        );
+            routeDecisionEvents,
+            routeSkipEvents,
+            targetOverride: configTargetOverride,
+          });
+        discoveryStats.push(attempt.stats);
+        lastRpcCacheStats = attempt.rpcCacheStats;
       } else {
         await handleTakes({
           signer: keeper,
@@ -692,8 +759,10 @@ async function main() {
       if (liquidationStatusAfterTake === null) {
         break;
       }
-      await provider.send('evm_increaseTime', [takeWarpSeconds]);
-      await provider.send('evm_mine', []);
+      await sendLocalEvmControl(provider, 'evm_increaseTime', [
+        takeWarpSeconds,
+      ]);
+      await sendLocalEvmControl(provider, 'evm_mine', []);
       takeWarpCount += 1;
     }
 
@@ -701,6 +770,30 @@ async function main() {
       keeper,
       pool.quoteAddress
     );
+    const blockAfterTake = await provider.getBlockNumber();
+    const routeArtifact = buildRouteArtifact({
+      summary,
+      mode,
+      discoveryStats,
+      routeDecisionEvents,
+    });
+    const { txArtifact, receiptArtifact } = await collectTransactionArtifact({
+      provider,
+      fromBlockExclusive: blockBeforeTake,
+      factoryAddress:
+        summary.uniswapV3ExternalTake.deployment.keeperTakerFactory,
+      keeperAddress: keeper.address,
+    });
+    const approvalArtifact = await finalizeApprovalChecks({
+      provider,
+      checks: approvalChecksBefore,
+    });
+    const balanceArtifact = buildBalanceArtifact({
+      quoteToken: pool.quoteAddress,
+      keeper: keeper.address,
+      before: keeperQuoteBalanceBefore,
+      after: keeperQuoteBalanceAfter,
+    });
 
     const report: HarnessReport = {
       mode,
@@ -728,6 +821,45 @@ async function main() {
       takeWarpSecondsPerStep: takeWarpSeconds,
       takeAttempts,
       discoveryStats: mode === 'discovery' ? discoveryStats : undefined,
+      routeArtifact,
+      txArtifact,
+      receiptArtifact,
+      balanceArtifact,
+      approvalArtifact,
+      transportArtifact: buildTransportArtifact(),
+      envArtifact: buildEnvArtifact(),
+      policyArtifact,
+      skipArtifact: buildSkipArtifact({
+        discoveryStats,
+        routeSkipEvents,
+        rpcCacheStats: lastRpcCacheStats,
+      }),
+      configArtifact,
+      manualArtifact:
+        mode === 'manual'
+          ? {
+              selectedDeploymentFromManualConfig:
+                routeArtifact.factoryRegistryAddress ===
+                  summary.uniswapV3ExternalTake.deployment.keeperTakerFactory &&
+                routeArtifact.selectedTakerAddress ===
+                  summary.uniswapV3ExternalTake.deployment.uniswapV3Taker,
+              lifiNoBroadcastPolicyContextResolved: true,
+              lifiNoBroadcastReason:
+                'manual LI.FI canary policy config was built for no-broadcast local validation; fixture mock tokens intentionally do not claim a live LI.FI route',
+            }
+          : undefined,
+      stateArtifact: {
+        auctionBeforeTake: liquidationStatusAfterKick ?? null,
+        auctionAfterTake: liquidationStatusAfterTake,
+        collateralReduced: collateralReducedByTake,
+        debtReducedOrNoCollateralRemaining:
+          hasDebtReducedOrNoCollateralRemaining({
+          before: liquidationStatusAfterKick,
+          after: liquidationStatusAfterTake,
+        }),
+        blockBeforeTake,
+        blockAfterTake,
+      },
     };
 
     const outputPath = process.env.AJNA_AGENT_HARNESS_OUTPUT_PATH;

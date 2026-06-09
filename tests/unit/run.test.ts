@@ -6,6 +6,7 @@ import {
   TakeWriteTransportMode,
 } from '../../src/config';
 import {
+  assertRunOnceLiveAcknowledged,
   initializeTakeLoop,
   shouldRunSettlementLoop,
   shouldRunTakeLoop,
@@ -140,6 +141,38 @@ describe('run startup gating', () => {
         },
       })
     ).to.equal(true);
+  });
+
+  it('requires an explicit acknowledgement for live run-once execution', () => {
+    expect(() =>
+      assertRunOnceLiveAcknowledged(
+        {
+          ...BASE_CONFIG,
+          ...withRuntime({ dryRun: false }),
+        },
+        false
+      )
+    ).to.throw('Run-once with runtime.dryRun=false');
+
+    expect(() =>
+      assertRunOnceLiveAcknowledged(
+        {
+          ...BASE_CONFIG,
+          ...withRuntime({ dryRun: false }),
+        },
+        true
+      )
+    ).to.not.throw();
+
+    expect(() =>
+      assertRunOnceLiveAcknowledged(
+        {
+          ...BASE_CONFIG,
+          ...withRuntime({ dryRun: true }),
+        },
+        false
+      )
+    ).to.not.throw();
   });
 
   it('keeps the take loop enabled when take write transport initialization fails', async () => {
