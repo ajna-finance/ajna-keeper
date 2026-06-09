@@ -1,5 +1,6 @@
 import { expect } from 'chai';
 import { CurvePoolType, LiquiditySource } from '../../src/config';
+import { getDiscoveryExecutionConfig } from '../../src/discovery/types';
 import {
   formatManualExternalTakeDeployment,
   formatManualTakeDeploymentFallback,
@@ -76,6 +77,35 @@ describe('manual take context helpers', () => {
       'takerContracts.UniswapV3 is not configured'
     );
     expect(resolution.requestedLiquiditySourceLabel).to.equal('UNISWAPV3');
+  });
+
+  it('preserves factory taker contracts through discovery execution config for manual takes', () => {
+    const executionConfig = getDiscoveryExecutionConfig({
+      runtime: { dryRun: true },
+      network: { tokenAddresses: {} },
+      takers: {
+        factory: '0x0000000000000000000000000000000000000001',
+        contracts: {
+          UniswapV3: '0x0000000000000000000000000000000000000002',
+        },
+      },
+      discovery: {},
+    } as any);
+
+    expect(executionConfig.takerContracts?.UniswapV3).to.equal(
+      '0x0000000000000000000000000000000000000002'
+    );
+
+    const context = resolveManualTakeContext({
+      poolConfig: {
+        name: 'config-loaded factory pool',
+        take: { liquiditySource: LiquiditySource.UNISWAPV3 },
+      } as any,
+      config: executionConfig,
+    });
+
+    expect(context.deploymentResolution.deploymentType).to.equal('factory');
+    expect(context.context.externalTakeAdapter.kind).to.equal('factory');
   });
 
   it('resolves manual take runtime context through deployment-aware fallback', () => {

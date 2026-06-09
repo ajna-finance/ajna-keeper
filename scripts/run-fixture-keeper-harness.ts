@@ -13,11 +13,13 @@ import {
   normalizeAddress,
 } from '../src/discovery/targets';
 import { validateExternalTakeRouteDeployments } from '../src/discovery/route-preflight';
+import { getDiscoveryExecutionConfig } from '../src/discovery/types';
 import type { DiscoveredTakeTargetStats } from '../src/discovery/take-executor';
 import type { ResolvedTakeTarget } from '../src/discovery/targets';
 import { handleKicks } from '../src/kick';
 import { assertSubgraphChainConsistency } from '../src/run';
 import { handleTakes } from '../src/take';
+import { resolveManualTakeDeployment } from '../src/take/manual-context';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../src/take/external-take/execution-plan';
 import type {
   ExternalTakeQuoteEvaluation,
@@ -221,6 +223,8 @@ type ConfigArtifact = {
   chainConsistencyPreflightPassed: boolean;
   discoveredTargetBuiltFromConfig: boolean;
   expectedTargetFound: boolean;
+  executionConfigReturnedTakerContracts: boolean;
+  manualFactoryResolvedThroughExecutionConfig: boolean;
   wrongDeploymentPoolSkipped: boolean;
   hydrationCooldownRecorded: boolean;
   hydrationCooldownPreventedRepeat: boolean;
@@ -1443,6 +1447,20 @@ async function runConfigLoadedDiscoverySmoke(params: {
   const loaded = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   assertIsValidConfig(loaded);
   validateAutoDiscoverConfig(loaded, 8453);
+  const executionConfig = getDiscoveryExecutionConfig(loaded);
+  const executionConfigReturnedTakerContracts =
+    executionConfig.takerContracts?.UniswapV3 ===
+    loaded.takers?.contracts?.UniswapV3;
+  const manualFactoryResolution = resolveManualTakeDeployment({
+    poolConfig: {
+      take: {
+        liquiditySource: LiquiditySource.UNISWAPV3,
+      },
+    },
+    config: executionConfig,
+  });
+  const manualFactoryResolvedThroughExecutionConfig =
+    manualFactoryResolution.deploymentType === 'factory';
   await validateExternalTakeRouteDeployments({
     config: loaded,
     provider: params.provider,
@@ -1521,6 +1539,8 @@ async function runConfigLoadedDiscoverySmoke(params: {
       chainConsistencyPreflightPassed: true,
       discoveredTargetBuiltFromConfig: true,
       expectedTargetFound,
+      executionConfigReturnedTakerContracts,
+      manualFactoryResolvedThroughExecutionConfig,
       wrongDeploymentPoolSkipped: invalidPool === undefined,
       hydrationCooldownRecorded,
       hydrationCooldownPreventedRepeat:

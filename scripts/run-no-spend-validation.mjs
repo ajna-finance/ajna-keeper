@@ -1309,6 +1309,10 @@ function assertConfigArtifact(report) {
     chainConsistencyPreflightPassed: artifact.chainConsistencyPreflightPassed,
     discoveredTargetBuiltFromConfig: artifact.discoveredTargetBuiltFromConfig,
     expectedTargetFound: artifact.expectedTargetFound,
+    executionConfigReturnedTakerContracts:
+      artifact.executionConfigReturnedTakerContracts,
+    manualFactoryResolvedThroughExecutionConfig:
+      artifact.manualFactoryResolvedThroughExecutionConfig,
     wrongDeploymentPoolSkipped: artifact.wrongDeploymentPoolSkipped,
     hydrationCooldownRecorded: artifact.hydrationCooldownRecorded,
     hydrationCooldownPreventedRepeat:
