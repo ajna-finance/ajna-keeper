@@ -1,17 +1,15 @@
 #!/usr/bin/env node
 
-import { spawn } from 'child_process';
 import fs from 'fs';
-import http from 'http';
-import https from 'https';
 import os from 'os';
 import path from 'path';
 import process from 'process';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-dotenv.config({ path: path.join(ROOT, '.env') });
+import {
+  redactUrlForReport,
+  resolveForkBlock,
+  resolveForkRpcUrl,
+  runLoggedCommand,
+} from './no-spend/runtime.mjs';
 
 function usage() {
   return `Usage: node scripts/run-no-spend-scenario-matrix.mjs [--base-fork-block N|latest] [--output /path/report.json]
@@ -57,178 +55,8 @@ function parseArgs(argv) {
   return options;
 }
 
-function envValueWithSource(...names) {
-  for (const name of names) {
-    const value = process.env[name];
-    if (value !== undefined && value.trim().length > 0) {
-      return { name, value };
-    }
-  }
-  return undefined;
-}
-
-function resolveForkRpcUrl() {
-  const configured = envValueWithSource(
-    'AJNA_AGENT_NO_SPEND_FORK_RPC_URL',
-    'BASE_RPC_URL',
-    'AJNA_RPC_URL_BASE',
-    'AJNA_AGENT_RPC_URL'
-  );
-  const forkRpcUrl =
-    configured?.value ??
-    (process.env.ALCHEMY_API_KEY
-      ? `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`
-      : undefined);
-  const source =
-    configured?.name ?? (process.env.ALCHEMY_API_KEY ? 'ALCHEMY_API_KEY' : '');
-  if (!forkRpcUrl) {
-    throw new Error(
-      'Missing Base fork RPC. Set BASE_RPC_URL, AJNA_RPC_URL_BASE, AJNA_AGENT_RPC_URL, AJNA_AGENT_NO_SPEND_FORK_RPC_URL, or ALCHEMY_API_KEY.'
-    );
-  }
-  return { forkRpcUrl, source };
-}
-
-function requestJsonRpc(rpcUrl, method, params = []) {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method,
-      params,
-    });
-    const url = new URL(rpcUrl);
-    const transport = url.protocol === 'https:' ? https : http;
-    const request = transport.request(
-      {
-        hostname: url.hostname,
-        port: url.port || (url.protocol === 'https:' ? 443 : 80),
-        path: `${url.pathname}${url.search}`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-        },
-        ...(url.username || url.password
-          ? {
-              auth: `${decodeURIComponent(url.username)}:${decodeURIComponent(
-                url.password
-              )}`,
-            }
-          : {}),
-        timeout: 15_000,
-      },
-      (response) => {
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', (chunk) => {
-          body += chunk;
-        });
-        response.on('end', () => {
-          try {
-            const parsed = JSON.parse(body);
-            if (parsed.error) {
-              reject(
-                new Error(
-                  `${method} failed: ${JSON.stringify(parsed.error)}`
-                )
-              );
-              return;
-            }
-            resolve(parsed.result);
-          } catch (error) {
-            reject(
-              new Error(
-                `Failed to parse ${method} response: ${
-                  error instanceof Error ? error.message : String(error)
-                }`
-              )
-            );
-          }
-        });
-      }
-    );
-    request.on('timeout', () => {
-      request.destroy(new Error(`${method} timed out`));
-    });
-    request.on('error', reject);
-    request.write(payload);
-    request.end();
-  });
-}
-
-async function resolveForkBlock(params) {
-  const tag =
-    params.requested === 'latest'
-      ? 'latest'
-      : `0x${Number(params.requested).toString(16)}`;
-  const block = await requestJsonRpc(params.forkRpcUrl, 'eth_getBlockByNumber', [
-    tag,
-    false,
-  ]);
-  if (!block?.number || !block?.hash) {
-    throw new Error(`Failed to resolve Base fork block for ${params.requested}`);
-  }
-  return {
-    requested: params.requested,
-    number: Number.parseInt(block.number, 16),
-    hash: block.hash,
-  };
-}
-
-function redactUrlForReport(rawUrl, source) {
-  const url = new URL(rawUrl);
-  return {
-    source,
-    protocol: url.protocol,
-    hostname: url.hostname,
-    port: url.port || undefined,
-    credentialRedacted: Boolean(url.username || url.password),
-  };
-}
-
-function readTail(filePath, maxBytes = 6_000) {
-  if (!fs.existsSync(filePath)) {
-    return '';
-  }
-  const buffer = fs.readFileSync(filePath);
-  return buffer.subarray(Math.max(0, buffer.length - maxBytes)).toString();
-}
-
 function runCommand(params) {
-  return new Promise((resolve) => {
-    const logStream = fs.createWriteStream(params.logPath, { flags: 'a' });
-    const child = spawn(params.command[0], params.command.slice(1), {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        ...params.env,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stdout.on('data', (chunk) => logStream.write(chunk));
-    child.stderr.on('data', (chunk) => logStream.write(chunk));
-    child.on('close', (code, signal) => {
-      logStream.end(() => {
-        resolve({
-          status: code === 0 ? 'passed' : 'failed',
-          exitCode: code,
-          signal: signal ?? undefined,
-          logPath: params.logPath,
-          tail: code === 0 ? undefined : readTail(params.logPath),
-        });
-      });
-    });
-    child.on('error', (error) => {
-      logStream.end(() => {
-        resolve({
-          status: 'failed',
-          error: error instanceof Error ? error.message : String(error),
-          logPath: params.logPath,
-        });
-      });
-    });
-  });
+  return runLoggedCommand(params);
 }
 
 function buildNoSpendCommand(params) {

@@ -103,6 +103,17 @@ function recordBlockedTarget(target, reporter) {
   return metadata;
 }
 
+function recordInstalled(allowedHosts, reporter) {
+  const metadata = {
+    result: 'guard_installed',
+    allowedHosts: Array.from(allowedHosts).sort(),
+    pid: process.pid,
+    timestamp: new Date().toISOString(),
+  };
+  reporter(metadata);
+  return metadata;
+}
+
 function installNoEgressGuard(options = {}) {
   const globalState = globalThis[INSTALL_MARK];
   if (globalState) {
@@ -156,6 +167,7 @@ function installNoEgressGuard(options = {}) {
 
   const state = { allowedHosts: Array.from(allowedHosts).sort() };
   globalThis[INSTALL_MARK] = state;
+  recordInstalled(allowedHosts, reporter);
   return state;
 }
 

@@ -2,22 +2,37 @@
 
 import { spawn } from 'child_process';
 import fs from 'fs';
-import http from 'http';
-import https from 'https';
-import net from 'net';
 import os from 'os';
 import path from 'path';
 import process from 'process';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
-import { Wallet } from 'ethers';
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-dotenv.config({ path: path.join(ROOT, '.env') });
+import {
+  ROOT,
+  assertLocalRpcUrl,
+  baseChildEnv,
+  getAllowedHostList,
+  getFreePort,
+  isLocalhostUrl,
+  readJson,
+  readTail,
+  redactUrlForReport,
+  requestJsonRpc,
+  resolveForkBlock,
+  resolveForkRpcUrl,
+  runNodeScript,
+} from './no-spend/runtime.mjs';
+import {
+  assertEgressReport,
+  runNoEgressRequirePositiveControl,
+  withNoEgressGuard,
+} from './no-spend/egress.mjs';
+import { runDaemonSmoke } from './no-spend/daemon-smoke.mjs';
+import {
+  buildReplayCommand,
+  buildStateIntegrityArtifact,
+} from './no-spend/report-artifacts.mjs';
 
 const HARDHAT_DEFAULT_KEEPER_KEY =
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
-const TS_NODE_BIN = path.join(ROOT, 'node_modules', 'ts-node', 'dist', 'bin.js');
 const HARDHAT_BIN = path.join(
   ROOT,
   'node_modules',
@@ -28,20 +43,6 @@ const HARDHAT_BIN = path.join(
 );
 const DEFAULT_RPC_TIMEOUT_MS = 120_000;
 const DEFAULT_BASE_FORK_BLOCK = 'latest';
-const NO_EGRESS_GUARD_PATH = path.join(ROOT, 'scripts', 'no-egress-guard.cjs');
-const BASE_ONEINCH_ROUTER = '0x1111111254EEB25477B68fb85Ed929f73A960582';
-const BASE_AJNA_CONFIG = {
-  erc20PoolFactory: '0x214f62B5836D83f3D6c4f71F174209097B1A779C',
-  erc721PoolFactory: '0xeefEC5d1Cc4bde97279d01D88eFf9e0fEe981769',
-  poolUtils: '0x97fa9b0909C238D170C1ab3B5c728A3a45BBEcBa',
-  positionManager: '0x59710a4149A27585f1841b5783ac704a08274e64',
-  ajnaToken: '0xf0f326af3b1Ed943ab95C29470730CC8Cf66ae47',
-  grantFund: '',
-  burnWrapper: '',
-  lenderHelper: '',
-};
-
-const LOCALHOST_NAMES = new Set(['127.0.0.1', 'localhost', '::1']);
 
 let hardhatNode;
 
@@ -194,251 +195,11 @@ function parseArgs(argv) {
   ) {
     throw new Error('--expected-fee-tier must be a positive integer');
   }
+  if (options.dryRunOnly && options.expectedResult === 'success') {
+    throw new Error('--dry-run-only requires --expect skip');
+  }
 
   return options;
-}
-
-function envValue(...names) {
-  return envValueWithSource(...names)?.value;
-}
-
-function envValueWithSource(...names) {
-  for (const name of names) {
-    const value = process.env[name];
-    if (value !== undefined && value.trim().length > 0) {
-      return { name, value };
-    }
-  }
-  return undefined;
-}
-
-function isLocalhostUrl(rawUrl) {
-  try {
-    const parsed = new URL(rawUrl);
-    return LOCALHOST_NAMES.has(parsed.hostname);
-  } catch {
-    return false;
-  }
-}
-
-function assertLocalRpcUrl(rawUrl, label) {
-  let parsed;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error(`${label} is not a valid URL: ${rawUrl}`);
-  }
-  if (!LOCALHOST_NAMES.has(parsed.hostname)) {
-    throw new Error(`${label} must point to localhost, got ${rawUrl}`);
-  }
-}
-
-function resolveForkRpcUrl() {
-  const configured = envValueWithSource(
-    'AJNA_AGENT_NO_SPEND_FORK_RPC_URL',
-    'BASE_RPC_URL',
-    'AJNA_RPC_URL_BASE',
-    'AJNA_AGENT_RPC_URL'
-  );
-  const forkRpcUrl =
-    configured?.value ??
-    (process.env.ALCHEMY_API_KEY
-      ? `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`
-      : undefined);
-  const source = configured?.name ?? (process.env.ALCHEMY_API_KEY ? 'ALCHEMY_API_KEY' : undefined);
-
-  if (!forkRpcUrl) {
-    throw new Error(
-      'Missing Base fork RPC. Set BASE_RPC_URL, AJNA_RPC_URL_BASE, AJNA_AGENT_RPC_URL, AJNA_AGENT_NO_SPEND_FORK_RPC_URL, or ALCHEMY_API_KEY.'
-    );
-  }
-  if (isLocalhostUrl(forkRpcUrl)) {
-    throw new Error(
-      `Refusing to use localhost as the Base fork source RPC: ${forkRpcUrl}`
-    );
-  }
-  return { forkRpcUrl, source };
-}
-
-async function getFreePort() {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        server.close(() => reject(new Error('Failed to allocate a port')));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-function requestJsonRpc(rpcUrl, method, params = [], timeoutMs = 1_000) {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method,
-      params,
-    });
-    const url = new URL(rpcUrl);
-    const transport = url.protocol === 'https:' ? https : http;
-    const request = transport.request(
-      {
-        hostname: url.hostname,
-        port: url.port || (url.protocol === 'https:' ? 443 : 80),
-        path: `${url.pathname}${url.search}`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-        },
-        ...(url.username || url.password
-          ? {
-              auth: `${decodeURIComponent(url.username)}:${decodeURIComponent(
-                url.password
-              )}`,
-            }
-          : {}),
-        timeout: timeoutMs,
-      },
-      (response) => {
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', (chunk) => {
-          body += chunk;
-        });
-        response.on('end', () => {
-          try {
-            const parsed = JSON.parse(body);
-            if (parsed.error) {
-              reject(
-                new Error(
-                  `${method} failed: ${JSON.stringify(parsed.error)}`
-                )
-              );
-              return;
-            }
-            resolve(parsed.result);
-          } catch (error) {
-            reject(
-              new Error(
-                `Failed to parse ${method} response: ${
-                  error instanceof Error ? error.message : String(error)
-                }`
-              )
-            );
-          }
-        });
-      }
-    );
-    request.on('timeout', () => {
-      request.destroy(new Error(`${method} timed out`));
-    });
-    request.on('error', reject);
-    request.write(payload);
-    request.end();
-  });
-}
-
-function redactUrlForReport(rawUrl, source) {
-  try {
-    const parsed = new URL(rawUrl);
-    return {
-      source,
-      protocol: parsed.protocol,
-      hostname: parsed.hostname,
-      port: parsed.port || undefined,
-      credentialRedacted: Boolean(parsed.username || parsed.password),
-    };
-  } catch {
-    return {
-      source,
-      protocol: 'unknown',
-      hostname: 'unparseable',
-      credentialRedacted: true,
-    };
-  }
-}
-
-async function resolveForkBlock(params) {
-  const requested = params.requestedForkBlock;
-  const tag =
-    requested === 'latest' ? 'latest' : `0x${Number(requested).toString(16)}`;
-  const block = await requestJsonRpc(
-    params.forkRpcUrl,
-    'eth_getBlockByNumber',
-    [tag, false],
-    15_000
-  );
-  if (!block?.number || !block?.hash) {
-    throw new Error(`Failed to resolve Base fork block for ${requested}`);
-  }
-  return {
-    requested,
-    number: Number.parseInt(block.number, 16),
-    hash: block.hash,
-  };
-}
-
-function getAllowedHostList(...urls) {
-  const hosts = new Set(Array.from(LOCALHOST_NAMES));
-  for (const rawUrl of urls) {
-    if (!rawUrl) continue;
-    try {
-      hosts.add(new URL(rawUrl).hostname.toLowerCase());
-    } catch {
-      // URL validity is checked elsewhere; ignore here so reporting helpers stay side-effect free.
-    }
-  }
-  return Array.from(hosts).sort().join(',');
-}
-
-function baseChildEnv(extra = {}) {
-  return {
-    PATH: process.env.PATH ?? '',
-    HOME: process.env.HOME ?? os.homedir(),
-    TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
-    NODE_ENV: 'test',
-    ...extra,
-  };
-}
-
-function withNoEgressGuard(env, params) {
-  const nodeOptions = [
-    env.NODE_OPTIONS,
-    `--require=${NO_EGRESS_GUARD_PATH}`,
-  ].filter(Boolean);
-  return {
-    ...env,
-    NODE_OPTIONS: nodeOptions.join(' '),
-    AJNA_NO_EGRESS_GUARD_ENABLED: '1',
-    AJNA_NO_EGRESS_ALLOWED_HOSTS: params.allowedHosts,
-    AJNA_NO_EGRESS_REPORT_PATH: params.reportPath,
-  };
-}
-
-function buildReplayCommand(params) {
-  return [
-    'npm',
-    'run',
-    'no-spend-validation',
-    '--',
-    '--base-fork-block',
-    String(params.resolvedForkBlockNumber),
-  ];
-}
-
-function readTail(filePath, maxBytes = 6_000) {
-  if (!fs.existsSync(filePath)) {
-    return '';
-  }
-  const buffer = fs.readFileSync(filePath);
-  return buffer.subarray(Math.max(0, buffer.length - maxBytes)).toString();
 }
 
 function startHardhatNode(params) {
@@ -490,7 +251,12 @@ async function waitForRpcReady(params) {
       );
     }
     try {
-      const chainId = await requestJsonRpc(params.rpcUrl, 'eth_chainId');
+      const chainId = await requestJsonRpc(
+        params.rpcUrl,
+        'eth_chainId',
+        [],
+        1_000
+      );
       if (chainId !== '0x2105') {
         throw new Error(`expected chainId 0x2105, got ${chainId}`);
       }
@@ -505,550 +271,6 @@ async function waitForRpcReady(params) {
       lastError instanceof Error ? lastError.message : String(lastError)
     }\n${readTail(params.logPath)}`
   );
-}
-
-function runNodeScript(label, scriptPath, args, env, logPath) {
-  return new Promise((resolve, reject) => {
-    process.stdout.write(`[no-spend] ${label}\n`);
-    const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-    const child = spawn(process.execPath, [TS_NODE_BIN, scriptPath, ...args], {
-      cwd: ROOT,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stdout.on('data', (chunk) => logStream.write(chunk));
-    child.stderr.on('data', (chunk) => logStream.write(chunk));
-    child.on('error', reject);
-    child.on('close', (code, signal) => {
-      logStream.end(() => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(
-          new Error(
-            `${label} failed${
-              signal ? ` with signal ${signal}` : ` with exit code ${code}`
-            }\n${readTail(logPath)}`
-          )
-        );
-      });
-    });
-  });
-}
-
-function runCommandWithTimeout(label, command, env, logPath, timeoutMs = 180_000) {
-  return new Promise((resolve) => {
-    process.stdout.write(`[no-spend] ${label}\n`);
-    const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-    const child = spawn(command[0], command.slice(1), {
-      cwd: ROOT,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-      setTimeout(() => {
-        if (child.exitCode === null) {
-          child.kill('SIGKILL');
-        }
-      }, 5_000).unref();
-    }, timeoutMs);
-    child.stdout.on('data', (chunk) => logStream.write(chunk));
-    child.stderr.on('data', (chunk) => logStream.write(chunk));
-    child.on('close', (code, signal) => {
-      clearTimeout(timeout);
-      logStream.end(() => {
-        resolve({
-          status: code === 0 && !timedOut ? 'passed' : 'failed',
-          exitCode: code,
-          signal: signal ?? undefined,
-          timedOut,
-          logPath,
-          tail: code === 0 && !timedOut ? undefined : readTail(logPath),
-        });
-      });
-    });
-    child.on('error', (error) => {
-      clearTimeout(timeout);
-      logStream.end(() => {
-        resolve({
-          status: 'failed',
-          error: error instanceof Error ? error.message : String(error),
-          logPath,
-        });
-      });
-    });
-  });
-}
-
-function readJson(filePath, label) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (error) {
-    throw new Error(
-      `Failed to read ${label} at ${filePath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-}
-
-function getFixtureAuction(summary) {
-  return {
-    id: `${summary.pool.address.toLowerCase()}-${summary.borrower.owner.toLowerCase()}`,
-    borrower: summary.borrower.owner,
-    kickTime: String(summary.finalKick?.auction?.kickTime ?? '0'),
-    debtRemaining:
-      summary.finalKick?.auction?.debtToCover ??
-      summary.borrower.debt ??
-      '0',
-    collateralRemaining: summary.borrower.collateral ?? '0',
-    neutralPrice:
-      summary.finalKick?.auction?.neutralPrice ??
-      summary.borrower.neutralPrice,
-    debt: summary.borrower.debt ?? '0',
-    collateral: summary.borrower.collateral ?? '0',
-    pool: {
-      id: summary.pool.address.toLowerCase(),
-    },
-  };
-}
-
-async function startFixtureSubgraphStub(params) {
-  const server = http.createServer(async (request, response) => {
-    try {
-      if (request.method !== 'POST') {
-        response.writeHead(405);
-        response.end('method not allowed');
-        return;
-      }
-      let body = '';
-      request.setEncoding('utf8');
-      request.on('data', (chunk) => {
-        body += chunk;
-      });
-      request.on('end', async () => {
-        const parsed = body ? JSON.parse(body) : {};
-        const query = String(parsed.query ?? '');
-        const variables = parsed.variables ?? {};
-        const latestBlock = await requestJsonRpc(params.rpcUrl, 'eth_getBlockByNumber', [
-          'latest',
-          false,
-        ]);
-        const auction = getFixtureAuction(params.summary);
-        let data;
-        if (query.includes('_meta')) {
-          data = {
-            _meta: {
-              block: {
-                number: Number.parseInt(latestBlock.number, 16),
-                timestamp: Number.parseInt(latestBlock.timestamp, 16),
-              },
-              deployment: 'fixture-local',
-              hasIndexingErrors: false,
-            },
-          };
-        } else if (query.includes('bucketTakes')) {
-          data = { bucketTakes: [] };
-        } else if (query.includes('loans')) {
-          data = { loans: [] };
-        } else if (query.includes('pool(')) {
-          data = {
-            pool: {
-              hpb: 0,
-              hpbIndex: 0,
-              liquidationAuctions:
-                variables.afterBorrower && variables.afterBorrower.length > 0
-                  ? []
-                  : [{ borrower: auction.borrower }],
-            },
-          };
-        } else if (query.includes('liquidationAuctions')) {
-          const after =
-            variables.afterId ?? variables.afterBorrower ?? '';
-          data = {
-            liquidationAuctions:
-              typeof after === 'string' && after.length > 0 ? [] : [auction],
-          };
-        } else {
-          data = {};
-        }
-        response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ data }));
-      });
-    } catch (error) {
-      response.writeHead(500, { 'Content-Type': 'application/json' });
-      response.end(
-        JSON.stringify({
-          errors: [
-            {
-              message: error instanceof Error ? error.message : String(error),
-            },
-          ],
-        })
-      );
-    }
-  });
-  await new Promise((resolve, reject) => {
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    throw new Error('Failed to start fixture subgraph stub');
-  }
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise((resolve) => server.close(resolve)),
-  };
-}
-
-function buildDaemonConfig(params) {
-  const uniswap = params.summary.uniswapV3ExternalTake;
-  if (!uniswap) {
-    throw new Error('Fixture summary missing uniswapV3ExternalTake');
-  }
-  return {
-    network: {
-      rpcUrl: params.rpcUrl,
-      readRpcUrls: [params.rpcUrl],
-      subgraph: {
-        url: params.subgraphUrl,
-        fallbackUrls: [`${params.subgraphUrl}/fallback`],
-      },
-      tokenAddresses: {
-        weth: uniswap.routerConfig.wethAddress,
-      },
-    },
-    signer: {
-      keystore: params.keystorePath,
-    },
-    runtime: {
-      logLevel: 'debug',
-      delayBetweenRuns: 1,
-      dryRun: params.dryRun,
-    },
-    ajna: BASE_AJNA_CONFIG,
-    manual: {
-      pools: [],
-    },
-    discovery: {
-      enabled: true,
-      dryRunNewPools: false,
-      hydrateCooldownSec: 30,
-      logSkips: true,
-      allowPools: [params.summary.pool.address],
-      denyPools: [],
-      defaults: {
-        take: {
-          minCollateral: 0.01,
-          liquiditySource: 2,
-          marketPriceFactor: 0.98,
-        },
-      },
-      take: {
-        enabled: true,
-        allowedExternalTakePaths: ['factory'],
-        defaultFactoryLiquiditySource: 2,
-        allowedLiquiditySources: [2],
-        externalTakeRouteSelectionMode: 'maximize_profit',
-        hybridGasQuoteFailureFallbackMode: 'disabled',
-        maxGasCostNative: 1,
-        validateRouteDeployments: true,
-      },
-    },
-    dex: {
-      oneInch: {
-        routers: {
-          8453: BASE_ONEINCH_ROUTER,
-        },
-      },
-      uniswapV3: {
-        router: uniswap.routerConfig,
-      },
-    },
-    takers: {
-      factory: uniswap.deployment.keeperTakerFactory,
-      contracts: {
-        UniswapV3: uniswap.deployment.uniswapV3Taker,
-      },
-    },
-  };
-}
-
-function daemonChildEnv(params) {
-  return withNoEgressGuard(
-    baseChildEnv({
-      ...(params.passwordFile
-        ? { KEYSTORE_PASSWORD_FILE: params.passwordFile }
-        : {}),
-    }),
-    {
-      allowedHosts: params.allowedHosts,
-      reportPath: params.egressReportPath,
-    }
-  );
-}
-
-async function readBlockNumber(rpcUrl) {
-  const hex = await requestJsonRpc(rpcUrl, 'eth_blockNumber');
-  return Number.parseInt(hex, 16);
-}
-
-async function warpLocalTakeWindow(rpcUrl) {
-  await requestJsonRpc(rpcUrl, 'evm_increaseTime', [86_400]);
-  await requestJsonRpc(rpcUrl, 'evm_mine', []);
-}
-
-async function countTransactionsFrom(params) {
-  let count = 0;
-  const hashes = [];
-  const normalizedFrom = params.from.toLowerCase();
-  for (
-    let blockNumber = params.fromBlockExclusive + 1;
-    blockNumber <= params.toBlockInclusive;
-    blockNumber += 1
-  ) {
-    const block = await requestJsonRpc(params.rpcUrl, 'eth_getBlockByNumber', [
-      `0x${blockNumber.toString(16)}`,
-      true,
-    ]);
-    for (const tx of block?.transactions ?? []) {
-      if (String(tx.from).toLowerCase() === normalizedFrom) {
-        count += 1;
-        hashes.push(tx.hash);
-      }
-    }
-  }
-  return { count, hashes };
-}
-
-function collateralRaw(stateReport) {
-  const raw = stateReport.stateArtifact?.auctionBeforeTake?.collateral;
-  return raw === undefined || raw === null ? 0n : BigInt(raw);
-}
-
-async function runStateOnlyHarness(params) {
-  await runNodeScript(
-    params.label,
-    path.join(ROOT, 'scripts', 'run-fixture-keeper-harness.ts'),
-    ['--summary', params.summaryPath, '--mode', 'discovery', '--state-only'],
-    harnessEnv({
-      rpcUrl: params.rpcUrl,
-      outputPath: params.outputPath,
-      allowedHosts: params.allowedHosts,
-      egressReportPath: params.egressReportPath,
-      configSmoke: false,
-    }),
-    params.logPath
-  );
-  return readJson(params.outputPath, params.label);
-}
-
-async function runDaemonSmoke(params) {
-  const subgraph = await startFixtureSubgraphStub({
-    summary: params.summary,
-    rpcUrl: params.rpcUrl,
-  });
-  const password = `ajna-local-${Date.now()}`;
-  const passwordPath = path.join(params.tempDir, 'daemon-keystore-password.txt');
-  const wrongPasswordPath = path.join(
-    params.tempDir,
-    'daemon-keystore-password-wrong.txt'
-  );
-  const missingPasswordPath = path.join(
-    params.tempDir,
-    'daemon-keystore-password-missing.txt'
-  );
-  const keystorePath = path.join(params.tempDir, 'daemon-keeper-keystore.json');
-  const wallet = new Wallet(HARDHAT_DEFAULT_KEEPER_KEY);
-  fs.writeFileSync(passwordPath, `${password}\n`, { mode: 0o600 });
-  fs.writeFileSync(wrongPasswordPath, 'wrong-password\n', { mode: 0o600 });
-  fs.writeFileSync(keystorePath, await wallet.encrypt(password), {
-    mode: 0o600,
-  });
-
-  const dryRunConfigPath = path.join(params.tempDir, 'daemon-dry-run-config.json');
-  const executionConfigPath = path.join(
-    params.tempDir,
-    'daemon-execution-config.json'
-  );
-  fs.writeFileSync(
-    dryRunConfigPath,
-    `${JSON.stringify(
-      buildDaemonConfig({
-        ...params,
-        subgraphUrl: subgraph.url,
-        keystorePath,
-        dryRun: true,
-      }),
-      null,
-      2
-    )}\n`
-  );
-  fs.writeFileSync(
-    executionConfigPath,
-    `${JSON.stringify(
-      buildDaemonConfig({
-        ...params,
-        subgraphUrl: subgraph.url,
-        keystorePath,
-        dryRun: false,
-      }),
-      null,
-      2
-    )}\n`
-  );
-
-  const command = (configPath) => [
-    'npm',
-    'start',
-    '--',
-    '--config',
-    configPath,
-    '--run-once',
-  ];
-
-  try {
-    const missingPassword = await runCommandWithTimeout(
-      'daemon missing password-file negative smoke',
-      command(dryRunConfigPath),
-      daemonChildEnv({
-        allowedHosts: params.allowedHosts,
-        egressReportPath: params.egressReportPath,
-        passwordFile: missingPasswordPath,
-      }),
-      path.join(params.tempDir, 'daemon-missing-password.log'),
-      60_000
-    );
-    const wrongPassword = await runCommandWithTimeout(
-      'daemon wrong password negative smoke',
-      command(dryRunConfigPath),
-      daemonChildEnv({
-        allowedHosts: params.allowedHosts,
-        egressReportPath: params.egressReportPath,
-        passwordFile: wrongPasswordPath,
-      }),
-      path.join(params.tempDir, 'daemon-wrong-password.log'),
-      60_000
-    );
-
-    const dryRunSnapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
-    await warpLocalTakeWindow(params.rpcUrl);
-    const dryRunFromBlock = await readBlockNumber(params.rpcUrl);
-    const dryRun = await runCommandWithTimeout(
-      'daemon run-once dry-run smoke',
-      command(dryRunConfigPath),
-      daemonChildEnv({
-        allowedHosts: params.allowedHosts,
-        egressReportPath: params.egressReportPath,
-        passwordFile: passwordPath,
-      }),
-      path.join(params.tempDir, 'daemon-dry-run.log')
-    );
-    const dryRunToBlock = await readBlockNumber(params.rpcUrl);
-    const dryRunTxs = await countTransactionsFrom({
-      rpcUrl: params.rpcUrl,
-      fromBlockExclusive: dryRunFromBlock,
-      toBlockInclusive: dryRunToBlock,
-      from: wallet.address,
-    });
-    await requestJsonRpc(params.rpcUrl, 'evm_revert', [dryRunSnapshot]);
-
-    const executionSnapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
-    await warpLocalTakeWindow(params.rpcUrl);
-    const beforeStatePath = path.join(params.tempDir, 'daemon-before-state.json');
-    const afterStatePath = path.join(params.tempDir, 'daemon-after-state.json');
-    const beforeState = await runStateOnlyHarness({
-      label: 'daemon pre-execution state read',
-      summaryPath: params.summaryPath,
-      rpcUrl: params.rpcUrl,
-      outputPath: beforeStatePath,
-      allowedHosts: params.allowedHosts,
-      egressReportPath: params.egressReportPath,
-      logPath: path.join(params.tempDir, 'daemon-before-state.log'),
-    });
-    const executionFromBlock = await readBlockNumber(params.rpcUrl);
-    const execution = await runCommandWithTimeout(
-      'daemon run-once execution smoke',
-      command(executionConfigPath),
-      daemonChildEnv({
-        allowedHosts: params.allowedHosts,
-        egressReportPath: params.egressReportPath,
-        passwordFile: passwordPath,
-      }),
-      path.join(params.tempDir, 'daemon-execution.log')
-    );
-    const executionToBlock = await readBlockNumber(params.rpcUrl);
-    const executionTxs = await countTransactionsFrom({
-      rpcUrl: params.rpcUrl,
-      fromBlockExclusive: executionFromBlock,
-      toBlockInclusive: executionToBlock,
-      from: wallet.address,
-    });
-    const afterState = await runStateOnlyHarness({
-      label: 'daemon post-execution state read',
-      summaryPath: params.summaryPath,
-      rpcUrl: params.rpcUrl,
-      outputPath: afterStatePath,
-      allowedHosts: params.allowedHosts,
-      egressReportPath: params.egressReportPath,
-      logPath: path.join(params.tempDir, 'daemon-after-state.log'),
-    });
-    await requestJsonRpc(params.rpcUrl, 'evm_revert', [executionSnapshot]);
-
-    const beforeCollateral = collateralRaw(beforeState);
-    const afterCollateral = collateralRaw(afterState);
-    const artifact = {
-      enabled: true,
-      subgraphUrl: subgraph.url,
-      configPaths: {
-        dryRun: dryRunConfigPath,
-        execution: executionConfigPath,
-      },
-      keystorePath,
-      passwordSource: 'KEYSTORE_PASSWORD_FILE',
-      keeperKeyEnvPresent: false,
-      missingPasswordRejected: missingPassword.status === 'failed',
-      wrongPasswordRejected: wrongPassword.status === 'failed',
-      dryRunPassed: dryRun.status === 'passed',
-      dryRunTransactionsFromKeeper: dryRunTxs.count,
-      dryRunSubmittedNoTransactions: dryRunTxs.count === 0,
-      executionPassed: execution.status === 'passed',
-      executionTransactionsFromKeeper: executionTxs.count,
-      executionTransactionHashes: executionTxs.hashes,
-      localExecutionCollateralReduced: afterCollateral < beforeCollateral,
-      beforeCollateral: beforeCollateral.toString(),
-      afterCollateral: afterCollateral.toString(),
-      logs: {
-        missingPassword: missingPassword.logPath,
-        wrongPassword: wrongPassword.logPath,
-        dryRun: dryRun.logPath,
-        execution: execution.logPath,
-      },
-      stateReports: {
-        before: beforeStatePath,
-        after: afterStatePath,
-      },
-    };
-    for (const [field, value] of Object.entries({
-      missingPasswordRejected: artifact.missingPasswordRejected,
-      wrongPasswordRejected: artifact.wrongPasswordRejected,
-      dryRunPassed: artifact.dryRunPassed,
-      dryRunSubmittedNoTransactions: artifact.dryRunSubmittedNoTransactions,
-      executionPassed: artifact.executionPassed,
-      executionSubmittedTransaction: artifact.executionTransactionsFromKeeper > 0,
-      localExecutionCollateralReduced: artifact.localExecutionCollateralReduced,
-    })) {
-      requireInvariant(value === true, `daemon smoke ${field}`);
-    }
-    return artifact;
-  } finally {
-    await subgraph.close();
-  }
 }
 
 function sumDiscoveryStats(report, field) {
@@ -1124,6 +346,10 @@ function assertFixtureSummary(summary) {
 }
 
 function assertEnvArtifact(report, label) {
+  requireInvariant(
+    report.transportArtifact?.noEgressGuardEnabled === true,
+    `${label} no-egress guard env marker recorded`
+  );
   requireInvariant(
     report.envArtifact?.rawSecretValuesRecorded === false,
     `${label} env artifact records no raw secret values`
@@ -1322,32 +548,6 @@ function assertConfigArtifact(report) {
   }
 }
 
-function buildStateIntegrityArtifact(params) {
-  if (!params.dryRunReport || !params.executionReport) {
-    return undefined;
-  }
-  const dryRunBefore = params.dryRunReport.stateArtifact?.auctionBeforeTake;
-  const executionBefore =
-    params.executionReport.stateArtifact?.auctionBeforeTake;
-  const sameCollateral =
-    String(dryRunBefore?.collateral ?? '') ===
-    String(executionBefore?.collateral ?? '');
-  return {
-    snapshotRevertedBeforeExecution: true,
-    dryRunBroadcastTransactions:
-      params.dryRunReport.txArtifact?.transactions?.length ?? 0,
-    auctionBeforeDryRun: dryRunBefore ?? null,
-    auctionBeforeExecution: executionBefore ?? null,
-    auctionCollateralRestoredAfterDryRun: sameCollateral,
-    dynamicAuctionFieldsChangedAfterReplay:
-      JSON.stringify(dryRunBefore ?? null) !==
-      JSON.stringify(executionBefore ?? null),
-    dryRunMutatedForkBeforeRevert:
-      JSON.stringify(params.dryRunReport.stateArtifact?.auctionAfterTake ?? null) !==
-      JSON.stringify(dryRunBefore ?? null),
-  };
-}
-
 function fixtureEnv(params) {
   const optionalRepoEnv = {};
   for (const name of [
@@ -1468,7 +668,9 @@ async function stopHardhatNode() {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const { forkRpcUrl, source: forkRpcSource } = resolveForkRpcUrl();
+  const { forkRpcUrl, source: forkRpcSource } = resolveForkRpcUrl({
+    rejectLocalhost: true,
+  });
   const resolvedForkBlock = await resolveForkBlock({
     forkRpcUrl,
     requestedForkBlock: options.baseForkBlock,
@@ -1503,6 +705,11 @@ async function main() {
       `[no-spend] resolvedBaseForkBlock=${resolvedForkBlock.number}\n` +
       `[no-spend] resolvedBaseForkHash=${resolvedForkBlock.hash}\n`
   );
+
+  const egressPositiveControl = await runNoEgressRequirePositiveControl({
+    tempDir,
+    allowedHosts,
+  });
 
   const node = startHardhatNode({
     port,
@@ -1552,6 +759,7 @@ async function main() {
     if (options.daemonSmokeOnly) {
       await stopHardhatNode();
       hardhatStopped = true;
+      const egress = assertEgressReport(egressReportPath, 'daemon smoke');
       const validationReport = {
         status: 'passed',
         scenario: options.scenarioName,
@@ -1566,6 +774,8 @@ async function main() {
         localRpcUrl: rpcUrl,
         allowedEgressHosts: allowedHosts.split(','),
         egressReportPath,
+        egress,
+        egressPositiveControl,
         hardhatStopped,
         reports: {
           fixtureSummary: summaryPath,
@@ -1667,6 +877,7 @@ async function main() {
 
     await stopHardhatNode();
     hardhatStopped = true;
+    const egress = assertEgressReport(egressReportPath, 'no-spend validation');
     const stateIntegrity = buildStateIntegrityArtifact({
       dryRunReport,
       executionReport,
@@ -1698,6 +909,8 @@ async function main() {
       localRpcUrl: rpcUrl,
       allowedEgressHosts: allowedHosts.split(','),
       egressReportPath,
+      egress,
+      egressPositiveControl,
       hardhatStopped,
       reports: {
         fixtureSummary: summaryPath,

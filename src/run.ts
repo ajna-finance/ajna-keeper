@@ -200,6 +200,18 @@ export function shouldRunSettlementLoop(config: KeeperConfig): boolean {
   return hasManualSettlementTargets || hasDiscoveredSettlementTargets;
 }
 
+export function assertRunOnceLiveAcknowledged(
+  config: KeeperConfig,
+  liveAcknowledged: boolean
+): void {
+  if (config.runtime.dryRun || liveAcknowledged) {
+    return;
+  }
+  throw new Error(
+    'Run-once with runtime.dryRun=false can submit real take and settlement transactions, then exit before kick, bond, and LP reward loops run. Pass --run-once-live-ok only when this live partial-cycle behavior is intended.'
+  );
+}
+
 export async function initializeTakeLoop(params: {
   config: KeeperConfig;
   signer: Wallet;

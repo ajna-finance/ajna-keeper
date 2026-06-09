@@ -106,7 +106,11 @@ async function main() {
   ]);
 
   const report = {
-    status: results.every((result) => result.passed) ? 'passed' : 'failed',
+    status:
+      blockedRecords.some((record) => record.result === 'guard_installed') &&
+      results.every((result) => result.passed)
+        ? 'passed'
+        : 'failed',
     results,
     blockedRecords,
     blockedJsonlPath,
