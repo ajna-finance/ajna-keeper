@@ -8,6 +8,7 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/security/ReentrancyGuar
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
+import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
@@ -87,13 +88,16 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         require(amountOutMinimum > 0, "Invalid minimum amount"); // FIXED: Validate minimum instead of slippage
 
         // FIXED: Configuration with new struct (mirrors 1inch pattern)
+        // Ajna's take() may clamp the collateral actually purchased below maxAmount on
+        // debt-constrained auctions, so the callback pro-rates amountOutMinimum (quoted for
+        // the full planned size) against this on-chain derived planned input.
         bytes memory data = abi.encode(SushiSwapDetails({
             swapRouter: swapRouter,
             targetToken: pool.quoteTokenAddress(),
             feeTier: feeTier,
             amountOutMinimum: amountOutMinimum, // FIXED: Use pre-calculated minimum
             deadline: deadline
-        }));
+        }), TakerTakeScaling.plannedTakeAmount(pool, maxAmount));
 
         // FIXED: Safe approval using Ajna's scaling (same as 1inch pattern)
         uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale());
@@ -118,14 +122,17 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         if (!_validatePool(pool)) revert InvalidPool();
 
         // Decode swap configuration
-        SushiSwapDetails memory details = abi.decode(data, (SushiSwapDetails));
-        
+        (SushiSwapDetails memory details, uint256 plannedAmountIn) =
+            abi.decode(data, (SushiSwapDetails, uint256));
+        if (plannedAmountIn == 0) revert InvalidSwapDetails();
+
         // Execute SushiSwap swap
         _swapWithSushiSwap(
             pool.collateralAddress(),
             details.targetToken,
             collateral, //this is already in native token amount that Ajna Core Knows
             quoteAmountDue,
+            plannedAmountIn,
             details
         );
     }
@@ -152,6 +159,7 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         address tokenOut,
         uint256 amountIn,
         uint256 quoteAmountDue,
+        uint256 plannedAmountIn,
         SushiSwapDetails memory details
     ) private {
         if (amountIn == 0) revert SwapFailed();
@@ -163,9 +171,10 @@ contract SushiSwapKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         // FIXED: Safe approval for SushiSwap router (same as 1inch pattern)
         _safeApproveWithReset(tokenInContract, details.swapRouter, amountIn);
 
-        // CRITICAL FIX: Use pre-calculated minimum directly (mirrors 1inch success pattern)
-        // This replaces the broken slippage calculation that didn't work with mixed decimals
-        uint256 amountOutMin = details.amountOutMinimum;
+        // Pro-rate the full-size minimum to the collateral Ajna actually sent (mirrors the
+        // 1inch _normalizeOneInchSwapAmounts pattern for debt-constrained partial fills).
+        uint256 amountOutMin =
+            TakerTakeScaling.scaleAmountOutMinimum(details.amountOutMinimum, amountIn, plannedAmountIn);
 
         // Prepare SushiSwap exactInputSingle parameters
         bytes memory swapCalldata = abi.encodeWithSignature(

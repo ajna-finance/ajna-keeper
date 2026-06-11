@@ -116,6 +116,9 @@ contract AjnaKeeperTaker is IERC20Taker {
         _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), 0);
 
         recover(IERC20(pool.quoteTokenAddress())); // send excess quote token (profit) to owner
+        // A 1inch route that under-consumes its input would otherwise strand
+        // collateral here; sweep it like the quote token (LifiKeeperTaker parity).
+        recover(IERC20(pool.collateralAddress()));
     }
 
     /// @dev Called by `Pool` to allow a taker to externally swap collateral for quote token.

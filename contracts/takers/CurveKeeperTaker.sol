@@ -7,6 +7,7 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/security/ReentrancyGuar
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
+import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
@@ -121,6 +122,9 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         require(poolAddress != address(0) && poolType <= POOL_TYPE_CRYPTO && deadline > block.timestamp && amountOutMinimum > 0, "Invalid params");
 
         // FIXED: Create struct directly like SushiSwap (no helper function)
+        // Ajna's take() may clamp the collateral actually purchased below maxAmount on
+        // debt-constrained auctions, so the callback pro-rates amountOutMinimum (quoted for
+        // the full planned size) against this on-chain derived planned input.
         bytes memory data = abi.encode(CurveSwapDetails({
             poolAddress: poolAddress,
             tokenIn: pool.collateralAddress(),
@@ -130,7 +134,7 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
             tokenOutIndex: tokenOutIndex,
             amountOutMinimum: amountOutMinimum,
             deadline: deadline
-        }));
+        }), TakerTakeScaling.plannedTakeAmount(pool, maxAmount));
 
         // FIXED: Safe approval (same as SushiSwap pattern)
         uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale());
@@ -151,14 +155,17 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         if (!_validatePool(pool)) revert InvalidPool();
 
         // Decode swap configuration
-        CurveSwapDetails memory details = abi.decode(data, (CurveSwapDetails));
+        (CurveSwapDetails memory details, uint256 plannedAmountIn) =
+            abi.decode(data, (CurveSwapDetails, uint256));
+        if (plannedAmountIn == 0) revert InvalidSwapDetails();
 
         // Execute Curve swap
         _swapWithCurve(
             pool.collateralAddress(),
             details,
             collateral, // This is already in native token amount that Ajna Core knows
-            quoteAmountDue
+            quoteAmountDue,
+            plannedAmountIn
         );
     }
 
@@ -183,7 +190,8 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         address tokenIn,
         CurveSwapDetails memory details,
         uint256 amountIn,
-        uint256 quoteAmountDue
+        uint256 quoteAmountDue,
+        uint256 plannedAmountIn
     ) private {
         if (amountIn == 0) revert SwapFailed();
         if (block.timestamp > details.deadline) revert SwapFailed();
@@ -198,8 +206,10 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         // FIXED: Safe approval for Curve pool (same as SushiSwap pattern)
         _safeApproveWithReset(tokenInContract, details.poolAddress, amountIn);
 
-        // FIXED: Use pre-calculated minimum directly (mirrors SushiSwap success pattern)
-        uint256 amountOutMin = details.amountOutMinimum;
+        // Pro-rate the full-size minimum to the collateral Ajna actually sent (mirrors the
+        // 1inch _normalizeOneInchSwapAmounts pattern for debt-constrained partial fills).
+        uint256 amountOutMin =
+            TakerTakeScaling.scaleAmountOutMinimum(details.amountOutMinimum, amountIn, plannedAmountIn);
 
         bytes memory swapCalldata;
         if (details.poolType == POOL_TYPE_STABLE) {

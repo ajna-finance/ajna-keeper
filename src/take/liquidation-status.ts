@@ -2,16 +2,16 @@ import { FungiblePool } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import { getErrorMessage } from '../utils';
 import { logger } from '../logging';
+import { AuctionTakeFacts } from './types';
 
 export const TAKE_STATUS_BATCH_SIZE = 50;
 const TAKE_STATUS_SINGLE_READ_FALLBACK_CONCURRENCY = 4;
 const AUCTION_STATUS_COLLATERAL_INDEX = 1;
+const AUCTION_STATUS_DEBT_TO_COVER_INDEX = 2;
 const AUCTION_STATUS_PRICE_INDEX = 4;
 
-export interface TakeAuctionStatus {
+export interface TakeAuctionStatus extends AuctionTakeFacts {
   borrower: string;
-  collateral: BigNumber;
-  auctionPrice: BigNumber;
 }
 
 export interface TakeAuctionStatusReader {
@@ -52,6 +52,8 @@ function mapAuctionStatusResult(
   result: {
     collateral?: BigNumber;
     collateral_?: BigNumber;
+    debtToCover?: BigNumber;
+    debtToCover_?: BigNumber;
     price?: BigNumber;
     price_?: BigNumber;
     [index: number]: unknown;
@@ -69,10 +71,15 @@ function mapAuctionStatusResult(
   ) {
     throw new Error(`auctionStatus returned malformed data for ${borrower}`);
   }
+  const debtToCover =
+    result.debtToCover_ ??
+    result.debtToCover ??
+    result[AUCTION_STATUS_DEBT_TO_COVER_INDEX];
   return {
     borrower,
     collateral,
     auctionPrice,
+    ...(BigNumber.isBigNumber(debtToCover) ? { debtToCover } : {}),
   };
 }
 
@@ -173,7 +180,11 @@ function supportsBatchStatusRead(pool: FungiblePool): boolean {
 
 function getBorrowerChunks(borrowers: string[]): string[][] {
   const chunks: string[][] = [];
-  for (let index = 0; index < borrowers.length; index += TAKE_STATUS_BATCH_SIZE) {
+  for (
+    let index = 0;
+    index < borrowers.length;
+    index += TAKE_STATUS_BATCH_SIZE
+  ) {
     chunks.push(borrowers.slice(index, index + TAKE_STATUS_BATCH_SIZE));
   }
   return chunks;
@@ -216,6 +227,48 @@ async function readStatusChunk(params: {
     result.set(normalizeBorrowerKey(borrower), status);
   }
   return result;
+}
+
+/**
+ * Resolves statuses for a window of candidate borrowers, preferring preloaded
+ * entries and batch-reading only the missing ones. Returns undefined when no
+ * status could be resolved, signalling per-candidate fallback reads.
+ */
+export async function readCandidateStatusWindow(params: {
+  pool: FungiblePool;
+  borrowers: string[];
+  preloadedStatuses?: Map<string, TakeAuctionStatus>;
+  reader?: TakeAuctionStatusReader;
+}): Promise<Map<string, TakeAuctionStatus> | undefined> {
+  const statuses = new Map<string, TakeAuctionStatus>();
+  const missingBorrowers: string[] = [];
+  for (const borrower of params.borrowers) {
+    const borrowerKey = normalizeBorrowerKey(borrower);
+    const preloadedStatus = params.preloadedStatuses?.get(borrowerKey);
+    if (preloadedStatus) {
+      statuses.set(borrowerKey, preloadedStatus);
+    } else {
+      missingBorrowers.push(borrower);
+    }
+  }
+
+  if (missingBorrowers.length > 1 && params.reader?.readMany !== undefined) {
+    try {
+      const windowStatuses = await params.reader.readMany({
+        pool: params.pool,
+        borrowers: missingBorrowers,
+      });
+      for (const [borrower, status] of Array.from(windowStatuses)) {
+        statuses.set(normalizeBorrowerKey(borrower), status);
+      }
+    } catch (error) {
+      logger.warn(
+        `Take candidate status window preload failed for ${params.pool.name}; falling back to per-candidate reads: ${getErrorMessage(error)}`
+      );
+    }
+  }
+
+  return statuses.size > 0 ? statuses : undefined;
 }
 
 export function createTakeAuctionStatusReader(params?: {

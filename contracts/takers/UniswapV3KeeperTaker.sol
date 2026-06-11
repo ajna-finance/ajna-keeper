@@ -7,6 +7,7 @@ import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
 import { ISwapRouter02 } from "../interfaces/ISwapRouter02.sol";
+import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
@@ -70,7 +71,10 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         require(details.deadline > block.timestamp, "Expired deadline");
         require(details.amountOutMinimum > 0, "Invalid minimum amount");
 
-        bytes memory data = abi.encode(details);
+        // Ajna's take() may clamp the collateral actually purchased below maxAmount on
+        // debt-constrained auctions, so the callback pro-rates amountOutMinimum (quoted for
+        // the full planned size) against this on-chain derived planned input.
+        bytes memory data = abi.encode(details, TakerTakeScaling.plannedTakeAmount(pool, maxAmount));
 
         uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale());
         
@@ -89,14 +93,16 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         if (!_validatePool(pool)) revert InvalidPool();
 
 
-        UniswapV3SwapDetails memory details = abi.decode(data, (UniswapV3SwapDetails));
+        (UniswapV3SwapDetails memory details, uint256 plannedAmountIn) =
+            abi.decode(data, (UniswapV3SwapDetails, uint256));
         if (
             details.swapRouter == address(0) ||
             details.targetToken != pool.quoteTokenAddress() ||
             details.deadline <= block.timestamp ||
-            details.amountOutMinimum == 0
+            details.amountOutMinimum == 0 ||
+            plannedAmountIn == 0
         ) revert InvalidSwapDetails();
-        _swapWithUniswapV3(pool.collateralAddress(), details.targetToken, collateral, quoteAmountDue, details);
+        _swapWithUniswapV3(pool.collateralAddress(), details.targetToken, collateral, quoteAmountDue, plannedAmountIn, details);
     }
 
     /// @inheritdoc IAjnaKeeperTaker
@@ -121,11 +127,15 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         address tokenOut,
         uint256 amountIn,
         uint256 quoteAmountDue,
+        uint256 plannedAmountIn,
         UniswapV3SwapDetails memory details
     ) private {
         if (amountIn == 0 || block.timestamp >= details.deadline) {
             revert SwapFailed();
         }
+
+        uint256 amountOutMinimum =
+            TakerTakeScaling.scaleAmountOutMinimum(details.amountOutMinimum, amountIn, plannedAmountIn);
 
         IERC20 tokenInContract = IERC20(tokenIn);
         uint256 quoteBalanceBefore = IERC20(tokenOut).balanceOf(address(this));
@@ -138,14 +148,14 @@ contract UniswapV3KeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
                 fee: details.feeTier,
                 recipient: address(this),
                 amountIn: amountIn,
-                amountOutMinimum: details.amountOutMinimum,
+                amountOutMinimum: amountOutMinimum,
                 sqrtPriceLimitX96: 0
             })
         );
         _safeApproveWithReset(tokenInContract, details.swapRouter, 0);
 
         uint256 quoteReceived = IERC20(tokenOut).balanceOf(address(this)) - quoteBalanceBefore;
-        if (quoteReceived < details.amountOutMinimum || quoteReceived < quoteAmountDue) {
+        if (quoteReceived < amountOutMinimum || quoteReceived < quoteAmountDue) {
             revert InsufficientQuoteReceived();
         }
         emit SwapExecuted(tokenIn, tokenOut, amountIn, quoteReceived);

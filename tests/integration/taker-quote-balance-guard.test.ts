@@ -1,168 +1,42 @@
 import { expect } from 'chai';
-import { BigNumber, Wallet, constants, providers, utils } from 'ethers';
-import { network } from 'hardhat';
+import { constants, utils } from 'ethers';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
 import {
-  CurveKeeperTaker__factory,
-  SushiSwapKeeperTaker__factory,
-  UniswapV3KeeperTaker__factory,
-} from '../../typechain-types/factories/contracts/takers';
-import {
-  MockAtomicSwapPool__factory,
   MockCurveSwapPool__factory,
-  MockERC20__factory,
-  MockMinOutBypassSwap__factory,
   MockOneInchUnderdeliveryRouter__factory,
-  MockPoolDeployer__factory,
-  MockSwapRouter02__factory,
   MockSushiSwapRouter__factory,
   MockSwapRouter__factory,
 } from '../../typechain-types/factories/contracts/mocks';
+import {
+  CURVE_DETAILS_TYPE,
+  DEADLINE,
+  MockTakerBase,
+  SUSHI_DETAILS_TYPE,
+  deployCurveTaker,
+  deployFundedSwapRouter02,
+  deployMinOutBypassSwap,
+  deployMockTakerBase,
+  deploySushiTaker,
+  deployUniswapTaker,
+  encodeTakerCallbackData,
+  encodeUniswapCallbackData,
+  encodeUniswapDetails,
+  expectRevertContaining,
+} from './helpers/mock-taker-base';
 
-const ERC20_NON_SUBSET_HASH = utils.keccak256(
-  utils.toUtf8Bytes('ERC20_NON_SUBSET_HASH')
-);
 const COLLATERAL_AMOUNT = utils.parseEther('10');
 const QUOTE_AMOUNT_DUE = utils.parseEther('5');
 const APPROVED_MIN_OUT = utils.parseEther('6');
-const QUOTE_TOKEN_SCALE = BigNumber.from(1);
-const DEADLINE = 4_102_444_800;
-const ZERO_FACTORY = constants.AddressZero;
 
 const ONE_INCH_DETAILS_TYPE =
   '(address,(address,address,address,address,uint256,uint256,uint256),bytes)';
 const ONE_INCH_CALLBACK_DATA_TYPE = '(uint8,address,bytes)';
-const UNISWAP_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
-const SUSHI_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
-const CURVE_DETAILS_TYPE =
-  '(address,address,address,uint8,uint8,uint8,uint256,uint256)';
-
-function getProvider() {
-  return new providers.Web3Provider(network.provider as any);
-}
-
-async function expectCustomError(tx: Promise<unknown>, errorName: string) {
-  let caught: unknown;
-  try {
-    await tx;
-  } catch (error) {
-    caught = error;
-  }
-
-  expect(caught).to.be.instanceOf(Error);
-  expect((caught as Error).message).to.contain(errorName);
-}
 
 describe('Taker quote balance guards', () => {
-  async function deployBase() {
-    const owner = Wallet.createRandom().connect(getProvider());
-    await network.provider.send('hardhat_setBalance', [
-      owner.address,
-      utils.parseEther('10').toHexString(),
-    ]);
-
-    const collateralToken = await new MockERC20__factory(owner).deploy(
-      'Mock Collateral',
-      'MCOLL',
-      18
-    );
-    await collateralToken.deployed();
-
-    const quoteToken = await new MockERC20__factory(owner).deploy(
-      'Mock Quote',
-      'MQUOTE',
-      18
-    );
-    await quoteToken.deployed();
-
-    const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
-    await poolDeployer.deployed();
-
-    const pool = await new MockAtomicSwapPool__factory(owner).deploy(
-      collateralToken.address,
-      quoteToken.address,
-      QUOTE_TOKEN_SCALE
-    );
-    await pool.deployed();
-
-    await poolDeployer.setDeployedPool(
-      ERC20_NON_SUBSET_HASH,
-      collateralToken.address,
-      quoteToken.address,
-      pool.address
-    );
-
-    return { owner, collateralToken, quoteToken, poolDeployer, pool };
-  }
-
-  async function deployUniswapTaker(
-    base: Awaited<ReturnType<typeof deployBase>>
-  ) {
-    const taker = await new UniswapV3KeeperTaker__factory(base.owner).deploy(
-      base.poolDeployer.address,
-      ZERO_FACTORY
-    );
-    await taker.deployed();
-    return taker;
-  }
-
-  async function deployFundedSwapRouter02(
-    base: Awaited<ReturnType<typeof deployBase>>,
-    amountOut: BigNumber
-  ) {
-    const router = await new MockSwapRouter02__factory(base.owner).deploy(
-      amountOut
-    );
-    await router.deployed();
-    if (amountOut.gt(0)) {
-      await base.quoteToken.mint(router.address, amountOut);
-    }
-    return router;
-  }
-
-  async function deployMinOutBypassSwap(
-    base: Awaited<ReturnType<typeof deployBase>>,
-    actualAmountOut: BigNumber,
-    reportedAmountOut: BigNumber
-  ) {
-    const router = await new MockMinOutBypassSwap__factory(base.owner).deploy(
-      base.collateralToken.address,
-      base.quoteToken.address,
-      actualAmountOut,
-      reportedAmountOut
-    );
-    await router.deployed();
-    if (actualAmountOut.gt(0)) {
-      await base.quoteToken.mint(router.address, actualAmountOut);
-    }
-    return router;
-  }
-
-  function encodeUniswapDetails(params: {
-    routerAddress: string;
-    targetToken: string;
-    amountOutMinimum: BigNumber | number;
-    deadline?: number;
-    feeTier?: number;
-  }) {
-    return utils.defaultAbiCoder.encode(
-      [UNISWAP_DETAILS_TYPE],
-      [
-        [
-          params.routerAddress,
-          params.targetToken,
-          params.feeTier ?? 500,
-          params.amountOutMinimum,
-          params.deadline ?? DEADLINE,
-        ],
-      ]
-    );
-  }
-
   async function expectNoFullTakeSideEffects(params: {
     takerAddress: string;
-    pool: Awaited<ReturnType<typeof deployBase>>['pool'];
-    quoteToken: Awaited<ReturnType<typeof deployBase>>['quoteToken'];
+    pool: MockTakerBase['pool'];
+    quoteToken: MockTakerBase['quoteToken'];
   }) {
     expect((await params.pool.takeCount()).eq(0)).to.equal(true);
     expect(
@@ -177,7 +51,7 @@ describe('Taker quote balance guards', () => {
 
   it('rejects 1inch atomic routes that redirect output away from the taker', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } =
-      await deployBase();
+      await deployMockTakerBase();
     const taker = await new AjnaKeeperTaker__factory(owner).deploy(
       poolDeployer.address
     );
@@ -211,7 +85,7 @@ describe('Taker quote balance guards', () => {
       [[1, router.address, oneInchDetails]]
     );
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -224,7 +98,7 @@ describe('Taker quote balance guards', () => {
 
   it('rejects 1inch atomic swaps that rely on preexisting quote balance', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } =
-      await deployBase();
+      await deployMockTakerBase();
     const taker = await new AjnaKeeperTaker__factory(owner).deploy(
       poolDeployer.address
     );
@@ -259,7 +133,7 @@ describe('Taker quote balance guards', () => {
       [[1, router.address, oneInchDetails]]
     );
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -272,7 +146,7 @@ describe('Taker quote balance guards', () => {
 
   it('rejects 1inch atomic swaps that underdeliver versus the scaled minReturnAmount', async () => {
     const { owner, collateralToken, quoteToken, poolDeployer, pool } =
-      await deployBase();
+      await deployMockTakerBase();
     const taker = await new AjnaKeeperTaker__factory(owner).deploy(
       poolDeployer.address
     );
@@ -311,7 +185,7 @@ describe('Taker quote balance guards', () => {
       [[1, router.address, oneInchDetails]]
     );
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -323,17 +197,18 @@ describe('Taker quote balance guards', () => {
   });
 
   it('executes uniswap callbacks through direct SwapRouter02 custody', async () => {
-    const base = await deployBase();
+    const base = await deployMockTakerBase();
     const { collateralToken, quoteToken, pool } = base;
     const taker = await deployUniswapTaker(base);
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
     const router = await deployFundedSwapRouter02(base, QUOTE_AMOUNT_DUE);
 
-    const callbackData = encodeUniswapDetails({
+    const callbackData = encodeUniswapCallbackData({
       routerAddress: router.address,
       targetToken: quoteToken.address,
       amountOutMinimum: QUOTE_AMOUNT_DUE,
+      plannedAmountIn: COLLATERAL_AMOUNT,
     });
 
     await pool.callAtomicSwapCallback(
@@ -355,7 +230,7 @@ describe('Taker quote balance guards', () => {
   });
 
   it('executes full uniswap takes with direct SwapRouter02 and resets allowances', async () => {
-    const base = await deployBase();
+    const base = await deployMockTakerBase();
     const { owner, collateralToken, quoteToken, pool } = base;
     const taker = await deployUniswapTaker(base);
 
@@ -389,12 +264,13 @@ describe('Taker quote balance guards', () => {
     expect(
       (await collateralToken.allowance(taker.address, router.address)).eq(0)
     ).to.equal(true);
-    expect((await quoteToken.allowance(taker.address, pool.address)).eq(0)).to
-      .equal(true);
+    expect(
+      (await quoteToken.allowance(taker.address, pool.address)).eq(0)
+    ).to.equal(true);
   });
 
   it('rejects full uniswap takes when the router argument differs from encoded details', async () => {
-    const base = await deployBase();
+    const base = await deployMockTakerBase();
     const { owner, quoteToken, pool } = base;
     const taker = await deployUniswapTaker(base);
 
@@ -407,7 +283,7 @@ describe('Taker quote balance guards', () => {
       amountOutMinimum: QUOTE_AMOUNT_DUE,
     });
 
-    await expectCustomError(
+    await expectRevertContaining(
       taker.takeWithAtomicSwap(
         pool.address,
         owner.address,
@@ -428,7 +304,7 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects full uniswap takes with expired deadlines', async () => {
-    const base = await deployBase();
+    const base = await deployMockTakerBase();
     const { owner, quoteToken, pool } = base;
     const taker = await deployUniswapTaker(base);
 
@@ -441,7 +317,7 @@ describe('Taker quote balance guards', () => {
       deadline: 1,
     });
 
-    await expectCustomError(
+    await expectRevertContaining(
       taker.takeWithAtomicSwap(
         pool.address,
         owner.address,
@@ -462,7 +338,7 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects full uniswap takes with zero amountOutMinimum', async () => {
-    const base = await deployBase();
+    const base = await deployMockTakerBase();
     const { owner, quoteToken, pool } = base;
     const taker = await deployUniswapTaker(base);
 
@@ -474,7 +350,7 @@ describe('Taker quote balance guards', () => {
       amountOutMinimum: 0,
     });
 
-    await expectCustomError(
+    await expectRevertContaining(
       taker.takeWithAtomicSwap(
         pool.address,
         owner.address,
@@ -495,20 +371,21 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects uniswap callbacks that target anything other than pool quote', async () => {
-    const base = await deployBase();
+    const base = await deployMockTakerBase();
     const { collateralToken, quoteToken, pool } = base;
     const taker = await deployUniswapTaker(base);
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
     const router = await deployFundedSwapRouter02(base, QUOTE_AMOUNT_DUE);
 
-    const callbackData = encodeUniswapDetails({
+    const callbackData = encodeUniswapCallbackData({
       routerAddress: router.address,
       targetToken: collateralToken.address,
       amountOutMinimum: QUOTE_AMOUNT_DUE,
+      plannedAmountIn: COLLATERAL_AMOUNT,
     });
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -525,7 +402,7 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects uniswap callbacks that do not increase quote balance', async () => {
-    const base = await deployBase();
+    const base = await deployMockTakerBase();
     const { collateralToken, quoteToken, pool } = base;
     const taker = await deployUniswapTaker(base);
 
@@ -534,13 +411,14 @@ describe('Taker quote balance guards', () => {
 
     const router = await deployFundedSwapRouter02(base, constants.Zero);
 
-    const callbackData = encodeUniswapDetails({
+    const callbackData = encodeUniswapCallbackData({
       routerAddress: router.address,
       targetToken: quoteToken.address,
       amountOutMinimum: 1,
+      plannedAmountIn: COLLATERAL_AMOUNT,
     });
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -552,7 +430,7 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects uniswap callbacks when actual quote received is below amountOutMinimum', async () => {
-    const base = await deployBase();
+    const base = await deployMockTakerBase();
     const { collateralToken, quoteToken, pool } = base;
     const taker = await deployUniswapTaker(base);
 
@@ -563,13 +441,14 @@ describe('Taker quote balance guards', () => {
       APPROVED_MIN_OUT
     );
 
-    const callbackData = encodeUniswapDetails({
+    const callbackData = encodeUniswapCallbackData({
       routerAddress: router.address,
       targetToken: quoteToken.address,
       amountOutMinimum: APPROVED_MIN_OUT,
+      plannedAmountIn: COLLATERAL_AMOUNT,
     });
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -581,13 +460,9 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects sushiswap callbacks that do not increase quote balance', async () => {
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
-      await deployBase();
-    const taker = await new SushiSwapKeeperTaker__factory(owner).deploy(
-      poolDeployer.address,
-      ZERO_FACTORY
-    );
-    await taker.deployed();
+    const base = await deployMockTakerBase();
+    const { owner, collateralToken, quoteToken, pool } = base;
+    const taker = await deploySushiTaker(base);
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
     await quoteToken.mint(taker.address, QUOTE_AMOUNT_DUE);
@@ -595,12 +470,13 @@ describe('Taker quote balance guards', () => {
     const router = await new MockSushiSwapRouter__factory(owner).deploy(0);
     await router.deployed();
 
-    const callbackData = utils.defaultAbiCoder.encode(
-      [SUSHI_DETAILS_TYPE],
-      [[router.address, quoteToken.address, 500, 0, DEADLINE]]
+    const callbackData = encodeTakerCallbackData(
+      SUSHI_DETAILS_TYPE,
+      [router.address, quoteToken.address, 500, 0, DEADLINE],
+      COLLATERAL_AMOUNT
     );
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -612,13 +488,9 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects sushiswap callbacks when actual quote received is below amountOutMinimum', async () => {
-    const base = await deployBase();
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } = base;
-    const taker = await new SushiSwapKeeperTaker__factory(owner).deploy(
-      poolDeployer.address,
-      ZERO_FACTORY
-    );
-    await taker.deployed();
+    const base = await deployMockTakerBase();
+    const { collateralToken, quoteToken, pool } = base;
+    const taker = await deploySushiTaker(base);
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
     const router = await deployMinOutBypassSwap(
@@ -627,12 +499,13 @@ describe('Taker quote balance guards', () => {
       APPROVED_MIN_OUT
     );
 
-    const callbackData = utils.defaultAbiCoder.encode(
-      [SUSHI_DETAILS_TYPE],
-      [[router.address, quoteToken.address, 500, APPROVED_MIN_OUT, DEADLINE]]
+    const callbackData = encodeTakerCallbackData(
+      SUSHI_DETAILS_TYPE,
+      [router.address, quoteToken.address, 500, APPROVED_MIN_OUT, DEADLINE],
+      COLLATERAL_AMOUNT
     );
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -644,13 +517,9 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects curve callbacks that trust forged return values without quote balance increase', async () => {
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } =
-      await deployBase();
-    const taker = await new CurveKeeperTaker__factory(owner).deploy(
-      poolDeployer.address,
-      ZERO_FACTORY
-    );
-    await taker.deployed();
+    const base = await deployMockTakerBase();
+    const { owner, collateralToken, quoteToken, pool } = base;
+    const taker = await deployCurveTaker(base);
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
     await quoteToken.mint(taker.address, QUOTE_AMOUNT_DUE);
@@ -661,23 +530,22 @@ describe('Taker quote balance guards', () => {
     );
     await curvePool.deployed();
 
-    const callbackData = utils.defaultAbiCoder.encode(
-      [CURVE_DETAILS_TYPE],
+    const callbackData = encodeTakerCallbackData(
+      CURVE_DETAILS_TYPE,
       [
-        [
-          curvePool.address,
-          collateralToken.address,
-          quoteToken.address,
-          0,
-          0,
-          1,
-          0,
-          DEADLINE,
-        ],
-      ]
+        curvePool.address,
+        collateralToken.address,
+        quoteToken.address,
+        0,
+        0,
+        1,
+        0,
+        DEADLINE,
+      ],
+      COLLATERAL_AMOUNT
     );
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,
@@ -689,13 +557,9 @@ describe('Taker quote balance guards', () => {
   });
 
   it('rejects curve callbacks when actual quote received is below amountOutMinimum', async () => {
-    const base = await deployBase();
-    const { owner, collateralToken, quoteToken, poolDeployer, pool } = base;
-    const taker = await new CurveKeeperTaker__factory(owner).deploy(
-      poolDeployer.address,
-      ZERO_FACTORY
-    );
-    await taker.deployed();
+    const base = await deployMockTakerBase();
+    const { collateralToken, quoteToken, pool } = base;
+    const taker = await deployCurveTaker(base);
 
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
     const curvePool = await deployMinOutBypassSwap(
@@ -704,23 +568,22 @@ describe('Taker quote balance guards', () => {
       APPROVED_MIN_OUT
     );
 
-    const callbackData = utils.defaultAbiCoder.encode(
-      [CURVE_DETAILS_TYPE],
+    const callbackData = encodeTakerCallbackData(
+      CURVE_DETAILS_TYPE,
       [
-        [
-          curvePool.address,
-          collateralToken.address,
-          quoteToken.address,
-          0,
-          0,
-          1,
-          APPROVED_MIN_OUT,
-          DEADLINE,
-        ],
-      ]
+        curvePool.address,
+        collateralToken.address,
+        quoteToken.address,
+        0,
+        0,
+        1,
+        APPROVED_MIN_OUT,
+        DEADLINE,
+      ],
+      COLLATERAL_AMOUNT
     );
 
-    await expectCustomError(
+    await expectRevertContaining(
       pool.callAtomicSwapCallback(
         taker.address,
         COLLATERAL_AMOUNT,

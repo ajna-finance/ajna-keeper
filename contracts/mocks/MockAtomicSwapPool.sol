@@ -11,7 +11,12 @@ contract MockAtomicSwapPool {
     address public immutable collateralAddress;
     address public immutable quoteTokenAddress;
     uint256 public immutable quoteTokenScale;
+    uint256 public collateralScale = 1;
     uint256 public quoteAmountDue;
+    /// @dev When nonzero, take() sends this raw collateral amount to the callee instead of
+    ///      maxAmount, simulating Ajna's debt-constrained clamp. Tests using a collateral
+    ///      scale other than 1 must always set this, since maxAmount is WAD-precision.
+    uint256 public collateralTakenOverride;
     address public lastBorrower;
     address public lastCallee;
     uint256 public lastCollateralTaken;
@@ -27,13 +32,21 @@ contract MockAtomicSwapPool {
         quoteAmountDue = quoteAmountDue_;
     }
 
+    function setCollateralScale(uint256 collateralScale_) external {
+        collateralScale = collateralScale_;
+    }
+
+    function setCollateralTakenOverride(uint256 collateralTakenOverride_) external {
+        collateralTakenOverride = collateralTakenOverride_;
+    }
+
     function take(
         address borrowerAddress_,
         uint256 maxAmount_,
         address callee_,
         bytes calldata data_
     ) external returns (uint256 collateralTaken_) {
-        collateralTaken_ = maxAmount_;
+        collateralTaken_ = collateralTakenOverride != 0 ? collateralTakenOverride : maxAmount_;
         lastBorrower = borrowerAddress_;
         lastCallee = callee_;
         lastCollateralTaken = collateralTaken_;

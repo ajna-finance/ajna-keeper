@@ -44,15 +44,7 @@ import {
 } from './external-take/policy';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from './external-take/execution-plan';
 import { approveOneInchQuoteForExecution } from './external-take/quote-approval';
-
-async function getOneInchTokenDecimals(params: {
-  signer: Signer;
-  tokenAddress: string;
-  chainId?: number;
-  cache?: Map<string, number>;
-}): Promise<number> {
-  return getCachedTokenDecimals(params);
-}
+import { getDebtConstrainedTakeCollateralWad } from './take-sizing';
 
 async function resolveOneInchChainId(
   config: Partial<Pick<OneInchQuoteConfig, 'chainId'>>,
@@ -166,7 +158,7 @@ export async function getOneInchPathQuoteEvaluation(
     });
 
     // 1inch expects collateral amounts in token-native decimals, not WAD.
-    const collateralDecimals = await getOneInchTokenDecimals({
+    const collateralDecimals = await getCachedTokenDecimals({
       signer,
       tokenAddress: pool.collateralAddress,
       chainId,
@@ -208,7 +200,7 @@ export async function getOneInchPathQuoteEvaluation(
       };
     }
 
-    const quoteDecimals = await getOneInchTokenDecimals({
+    const quoteDecimals = await getCachedTokenDecimals({
       signer,
       tokenAddress: pool.quoteAddress,
       chainId,
@@ -288,13 +280,14 @@ export async function getOneInchPathQuoteEvaluation(
 
 async function computeOneInchAtomicMinReturnAmount(params: {
   pool: FungiblePool;
-  liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
+  auctionPrice: BigNumber;
+  executionCollateralWad: BigNumber;
   quoteEvaluation: ApprovedOneInchQuoteEvaluation;
 }): Promise<BigNumber> {
   const quoteAmountDueRaw = await factoryShared.getQuoteAmountDueRaw(
     params.pool,
-    params.liquidation.auctionPrice,
-    params.liquidation.collateral
+    params.auctionPrice,
+    params.executionCollateralWad
   );
   const approvedMinOutRaw = params.quoteEvaluation.approvedMinOutRaw;
 
@@ -336,6 +329,22 @@ export async function takeLiquidation({
     return false;
   }
 
+  // Size the swap to the collateral Ajna can actually fill: with
+  // maxAmount == this clamped size the take fills exactly, so the 1inch
+  // calldata's quoted input matches the on-chain swap input.
+  //
+  // Unlike the LI.FI path, no hard quote-context match is enforced here: if
+  // auction state drifted since evaluation, AjnaKeeperTaker pro-rates
+  // desc.amount/minReturnAmount to the actual fill on-chain, so drift degrades
+  // to a guarded attempt instead of a refusal (pinned by the take-1inch
+  // "collateral mutation" test). LI.FI calldata cannot be re-sized, which is
+  // why its execution path rejects on any quote-context mismatch.
+  const executionCollateralWad = getDebtConstrainedTakeCollateralWad({
+    collateral: liquidation.collateral,
+    auctionPrice: liquidation.auctionPrice,
+    debtToCover: liquidation.debtToCover,
+  });
+
   let attemptedSubmission = false;
   try {
     const quoteEvaluation =
@@ -343,7 +352,7 @@ export async function takeLiquidation({
       (await getOneInchTakeQuoteEvaluation(
         pool,
         Number(weiToDecimaled(liquidation.auctionPrice)),
-        liquidation.collateral,
+        executionCollateralWad,
         poolConfig,
         {
           oneInchRequestTimeoutMs: config.oneInchRequestTimeoutMs,
@@ -401,14 +410,14 @@ export async function takeLiquidation({
       return false;
     }
 
-    const collateralDecimals = await getOneInchTokenDecimals({
+    const collateralDecimals = await getCachedTokenDecimals({
       signer,
       tokenAddress: pool.collateralAddress,
       chainId,
       cache: config.tokenDecimalsCache,
     });
     const collateralInTokenDecimals = convertWadToTokenDecimals(
-      liquidation.collateral,
+      executionCollateralWad,
       collateralDecimals
     );
 
@@ -465,7 +474,8 @@ export async function takeLiquidation({
 
     const requiredMinReturnAmount = await computeOneInchAtomicMinReturnAmount({
       pool,
-      liquidation,
+      auctionPrice: liquidation.auctionPrice,
+      executionCollateralWad,
       quoteEvaluation: approvedQuoteEvaluation,
     });
 
@@ -505,8 +515,9 @@ export async function takeLiquidation({
         `  Pool: ${pool.poolAddress}\n` +
         `  Borrower: ${liquidation.borrower}\n` +
         `  Auction Price (WAD): ${liquidation.auctionPrice.toString()}\n` +
-        `  Collateral (WAD): ${liquidation.collateral.toString()}\n` +
-        `  Collateral (Token Decimals): ${collateralInTokenDecimals.toString()}\n` +
+        `  Auction Collateral (WAD): ${liquidation.collateral.toString()}\n` +
+        `  Take Collateral (WAD): ${executionCollateralWad.toString()}\n` +
+        `  Take Collateral (Token Decimals): ${collateralInTokenDecimals.toString()}\n` +
         `  Liquidity Source: ${LiquiditySource.ONEINCH}\n` +
         `  1inch Router: ${configuredOneInchRouter}\n` +
         `  Required Min Return: ${executionMinReturnAmount.toString()}\n` +
@@ -523,7 +534,7 @@ export async function takeLiquidation({
           pool.poolAddress,
           liquidation.borrower,
           liquidation.auctionPrice,
-          liquidation.collateral,
+          executionCollateralWad,
           Number(LiquiditySource.ONEINCH),
           configuredOneInchRouter,
           swapDetailsBytes,

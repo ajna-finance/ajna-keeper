@@ -3,7 +3,10 @@ import { BigNumber, ethers } from 'ethers';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
 import { LifiDexConfig, LiquiditySource } from '../../config';
 import type { ExternalTakeTakerContractKey } from '../../config';
-import { ApprovedLifiQuote, DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../../dex/lifi';
+import {
+  ApprovedLifiQuote,
+  DEFAULT_LIFI_QUOTE_MAX_AGE_MS,
+} from '../../dex/lifi';
 import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
 import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
@@ -25,7 +28,6 @@ import {
 } from './quote-service';
 import {
   ApprovedLifiQuoteEvaluation,
-  ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
@@ -35,6 +37,7 @@ import {
   submitTakeTransaction,
 } from '../write-transport';
 import { logTakeExecutionTelemetry } from '../execution-telemetry';
+import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
 
 export const getLifiPathQuoteEvaluation = evaluateLifiPathQuote;
 
@@ -106,12 +109,13 @@ function recordLifiStaleFreshQuote(
 
 function getLifiQuoteContextMismatch(params: {
   quoteEvaluation: ApprovedLifiQuoteEvaluation;
-  liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
+  liquidation: Pick<TakeLiquidationPlan, 'auctionPrice'>;
+  executionCollateralWad: BigNumber;
 }): string | undefined {
   if (
     params.quoteEvaluation.quotedCollateralWad !== undefined &&
     !params.quoteEvaluation.quotedCollateralWad.eq(
-      params.liquidation.collateral
+      params.executionCollateralWad
     )
   ) {
     return 'LI.FI approved quote collateral does not match current liquidation collateral';
@@ -174,6 +178,10 @@ type PreparedLifiExecution =
       approvedQuoteEvaluation: ApprovedLifiQuoteEvaluation;
       freshQuote: ApprovedLifiQuote;
       swapDetails: string;
+      // maxAmount for pool.take; the debt-clamped size the LI.FI calldata was
+      // requested for, so the take fills exactly and the strict on-chain
+      // balance check (UnexpectedSourceBalance) passes.
+      executionCollateralWad: BigNumber;
       takeWriteTransport: TakeWriteTransport;
       factory: LifiTakerFactory;
       assertFreshQuoteStillCurrent: () => void;
@@ -198,12 +206,20 @@ async function resolveApprovedLifiExecutionQuote(params: {
   signer: Signer;
   poolConfig: TakeActionConfig;
   liquidation: TakeLiquidationPlan;
+  executionCollateralWad: BigNumber;
   config: LifiExecutionConfig;
 }): Promise<
   | { approved: true; quoteEvaluation: ApprovedLifiQuoteEvaluation }
   | { approved: false; reason: string; logError?: boolean }
 > {
-  const { pool, signer, poolConfig, liquidation, config } = params;
+  const {
+    pool,
+    signer,
+    poolConfig,
+    liquidation,
+    executionCollateralWad,
+    config,
+  } = params;
   const quoteEvaluation =
     getExternalTakeExecutionPlanPrimaryEvaluation(
       liquidation.externalTakeExecutionPlan
@@ -211,7 +227,7 @@ async function resolveApprovedLifiExecutionQuote(params: {
     (await getLifiPathQuoteEvaluation(
       pool,
       Number(weiToDecimaled(liquidation.auctionPrice)),
-      liquidation.collateral,
+      executionCollateralWad,
       poolConfig,
       config,
       signer,
@@ -232,6 +248,7 @@ async function resolveApprovedLifiExecutionQuote(params: {
   const contextMismatch = getLifiQuoteContextMismatch({
     quoteEvaluation: approval.quoteEvaluation,
     liquidation,
+    executionCollateralWad,
   });
   if (contextMismatch) {
     return {
@@ -312,11 +329,20 @@ async function prepareLifiExecution(params: {
   config: LifiExecutionConfig;
 }): Promise<PreparedLifiExecution> {
   const { pool, signer, poolConfig, liquidation, config } = params;
+  // LI.FI calldata cannot be re-sized on-chain, so quote and take exactly the
+  // debt-clamped size: price decay only increases what Ajna can fill, making
+  // maxAmount == quoted size an exact fill.
+  const executionCollateralWad = getDebtConstrainedTakeCollateralWad({
+    collateral: liquidation.collateral,
+    auctionPrice: liquidation.auctionPrice,
+    debtToCover: liquidation.debtToCover,
+  });
   const approved = await resolveApprovedLifiExecutionQuote({
     pool,
     signer,
     poolConfig,
     liquidation,
+    executionCollateralWad,
     config,
   });
   if (!approved.approved) {
@@ -351,7 +377,7 @@ async function prepareLifiExecution(params: {
     cache: config.tokenDecimalsCache,
   });
   const collateralInTokenDecimals = convertWadToTokenDecimals(
-    liquidation.collateral,
+    executionCollateralWad,
     collateralDecimals
   );
   if (collateralInTokenDecimals.isZero()) {
@@ -406,6 +432,7 @@ async function prepareLifiExecution(params: {
       quote: freshQuote,
       amountOutMinimum: approvedQuoteEvaluation.approvedMinOutRaw,
     }),
+    executionCollateralWad,
     takeWriteTransport: resolveTakeWriteTransport(signer, config),
     factory: AjnaKeeperTakerFactory__factory.connect(
       config.keeperTakerFactory,
@@ -436,7 +463,7 @@ async function submitPreparedLifiExecution(params: {
         pool.poolAddress,
         liquidation.borrower,
         liquidation.auctionPrice,
-        liquidation.collateral,
+        prepared.executionCollateralWad,
         Number(LiquiditySource.LIFI),
         prepared.freshQuote.transactionTarget,
         prepared.swapDetails,
