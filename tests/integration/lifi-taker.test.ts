@@ -515,6 +515,29 @@ describe('LifiKeeperTaker', () => {
     ).to.be.true;
   });
 
+  it('rejects active-pool callbacks whose data does not hash-match the in-flight take', async () => {
+    // Packet 2B regression: an extraction that kept _activeCallbackPool but
+    // dropped _activeCallbackDataHash would pass the sender half of the
+    // binding. The mock pool delivers mutated callback bytes mid-take; the
+    // taker must reject them even though msg.sender IS the active pool.
+    const result = await executeTake({});
+    await result.pool.setMutateCallbackData(true);
+
+    await expectRevertWith(result.send(), 'UnexpectedCallback');
+    expect((await result.collateral.balanceOf(result.target.address)).eq(0)).to
+      .be.true;
+    expect((await result.quote.balanceOf(result.taker.address)).eq(0)).to.be
+      .true;
+    expect(
+      (
+        await result.collateral.allowance(
+          result.taker.address,
+          result.target.address
+        )
+      ).eq(0)
+    ).to.be.true;
+  });
+
   it('recovers LI.FI source token residue to the owner after quote repayment', async () => {
     const result = await deployFixture();
     const amountIn = utils.parseEther('1');
