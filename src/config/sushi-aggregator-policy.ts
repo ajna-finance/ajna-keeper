@@ -7,7 +7,7 @@ import {
 /**
  * Sushi aggregator provider policy (Packet 3B). Focused provider module so
  * src/config/validation.ts only carries the validator-map entry. Entirely
- * separate from the removed dex.sushiswap direct-router surface and from the
+ * separate from the removed direct-router config surface and from the
  * LI.FI policy module; allowlists are isolated per provider deployment.
  *
  * Initial production scope is bounded by the Packet 3A proceed artifact

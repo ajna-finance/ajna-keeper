@@ -117,10 +117,16 @@ export function validateSushiAggregatorQuote(params: {
   if (!HEX_ADDRESS_RE.test(target)) {
     fail('tx.to is not a valid execution target address');
   }
-  if (params.chainPolicy.callTargets.indexOf(target) < 0) {
+  const allowedCallTargets = params.chainPolicy.callTargets.map(value =>
+    value.toLowerCase()
+  );
+  const allowedApprovalSpenders = params.chainPolicy.approvalSpenders.map(
+    value => value.toLowerCase()
+  );
+  if (allowedCallTargets.indexOf(target) < 0) {
     fail(`tx.to ${target} is not in the chain call-target allowlist`);
   }
-  if (params.chainPolicy.approvalSpenders.indexOf(target) < 0) {
+  if (allowedApprovalSpenders.indexOf(target) < 0) {
     fail(
       `approval spender ${target} is not in the chain approval-spender allowlist`
     );
@@ -140,7 +146,14 @@ export function validateSushiAggregatorQuote(params: {
   if (PROVEN_SUSHI_AGGREGATOR_SELECTORS.indexOf(selector) < 0) {
     fail(`selector ${selector} has no proven head layout`);
   }
-  const allowedSelectors = params.chainPolicy.selectorAllowlist[target] ?? [];
+  const selectorEntry = Object.keys(params.chainPolicy.selectorAllowlist).find(
+    key => key.toLowerCase() === target
+  );
+  const allowedSelectors = selectorEntry
+    ? params.chainPolicy.selectorAllowlist[selectorEntry].map(value =>
+        value.toLowerCase()
+      )
+    : [];
   if (allowedSelectors.indexOf(selector) < 0) {
     fail(`selector ${selector} is not allowlisted for target ${target}`);
   }
