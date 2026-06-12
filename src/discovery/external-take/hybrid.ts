@@ -1,5 +1,4 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber } from 'ethers';
 import {
   ActiveExternalTakeRouteSelectionMode,
   ExternalTakePathKind,
@@ -9,6 +8,7 @@ import {
 import { logger } from '../../logging';
 import { isSubsidizedExternalTakeQuote } from '../../take/external-take/policy';
 import {
+  AuctionTakeFacts,
   BoundExternalTakeRouteEvaluation,
   ExternalTakeEvaluationResult,
   ExternalTakeExecutionCandidate,
@@ -105,17 +105,17 @@ function resolveProbeOrder(params: {
   });
 }
 
-async function probeExternalTakePath(params: {
-  provider: DiscoveryExternalTakeRouteProvider;
-  control: ProbeControl;
-  pool: FungiblePool;
-  signer: Signer;
-  poolConfig: ResolvedTakeTarget;
-  price: number;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
-  approveExternalTake: DiscoveryExternalTakeApprover;
-}): Promise<HybridExternalTakeProbeResult> {
+async function probeExternalTakePath(
+  params: AuctionTakeFacts & {
+    provider: DiscoveryExternalTakeRouteProvider;
+    control: ProbeControl;
+    pool: FungiblePool;
+    signer: Signer;
+    poolConfig: ResolvedTakeTarget;
+    price: number;
+    approveExternalTake: DiscoveryExternalTakeApprover;
+  }
+): Promise<HybridExternalTakeProbeResult> {
   const startedAt = Date.now();
   let circuitOutcome: ExternalTakeQuoteCircuitOutcome | undefined;
   try {
@@ -126,6 +126,7 @@ async function probeExternalTakePath(params: {
       price: params.price,
       auctionPrice: params.auctionPrice,
       collateral: params.collateral,
+      debtToCover: params.debtToCover,
       intent: {
         kind: 'hybrid_probe',
         abortSignal: params.control.abortController.signal,
@@ -158,6 +159,7 @@ async function probeExternalTakePath(params: {
       price: params.price,
       auctionPrice: params.auctionPrice,
       collateral: params.collateral,
+      debtToCover: params.debtToCover,
       quoteEvaluation: evaluation,
       countStats: false,
     });
@@ -247,19 +249,19 @@ async function withProbeTimeout(params: {
   }
 }
 
-async function runHybridExternalTakeProbes(params: {
-  pool: FungiblePool;
-  signer: Signer;
-  poolConfig: ResolvedTakeTarget;
-  externalTakePaths: ExternalTakePathKind[];
-  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
-  probeTimeoutMs: number;
-  price: number;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
-  providerRegistry: DiscoveryExternalTakeProviderRegistry;
-  approveExternalTake: DiscoveryExternalTakeApprover;
-}): Promise<HybridExternalTakeProbeResult[]> {
+async function runHybridExternalTakeProbes(
+  params: AuctionTakeFacts & {
+    pool: FungiblePool;
+    signer: Signer;
+    poolConfig: ResolvedTakeTarget;
+    externalTakePaths: ExternalTakePathKind[];
+    routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+    probeTimeoutMs: number;
+    price: number;
+    providerRegistry: DiscoveryExternalTakeProviderRegistry;
+    approveExternalTake: DiscoveryExternalTakeApprover;
+  }
+): Promise<HybridExternalTakeProbeResult[]> {
   const probeOrder = resolveProbeOrder(params);
   const runProbe = async (
     provider: DiscoveryExternalTakeRouteProvider,
@@ -343,21 +345,22 @@ function resolveHybridGasQuoteFallbackTriggerReason(params: {
     : undefined;
 }
 
-async function buildHybridGasQuoteFallbackEvaluation(params: {
-  pool: FungiblePool;
-  signer: Signer;
-  poolConfig: ResolvedTakeTarget;
-  takePolicy: AutoDiscoverTakePolicyRuntime;
-  externalTakePaths: ExternalTakePathKind[];
-  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
-  price: number;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
-  providerRegistry: DiscoveryExternalTakeProviderRegistry;
-  approveExternalTake: DiscoveryExternalTakeApprover;
-  probeResults: HybridExternalTakeProbeResult[];
-}): Promise<
-  ExternalTakeExecutionCandidate<DiscoveryExternalTakeApprovalContext> | undefined
+async function buildHybridGasQuoteFallbackEvaluation(
+  params: AuctionTakeFacts & {
+    pool: FungiblePool;
+    signer: Signer;
+    poolConfig: ResolvedTakeTarget;
+    takePolicy: AutoDiscoverTakePolicyRuntime;
+    externalTakePaths: ExternalTakePathKind[];
+    routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+    price: number;
+    providerRegistry: DiscoveryExternalTakeProviderRegistry;
+    approveExternalTake: DiscoveryExternalTakeApprover;
+    probeResults: HybridExternalTakeProbeResult[];
+  }
+): Promise<
+  | ExternalTakeExecutionCandidate<DiscoveryExternalTakeApprovalContext>
+  | undefined
 > {
   const factoryNativeToQuoteReject = params.probeResults.find(
     (result) =>
@@ -399,6 +402,7 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
     price: params.price,
     auctionPrice: params.auctionPrice,
     collateral: params.collateral,
+    debtToCover: params.debtToCover,
     intent: { kind: HYBRID_GAS_QUOTE_FALLBACK_KIND },
   });
   if (!fallbackQuote.isTakeable) {
@@ -412,6 +416,7 @@ async function buildHybridGasQuoteFallbackEvaluation(params: {
     price: params.price,
     auctionPrice: params.auctionPrice,
     collateral: params.collateral,
+    debtToCover: params.debtToCover,
     quoteEvaluation: fallbackQuote,
     externalTakeApprovalContext: HYBRID_GAS_QUOTE_FALLBACK_CONTEXT,
     countStats: false,
@@ -453,21 +458,21 @@ function formatRejectedProbeReasons(
     );
 }
 
-export async function evaluateHybridExternalTakeForDiscovery(params: {
-  pool: FungiblePool;
-  signer: Signer;
-  poolConfig: ResolvedTakeTarget;
-  takePolicy: AutoDiscoverTakePolicyRuntime;
-  externalTakePaths: ExternalTakePathKind[];
-  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
-  probeTimeoutMs: number;
-  price: number;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
-  providerRegistry: DiscoveryExternalTakeProviderRegistry;
-  approveExternalTake: DiscoveryExternalTakeApprover;
-  stats: HybridExternalTakeStats;
-}): Promise<ExternalTakeEvaluationResult<DiscoveryExternalTakeApprovalContext>> {
+export async function evaluateHybridExternalTakeForDiscovery(
+  params: AuctionTakeFacts & {
+    pool: FungiblePool;
+    signer: Signer;
+    poolConfig: ResolvedTakeTarget;
+    takePolicy: AutoDiscoverTakePolicyRuntime;
+    externalTakePaths: ExternalTakePathKind[];
+    routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+    probeTimeoutMs: number;
+    price: number;
+    providerRegistry: DiscoveryExternalTakeProviderRegistry;
+    approveExternalTake: DiscoveryExternalTakeApprover;
+    stats: HybridExternalTakeStats;
+  }
+): Promise<ExternalTakeEvaluationResult<DiscoveryExternalTakeApprovalContext>> {
   const probeResults = await runHybridExternalTakeProbes({
     ...params,
   });
@@ -523,13 +528,11 @@ export async function evaluateHybridExternalTakeForDiscovery(params: {
   if (selected) {
     const selectedWithFallbacks = cloneExternalTakeQuoteEvaluation(selected);
     const fallbackCandidates: ExternalTakeExecutionCandidate<DiscoveryExternalTakeApprovalContext>[] =
-      sortedApprovedEvaluations
-        .slice(1)
-        .map((evaluation) =>
-          createExternalTakeExecutionCandidate({
-            evaluation: cloneExternalTakeQuoteEvaluation(evaluation),
-          })
-        );
+      sortedApprovedEvaluations.slice(1).map((evaluation) =>
+        createExternalTakeExecutionCandidate({
+          evaluation: cloneExternalTakeQuoteEvaluation(evaluation),
+        })
+      );
     if (
       isOneInchExternalTakeRoute(selected) ||
       isLifiExternalTakeRoute(selected)

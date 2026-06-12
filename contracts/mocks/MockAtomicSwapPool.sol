@@ -11,7 +11,16 @@ contract MockAtomicSwapPool {
     address public immutable collateralAddress;
     address public immutable quoteTokenAddress;
     uint256 public immutable quoteTokenScale;
+    uint256 public collateralScale = 1;
     uint256 public quoteAmountDue;
+    /// @dev When nonzero, take() sends this raw collateral amount to the callee instead of
+    ///      maxAmount, simulating Ajna's debt-constrained clamp. Tests using a collateral
+    ///      scale other than 1 must always set this, since maxAmount is WAD-precision.
+    uint256 public collateralTakenOverride;
+    /// @dev When nonzero, take() pulls this raw quote amount instead of quoteAmountDue.
+    ///      Real Ajna passes floor(quoteWad/scale) to the callback but pulls
+    ///      ceil(quoteWad/scale) — set this to quoteAmountDue + 1 to model that gap.
+    uint256 public quotePullOverride;
     address public lastBorrower;
     address public lastCallee;
     uint256 public lastCollateralTaken;
@@ -27,13 +36,25 @@ contract MockAtomicSwapPool {
         quoteAmountDue = quoteAmountDue_;
     }
 
+    function setCollateralScale(uint256 collateralScale_) external {
+        collateralScale = collateralScale_;
+    }
+
+    function setCollateralTakenOverride(uint256 collateralTakenOverride_) external {
+        collateralTakenOverride = collateralTakenOverride_;
+    }
+
+    function setQuotePullOverride(uint256 quotePullOverride_) external {
+        quotePullOverride = quotePullOverride_;
+    }
+
     function take(
         address borrowerAddress_,
         uint256 maxAmount_,
         address callee_,
         bytes calldata data_
     ) external returns (uint256 collateralTaken_) {
-        collateralTaken_ = maxAmount_;
+        collateralTaken_ = collateralTakenOverride != 0 ? collateralTakenOverride : maxAmount_;
         lastBorrower = borrowerAddress_;
         lastCallee = callee_;
         lastCollateralTaken = collateralTaken_;
@@ -45,10 +66,12 @@ contract MockAtomicSwapPool {
             quoteAmountDue,
             data_
         );
+        // Real Ajna pulls from msg.sender (the take caller), not the callee, and pulls
+        // the ceil-divided amount which can exceed the callback's floored due by 1 wei.
         IERC20(quoteTokenAddress).safeTransferFrom(
-            callee_,
+            msg.sender,
             address(this),
-            quoteAmountDue
+            quotePullOverride != 0 ? quotePullOverride : quoteAmountDue
         );
     }
 

@@ -50,6 +50,7 @@ function createProviderBackedDirectAdapter(params: {
       price,
       auctionPrice,
       collateral,
+      debtToCover,
     }) => {
       const quoteEvaluation = await params.provider.quote({
         pool,
@@ -58,6 +59,7 @@ function createProviderBackedDirectAdapter(params: {
         price,
         auctionPrice,
         collateral,
+        debtToCover,
         intent: { kind: 'direct' },
       });
       return bindExternalTakeQuoteToExecutionResult({
@@ -120,6 +122,7 @@ export function createExternalTakeAdapterForDiscovery(params: {
         price,
         auctionPrice,
         collateral,
+        debtToCover,
       }) =>
         evaluateHybridExternalTakeForDiscovery({
           pool,
@@ -132,6 +135,7 @@ export function createExternalTakeAdapterForDiscovery(params: {
           price,
           auctionPrice,
           collateral,
+          debtToCover,
           providerRegistry: params.providerRegistry,
           approveExternalTake: params.approveExternalTake,
           stats: params.stats,

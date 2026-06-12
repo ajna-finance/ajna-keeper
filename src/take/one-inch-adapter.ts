@@ -5,6 +5,7 @@ import {
   takeLiquidation,
 } from './one-inch-execution';
 import { OneInchExecutionConfig, OneInchQuoteConfig } from './one-inch-types';
+import { getDebtConstrainedTakeCollateralWad } from './take-sizing';
 import { TakeActionConfig } from './types';
 
 export function createNoExternalTakeAdapter<
@@ -32,11 +33,16 @@ export function createOneInchTakeAdapter(
       price,
       auctionPrice,
       collateral,
+      debtToCover,
     }) => {
       const quoteEvaluation = await getOneInchTakeQuoteEvaluation(
         pool,
         price,
-        collateral,
+        getDebtConstrainedTakeCollateralWad({
+          collateral,
+          auctionPrice,
+          debtToCover,
+        }),
         poolConfig,
         {
           oneInchRequestTimeoutMs: quoteConfig.oneInchRequestTimeoutMs,

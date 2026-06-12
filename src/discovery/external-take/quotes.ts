@@ -6,7 +6,11 @@ import * as takeFactoryModule from '../../take/factory';
 import { FactoryRouteProfitabilityContext } from '../../take/factory';
 import * as lifiExecutionModule from '../../take/lifi/execution';
 import * as oneInchExecutionModule from '../../take/one-inch-execution';
-import { ExternalTakeQuoteEvaluation } from '../../take/types';
+import { getDebtConstrainedTakeCollateralWad } from '../../take/take-sizing';
+import {
+  AuctionTakeFacts,
+  ExternalTakeQuoteEvaluation,
+} from '../../take/types';
 import {
   AsyncOperationLimiter,
   getErrorMessage,
@@ -41,12 +45,10 @@ export type AutoDiscoverTakePolicyRuntime = ReturnType<
 export type OneInchCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
 export type LifiCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
 
-export interface FactoryPathQuoteInput {
+export interface FactoryPathQuoteInput extends AuctionTakeFacts {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: ResolvedTakeTarget;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
   factoryGasQuoteFallback?: boolean;
   routeProbeAbortSignal?: AbortSignal;
 }
@@ -104,7 +106,8 @@ type DiscoveryOneInchQuoteOptions = {
 };
 
 type OneInchDiscoveryQuoteEvaluator = (
-  quoteOptions: DiscoveryOneInchQuoteOptions
+  quoteOptions: DiscoveryOneInchQuoteOptions,
+  quoteCollateralWad: BigNumber
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
 async function withCombinedAbortSignal<T>(
@@ -368,13 +371,15 @@ async function quoteOneInchForDiscovery(
     takePolicy: params.takePolicy,
   });
   const oneInchRequestTimeoutMs = getOneInchQuoteTimeoutMs(params.takePolicy);
+  // Aggregator quotes are denominated in the debt-clamped take size.
+  const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
   return quoteCircuitGuardedPath({
     poolName: params.pool.name,
     label: '1inch',
     externalTakePath: 'oneinch',
     selectedLiquiditySource: LiquiditySource.ONEINCH,
     auctionPrice: params.auctionPrice,
-    collateral: params.collateral,
+    collateral: quoteCollateralWad,
     circuitOpenReason,
     recordCircuitOutcome: params.recordCircuitOutcome,
     routeProbeLimiter: params.routeProbeLimiter,
@@ -383,12 +388,15 @@ async function quoteOneInchForDiscovery(
     abortErrorMessage: '1inch external take quote aborted',
     timeoutLabel: '1inch external take quote',
     evaluate: async (signal) =>
-      await params.evaluate({
-        oneInchRequestTimeoutMs,
-        oneInchRequestAbortSignal: signal,
-        chainId: params.rpcCache?.chainId,
-        tokenDecimalsCache: params.getTokenDecimalsCache(params.rpcCache),
-      }),
+      await params.evaluate(
+        {
+          oneInchRequestTimeoutMs,
+          oneInchRequestAbortSignal: signal,
+          chainId: params.rpcCache?.chainId,
+          tokenDecimalsCache: params.getTokenDecimalsCache(params.rpcCache),
+        },
+        quoteCollateralWad
+      ),
     recordOutcome: (outcome) =>
       recordOneInchCircuitOutcomeForDiscovery({
         rpcCache: params.rpcCache,
@@ -411,11 +419,11 @@ export async function quoteOneInchPathForDiscovery(
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteOneInchForDiscovery({
     ...params,
-    evaluate: (quoteOptions) =>
+    evaluate: (quoteOptions, quoteCollateralWad) =>
       oneInchExecutionModule.getOneInchPathQuoteEvaluation(
         params.pool,
         params.price,
-        params.collateral,
+        quoteCollateralWad,
         params.poolConfig,
         {
           ...quoteOptions,
@@ -441,11 +449,11 @@ export async function quoteKeeperTakerOneInchTakeForDiscovery(
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteOneInchForDiscovery({
     ...params,
-    evaluate: (quoteOptions) =>
+    evaluate: (quoteOptions, quoteCollateralWad) =>
       oneInchExecutionModule.getOneInchTakeQuoteEvaluation(
         params.pool,
         params.price,
-        params.collateral,
+        quoteCollateralWad,
         params.poolConfig,
         {
           ...quoteOptions,
@@ -474,13 +482,14 @@ export async function quoteLifiPathForDiscovery(
     rpcCache: params.rpcCache,
     lifiConfig: params.config.lifi,
   });
+  const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
   return quoteCircuitGuardedPath({
     poolName: params.pool.name,
     label: 'LI.FI',
     externalTakePath: 'lifi',
     selectedLiquiditySource: LiquiditySource.LIFI,
     auctionPrice: params.auctionPrice,
-    collateral: params.collateral,
+    collateral: quoteCollateralWad,
     circuitOpenReason,
     recordCircuitOutcome: params.recordCircuitOutcome,
     routeProbeLimiter: params.routeProbeLimiter,
@@ -492,7 +501,7 @@ export async function quoteLifiPathForDiscovery(
       await lifiExecutionModule.getLifiPathQuoteEvaluation(
         params.pool,
         params.price,
-        params.collateral,
+        quoteCollateralWad,
         params.poolConfig,
         {
           lifi: params.config.lifi,

@@ -1,6 +1,6 @@
 import { FungiblePool } from '@ajna-finance/sdk';
-import { BigNumber } from 'ethers';
 import {
+  AuctionTakeFacts,
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeLiquidationPlan,
@@ -14,20 +14,21 @@ import {
 } from './approval';
 import { withExternalTakeApprovalContext } from './evaluation';
 
-export async function reapproveDiscoveryExternalTakeForAuction(params: {
-  approveExternalTake: DiscoveryExternalTakeApprover;
-  price?: number;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
-  externalTakeApprovalContext?: DiscoveryExternalTakeApprovalContext;
-  countStats?: boolean;
-  forceGasRefresh?: boolean;
-}): Promise<ExternalTakeApprovalResult> {
+export async function reapproveDiscoveryExternalTakeForAuction(
+  params: AuctionTakeFacts & {
+    approveExternalTake: DiscoveryExternalTakeApprover;
+    price?: number;
+    quoteEvaluation: ExternalTakeQuoteEvaluation;
+    externalTakeApprovalContext?: DiscoveryExternalTakeApprovalContext;
+    countStats?: boolean;
+    forceGasRefresh?: boolean;
+  }
+): Promise<ExternalTakeApprovalResult> {
   const approval = await params.approveExternalTake({
     price: params.price ?? Number(weiToDecimaled(params.auctionPrice)),
     auctionPrice: params.auctionPrice,
     collateral: params.collateral,
+    debtToCover: params.debtToCover,
     quoteEvaluation: params.quoteEvaluation,
     externalTakeApprovalContext: params.externalTakeApprovalContext,
     countStats: params.countStats,
@@ -42,6 +43,7 @@ export async function reapproveDiscoveryExternalTakeForAuction(params: {
       quoteEvaluation: approval.quoteEvaluation,
       auctionPrice: params.auctionPrice,
       collateral: params.collateral,
+      debtToCover: params.debtToCover,
     }),
   };
 }
@@ -86,11 +88,13 @@ export async function refreshAndReapproveDiscoveryExternalTake(params: {
     ...params.liquidation,
     auctionPrice: refreshedStatus.auctionPrice,
     collateral: refreshedStatus.collateral,
+    debtToCover: refreshedStatus.debtToCover,
   };
   const approval = await reapproveDiscoveryExternalTakeForAuction({
     approveExternalTake: params.approveExternalTake,
     auctionPrice: liquidation.auctionPrice,
     collateral: liquidation.collateral,
+    debtToCover: liquidation.debtToCover,
     quoteEvaluation: params.quoteEvaluation,
     externalTakeApprovalContext: params.externalTakeApprovalContext,
     countStats: params.countStats,

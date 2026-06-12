@@ -1,10 +1,8 @@
 import { ExternalTakeAdapter } from '../engine';
 import { bindExternalTakeQuoteToExecutionResult } from '../external-take/execution-plan';
-import {
-  getLifiPathQuoteEvaluation,
-  takeLiquidationLifi,
-} from './execution';
+import { getLifiPathQuoteEvaluation, takeLiquidationLifi } from './execution';
 import { LifiExecutionConfig, LifiQuoteConfig } from './types';
+import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
 import { TakeActionConfig } from '../types';
 
 export function createLifiTakeAdapter(
@@ -20,11 +18,16 @@ export function createLifiTakeAdapter(
       price,
       auctionPrice,
       collateral,
+      debtToCover,
     }) => {
       const quoteEvaluation = await getLifiPathQuoteEvaluation(
         pool,
         price,
-        collateral,
+        getDebtConstrainedTakeCollateralWad({
+          collateral,
+          auctionPrice,
+          debtToCover,
+        }),
         poolConfig,
         quoteConfig,
         signer,

@@ -7,7 +7,51 @@ import {
   TakeAuctionStatusReader,
   defaultTakeAuctionStatusReader,
 } from './liquidation-status';
-import { TakeActionConfig } from './types';
+import { getExpectedQuotedCollateralWad } from './take-sizing';
+import {
+  AuctionTakeFacts,
+  ExternalTakeQuoteEvaluation,
+  TakeActionConfig,
+} from './types';
+
+export type RevalidatedQuoteContextIssue =
+  | 'collateral_mismatch'
+  | 'auction_price_stale';
+
+/**
+ * Compares an approved quote evaluation against revalidated auction state.
+ * Aggregator quotes are denominated in the debt-clamped take size, so the
+ * collateral comparison uses the same path-aware size derived from the
+ * refreshed facts.
+ */
+export function getRevalidatedQuoteContextIssue(
+  params: AuctionTakeFacts & {
+    quoteEvaluation: Pick<
+      ExternalTakeQuoteEvaluation,
+      'externalTakePath' | 'quotedCollateralWad' | 'quotedAuctionPriceWad'
+    >;
+  }
+): RevalidatedQuoteContextIssue | undefined {
+  const { quoteEvaluation } = params;
+  if (quoteEvaluation.quotedCollateralWad) {
+    const expectedQuotedCollateral = getExpectedQuotedCollateralWad({
+      externalTakePath: quoteEvaluation.externalTakePath,
+      collateral: params.collateral,
+      auctionPrice: params.auctionPrice,
+      debtToCover: params.debtToCover,
+    });
+    if (!expectedQuotedCollateral.eq(quoteEvaluation.quotedCollateralWad)) {
+      return 'collateral_mismatch';
+    }
+  }
+  if (
+    quoteEvaluation.quotedAuctionPriceWad &&
+    params.auctionPrice.gt(quoteEvaluation.quotedAuctionPriceWad)
+  ) {
+    return 'auction_price_stale';
+  }
+  return undefined;
+}
 
 export async function revalidateTakeDecision<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
@@ -27,6 +71,7 @@ export async function revalidateTakeDecision<
   approvedArbTake: boolean;
   collateral: BigNumber;
   auctionPrice: BigNumber;
+  debtToCover?: BigNumber;
   hpbIndex: number;
   maxArbTakePrice?: number;
 }> {
@@ -44,6 +89,7 @@ export async function revalidateTakeDecision<
       approvedArbTake: false,
       collateral,
       auctionPrice: liquidationStatus.auctionPrice,
+      debtToCover: liquidationStatus.debtToCover,
       hpbIndex: 0,
     };
   }
@@ -78,6 +124,7 @@ export async function revalidateTakeDecision<
     approvedArbTake,
     collateral,
     auctionPrice: liquidationStatus.auctionPrice,
+    debtToCover: liquidationStatus.debtToCover,
     hpbIndex,
     maxArbTakePrice,
   };

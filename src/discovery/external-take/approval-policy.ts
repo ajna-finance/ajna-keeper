@@ -161,9 +161,8 @@ export async function approveExternalTakeForDiscovery(
     quoteEvaluation,
   } = params;
   const countStats = params.countStats ?? true;
-  let candidateQuoteEvaluation = cloneExternalTakeQuoteEvaluation(
-    quoteEvaluation
-  );
+  let candidateQuoteEvaluation =
+    cloneExternalTakeQuoteEvaluation(quoteEvaluation);
   const approvalMode = params.approvalMode ?? 'strict_hybrid';
 
   if (approvalMode === HYBRID_GAS_QUOTE_FALLBACK_KIND) {
@@ -359,11 +358,14 @@ export async function approveExternalTakeForDiscovery(
       rpcCache?.chainId
     );
   }
+  // Pair the auction cost with the collateral size the route quote is
+  // denominated in (the debt-clamped size for aggregator paths), so absolute
+  // profit-vs-gas checks reflect what the take can actually realize.
   const auctionCostQuoteRaw =
     quoteTokenDecimals !== undefined
       ? getAuctionCostQuoteRaw({
           price: auctionPrice,
-          collateral,
+          collateral: approvedQuoteEvaluation.quotedCollateralWad ?? collateral,
           quoteTokenDecimals,
         })
       : undefined;

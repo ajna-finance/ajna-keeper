@@ -1,19 +1,19 @@
 import { expect } from 'chai';
-import { BigNumber, Wallet, constants, providers, utils } from 'ethers';
-import { network } from 'hardhat';
+import { BigNumber, constants, utils } from 'ethers';
 import { LiquiditySource } from '../../../src/config';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
-import {
-  MockAtomicSwapPool__factory,
-  MockERC20__factory,
-  MockLifiSwapTarget__factory,
-  MockPoolDeployer__factory,
-} from '../../../typechain-types/factories/contracts/mocks';
+import { MockLifiSwapTarget__factory } from '../../../typechain-types/factories/contracts/mocks';
 import { LifiKeeperTaker__factory } from '../../../typechain-types/factories/contracts/takers';
+import {
+  deployMockTakerBase,
+  expectRevertContaining,
+  fundSigner,
+  getProvider,
+} from './mock-taker-base';
 
-const ERC20_NON_SUBSET_HASH = utils.keccak256(
-  utils.toUtf8Bytes('ERC20_NON_SUBSET_HASH')
-);
+export { fundSigner, getProvider };
+export const expectRevertWith = expectRevertContaining;
+
 const LIFI_DETAILS_ABI =
   'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)';
 
@@ -42,59 +42,11 @@ export type ExecuteTakeParams = {
   swapRouter?: string;
 };
 
-export function getProvider() {
-  return new providers.Web3Provider(network.provider as any);
-}
-
-export async function fundSigner(address: string) {
-  await network.provider.send('hardhat_setBalance', [
-    address,
-    utils.parseEther('10').toHexString(),
-  ]);
-}
-
-export async function expectRevertWith(
-  action: Promise<unknown>,
-  expected: string
-): Promise<void> {
-  let caught: unknown;
-  try {
-    await action;
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught).to.be.instanceOf(Error);
-  expect((caught as Error).message).to.contain(expected);
-}
-
 export async function deployFixture() {
-  const owner = Wallet.createRandom().connect(getProvider());
-  await fundSigner(owner.address);
-
-  const collateral = await new MockERC20__factory(owner).deploy(
-    'Collateral',
-    'COL',
-    18
-  );
-  const quote = await new MockERC20__factory(owner).deploy('Quote', 'QTE', 18);
-  await collateral.deployed();
-  await quote.deployed();
-
-  const pool = await new MockAtomicSwapPool__factory(owner).deploy(
-    collateral.address,
-    quote.address,
-    1
-  );
-  await pool.deployed();
-
-  const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
-  await poolDeployer.deployed();
-  await poolDeployer.setDeployedPool(
-    ERC20_NON_SUBSET_HASH,
-    collateral.address,
-    quote.address,
-    pool.address
-  );
+  const base = await deployMockTakerBase();
+  const { owner, poolDeployer, pool } = base;
+  const collateral = base.collateralToken;
+  const quote = base.quoteToken;
 
   const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
     poolDeployer.address

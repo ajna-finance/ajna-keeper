@@ -721,6 +721,7 @@ export async function handleDiscoveredTakeTarget(
             price,
             auctionPrice,
             collateral,
+            debtToCover,
             quoteEvaluation,
             externalTakeApprovalContext,
           }) =>
@@ -728,6 +729,7 @@ export async function handleDiscoveredTakeTarget(
               price,
               auctionPrice,
               collateral,
+              debtToCover,
               quoteEvaluation,
               externalTakeApprovalContext,
             }),
@@ -735,6 +737,7 @@ export async function handleDiscoveredTakeTarget(
             price,
             auctionPrice,
             collateral,
+            debtToCover,
             quoteEvaluation,
             externalTakeApprovalContext,
           }) =>
@@ -743,6 +746,7 @@ export async function handleDiscoveredTakeTarget(
               price,
               auctionPrice,
               collateral,
+              debtToCover,
               quoteEvaluation,
               externalTakeApprovalContext,
               forceGasRefresh: true,

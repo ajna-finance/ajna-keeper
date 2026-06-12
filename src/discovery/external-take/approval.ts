@@ -1,6 +1,6 @@
-import { BigNumber } from 'ethers';
 import { GasPolicyResult } from '../gas-policy';
 import {
+  AuctionTakeFacts,
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
 } from '../../take/types';
@@ -17,10 +17,8 @@ export const HYBRID_GAS_QUOTE_FALLBACK_CONTEXT: DiscoveryExternalTakeApprovalCon
     kind: HYBRID_GAS_QUOTE_FALLBACK_KIND,
   };
 
-export interface ExternalTakeApprovalInput {
+export interface ExternalTakeApprovalInput extends AuctionTakeFacts {
   price: number;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   externalTakeApprovalContext?: DiscoveryExternalTakeApprovalContext;
   approvalMode?: DiscoveryExternalTakeApprovalMode;

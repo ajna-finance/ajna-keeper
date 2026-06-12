@@ -1,5 +1,6 @@
-import { BigNumber } from 'ethers';
+import { getExpectedQuotedCollateralWad } from '../../take/take-sizing';
 import {
+  AuctionTakeFacts,
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
 } from '../../take/types';
@@ -35,14 +36,19 @@ export function cloneExternalTakeQuoteEvaluation<
 
 export function withExternalTakeApprovalContext<
   TQuoteEvaluation extends BoundExternalTakeRouteEvaluation,
->(params: {
-  quoteEvaluation: TQuoteEvaluation;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
-}): TQuoteEvaluation {
+>(
+  params: AuctionTakeFacts & { quoteEvaluation: TQuoteEvaluation }
+): TQuoteEvaluation {
   return {
     ...params.quoteEvaluation,
     quotedAuctionPriceWad: params.auctionPrice,
-    quotedCollateralWad: params.collateral,
+    // Aggregator quotes are denominated in the debt-clamped take size, so the
+    // re-bound context must use the same path-aware size.
+    quotedCollateralWad: getExpectedQuotedCollateralWad({
+      externalTakePath: params.quoteEvaluation.externalTakePath,
+      collateral: params.collateral,
+      auctionPrice: params.auctionPrice,
+      debtToCover: params.debtToCover,
+    }),
   };
 }

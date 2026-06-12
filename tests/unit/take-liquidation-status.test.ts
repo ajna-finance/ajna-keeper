@@ -3,7 +3,10 @@ import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import {
   createTakeAuctionStatusReader,
+  normalizeBorrowerKey,
+  readCandidateStatusWindow,
   TAKE_STATUS_BATCH_SIZE,
+  TakeAuctionStatus,
 } from '../../src/take/liquidation-status';
 
 describe('take auction status reader', () => {
@@ -33,12 +36,58 @@ describe('take auction status reader', () => {
     expect(status.borrower).to.equal('0xBorrower');
     expect(status.collateral.eq(ethers.utils.parseEther('2'))).to.equal(true);
     expect(status.auctionPrice.eq(ethers.utils.parseEther('3'))).to.equal(true);
-    expect(pool.poolInfoContractUtils.auctionStatus.calledOnceWithExactly(
-      pool.poolAddress,
-      '0xBorrower'
-    )).to.equal(true);
+    expect(status.debtToCover).to.equal(undefined);
+    expect(
+      pool.poolInfoContractUtils.auctionStatus.calledOnceWithExactly(
+        pool.poolAddress,
+        '0xBorrower'
+      )
+    ).to.equal(true);
     expect(pool.getLiquidation.called).to.equal(false);
     expect(stats).to.deep.include({ takeStatusReadCount: 1 });
+  });
+
+  it('maps debtToCover from named fields and tuple position', async () => {
+    const namedPool = {
+      name: 'Named Debt Pool',
+      poolAddress: '0x4444444444444444444444444444444444444444',
+      poolInfoContractUtils: {
+        auctionStatus: sinon.stub().resolves({
+          collateral_: ethers.utils.parseEther('2'),
+          debtToCover_: ethers.utils.parseEther('1.5'),
+          price_: ethers.utils.parseEther('3'),
+        }),
+      },
+    };
+    const namedStatus = await createTakeAuctionStatusReader().read({
+      pool: namedPool as any,
+      borrower: '0xBorrower',
+    });
+    expect(
+      namedStatus.debtToCover?.eq(ethers.utils.parseEther('1.5'))
+    ).to.equal(true);
+
+    const tupleResult: Record<number, BigNumber> = {
+      0: BigNumber.from(123),
+      1: ethers.utils.parseEther('2'),
+      2: ethers.utils.parseEther('0.75'),
+      3: BigNumber.from(1),
+      4: ethers.utils.parseEther('3'),
+    };
+    const tuplePool = {
+      name: 'Tuple Debt Pool',
+      poolAddress: '0x5555555555555555555555555555555555555555',
+      poolInfoContractUtils: {
+        auctionStatus: sinon.stub().resolves(tupleResult),
+      },
+    };
+    const tupleStatus = await createTakeAuctionStatusReader().read({
+      pool: tuplePool as any,
+      borrower: '0xBorrower',
+    });
+    expect(
+      tupleStatus.debtToCover?.eq(ethers.utils.parseEther('0.75'))
+    ).to.equal(true);
   });
 
   it('batch reads preserve borrower mapping across chunks', async () => {
@@ -73,9 +122,7 @@ describe('take auction status reader', () => {
     expect(pool.ethcallProvider.all.callCount).to.equal(2);
     expect(statuses.get('0xborrower0')?.collateral.eq(1)).to.equal(true);
     expect(
-      statuses
-        .get(`0xborrower${TAKE_STATUS_BATCH_SIZE}`)
-        ?.auctionPrice.eq(100)
+      statuses.get(`0xborrower${TAKE_STATUS_BATCH_SIZE}`)?.auctionPrice.eq(100)
     ).to.equal(true);
     expect(stats).to.deep.include({
       takeStatusBatchReadCount: 2,
@@ -125,5 +172,99 @@ describe('take auction status reader', () => {
       takeStatusReadCount: 3,
       takeStatusBatchFallbackCount: 1,
     });
+  });
+});
+
+describe('readCandidateStatusWindow', () => {
+  const pool = { name: 'Window Pool' } as any;
+  const status = (borrower: string): TakeAuctionStatus => ({
+    borrower,
+    collateral: BigNumber.from(1),
+    auctionPrice: BigNumber.from(2),
+  });
+
+  it('serves fully preloaded windows without touching the reader', async () => {
+    const readMany = sinon.stub().rejects(new Error('must not be called'));
+    const preloadedStatuses = new Map([
+      [normalizeBorrowerKey('0xA'), status('0xA')],
+      [normalizeBorrowerKey('0xB'), status('0xB')],
+    ]);
+
+    const result = await readCandidateStatusWindow({
+      pool,
+      borrowers: ['0xA', '0xB'],
+      preloadedStatuses,
+      reader: { read: sinon.stub(), readMany } as any,
+    });
+
+    expect(result?.size).to.equal(2);
+    expect(readMany.called).to.equal(false);
+  });
+
+  it('batch-reads only the missing borrowers and merges results', async () => {
+    const readMany = sinon.stub().resolves(
+      new Map([
+        [normalizeBorrowerKey('0xB'), status('0xB')],
+        [normalizeBorrowerKey('0xC'), status('0xC')],
+      ])
+    );
+    const preloadedStatuses = new Map([
+      [normalizeBorrowerKey('0xA'), status('0xA')],
+    ]);
+
+    const result = await readCandidateStatusWindow({
+      pool,
+      borrowers: ['0xA', '0xB', '0xC'],
+      preloadedStatuses,
+      reader: { read: sinon.stub(), readMany } as any,
+    });
+
+    expect(readMany.calledOnce).to.equal(true);
+    expect(readMany.firstCall.args[0].borrowers).to.deep.equal(['0xB', '0xC']);
+    expect(result?.size).to.equal(3);
+  });
+
+  it('leaves a single missing borrower to per-candidate reads', async () => {
+    const readMany = sinon.stub().rejects(new Error('must not be called'));
+    const preloadedStatuses = new Map([
+      [normalizeBorrowerKey('0xA'), status('0xA')],
+    ]);
+
+    const result = await readCandidateStatusWindow({
+      pool,
+      borrowers: ['0xA', '0xB'],
+      preloadedStatuses,
+      reader: { read: sinon.stub(), readMany } as any,
+    });
+
+    expect(readMany.called).to.equal(false);
+    expect(result?.size).to.equal(1);
+  });
+
+  it('keeps preloaded statuses when the batch read fails', async () => {
+    const readMany = sinon.stub().rejects(new Error('batch unavailable'));
+    const preloadedStatuses = new Map([
+      [normalizeBorrowerKey('0xA'), status('0xA')],
+    ]);
+
+    const result = await readCandidateStatusWindow({
+      pool,
+      borrowers: ['0xA', '0xB', '0xC'],
+      preloadedStatuses,
+      reader: { read: sinon.stub(), readMany } as any,
+    });
+
+    expect(result?.size).to.equal(1);
+  });
+
+  it('returns undefined when no status can be resolved', async () => {
+    const result = await readCandidateStatusWindow({
+      pool,
+      borrowers: ['0xA'],
+      preloadedStatuses: new Map(),
+      reader: undefined,
+    });
+
+    expect(result).to.equal(undefined);
   });
 });
