@@ -21,13 +21,11 @@ import { singleExternalTakeExecutionPlan } from '../../helpers/external-take-pla
 import { AjnaKeeperTakerFactory } from '../../../typechain-types/contracts/factories';
 import {
   CurveKeeperTaker,
-  SushiSwapKeeperTaker,
   UniswapV3KeeperTaker,
 } from '../../../typechain-types/contracts/takers';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
 import {
   CurveKeeperTaker__factory,
-  SushiSwapKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../../typechain-types/factories/contracts/takers';
 import {
@@ -39,7 +37,6 @@ import {
   MockCurveSwapPool__factory,
   MockERC20__factory,
   MockPoolDeployer__factory,
-  MockSushiSwapRouter__factory,
   MockSwapRouter02__factory,
   MockSwapRouter__factory,
 } from '../../../typechain-types/factories/contracts/mocks';
@@ -75,7 +72,6 @@ export interface FactoryHarness {
   pool: MockAtomicSwapPool;
   factory: AjnaKeeperTakerFactory;
   uniswapTaker: UniswapV3KeeperTaker;
-  sushiTaker: SushiSwapKeeperTaker;
   curveTaker: CurveKeeperTaker;
   quoteAmountDue: BigNumber;
 }
@@ -140,12 +136,6 @@ export async function deployFactoryHarness(options?: {
   );
   await uniswapTaker.deployed();
 
-  const sushiTaker = await new SushiSwapKeeperTaker__factory(owner).deploy(
-    poolDeployer.address,
-    factory.address
-  );
-  await sushiTaker.deployed();
-
   const curveTaker = await new CurveKeeperTaker__factory(owner).deploy(
     poolDeployer.address,
     factory.address
@@ -153,7 +143,6 @@ export async function deployFactoryHarness(options?: {
   await curveTaker.deployed();
 
   await factory.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address);
-  await factory.setTaker(LiquiditySource.SUSHISWAP, sushiTaker.address);
   await factory.setTaker(LiquiditySource.CURVE, curveTaker.address);
 
   return {
@@ -163,7 +152,6 @@ export async function deployFactoryHarness(options?: {
     pool,
     factory,
     uniswapTaker,
-    sushiTaker,
     curveTaker,
     quoteAmountDue,
   };
@@ -297,16 +285,6 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
       selectedFeeTier: params.selectedFeeTier,
     };
   }
-  if (params.source === LiquiditySource.SUSHISWAP) {
-    if (params.selectedFeeTier === undefined) {
-      throw new Error('Test SushiSwap factory quote missing fee tier');
-    }
-    return {
-      ...base,
-      selectedLiquiditySource: LiquiditySource.SUSHISWAP,
-      selectedFeeTier: params.selectedFeeTier,
-    };
-  }
   if (params.source === LiquiditySource.CURVE) {
     if (!params.curvePool) {
       throw new Error('Test Curve factory quote missing curve pool');
@@ -332,18 +310,6 @@ export async function deployFundedSwapRouter02(
   return router;
 }
 
-export async function deployFundedSushiRouter(
-  harness: FactoryHarness,
-  amountOut: BigNumber
-) {
-  const router = await new MockSushiSwapRouter__factory(harness.owner).deploy(
-    amountOut
-  );
-  await router.deployed();
-  await harness.quoteToken.mint(router.address, amountOut);
-  return router;
-}
-
 interface CurvePoolSelection {
   address: string;
   poolType: CurvePoolType;
@@ -355,9 +321,7 @@ interface FactoryRouteExecutionFixture {
   takerAddress: string;
   configOverrides: Pick<
     FactoryExecutionConfig,
-    | 'uniswapV3RouterOverrides'
-    | 'sushiswapRouterOverrides'
-    | 'curveRouterOverrides'
+    'uniswapV3RouterOverrides' | 'curveRouterOverrides'
   >;
   curvePool?: CurvePoolSelection;
 }
@@ -411,28 +375,6 @@ async function prepareUniswapNonSwapRouterExecution(
   };
 }
 
-async function prepareSushiFactoryRouteExecution(
-  params: FactoryRouteExecutionSetup
-): Promise<FactoryRouteExecutionFixture> {
-  const { harness } = params;
-  const router = await deployFundedSushiRouter(
-    harness,
-    params.routerAmountOut
-  );
-  return {
-    takerAddress: harness.sushiTaker.address,
-    configOverrides: {
-      sushiswapRouterOverrides: {
-        swapRouterAddress: router.address,
-        quoterV2Address: '0x9999999999999999999999999999999999999999',
-        factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        wethAddress: harness.quoteToken.address,
-        defaultFeeTier: params.selectedFeeTier ?? 500,
-      },
-    },
-  };
-}
-
 async function prepareCurveFactoryRouteExecution(
   params: FactoryRouteExecutionSetup
 ): Promise<FactoryRouteExecutionFixture> {
@@ -467,8 +409,6 @@ async function prepareFactoryRouteExecution(params: {
   switch (params.source) {
     case LiquiditySource.UNISWAPV3:
       return await prepareUniswapFactoryRouteExecution(params);
-    case LiquiditySource.SUSHISWAP:
-      return await prepareSushiFactoryRouteExecution(params);
     case LiquiditySource.CURVE:
       return await prepareCurveFactoryRouteExecution(params);
     default:
@@ -606,7 +546,6 @@ export async function expectSuccessfulFactoryTake(params: {
     pool,
     factory,
     uniswapTaker,
-    sushiTaker,
     curveTaker,
   } = harness;
 
@@ -628,15 +567,6 @@ export async function expectSuccessfulFactoryTake(params: {
       [[router.address, quoteToken.address, 500, APPROVED_MIN_OUT, DEADLINE]]
     );
     takerAddress = uniswapTaker.address;
-  } else if (params.source === LiquiditySource.SUSHISWAP) {
-    const router = await deployFundedSushiRouter(harness, ROUTER_AMOUNT_OUT);
-
-    swapRouter = router.address;
-    swapDetails = utils.defaultAbiCoder.encode(
-      ['uint24', 'uint256', 'uint256'],
-      [500, APPROVED_MIN_OUT, DEADLINE]
-    );
-    takerAddress = sushiTaker.address;
   } else {
     const curvePool = await new MockCurveSwapPool__factory(owner).deploy(
       collateralToken.address,

@@ -4,7 +4,6 @@ import { BigNumber, Wallet, constants, ethers, utils } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../../src/config';
 import * as erc20 from '../../src/erc20';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
-import { SushiSwapQuoteProvider } from '../../src/dex/providers/sushiswap-quote-provider';
 import {
   getFactoryTakeQuoteEvaluation,
   takeLiquidationFactory,
@@ -25,7 +24,6 @@ import {
   COLLATERAL_AMOUNT,
   DEADLINE,
   deployFactoryHarness,
-  deployFundedSushiRouter,
   deployFundedSwapRouter02,
   expectFactoryExecutionRejectedWithoutStateMutation,
   expectSuccessfulFactoryTake,
@@ -71,11 +69,8 @@ describe('Production route selection fork verification', function () {
     });
   });
 
-  it('executes SushiSwap factory takes with selected fee tier and bound min-out', async () => {
-    await expectSuccessfulFactoryTake({
-      source: LiquiditySource.SUSHISWAP,
-    });
-  });
+  // Direct-SushiSwap factory take case removed with the direct Sushi path; the
+  // Uniswap V3 and Curve cases cover factory execution.
 
   it('executes Curve factory takes through stable and crypto dispatch', async () => {
     await expectSuccessfulFactoryTake({
@@ -182,7 +177,6 @@ describe('Production route selection fork verification', function () {
 
     for (const source of [
       LiquiditySource.UNISWAPV3,
-      LiquiditySource.SUSHISWAP,
       LiquiditySource.CURVE,
     ]) {
       await expectFactoryExecutionRejectedWithoutStateMutation({
@@ -212,15 +206,18 @@ describe('Production route selection fork verification', function () {
 
   it('fails stale factory routes without clearing collateral or weakening min-out', async () => {
     const harness = await deployFactoryHarness();
-    const { quoteToken, collateralToken, pool, factory, sushiTaker } = harness;
+    const { quoteToken, collateralToken, pool, factory, uniswapTaker } =
+      harness;
+    // Router delivers below the encoded min-out, so the swap reverts inside the
+    // router and the take fails closed without mutating pool state.
     const staleAmountOut = QUOTE_AMOUNT_DUE.add(utils.parseEther('0.1'));
-    const router = await deployFundedSushiRouter(harness, staleAmountOut);
+    const router = await deployFundedSwapRouter02(harness, staleAmountOut);
 
     const poolQuoteBefore = await quoteToken.balanceOf(pool.address);
     const poolCollateralBefore = await collateralToken.balanceOf(pool.address);
     const swapDetails = utils.defaultAbiCoder.encode(
-      ['uint24', 'uint256', 'uint256'],
-      [500, APPROVED_MIN_OUT, DEADLINE]
+      ['(address,address,uint24,uint256,uint256)'],
+      [[router.address, quoteToken.address, 500, APPROVED_MIN_OUT, DEADLINE]]
     );
 
     await expectRevert(
@@ -229,11 +226,11 @@ describe('Production route selection fork verification', function () {
         BORROWER,
         AUCTION_PRICE,
         COLLATERAL_AMOUNT,
-        LiquiditySource.SUSHISWAP,
+        LiquiditySource.UNISWAPV3,
         router.address,
         swapDetails
       ),
-      'SushiSwap swap failed'
+      'insufficient output amount'
     );
 
     expect((await pool.takeCount()).eq(constants.Zero)).to.be.true;
@@ -243,7 +240,7 @@ describe('Production route selection fork verification', function () {
       (await collateralToken.balanceOf(pool.address)).eq(poolCollateralBefore)
     ).to.be.true;
     expect(
-      (await quoteToken.allowance(sushiTaker.address, pool.address)).eq(
+      (await quoteToken.allowance(uniswapTaker.address, pool.address)).eq(
         constants.Zero
       )
     ).to.be.true;
@@ -306,22 +303,23 @@ describe('Production route selection fork verification', function () {
     expect(evaluation.reason).to.contain('UNISWAPV3:500');
   });
 
-  it('waits for marketPriceFactor range, then selects and executes the best route', async () => {
+  it('waits for marketPriceFactor range, then selects and executes the route', async () => {
+    // Migrated off the direct-Sushi two-source variant: this exercises the
+    // marketPriceFactor range gating plus end-to-end execution on UniswapV3.
+    // Multi-source best-route selection is covered by the
+    // hybrid-external-take-selection unit tests.
     const harness = await deployFactoryHarness();
-    const { owner, collateralToken, quoteToken, pool, factory, sushiTaker } =
+    const { owner, collateralToken, quoteToken, pool, factory, uniswapTaker } =
       harness;
     const collateral = utils.parseEther('1');
     const beforeRangeAuctionPrice = utils.parseEther('119');
     const inRangeAuctionPrice = utils.parseEther('117.8');
-    const uniswapAmountOut = utils.parseEther('119.5');
-    const sushiAmountOut = utils.parseEther('120');
+    const uniswapAmountOut = utils.parseEther('120');
 
     const uniswapRouter = await deployFundedSwapRouter02(
       harness,
       uniswapAmountOut
     );
-
-    const sushiRouter = await deployFundedSushiRouter(harness, sushiAmountOut);
 
     sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
     sinon
@@ -333,14 +331,6 @@ describe('Production route selection fork verification', function () {
       .resolves({
         success: true,
         dstAmount: uniswapAmountOut,
-      } as any);
-    sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
-    sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(true);
-    const sushiQuoteStub = sinon
-      .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
-      .resolves({
-        success: true,
-        dstAmount: sushiAmountOut,
       } as any);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
 
@@ -364,25 +354,12 @@ describe('Production route selection fork verification', function () {
         quoterV2Address: '0x6666666666666666666666666666666666666666',
         defaultSlippage: 1.0,
       },
-      sushiswapRouterOverrides: {
-        swapRouterAddress: sushiRouter.address,
-        quoterV2Address: '0x9999999999999999999999999999999999999999',
-        factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        defaultFeeTier: 500,
-        candidateFeeTiers: [],
-        wethAddress: quoteToken.address,
-        defaultSlippage: 1.0,
-      },
     };
     const routeSelection = {
-      allowedLiquiditySources: [
-        LiquiditySource.UNISWAPV3,
-        LiquiditySource.SUSHISWAP,
-      ],
+      allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
       routeProfitabilityContext: {
         routeExecutionCostQuoteRawBySource: {
           [LiquiditySource.UNISWAPV3]: utils.parseEther('0.1'),
-          [LiquiditySource.SUSHISWAP]: utils.parseEther('0.05'),
         },
       },
     };
@@ -419,12 +396,11 @@ describe('Production route selection fork verification', function () {
       true
     );
     expect(inRangeEvaluation.selectedLiquiditySource).to.equal(
-      LiquiditySource.SUSHISWAP
+      LiquiditySource.UNISWAPV3
     );
-    expect(inRangeEvaluation.selectedFeeTier).to.equal(500);
     expect(
       inRangeEvaluation.routeProfitability?.expectedNetProfitQuoteRaw?.eq(
-        sushiAmountOut.sub(inRangeAuctionPrice).sub(utils.parseEther('0.05'))
+        uniswapAmountOut.sub(inRangeAuctionPrice).sub(utils.parseEther('0.1'))
       )
     ).to.be.true;
     const boundInRangeEvaluation = bindExternalTakeRouteForCandidate({
@@ -461,22 +437,20 @@ describe('Production route selection fork verification', function () {
         dryRun: false,
         keeperTakerFactory: factory.address,
         uniswapV3RouterOverrides: config.uniswapV3RouterOverrides,
-        sushiswapRouterOverrides: config.sushiswapRouterOverrides,
         runtimeCache,
       },
     });
 
     expect(executed).to.equal(true);
     expect((await pool.takeCount()).eq(takeCountBefore.add(1))).to.be.true;
-    expect(await pool.lastCallee()).to.equal(sushiTaker.address);
+    expect(await pool.lastCallee()).to.equal(uniswapTaker.address);
     expect(await pool.lastBorrower()).to.equal(BORROWER);
     expect((await pool.lastCollateralTaken()).eq(collateral)).to.be.true;
     expect(
       (await quoteToken.balanceOf(owner.address)).eq(
-        ownerQuoteBefore.add(sushiAmountOut.sub(inRangeAuctionPrice))
+        ownerQuoteBefore.add(uniswapAmountOut.sub(inRangeAuctionPrice))
       )
     ).to.be.true;
     expect(uniswapQuoteStub.calledTwice).to.be.true;
-    expect(sushiQuoteStub.calledTwice).to.be.true;
   });
 });
