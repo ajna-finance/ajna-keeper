@@ -227,22 +227,32 @@ export interface ArbTakeEvaluation {
   reason?: string;
 }
 
-export interface TakeLiquidationPlan<TApprovalContext = unknown> {
+/**
+ * The auction facts a take is sized and validated against, all from one
+ * on-chain auction status read (WAD precision). `debtToCover` is optional
+ * because some readers cannot surface it; consumers then degrade to
+ * un-clamped (full collateral) sizing. Aggregator paths clamp their
+ * quote/take size to the debt via src/take/take-sizing.ts.
+ */
+export interface AuctionTakeFacts {
+  collateral: BigNumber;
+  auctionPrice: BigNumber;
+  debtToCover?: BigNumber;
+}
+
+export interface TakeLiquidationPlan<TApprovalContext = unknown>
+  extends AuctionTakeFacts {
   borrower: string;
   hpbIndex: number;
-  collateral: BigNumber; // WAD
-  auctionPrice: BigNumber; // WAD
   isTakeable: boolean;
   isArbTakeable: boolean;
   externalTakeExecutionPlan?: ExternalTakeExecutionPlan<TApprovalContext>;
 }
 
-interface TakeDecisionBase {
+interface TakeDecisionBase extends AuctionTakeFacts {
   approvedArbTake: boolean;
   borrower: string;
   hpbIndex: number;
-  collateral: BigNumber;
-  auctionPrice: BigNumber;
   maxArbTakePrice?: number;
   reason?: string;
 }

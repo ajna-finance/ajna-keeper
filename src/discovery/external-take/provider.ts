@@ -1,8 +1,8 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber } from 'ethers';
 import { ExternalTakePathKind, LiquiditySource } from '../../config';
 import { TakeWriteTransport } from '../../take/write-transport';
 import {
+  AuctionTakeFacts,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -55,13 +55,12 @@ export type ExternalTakeQuoteIntent =
   | { kind: 'hybrid_probe'; abortSignal: AbortSignal }
   | { kind: typeof HYBRID_GAS_QUOTE_FALLBACK_KIND };
 
-export interface ExternalTakeQuoteParams<TPoolConfig extends TakeActionConfig> {
+export interface ExternalTakeQuoteParams<TPoolConfig extends TakeActionConfig>
+  extends AuctionTakeFacts {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: TPoolConfig;
   price: number;
-  auctionPrice: BigNumber;
-  collateral: BigNumber;
   intent: ExternalTakeQuoteIntent;
 }
 

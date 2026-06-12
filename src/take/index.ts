@@ -272,6 +272,7 @@ export async function* getLiquidationsToTake({
         hpbIndex: decision.hpbIndex,
         collateral: decision.collateral,
         auctionPrice: decision.auctionPrice,
+        debtToCover: decision.debtToCover,
         isTakeable: decision.approvedTake,
         isArbTakeable: decision.approvedArbTake,
         externalTakeExecutionPlan: decision.externalTakeExecutionPlan,

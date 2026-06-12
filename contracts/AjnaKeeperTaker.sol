@@ -3,15 +3,15 @@ pragma solidity 0.8.28;
 
 import { IERC20Pool, IERC20Taker, PoolDeployer } from "./AjnaInterfaces.sol";
 import { IAggregationExecutor, IERC20, IGenericRouter, SwapDescription } from "./OneInchInterfaces.sol";
-// SECURITY FIX: Add SafeERC20 import
-import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/math/Math.sol";
+import { KeeperTakerBase } from "./base/KeeperTakerBase.sol";
+import { TakerTakeScaling } from "./libraries/TakerTakeScaling.sol";
 
 /// @notice Allows a keeper to take auctions using external liquidity sources.
-contract AjnaKeeperTaker is IERC20Taker {
-    // SECURITY FIX: Add SafeERC20 using statement
-    using SafeERC20 for IERC20;
-    
+/// @dev Standalone (non-factory) taker. Inherits KeeperTakerBase but deliberately
+///      NOT FactoryAuthorizedTakerBase: AjnaKeeperTakerFactory's legacy-taker
+///      detection identifies this contract family by the absence of an
+///      `authorizedFactory()` getter.
+contract AjnaKeeperTaker is IERC20Taker, KeeperTakerBase {
     /// @notice Identifies the source of liquidity to use for the swap.
     enum LiquiditySource {
         None, // (do not use)
@@ -32,49 +32,16 @@ contract AjnaKeeperTaker is IERC20Taker {
         bytes opaqueData;                // passed through from 1inch API to router
     }
 
-
-    /// @dev Hash used for all ERC20 pools, used for pool validation
-    bytes32 public constant ERC20_NON_SUBSET_HASH = keccak256("ERC20_NON_SUBSET_HASH");
-
-    /// @dev Actor allowed to take auctions using this contract
-    address public immutable owner;
-
-    /// @dev Identifies the Ajna deployment, used to validate pools
-    PoolDeployer public immutable poolFactory;
-
-
-    // sig: 0x2083cd40
-    /// @notice Pool invoking callback is not from the Ajna deployment configured in this contract.
-    error InvalidPool();
-
-    // sig: 0x82b42900
-    /// @notice Caller is not the owner of this contract.
-    error Unauthorized();
-
     // sig: 0xf54a7ed9
     /// @notice Emitted when the requested liquidity source is not available on this deployment of the contract.
     error UnsupportedLiquiditySource();
 
-    /// @notice The provided swap details are inconsistent with the Ajna pool assets or receiver.
-    error InvalidSwapDetails();
-
-    /// @notice External swap did not deliver enough quote token to satisfy Ajna's callback requirement.
-    error InsufficientQuoteReceived();
-
-
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment of Ajna the keeper is interacting with.
-    constructor(PoolDeployer ajnaErc20PoolFactory) {
-        owner = msg.sender;
-        poolFactory = ajnaErc20PoolFactory;
-    }
+    constructor(PoolDeployer ajnaErc20PoolFactory) KeeperTakerBase(ajnaErc20PoolFactory) {}
 
     /// @notice Owner may call to recover legitimate ERC20 tokens sent to this contract.
     function recover(IERC20 token) public onlyOwner {
-        uint256 balance = token.balanceOf(address(this));
-        // SECURITY FIX: Use safeTransfer instead of transfer to handle non-standard tokens (like USDT)
-        if (balance > 0) {
-            token.safeTransfer(owner, balance);
-        }
+        _recoverToken(token);
     }
 
     /// @notice Called by keeper to invoke `Pool.take`, passing `IERC20Taker` callback data.
@@ -105,22 +72,23 @@ contract AjnaKeeperTaker is IERC20Taker {
             })
         );
 
-        // SECURITY FIX: Use safe approve with reset pattern to prevent "non-zero to non-zero allowance" error
-        uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale()); // convert WAD to token precision
-        _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), approvalAmount);
+        _approveQuoteForTake(pool, maxAmount, auctionPrice);
 
         // invoke the take
         pool.take(borrowerAddress, maxAmount, address(this), data);
 
-        // SECURITY FIX: Reset allowance to prevent future misuse
-        _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), 0);
-
-        recover(IERC20(pool.quoteTokenAddress())); // send excess quote token (profit) to owner
+        // Clears the pool allowance and sweeps quote profit plus any collateral a
+        // 1inch route under-consumed (would otherwise strand here).
+        _settleAfterTake(pool);
     }
 
     /// @dev Called by `Pool` to allow a taker to externally swap collateral for quote token.
     /// @param data Determines where external liquidity should be sourced to swap collateral for quote token.
-    function atomicSwapCallback(uint256 collateral, uint256 quoteAmountDue, bytes calldata data) external override {
+    /// @dev `nonReentrant` blocks a malicious router/executor from re-entering this callback through a
+    ///      SECOND pool's `take` while a swap is in flight. `_validatePool` only verifies the caller is
+    ///      *a* registered pool, and the pool's own reentrancy guard only covers same-pool re-entry, so
+    ///      neither stops that cross-pool path on its own.
+    function atomicSwapCallback(uint256 collateral, uint256 quoteAmountDue, bytes calldata data) external override nonReentrant {
         SwapData memory swapData = abi.decode(data, (SwapData));
 
         // Ensure msg.sender is a valid Ajna pool and matches the pool in the data
@@ -171,10 +139,11 @@ contract AjnaKeeperTaker is IERC20Taker {
             swapDescription,
             actualCollateralAmount
         );
+        uint256 quoteAmountDueCeiling = TakerTakeScaling.quoteAmountDueCeiling(pool, quoteAmountDue);
         uint256 requiredQuoteReceived =
-            normalizedMinReturnAmount > quoteAmountDue
+            normalizedMinReturnAmount > quoteAmountDueCeiling
                 ? normalizedMinReturnAmount
-                : quoteAmountDue;
+                : quoteAmountDueCeiling;
 
         _executeOneInchSwap(
             swapRouter,
@@ -186,6 +155,10 @@ contract AjnaKeeperTaker is IERC20Taker {
 
         uint256 quoteReceived = quoteToken.balanceOf(address(this)) - quoteBalanceBefore;
         if (quoteReceived < requiredQuoteReceived) revert InsufficientQuoteReceived();
+
+        // AUDIT FIX: this taker previously emitted no events at all, leaving direct
+        // 1inch takes invisible to per-swap monitoring (factory-taker parity).
+        emit SwapExecuted(pool.collateralAddress(), pool.quoteTokenAddress(), actualCollateralAmount, quoteReceived);
     }
 
     function _executeOneInchSwap(
@@ -195,7 +168,6 @@ contract AjnaKeeperTaker is IERC20Taker {
         bytes memory swapData,
         uint256 actualCollateralAmount
     ) private {
-        // SECURITY FIX: Use safe approve with reset pattern to prevent "non-zero to non-zero allowance" error
         _safeApproveWithReset(swapDescription.srcToken, address(swapRouter), actualCollateralAmount);
 
         // scale the return amount to the actual amount
@@ -226,14 +198,24 @@ contract AjnaKeeperTaker is IERC20Taker {
         normalizedMinReturnAmount = swapDescription.minReturnAmount;
 
         if (normalizedAmount != actualCollateralAmount) {
-            normalizedMinReturnAmount =
-                actualCollateralAmount * normalizedMinReturnAmount / normalizedAmount;
+            if (normalizedAmount == 0) revert InvalidSwapDetails();
+            // AUDIT FIX: round the pro-rated floor up (was floor division), matching
+            // TakerTakeScaling semantics used by the factory takers so an
+            // underdelivering route cannot pass here by the rounding wei.
+            normalizedMinReturnAmount = TakerTakeScaling.scaleAmountOutMinimum(
+                normalizedMinReturnAmount,
+                actualCollateralAmount,
+                normalizedAmount
+            );
             normalizedAmount = actualCollateralAmount;
         }
     }
 
 
-    /// @dev Called by query-1inch.ts to test mutating calldata to send to 1inch GenericRouter.swap
+    /// @dev Called by query-1inch.ts to test mutating calldata to send to 1inch GenericRouter.swap.
+    ///      Owner-gated tooling that approves and calls an arbitrary owner-supplied router with no
+    ///      output check; it grants nothing beyond what the owner already controls, but consider
+    ///      deploying without these helpers if the tooling flow is not needed in production.
     function testOneInchSwapBytes(
         IGenericRouter swapRouter,
         bytes calldata swapDetails,
@@ -256,42 +238,5 @@ contract AjnaKeeperTaker is IERC20Taker {
             swapDetails.opaqueData,
             actualCollateralAmount
         );
-    }
-
-    function _validatePool(IERC20Pool pool) private view returns(bool) {
-        return poolFactory.deployedPools(ERC20_NON_SUBSET_HASH, pool.collateralAddress(), pool.quoteTokenAddress()) == address(pool);
-    }
-
-    /// @dev multiplies two WADs and rounds up to the nearest decimal
-    function _ceilWmul(uint256 x, uint256 y) internal pure returns (uint256) {
-        return (x * y + 1e18 - 1) / 1e18;
-    }
-
-    /// @dev SECURITY FIX: Safe approval that handles non-zero to non-zero allowance issue
-    /// @notice This function prevents "SafeERC20: approve from non-zero to non-zero allowance" errors
-    /// by resetting allowance to zero before setting new amount, which is the industry standard pattern
-    /// used by Compound, Aave, Uniswap V3, and other major DeFi protocols.
-    /// @param token The ERC20 token to approve
-    /// @param spender The address to approve  
-    /// @param amount The amount to approve
-    function _safeApproveWithReset(IERC20 token, address spender, uint256 amount) private {
-        uint256 currentAllowance = token.allowance(address(this), spender);
-        
-        if (currentAllowance != 0) {
-            // Reset to zero first if there's existing allowance
-            // This satisfies SafeERC20's requirement for non-zero to zero approval
-            token.safeApprove(spender, 0);
-        }
-        
-        // Now approve the new amount
-        // This satisfies SafeERC20's requirement for zero to non-zero approval  
-        if (amount != 0) {
-            token.safeApprove(spender, amount);
-        }
-    }
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert Unauthorized();
-        _;
     }
 }

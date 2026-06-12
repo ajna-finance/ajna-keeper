@@ -32,4 +32,14 @@ contract MockCurveSwapPool {
             tokenOut.transfer(receiver, amountOut);
         }
     }
+
+    /// @dev 4-arg base form real CryptoSwap pools expose via Vyper default
+    ///      arguments (receiver defaults to msg.sender); the taker calls this.
+    function exchange(uint256, uint256, uint256 dx, uint256) external returns (uint256 amountOut) {
+        tokenIn.transferFrom(msg.sender, address(this), dx);
+        amountOut = fixedAmountOut;
+        if (address(tokenOut) != address(0) && amountOut > 0) {
+            tokenOut.transfer(msg.sender, amountOut);
+        }
+    }
 }

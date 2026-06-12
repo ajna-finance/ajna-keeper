@@ -25,20 +25,54 @@ describe('LifiKeeperTaker', () => {
     const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
     await poolDeployer.deployed();
 
+    // Assert the hardhat reason phrase, not just the bare string: deploy-revert
+    // errors embed the contract source (sourceContent), so a bare `.contains`
+    // can false-match identifiers that merely appear in the source code.
     await expectRevertWith(
       new LifiKeeperTaker__factory(owner).deploy(
         constants.AddressZero,
         owner.address
       ),
-      'InvalidSwapDetails'
+      "reverted with reason string 'Zero pool factory'"
     );
     await expectRevertWith(
       new LifiKeeperTaker__factory(owner).deploy(
         poolDeployer.address,
         constants.AddressZero
       ),
-      'InvalidSwapDetails'
+      "reverted with reason string 'Zero authorized factory'"
     );
+  });
+
+  it('emits LifiSwapExecuted and no generic SwapExecuted on successful takes', async () => {
+    // The inherited 4-arg SwapExecuted is part of the ABI but is intentionally
+    // never emitted by this taker; monitoring must subscribe to LifiSwapExecuted
+    // (distinct topic0 carrying the allowlisted call target). This pins that
+    // event contract.
+    const result = await executeTake({});
+    const receipt = await (await result.send()).wait();
+
+    const takerLogs = receipt.logs.filter(
+      (log) => log.address.toLowerCase() === result.taker.address.toLowerCase()
+    );
+
+    const lifiTopic = result.taker.interface.getEventTopic('LifiSwapExecuted');
+    const genericTopic = utils.id(
+      'SwapExecuted(address,address,uint256,uint256)'
+    );
+
+    const lifiLogs = takerLogs.filter((log) => log.topics[0] === lifiTopic);
+    expect(lifiLogs.length).to.equal(1);
+    const parsed = result.taker.interface.parseLog(lifiLogs[0]);
+    expect(parsed.args.tokenIn).to.equal(result.collateral.address);
+    expect(parsed.args.tokenOut).to.equal(result.quote.address);
+    expect(parsed.args.target).to.equal(result.target.address);
+    expect(parsed.args.amountIn.eq(result.amountIn)).to.equal(true);
+    expect(parsed.args.amountOut.eq(result.outputAmount)).to.equal(true);
+
+    expect(
+      takerLogs.some((log) => log.topics[0] === genericTopic)
+    ).to.equal(false);
   });
 
   it('executes through the factory and enforces balance-delta output', async () => {

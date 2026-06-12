@@ -1,9 +1,7 @@
 import { ExternalTakePathKind, isFactoryDynamicSource } from '../../config';
 import { logger } from '../../logging';
 import * as takeFactoryModule from '../../take/factory';
-import {
-  getExternalTakeExecutionPlanPrimaryEvaluation,
-} from '../../take/external-take/execution-plan';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../take/external-take/execution-plan';
 import * as lifiExecutionModule from '../../take/lifi/execution';
 import * as oneInchExecutionModule from '../../take/one-inch-execution';
 import { ResolvedTakeTarget } from '../targets';
@@ -106,6 +104,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       price,
       auctionPrice,
       collateral,
+      debtToCover,
     }) => {
       const quoteOneInch =
         intent.kind === 'direct'
@@ -118,6 +117,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
         price,
         auctionPrice,
         collateral,
+        debtToCover,
         ...getAggregatorQuoteIntentOptions(intent),
       });
     },
@@ -161,6 +161,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       price,
       auctionPrice,
       collateral,
+      debtToCover,
     }) =>
       params.quoteLifiPath({
         pool,
@@ -169,6 +170,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
         price,
         auctionPrice,
         collateral,
+        debtToCover,
         ...getAggregatorQuoteIntentOptions(intent),
       }),
     getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
@@ -228,13 +230,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
         collateral,
         ...getFactoryQuoteIntentOptions(intent),
       }),
-    execute: async ({
-      pool,
-      signer,
-      poolConfig,
-      liquidation,
-      config,
-    }) => {
+    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
       const selectedSource = getExternalTakeExecutionPlanPrimaryEvaluation(
         liquidation.externalTakeExecutionPlan
       )?.selectedLiquiditySource;

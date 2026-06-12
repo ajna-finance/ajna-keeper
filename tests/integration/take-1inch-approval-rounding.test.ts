@@ -91,6 +91,82 @@ describe('AjnaKeeperTaker quote approval rounding', () => {
       .true;
   });
 
+  it('sweeps stray collateral back to the owner after a take', async () => {
+    const owner = Wallet.createRandom().connect(getProvider());
+    await network.provider.send('hardhat_setBalance', [
+      owner.address,
+      utils.parseEther('10').toHexString(),
+    ]);
+
+    const collateralToken = await new MockERC20__factory(owner).deploy(
+      'Mock Collateral',
+      'MCOLL',
+      18
+    );
+    await collateralToken.deployed();
+
+    const quoteToken = await new MockERC20__factory(owner).deploy(
+      'Mock Quote',
+      'MQUOTE',
+      6
+    );
+    await quoteToken.deployed();
+
+    const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
+    await poolDeployer.deployed();
+
+    const maxAmount = WAD;
+    const auctionPrice = WAD;
+    const quoteTokenScale = BigNumber.from(10).pow(12);
+    const pool = await new MockAllowanceCheckingPool__factory(owner).deploy(
+      collateralToken.address,
+      quoteToken.address,
+      quoteTokenScale,
+      auctionPrice
+    );
+    await pool.deployed();
+
+    await poolDeployer.setDeployedPool(
+      ERC20_NON_SUBSET_HASH,
+      collateralToken.address,
+      quoteToken.address,
+      pool.address
+    );
+
+    const keeperTaker = await new AjnaKeeperTaker__factory(owner).deploy(
+      poolDeployer.address
+    );
+    await keeperTaker.deployed();
+
+    const quoteDue = maxAmount
+      .mul(auctionPrice)
+      .add(WAD.sub(1))
+      .div(WAD)
+      .add(quoteTokenScale.sub(1))
+      .div(quoteTokenScale);
+    await quoteToken.mint(keeperTaker.address, quoteDue);
+
+    // A 1inch route that under-consumes its quoted input leaves collateral on
+    // the taker; the take must sweep it to the owner like quote-token profit.
+    const strayCollateral = utils.parseEther('0.25');
+    await collateralToken.mint(keeperTaker.address, strayCollateral);
+
+    await keeperTaker.takeWithAtomicSwap(
+      pool.address,
+      constants.AddressZero,
+      auctionPrice,
+      maxAmount,
+      1,
+      constants.AddressZero,
+      '0x'
+    );
+
+    expect((await collateralToken.balanceOf(keeperTaker.address)).isZero()).to
+      .be.true;
+    expect((await collateralToken.balanceOf(owner.address)).eq(strayCollateral))
+      .to.be.true;
+  });
+
   it('rejects unregistered pools before granting quote allowance', async () => {
     const owner = Wallet.createRandom().connect(getProvider());
     await network.provider.send('hardhat_setBalance', [

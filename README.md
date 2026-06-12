@@ -1017,6 +1017,9 @@ const config: KeeperConfig = {
 - **STABLE pools**: Stablecoin pools (USDC/DAI/USDT) - use `CurvePoolType.STABLE`
 - **CRYPTO pools**: Volatile asset pools (ETH/BTC/tricrypto) - use `CurvePoolType.CRYPTO`
 - Check pool contract on block explorer: STABLE pools use `int128` indices, CRYPTO pools use `uint256`
+- The taker contract calls the 4-argument base form of `exchange` for both types, which every
+  StableSwap and CryptoSwap generation exposes (legacy, factory two-coin, tricrypto2, and -NG
+  variants included), so no per-generation configuration is needed beyond the two types above
 
 **Step 3: Configure Token Address Mapping**
 

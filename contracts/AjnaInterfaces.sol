@@ -17,8 +17,10 @@ interface IERC20Pool {
     /**
      *  @notice Returns the `quoteTokenScale` state variable.
      *  @return The precision of the quote `ERC20` token based on decimals.
+     *  @dev Declared `view` (it reads pool state) for consistency with
+     *       `collateralScale()`; mutability does not affect the selector.
      */
-    function quoteTokenScale() external pure returns (uint256);
+    function quoteTokenScale() external view returns (uint256);
 
     /**
      *  @notice Called by actors to purchase collateral from the auction in exchange for quote token.
@@ -41,9 +43,11 @@ interface IERC20Pool {
 interface IERC20Taker {
     /**
      *  @notice Called by `Pool.take` allowing a taker to externally swap collateral for quote token.
-     *  @param  collateralAmount The denormalized amount of collateral being taken (`WAD` precision).
-     *  @param  quoteAmountDue   Denormalized amount of quote token required to purchase `collateralAmount` at the
-     *                           current auction price (`WAD` precision).
+     *  @param  collateralAmount Amount of collateral being taken, denormalized to the collateral token's own
+     *                           precision (i.e. `WAD / collateralScale`, NOT `WAD`). Pass directly as a swap
+     *                           `amountIn`.
+     *  @param  quoteAmountDue   Amount of quote token required to purchase `collateralAmount` at the current
+     *                           auction price, denormalized to the quote token's own precision (NOT `WAD`).
      *  @param  data             Taker-provided calldata passed from taker's invocation to their callback.
      */
     function atomicSwapCallback(

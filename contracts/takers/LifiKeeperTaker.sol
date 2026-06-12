@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import { ReentrancyGuard } from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
-import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
+import { FactoryAuthorizedTakerBase } from "../base/KeeperTakerBase.sol";
+import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 
 /// @notice LI.FI same-chain implementation for Ajna keeper factory takes.
 /// @dev Executes one allowlisted LI.FI transaction target during the Ajna callback and trusts only token balance deltas.
-contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
-    using SafeERC20 for IERC20;
-
+///      Shared wiring, helpers, and errors live in FactoryAuthorizedTakerBase / KeeperTakerBase.
+contract LifiKeeperTaker is FactoryAuthorizedTakerBase {
     struct LifiSwapDetails {
         address approvalSpender;
         address srcToken;
@@ -23,12 +20,6 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         uint256 amountOutMinimum;
         bytes callData;
     }
-
-    bytes32 public constant ERC20_NON_SUBSET_HASH = keccak256("ERC20_NON_SUBSET_HASH");
-
-    address public immutable owner;
-    PoolDeployer public immutable poolFactory;
-    address public immutable authorizedFactory;
 
     mapping(address => bool) private _callTargets;
     mapping(address => bool) private _approvalSpenders;
@@ -45,12 +36,13 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     event CallTargetUpdated(address indexed target, bool allowed);
     event ApprovalSpenderUpdated(address indexed spender, bool allowed);
     event CallSelectorUpdated(address indexed target, bytes4 indexed selector, bool allowed);
-    event SwapExecuted(address indexed tokenIn, address indexed tokenOut, address indexed target, uint256 amountIn, uint256 amountOut);
+    /// @dev LI.FI executions log the allowlisted call target, so this taker emits its own
+    ///      distinctly-named event instead of the base 4-arg SwapExecuted. The distinct name
+    ///      keeps the ABI free of same-name overloads (which ethers v5 warns on) and makes
+    ///      the topic0 divergence explicit: monitoring must subscribe to THIS signature for
+    ///      LI.FI takes.
+    event LifiSwapExecuted(address indexed tokenIn, address indexed tokenOut, address indexed target, uint256 amountIn, uint256 amountOut);
 
-    error Unauthorized();
-    error InvalidPool();
-    error UnsupportedSource();
-    error InvalidSwapDetails();
     error CallTargetNotAllowed();
     error CallTargetHasNoCode();
     error ApprovalSpenderNotAllowed();
@@ -58,17 +50,16 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     error StaleSourceBalance();
     error UnexpectedSourceBalance();
     error SourceNotConsumed();
-    error SwapFailed();
-    error InsufficientQuoteReceived();
     error UnexpectedCallback();
 
-    constructor(PoolDeployer ajnaErc20PoolFactory, address _authorizedFactory) {
-        if (address(ajnaErc20PoolFactory) == address(0) || _authorizedFactory == address(0)) {
-            revert InvalidSwapDetails();
-        }
-        owner = msg.sender;
-        poolFactory = ajnaErc20PoolFactory;
-        authorizedFactory = _authorizedFactory;
+    /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
+    /// @param authorizedFactory_ Factory contract address that can also call functions.
+    ///        Unlike the other takers, LI.FI is factory-only by design and refuses
+    ///        standalone (zero factory) deployment.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedFactory_)
+        FactoryAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedFactory_)
+    {
+        require(authorizedFactory_ != address(0), "Zero authorized factory");
     }
 
     /// @inheritdoc IAjnaKeeperTaker
@@ -94,8 +85,7 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         }
 
         bytes memory data = abi.encode(details, swapRouter);
-        uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale());
-        _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), approvalAmount);
+        _approveQuoteForTake(pool, maxAmount, auctionPrice);
 
         _activeCallbackPool = address(pool);
         _activeCallbackDataHash = keccak256(data);
@@ -103,9 +93,9 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         _activeCallbackPool = address(0);
         _activeCallbackDataHash = bytes32(0);
 
-        _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), 0);
-        _recoverToken(IERC20(pool.quoteTokenAddress()));
-        _recoverToken(IERC20(details.srcToken));
+        // srcToken is validated equal to the pool collateral, so the standard
+        // settle sweep covers both the quote profit and any unconsumed source.
+        _settleAfterTake(pool);
     }
 
     /// @notice Called by the Ajna pool after it sends callback collateral to this taker.
@@ -123,11 +113,6 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         (LifiSwapDetails memory details, address swapRouter) = abi.decode(data, (LifiSwapDetails, address));
         _validateSwapDetails(pool, swapRouter, details);
         _executeLifiCall(pool, quoteAmountDue, swapRouter, details);
-    }
-
-    /// @inheritdoc IAjnaKeeperTaker
-    function recover(IERC20 token) external onlyOwnerOrFactory {
-        _recoverToken(token);
     }
 
     /// @inheritdoc IAjnaKeeperTaker
@@ -256,14 +241,15 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         _safeApproveWithReset(srcToken, details.approvalSpender, 0);
 
         uint256 quoteReceived = dstToken.balanceOf(address(this)) - quoteBalanceBefore;
-        uint256 requiredQuoteReceived = details.amountOutMinimum > quoteAmountDue
+        uint256 quoteAmountDueCeiling = TakerTakeScaling.quoteAmountDueCeiling(pool, quoteAmountDue);
+        uint256 requiredQuoteReceived = details.amountOutMinimum > quoteAmountDueCeiling
             ? details.amountOutMinimum
-            : quoteAmountDue;
+            : quoteAmountDueCeiling;
         if (quoteReceived < requiredQuoteReceived) {
             revert InsufficientQuoteReceived();
         }
 
-        emit SwapExecuted(pool.collateralAddress(), pool.quoteTokenAddress(), swapRouter, details.amountInTokenUnits, quoteReceived);
+        emit LifiSwapExecuted(pool.collateralAddress(), pool.quoteTokenAddress(), swapRouter, details.amountInTokenUnits, quoteReceived);
     }
 
     function _callLifiTarget(address swapRouter, bytes memory callData) private {
@@ -310,40 +296,5 @@ contract LifiKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         assembly {
             selector := mload(add(callData, 32))
         }
-    }
-
-    function _recoverToken(IERC20 token) private {
-        uint256 balance = token.balanceOf(address(this));
-        if (balance > 0) {
-            token.safeTransfer(owner, balance);
-        }
-    }
-
-    function _validatePool(IERC20Pool pool) private view returns (bool) {
-        return poolFactory.deployedPools(ERC20_NON_SUBSET_HASH, pool.collateralAddress(), pool.quoteTokenAddress()) == address(pool);
-    }
-
-    function _ceilWmul(uint256 x, uint256 y) internal pure returns (uint256) {
-        return (x * y + 1e18 - 1) / 1e18;
-    }
-
-    function _safeApproveWithReset(IERC20 token, address spender, uint256 amount) private {
-        uint256 currentAllowance = token.allowance(address(this), spender);
-        if (currentAllowance != 0) {
-            token.safeApprove(spender, 0);
-        }
-        if (amount != 0) {
-            token.safeApprove(spender, amount);
-        }
-    }
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert Unauthorized();
-        _;
-    }
-
-    modifier onlyOwnerOrFactory() {
-        if (msg.sender != owner && msg.sender != authorizedFactory) revert Unauthorized();
-        _;
     }
 }

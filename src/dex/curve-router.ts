@@ -26,11 +26,16 @@ const STABLESWAP_ABI = [
 ];
 
 // CryptoSwap ABI (uint256 indices) - from curve-swap-tricrypto.ts
+// AUDIT FIX: use the 4-arg base form of exchange (mirrors CurveKeeperTaker.sol).
+// Vyper emits one selector per default-argument arity, so the 4-arg form exists on
+// every CryptoSwap generation, while the previous 6-arg (use_eth, receiver) form is
+// absent on tricrypto2 and V2 factory crypto pools and made this path revert there.
+// Defaults are what we want: use_eth=false, receiver=msg.sender (the signer).
 const CRYPTOSWAP_ABI = [
   'function coins(uint256 i) external view returns (address)',
   'function balances(uint256 i) external view returns (uint256)',
   'function get_dy(uint256 i, uint256 j, uint256 dx) external view returns (uint256)',
-  'function exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy, bool use_eth, address receiver) payable returns (uint256)',
+  'function exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy) returns (uint256)',
   'function fee() external view returns (uint256)',
 ];
 
@@ -234,14 +239,14 @@ export async function swapWithCurveRouter(
             }
           );
         } else {
-          // CryptoSwap exchange: exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy, bool use_eth, address receiver)
+          // CryptoSwap exchange: 4-arg base form, exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy).
+          // use_eth defaults to false and receiver defaults to msg.sender (this signer),
+          // matching the explicit arguments the removed 6-arg call passed.
           swapTx = await poolContract.exchange(
             tokenInIndex,
             tokenOutIndex,
             amount,
             minAmountOutWithSlippage,
-            false, // use_eth = false on L2 (everything is ERC20)
-            signerAddress, // receiver
             {
               nonce,
               gasLimit: 800000, // Conservative gas limit
