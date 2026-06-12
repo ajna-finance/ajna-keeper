@@ -13,7 +13,6 @@ import {
 import { logger } from '../../src/logging';
 import * as takeFactory from '../../src/take/factory';
 import { processManualTakeCandidates } from '../../src/take';
-import { SushiSwapQuoteProvider } from '../../src/dex/providers/sushiswap-quote-provider';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
 import * as erc20 from '../../src/erc20';
@@ -26,7 +25,6 @@ import {
   getCachedFactoryTokenDecimals,
   getFactoryRouteCandidates,
   getMarketPriceFactorUnits,
-  getSushiSwapQuoteProvider,
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
   MARKET_FACTOR_SCALE,
@@ -637,184 +635,6 @@ describe('Take Factory', () => {
       expect(quoteTokenScaleStub.calledOnce).to.be.true;
     });
 
-    it('reuses a shared SushiSwap quote provider cache across quote evaluations', async () => {
-      const initializeStub = sinon
-        .stub(SushiSwapQuoteProvider.prototype, 'initialize')
-        .resolves(true);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'getQuote').resolves({
-        success: true,
-        dstAmount: ethers.utils.parseUnits('120', 6),
-      } as any);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(true);
-      sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
-
-      const pool = {
-        name: 'Test Pool',
-        collateralAddress: '0x1111111111111111111111111111111111111111',
-        quoteAddress: '0x2222222222222222222222222222222222222222',
-        contract: {
-          quoteTokenScale: sinon
-            .stub()
-            .resolves(BigNumber.from('1000000000000')),
-        },
-      };
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.SUSHISWAP,
-          marketPriceFactor: 0.99,
-        },
-      };
-      const config = {
-        sushiswapRouterOverrides: {
-          swapRouterAddress: '0x3333333333333333333333333333333333333333',
-          quoterV2Address: '0x4444444444444444444444444444444444444444',
-          factoryAddress: '0x5555555555555555555555555555555555555555',
-          defaultFeeTier: 500,
-          candidateFeeTiers: [500],
-          wethAddress: '0x6666666666666666666666666666666666666666',
-        },
-      };
-      const quoteSigner = ethers.Wallet.createRandom().connect(
-        new ethers.providers.JsonRpcProvider()
-      );
-      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
-      runtimeCache.chainId = 8453;
-
-      await takeFactory.getFactoryTakeQuoteEvaluation(
-        pool as any,
-        ethers.utils.parseEther('1'),
-        ethers.utils.parseEther('1'),
-        poolConfig as any,
-        config as any,
-        quoteSigner as any,
-        runtimeCache
-      );
-      const cachedProvider = runtimeCache.sushiswap;
-      expect(cachedProvider).to.not.equal(undefined);
-      expect(cachedProvider).to.not.equal(null);
-      await takeFactory.getFactoryTakeQuoteEvaluation(
-        pool as any,
-        ethers.utils.parseEther('1'),
-        ethers.utils.parseEther('1'),
-        poolConfig as any,
-        config as any,
-        quoteSigner as any,
-        runtimeCache
-      );
-
-      expect(initializeStub.called).to.be.true;
-      expect(runtimeCache.sushiswap).to.equal(cachedProvider);
-    });
-
-    it('does not sticky-cache failed SushiSwap provider initialization', async () => {
-      const initializeStub = sinon
-        .stub(SushiSwapQuoteProvider.prototype, 'initialize')
-        .onFirstCall()
-        .rejects(new Error('rpc unavailable'))
-        .onSecondCall()
-        .resolves(true);
-      const warnStub = sinon.stub(logger, 'warn');
-      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
-      const routerConfig = {
-        swapRouterAddress: '0x3333333333333333333333333333333333333333',
-        quoterV2Address: '0x4444444444444444444444444444444444444444',
-        factoryAddress: '0x5555555555555555555555555555555555555555',
-        defaultFeeTier: 500,
-        wethAddress: '0x6666666666666666666666666666666666666666',
-      };
-      const quoteSigner = ethers.Wallet.createRandom().connect(
-        new ethers.providers.JsonRpcProvider()
-      );
-
-      const firstProvider = await getSushiSwapQuoteProvider({
-        signer: quoteSigner as any,
-        routerConfig,
-        runtimeCache,
-      });
-      expect(firstProvider).to.equal(undefined);
-      expect(runtimeCache.sushiswap).to.equal(undefined);
-      expect(runtimeCache.sushiswapUnavailableUntilMs).to.be.greaterThan(
-        Date.now()
-      );
-
-      const secondProvider = await getSushiSwapQuoteProvider({
-        signer: quoteSigner as any,
-        routerConfig,
-        runtimeCache,
-      });
-      expect(secondProvider).to.equal(undefined);
-      expect(initializeStub.calledOnce).to.be.true;
-
-      runtimeCache.sushiswapUnavailableUntilMs = Date.now() - 1;
-      const recoveredProvider = await getSushiSwapQuoteProvider({
-        signer: quoteSigner as any,
-        routerConfig,
-        runtimeCache,
-      });
-
-      expect(recoveredProvider).to.not.equal(undefined);
-      expect(initializeStub.calledTwice).to.be.true;
-      expect(warnStub.calledTwice).to.be.true;
-      expect(warnStub.secondCall.args[0]).to.contain(
-        'SushiSwap quote provider unavailable; retrying initialization'
-      );
-    });
-
-    it('coalesces concurrent SushiSwap provider initialization', async () => {
-      let resolveInitialization: ((value: boolean) => void) | undefined;
-      const initializeStub = sinon.stub(
-        SushiSwapQuoteProvider.prototype,
-        'initialize'
-      );
-      const initializationStarted = new Promise<void>((resolveStarted) => {
-        initializeStub.callsFake(
-          () =>
-            new Promise<boolean>((resolve) => {
-              resolveInitialization = resolve;
-              resolveStarted();
-            })
-        );
-      });
-      const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
-      const routerConfig = {
-        swapRouterAddress: '0x3333333333333333333333333333333333333333',
-        quoterV2Address: '0x4444444444444444444444444444444444444444',
-        factoryAddress: '0x5555555555555555555555555555555555555555',
-        defaultFeeTier: 500,
-        wethAddress: '0x6666666666666666666666666666666666666666',
-      };
-      const quoteSigner = ethers.Wallet.createRandom().connect(
-        new ethers.providers.JsonRpcProvider()
-      );
-
-      const firstProviderPromise = getSushiSwapQuoteProvider({
-        signer: quoteSigner as any,
-        routerConfig,
-        runtimeCache,
-      });
-      await initializationStarted;
-      expect(runtimeCache.sushiswapInitInflight).to.not.equal(undefined);
-
-      const secondProviderPromise = getSushiSwapQuoteProvider({
-        signer: quoteSigner as any,
-        routerConfig,
-        runtimeCache,
-      });
-      expect(initializeStub.calledOnce).to.be.true;
-
-      resolveInitialization?.(true);
-      const [firstProvider, secondProvider] = await Promise.all([
-        firstProviderPromise,
-        secondProviderPromise,
-      ]);
-
-      expect(firstProvider).to.not.equal(undefined);
-      expect(secondProvider).to.equal(firstProvider);
-      expect(runtimeCache.sushiswap).to.equal(firstProvider);
-      expect(runtimeCache.sushiswapInitInflight).to.equal(undefined);
-    });
-
     it('reuses a shared Curve quote provider cache across quote evaluations', async () => {
       const initializeStub = sinon
         .stub(CurveQuoteProvider.prototype, 'initialize')
@@ -1017,18 +837,14 @@ describe('Take Factory', () => {
         defaultLiquiditySource: LiquiditySource.UNISWAPV3,
         config: {
           uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
-          sushiswapRouterOverrides: {
-            defaultFeeTier: 500,
-            candidateFeeTiers: [500],
-          },
         },
         selection: {
-          allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+          allowedLiquiditySources: [LiquiditySource.CURVE],
         },
       });
 
       expect(routes).to.deep.equal([
-        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
+        { liquiditySource: LiquiditySource.CURVE },
       ]);
     });
 
@@ -1045,22 +861,6 @@ describe('Take Factory', () => {
         { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 100 },
         { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 500 },
         { liquiditySource: LiquiditySource.UNISWAPV3, feeTier: 10000 },
-      ]);
-    });
-
-    it('auto-probes standard SushiSwap fee tiers when candidates are not configured', () => {
-      const routes = getFactoryRouteCandidates({
-        defaultLiquiditySource: LiquiditySource.SUSHISWAP,
-        config: {
-          sushiswapRouterOverrides: { defaultFeeTier: 500 },
-        },
-      });
-
-      expect(routes).to.deep.equal([
-        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
-        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 100 },
-        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 3000 },
-        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 10000 },
       ]);
     });
 
@@ -1081,28 +881,11 @@ describe('Take Factory', () => {
       ]);
     });
 
-    it('treats configured SushiSwap candidate fee tiers as an explicit override', () => {
-      const routes = getFactoryRouteCandidates({
-        defaultLiquiditySource: LiquiditySource.SUSHISWAP,
-        config: {
-          sushiswapRouterOverrides: {
-            defaultFeeTier: 500,
-            candidateFeeTiers: [3000],
-          },
-        },
-      });
-
-      expect(routes).to.deep.equal([
-        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 500 },
-        { liquiditySource: LiquiditySource.SUSHISWAP, feeTier: 3000 },
-      ]);
-    });
-
     it('skips takeable route evaluations without net-profit metadata', () => {
       const loggerWarnStub = sinon.stub(logger, 'warn');
       const validRoute = {
         route: {
-          liquiditySource: LiquiditySource.SUSHISWAP,
+          liquiditySource: LiquiditySource.CURVE,
           feeTier: 500,
         },
         evaluation: {
@@ -1137,7 +920,6 @@ describe('Take Factory', () => {
           defaultLiquiditySource: LiquiditySource.UNISWAPV3,
           config: {
             uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
-            sushiswapRouterOverrides: { defaultFeeTier: 500 },
           },
         })
       ).to.equal(validRoute);
@@ -1165,7 +947,7 @@ describe('Take Factory', () => {
       };
       const subsidizedRoute = {
         route: {
-          liquiditySource: LiquiditySource.SUSHISWAP,
+          liquiditySource: LiquiditySource.CURVE,
           feeTier: 500,
         },
         evaluation: {
@@ -1185,7 +967,6 @@ describe('Take Factory', () => {
           defaultLiquiditySource: LiquiditySource.UNISWAPV3,
           config: {
             uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
-            sushiswapRouterOverrides: { defaultFeeTier: 500 },
           },
         })
       ).to.equal(nonSubsidizedRoute);
@@ -1209,7 +990,7 @@ describe('Take Factory', () => {
       };
       const largerSubsidyRoute = {
         route: {
-          liquiditySource: LiquiditySource.SUSHISWAP,
+          liquiditySource: LiquiditySource.CURVE,
           feeTier: 500,
         },
         evaluation: {
@@ -1226,10 +1007,9 @@ describe('Take Factory', () => {
       expect(
         selectBestFactoryRouteEvaluation({
           evaluations: [largerSubsidyRoute, smallerSubsidyRoute],
-          defaultLiquiditySource: LiquiditySource.SUSHISWAP,
+          defaultLiquiditySource: LiquiditySource.CURVE,
           config: {
             uniswapV3RouterOverrides: { defaultFeeTier: 3000 },
-            sushiswapRouterOverrides: { defaultFeeTier: 500 },
           },
         })
       ).to.equal(smallerSubsidyRoute);
@@ -1346,7 +1126,7 @@ describe('Take Factory', () => {
       expect(evaluation.isTakeable).to.be.true;
     });
 
-    it('ranks viable Uni/Sushi routes by gas-adjusted net profit and keeps the selected fee tier', async () => {
+    it('ranks viable Uni/Curve routes by gas-adjusted net profit and keeps the selected fee tier', async () => {
       sinon.stub(UniswapV3QuoteProvider.prototype, 'isAvailable').returns(true);
       sinon
         .stub(UniswapV3QuoteProvider.prototype, 'getQuoterAddress')
@@ -1364,10 +1144,10 @@ describe('Take Factory', () => {
                   : ethers.utils.parseUnits('112', 6),
             }) as any
         );
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(true);
-      const sushiQuoteStub = sinon
-        .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+      sinon.stub(CurveQuoteProvider.prototype, 'initialize').resolves(true);
+      sinon.stub(CurveQuoteProvider.prototype, 'poolExists').resolves(true);
+      const curveQuoteStub = sinon
+        .stub(CurveQuoteProvider.prototype, 'getQuote')
         .resolves({
           success: true,
           dstAmount: ethers.utils.parseUnits('120', 6),
@@ -1401,12 +1181,13 @@ describe('Take Factory', () => {
           wethAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
         },
-        sushiswapRouterOverrides: {
-          swapRouterAddress: '0x8888888888888888888888888888888888888888',
-          quoterV2Address: '0x9999999999999999999999999999999999999999',
-          factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          defaultFeeTier: 500,
-          candidateFeeTiers: [500],
+        curveRouterOverrides: {
+          poolConfigs: {
+            'COLL-QUOTE': {
+              address: '0xcccccccccccccccccccccccccccccccccccccccc',
+              poolType: CurvePoolType.STABLE,
+            },
+          },
           wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         },
       };
@@ -1426,12 +1207,12 @@ describe('Take Factory', () => {
         {
           allowedLiquiditySources: [
             LiquiditySource.UNISWAPV3,
-            LiquiditySource.SUSHISWAP,
+            LiquiditySource.CURVE,
           ],
           routeProfitabilityContext: {
             routeExecutionCostQuoteRawBySource: {
               [LiquiditySource.UNISWAPV3]: ethers.utils.parseUnits('1', 6),
-              [LiquiditySource.SUSHISWAP]: ethers.utils.parseUnits('5', 6),
+              [LiquiditySource.CURVE]: ethers.utils.parseUnits('5', 6),
             },
             configuredProfitFloorQuoteRaw: ethers.utils.parseUnits('2', 6),
           },
@@ -1452,7 +1233,7 @@ describe('Take Factory', () => {
         )
       ).to.be.true;
       expect(uniswapQuoteStub.calledTwice).to.be.true;
-      expect(sushiQuoteStub.calledOnce).to.be.true;
+      expect(curveQuoteStub.calledOnce).to.be.true;
       expect(decimalsStub.calledTwice).to.be.true;
       expect(quoteTokenScaleStub.calledOnce).to.be.true;
       expect(runtimeCache.recentRouteSuccesses).to.equal(undefined);
@@ -1472,10 +1253,10 @@ describe('Take Factory', () => {
           success: true,
           dstAmount: ethers.utils.parseUnits('500', 6),
         } as any);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(true);
-      const sushiQuoteStub = sinon
-        .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+      sinon.stub(CurveQuoteProvider.prototype, 'initialize').resolves(true);
+      sinon.stub(CurveQuoteProvider.prototype, 'poolExists').resolves(true);
+      const curveQuoteStub = sinon
+        .stub(CurveQuoteProvider.prototype, 'getQuote')
         .resolves({
           success: true,
           dstAmount: ethers.utils.parseUnits('115', 6),
@@ -1507,12 +1288,13 @@ describe('Take Factory', () => {
           wethAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
         },
-        sushiswapRouterOverrides: {
-          swapRouterAddress: '0x8888888888888888888888888888888888888888',
-          quoterV2Address: '0x9999999999999999999999999999999999999999',
-          factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          defaultFeeTier: 500,
-          candidateFeeTiers: [500],
+        curveRouterOverrides: {
+          poolConfigs: {
+            'COLL-QUOTE': {
+              address: '0xcccccccccccccccccccccccccccccccccccccccc',
+              poolType: CurvePoolType.STABLE,
+            },
+          },
           wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         },
       };
@@ -1532,7 +1314,7 @@ describe('Take Factory', () => {
         {
           allowedLiquiditySources: [
             LiquiditySource.UNISWAPV3,
-            LiquiditySource.SUSHISWAP,
+            LiquiditySource.CURVE,
           ],
           routeProfitabilityContext: {
             routeRejectionReasonsBySource: {
@@ -1540,7 +1322,7 @@ describe('Take Factory', () => {
                 'failed to quote gas cost into quote token',
             },
             routeExecutionCostQuoteRawBySource: {
-              [LiquiditySource.SUSHISWAP]: ethers.utils.parseUnits('1', 6),
+              [LiquiditySource.CURVE]: ethers.utils.parseUnits('1', 6),
             },
           },
         }
@@ -1548,9 +1330,10 @@ describe('Take Factory', () => {
 
       expect(evaluation.isTakeable).to.be.true;
       expect(evaluation.selectedLiquiditySource).to.equal(
-        LiquiditySource.SUSHISWAP
+        LiquiditySource.CURVE
       );
-      expect(evaluation.selectedFeeTier).to.equal(500);
+      // Curve routes carry no fee tier.
+      expect(evaluation.selectedFeeTier).to.equal(undefined);
       expect(
         evaluation.routeProfitability?.routeExecutionCostQuoteRaw?.eq(
           ethers.utils.parseUnits('1', 6)
@@ -1558,7 +1341,7 @@ describe('Take Factory', () => {
       ).to.be.true;
       expect(uniswapPoolExistsStub.called).to.be.false;
       expect(uniswapQuoteStub.called).to.be.false;
-      expect(sushiQuoteStub.calledOnce).to.be.true;
+      expect(curveQuoteStub.calledOnce).to.be.true;
     });
 
     it('propagates structured gas-conversion rejection metadata when every factory route is gas-rejected', async () => {
@@ -1655,12 +1438,12 @@ describe('Take Factory', () => {
         success: true,
         dstAmount: ethers.utils.parseUnits('120', 6),
       } as any);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
+      sinon.stub(CurveQuoteProvider.prototype, 'initialize').resolves(true);
       sinon
-        .stub(SushiSwapQuoteProvider.prototype, 'poolExists')
+        .stub(CurveQuoteProvider.prototype, 'poolExists')
         .resolves(false);
-      const sushiQuoteStub = sinon.stub(
-        SushiSwapQuoteProvider.prototype,
+      const curveQuoteStub = sinon.stub(
+        CurveQuoteProvider.prototype,
         'getQuote'
       );
       sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
@@ -1700,13 +1483,7 @@ describe('Take Factory', () => {
             wethAddress: '0x5555555555555555555555555555555555555555',
             quoterV2Address: '0x6666666666666666666666666666666666666666',
           },
-          sushiswapRouterOverrides: {
-            swapRouterAddress: '0x8888888888888888888888888888888888888888',
-            quoterV2Address: '0x9999999999999999999999999999999999999999',
-            factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            defaultFeeTier: 500,
-            wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          },
+          curveRouterOverrides: {            poolConfigs: {              'COLL-QUOTE': {                address: '0xcccccccccccccccccccccccccccccccccccccccc',                poolType: CurvePoolType.STABLE,              },            },            wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',          },
         } as any,
         ethers.Wallet.createRandom().connect(
           new ethers.providers.JsonRpcProvider()
@@ -1715,7 +1492,7 @@ describe('Take Factory', () => {
         {
           allowedLiquiditySources: [
             LiquiditySource.UNISWAPV3,
-            LiquiditySource.SUSHISWAP,
+            LiquiditySource.CURVE,
           ],
           routeProfitabilityContextFactory: contextFactory,
         }
@@ -1727,7 +1504,7 @@ describe('Take Factory', () => {
       );
       expect(contextFactory.calledOnceWithExactly([LiquiditySource.UNISWAPV3]))
         .to.be.true;
-      expect(sushiQuoteStub.called).to.be.false;
+      expect(curveQuoteStub.called).to.be.false;
     });
 
     it('checks route availability with bounded parallelism while preserving route order', async () => {
@@ -2019,10 +1796,10 @@ describe('Take Factory', () => {
                   : ethers.utils.parseUnits('112', 6),
             }) as any
         );
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(true);
-      const sushiQuoteStub = sinon
-        .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+      sinon.stub(CurveQuoteProvider.prototype, 'initialize').resolves(true);
+      sinon.stub(CurveQuoteProvider.prototype, 'poolExists').resolves(true);
+      const curveQuoteStub = sinon
+        .stub(CurveQuoteProvider.prototype, 'getQuote')
         .resolves({
           success: true,
           dstAmount: ethers.utils.parseUnits('130', 6),
@@ -2055,13 +1832,7 @@ describe('Take Factory', () => {
           wethAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
         },
-        sushiswapRouterOverrides: {
-          swapRouterAddress: '0x8888888888888888888888888888888888888888',
-          quoterV2Address: '0x9999999999999999999999999999999999999999',
-          factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          defaultFeeTier: 500,
-          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        },
+        curveRouterOverrides: {          poolConfigs: {            'COLL-QUOTE': {              address: '0xcccccccccccccccccccccccccccccccccccccccc',              poolType: CurvePoolType.STABLE,            },          },          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',        },
       };
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
       runtimeCache.recentRouteSuccesses = new Map([
@@ -2084,13 +1855,13 @@ describe('Take Factory', () => {
         {
           allowedLiquiditySources: [
             LiquiditySource.UNISWAPV3,
-            LiquiditySource.SUSHISWAP,
+            LiquiditySource.CURVE,
           ],
           routeQuoteBudgetPerCandidate: 2,
           routeProfitabilityContext: {
             routeExecutionCostQuoteRawBySource: {
               [LiquiditySource.UNISWAPV3]: BigNumber.from(0),
-              [LiquiditySource.SUSHISWAP]: BigNumber.from(0),
+              [LiquiditySource.CURVE]: BigNumber.from(0),
             },
           },
         }
@@ -2102,7 +1873,7 @@ describe('Take Factory', () => {
       );
       expect(evaluation.selectedFeeTier).to.equal(500);
       expect(uniswapQuoteStub.calledTwice).to.be.true;
-      expect(sushiQuoteStub.called).to.be.false;
+      expect(curveQuoteStub.called).to.be.false;
     });
 
     it('prioritizes a recent successful route over the default route when budget is one', async () => {
@@ -2186,7 +1957,7 @@ describe('Take Factory', () => {
       };
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
       const routeKey = `${LiquiditySource.UNISWAPV3}:500:${pool.collateralAddress.toLowerCase()}:${pool.quoteAddress.toLowerCase()}`;
-      const otherKey = `${LiquiditySource.SUSHISWAP}:500:${pool.collateralAddress.toLowerCase()}:${pool.quoteAddress.toLowerCase()}`;
+      const otherKey = `${LiquiditySource.CURVE}:500:${pool.collateralAddress.toLowerCase()}:${pool.quoteAddress.toLowerCase()}`;
       runtimeCache.recentRouteSuccesses = new Map([
         [routeKey, Date.now() - 1000],
         [otherKey, Date.now()],
@@ -2214,10 +1985,10 @@ describe('Take Factory', () => {
           success: true,
           dstAmount: ethers.utils.parseUnits('120', 6).toString(),
         } as any);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'initialize').resolves(true);
-      sinon.stub(SushiSwapQuoteProvider.prototype, 'poolExists').resolves(true);
-      const sushiQuoteStub = sinon
-        .stub(SushiSwapQuoteProvider.prototype, 'getQuote')
+      sinon.stub(CurveQuoteProvider.prototype, 'initialize').resolves(true);
+      sinon.stub(CurveQuoteProvider.prototype, 'poolExists').resolves(true);
+      const curveQuoteStub = sinon
+        .stub(CurveQuoteProvider.prototype, 'getQuote')
         .resolves({
           success: true,
           dstAmount: ethers.utils.parseUnits('121', 6),
@@ -2249,13 +2020,7 @@ describe('Take Factory', () => {
           wethAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
         },
-        sushiswapRouterOverrides: {
-          swapRouterAddress: '0x8888888888888888888888888888888888888888',
-          quoterV2Address: '0x9999999999999999999999999999999999999999',
-          factoryAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          defaultFeeTier: 500,
-          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        },
+        curveRouterOverrides: {          poolConfigs: {            'COLL-QUOTE': {              address: '0xcccccccccccccccccccccccccccccccccccccccc',              poolType: CurvePoolType.STABLE,            },          },          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',        },
       };
 
       const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
@@ -2271,7 +2036,7 @@ describe('Take Factory', () => {
         {
           allowedLiquiditySources: [
             LiquiditySource.UNISWAPV3,
-            LiquiditySource.SUSHISWAP,
+            LiquiditySource.CURVE,
           ],
         }
       );
@@ -2281,7 +2046,7 @@ describe('Take Factory', () => {
         'route profitability context required for dynamic liquidity source selection'
       );
       expect(uniswapQuoteStub.called).to.be.false;
-      expect(sushiQuoteStub.called).to.be.false;
+      expect(curveQuoteStub.called).to.be.false;
     });
 
     it('applies route quote budget after skipping unavailable fee tiers', async () => {

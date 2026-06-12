@@ -32,8 +32,8 @@ import {
 } from '../../src/take/factory';
 import { arrayFromAsync } from '../../src/utils';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
-import { SushiSwapKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
-import { MockSushiSwapRouter__factory } from '../../typechain-types/factories/contracts/mocks';
+import { UniswapV3KeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
+import { MockSwapRouter02__factory } from '../../typechain-types/factories/contracts/mocks';
 
 const FORK_INTEGRATION_TIMEOUT_MS = 300_000;
 const WAD = ethers.constants.WeiPerEther;
@@ -114,15 +114,15 @@ describe('Factory slippage bound', function () {
     );
     await factory.deployed();
 
-    const sushiTaker = await new SushiSwapKeeperTaker__factory(signer).deploy(
+    const uniswapTaker = await new UniswapV3KeeperTaker__factory(signer).deploy(
       MAINNET_CONFIG.AJNA_CONFIG.erc20PoolFactory,
       factory.address
     );
-    await sushiTaker.deployed();
+    await uniswapTaker.deployed();
 
-    await factory.setTaker(LiquiditySource.SUSHISWAP, sushiTaker.address);
+    await factory.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address);
 
-    return { factory, sushiTaker };
+    return { factory, uniswapTaker };
   }
 
   before(async () => {
@@ -177,7 +177,7 @@ describe('Factory slippage bound', function () {
     const approvedMinOutRaw = quotedAmountRaw.mul(99).div(100);
     const manipulatedOutputRaw = quoteAmountDueRaw.mul(110).div(100);
 
-    const mockRouter = await new MockSushiSwapRouter__factory(signer).deploy(
+    const mockRouter = await new MockSwapRouter02__factory(signer).deploy(
       manipulatedOutputRaw
     );
     await mockRouter.deployed();
@@ -204,7 +204,7 @@ describe('Factory slippage bound', function () {
         externalTakePath: 'factory',
         quoteAmountRaw: quotedAmountRaw,
         approvedMinOutRaw,
-        selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
         selectedFeeTier: 3000,
       },
     });
@@ -219,7 +219,7 @@ describe('Factory slippage bound', function () {
       poolConfig: {
         name: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.name,
         take: {
-          liquiditySource: LiquiditySource.SUSHISWAP,
+          liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
         },
       } as any,
@@ -237,7 +237,7 @@ describe('Factory slippage bound', function () {
           quoteAmountRaw: quotedAmountRaw,
           routeExecutionFloorRaw: approvedMinOutRaw,
           approvedMinOutRaw,
-          selectedLiquiditySource: LiquiditySource.SUSHISWAP,
+          selectedLiquiditySource: LiquiditySource.UNISWAPV3,
           selectedFeeTier: 3000,
           quoteAmount: Number(utils.formatEther(quotedAmountRaw)),
           collateralAmount: Number(
@@ -248,8 +248,11 @@ describe('Factory slippage bound', function () {
       config: {
         dryRun: false,
         keeperTakerFactory: factory.address,
-        sushiswapRouterOverrides: {
-          swapRouterAddress: mockRouter.address,
+        uniswapV3RouterOverrides: {
+          swapRouter02Address: mockRouter.address,
+          poolFactoryAddress: '0x4444444444444444444444444444444444444444',
+          wethAddress: pool.quoteAddress,
+          quoterV2Address: '0x6666666666666666666666666666666666666666',
           defaultFeeTier: 500,
           defaultSlippage: 1.0,
         },
@@ -275,7 +278,7 @@ describe('Factory slippage bound', function () {
     );
     const manipulatedOutputRaw = quoteAmountDueRaw.mul(110).div(100);
 
-    const mockRouter = await new MockSushiSwapRouter__factory(signer).deploy(
+    const mockRouter = await new MockSwapRouter02__factory(signer).deploy(
       manipulatedOutputRaw
     );
     await mockRouter.deployed();
@@ -293,9 +296,10 @@ describe('Factory slippage bound', function () {
 
     const initialQuoteBalance = await quoteToken.balanceOf(signer.address);
     const deadline = await getChainDeadline(provider);
+    // UniswapV3SwapDetails tuple with a weak (1 wei) encoded minimum.
     const weakSwapDetails = ethers.utils.defaultAbiCoder.encode(
-      ['uint24', 'uint256', 'uint256'],
-      [500, BigNumber.from(1), deadline]
+      ['(address,address,uint24,uint256,uint256)'],
+      [[mockRouter.address, pool.quoteAddress, 500, BigNumber.from(1), deadline]]
     );
 
     const tx = await factory.takeWithAtomicSwap(
@@ -303,7 +307,7 @@ describe('Factory slippage bound', function () {
       borrower,
       liquidationStatus.price,
       liquidationStatus.collateral,
-      LiquiditySource.SUSHISWAP,
+      LiquiditySource.UNISWAPV3,
       mockRouter.address,
       weakSwapDetails
     );

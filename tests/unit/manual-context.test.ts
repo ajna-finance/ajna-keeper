@@ -307,7 +307,6 @@ describe('manual take context helpers', () => {
         keeperTakerFactory: '0xfactory',
         takerContracts: { UniswapV3: '0xuniswap' },
         uniswapV3RouterOverrides: { swapRouter02Address: '0xswaprouter02' },
-        sushiswapRouterOverrides: { swapRouterAddress: '0xsushi' },
         curveRouterOverrides: {
           poolConfigs: {
             WETH_USDC: {
