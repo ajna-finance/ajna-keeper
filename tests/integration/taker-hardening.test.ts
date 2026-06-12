@@ -1,22 +1,32 @@
 import { expect } from 'chai';
-import { BigNumber, constants, utils } from 'ethers';
+import { BigNumber, Wallet, constants, utils } from 'ethers';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
-import { CurveKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
 import {
+  CurveKeeperTaker__factory,
+} from '../../typechain-types/factories/contracts/takers';
+import {
+  MockAtomicSwapPool__factory,
   MockCurveTricryptoPool__factory,
   MockERC20__factory,
   MockOneInchUnderdeliveryRouter__factory,
+  MockPoolDeployer__factory,
+  MockStrictApprovalToken__factory,
+  MockSwapRouter02__factory,
 } from '../../typechain-types/factories/contracts/mocks';
 import { MockReentrantOneInchRouter__factory } from '../../typechain-types/factories/contracts/mocks/MockReentrantOneInchRouter.sol';
+import { UniswapV3KeeperTaker__factory } from '../../typechain-types/factories/contracts/takers/UniswapV3KeeperTaker__factory';
 import {
   CURVE_DETAILS_TYPE,
   DEADLINE,
+  ERC20_NON_SUBSET_HASH,
   MockTakerBase,
   SUSHI_DETAILS_TYPE,
+  ZERO_FACTORY,
   deployCurveTaker,
   deployFundedCurvePool,
   deployFundedSushiRouter,
   deployFundedSwapRouter02,
+  deployMinOutBypassSwap,
   deployMockTakerBase,
   deploySushiTaker,
   deployUniswapTaker,
@@ -25,6 +35,8 @@ import {
   encodeTakerCallbackData,
   encodeUniswapDetails,
   expectRevertContaining,
+  fundSigner,
+  getProvider,
 } from './helpers/mock-taker-base';
 
 const MAX_AMOUNT = utils.parseEther('10');
@@ -682,6 +694,257 @@ describe('Taker hardening regressions', () => {
       );
       await taker.deployed();
       expect(await taker.authorizedFactory()).to.equal(constants.AddressZero);
+    });
+  });
+
+  describe('partial fill combined with non-18-decimal quote tokens', () => {
+    // The hardest rounding combination: a debt-constrained partial fill AND a
+    // 6-decimal quote whose pool pull is ceil-rounded (+1 over the callback's
+    // floored due). Previously each dimension was tested only in isolation.
+    const QUOTE_SCALE = BigNumber.from(10).pow(12);
+    const DUE_PARTIAL_RAW = BigNumber.from(1_800_000); // floored due, 6 decimals
+    const FULL_MIN_OUT_RAW = BigNumber.from(6_000_000); // quoted for MAX_AMOUNT
+    const SCALED_MIN_OUT_RAW = BigNumber.from(2_400_000); // pro-rated to 4/10 fill
+
+    async function setupScaledPartialFill() {
+      const base = await deployMockTakerBase({
+        quoteDecimals: 6,
+        quoteTokenScale: QUOTE_SCALE,
+      });
+      await base.pool.setCollateralTakenOverride(TAKEN_PARTIAL);
+      await base.pool.setQuoteAmountDue(DUE_PARTIAL_RAW);
+      await base.pool.setQuotePullOverride(DUE_PARTIAL_RAW.add(1));
+      await base.collateralToken.mint(base.pool.address, TAKEN_PARTIAL);
+      return base;
+    }
+
+    it('settles a scaled-quote partial fill and repays the ceil-rounded pull', async () => {
+      const base = await setupScaledPartialFill();
+      const taker = await deployUniswapTaker(base);
+      const router = await deployFundedSwapRouter02(base, SCALED_MIN_OUT_RAW);
+      const ownerQuoteBefore = await base.quoteToken.balanceOf(
+        base.owner.address
+      );
+
+      await taker.takeWithAtomicSwap(
+        base.pool.address,
+        base.owner.address,
+        AUCTION_PRICE,
+        MAX_AMOUNT,
+        SOURCE_UNISWAP_V3,
+        router.address,
+        encodeUniswapDetails({
+          routerAddress: router.address,
+          targetToken: base.quoteToken.address,
+          amountOutMinimum: FULL_MIN_OUT_RAW,
+        })
+      );
+
+      expect((await base.pool.takeCount()).eq(1)).to.equal(true);
+      expect(
+        (await base.quoteToken.balanceOf(base.pool.address)).eq(
+          DUE_PARTIAL_RAW.add(1)
+        )
+      ).to.equal(true);
+      expect(
+        (await base.quoteToken.balanceOf(base.owner.address)).eq(
+          ownerQuoteBefore.add(SCALED_MIN_OUT_RAW.sub(DUE_PARTIAL_RAW.add(1)))
+        )
+      ).to.equal(true);
+    });
+
+    it('rejects a scaled-quote partial fill below the pro-rated floor', async () => {
+      const base = await setupScaledPartialFill();
+      const taker = await deployUniswapTaker(base);
+      // MockMinOutBypassSwap ignores min_dy entirely; only the taker guard protects.
+      const router = await deployMinOutBypassSwap(
+        base,
+        SCALED_MIN_OUT_RAW.sub(1),
+        SCALED_MIN_OUT_RAW
+      );
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          router.address,
+          encodeUniswapDetails({
+            routerAddress: router.address,
+            targetToken: base.quoteToken.address,
+            amountOutMinimum: FULL_MIN_OUT_RAW,
+          })
+        ),
+        'InsufficientQuoteReceived'
+      );
+    });
+  });
+
+  describe('AjnaKeeperTaker quote pull ceiling for non-18-decimal quote tokens', () => {
+    // Mirrors the factory-taker ceiling coverage for the standalone 1inch path,
+    // which shares quoteAmountDueCeiling but was previously tested only at scale 1.
+    const QUOTE_SCALE = BigNumber.from(10).pow(12);
+    const DUE_RAW = BigNumber.from(5_000_000); // 5 USDC at 6 decimals
+    const ONEINCH_MAX_AMOUNT = utils.parseEther('10');
+
+    async function setupScaledOneInch(forcedReturnAmount: BigNumber) {
+      const base = await deployMockTakerBase({
+        quoteDecimals: 6,
+        quoteTokenScale: QUOTE_SCALE,
+      });
+      const taker = await new AjnaKeeperTaker__factory(base.owner).deploy(
+        base.poolDeployer.address
+      );
+      await taker.deployed();
+
+      await base.pool.setQuoteAmountDue(DUE_RAW);
+      await base.pool.setQuotePullOverride(DUE_RAW.add(1));
+      await base.collateralToken.mint(base.pool.address, ONEINCH_MAX_AMOUNT);
+
+      const router = await new MockOneInchUnderdeliveryRouter__factory(
+        base.owner
+      ).deploy(forcedReturnAmount);
+      await router.deployed();
+      await base.quoteToken.mint(router.address, forcedReturnAmount);
+
+      const details = encodeOneInchDetails({
+        executor: router.address,
+        srcToken: base.collateralToken.address,
+        dstToken: base.quoteToken.address,
+        srcReceiver: router.address,
+        dstReceiver: taker.address,
+        amount: ONEINCH_MAX_AMOUNT,
+        minReturnAmount: BigNumber.from(1),
+      });
+
+      return { base, taker, router, details };
+    }
+
+    it('rejects 1inch swaps that only cover the floored quote due', async () => {
+      const { base, taker, router, details } = await setupScaledOneInch(
+        DUE_RAW
+      );
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          ONEINCH_MAX_AMOUNT,
+          SOURCE_ONEINCH,
+          router.address,
+          details
+        ),
+        'InsufficientQuoteReceived'
+      );
+    });
+
+    it('accepts 1inch swaps that cover the ceil-rounded pull', async () => {
+      const { base, taker, router, details } = await setupScaledOneInch(
+        DUE_RAW.add(1)
+      );
+
+      await taker.takeWithAtomicSwap(
+        base.pool.address,
+        base.owner.address,
+        AUCTION_PRICE,
+        ONEINCH_MAX_AMOUNT,
+        SOURCE_ONEINCH,
+        router.address,
+        details
+      );
+
+      expect((await base.pool.takeCount()).eq(1)).to.equal(true);
+      expect(
+        (await base.quoteToken.balanceOf(base.pool.address)).eq(DUE_RAW.add(1))
+      ).to.equal(true);
+    });
+  });
+
+  describe('USDT-style strict approval tokens', () => {
+    it('completes consecutive takes when both pool tokens revert on non-zero-to-non-zero approvals', async () => {
+      // The worst-case quote approval exceeds the actual pull, leaving residual
+      // allowance mid-take. A taker that skipped the zero-first reset in
+      // _safeApproveWithReset would brick on its SECOND take with a strict
+      // token; two consecutive takes pin the reset pattern end to end.
+      const owner = Wallet.createRandom().connect(getProvider());
+      await fundSigner(owner.address);
+
+      const collateralToken = await new MockStrictApprovalToken__factory(
+        owner
+      ).deploy('Strict Collateral', 'SCOLL', 18);
+      await collateralToken.deployed();
+      const quoteToken = await new MockStrictApprovalToken__factory(
+        owner
+      ).deploy('Strict Quote', 'SQTE', 18);
+      await quoteToken.deployed();
+
+      const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
+      await poolDeployer.deployed();
+      const pool = await new MockAtomicSwapPool__factory(owner).deploy(
+        collateralToken.address,
+        quoteToken.address,
+        BigNumber.from(1)
+      );
+      await pool.deployed();
+      await poolDeployer.setDeployedPool(
+        ERC20_NON_SUBSET_HASH,
+        collateralToken.address,
+        quoteToken.address,
+        pool.address
+      );
+
+      const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+        poolDeployer.address,
+        ZERO_FACTORY
+      );
+      await taker.deployed();
+
+      const due = utils.parseEther('5');
+      const routerOutput = utils.parseEther('7');
+      await pool.setQuoteAmountDue(due);
+      await collateralToken.mint(pool.address, MAX_AMOUNT.mul(2));
+
+      const router = await new MockSwapRouter02__factory(owner).deploy(
+        routerOutput
+      );
+      await router.deployed();
+      await quoteToken.mint(router.address, routerOutput.mul(2));
+
+      const details = encodeUniswapDetails({
+        routerAddress: router.address,
+        targetToken: quoteToken.address,
+        amountOutMinimum: utils.parseEther('6'),
+      });
+
+      for (let i = 0; i < 2; i++) {
+        await taker.takeWithAtomicSwap(
+          pool.address,
+          owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          router.address,
+          details
+        );
+      }
+
+      expect((await pool.takeCount()).eq(2)).to.equal(true);
+      // Residual allowances must be fully reset after each take.
+      expect(
+        (await quoteToken.allowance(taker.address, pool.address)).eq(0)
+      ).to.equal(true);
+      expect(
+        (await collateralToken.allowance(taker.address, router.address)).eq(0)
+      ).to.equal(true);
+      // Owner collected the profit from both takes.
+      expect(
+        (await quoteToken.balanceOf(owner.address)).eq(
+          routerOutput.sub(due).mul(2)
+        )
+      ).to.equal(true);
     });
   });
 });
