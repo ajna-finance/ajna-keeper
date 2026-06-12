@@ -4,19 +4,16 @@ import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contra
 import {
   MockCurveSwapPool__factory,
   MockOneInchUnderdeliveryRouter__factory,
-  MockSushiSwapRouter__factory,
   MockSwapRouter__factory,
 } from '../../typechain-types/factories/contracts/mocks';
 import {
   CURVE_DETAILS_TYPE,
   DEADLINE,
   MockTakerBase,
-  SUSHI_DETAILS_TYPE,
   deployCurveTaker,
   deployFundedSwapRouter02,
   deployMinOutBypassSwap,
   deployMockTakerBase,
-  deploySushiTaker,
   deployUniswapTaker,
   encodeTakerCallbackData,
   encodeUniswapCallbackData,
@@ -468,62 +465,9 @@ describe('Taker quote balance guards', () => {
     );
   });
 
-  it('rejects sushiswap callbacks that do not increase quote balance', async () => {
-    const base = await deployMockTakerBase();
-    const { owner, collateralToken, quoteToken, pool } = base;
-    const taker = await deploySushiTaker(base);
-
-    await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
-    await quoteToken.mint(taker.address, QUOTE_AMOUNT_DUE);
-
-    const router = await new MockSushiSwapRouter__factory(owner).deploy(0);
-    await router.deployed();
-
-    const callbackData = encodeTakerCallbackData(
-      SUSHI_DETAILS_TYPE,
-      [router.address, quoteToken.address, 500, 0, DEADLINE],
-      COLLATERAL_AMOUNT
-    );
-
-    await expectRevertContaining(
-      pool.callAtomicSwapCallback(
-        taker.address,
-        COLLATERAL_AMOUNT,
-        QUOTE_AMOUNT_DUE,
-        callbackData
-      ),
-      'InsufficientQuoteReceived'
-    );
-  });
-
-  it('rejects sushiswap callbacks when actual quote received is below amountOutMinimum', async () => {
-    const base = await deployMockTakerBase();
-    const { collateralToken, quoteToken, pool } = base;
-    const taker = await deploySushiTaker(base);
-
-    await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
-    const router = await deployMinOutBypassSwap(
-      base,
-      QUOTE_AMOUNT_DUE,
-      APPROVED_MIN_OUT
-    );
-
-    const callbackData = encodeTakerCallbackData(
-      SUSHI_DETAILS_TYPE,
-      [router.address, quoteToken.address, 500, APPROVED_MIN_OUT, DEADLINE],
-      COLLATERAL_AMOUNT
-    );
-
-    await expectRevertContaining(
-      pool.callAtomicSwapCallback(
-        taker.address,
-        COLLATERAL_AMOUNT,
-        QUOTE_AMOUNT_DUE,
-        callbackData
-      ),
-      'InsufficientQuoteReceived'
-    );
-  });
+  // Direct-Sushi callback guard cases removed with the direct Sushi path; the
+  // identical balance-delta and min-out invariants are covered by the curve
+  // and uniswap callback cases in this same suite.
 
   it('rejects curve callbacks that trust forged return values without quote balance increase', async () => {
     const base = await deployMockTakerBase();
