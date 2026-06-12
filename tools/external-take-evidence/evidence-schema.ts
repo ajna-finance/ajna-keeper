@@ -68,6 +68,15 @@ export interface ProviderSuccessResult {
   outcome: 'success';
   rawFixturePath: string;
   normalized: ProvisionalNormalizedRouteFields;
+  /**
+   * Packet 3A comparison enrichment: provider gas estimate and the net
+   * quote-token value after gas ('unknown' with rationale when the
+   * native-to-quote conversion is not derivable from the provider quote).
+   */
+  execution?: {
+    gasEstimate: string;
+    netQuoteValueAfterGasRaw: string;
+  };
 }
 
 export interface ProviderFailureResult {
@@ -76,6 +85,8 @@ export interface ProviderFailureResult {
   classification: FailureClassification;
   evidenceSummary: string;
   rawFixturePath?: string;
+  /** Packet 3A: whether re-querying reproduced the same classification. */
+  reproducible?: boolean;
 }
 
 export type ProviderResult = ProviderSuccessResult | ProviderFailureResult;
@@ -94,6 +105,12 @@ export interface SampleRow {
     substitutedPair?: { reason: string };
   };
   providerResults: ProviderResult[];
+  /** Packet 3A per-row comparison assessment (competitiveness rows only). */
+  assessment?: {
+    sushiAddsMateriallyDistinctRoute: boolean;
+    sushiBetterNetExecution: boolean | 'unknown';
+    rationale: string;
+  };
 }
 
 export interface ObservedResponseShape {
@@ -115,6 +132,28 @@ export interface RouteShapeArtifact {
   rows: SampleRow[];
 }
 
+export interface AllowlistStabilitySample {
+  timestamp: string;
+  responseSha256: string;
+  requestId?: string;
+}
+
+export interface AllowlistStabilityEvidence {
+  chainId: number;
+  pair: string;
+  sourceFilter?: string;
+  target: string;
+  selector: string;
+  spender: string;
+  /**
+   * At least three matching route-shape samples with distinct timestamps and
+   * response hashes, or a modelDocRef pointing at a human-reviewed
+   * route-processor allowlist model.
+   */
+  samples: AllowlistStabilitySample[];
+  modelDocRef?: string;
+}
+
 export interface CompetitivenessDecisionBlock {
   decision: 'proceed' | 'defer';
   rationale: string;
@@ -124,6 +163,7 @@ export interface CompetitivenessDecisionBlock {
     sourceFilters?: string[];
     allowlist?: { target: string; selector: string; spender: string }[];
   };
+  stabilityEvidence?: AllowlistStabilityEvidence[];
   modelDocRef?: string;
 }
 
@@ -581,8 +621,38 @@ export function validateCompetitivenessArtifact(
       validateSampleRow(row, `artifact.rows[${index}]`, errors)
     );
   }
+  if (Array.isArray(value.rows)) {
+    value.rows.forEach((row, rowIndex) => {
+      if (!isRecord(row) || !Array.isArray(row.providerResults)) {
+        return;
+      }
+      row.providerResults.forEach((result, resultIndex) => {
+        const resultPath = `artifact.rows[${rowIndex}].providerResults[${resultIndex}]`;
+        if (!isRecord(result)) {
+          return;
+        }
+        if (
+          result.outcome === 'failure' &&
+          typeof result.reproducible !== 'boolean'
+        ) {
+          errors.push(
+            `${resultPath}.reproducible: competitiveness failure results must record reproducibility`
+          );
+        }
+        if (result.outcome === 'failure' && 'execution' in result) {
+          errors.push(
+            `${resultPath}: failure results must not carry placeholder success-only execution fields`
+          );
+        }
+      });
+    });
+  }
   const decision = value.decision;
-  if (!isRecord(decision)) {
+  if (Array.isArray(decision)) {
+    errors.push(
+      'artifact.decision: exactly one decision/scope block is allowed'
+    );
+  } else if (!isRecord(decision)) {
     errors.push(
       'artifact.decision: expected exactly one decision/scope block object'
     );
@@ -598,11 +668,88 @@ export function validateCompetitivenessArtifact(
     ) {
       errors.push('artifact.decision.rationale: expected non-empty rationale');
     }
+    if (decision.decision === 'proceed') {
+      validateProceedScope(decision, errors);
+    }
   }
   if (errors.length > 0) {
     return { ok: false, errors };
   }
   return { ok: true, artifact: value as unknown as CompetitivenessArtifact };
+}
+
+function validateProceedScope(
+  decision: Record<string, unknown>,
+  errors: string[]
+): void {
+  const scope = decision.scope;
+  if (
+    !isRecord(scope) ||
+    !Array.isArray(scope.chains) ||
+    scope.chains.length === 0 ||
+    !Array.isArray(scope.pairs) ||
+    scope.pairs.length === 0 ||
+    !Array.isArray(scope.allowlist) ||
+    scope.allowlist.length === 0
+  ) {
+    errors.push(
+      'artifact.decision.scope: proceed requires explicit non-empty chains, pairs, and allowlist for Packet 3B'
+    );
+    return;
+  }
+  const stability = decision.stabilityEvidence;
+  const allowlistEntries = scope.allowlist as Record<string, unknown>[];
+  for (let index = 0; index < allowlistEntries.length; index++) {
+    const entry = allowlistEntries[index];
+    if (
+      !isRecord(entry) ||
+      typeof entry.target !== 'string' ||
+      typeof entry.selector !== 'string' ||
+      typeof entry.spender !== 'string'
+    ) {
+      errors.push(
+        `artifact.decision.scope.allowlist[${index}]: expected target/selector/spender`
+      );
+      continue;
+    }
+    const proof =
+      Array.isArray(stability) &&
+      stability.some(evidence => {
+        if (!isRecord(evidence)) {
+          return false;
+        }
+        if (
+          evidence.target !== entry.target ||
+          evidence.selector !== entry.selector ||
+          evidence.spender !== entry.spender
+        ) {
+          return false;
+        }
+        if (typeof evidence.modelDocRef === 'string') {
+          return true;
+        }
+        const samples = evidence.samples;
+        if (!Array.isArray(samples) || samples.length < 3) {
+          return false;
+        }
+        const timestamps = new Set(
+          samples.map(sample =>
+            isRecord(sample) ? String(sample.timestamp) : ''
+          )
+        );
+        const hashes = new Set(
+          samples.map(sample =>
+            isRecord(sample) ? String(sample.responseSha256) : ''
+          )
+        );
+        return timestamps.size >= 3 && hashes.size >= 3;
+      });
+    if (!proof) {
+      errors.push(
+        `artifact.decision.scope.allowlist[${index}]: proceed requires >=3 distinct-timestamp/hash stability samples or a modelDocRef for ${String(entry.target)}`
+      );
+    }
+  }
 }
 
 export function validateEvidenceArtifact(value: unknown): ValidationResult {

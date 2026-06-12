@@ -121,12 +121,14 @@ describe('external-take evidence schema (Packet 2A)', () => {
         outcome: 'failure',
         classification: 'no_route',
         evidenceSummary: 'incumbent returned no route for the pair',
+        reproducible: true,
       },
       {
         provider: 'oneinch',
         outcome: 'failure',
         classification: 'missing_credentials',
         evidenceSummary: 'incumbent credentials rejected (HTTP 401)',
+        reproducible: true,
       }
     );
     const artifact: CompetitivenessArtifact = {
@@ -208,5 +210,157 @@ describe('external-take evidence schema (Packet 2A)', () => {
       const floor = routeShapeSuccessFloorMet(artifact);
       expect(floor.met, floor.detail).to.equal(true);
     });
+  });
+});
+
+describe('competitiveness artifact rules (Packet 3A)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const {
+    validateCompetitivenessArtifact,
+  } = require('../../tools/external-take-evidence/evidence-schema');
+  const {
+    checkCompetitivenessArtifact,
+  } = require('../../scripts/check-calldata-aggregator-evidence');
+  const artifactPath = path.join(
+    __dirname,
+    '..',
+    '..',
+    'tools',
+    'external-take-evidence',
+    'fixtures',
+    'sushi-competitiveness.artifact.json'
+  );
+  const loadArtifact = () =>
+    JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+  const cloneArtifact = () => JSON.parse(JSON.stringify(loadArtifact()));
+
+  it('validates the committed competitiveness artifact end to end', () => {
+    const artifact = loadArtifact();
+    const result = validateCompetitivenessArtifact(artifact);
+    expect(result.ok, JSON.stringify(result.ok ? '' : result.errors)).to.equal(
+      true
+    );
+    const violations = checkCompetitivenessArtifact(artifact);
+    expect(violations, JSON.stringify(violations)).to.deep.equal([]);
+  });
+
+  it('records one discriminated result per provider on every row', () => {
+    const artifact = loadArtifact();
+    for (const row of artifact.rows) {
+      for (const provider of ['sushi', 'lifi', 'oneinch']) {
+        expect(
+          row.providerResults.filter((r: any) => r.provider === provider)
+        ).to.have.length(1);
+      }
+    }
+  });
+
+  it('rejects competitiveness failure results without reproducibility', () => {
+    const artifact = cloneArtifact();
+    const failure = artifact.rows
+      .flatMap((row: any) => row.providerResults)
+      .find((result: any) => result.outcome === 'failure');
+    delete failure.reproducible;
+    const result = validateCompetitivenessArtifact(artifact);
+    expect(result.ok).to.equal(false);
+  });
+
+  it('rejects failure results carrying placeholder execution fields', () => {
+    const artifact = cloneArtifact();
+    const failure = artifact.rows
+      .flatMap((row: any) => row.providerResults)
+      .find((result: any) => result.outcome === 'failure');
+    failure.execution = { gasEstimate: '0', netQuoteValueAfterGasRaw: '0' };
+    const result = validateCompetitivenessArtifact(artifact);
+    expect(result.ok).to.equal(false);
+  });
+
+  it('rejects multiple decision blocks', () => {
+    const artifact = cloneArtifact();
+    artifact.decision = [artifact.decision, artifact.decision];
+    const result = validateCompetitivenessArtifact(artifact);
+    expect(result.ok).to.equal(false);
+  });
+
+  it('rejects proceed without an explicit Packet 3B scope', () => {
+    const artifact = cloneArtifact();
+    artifact.decision = { decision: 'proceed', rationale: 'scopeless' };
+    const result = validateCompetitivenessArtifact(artifact);
+    expect(result.ok).to.equal(false);
+  });
+
+  it('rejects proceed without stability proof for a scoped allowlist entry', () => {
+    const artifact = cloneArtifact();
+    artifact.decision.stabilityEvidence = [];
+    const result = validateCompetitivenessArtifact(artifact);
+    expect(result.ok).to.equal(false);
+    if (!result.ok) {
+      expect(
+        result.errors.some((error: string) =>
+          error.includes('stability samples or a modelDocRef')
+        )
+      ).to.equal(true);
+    }
+  });
+
+  it('accepts a modelDocRef as the alternative stability proof', () => {
+    const artifact = cloneArtifact();
+    for (const evidence of artifact.decision.stabilityEvidence) {
+      evidence.samples = [];
+      evidence.modelDocRef = 'docs/sushiswap-external-take-plan.md';
+    }
+    const result = validateCompetitivenessArtifact(artifact);
+    expect(result.ok, JSON.stringify(result.ok ? '' : result.errors)).to.equal(
+      true
+    );
+  });
+
+  it('vetoes coverage-based proceed built on credential failures', () => {
+    const artifact = cloneArtifact();
+    // Make a scoped chain coverage-based with an ineligible incumbent: drop
+    // the successful LI.FI result on the first scoped chain and replace it
+    // with a credentials failure.
+    const scopedChain = artifact.decision.scope.chains[0];
+    const row = artifact.rows.find((r: any) => r.chainId === scopedChain);
+    row.providerResults = row.providerResults.map((result: any) =>
+      result.provider === 'lifi'
+        ? {
+            provider: 'lifi',
+            outcome: 'failure',
+            classification: 'missing_credentials',
+            evidenceSummary: 'synthetic credentials failure',
+            reproducible: true,
+          }
+        : result
+    );
+    const violations = checkCompetitivenessArtifact(artifact);
+    expect(
+      violations.some((violation: any) => violation.rule === 'coverage-proceed'),
+      JSON.stringify(violations)
+    ).to.equal(true);
+  });
+
+  it('flags scoped chains without a successful Sushi route', () => {
+    const artifact = cloneArtifact();
+    const scopedChain = artifact.decision.scope.chains[0];
+    const row = artifact.rows.find((r: any) => r.chainId === scopedChain);
+    row.providerResults = row.providerResults.map((result: any) =>
+      result.provider === 'sushi'
+        ? {
+            provider: 'sushi',
+            outcome: 'failure',
+            classification: 'no_route',
+            evidenceSummary: 'synthetic sushi failure',
+            reproducible: true,
+          }
+        : result
+    );
+    const violations = checkCompetitivenessArtifact(artifact);
+    expect(
+      violations.some((violation: any) =>
+        violation.detail.includes('no successful Sushi route')
+      )
+    ).to.equal(true);
   });
 });

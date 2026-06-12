@@ -19,6 +19,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  CompetitivenessArtifact,
+  EVIDENCE_PROVIDERS,
   ProviderSuccessResult,
   RouteShapeArtifact,
   routeShapeSuccessFloorMet,
@@ -236,6 +238,96 @@ export function checkRouteShapeArtifact(
   return violations;
 }
 
+// Packet 3A competitiveness rules: matrix coverage, one discriminated result
+// per provider per row, and the coverage-based-proceed veto (incumbent
+// failures justifying coverage must be reproducible unsupported_chain or
+// no_route — never credentials, rate limits, transient errors, or malformed
+// responses).
+export function checkCompetitivenessArtifact(
+  artifact: CompetitivenessArtifact
+): CheckViolation[] {
+  const violations: CheckViolation[] = [];
+  for (const chainId of REQUIRED_ROUTE_SHAPE_MATRIX_CHAIN_IDS) {
+    if (!artifact.rows.some(row => row.chainId === chainId)) {
+      violations.push({
+        rule: 'matrix',
+        detail: `required matrix chain ${chainId} has no recorded row`,
+      });
+    }
+  }
+  for (const row of artifact.rows) {
+    for (const provider of EVIDENCE_PROVIDERS) {
+      const results = row.providerResults.filter(
+        result => result.provider === provider
+      );
+      if (results.length !== 1) {
+        violations.push({
+          rule: 'providers',
+          detail: `${row.chainName}: expected exactly one ${provider} result, found ${results.length}`,
+        });
+      }
+    }
+  }
+  const decision = artifact.decision;
+  if (decision.decision === 'proceed' && decision.scope) {
+    for (const chainId of decision.scope.chains) {
+      const row = artifact.rows.find(candidate => candidate.chainId === chainId);
+      if (!row) {
+        violations.push({
+          rule: 'scope',
+          detail: `proceed scope chain ${chainId} has no sample row`,
+        });
+        continue;
+      }
+      const sushiSuccess = row.providerResults.some(
+        result => result.provider === 'sushi' && result.outcome === 'success'
+      );
+      if (!sushiSuccess) {
+        violations.push({
+          rule: 'scope',
+          detail: `proceed scope chain ${chainId} has no successful Sushi route`,
+        });
+        continue;
+      }
+      const incumbentResults = row.providerResults.filter(
+        result => result.provider !== 'sushi'
+      );
+      const incumbentSuccess = incumbentResults.some(
+        result => result.outcome === 'success'
+      );
+      if (!incumbentSuccess) {
+        // Coverage-based justification for this chain.
+        for (const result of incumbentResults) {
+          if (result.outcome !== 'failure') {
+            continue;
+          }
+          const eligible =
+            (result.classification === 'unsupported_chain' ||
+              result.classification === 'no_route') &&
+            result.reproducible === true;
+          if (!eligible) {
+            violations.push({
+              rule: 'coverage-proceed',
+              detail:
+                `chain ${chainId}: coverage-based proceed needs reproducible ` +
+                `unsupported_chain/no_route incumbents; ${result.provider} is ` +
+                `${result.classification} (reproducible=${String(result.reproducible)})`,
+            });
+          }
+        }
+      } else if (!row.assessment) {
+        violations.push({
+          rule: 'scope',
+          detail:
+            `chain ${chainId}: proceed with a successful incumbent requires a ` +
+            'recorded per-row comparison assessment',
+        });
+      }
+    }
+  }
+  return violations;
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   let artifactPath = DEFAULT_ARTIFACT_PATH;
@@ -307,6 +399,25 @@ function main(): void {
     );
     console.log('ok re-derive: recorded normalized fields match raw fixtures');
     console.log('ok fail-closed: committed fixtures are rejected as required');
+  }
+
+  if (artifact.artifactKind === 'competitiveness') {
+    const violations = checkCompetitivenessArtifact(artifact);
+    if (violations.length > 0) {
+      for (const violation of violations) {
+        console.error(`FAIL [${violation.rule}] ${violation.detail}`);
+      }
+      console.error(
+        `${violations.length} evidence violation(s) in ${artifactPath}`
+      );
+      process.exit(1);
+    }
+    console.log(
+      `ok matrix: ${artifact.rows.length} rows cover the required chains with all three providers`
+    );
+    console.log(
+      `ok decision: ${artifact.decision.decision} (${artifact.decision.rationale.slice(0, 100)})`
+    );
   }
 }
 

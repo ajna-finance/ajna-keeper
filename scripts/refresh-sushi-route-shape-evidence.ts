@@ -45,11 +45,11 @@ const ARTIFACT_PATH = path.join(FIXTURES_DIR, 'sushi-route-shape.artifact.json')
 // Spike-only quote identity: a burn address keeps committed fixtures clearly
 // detached from any operator wallet. The API's recipient param was verified
 // to rewrite the encoded recipient; default recipient is the sender.
-const SPIKE_SENDER = '0x000000000000000000000000000000000000dead';
-const SPIKE_MAX_SLIPPAGE = 0.005;
-const SPIKE_AMOUNT_IN = '1000000000000000000'; // 1.0 of an 18-decimal input
+export const SPIKE_SENDER = '0x000000000000000000000000000000000000dead';
+export const SPIKE_MAX_SLIPPAGE = 0.005;
+export const SPIKE_AMOUNT_IN = '1000000000000000000'; // 1.0 of an 18-decimal input
 
-interface MatrixEntry {
+export interface MatrixEntry {
   chainId: number;
   chainName: string;
   tokenIn: EvidenceTokenRef;
@@ -63,7 +63,7 @@ const POLYGON_SUBSTITUTION_REASON =
   'fail-closed fixture); WETH into the production USDC quote token is the ' +
   'substituted keeper-relevant collateral pair.';
 
-const MATRIX: readonly MatrixEntry[] = [
+export const MATRIX: readonly MatrixEntry[] = [
   {
     chainId: 1,
     chainName: 'ethereum',
@@ -188,7 +188,7 @@ interface HttpResult {
   bodyText: string;
 }
 
-function httpGetText(url: string): Promise<HttpResult> {
+export function httpGetText(url: string): Promise<HttpResult> {
   return new Promise((resolve, reject) => {
     const request = https.get(
       url,
@@ -244,7 +244,7 @@ function writeFixture(fileName: string, fixture: RawFixture): string {
   return `raw/${fileName}`;
 }
 
-function parseBody(bodyText: string): unknown {
+export function parseBody(bodyText: string): unknown {
   try {
     return JSON.parse(bodyText);
   } catch {
