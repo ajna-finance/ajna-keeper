@@ -4,7 +4,7 @@ import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contra
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
 import {
   LifiKeeperTaker__factory,
-  SushiSwapKeeperTaker__factory,
+  UniswapV3KeeperTaker__factory,
 } from '../../typechain-types/factories/contracts/takers';
 import {
   MockConfigurableTaker__factory,
@@ -25,6 +25,34 @@ describe('Factory taker registration', () => {
     await expectRevertContaining(
       new AjnaKeeperTakerFactory__factory(owner).deploy(constants.AddressZero),
       "reverted with reason string 'Zero pool factory'"
+    );
+  });
+
+  it('rejects registering a taker for the deprecated SushiSwap source id', async () => {
+    // Source id 3 (formerly direct SushiSwap) is permanently reserved and
+    // unsupported on a newly compiled factory. The guard fires before taker
+    // validation, so any nonzero address is rejected outright.
+    const owner = Wallet.createRandom().connect(getProvider());
+    await fundSigner(owner.address);
+
+    const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
+    await poolDeployer.deployed();
+
+    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+      poolDeployer.address
+    );
+    await factory.deployed();
+
+    await expectRevertContaining(
+      factory.setTaker(LiquiditySource.SUSHISWAP, Wallet.createRandom().address),
+      'DeprecatedLiquiditySource'
+    );
+
+    // Clearing the slot stays allowed so a reused factory can zero a stale
+    // mapping without tripping the guard.
+    await factory.setTaker(LiquiditySource.SUSHISWAP, constants.AddressZero);
+    expect(await factory.takerContracts(LiquiditySource.SUSHISWAP)).to.equal(
+      constants.AddressZero
     );
   });
 
@@ -64,14 +92,14 @@ describe('Factory taker registration', () => {
     );
     await factory.deployed();
 
-    const taker = await new SushiSwapKeeperTaker__factory(owner).deploy(
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
       poolDeployer.address,
       otherAccount.address
     );
     await taker.deployed();
 
     await expectRevertContaining(
-      factory.setTaker(LiquiditySource.SUSHISWAP, taker.address),
+      factory.setTaker(LiquiditySource.UNISWAPV3, taker.address),
       'Factory mismatch'
     );
   });
@@ -88,15 +116,15 @@ describe('Factory taker registration', () => {
     );
     await factory.deployed();
 
-    const taker = await new SushiSwapKeeperTaker__factory(owner).deploy(
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
       poolDeployer.address,
       factory.address
     );
     await taker.deployed();
 
-    await factory.setTaker(LiquiditySource.SUSHISWAP, taker.address);
+    await factory.setTaker(LiquiditySource.UNISWAPV3, taker.address);
 
-    expect(await factory.takerContracts(LiquiditySource.SUSHISWAP)).to.equal(
+    expect(await factory.takerContracts(LiquiditySource.UNISWAPV3)).to.equal(
       taker.address
     );
   });
@@ -143,10 +171,10 @@ describe('Factory taker registration', () => {
       const taker = await new MockConfigurableTaker__factory(owner).deploy(
         poolDeployer.address,
         factory.address,
-        LiquiditySource.SUSHISWAP
+        LiquiditySource.UNISWAPV3
       );
       await taker.deployed();
-      await factory.setTaker(LiquiditySource.SUSHISWAP, taker.address);
+      await factory.setTaker(LiquiditySource.UNISWAPV3, taker.address);
 
       return { owner, factory, taker };
     }
@@ -159,7 +187,7 @@ describe('Factory taker registration', () => {
       // taker's raw 4-byte error data intact (previously flattened to the
       // generic "Recovery failed" string, which carries no error data at all).
       await expectRevertContaining(
-        factory.recoverFromTaker(LiquiditySource.SUSHISWAP, taker.address),
+        factory.recoverFromTaker(LiquiditySource.UNISWAPV3, taker.address),
         "reverted with custom error 'CustomRecoveryError()'"
       );
     });
@@ -169,7 +197,7 @@ describe('Factory taker registration', () => {
       await taker.setRecoverMode(2); // revert("taker recovery reason")
 
       await expectRevertContaining(
-        factory.recoverFromTaker(LiquiditySource.SUSHISWAP, taker.address),
+        factory.recoverFromTaker(LiquiditySource.UNISWAPV3, taker.address),
         'taker recovery reason'
       );
     });
@@ -179,7 +207,7 @@ describe('Factory taker registration', () => {
       await taker.setRecoverMode(3); // revert with no data
 
       await expectRevertContaining(
-        factory.recoverFromTaker(LiquiditySource.SUSHISWAP, taker.address),
+        factory.recoverFromTaker(LiquiditySource.UNISWAPV3, taker.address),
         'Recovery failed'
       );
     });
@@ -188,7 +216,7 @@ describe('Factory taker registration', () => {
       const { factory, taker } = await deployFactoryWithMockTaker();
 
       const receipt = await (
-        await factory.recoverFromTaker(LiquiditySource.SUSHISWAP, taker.address)
+        await factory.recoverFromTaker(LiquiditySource.UNISWAPV3, taker.address)
       ).wait();
 
       const recovered = receipt.events?.find(
@@ -244,14 +272,14 @@ describe('Factory taker registration', () => {
     );
     await factory.deployed();
 
-    const taker = await new SushiSwapKeeperTaker__factory(owner).deploy(
+    const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
       otherAjnaFactory.address,
       factory.address
     );
     await taker.deployed();
 
     await expectRevertContaining(
-      factory.setTaker(LiquiditySource.SUSHISWAP, taker.address),
+      factory.setTaker(LiquiditySource.UNISWAPV3, taker.address),
       'Pool factory mismatch'
     );
   });
