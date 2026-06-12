@@ -140,7 +140,6 @@ export enum RewardActionLabel {
 export enum PostAuctionDex {
   ONEINCH = 'oneinch',
   UNISWAP_V3 = 'uniswap_v3',
-  SUSHISWAP = 'sushiswap',
   CURVE = 'curve',
 }
 
@@ -445,16 +444,6 @@ export interface UniswapV3RouterOverrides {
   wethAddress?: string;
 }
 
-export interface SushiswapRouterOverrides {
-  swapRouterAddress?: string;
-  quoterV2Address?: string;
-  factoryAddress?: string;
-  defaultFeeTier?: number;
-  candidateFeeTiers?: number[];
-  defaultSlippage?: number;
-  wethAddress?: string;
-}
-
 export interface CurveRouterOverrides {
   poolConfigs?: {
     [tokenPair: string]: {
@@ -596,7 +585,6 @@ export interface DexConfig {
   oneInch?: OneInchDexConfig;
   lifi?: LifiDexConfig;
   uniswapV3?: UniswapV3DexConfig;
-  sushiswap?: SushiswapRouterOverrides;
   curve?: CurveRouterOverrides;
 }
 

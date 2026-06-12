@@ -3,7 +3,6 @@ import {
   DiscoveredDefaultsConfig,
   KeeperConfig,
   LiquiditySource,
-  SushiswapRouterOverrides,
   UniswapV3RouterOverrides,
   hasNonEmptyObject,
 } from './schema';
@@ -13,7 +12,6 @@ export interface LiquiditySourceConfig {
   curveRouterOverrides?: CurveRouterOverrides;
   discoveredDefaults?: DiscoveredDefaultsConfig;
   oneInchRouters?: { [chainId: number]: string };
-  sushiswapRouterOverrides?: SushiswapRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
 }
@@ -25,7 +23,6 @@ export function getLiquiditySourceConfig(
     curveRouterOverrides: config.dex?.curve,
     discoveredDefaults: config.discovery?.defaults,
     oneInchRouters: config.dex?.oneInch?.routers,
-    sushiswapRouterOverrides: config.dex?.sushiswap,
     tokenAddresses: config.network.tokenAddresses,
     uniswapV3RouterOverrides: config.dex?.uniswapV3?.router,
   };
@@ -46,15 +43,12 @@ export const WRAPPED_NATIVE_TOKEN_SYMBOLS = [
   'wone',
 ];
 
-type DefaultFactoryFeeTierSource =
-  | LiquiditySource.UNISWAPV3
-  | LiquiditySource.SUSHISWAP;
+type DefaultFactoryFeeTierSource = LiquiditySource.UNISWAPV3;
 
 export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
   Record<DefaultFactoryFeeTierSource, number>
 > = {
   [LiquiditySource.UNISWAPV3]: 3000,
-  [LiquiditySource.SUSHISWAP]: 500,
 };
 
 export const STANDARD_V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
@@ -215,13 +209,6 @@ export function hasConfiguredGasQuoteLiquiditySource(
       return !!resolveUniswapV3FactoryQuoteConfig(
         config.uniswapV3RouterOverrides
       );
-    case LiquiditySource.SUSHISWAP:
-      return !!(
-        config.sushiswapRouterOverrides?.swapRouterAddress &&
-        config.sushiswapRouterOverrides.factoryAddress &&
-        config.sushiswapRouterOverrides.wethAddress &&
-        config.sushiswapRouterOverrides.quoterV2Address
-      );
     case LiquiditySource.CURVE:
       return !!(
         hasNonEmptyObject(config.curveRouterOverrides?.poolConfigs) &&
@@ -247,7 +234,6 @@ export function resolveConfiguredGasQuoteLiquiditySource(
   for (const candidate of [
     LiquiditySource.ONEINCH,
     LiquiditySource.UNISWAPV3,
-    LiquiditySource.SUSHISWAP,
     LiquiditySource.CURVE,
   ]) {
     if (hasConfiguredGasQuoteLiquiditySource(config, candidate, chainId)) {
@@ -269,13 +255,6 @@ export function resolveConfiguredWrappedNativeAddress(
     );
   }
 
-  if (liquiditySource === LiquiditySource.SUSHISWAP) {
-    return (
-      config.sushiswapRouterOverrides?.wethAddress ??
-      resolveWrappedNativeTokenAddress(config.tokenAddresses)
-    );
-  }
-
   if (liquiditySource === LiquiditySource.CURVE) {
     return (
       config.curveRouterOverrides?.wethAddress ??
@@ -286,7 +265,6 @@ export function resolveConfiguredWrappedNativeAddress(
   return (
     resolveWrappedNativeTokenAddress(config.tokenAddresses) ??
     config.uniswapV3RouterOverrides?.wethAddress ??
-    config.sushiswapRouterOverrides?.wethAddress ??
     config.curveRouterOverrides?.wethAddress
   );
 }

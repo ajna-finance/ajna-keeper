@@ -47,7 +47,7 @@ const config: KeeperConfig = {
         // minExpectedProfitQuote: 1,
         // If discovery.defaults.take enables factory external takes later, import
         // LiquiditySource and list every direct-DEX factory route that may execute:
-        // allowedLiquiditySources: [LiquiditySource.UNISWAPV3, LiquiditySource.SUSHISWAP],
+        // allowedLiquiditySources: [LiquiditySource.UNISWAPV3, LiquiditySource.CURVE],
         // To compare aggregators against the best factory route for discovered takes:
         // allowedExternalTakePaths: ['oneinch', 'factory'],
         // allowedExternalTakePaths: ['factory', 'lifi'],
@@ -61,7 +61,7 @@ const config: KeeperConfig = {
         // configure production dex.lifi allowlists, takers.contracts.Lifi, both
         // LI.FI production gates, and a conservative LI.FI gas override:
         // dexGasOverrides: {
-        //   [LiquiditySource.SUSHISWAP]: '700000',
+        //   [LiquiditySource.CURVE]: '700000',
         //   [LiquiditySource.LIFI]: '900000',
         // },
         // validateRouteDeployments: true, // required for LI.FI and mixed factory/aggregator paths

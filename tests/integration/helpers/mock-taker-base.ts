@@ -3,7 +3,6 @@ import { BigNumber, Wallet, constants, providers, utils } from 'ethers';
 import { network } from 'hardhat';
 import {
   CurveKeeperTaker__factory,
-  SushiSwapKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../../typechain-types/factories/contracts/takers';
 import {
@@ -12,7 +11,6 @@ import {
   MockERC20__factory,
   MockMinOutBypassSwap__factory,
   MockPoolDeployer__factory,
-  MockSushiSwapRouter__factory,
   MockSwapRouter02__factory,
 } from '../../../typechain-types/factories/contracts/mocks';
 
@@ -24,7 +22,6 @@ export const ZERO_FACTORY = constants.AddressZero;
 
 // Keeper- and callback-payload detail shapes shared by the taker contracts.
 export const UNISWAP_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
-export const SUSHI_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
 export const CURVE_DETAILS_TYPE =
   '(address,address,address,uint8,uint8,uint8,uint256,uint256)';
 
@@ -147,18 +144,6 @@ export async function deployUniswapTaker(
   return taker;
 }
 
-export async function deploySushiTaker(
-  base: MockTakerBase,
-  authorizedFactory: string = ZERO_FACTORY
-) {
-  const taker = await new SushiSwapKeeperTaker__factory(base.owner).deploy(
-    base.poolDeployer.address,
-    authorizedFactory
-  );
-  await taker.deployed();
-  return taker;
-}
-
 export async function deployCurveTaker(
   base: MockTakerBase,
   authorizedFactory: string = ZERO_FACTORY
@@ -176,20 +161,6 @@ export async function deployFundedSwapRouter02(
   amountOut: BigNumber
 ) {
   const router = await new MockSwapRouter02__factory(base.owner).deploy(
-    amountOut
-  );
-  await router.deployed();
-  if (amountOut.gt(0)) {
-    await base.quoteToken.mint(router.address, amountOut);
-  }
-  return router;
-}
-
-export async function deployFundedSushiRouter(
-  base: MockTakerBase,
-  amountOut: BigNumber
-) {
-  const router = await new MockSushiSwapRouter__factory(base.owner).deploy(
     amountOut
   );
   await router.deployed();
@@ -285,16 +256,6 @@ export function encodeUniswapCallbackData(
   );
 }
 
-/** Keeper-facing SushiSwap details encoding (feeTier, amountOutMinimum, deadline). */
-export function encodeSushiKeeperDetails(
-  amountOutMinimum: BigNumber,
-  options: { feeTier?: number; deadline?: number } = {}
-) {
-  return utils.defaultAbiCoder.encode(
-    ['uint24', 'uint256', 'uint256'],
-    [options.feeTier ?? 500, amountOutMinimum, options.deadline ?? DEADLINE]
-  );
-}
 
 /** Keeper-facing Curve details encoding (pool, poolType, indices, min, deadline). */
 export function encodeCurveKeeperDetails(

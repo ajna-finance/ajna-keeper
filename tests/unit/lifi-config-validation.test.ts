@@ -547,7 +547,7 @@ describe('LI.FI config validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
-      'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3, SUSHISWAP, and CURVE'
+      'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3 and CURVE'
     );
   });
 });

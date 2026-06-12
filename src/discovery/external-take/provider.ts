@@ -100,7 +100,6 @@ export type DiscoveryExternalExecutionConfig = Pick<
   | 'oneInchAggregationExecutorAllowlist'
   | 'oneInchDefaultSlippage'
   | 'oneInchRouters'
-  | 'sushiswapRouterOverrides'
   | 'tokenAddresses'
   | 'uniswapV3RouterOverrides'
 > & {

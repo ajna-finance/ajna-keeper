@@ -59,15 +59,6 @@ const config: KeeperConfig = {
         quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a', // QuoterV2 for accurate pricing
       },
     },
-    sushiswap: {
-      swapRouterAddress: '0x[SUSHISWAP_ROUTER_ADDRESS]', // SushiSwap V3 Router
-      quoterV2Address: '0x[SUSHISWAP_QUOTER_ADDRESS]', // SushiSwap QuoterV2
-      factoryAddress: '0x[SUSHISWAP_FACTORY_ADDRESS]', // SushiSwap V3 Factory
-      wethAddress: '0x4200000000000000000000000000000000000006',
-      defaultFeeTier: 500, // Preferred/default 0.05% fee tier
-      candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
-      defaultSlippage: 2.0, // 2% slippage tolerance (conservative for SushiSwap)
-    },
   },
   pricing: {
     coinGeckoApiKey: process.env.COINGECKO_API_KEY,
@@ -118,7 +109,7 @@ const config: KeeperConfig = {
           // External Takes Example - uncomment and configure after contract deployment
           // liquiditySource: LiquiditySource.ONEINCH,      // Use 1inch (requires takers.oneInch)
           // liquiditySource: LiquiditySource.UNISWAPV3,    // Use Uniswap V3 (requires takers.factory)
-          // liquiditySource: LiquiditySource.SUSHISWAP,    // Use SushiSwap (requires takers.factory)
+          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.factory)
           // liquiditySource: LiquiditySource.LIFI,         // Use LI.FI same-chain aggregation
           // Requires takers.factory, takers.contracts.Lifi, production dex.lifi allowlists, and LI.FI production gates.
           // marketPriceFactor: 0.98,                       // Take when auction < market * 0.98
@@ -134,7 +125,7 @@ const config: KeeperConfig = {
             address: '0xaddressOfWstETH',
             targetToken: 'weth',
             slippage: 1,
-            dexProvider: PostAuctionDex.UNISWAP_V3, // Options: ONEINCH, UNISWAP_V3, SUSHISWAP
+            dexProvider: PostAuctionDex.UNISWAP_V3, // Options: ONEINCH, UNISWAP_V3, CURVE
             fee: FeeAmount.LOW,
           },
         },
@@ -166,7 +157,7 @@ const config: KeeperConfig = {
           // Example external take configuration for major pool
           // liquiditySource: LiquiditySource.ONEINCH,     // 1inch aggregator path
           // liquiditySource: LiquiditySource.LIFI,        // LI.FI aggregator path after production canary/fork gates
-          // liquiditySource: LiquiditySource.SUSHISWAP,   // SushiSwap direct-DEX factory path
+          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.factory)
           // marketPriceFactor: 0.99,  // More conservative for volatile pairs
           // allowSubsidy: false,      // Set true only for reviewed defensive pools
         },
@@ -229,7 +220,7 @@ const config: KeeperConfig = {
           // Stable pair external take example - multiple options
           liquiditySource: LiquiditySource.ONEINCH, // 1inch for aggregation
           // liquiditySource: LiquiditySource.LIFI,      // LI.FI for reviewed same-chain aggregation; external-take only, not LP rewards
-          // liquiditySource: LiquiditySource.SUSHISWAP,   // SushiSwap for direct routing
+          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.factory)
           marketPriceFactor: 0.98, // Stable pairs can be more aggressive
           allowSubsidy: false,
         },
@@ -243,7 +234,7 @@ const config: KeeperConfig = {
             address: '0x06d47F3fb376649c3A9Dafe069B3D6E35572219E',
             targetToken: 'usdc',
             slippage: 1,
-            dexProvider: PostAuctionDex.ONEINCH, // Options: ONEINCH, UNISWAP_V3, SUSHISWAP
+            dexProvider: PostAuctionDex.ONEINCH, // Options: ONEINCH, UNISWAP_V3, CURVE
           },
         },
         // Settlement with longer wait time for stable pools
@@ -256,7 +247,7 @@ const config: KeeperConfig = {
         },
       },
       {
-        name: 'Example SushiSwap Pool',
+        name: 'Example Curve Pool',
         address: '0x[example-pool-address]',
         price: {
           source: PriceOriginSource.FIXED,
@@ -271,8 +262,8 @@ const config: KeeperConfig = {
           minCollateral: 0.1,
           hpbPriceFactor: 0.95,
 
-          // SushiSwap external take configuration
-          liquiditySource: LiquiditySource.SUSHISWAP,
+          // Curve external take configuration
+          liquiditySource: LiquiditySource.CURVE,
           marketPriceFactor: 0.99, // Take when auction < market * 0.99
           allowSubsidy: false,
         },
@@ -285,8 +276,8 @@ const config: KeeperConfig = {
             action: RewardActionLabel.EXCHANGE,
             address: '0x[collateral-token-address]',
             targetToken: 'usdc',
-            slippage: 10, // Higher slippage for SushiSwap
-            dexProvider: PostAuctionDex.SUSHISWAP,
+            slippage: 10,
+            dexProvider: PostAuctionDex.CURVE,
             fee: FeeAmount.LOW, // 0.05% fee tier
           },
         },

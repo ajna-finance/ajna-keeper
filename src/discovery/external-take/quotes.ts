@@ -77,7 +77,6 @@ export type LifiPathQuoteFn = (
 
 export type DiscoveryFactoryQuoteConfig = {
   uniswapV3RouterOverrides: DiscoveryExecutionConfig['uniswapV3RouterOverrides'];
-  sushiswapRouterOverrides: DiscoveryExecutionConfig['sushiswapRouterOverrides'];
   curveRouterOverrides: DiscoveryExecutionConfig['curveRouterOverrides'];
   tokenAddresses: DiscoveryExecutionConfig['tokenAddresses'];
 };

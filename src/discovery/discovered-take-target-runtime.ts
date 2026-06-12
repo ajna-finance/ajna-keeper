@@ -102,7 +102,6 @@ export function createDiscoveredTakeTargetRuntime(params: {
   });
   const factoryQuoteConfig = {
     uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
-    sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
     tokenAddresses: params.config.tokenAddresses,
   };
@@ -254,7 +253,6 @@ export function createDiscoveredTakeTargetRuntime(params: {
     lifi: params.config.lifi,
     lifiTaker: params.config.lifiTaker,
     uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
-    sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
     tokenAddresses: params.config.tokenAddresses,
     takeWriteTransport: params.takeWriteTransport,

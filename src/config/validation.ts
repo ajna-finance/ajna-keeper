@@ -6,7 +6,6 @@ import {
   KeeperConfig,
   LiquiditySource,
   PostAuctionDex,
-  SushiswapRouterOverrides,
   SettlementConfig,
   TakeSettings,
   TakeWriteTransportMode,
@@ -238,8 +237,6 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
   const uniswapConfig: UniswapV3RouterOverrides | undefined =
     config.dex?.uniswapV3?.router;
   const universalRouterConfig = config.dex?.uniswapV3?.universalRouter;
-  const sushiConfig: SushiswapRouterOverrides | undefined =
-    config.dex?.sushiswap;
   requireOptionalPercentage(
     config.dex?.oneInch?.defaultSlippage,
     'KeeperConfig.dex.oneInch.defaultSlippage must be a number between 0 and 100'
@@ -258,11 +255,6 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
   validateDefaultFeeTier(
     universalRouterConfig?.defaultFeeTier,
     'KeeperConfig.dex.uniswapV3.universalRouter'
-  );
-  validateCandidateFeeTiers(
-    sushiConfig?.candidateFeeTiers,
-    sushiConfig?.defaultFeeTier,
-    'KeeperConfig.dex.sushiswap'
   );
 }
 
@@ -482,13 +474,6 @@ export function validatePostAuctionDex(
       if (!config.dex?.uniswapV3?.universalRouter) {
         throw new Error(
           'PostAuctionDex.UNISWAP_V3 requires dex.uniswapV3.universalRouter configuration'
-        );
-      }
-      return;
-    case PostAuctionDex.SUSHISWAP:
-      if (!config.dex?.sushiswap) {
-        throw new Error(
-          'PostAuctionDex.SUSHISWAP requires dex.sushiswap configuration'
         );
       }
       return;
@@ -986,7 +971,7 @@ export function validateAutoDiscoverConfig(
       !isFactoryDynamicSource(takePolicy.defaultFactoryLiquiditySource)
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource must be UNISWAPV3, SUSHISWAP, or CURVE'
+        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource must be UNISWAPV3 or CURVE'
       );
     }
     const effectiveDefaultFactoryLiquiditySource = isFactoryDynamicSource(
@@ -1100,7 +1085,7 @@ export function validateAutoDiscoverConfig(
         }
         if (!isFactoryDynamicSource(source)) {
           throw new Error(
-            'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3, SUSHISWAP, and CURVE'
+            'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3 and CURVE'
           );
         }
         validateTakeSettings(
@@ -1174,14 +1159,6 @@ export function validateAutoDiscoverConfig(
     ) {
       logger.warn(
         'KeeperConfig.dex.uniswapV3.router.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
-      );
-    }
-    if (
-      config.dex?.sushiswap?.candidateFeeTiers !== undefined &&
-      !effectiveFactorySources.has(LiquiditySource.SUSHISWAP)
-    ) {
-      logger.warn(
-        'KeeperConfig.dex.sushiswap.candidateFeeTiers configured but SUSHISWAP is not an enabled autodiscover factory route source'
       );
     }
 

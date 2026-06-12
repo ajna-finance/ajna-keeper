@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(forge test *)",
+      "Bash(npx hardhat test *)",
+      "Bash(npx prettier --check *)",
+      "Bash(npx tsc --noEmit *)"
+    ]
+  }
+}

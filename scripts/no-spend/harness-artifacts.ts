@@ -285,7 +285,9 @@ function parseLiquiditySourceLabel(raw: string): LiquiditySource {
     return LiquiditySource.ONEINCH;
   }
   if (value === 'SUSHISWAP' || value === 'SUSHI' || value === '3') {
-    return LiquiditySource.SUSHISWAP;
+    throw new Error(
+      'SushiSwap (source id 3) is deprecated and unsupported as an active liquidity source'
+    );
   }
   if (value === 'CURVE' || value === '4') {
     return LiquiditySource.CURVE;
