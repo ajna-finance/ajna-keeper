@@ -6,6 +6,7 @@ import {
   ExternalTakeTakerContractKey,
   KeeperConfig,
   LifiDexConfig,
+  SushiAggregatorDexConfig,
   LiquiditySource,
   UniswapV3RouterOverrides,
   resolveExternalTakeDeployment,
@@ -30,6 +31,8 @@ export interface DiscoveryExecutionConfig {
   takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
   lifi?: LifiDexConfig;
   lifiTaker?: string;
+  sushiAggregator?: SushiAggregatorDexConfig;
+  sushiAggregatorTaker?: string;
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
@@ -50,6 +53,13 @@ export function getDiscoveryExecutionConfig(
       takerContracts: config.takers?.contracts,
     },
   });
+  const sushiAggregatorDeployment = resolveExternalTakeDeployment({
+    liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
+    config: {
+      keeperTakerFactory: config.takers?.factory,
+      takerContracts: config.takers?.contracts,
+    },
+  });
   return {
     autoDiscover: config.discovery,
     connectorTokens: config.dex?.oneInch?.connectorTokens,
@@ -63,6 +73,11 @@ export function getDiscoveryExecutionConfig(
     lifiTaker:
       lifiDeployment.deploymentType === 'calldata_aggregator'
         ? lifiDeployment.resolvedTakerAddress
+        : undefined,
+    sushiAggregator: config.dex?.sushiAggregator,
+    sushiAggregatorTaker:
+      sushiAggregatorDeployment.deploymentType === 'calldata_aggregator'
+        ? sushiAggregatorDeployment.resolvedTakerAddress
         : undefined,
     oneInchAggregationExecutorAllowlist:
       config.dex?.oneInch?.aggregationExecutorAllowlist,

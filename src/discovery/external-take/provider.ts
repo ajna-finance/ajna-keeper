@@ -1,5 +1,9 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { ExternalTakePathKind, LiquiditySource } from '../../config';
+import {
+  CalldataAggregatorProviderId,
+  ExternalTakePathKind,
+  LiquiditySource,
+} from '../../config';
 import { TakeWriteTransport } from '../../take/write-transport';
 import {
   AuctionTakeFacts,
@@ -76,6 +80,8 @@ export interface ExternalTakeRouteProvider<
   TExecutionConfig = unknown,
 > {
   readonly path: ExternalTakePathKind;
+  /** Set for calldata-aggregator providers; dispatch is path + provider id. */
+  readonly providerId?: CalldataAggregatorProviderId;
   quote(
     params: ExternalTakeQuoteParams<TPoolConfig>
   ): Promise<ExternalTakeQuoteEvaluation>;
@@ -97,6 +103,8 @@ export type DiscoveryExternalExecutionConfig = Pick<
   | 'keeperTakerFactory'
   | 'lifi'
   | 'lifiTaker'
+  | 'sushiAggregator'
+  | 'sushiAggregatorTaker'
   | 'oneInchAggregationExecutorAllowlist'
   | 'oneInchDefaultSlippage'
   | 'oneInchRouters'
@@ -122,6 +130,10 @@ export type DiscoveryExternalExecutionConfig = Pick<
   ) => void;
   onLifiQuoteResult?: (result: ExternalTakeQuoteResult) => void;
   onLifiExecutionFailure?: (result: ExternalTakeExecutionFailureResult) => void;
+  onSushiAggregatorQuoteResult?: (result: ExternalTakeQuoteResult) => void;
+  onSushiAggregatorExecutionFailure?: (
+    result: ExternalTakeExecutionFailureResult
+  ) => void;
 };
 
 export function createPreBroadcastFailureCapture(

@@ -113,12 +113,11 @@ export function createExternalTakeAdapterForDiscovery(params: {
   DiscoveryExternalExecutionConfig,
   DiscoveryExternalTakeApprovalContext
 > {
-  if (
-    resolveExternalTakePolicy({
-      defaultLiquiditySource: params.target.take.liquiditySource,
-      takePolicy: params.takePolicy,
-    }).externalTakePathsExplicitlyConfigured
-  ) {
+  const resolvedExternalTakePolicy = resolveExternalTakePolicy({
+    defaultLiquiditySource: params.target.take.liquiditySource,
+    takePolicy: params.takePolicy,
+  });
+  if (resolvedExternalTakePolicy.externalTakePathsExplicitlyConfigured) {
     return {
       kind: 'hybrid',
       evaluateExternalTake: async ({
@@ -136,6 +135,8 @@ export function createExternalTakeAdapterForDiscovery(params: {
           poolConfig,
           takePolicy: params.takePolicy,
           externalTakePaths: params.externalTakePaths,
+          calldataAggregatorProviders:
+            resolvedExternalTakePolicy.calldataAggregatorProviders,
           routeSelectionMode: params.routeSelectionMode,
           probeTimeoutMs: params.probeTimeoutMs,
           price,
@@ -160,6 +161,8 @@ export function createExternalTakeAdapterForDiscovery(params: {
           liquidation,
           config,
           externalTakePaths: params.externalTakePaths,
+          calldataAggregatorProviders:
+            resolvedExternalTakePolicy.calldataAggregatorProviders,
           providerRegistry: params.providerRegistry,
           approveExternalTake: params.approveExternalTake,
           takeAuctionStatusReader: params.takeAuctionStatusReader,
@@ -180,6 +183,16 @@ export function createExternalTakeAdapterForDiscovery(params: {
     return createProviderBackedDirectAdapter({
       kind: 'calldata_aggregator',
       provider: params.providerRegistry.lifiProvider,
+      stats: params.stats,
+    });
+  }
+
+  if (
+    params.target.take.liquiditySource === LiquiditySource.SUSHI_AGGREGATOR
+  ) {
+    return createProviderBackedDirectAdapter({
+      kind: 'calldata_aggregator',
+      provider: params.providerRegistry.sushiAggregatorProvider,
       stats: params.stats,
     });
   }

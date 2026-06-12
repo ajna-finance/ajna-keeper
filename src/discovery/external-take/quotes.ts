@@ -5,6 +5,7 @@ import { DiscoveryReadTransports } from '../../read-transports';
 import * as takeFactoryModule from '../../take/factory';
 import { FactoryRouteProfitabilityContext } from '../../take/factory';
 import * as lifiExecutionModule from '../../take/lifi/execution';
+import * as sushiAggregatorModule from '../../take/sushi-aggregator/quote-evaluation';
 import * as oneInchExecutionModule from '../../take/one-inch-execution';
 import { getDebtConstrainedTakeCollateralWad } from '../../take/take-sizing';
 import {
@@ -63,6 +64,11 @@ export interface LifiPathQuoteInput extends FactoryPathQuoteInput {
   recordCircuitOutcome?: boolean;
 }
 
+export interface SushiAggregatorPathQuoteInput extends FactoryPathQuoteInput {
+  price: number;
+  recordCircuitOutcome?: boolean;
+}
+
 export type FactoryPathQuoteFn = (
   quoteParams: FactoryPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
@@ -73,6 +79,10 @@ export type OneInchPathQuoteFn = (
 
 export type LifiPathQuoteFn = (
   quoteParams: LifiPathQuoteInput
+) => Promise<ExternalTakeQuoteEvaluation>;
+
+export type SushiAggregatorPathQuoteFn = (
+  quoteParams: SushiAggregatorPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
 export type DiscoveryFactoryQuoteConfig = {
@@ -518,5 +528,50 @@ export async function quoteLifiPathForDiscovery(
         config: params.config,
         outcome,
       }),
+  });
+}
+
+export async function quoteSushiAggregatorPathForDiscovery(
+  params: {
+    config: DiscoveryExecutionConfig;
+    rpcCache?: DiscoveryRpcCache;
+    takePolicy: AutoDiscoverTakePolicyRuntime;
+    recordCircuitOutcome?: boolean;
+    routeProbeLimiter?: AsyncOperationLimiter;
+    probeTimeoutMs: number;
+    getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
+  } & SushiAggregatorPathQuoteInput
+): Promise<ExternalTakeQuoteEvaluation> {
+  const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
+  return quoteCircuitGuardedPath({
+    poolName: params.pool.name,
+    label: 'Sushi Aggregator',
+    externalTakePath: 'calldata_aggregator',
+    selectedLiquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
+    auctionPrice: params.auctionPrice,
+    collateral: quoteCollateralWad,
+    recordCircuitOutcome: false,
+    routeProbeLimiter: params.routeProbeLimiter,
+    routeProbeAbortSignal: params.routeProbeAbortSignal,
+    probeTimeoutMs: params.probeTimeoutMs,
+    abortErrorMessage: 'Sushi aggregator external take quote aborted',
+    timeoutLabel: 'Sushi aggregator external take quote',
+    evaluate: async (signal) =>
+      await sushiAggregatorModule.getSushiAggregatorPathQuoteEvaluation(
+        params.pool,
+        params.price,
+        quoteCollateralWad,
+        params.poolConfig,
+        {
+          sushiAggregator: params.config.sushiAggregator,
+          sushiAggregatorTaker: params.config.sushiAggregatorTaker,
+          sushiAggregatorRequestAbortSignal: signal,
+          chainId: params.rpcCache?.chainId,
+          tokenDecimalsCache: params.getTokenDecimalsCache(params.rpcCache),
+        },
+        params.signer,
+        params.auctionPrice
+      ),
+    recordOutcome: () => undefined,
   });
 }
