@@ -17,6 +17,10 @@ contract MockAtomicSwapPool {
     ///      maxAmount, simulating Ajna's debt-constrained clamp. Tests using a collateral
     ///      scale other than 1 must always set this, since maxAmount is WAD-precision.
     uint256 public collateralTakenOverride;
+    /// @dev When nonzero, take() pulls this raw quote amount instead of quoteAmountDue.
+    ///      Real Ajna passes floor(quoteWad/scale) to the callback but pulls
+    ///      ceil(quoteWad/scale) — set this to quoteAmountDue + 1 to model that gap.
+    uint256 public quotePullOverride;
     address public lastBorrower;
     address public lastCallee;
     uint256 public lastCollateralTaken;
@@ -40,6 +44,10 @@ contract MockAtomicSwapPool {
         collateralTakenOverride = collateralTakenOverride_;
     }
 
+    function setQuotePullOverride(uint256 quotePullOverride_) external {
+        quotePullOverride = quotePullOverride_;
+    }
+
     function take(
         address borrowerAddress_,
         uint256 maxAmount_,
@@ -58,10 +66,12 @@ contract MockAtomicSwapPool {
             quoteAmountDue,
             data_
         );
+        // Real Ajna pulls from msg.sender (the take caller), not the callee, and pulls
+        // the ceil-divided amount which can exceed the callback's floored due by 1 wei.
         IERC20(quoteTokenAddress).safeTransferFrom(
-            callee_,
+            msg.sender,
             address(this),
-            quoteAmountDue
+            quotePullOverride != 0 ? quotePullOverride : quoteAmountDue
         );
     }
 

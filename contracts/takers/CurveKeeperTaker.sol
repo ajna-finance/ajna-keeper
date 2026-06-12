@@ -1,22 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-// AUDIT FIX: Import OpenZeppelin utilities for security
 import { Address } from "@openzeppelin/contracts/utils/Address.sol";
-import { ReentrancyGuard } from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
+import { FactoryAuthorizedTakerBase } from "../base/KeeperTakerBase.sol";
 import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
-import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @notice Curve DEX implementation for Ajna keeper takes using Curve pools
-/// @dev FIXED: Follows SushiSwap pattern for decimal handling and pre-calculated minimums
-contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
-    using SafeERC20 for IERC20;
-    using Math for uint256;
-
+/// @dev Follows the SushiSwap pattern for decimal handling and pre-calculated minimums.
+///      Shared wiring, helpers, errors, and the SwapExecuted event live in
+///      FactoryAuthorizedTakerBase / KeeperTakerBase.
+contract CurveKeeperTaker is FactoryAuthorizedTakerBase {
     /// @notice Configuration for Curve swaps with pre-calculated minimum and pre-discovered indices
     struct CurveSwapDetails {
         address poolAddress;        // Curve pool contract address (from config)
@@ -29,55 +26,20 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         uint256 deadline;         // Swap deadline timestamp
     }
 
-    /// @dev Hash used for all ERC20 pools, used for pool validation
-    bytes32 public constant ERC20_NON_SUBSET_HASH = keccak256("ERC20_NON_SUBSET_HASH");
-
     /// @dev Pool type constants
     uint8 private constant POOL_TYPE_STABLE = 0; // StableSwap pools use int128 indices
     uint8 private constant POOL_TYPE_CRYPTO = 1; // CryptoSwap pools use uint256 indices
 
-    /// @dev Actor allowed to take auctions using this contract
-    address public immutable owner;
-
-    /// @dev Identifies the Ajna deployment, used to validate pools
-    PoolDeployer public immutable poolFactory;
-
-    /// @dev Factory contract that is also authorized to call functions
-    address public immutable authorizedFactory;
-
-    // Events for monitoring
-    event TakeExecuted(
-        address indexed pool,
-        address indexed borrower,
-        uint256 collateralAmount,
-        uint256 quoteAmount,
-        LiquiditySource source,
-        address indexed caller
-    );
-
-    event SwapExecuted(
-        address indexed tokenIn,
-        address indexed tokenOut,
-        uint256 amountIn,
-        uint256 amountOut
-    );
-
-    // Errors
-    error Unauthorized();       // sig: 0x82b42900
-    error InvalidPool();        // sig: 0x2083cd40
-    error UnsupportedSource();  // sig: 0xf54a7ed9
-    error SwapFailed();         // sig: 0xf2fde38b
-    error InvalidSwapDetails(); // sig: 0x13d0c2b4
-    error InvalidPoolType();    // sig: 0x570b9b3f
-    error InsufficientQuoteReceived();
+    /// @notice The configured Curve pool type is not supported.
+    error InvalidPoolType();    // sig: 0x2946cbf1
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment
-    /// @param _authorizedFactory Factory contract address that can also call functions
-    constructor(PoolDeployer ajnaErc20PoolFactory, address _authorizedFactory) {
-        owner = msg.sender;
-        poolFactory = ajnaErc20PoolFactory;
-        authorizedFactory = _authorizedFactory;
-    }
+    /// @param authorizedFactory_ Factory contract address that can also call functions.
+    ///        May be zero to deploy the taker in standalone (owner-only) mode; the
+    ///        keeper factory refuses to register a taker whose factory does not match.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedFactory_)
+        FactoryAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedFactory_)
+    {}
 
     /// @inheritdoc IAjnaKeeperTaker
     function takeWithAtomicSwap(
@@ -93,11 +55,11 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         if (source != LiquiditySource.Curve) revert UnsupportedSource();
         if (!_validatePool(pool)) revert InvalidPool();
 
-        // FIXED: Decode poolAddress first to validate against swapRouter
-        if (swapDetails.length < 160) revert InvalidSwapDetails();
+        // Decode poolAddress first to validate against swapRouter
+        if (swapDetails.length < 192) revert InvalidSwapDetails(); // 6 static fields x 32 bytes
         (address poolAddress,,,,,) = abi.decode(swapDetails, (address, uint8, uint8, uint8, uint256, uint256));
-        
-        // FIXED: Validate swapRouter matches poolAddress (Curve has no central router)
+
+        // Validate swapRouter matches poolAddress (Curve has no central router)
         require(swapRouter == poolAddress, "Router must match pool address");
 
         // Use internal function to avoid stack depth issues
@@ -112,16 +74,12 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         uint256 maxAmount,
         bytes calldata swapDetails
     ) internal {
-        // FIXED: Decode like SushiSwap pattern - basic validation first
-        if (swapDetails.length < 160) revert InvalidSwapDetails();
-        
-        (address poolAddress, uint8 poolType, uint8 tokenInIndex, uint8 tokenOutIndex, uint256 amountOutMinimum, uint256 deadline) = 
+        (address poolAddress, uint8 poolType, uint8 tokenInIndex, uint8 tokenOutIndex, uint256 amountOutMinimum, uint256 deadline) =
             abi.decode(swapDetails, (address, uint8, uint8, uint8, uint256, uint256));
 
         // Basic validation (like SushiSwap)
         require(poolAddress != address(0) && poolType <= POOL_TYPE_CRYPTO && deadline > block.timestamp && amountOutMinimum > 0, "Invalid params");
 
-        // FIXED: Create struct directly like SushiSwap (no helper function)
         // Ajna's take() may clamp the collateral actually purchased below maxAmount on
         // debt-constrained auctions, so the callback pro-rates amountOutMinimum (quoted for
         // the full planned size) against this on-chain derived planned input.
@@ -136,16 +94,12 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
             deadline: deadline
         }), TakerTakeScaling.plannedTakeAmount(pool, maxAmount));
 
-        // FIXED: Safe approval (same as SushiSwap pattern)
-        uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale());
-        _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), approvalAmount);
+        _approveQuoteForTake(pool, maxAmount, auctionPrice);
 
         // Invoke the take
         pool.take(borrowerAddress, maxAmount, address(this), data);
 
-        // Reset allowance and recover tokens
-        _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), 0);
-        _recoverToken(IERC20(pool.quoteTokenAddress()));
+        _settleAfterTake(pool);
     }
 
     /// @notice Called by Pool to swap collateral for quote tokens during liquidation
@@ -158,20 +112,24 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         (CurveSwapDetails memory details, uint256 plannedAmountIn) =
             abi.decode(data, (CurveSwapDetails, uint256));
         if (plannedAmountIn == 0) revert InvalidSwapDetails();
+        // Re-bind swap tokens to the calling pool. Anyone may invoke pool.take with this
+        // taker as callee and arbitrary data; without this check crafted details could
+        // point tokenOut at an attacker-minted token so the balance-delta guard below
+        // measures the wrong asset (no taker funds at risk, but events get spoofed and
+        // the contract acts as a swap conduit). Mirrors UniswapV3KeeperTaker.
+        if (
+            details.tokenIn != pool.collateralAddress() ||
+            details.tokenOut != pool.quoteTokenAddress()
+        ) revert InvalidSwapDetails();
 
         // Execute Curve swap
         _swapWithCurve(
             pool.collateralAddress(),
             details,
             collateral, // This is already in native token amount that Ajna Core knows
-            quoteAmountDue,
+            TakerTakeScaling.quoteAmountDueCeiling(pool, quoteAmountDue),
             plannedAmountIn
         );
-    }
-
-    /// @inheritdoc IAjnaKeeperTaker
-    function recover(IERC20 token) external onlyOwnerOrFactory {
-        _recoverToken(token);
     }
 
     /// @inheritdoc IAjnaKeeperTaker
@@ -186,11 +144,13 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
     }
 
     /// @dev Executes swap using Curve pools with pool-type-specific ABI calls
+    /// @param quoteAmountDueCeiling Ajna repayment backstop, already adjusted for the
+    ///        pool's ceil-rounded quote pull (TakerTakeScaling.quoteAmountDueCeiling).
     function _swapWithCurve(
         address tokenIn,
         CurveSwapDetails memory details,
         uint256 amountIn,
-        uint256 quoteAmountDue,
+        uint256 quoteAmountDueCeiling,
         uint256 plannedAmountIn
     ) private {
         if (amountIn == 0) revert SwapFailed();
@@ -203,7 +163,6 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
         IERC20 tokenInContract = IERC20(tokenIn);
         uint256 quoteBalanceBefore = IERC20(details.tokenOut).balanceOf(address(this));
 
-        // FIXED: Safe approval for Curve pool (same as SushiSwap pattern)
         _safeApproveWithReset(tokenInContract, details.poolAddress, amountIn);
 
         // Pro-rate the full-size minimum to the collateral Ajna actually sent (mirrors the
@@ -213,7 +172,9 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
 
         bytes memory swapCalldata;
         if (details.poolType == POOL_TYPE_STABLE) {
-            // StableSwap pools use int128 indices: exchange(int128 i, int128 j, uint256 dx, uint256 min_dy)
+            // StableSwap pools use int128 indices. The 4-arg base form exists on every
+            // StableSwap generation (legacy and -NG, whose optional receiver defaults to
+            // msg.sender via Vyper default arguments).
             swapCalldata = abi.encodeWithSignature(
                 "exchange(int128,int128,uint256,uint256)",
                 int128(uint128(details.tokenInIndex)),  // Cast to int128 for StableSwap
@@ -222,71 +183,33 @@ contract CurveKeeperTaker is IAjnaKeeperTaker, ReentrancyGuard {
                 amountOutMin
             );
         } else {
-            // CryptoSwap pools use uint256 indices: exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy, bool use_eth, address receiver)
+            // CryptoSwap pools use uint256 indices. AUDIT FIX: call the 4-arg base form,
+            // which every CryptoSwap generation exposes (Vyper emits one selector per
+            // default-argument arity). The previous 6-arg encoding only exists on newer
+            // -NG pools — tricrypto2 (use_eth, no receiver) and V2 factory crypto pools
+            // lack it, so documented tricrypto targets always reverted.
+            // Defaults are what we want anyway: use_eth=false, receiver=msg.sender=this
+            // taker; the balance-delta check below verifies the output actually arrived.
             swapCalldata = abi.encodeWithSignature(
-                "exchange(uint256,uint256,uint256,uint256,bool,address)",
+                "exchange(uint256,uint256,uint256,uint256)",
                 uint256(details.tokenInIndex),   // uint256 for CryptoSwap
                 uint256(details.tokenOutIndex),  // uint256 for CryptoSwap
                 amountIn,
-                amountOutMin,
-                false,        // use_eth = false (ERC20 tokens only)
-                address(this) // receiver = this contract
+                amountOutMin
             );
         }
 
-        // Execute the swap using the transaction-level gas limit selected by the keeper.
-        (bool success, ) = details.poolAddress.call(swapCalldata);
-        if (!success) {
-            revert SwapFailed();
-        }
+        // Execute the swap; Address.functionCall bubbles reverts and fails loudly on a
+        // non-contract pool address. The balance-delta check below is the output guard.
+        Address.functionCall(details.poolAddress, swapCalldata, "Curve swap failed");
 
         _safeApproveWithReset(tokenInContract, details.poolAddress, 0);
 
         uint256 quoteReceived = IERC20(details.tokenOut).balanceOf(address(this)) - quoteBalanceBefore;
-        if (quoteReceived < amountOutMin || quoteReceived < quoteAmountDue) {
+        if (quoteReceived < amountOutMin || quoteReceived < quoteAmountDueCeiling) {
             revert InsufficientQuoteReceived();
         }
 
         emit SwapExecuted(details.tokenIn, details.tokenOut, amountIn, quoteReceived);
-    }
-
-    /// @dev Recovers token balance to owner
-    function _recoverToken(IERC20 token) private {
-        uint256 balance = token.balanceOf(address(this));
-        if (balance > 0) {
-            token.safeTransfer(owner, balance);
-        }
-    }
-
-    /// @dev Validates that the pool is from our Ajna deployment
-    function _validatePool(IERC20Pool pool) private view returns(bool) {
-        return poolFactory.deployedPools(ERC20_NON_SUBSET_HASH, pool.collateralAddress(), pool.quoteTokenAddress()) == address(pool);
-    }
-
-    /// @dev FIXED: Multiplies two WADs and rounds up (same as SushiSwap pattern)
-    function _ceilWmul(uint256 x, uint256 y) internal pure returns (uint256) {
-        return (x * y + 1e18 - 1) / 1e18;
-    }
-
-    /// @dev FIXED: Safe approval that handles non-zero to non-zero allowance issue (same as SushiSwap)
-    /// @param token The ERC20 token to approve
-    /// @param spender The address to approve
-    /// @param amount The amount to approve
-    function _safeApproveWithReset(IERC20 token, address spender, uint256 amount) private {
-        uint256 currentAllowance = token.allowance(address(this), spender);
-        if (currentAllowance != 0) {
-            // Reset to zero first if there's existing allowance
-            token.safeApprove(spender, 0);
-        }
-        // Now approve the new amount
-        if (amount != 0) {
-            token.safeApprove(spender, amount);
-        }
-    }
-
-    // New modifier that allows both owner and authorized factory
-    modifier onlyOwnerOrFactory() {
-        if (msg.sender != owner && msg.sender != authorizedFactory) revert Unauthorized();
-        _;
     }
 }

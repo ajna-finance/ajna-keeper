@@ -18,10 +18,10 @@ contract AjnaKeeperTakerFactory {
     PoolDeployer public immutable poolFactory;
     /// @dev Maps LiquiditySource to taker contract addresses
     mapping(IAjnaKeeperTaker.LiquiditySource => address) public takerContracts;
-    /// @dev Maps taker addresses to their supported sources for validation
-    mapping(address => IAjnaKeeperTaker.LiquiditySource[]) public takerSources;
-    /// @dev Last supported enum value. Keep source iteration in sync with IAjnaKeeperTaker.LiquiditySource.
-    uint8 private constant LAST_LIQUIDITY_SOURCE = uint8(IAjnaKeeperTaker.LiquiditySource.Lifi);
+    /// @dev Last supported enum value. AUDIT FIX: derived from the enum type so it
+    ///      auto-syncs at compile time if IAjnaKeeperTaker.LiquiditySource grows
+    ///      (previously a hand-maintained constant that could silently lag).
+    uint8 private constant LAST_LIQUIDITY_SOURCE = uint8(type(IAjnaKeeperTaker.LiquiditySource).max);
 
     // Events
     event TakerUpdated(IAjnaKeeperTaker.LiquiditySource indexed source, address indexed oldTaker, address indexed newTaker);
@@ -32,13 +32,17 @@ contract AjnaKeeperTakerFactory {
     // Errors
     error Unauthorized();          // sig: 0x82b42900
     error InvalidPool();           // sig: 0x2083cd40
-    error UnsupportedSource();     // sig: 0xf54a7ed9
-    error TakerNotSet();           // sig: 0x1f2a2005
-    error InvalidTaker();          // sig: 0x8baa579f
+    // Declared (not raised here) so ethers can decode the takers' bubbled custom error.
+    error UnsupportedSource();     // sig: 0x79b7ef0d
+    error TakerNotSet();           // sig: 0x28c25087
+    error InvalidTaker();          // sig: 0x1f7e75fc
     error LegacyDirectOneInchTakerUnsupported();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for this deployment
     constructor(PoolDeployer ajnaErc20PoolFactory) {
+        // A zero pool factory bricks the deployment: _validatePool can never pass and
+        // setTaker rejects every taker with "Pool factory mismatch" (taker parity).
+        require(address(ajnaErc20PoolFactory) != address(0), "Zero pool factory");
         owner = msg.sender;
         poolFactory = ajnaErc20PoolFactory;
     }
@@ -136,7 +140,14 @@ contract AjnaKeeperTakerFactory {
             emit TokenRecovered(source, address(token), takerAddress);
         } catch Error(string memory reason) {
             revert(reason);
-        } catch {
+        } catch (bytes memory lowLevelData) {
+            // AUDIT FIX: bubble the taker's custom errors raw instead of flattening
+            // them to a generic string, so off-chain decoders see the real reason.
+            if (lowLevelData.length > 0) {
+                assembly {
+                    revert(add(lowLevelData, 32), mload(lowLevelData))
+                }
+            }
             revert("Recovery failed");
         }
     }
