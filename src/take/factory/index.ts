@@ -37,10 +37,6 @@ import {
 } from './shared';
 import { evaluateCurveFactoryQuote, executeCurveFactoryTake } from './curve';
 import {
-  evaluateSushiSwapFactoryQuote,
-  executeSushiSwapFactoryTake,
-} from './sushiswap';
-import {
   evaluateUniswapV3FactoryQuote,
   executeUniswapV3FactoryTake,
 } from './uniswap';
@@ -124,7 +120,6 @@ export async function getFactoryTakeQuoteEvaluation(
   config: Pick<
     FactoryTakeParams['config'],
     | 'uniswapV3RouterOverrides'
-    | 'sushiswapRouterOverrides'
     | 'curveRouterOverrides'
     | 'tokenAddresses'
   >,
@@ -152,7 +147,6 @@ export async function getFactoryTakeQuoteEvaluation(
   try {
     if (
       poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3 ||
-      poolConfig.take.liquiditySource === LiquiditySource.SUSHISWAP ||
       poolConfig.take.liquiditySource === LiquiditySource.CURVE
     ) {
       throwIfRouteProbeAborted(
@@ -352,8 +346,8 @@ export async function getFactoryTakeQuoteEvaluation(
                 feeTier: route.feeTier,
                 routeContext,
               })
-            : route.liquiditySource === LiquiditySource.SUSHISWAP
-              ? await evaluateSushiSwapFactoryQuote({
+            : route.liquiditySource === LiquiditySource.CURVE
+              ? await evaluateCurveFactoryQuote({
                   pool,
                   auctionPriceWad,
                   collateral,
@@ -361,25 +355,13 @@ export async function getFactoryTakeQuoteEvaluation(
                   config,
                   signer,
                   runtimeCache,
-                  feeTier: route.feeTier,
                   routeContext,
                 })
-              : route.liquiditySource === LiquiditySource.CURVE
-                ? await evaluateCurveFactoryQuote({
-                    pool,
-                    auctionPriceWad,
-                    collateral,
-                    poolConfig,
-                    config,
-                    signer,
-                    runtimeCache,
-                    routeContext,
-                  })
-                : {
-                    isTakeable: false,
-                    reason: `unsupported route source ${route.liquiditySource}`,
-                    selectedLiquiditySource: route.liquiditySource,
-                  };
+              : {
+                  isTakeable: false,
+                  reason: `unsupported route source ${route.liquiditySource}`,
+                  selectedLiquiditySource: route.liquiditySource,
+                };
         const evaluation = applyFactoryRouteProfitabilityPolicy({
           evaluation: rawEvaluation,
           liquiditySource: route.liquiditySource,
@@ -503,7 +485,6 @@ interface FactoryLiquidationExecutionParams {
     | 'dryRun'
     | 'keeperTakerFactory'
     | 'uniswapV3RouterOverrides'
-    | 'sushiswapRouterOverrides'
     | 'curveRouterOverrides'
     | 'tokenAddresses'
   > & {
@@ -523,17 +504,6 @@ async function executeSelectedFactoryRoute(
 
   if (quoteEvaluation.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
     await executeUniswapV3FactoryTake({
-      pool,
-      poolConfig,
-      signer,
-      liquidation,
-      quoteEvaluation,
-      config,
-    });
-  } else if (
-    quoteEvaluation.selectedLiquiditySource === LiquiditySource.SUSHISWAP
-  ) {
-    await executeSushiSwapFactoryTake({
       pool,
       poolConfig,
       signer,

@@ -5,7 +5,6 @@ import {
   ExternalTakeDeploymentRuntimeConfig,
   LifiDexConfig,
   PoolConfig,
-  SushiswapRouterOverrides,
   UniswapV3RouterOverrides,
   formatLiquiditySource,
   resolveExternalTakeDeployment,
@@ -46,7 +45,6 @@ export interface ManualFactoryContextConfig
   extends ManualTakeCommonContextConfig {
   keeperTakerFactory?: string;
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
-  sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
 }
@@ -245,7 +243,6 @@ function createManualFactoryTakeContext(params: {
     externalTakeAdapter: createFactoryTakeAdapter({
       quoteConfig: {
         uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
-        sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
         curveRouterOverrides: params.config.curveRouterOverrides,
         tokenAddresses: params.config.tokenAddresses,
       },
@@ -259,7 +256,6 @@ function createManualFactoryTakeContext(params: {
       dryRun: params.config.dryRun,
       keeperTakerFactory: params.config.keeperTakerFactory,
       uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
-      sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
       curveRouterOverrides: params.config.curveRouterOverrides,
       tokenAddresses: params.config.tokenAddresses,
       takeWriteTransport: params.takeWriteTransport,

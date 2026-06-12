@@ -143,18 +143,6 @@ export interface ApprovedUniswapV3FactoryQuoteEvaluation
   selectedFeeTier: number;
 }
 
-export interface BoundSushiSwapFactoryRouteEvaluation
-  extends BoundExternalTakeRouteBase<LiquiditySource.SUSHISWAP> {
-  externalTakePath: 'factory';
-  selectedFeeTier: number;
-}
-
-export interface ApprovedSushiSwapFactoryQuoteEvaluation
-  extends ApprovedExternalTakeQuoteBase<LiquiditySource.SUSHISWAP> {
-  externalTakePath: 'factory';
-  selectedFeeTier: number;
-}
-
 export interface BoundCurveFactoryRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.CURVE> {
   externalTakePath: 'factory';
@@ -181,12 +169,10 @@ export interface BoundLifiRouteEvaluation
 
 export type BoundFactoryRouteEvaluation =
   | BoundUniswapV3FactoryRouteEvaluation
-  | BoundSushiSwapFactoryRouteEvaluation
   | BoundCurveFactoryRouteEvaluation;
 
 export type ApprovedFactoryQuoteEvaluation =
   | ApprovedUniswapV3FactoryQuoteEvaluation
-  | ApprovedSushiSwapFactoryQuoteEvaluation
   | ApprovedCurveFactoryQuoteEvaluation;
 
 export type BoundExternalTakeRouteEvaluation =

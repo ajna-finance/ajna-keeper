@@ -114,10 +114,6 @@ type FactoryRouteFields =
       selectedFeeTier: number;
     }
   | {
-      selectedLiquiditySource: LiquiditySource.SUSHISWAP;
-      selectedFeeTier: number;
-    }
-  | {
       selectedLiquiditySource: LiquiditySource.CURVE;
       curvePool: CurvePoolSelection;
     };
@@ -133,10 +129,7 @@ function resolveFactoryRouteFields(params: {
 }): { ok: true; fields: FactoryRouteFields } | { ok: false; reason: string } {
   const action = `${params.action} an unbound route`;
 
-  if (
-    params.selectedLiquiditySource === LiquiditySource.UNISWAPV3 ||
-    params.selectedLiquiditySource === LiquiditySource.SUSHISWAP
-  ) {
+  if (params.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
     if (params.quoteEvaluation.selectedFeeTier === undefined) {
       return {
         ok: false,
