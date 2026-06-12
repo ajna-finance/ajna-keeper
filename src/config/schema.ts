@@ -87,6 +87,7 @@ export enum LiquiditySource {
   SUSHISWAP = 3,
   CURVE = 4,
   LIFI = 5,
+  SUSHI_AGGREGATOR = 6,
 }
 
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
@@ -103,11 +104,12 @@ export type ExternalTakePathKind = 'oneinch' | 'factory' | 'calldata_aggregator'
  */
 export type ConfiguredExternalTakePathKind = ExternalTakePathKind | 'lifi';
 /**
- * Calldata-aggregator providers active in the current packet. Packet 2B is
- * only `lifi`; Packet 3B extends the union in the same diff that adds Sushi
- * support.
+ * Calldata-aggregator providers active in the current packet. Packet 3B
+ * extended the union with `sushi_aggregator` in the same diff that added
+ * Sushi support; an omitted allowedCalldataAggregatorProviders list still
+ * resolves to LI.FI only, so Sushi is never silently enabled.
  */
-export type CalldataAggregatorProviderId = 'lifi';
+export type CalldataAggregatorProviderId = 'lifi' | 'sushi_aggregator';
 export type ExternalTakeRouteSelectionMode =
   | 'maximize_profit'
   | 'factory_first';
@@ -600,6 +602,25 @@ export interface LifiProductionDexConfig extends LifiDexBaseConfig {
 
 export type LifiDexConfig = LifiCanaryDexConfig | LifiProductionDexConfig;
 
+/**
+ * Sushi same-chain aggregator provider config (Packet 3B). Entirely separate
+ * from the removed direct-router surface: validated, allowlisted, fail-closed.
+ * Initial production scope is bounded by the Packet 3A proceed artifact;
+ * enabling a new chain or route requires a new reviewed evidence artifact
+ * before the config/allowlist change.
+ */
+export interface SushiAggregatorDexConfig {
+  mode: 'production';
+  apiBaseUrl?: string;
+  defaultSlippage?: number;
+  quoteTimeoutMs?: number;
+  maxQuoteAgeMs?: number;
+  maxPriceImpact?: number;
+  callTargetAllowlist: ChainAddressAllowlist;
+  approvalSpenderAllowlist: ChainAddressAllowlist;
+  selectorAllowlist: ChainTargetSelectorAllowlist;
+}
+
 export interface UniswapV3DexConfig {
   legacy?: UniswapV3Overrides;
   router?: UniswapV3RouterOverrides;
@@ -609,6 +630,7 @@ export interface UniswapV3DexConfig {
 export interface DexConfig {
   oneInch?: OneInchDexConfig;
   lifi?: LifiDexConfig;
+  sushiAggregator?: SushiAggregatorDexConfig;
   uniswapV3?: UniswapV3DexConfig;
   curve?: CurveRouterOverrides;
 }

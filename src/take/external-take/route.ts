@@ -6,9 +6,11 @@ import {
   formatLiquiditySource,
   getExternalTakePathDefaultSource,
   isFactoryDynamicSource,
+  isCalldataAggregatorLiquiditySource,
   resolveCalldataAggregatorProviderForSource,
   resolveExternalTakePathFromSource,
 } from '../../config';
+import type { CalldataAggregatorLiquiditySource } from '../../config';
 import { ExternalTakeQuoteEvaluation } from '../types';
 
 export type ExternalTakeRouteIdentity =
@@ -19,7 +21,7 @@ export type ExternalTakeRouteIdentity =
   | {
       path: 'calldata_aggregator';
       providerId: CalldataAggregatorProviderId;
-      source: LiquiditySource.LIFI;
+      source: CalldataAggregatorLiquiditySource;
     }
   | {
       path: 'factory';
@@ -96,11 +98,11 @@ type BoundCalldataAggregatorExternalTakeRouteBinding<
   identity: Extract<ExternalTakeRouteIdentity, { path: 'calldata_aggregator' }>;
   path: 'calldata_aggregator';
   providerId: CalldataAggregatorProviderId;
-  source: LiquiditySource.LIFI;
+  source: CalldataAggregatorLiquiditySource;
   quoteEvaluation: ExternalTakeRouteQuoteEvaluation<
     TQuoteEvaluation,
     'calldata_aggregator',
-    LiquiditySource.LIFI
+    CalldataAggregatorLiquiditySource
   >;
 };
 
@@ -140,7 +142,7 @@ export function resolveExternalTakeRouteIdentityFromParts(params: {
   if (params.path === 'oneinch' && params.source === LiquiditySource.ONEINCH) {
     return { path: 'oneinch', source: LiquiditySource.ONEINCH };
   }
-  if (params.path === 'calldata_aggregator' && params.source === LiquiditySource.LIFI) {
+  if (params.path === 'calldata_aggregator' && isCalldataAggregatorLiquiditySource(params.source)) {
     const providerId = resolveCalldataAggregatorProviderForSource(params.source);
     return providerId && { path: 'calldata_aggregator', providerId, source: params.source };
   }
@@ -176,11 +178,11 @@ function createBoundExternalTakeRouteBinding<
         identity,
         path: 'calldata_aggregator',
         providerId: identity.providerId,
-        source: LiquiditySource.LIFI,
+        source: identity.source,
         quoteEvaluation: {
           ...params.quoteEvaluation,
           externalTakePath: 'calldata_aggregator',
-          selectedLiquiditySource: LiquiditySource.LIFI,
+          selectedLiquiditySource: identity.source,
         },
       };
     case 'factory':

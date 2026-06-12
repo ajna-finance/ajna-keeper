@@ -95,10 +95,7 @@ export function approveCalldataAggregatorQuoteForExecution(params: {
       externalTakePath: 'calldata_aggregator',
       providerId,
       quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
-      // Packet 2B: the provider union is only lifi, so the evaluation source
-      // type is pinned to LIFI; Packet 3B generalizes the source typing in
-      // the same diff that extends the provider union.
-      selectedLiquiditySource: LiquiditySource.LIFI,
+      selectedLiquiditySource: identity.liquiditySource,
       routeExecutionFloorRaw:
         quoteEvaluation.routeExecutionFloorRaw ?? approvedMinOutRaw,
       approvedMinOutRaw,

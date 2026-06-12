@@ -6,6 +6,7 @@ import {
   LiquiditySource,
   TakeSettings,
 } from '../config';
+import type { CalldataAggregatorLiquiditySource } from '../config';
 import { ApprovedCalldataAggregatorQuote } from './aggregator-calldata/types';
 
 export type GasPolicyRejectCode =
@@ -157,14 +158,14 @@ export interface ApprovedCurveFactoryQuoteEvaluation
 }
 
 export interface ApprovedCalldataAggregatorQuoteEvaluation
-  extends ApprovedExternalTakeQuoteBase<LiquiditySource.LIFI> {
+  extends ApprovedExternalTakeQuoteBase<CalldataAggregatorLiquiditySource> {
   externalTakePath: 'calldata_aggregator';
   providerId: CalldataAggregatorProviderId;
   calldataQuote: ApprovedCalldataAggregatorQuote;
 }
 
 export interface BoundCalldataAggregatorRouteEvaluation
-  extends BoundExternalTakeRouteBase<LiquiditySource.LIFI> {
+  extends BoundExternalTakeRouteBase<CalldataAggregatorLiquiditySource> {
   externalTakePath: 'calldata_aggregator';
   providerId: CalldataAggregatorProviderId;
   calldataQuote: ApprovedCalldataAggregatorQuote;

@@ -22,6 +22,7 @@ import {
   readLifiTakerAllowlistSnapshot,
 } from '../dex/lifi';
 import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
+import { validateSushiAggregatorAllowlistPreflight } from '../dex/sushi-aggregator/preflight';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
 
@@ -518,6 +519,22 @@ const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
       errors,
     }) => {
       await validateLifiAllowlistPreflight({
+        config,
+        provider,
+        chainId,
+        takerAddress,
+        errors,
+      });
+    },
+  },
+  [LiquiditySource.SUSHI_AGGREGATOR]: {
+    usesFactoryRegistry: true,
+    takerLabel: () => 'Sushi aggregator taker',
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: () => [],
+    validateAdditional: async ({ config, provider, chainId, takerAddress, errors }) => {
+      await validateSushiAggregatorAllowlistPreflight({
         config,
         provider,
         chainId,

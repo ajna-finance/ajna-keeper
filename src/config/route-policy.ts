@@ -42,6 +42,7 @@ export {
   getExternalTakePathDescriptors,
   getExternalTakeTakerContractKeyForSource,
   isAggregatorExternalTakePath,
+  isCalldataAggregatorLiquiditySource,
   isExternalTakeLiquiditySource,
   isExternalTakePath,
   resolveExternalTakeDeployment,
@@ -50,6 +51,7 @@ export {
 export type {
   ActiveExternalTakeDeploymentResolution,
   ActiveExternalTakeDeploymentType,
+  CalldataAggregatorLiquiditySource,
   ExternalTakeDeploymentResolution,
   ExternalTakeDeploymentRuntimeConfig,
   ExternalTakeDeploymentType,

@@ -84,15 +84,15 @@ describe('allowedCalldataAggregatorProviders enablement (Packet 2B)', () => {
     ).to.throw('cannot contain duplicates');
   });
 
-  it('rejects unknown and packet-inactive provider ids', () => {
+  it('rejects unknown provider ids', () => {
     expect(() =>
       resolveExternalTakePolicy({
         defaultLiquiditySource: LiquiditySource.LIFI,
         takePolicy: {
-          allowedCalldataAggregatorProviders: ['sushi_aggregator'],
+          allowedCalldataAggregatorProviders: ['mystery_aggregator'],
         },
       })
-    ).to.throw('currently supports only lifi');
+    ).to.throw('currently supports only lifi, sushi_aggregator');
   });
 
   it('rejects a provider list when the calldata_aggregator family is disabled', () => {
@@ -129,5 +129,74 @@ describe('allowedCalldataAggregatorProviders enablement (Packet 2B)', () => {
       takePolicy: {},
     });
     expect(derived.externalTakePathsExplicitlyConfigured).to.equal(false);
+  });
+});
+
+describe('provider enablement matrix with Sushi active (Packet 3B)', () => {
+  const { resolveExternalTakePolicy } = require('../../src/config/route-policy');
+  const { LiquiditySource } = require('../../src/config/schema');
+
+  it('keeps an omitted provider list LI.FI-only after Sushi is added', () => {
+    const resolved = resolveExternalTakePolicy({
+      defaultLiquiditySource: LiquiditySource.LIFI,
+      takePolicy: { allowedExternalTakePaths: ['calldata_aggregator'] },
+    });
+    expect(resolved.calldataAggregatorProviders).to.deep.equal(['lifi']);
+  });
+
+  it('enables LI.FI only explicitly', () => {
+    const resolved = resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy: {
+        allowedExternalTakePaths: ['calldata_aggregator'],
+        allowedCalldataAggregatorProviders: ['lifi'],
+      },
+    });
+    expect(resolved.calldataAggregatorProviders).to.deep.equal(['lifi']);
+  });
+
+  it('enables Sushi only explicitly', () => {
+    const resolved = resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy: {
+        allowedExternalTakePaths: ['calldata_aggregator'],
+        allowedCalldataAggregatorProviders: ['sushi_aggregator'],
+      },
+    });
+    expect(resolved.calldataAggregatorProviders).to.deep.equal([
+      'sushi_aggregator',
+    ]);
+  });
+
+  it('enables LI.FI plus Sushi under the same family', () => {
+    const resolved = resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy: {
+        allowedExternalTakePaths: ['calldata_aggregator'],
+        allowedCalldataAggregatorProviders: ['lifi', 'sushi_aggregator'],
+      },
+    });
+    expect(resolved.calldataAggregatorProviders).to.deep.equal([
+      'lifi',
+      'sushi_aggregator',
+    ]);
+  });
+
+  it('resolves deployment for the appended Sushi source by provider id', () => {
+    const {
+      resolveExternalTakeDeployment,
+    } = require('../../src/config/external-take-registry');
+    const resolution = resolveExternalTakeDeployment({
+      liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
+      config: {
+        keeperTakerFactory: '0x' + '11'.repeat(20),
+        takerContracts: { SushiAggregator: '0x' + '22'.repeat(20) },
+      },
+    });
+    expect(resolution.deploymentType).to.equal('calldata_aggregator');
+    expect(resolution.providerId).to.equal('sushi_aggregator');
+    expect(resolution.requestedLiquiditySource).to.equal(
+      LiquiditySource.SUSHI_AGGREGATOR
+    );
   });
 });

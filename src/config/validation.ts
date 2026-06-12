@@ -49,6 +49,7 @@ import { logger } from '../logging';
 import { ethers } from 'ethers';
 import { MARKET_FACTOR_SCALE } from '../constants';
 import { LIFI_POLICY_BOUNDS, assertValidLifiDexConfig } from './lifi-policy';
+import { validateSushiAggregatorDexRequirements } from './sushi-aggregator-policy';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -586,11 +587,23 @@ function validateLifiTakeSource({
   });
 }
 
+function validateSushiAggregatorTakeSource({
+  keeperConfig,
+  chainId,
+}: ExternalTakeSourceValidationParams): void {
+  requireRegisteredTakerContract({
+    keeperConfig,
+    source: LiquiditySource.SUSHI_AGGREGATOR,
+  });
+  validateSushiAggregatorDexRequirements({ keeperConfig, chainId });
+}
+
 const EXTERNAL_TAKE_SOURCE_VALIDATORS = {
   [LiquiditySource.ONEINCH]: validateOneInchTakeSource,
   [LiquiditySource.UNISWAPV3]: validateUniswapV3TakeSource,
   [LiquiditySource.CURVE]: validateCurveTakeSource,
   [LiquiditySource.LIFI]: validateLifiTakeSource,
+  [LiquiditySource.SUSHI_AGGREGATOR]: validateSushiAggregatorTakeSource,
 } satisfies Record<ExternalTakeLiquiditySource, ExternalTakeSourceValidator>;
 
 function validateExternalTakeSourceRequirements(params: {

@@ -245,18 +245,18 @@ describe('Factory taker registration', () => {
     const taker = await new MockConfigurableTaker__factory(owner).deploy(
       poolDeployer.address,
       factory.address,
-      LiquiditySource.LIFI
+      LiquiditySource.SUSHI_AGGREGATOR
     );
     await taker.deployed();
-    await factory.setTaker(LiquiditySource.LIFI, taker.address);
+    await factory.setTaker(LiquiditySource.SUSHI_AGGREGATOR, taker.address);
 
     const [sources, takers] = await factory.getConfiguredTakers();
     expect(sources.length).to.equal(1);
-    expect(sources[0]).to.equal(LiquiditySource.LIFI);
+    expect(sources[0]).to.equal(LiquiditySource.SUSHI_AGGREGATOR);
     expect(takers[0]).to.equal(taker.address);
-    expect(await factory.hasConfiguredTaker(LiquiditySource.LIFI)).to.equal(
-      true
-    );
+    expect(
+      await factory.hasConfiguredTaker(LiquiditySource.SUSHI_AGGREGATOR)
+    ).to.equal(true);
   });
 
   it('rejects takers bound to a different Ajna pool factory', async () => {

@@ -1,5 +1,8 @@
 import { CalldataAggregatorProviderId, LiquiditySource } from './schema';
-import type { ExternalTakeTakerContractKey } from './external-take-registry';
+import type {
+  CalldataAggregatorLiquiditySource,
+  ExternalTakeTakerContractKey,
+} from './external-take-registry';
 
 /**
  * The single shared identity registry for calldata-aggregator providers
@@ -20,7 +23,7 @@ export interface AggregatorProviderIdentity {
   readonly canonicalPath: 'calldata_aggregator';
   readonly executionFamily: 'calldata_aggregator';
   readonly label: string;
-  readonly liquiditySource: LiquiditySource;
+  readonly liquiditySource: CalldataAggregatorLiquiditySource;
   readonly takerContractKey: ExternalTakeTakerContractKey;
   readonly configKey: string;
 }
@@ -34,6 +37,15 @@ export const AGGREGATOR_PROVIDER_IDENTITIES = {
     liquiditySource: LiquiditySource.LIFI,
     takerContractKey: 'Lifi',
     configKey: 'lifi',
+  },
+  sushi_aggregator: {
+    providerId: 'sushi_aggregator',
+    canonicalPath: 'calldata_aggregator',
+    executionFamily: 'calldata_aggregator',
+    label: 'Sushi Aggregator',
+    liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
+    takerContractKey: 'SushiAggregator',
+    configKey: 'sushiAggregator',
   },
 } satisfies Record<CalldataAggregatorProviderId, AggregatorProviderIdentity>;
 

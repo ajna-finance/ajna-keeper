@@ -9,12 +9,13 @@ import { IERC20 } from "../OneInchInterfaces.sol";
 interface IAjnaKeeperTaker is IERC20Taker {
     /// @notice Identifies the source of liquidity to use for the swap.
     enum LiquiditySource {
-        None,      // (do not use)
-        OneInch,   // Use 1inch single-contract aggregation
-        UniswapV3, // Use Uniswap V3 direct SwapRouter02 execution
-        SushiSwap, // Use SushiSwap direct-DEX execution
-        Curve,     // Use Curve direct-DEX execution
-        Lifi       // Use LI.FI same-chain aggregator calldata
+        None,           // (do not use)
+        OneInch,        // Use 1inch single-contract aggregation
+        UniswapV3,      // Use Uniswap V3 direct SwapRouter02 execution
+        SushiSwap,      // Deprecated direct-DEX slot; reserved, never reuse
+        Curve,          // Use Curve direct-DEX execution
+        Lifi,           // Use LI.FI same-chain aggregator calldata
+        SushiAggregator // Use Sushi same-chain aggregator calldata (Packet 3B)
     }
 
     /// @notice Called by keeper to invoke `Pool.take`, passing `IERC20Taker` callback data.

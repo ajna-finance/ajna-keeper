@@ -461,7 +461,7 @@ export function bindExternalTakeRouteForDiscovery(params: {
         ...boundBase,
         externalTakePath: 'calldata_aggregator',
         providerId: route.route.identity.providerId,
-        selectedLiquiditySource: LiquiditySource.LIFI,
+        selectedLiquiditySource: route.route.identity.source,
         calldataQuote: route.route.quoteEvaluation.calldataQuote,
       } satisfies BoundCalldataAggregatorRouteEvaluation,
     };
