@@ -3,8 +3,7 @@ import {
   ExternalTakePathKind,
   LiquiditySource,
   normalizeExternalTakeRouteSelectionMode,
-  resolveDefaultFactoryLiquiditySource,
-  resolveExternalTakePaths,
+  resolveExternalTakePolicy,
 } from '../config';
 import { logger } from '../logging';
 import { ExternalTakeAdapter } from '../take/engine';
@@ -91,15 +90,15 @@ export function createDiscoveredTakeTargetRuntime(params: {
   externalTakeProbeTimeoutMs: number;
   buildFactoryRouteProfitabilityContext: DiscoveryFactoryRouteProfitabilityContextBuilder;
 }): DiscoveredTakeTargetRuntime {
-  const externalTakePaths = resolveExternalTakePaths({
+  const resolvedExternalTakePolicy = resolveExternalTakePolicy({
     defaultLiquiditySource: params.target.take.liquiditySource,
-    allowedExternalTakePaths: params.takePolicy?.allowedExternalTakePaths,
+    takePolicy: params.takePolicy,
   });
-  const defaultFactoryLiquiditySource = resolveDefaultFactoryLiquiditySource({
-    defaultLiquiditySource: params.target.take.liquiditySource,
-    configuredDefaultFactoryLiquiditySource:
-      params.takePolicy?.defaultFactoryLiquiditySource,
-  });
+  const externalTakePaths = Array.from(
+    resolvedExternalTakePolicy.externalTakePaths
+  );
+  const defaultFactoryLiquiditySource =
+    resolvedExternalTakePolicy.defaultFactoryLiquiditySource;
   const factoryQuoteConfig = {
     uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
@@ -143,7 +142,7 @@ export function createDiscoveredTakeTargetRuntime(params: {
       transports: params.transports,
       rpcCache: params.rpcCache,
       takePolicy: params.takePolicy,
-      defaultFactoryLiquiditySource,
+      resolvedDefaultFactoryLiquiditySource: defaultFactoryLiquiditySource,
       routeProbeLimiter: params.routeProbeLimiter,
       factoryQuoteConfig,
       buildFactoryRouteProfitabilityContext:
@@ -297,7 +296,9 @@ export function createDiscoveredTakeTargetRuntime(params: {
         );
       }
     },
-    onLifiExecutionFailure: recordExternalTakeExecutionFailure('lifi'),
+    onLifiExecutionFailure: recordExternalTakeExecutionFailure(
+      'calldata_aggregator'
+    ),
   };
 
   return {

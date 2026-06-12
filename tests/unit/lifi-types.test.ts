@@ -7,9 +7,10 @@ import type {
   DiscoveryExecutionConfig,
   ExternalProviderCircuits,
 } from '../../src/discovery/types';
+import { normalizeApprovedLifiQuote } from '../../src/take/lifi/quote-service';
 import type {
+  ApprovedCalldataAggregatorQuoteEvaluation,
   ApprovedExternalTakeQuoteEvaluation,
-  ApprovedLifiQuoteEvaluation,
   ExternalTakeStrategyKind,
 } from '../../src/take/types';
 
@@ -21,10 +22,13 @@ type IsEqual<A, B> =
     : false;
 
 type _LifiQuoteIsApprovedExternalTake = Expect<
-  IsAssignable<ApprovedLifiQuoteEvaluation, ApprovedExternalTakeQuoteEvaluation>
+  IsAssignable<
+    ApprovedCalldataAggregatorQuoteEvaluation,
+    ApprovedExternalTakeQuoteEvaluation
+  >
 >;
-type _LifiIsExecutionStrategy = Expect<
-  IsAssignable<'lifi', ExternalTakeStrategyKind>
+type _CalldataAggregatorIsExecutionStrategy = Expect<
+  IsAssignable<'calldata_aggregator', ExternalTakeStrategyKind>
 >;
 type _HybridRemainsExecutionStrategy = Expect<
   IsAssignable<'hybrid', ExternalTakeStrategyKind>
@@ -41,8 +45,11 @@ type _OneInchCircuitPurposesStayTyped = Expect<
     'route_quote' | 'swap_data' | 'gas_conversion'
   >
 >;
-type _StatsAllowLifiProviderPath = Expect<
-  IsAssignable<'lifi', keyof DiscoveredTakeTargetStats['externalTakeByPath']>
+type _StatsAllowCalldataAggregatorPath = Expect<
+  IsAssignable<
+    'calldata_aggregator',
+    keyof DiscoveredTakeTargetStats['externalTakeByPath']
+  >
 >;
 type _StatsDoNotAddFlatLifiCounters = Expect<
   Extract<
@@ -86,12 +93,13 @@ describe('LI.FI type surface', () => {
   it('keeps LI.FI typed as both an external take path and strategy kind', () => {
     const approvedLifiQuote = {
       isTakeable: true,
-      externalTakePath: 'lifi',
+      externalTakePath: 'calldata_aggregator',
+      providerId: 'lifi',
       quoteAmountRaw: BigNumber.from(125),
       selectedLiquiditySource: LiquiditySource.LIFI,
       approvedMinOutRaw: BigNumber.from(123),
-      lifiQuote: makeApprovedLifiQuote(),
-    } satisfies ApprovedLifiQuoteEvaluation;
+      calldataQuote: normalizeApprovedLifiQuote(makeApprovedLifiQuote(), 8453),
+    } satisfies ApprovedCalldataAggregatorQuoteEvaluation;
     const approvedExternalQuote: ApprovedExternalTakeQuoteEvaluation =
       approvedLifiQuote;
     const executionConfig = {
@@ -125,7 +133,7 @@ describe('LI.FI type surface', () => {
     } satisfies ExternalProviderCircuits;
     const providerStats = {
       externalTakeByPath: {
-        lifi: {
+        calldata_aggregator: {
           approved: 1,
           executed: 0,
           dryRun: 0,
@@ -135,12 +143,16 @@ describe('LI.FI type surface', () => {
       },
     } satisfies Pick<DiscoveredTakeTargetStats, 'externalTakeByPath'>;
 
-    expect(approvedExternalQuote.externalTakePath).to.equal('lifi');
+    expect(approvedExternalQuote.externalTakePath).to.equal(
+      'calldata_aggregator'
+    );
     expect(executionConfig.lifiTaker).to.equal(
       '0x3333333333333333333333333333333333333333'
     );
     expect(providerCircuits.lifi.route_quote.failures).to.equal(1);
     expect(providerCircuits.oneinch.swap_data.failures).to.equal(1);
-    expect(providerStats.externalTakeByPath.lifi.approved).to.equal(1);
+    expect(providerStats.externalTakeByPath.calldata_aggregator.approved).to.equal(
+      1
+    );
   });
 });

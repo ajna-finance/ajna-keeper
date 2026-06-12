@@ -9,7 +9,7 @@ export function createLifiTakeAdapter(
   quoteConfig: LifiQuoteConfig
 ): ExternalTakeAdapter<TakeActionConfig, LifiExecutionConfig> {
   return {
-    kind: 'lifi',
+    kind: 'calldata_aggregator',
     evaluateExternalTake: async ({
       pool,
       signer,

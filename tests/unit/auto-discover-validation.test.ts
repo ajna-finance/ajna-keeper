@@ -805,7 +805,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch, factory, and lifi'
+      'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch, factory, and calldata_aggregator (legacy alias: lifi)'
     );
 
     config.discovery!.take = {

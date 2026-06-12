@@ -103,11 +103,11 @@ export type HybridExternalTakeExecutionSelection =
 
 export function resolveHybridExternalTakeExecutionSelection(params: {
   quoteEvaluation?: ExternalTakeQuoteEvaluation;
-  allowedExternalTakePaths: ExternalTakePathKind[];
+  resolvedExternalTakePaths: ExternalTakePathKind[];
 }): HybridExternalTakeExecutionSelection {
   const route = bindExternalTakeRoute({
     quoteEvaluation: params.quoteEvaluation,
-    allowedExternalTakePaths: params.allowedExternalTakePaths,
+    resolvedExternalTakePaths: params.resolvedExternalTakePaths,
     inferSourceFromPath: true,
   });
   if (!route.bound) {

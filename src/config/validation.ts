@@ -17,15 +17,14 @@ import {
   hasNonEmptyObject,
 } from './schema';
 import {
-  EXTERNAL_TAKE_PATHS,
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
   isFactoryDynamicSource,
   normalizeExternalTakeRouteSelectionMode,
-  resolveExternalTakePaths,
-  resolveFactoryRouteSelectionSources,
+  resolveExternalTakePolicy,
   resolveHybridGasQuoteFallbackPolicy,
 } from './route-policy';
+import type { RawExternalTakePolicyInputs } from './route-policy';
 import {
   formatSupportedExternalTakeLiquiditySources,
   formatSupportedExternalTakePaths,
@@ -274,11 +273,10 @@ function getEffectiveFactoryRouteSources(
   defaultFactoryLiquiditySource?: LiquiditySource
 ): Set<LiquiditySource> {
   return new Set(
-    resolveFactoryRouteSelectionSources({
+    resolveExternalTakePolicy({
       defaultLiquiditySource: discoveredTake.liquiditySource,
-      allowedLiquiditySources,
-      configuredDefaultFactoryLiquiditySource: defaultFactoryLiquiditySource,
-    })
+      takePolicy: { allowedLiquiditySources, defaultFactoryLiquiditySource },
+    }).factoryRouteSources
   );
 }
 
@@ -302,43 +300,19 @@ function getEffectiveTakeGasOverrideSources(
   return sources;
 }
 
+// Path/provider/default-source interpretation and its validation live in
+// resolveExternalTakePolicy (src/config/route-policy.ts); this is the
+// one-line delegation the resolver boundary allows in this legacy-frozen file.
 function getEffectiveExternalTakePaths(
   discoveredTake: TakeSettings,
-  allowedExternalTakePaths: ExternalTakePathKind[] | undefined
+  takePolicy: RawExternalTakePolicyInputs | undefined
 ): Set<ExternalTakePathKind> {
   return new Set(
-    resolveExternalTakePaths({
+    resolveExternalTakePolicy({
       defaultLiquiditySource: discoveredTake.liquiditySource,
-      allowedExternalTakePaths,
-    })
+      takePolicy,
+    }).externalTakePaths
   );
-}
-
-function validateAllowedExternalTakePaths(
-  paths: ExternalTakePathKind[] | undefined
-): void {
-  if (paths === undefined) {
-    return;
-  }
-  if (!Array.isArray(paths) || paths.length === 0) {
-    throw new Error(
-      'AutoDiscoverConfig.take: allowedExternalTakePaths must be non-empty'
-    );
-  }
-  const seen = new Set<ExternalTakePathKind>();
-  for (const path of paths) {
-    if (!EXTERNAL_TAKE_PATHS.has(path)) {
-      throw new Error(
-        `AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only ${formatSupportedExternalTakePaths()}`
-      );
-    }
-    if (seen.has(path)) {
-      throw new Error(
-        'AutoDiscoverConfig.take: allowedExternalTakePaths cannot contain duplicates'
-      );
-    }
-    seen.add(path);
-  }
 }
 
 function validateExternalTakeTransportPolicy(
@@ -941,10 +915,9 @@ export function validateAutoDiscoverConfig(
       }
     }
 
-    validateAllowedExternalTakePaths(takePolicy.allowedExternalTakePaths);
     const externalTakePaths = getEffectiveExternalTakePaths(
       discoveredTake,
-      takePolicy.allowedExternalTakePaths
+      takePolicy
     );
     if (takePolicy.hybridGasQuoteFailureFallbackMode === 'factory_first') {
       const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({

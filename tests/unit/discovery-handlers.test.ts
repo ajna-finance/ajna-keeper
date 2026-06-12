@@ -2732,7 +2732,7 @@ describe('Discovery Handlers', () => {
       .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
       .resolves({
         isTakeable: false,
-        externalTakePath: 'lifi',
+        externalTakePath: 'calldata_aggregator',
         selectedLiquiditySource: LiquiditySource.LIFI,
         reason: 'LI.FI unavailable',
       });
@@ -3612,7 +3612,7 @@ describe('Discovery Handlers', () => {
 
       lifiDeferred.resolve({
         isTakeable: true,
-        externalTakePath: 'lifi',
+        externalTakePath: 'calldata_aggregator',
         selectedLiquiditySource: LiquiditySource.LIFI,
         quoteAmount: 125,
         quoteAmountRaw: ethers.utils.parseUnits('125', 6),

@@ -14,6 +14,8 @@ import type { ResolvedTakeTarget } from '../../../src/discovery/targets';
 import type { HandleDiscoveredTakeTargetParams } from '../../../src/discovery/take-executor';
 import type { DiscoveryReadTransports } from '../../../src/read-transports';
 import * as lifiExecutionModule from '../../../src/take/lifi/execution';
+import { normalizeApprovedLifiQuote } from '../../../src/take/lifi/quote-service';
+import type { ApprovedCalldataAggregatorQuote } from '../../../src/take/aggregator-calldata/types';
 import * as takeFactoryModule from '../../../src/take/factory';
 import type { ExternalTakeQuoteEvaluation } from '../../../src/take/types';
 import type { TakeWriteTransport } from '../../../src/take/write-transport';
@@ -108,6 +110,16 @@ export function makeTestApprovedLifiQuote(
   };
 }
 
+export function makeTestCalldataAggregatorQuote(
+  overrides: Partial<ApprovedLifiQuote> = {},
+  chainId = 8453
+): ApprovedCalldataAggregatorQuote {
+  return normalizeApprovedLifiQuote(
+    makeTestApprovedLifiQuote(overrides),
+    chainId
+  );
+}
+
 export function createHybridGasFallbackFactoryQuote(
   overrides: Partial<ExternalTakeQuoteEvaluation> = {}
 ): ExternalTakeQuoteEvaluation {
@@ -170,7 +182,7 @@ export async function runLifiHybridGasFallbackScenario(
     .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
     .resolves({
       isTakeable: false,
-      externalTakePath: 'lifi',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.LIFI,
       reason: 'LI.FI unavailable',
     });
@@ -292,7 +304,7 @@ export function createHybridLifiFallbackScenario(
     .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
     .resolves({
       isTakeable: true,
-      externalTakePath: 'lifi',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.LIFI,
       quoteAmount: 130,
       quoteAmountRaw: ethers.utils.parseEther('130'),
@@ -303,7 +315,7 @@ export function createHybridLifiFallbackScenario(
       approvedMinOutRaw: ethers.utils.parseEther('100'),
       quotedAuctionPriceWad: ethers.utils.parseEther('100'),
       quotedCollateralWad: ethers.utils.parseEther('1'),
-      lifiQuote: makeTestApprovedLifiQuote({
+      calldataQuote: makeTestCalldataAggregatorQuote({
         quoteAmountRaw: ethers.utils.parseEther('130'),
         routeMinOutRaw: ethers.utils.parseEther('128'),
       }),

@@ -8,7 +8,7 @@ describe('external take quote approval', () => {
     const binding = bindExternalTakeRouteForDiscovery({
       quoteEvaluation: {
         isTakeable: true,
-        externalTakePath: 'lifi',
+        externalTakePath: 'calldata_aggregator',
         quoteAmountRaw: BigNumber.from(125),
         selectedLiquiditySource: LiquiditySource.LIFI,
       },
@@ -20,7 +20,7 @@ describe('external take quote approval', () => {
     expect(binding).to.deep.equal({
       bound: false,
       reason:
-        'LI.FI route is missing validated route details for Missing LI.FI Quote Pool/0xBorrower',
+        'calldata-aggregator route is missing validated route details for Missing LI.FI Quote Pool/0xBorrower',
     });
   });
 });

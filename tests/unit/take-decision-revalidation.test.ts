@@ -37,7 +37,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'lifi',
+          externalTakePath: 'calldata_aggregator',
           quotedCollateralWad: COLLATERAL,
         },
         ...FACTS,

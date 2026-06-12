@@ -1,4 +1,8 @@
-import { ExternalTakePathKind, LiquiditySource } from './schema';
+import {
+  CalldataAggregatorProviderId,
+  ExternalTakePathKind,
+  LiquiditySource,
+} from './schema';
 
 export type FactoryLiquiditySource =
   | LiquiditySource.UNISWAPV3
@@ -33,7 +37,7 @@ export interface ExternalTakeLiquiditySourceDescriptor {
 export type ExternalTakeDeploymentType =
   | 'factory'
   | 'oneinch'
-  | 'lifi'
+  | 'calldata_aggregator'
   | 'none';
 export type ActiveExternalTakeDeploymentType = Exclude<
   ExternalTakeDeploymentType,
@@ -58,8 +62,9 @@ export type FactoryExternalTakeDeploymentResolution = {
   resolvedTakerAddress: string;
 };
 
-export type LifiExternalTakeDeploymentResolution = {
-  deploymentType: 'lifi';
+export type CalldataAggregatorExternalTakeDeploymentResolution = {
+  deploymentType: 'calldata_aggregator';
+  providerId: CalldataAggregatorProviderId;
   requestedLiquiditySource: LiquiditySource.LIFI;
   resolvedTakerAddress: string;
 };
@@ -67,7 +72,7 @@ export type LifiExternalTakeDeploymentResolution = {
 export type ActiveExternalTakeDeploymentResolution =
   | OneInchExternalTakeDeploymentResolution
   | FactoryExternalTakeDeploymentResolution
-  | LifiExternalTakeDeploymentResolution;
+  | CalldataAggregatorExternalTakeDeploymentResolution;
 
 export type ExternalTakeDeploymentResolution =
   | ActiveExternalTakeDeploymentResolution
@@ -85,7 +90,7 @@ export const FACTORY_DYNAMIC_SOURCES: readonly FactoryLiquiditySource[] = [
 export const SUPPORTED_EXTERNAL_TAKE_PATHS: readonly ExternalTakePathKind[] = [
   'oneinch',
   'factory',
-  'lifi',
+  'calldata_aggregator',
 ];
 
 export const EXTERNAL_TAKE_PATHS: ReadonlySet<ExternalTakePathKind> = new Set(
@@ -109,10 +114,10 @@ export const EXTERNAL_TAKE_PATH_DESCRIPTORS = {
     label: 'factory',
     sources: FACTORY_DYNAMIC_SOURCES,
   },
-  lifi: {
-    path: 'lifi',
+  calldata_aggregator: {
+    path: 'calldata_aggregator',
     category: 'aggregator',
-    label: 'LI.FI',
+    label: 'calldata aggregator',
     defaultSource: LiquiditySource.LIFI,
     sources: [LiquiditySource.LIFI],
     requiresRouteDeploymentValidation: true,
@@ -140,7 +145,7 @@ export const EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS = {
   },
   [LiquiditySource.LIFI]: {
     source: LiquiditySource.LIFI,
-    path: 'lifi',
+    path: 'calldata_aggregator',
     label: 'LI.FI',
     takerContractKey: 'Lifi',
   },
@@ -306,7 +311,8 @@ export function resolveExternalTakeDeployment(params: {
   }
   if (source === LiquiditySource.LIFI) {
     return {
-      deploymentType: 'lifi',
+      deploymentType: 'calldata_aggregator',
+      providerId: 'lifi',
       requestedLiquiditySource: source,
       resolvedTakerAddress,
     };

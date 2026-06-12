@@ -61,7 +61,7 @@ export function getDiscoveryExecutionConfig(
     takerContracts: config.takers?.contracts,
     lifi: config.dex?.lifi,
     lifiTaker:
-      lifiDeployment.deploymentType === 'lifi'
+      lifiDeployment.deploymentType === 'calldata_aggregator'
         ? lifiDeployment.resolvedTakerAddress
         : undefined,
     oneInchAggregationExecutorAllowlist:

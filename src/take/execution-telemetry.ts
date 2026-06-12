@@ -1,5 +1,9 @@
 import { BigNumber, providers, utils } from 'ethers';
-import { LiquiditySource, formatLiquiditySource } from '../config';
+import {
+  CalldataAggregatorProviderId,
+  LiquiditySource,
+  formatLiquiditySource,
+} from '../config';
 import { logger } from '../logging';
 import { RouteProfitabilityBreakdown } from './types';
 import { TakeWriteTransport } from './write-transport';
@@ -31,7 +35,8 @@ function formatBorrowerTelemetryId(borrower: string): string {
 }
 
 export function logTakeExecutionTelemetry(params: {
-  path: 'oneinch' | 'factory' | 'lifi';
+  path: 'oneinch' | 'factory' | 'calldata_aggregator';
+  providerId?: CalldataAggregatorProviderId;
   source?: LiquiditySource;
   poolName: string;
   poolAddress: string;
@@ -55,6 +60,7 @@ export function logTakeExecutionTelemetry(params: {
   const message =
     `Take execution telemetry: version=${TAKE_EXECUTION_TELEMETRY_VERSION}` +
     ` path=${params.path}` +
+    (params.providerId ? ` provider=${params.providerId}` : '') +
     ` source=${formatLiquiditySource(params.source)}` +
     ` pool=${params.poolAddress}` +
     ` poolName="${params.poolName}"` +

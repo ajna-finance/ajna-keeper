@@ -196,13 +196,13 @@ export async function quoteFactoryPathForDiscovery(
     transports: DiscoveryReadTransports;
     rpcCache?: DiscoveryRpcCache;
     takePolicy: AutoDiscoverTakePolicyRuntime;
-    defaultFactoryLiquiditySource: LiquiditySource | undefined;
+    resolvedDefaultFactoryLiquiditySource: LiquiditySource | undefined;
     routeProbeLimiter?: AsyncOperationLimiter;
     factoryQuoteConfig: DiscoveryFactoryQuoteConfig;
     buildFactoryRouteProfitabilityContext: DiscoveryFactoryRouteProfitabilityContextBuilder;
   } & FactoryPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
-  if (params.defaultFactoryLiquiditySource === undefined) {
+  if (params.resolvedDefaultFactoryLiquiditySource === undefined) {
     return {
       isTakeable: false,
       externalTakePath: 'factory',
@@ -211,7 +211,7 @@ export async function quoteFactoryPathForDiscovery(
   }
   const factoryPoolConfig = withTakeLiquiditySource(
     params.poolConfig,
-    params.defaultFactoryLiquiditySource
+    params.resolvedDefaultFactoryLiquiditySource
   );
   const routeProfitabilityContextFactory = async (sources: LiquiditySource[]) =>
     await params.buildFactoryRouteProfitabilityContext({
@@ -220,7 +220,7 @@ export async function quoteFactoryPathForDiscovery(
       config: params.config,
       transports: params.transports,
       rpcCache: params.rpcCache,
-      defaultLiquiditySource: params.defaultFactoryLiquiditySource,
+      defaultLiquiditySource: params.resolvedDefaultFactoryLiquiditySource,
       sources,
       allowSubsidy: params.poolConfig.take.allowSubsidy === true,
       takePolicy: params.takePolicy,
@@ -270,7 +270,7 @@ export function getCircuitGuardedQuoteOutcome(
 async function quoteCircuitGuardedPath(params: {
   poolName: string;
   label: string;
-  externalTakePath: 'oneinch' | 'lifi';
+  externalTakePath: 'oneinch' | 'calldata_aggregator';
   selectedLiquiditySource: LiquiditySource;
   auctionPrice: BigNumber;
   collateral: BigNumber;
@@ -485,7 +485,7 @@ export async function quoteLifiPathForDiscovery(
   return quoteCircuitGuardedPath({
     poolName: params.pool.name,
     label: 'LI.FI',
-    externalTakePath: 'lifi',
+    externalTakePath: 'calldata_aggregator',
     selectedLiquiditySource: LiquiditySource.LIFI,
     auctionPrice: params.auctionPrice,
     collateral: quoteCollateralWad,

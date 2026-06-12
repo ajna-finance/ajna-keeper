@@ -62,7 +62,7 @@ describe('LI.FI execution', () => {
         collateral: ethers.utils.parseEther('1'),
         externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: false,
-          externalTakePath: 'lifi',
+          externalTakePath: 'calldata_aggregator',
           selectedLiquiditySource: LiquiditySource.LIFI,
           reason: 'LI.FI fresh quote min output below execution floor',
         }),
@@ -127,7 +127,7 @@ describe('LI.FI execution', () => {
 
     expect(result).to.deep.include({
       isTakeable: false,
-      externalTakePath: 'lifi',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.LIFI,
       reason: 'LI.FI collateral rounds to zero in token decimals',
     });
@@ -202,7 +202,9 @@ describe('LI.FI execution', () => {
     expect(result.reason).to.equal('route quote below repayment floor');
     expect(result.quoteAmountRaw?.eq(routeMinOutRaw)).to.equal(true);
     expect(result.routeMinOutRaw?.eq(routeMinOutRaw)).to.equal(true);
-    expect(result.lifiQuote?.quoteAmountRaw.eq(quoteAmountRaw)).to.equal(true);
+    expect(result.calldataQuote?.quoteAmountRaw.eq(quoteAmountRaw)).to.equal(
+      true
+    );
     expect(
       result.routeProfitability?.expectedShortfallQuoteRaw?.eq(
         ethers.utils.parseUnits('1', 6)
@@ -321,14 +323,15 @@ describe('LI.FI execution', () => {
         collateral: ethers.utils.parseEther('2'),
         externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: true,
-          externalTakePath: 'lifi',
+          externalTakePath: 'calldata_aggregator',
           selectedLiquiditySource: LiquiditySource.LIFI,
           quoteAmountRaw,
           routeMinOutRaw,
           approvedMinOutRaw: routeMinOutRaw,
           quotedAuctionPriceWad: ethers.utils.parseEther('100'),
           quotedCollateralWad: ethers.utils.parseEther('1'),
-          lifiQuote: {
+          calldataQuote: {
+            providerId: 'lifi',
             quoteAmountRaw,
             routeMinOutRaw,
           },
@@ -421,12 +424,13 @@ describe('LI.FI execution', () => {
         collateral: fromAmount,
         externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: true,
-          externalTakePath: 'lifi',
+          externalTakePath: 'calldata_aggregator',
           selectedLiquiditySource: LiquiditySource.LIFI,
           quoteAmountRaw,
           routeMinOutRaw,
           approvedMinOutRaw: routeMinOutRaw,
-          lifiQuote: {
+          calldataQuote: {
+            providerId: 'lifi',
             quoteAmountRaw,
             routeMinOutRaw,
           },
@@ -556,12 +560,13 @@ describe('LI.FI execution', () => {
         collateral: fromAmount,
         externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: true,
-          externalTakePath: 'lifi',
+          externalTakePath: 'calldata_aggregator',
           selectedLiquiditySource: LiquiditySource.LIFI,
           quoteAmountRaw,
           routeMinOutRaw,
           approvedMinOutRaw: routeMinOutRaw,
-          lifiQuote: {
+          calldataQuote: {
+            providerId: 'lifi',
             quoteAmountRaw,
             routeMinOutRaw,
           },
@@ -750,12 +755,13 @@ describe('LI.FI execution', () => {
         collateral: collateralWad,
         externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: true,
-          externalTakePath: 'lifi',
+          externalTakePath: 'calldata_aggregator',
           selectedLiquiditySource: LiquiditySource.LIFI,
           quoteAmountRaw,
           routeMinOutRaw,
           approvedMinOutRaw: routeMinOutRaw,
-          lifiQuote: {
+          calldataQuote: {
+            providerId: 'lifi',
             quoteAmountRaw,
             routeMinOutRaw,
           },

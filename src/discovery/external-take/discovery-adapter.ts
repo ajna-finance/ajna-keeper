@@ -3,6 +3,7 @@ import {
   ExternalTakePathKind,
   LiquiditySource,
   isFactoryDynamicSource,
+  resolveExternalTakePolicy,
 } from '../../config';
 import { ExternalTakeAdapter } from '../../take/engine';
 import { TakeAuctionStatusReader } from '../../take/liquidation-status';
@@ -32,7 +33,7 @@ import {
 import { ResolvedTakeTarget } from '../targets';
 
 function createProviderBackedDirectAdapter(params: {
-  kind: 'oneinch' | 'lifi' | 'factory';
+  kind: 'oneinch' | 'calldata_aggregator' | 'factory';
   provider: DiscoveryExternalTakeRouteProvider;
   stats: DiscoveredTakeTargetStats;
 }): ExternalTakeAdapter<
@@ -112,7 +113,12 @@ export function createExternalTakeAdapterForDiscovery(params: {
   DiscoveryExternalExecutionConfig,
   DiscoveryExternalTakeApprovalContext
 > {
-  if (params.takePolicy?.allowedExternalTakePaths !== undefined) {
+  if (
+    resolveExternalTakePolicy({
+      defaultLiquiditySource: params.target.take.liquiditySource,
+      takePolicy: params.takePolicy,
+    }).externalTakePathsExplicitlyConfigured
+  ) {
     return {
       kind: 'hybrid',
       evaluateExternalTake: async ({
@@ -172,7 +178,7 @@ export function createExternalTakeAdapterForDiscovery(params: {
 
   if (params.target.take.liquiditySource === LiquiditySource.LIFI) {
     return createProviderBackedDirectAdapter({
-      kind: 'lifi',
+      kind: 'calldata_aggregator',
       provider: params.providerRegistry.lifiProvider,
       stats: params.stats,
     });

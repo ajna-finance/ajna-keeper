@@ -152,7 +152,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
   };
 
   const lifiProvider: DiscoveryExternalTakeRouteProvider = {
-    path: 'lifi',
+    path: 'calldata_aggregator',
     quote: async ({
       intent,
       pool,
@@ -263,7 +263,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
     DiscoveryExternalTakeRouteProvider
   > = {
     oneinch: oneInchProvider,
-    lifi: lifiProvider,
+    calldata_aggregator: lifiProvider,
     factory: factoryProvider,
   };
 

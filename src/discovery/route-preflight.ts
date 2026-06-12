@@ -12,9 +12,8 @@ import {
   getExternalTakePathDescriptor,
   getManualPools,
   isExternalTakeLiquiditySource,
-  resolveExternalTakePaths,
+  resolveExternalTakePolicy,
   resolveExternalTakePathFromSource,
-  resolveFactoryRouteSelectionSources,
 } from '../config';
 import {
   LIFI_TAKER_ALLOWLIST_ABI,
@@ -81,10 +80,12 @@ function getAutodiscoverExternalTakePaths(
     return [];
   }
   const discoveredTake = config.discovery?.defaults?.take;
-  return resolveExternalTakePaths({
-    defaultLiquiditySource: discoveredTake?.liquiditySource,
-    allowedExternalTakePaths: takePolicy?.allowedExternalTakePaths,
-  });
+  return Array.from(
+    resolveExternalTakePolicy({
+      defaultLiquiditySource: discoveredTake?.liquiditySource,
+      takePolicy,
+    }).externalTakePaths
+  );
 }
 
 function addPreflightRequirement(
@@ -109,13 +110,11 @@ function addExternalTakePathRequirements(
   const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
   for (const path of paths) {
     if (path === 'factory') {
-      for (const source of resolveFactoryRouteSelectionSources({
+      for (const source of resolveExternalTakePolicy({
         defaultLiquiditySource:
           config.discovery?.defaults?.take?.liquiditySource,
-        allowedLiquiditySources: takePolicy?.allowedLiquiditySources,
-        configuredDefaultFactoryLiquiditySource:
-          takePolicy?.defaultFactoryLiquiditySource,
-      })) {
+        takePolicy,
+      }).factoryRouteSources) {
         addPreflightRequirement(requirements, source);
       }
       continue;

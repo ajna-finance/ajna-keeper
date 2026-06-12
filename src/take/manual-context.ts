@@ -129,7 +129,7 @@ export function formatManualExternalTakeDeployment(params: {
       return `Using manual 1inch external take strategy for pool: ${params.poolName}`;
     case 'factory':
       return `Using factory external take strategy for pool: ${params.poolName}`;
-    case 'lifi':
+    case 'calldata_aggregator':
       return `Using manual LI.FI external take strategy for pool: ${params.poolName}`;
   }
 }
@@ -179,7 +179,7 @@ export function formatManualTakeContextStart(params: {
   switch (path) {
     case 'factory':
       return `Manual factory external take context starting for pool: ${params.poolName}`;
-    case 'lifi':
+    case 'calldata_aggregator':
       return `Manual LI.FI external take context starting for pool: ${params.poolName}`;
     case 'oneinch':
       return `Manual 1inch take context starting for pool: ${params.poolName}`;
@@ -306,7 +306,7 @@ function createManualTakeContext(params: {
         config: params.config,
         takeWriteTransport: params.takeWriteTransport,
       });
-    case 'lifi':
+    case 'calldata_aggregator':
       return createManualLifiTakeContext({
         config: {
           ...params.config,

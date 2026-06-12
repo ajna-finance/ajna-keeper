@@ -1,11 +1,12 @@
 import { BigNumber } from 'ethers';
-import { ApprovedLifiQuote } from '../dex/lifi';
 import {
+  CalldataAggregatorProviderId,
   CurvePoolType,
   ExternalTakePathKind,
   LiquiditySource,
   TakeSettings,
 } from '../config';
+import { ApprovedCalldataAggregatorQuote } from './aggregator-calldata/types';
 
 export type GasPolicyRejectCode =
   | 'gas_price_above_cap'
@@ -64,7 +65,7 @@ export interface TakeActionConfig {
 export type ExternalTakeStrategyKind =
   | 'none'
   | 'oneinch'
-  | 'lifi'
+  | 'calldata_aggregator'
   | 'factory'
   | 'hybrid';
 
@@ -94,7 +95,7 @@ export interface ExternalTakeQuoteEvaluation {
   quotedCollateralWad?: BigNumber;
   auctionIdentity?: string;
   curvePool?: CurvePoolSelection;
-  lifiQuote?: ApprovedLifiQuote;
+  calldataQuote?: ApprovedCalldataAggregatorQuote;
   reason?: string;
 }
 
@@ -155,16 +156,18 @@ export interface ApprovedCurveFactoryQuoteEvaluation
   curvePool: CurvePoolSelection;
 }
 
-export interface ApprovedLifiQuoteEvaluation
+export interface ApprovedCalldataAggregatorQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.LIFI> {
-  externalTakePath: 'lifi';
-  lifiQuote: ApprovedLifiQuote;
+  externalTakePath: 'calldata_aggregator';
+  providerId: CalldataAggregatorProviderId;
+  calldataQuote: ApprovedCalldataAggregatorQuote;
 }
 
-export interface BoundLifiRouteEvaluation
+export interface BoundCalldataAggregatorRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.LIFI> {
-  externalTakePath: 'lifi';
-  lifiQuote: ApprovedLifiQuote;
+  externalTakePath: 'calldata_aggregator';
+  providerId: CalldataAggregatorProviderId;
+  calldataQuote: ApprovedCalldataAggregatorQuote;
 }
 
 export type BoundFactoryRouteEvaluation =
@@ -178,7 +181,7 @@ export type ApprovedFactoryQuoteEvaluation =
 export type BoundExternalTakeRouteEvaluation =
   | BoundOneInchRouteEvaluation
   | BoundFactoryRouteEvaluation
-  | BoundLifiRouteEvaluation;
+  | BoundCalldataAggregatorRouteEvaluation;
 
 export interface ExternalTakeExecutionCandidate<TApprovalContext = unknown> {
   readonly evaluation: BoundExternalTakeRouteEvaluation;
@@ -204,7 +207,7 @@ export type ExternalTakeEvaluationResult<TApprovalContext = unknown> =
 export type ApprovedExternalTakeQuoteEvaluation =
   | ApprovedOneInchQuoteEvaluation
   | ApprovedFactoryQuoteEvaluation
-  | ApprovedLifiQuoteEvaluation;
+  | ApprovedCalldataAggregatorQuoteEvaluation;
 
 export interface ArbTakeEvaluation {
   isArbTakeable: boolean;

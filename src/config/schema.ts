@@ -90,7 +90,24 @@ export enum LiquiditySource {
 }
 
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
-export type ExternalTakePathKind = 'oneinch' | 'factory' | 'lifi';
+/**
+ * Canonical internal execution families. `calldata_aggregator` is the shared
+ * family for opaque-calldata aggregator providers (LI.FI today); provider
+ * identity travels separately as CalldataAggregatorProviderId.
+ */
+export type ExternalTakePathKind = 'oneinch' | 'factory' | 'calldata_aggregator';
+/**
+ * Operator/config-facing path names. `lifi` survives only as a legacy input
+ * alias and normalizes to family `calldata_aggregator` plus provider `lifi`
+ * at the resolveExternalTakePolicy boundary.
+ */
+export type ConfiguredExternalTakePathKind = ExternalTakePathKind | 'lifi';
+/**
+ * Calldata-aggregator providers active in the current packet. Packet 2B is
+ * only `lifi`; Packet 3B extends the union in the same diff that adds Sushi
+ * support.
+ */
+export type CalldataAggregatorProviderId = 'lifi';
 export type ExternalTakeRouteSelectionMode =
   | 'maximize_profit'
   | 'factory_first';
@@ -228,9 +245,17 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   /**
    * External take execution paths eligible for discovered liquidation takes.
    * When omitted, autodiscover preserves the single-path behavior from
-   * discovery.defaults.take.liquiditySource.
+   * discovery.defaults.take.liquiditySource. Accepts the legacy `lifi` alias,
+   * which normalizes to the `calldata_aggregator` family with provider `lifi`.
    */
-  allowedExternalTakePaths?: ExternalTakePathKind[];
+  allowedExternalTakePaths?: ConfiguredExternalTakePathKind[];
+  /**
+   * Calldata-aggregator providers allowed to quote and compete inside the
+   * `calldata_aggregator` family. Omitted resolves to `['lifi']` when the
+   * family is enabled. A non-empty list requires the family to be enabled;
+   * empty lists, duplicates, and unknown or packet-inactive ids are invalid.
+   */
+  allowedCalldataAggregatorProviders?: CalldataAggregatorProviderId[];
   /**
    * Factory path to use when discovery.defaults.take.liquiditySource is 1inch
    * but allowedExternalTakePaths also enables the factory execution path.

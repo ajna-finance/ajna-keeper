@@ -1,11 +1,13 @@
 import {
+  CalldataAggregatorProviderId,
   ExternalTakePathKind,
   FactoryLiquiditySource,
   LiquiditySource,
   formatLiquiditySource,
   getExternalTakePathDefaultSource,
   isFactoryDynamicSource,
-  resolveExternalTakePathFromSource as resolveConfiguredExternalTakePathFromSource,
+  resolveCalldataAggregatorProviderForSource,
+  resolveExternalTakePathFromSource,
 } from '../../config';
 import { ExternalTakeQuoteEvaluation } from '../types';
 
@@ -15,7 +17,8 @@ export type ExternalTakeRouteIdentity =
       source: LiquiditySource.ONEINCH;
     }
   | {
-      path: 'lifi';
+      path: 'calldata_aggregator';
+      providerId: CalldataAggregatorProviderId;
       source: LiquiditySource.LIFI;
     }
   | {
@@ -86,16 +89,17 @@ type BoundOneInchExternalTakeRouteBinding<
   >;
 };
 
-type BoundLifiExternalTakeRouteBinding<
+type BoundCalldataAggregatorExternalTakeRouteBinding<
   TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
 > = {
   bound: true;
-  identity: Extract<ExternalTakeRouteIdentity, { path: 'lifi' }>;
-  path: 'lifi';
+  identity: Extract<ExternalTakeRouteIdentity, { path: 'calldata_aggregator' }>;
+  path: 'calldata_aggregator';
+  providerId: CalldataAggregatorProviderId;
   source: LiquiditySource.LIFI;
   quoteEvaluation: ExternalTakeRouteQuoteEvaluation<
     TQuoteEvaluation,
-    'lifi',
+    'calldata_aggregator',
     LiquiditySource.LIFI
   >;
 };
@@ -118,7 +122,7 @@ export type BoundExternalTakeRouteBinding<
   TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
 > =
   | BoundOneInchExternalTakeRouteBinding<TQuoteEvaluation>
-  | BoundLifiExternalTakeRouteBinding<TQuoteEvaluation>
+  | BoundCalldataAggregatorExternalTakeRouteBinding<TQuoteEvaluation>
   | BoundFactoryExternalTakeRouteBinding<TQuoteEvaluation>;
 
 export type ExternalTakeRouteBinding<
@@ -127,11 +131,7 @@ export type ExternalTakeRouteBinding<
   | BoundExternalTakeRouteBinding<TQuoteEvaluation>
   | ExternalTakeRouteBindingFailure;
 
-export function resolveExternalTakePathFromSource(
-  source: LiquiditySource | undefined
-): ExternalTakePathKind | undefined {
-  return resolveConfiguredExternalTakePathFromSource(source);
-}
+export { resolveExternalTakePathFromSource };
 
 export function resolveExternalTakeRouteIdentityFromParts(params: {
   path: ExternalTakePathKind;
@@ -140,8 +140,9 @@ export function resolveExternalTakeRouteIdentityFromParts(params: {
   if (params.path === 'oneinch' && params.source === LiquiditySource.ONEINCH) {
     return { path: 'oneinch', source: LiquiditySource.ONEINCH };
   }
-  if (params.path === 'lifi' && params.source === LiquiditySource.LIFI) {
-    return { path: 'lifi', source: LiquiditySource.LIFI };
+  if (params.path === 'calldata_aggregator' && params.source === LiquiditySource.LIFI) {
+    const providerId = resolveCalldataAggregatorProviderForSource(params.source);
+    return providerId && { path: 'calldata_aggregator', providerId, source: params.source };
   }
   if (params.path === 'factory' && isFactoryDynamicSource(params.source)) {
     return { path: 'factory', source: params.source };
@@ -169,15 +170,16 @@ function createBoundExternalTakeRouteBinding<
           selectedLiquiditySource: LiquiditySource.ONEINCH,
         },
       };
-    case 'lifi':
+    case 'calldata_aggregator':
       return {
         bound: true,
         identity,
-        path: 'lifi',
+        path: 'calldata_aggregator',
+        providerId: identity.providerId,
         source: LiquiditySource.LIFI,
         quoteEvaluation: {
           ...params.quoteEvaluation,
-          externalTakePath: 'lifi',
+          externalTakePath: 'calldata_aggregator',
           selectedLiquiditySource: LiquiditySource.LIFI,
         },
       };
@@ -201,7 +203,7 @@ export function bindExternalTakeRoute<
 >(params: {
   quoteEvaluation: TQuoteEvaluation | undefined;
   selectedLiquiditySource?: LiquiditySource;
-  allowedExternalTakePaths?: readonly ExternalTakePathKind[];
+  resolvedExternalTakePaths?: readonly ExternalTakePathKind[];
   inferSourceFromPath?: boolean;
 }): ExternalTakeRouteBinding<TQuoteEvaluation> {
   const quoteSource = params.quoteEvaluation?.selectedLiquiditySource;
@@ -259,8 +261,8 @@ export function bindExternalTakeRoute<
   const path = selectedPath ?? sourcePath;
   if (
     path !== undefined &&
-    params.allowedExternalTakePaths !== undefined &&
-    !params.allowedExternalTakePaths.includes(path)
+    params.resolvedExternalTakePaths !== undefined &&
+    !params.resolvedExternalTakePaths.includes(path)
   ) {
     return {
       bound: false,
@@ -408,10 +410,11 @@ export function isFactoryExternalTakeRoute(
   return resolveExternalTakeRouteIdentity(quoteEvaluation)?.path === 'factory';
 }
 
-export function isLifiExternalTakeRoute(
+export function isCalldataAggregatorExternalTakeRoute(
   quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
 ): boolean {
-  return resolveExternalTakeRouteIdentity(quoteEvaluation)?.path === 'lifi';
+  const identity = resolveExternalTakeRouteIdentity(quoteEvaluation);
+  return identity?.path === 'calldata_aggregator';
 }
 
 export function resolveExternalTakePathFromEvaluation(

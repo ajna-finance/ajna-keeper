@@ -15,6 +15,7 @@ import { LifiQuoteConfig } from './types';
 import {
   getLifiQuoteFailureMetadata,
   getLifiTokenDecimals,
+  normalizeApprovedLifiQuote,
   requestValidatedLifiQuote,
   requireProductionLifiConfig,
   resolveLifiChainId,
@@ -48,7 +49,7 @@ export async function getLifiPathQuoteEvaluation(
   if (!poolConfig.take.marketPriceFactor) {
     return {
       isTakeable: false,
-      externalTakePath: 'lifi',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.LIFI,
       reason: 'LI.FI marketPriceFactor is not configured',
     };
@@ -56,7 +57,7 @@ export async function getLifiPathQuoteEvaluation(
   if (!collateral.gt(0)) {
     return {
       isTakeable: false,
-      externalTakePath: 'lifi',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.LIFI,
       reason: 'collateral must be greater than zero',
     };
@@ -67,7 +68,7 @@ export async function getLifiPathQuoteEvaluation(
     if (!config.lifiTaker) {
       return {
         isTakeable: false,
-        externalTakePath: 'lifi',
+        externalTakePath: 'calldata_aggregator',
         selectedLiquiditySource: LiquiditySource.LIFI,
         reason: 'LI.FI taker is not configured',
       };
@@ -86,7 +87,7 @@ export async function getLifiPathQuoteEvaluation(
     if (collateralInTokenDecimals.isZero()) {
       return {
         isTakeable: false,
-        externalTakePath: 'lifi',
+        externalTakePath: 'calldata_aggregator',
         selectedLiquiditySource: LiquiditySource.LIFI,
         reason: 'LI.FI collateral rounds to zero in token decimals',
       };
@@ -147,7 +148,7 @@ export async function getLifiPathQuoteEvaluation(
     return mergeRoutePolicyIntoEvaluation({
       evaluation: {
         isTakeable: policy.isEconomicallyExecutable,
-        externalTakePath: 'lifi',
+        externalTakePath: 'calldata_aggregator',
         marketPrice,
         takeablePrice,
         quoteAmount,
@@ -156,7 +157,7 @@ export async function getLifiPathQuoteEvaluation(
         collateralAmount,
         quotedCollateralWad: collateral,
         quotedAuctionPriceWad: effectiveAuctionPriceWad,
-        lifiQuote: approvedQuote,
+        calldataQuote: normalizeApprovedLifiQuote(approvedQuote, chainId),
         reason: policy.isEconomicallyExecutable
           ? undefined
           : (policy.rejectionReason ??
@@ -171,7 +172,7 @@ export async function getLifiPathQuoteEvaluation(
     const failure = getLifiQuoteFailureMetadata(error);
     return {
       isTakeable: false,
-      externalTakePath: 'lifi',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.LIFI,
       quoteFailureRetryable: failure.retryable ?? true,
       quoteFailureCode: failure.code,

@@ -1,43 +1,46 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber, ethers } from 'ethers';
+import { BigNumber } from 'ethers';
 import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
 import { LifiDexConfig, LiquiditySource } from '../../config';
 import type { ExternalTakeTakerContractKey } from '../../config';
-import {
-  ApprovedLifiQuote,
-  DEFAULT_LIFI_QUOTE_MAX_AGE_MS,
-} from '../../dex/lifi';
+import { DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../../dex/lifi';
 import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
-import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
+import { isNonceConsumedTransactionError } from '../../nonce';
+import { getErrorMessage, weiToDecimaled } from '../../utils';
+import { approveCalldataAggregatorQuoteForExecution } from '../aggregator-calldata/quote-approval';
 import {
-  estimateGasWithBuffer,
-  getErrorMessage,
-  weiToDecimaled,
-} from '../../utils';
-import { approveLifiQuoteForExecution } from '../external-take/quote-approval';
+  AggregatorTakerFactory,
+  encodeAggregatorSwapDetails,
+  getAggregatorFreshQuoteFloorError,
+  getAggregatorQuoteAgeError,
+  getAggregatorQuoteContextMismatch,
+  submitCalldataAggregatorTake,
+} from '../aggregator-calldata/execution';
+import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../external-take/execution-plan';
 import { LifiExecutionConfig } from './types';
 import { getLifiPathQuoteEvaluation as evaluateLifiPathQuote } from './quote-evaluation';
 import {
   getLifiQuoteFailureMetadata,
   getLifiTokenDecimals,
+  normalizeApprovedLifiQuote,
   requestValidatedLifiQuote,
   requireProductionLifiConfig,
   resolveLifiChainId,
 } from './quote-service';
 import {
-  ApprovedLifiQuoteEvaluation,
+  ApprovedCalldataAggregatorQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
 import {
   TakeWriteTransport,
   resolveTakeWriteTransport,
-  submitTakeTransaction,
 } from '../write-transport';
-import { logTakeExecutionTelemetry } from '../execution-telemetry';
 import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
+
+const LIFI_LABEL = 'LI.FI';
 
 export const getLifiPathQuoteEvaluation = evaluateLifiPathQuote;
 
@@ -76,17 +79,8 @@ function recordLifiPreBroadcastFailure(
   });
 }
 
-function getLifiFreshQuoteAgeError(params: {
-  quote: Pick<ApprovedLifiQuote, 'quotedAtMs'>;
-  config: LifiDexConfig;
-}): string | undefined {
-  if (
-    Date.now() - params.quote.quotedAtMs >
-    (params.config.maxQuoteAgeMs ?? DEFAULT_LIFI_QUOTE_MAX_AGE_MS)
-  ) {
-    return 'LI.FI fresh quote exceeded maxQuoteAgeMs';
-  }
-  return undefined;
+function getLifiMaxQuoteAgeMs(config: LifiDexConfig): number {
+  return config.maxQuoteAgeMs ?? DEFAULT_LIFI_QUOTE_MAX_AGE_MS;
 }
 
 function recordLifiStaleFreshQuote(
@@ -107,56 +101,6 @@ function recordLifiStaleFreshQuote(
   });
 }
 
-function getLifiQuoteContextMismatch(params: {
-  quoteEvaluation: ApprovedLifiQuoteEvaluation;
-  liquidation: Pick<TakeLiquidationPlan, 'auctionPrice'>;
-  executionCollateralWad: BigNumber;
-}): string | undefined {
-  if (
-    params.quoteEvaluation.quotedCollateralWad !== undefined &&
-    !params.quoteEvaluation.quotedCollateralWad.eq(
-      params.executionCollateralWad
-    )
-  ) {
-    return 'LI.FI approved quote collateral does not match current liquidation collateral';
-  }
-  if (
-    params.quoteEvaluation.quotedAuctionPriceWad !== undefined &&
-    !params.quoteEvaluation.quotedAuctionPriceWad.eq(
-      params.liquidation.auctionPrice
-    )
-  ) {
-    return 'LI.FI approved quote auction price does not match current liquidation auction price';
-  }
-  return undefined;
-}
-
-function encodeLifiSwapDetails(params: {
-  quote: ApprovedLifiQuote;
-  amountOutMinimum: BigNumber;
-}): string {
-  return ethers.utils.defaultAbiCoder.encode(
-    [
-      'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)',
-    ],
-    [
-      {
-        approvalSpender: params.quote.approvalSpender,
-        srcToken: params.quote.srcToken,
-        dstToken: params.quote.dstToken,
-        dstReceiver: params.quote.dstReceiver,
-        amountInTokenUnits: params.quote.amountInTokenUnits,
-        amountOutMinimum: params.amountOutMinimum,
-        callData: params.quote.transactionRequest.data,
-      },
-    ]
-  );
-}
-
-type LifiTakerFactory = ReturnType<
-  typeof AjnaKeeperTakerFactory__factory.connect
->;
-
 type LifiQuoteResultNotification = Parameters<
   NonNullable<LifiExecutionConfig['onLifiQuoteResult']>
 >[0];
@@ -171,19 +115,19 @@ type LifiPreBroadcastRejection = {
 type PreparedLifiExecution =
   | {
       kind: 'dry_run';
-      approvedQuoteEvaluation: ApprovedLifiQuoteEvaluation;
+      approvedQuoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
     }
   | {
       kind: 'ready';
-      approvedQuoteEvaluation: ApprovedLifiQuoteEvaluation;
-      freshQuote: ApprovedLifiQuote;
+      approvedQuoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
+      freshQuote: ApprovedCalldataAggregatorQuote;
       swapDetails: string;
       // maxAmount for pool.take; the debt-clamped size the LI.FI calldata was
       // requested for, so the take fills exactly and the strict on-chain
       // balance check (UnexpectedSourceBalance) passes.
       executionCollateralWad: BigNumber;
       takeWriteTransport: TakeWriteTransport;
-      factory: LifiTakerFactory;
+      factory: AggregatorTakerFactory;
       assertFreshQuoteStillCurrent: () => void;
     }
   | LifiPreBroadcastRejection;
@@ -209,7 +153,10 @@ async function resolveApprovedLifiExecutionQuote(params: {
   executionCollateralWad: BigNumber;
   config: LifiExecutionConfig;
 }): Promise<
-  | { approved: true; quoteEvaluation: ApprovedLifiQuoteEvaluation }
+  | {
+      approved: true;
+      quoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
+    }
   | { approved: false; reason: string; logError?: boolean }
 > {
   const {
@@ -233,8 +180,9 @@ async function resolveApprovedLifiExecutionQuote(params: {
       signer,
       liquidation.auctionPrice
     ));
-  const approval = approveLifiQuoteForExecution({
+  const approval = approveCalldataAggregatorQuoteForExecution({
     quoteEvaluation,
+    providerId: 'lifi',
     poolName: pool.name,
     borrower: liquidation.borrower,
   });
@@ -245,10 +193,11 @@ async function resolveApprovedLifiExecutionQuote(params: {
       logError: true,
     };
   }
-  const contextMismatch = getLifiQuoteContextMismatch({
+  const contextMismatch = getAggregatorQuoteContextMismatch({
     quoteEvaluation: approval.quoteEvaluation,
     liquidation,
     executionCollateralWad,
+    label: LIFI_LABEL,
   });
   if (contextMismatch) {
     return {
@@ -269,9 +218,9 @@ async function requestFreshLifiExecutionQuote(params: {
   lifiTaker: string;
   chainId: number;
   collateralInTokenDecimals: BigNumber;
-}): Promise<ApprovedLifiQuote> {
+}): Promise<ApprovedCalldataAggregatorQuote> {
   try {
-    return await requestValidatedLifiQuote({
+    const validated = await requestValidatedLifiQuote({
       pool: params.pool,
       lifiConfig: params.lifiConfig,
       lifiTaker: params.lifiTaker,
@@ -279,6 +228,7 @@ async function requestFreshLifiExecutionQuote(params: {
       collateralInTokenDecimals: params.collateralInTokenDecimals,
       signal: params.config.lifiRequestAbortSignal,
     });
+    return normalizeApprovedLifiQuote(validated, params.chainId);
   } catch (error) {
     const failure = getLifiQuoteFailureMetadata(error);
     params.config.onLifiQuoteResult?.({
@@ -291,28 +241,16 @@ async function requestFreshLifiExecutionQuote(params: {
   }
 }
 
-function getLifiFreshQuoteFloorError(params: {
-  freshQuote: ApprovedLifiQuote;
-  approvedMinOutRaw: BigNumber;
-}): string | undefined {
-  if (params.freshQuote.quoteAmountRaw.lt(params.approvedMinOutRaw)) {
-    return 'LI.FI fresh quote expected output below execution floor';
-  }
-  if (params.freshQuote.routeMinOutRaw.lt(params.approvedMinOutRaw)) {
-    return 'LI.FI fresh quote min output below execution floor';
-  }
-  return undefined;
-}
-
 function createLifiFreshQuoteCurrentGuard(params: {
-  freshQuote: ApprovedLifiQuote;
+  freshQuote: ApprovedCalldataAggregatorQuote;
   lifiConfig: LifiDexConfig;
   config: LifiExecutionConfig;
 }): () => void {
   return () => {
-    const error = getLifiFreshQuoteAgeError({
+    const error = getAggregatorQuoteAgeError({
       quote: params.freshQuote,
-      config: params.lifiConfig,
+      maxQuoteAgeMs: getLifiMaxQuoteAgeMs(params.lifiConfig),
+      label: LIFI_LABEL,
     });
     if (error) {
       recordLifiStaleFreshQuote(params.config, error, false);
@@ -393,9 +331,10 @@ async function prepareLifiExecution(params: {
     chainId,
     collateralInTokenDecimals,
   });
-  const floorError = getLifiFreshQuoteFloorError({
+  const floorError = getAggregatorFreshQuoteFloorError({
     freshQuote,
     approvedMinOutRaw: approvedQuoteEvaluation.approvedMinOutRaw,
+    label: LIFI_LABEL,
   });
   if (floorError) {
     return {
@@ -408,9 +347,10 @@ async function prepareLifiExecution(params: {
       },
     };
   }
-  const freshQuoteAgeError = getLifiFreshQuoteAgeError({
+  const freshQuoteAgeError = getAggregatorQuoteAgeError({
     quote: freshQuote,
-    config: lifiConfig,
+    maxQuoteAgeMs: getLifiMaxQuoteAgeMs(lifiConfig),
+    label: LIFI_LABEL,
   });
   if (freshQuoteAgeError) {
     return {
@@ -428,7 +368,7 @@ async function prepareLifiExecution(params: {
     kind: 'ready',
     approvedQuoteEvaluation,
     freshQuote,
-    swapDetails: encodeLifiSwapDetails({
+    swapDetails: encodeAggregatorSwapDetails({
       quote: freshQuote,
       amountOutMinimum: approvedQuoteEvaluation.approvedMinOutRaw,
     }),
@@ -454,58 +394,25 @@ async function submitPreparedLifiExecution(params: {
   onSubmissionAccepted: () => void;
 }): Promise<void> {
   const { pool, liquidation, config, prepared } = params;
-  const { borrower } = liquidation;
-  await NonceTracker.queueTransaction(
-    prepared.takeWriteTransport.signer,
-    async (nonce: number) => {
-      prepared.assertFreshQuoteStillCurrent();
-      const txArgs = [
-        pool.poolAddress,
-        liquidation.borrower,
-        liquidation.auctionPrice,
-        prepared.executionCollateralWad,
-        Number(LiquiditySource.LIFI),
-        prepared.freshQuote.transactionTarget,
-        prepared.swapDetails,
-      ] as const;
-      const gasLimit = await estimateGasWithBuffer(
-        () => prepared.factory.estimateGas.takeWithAtomicSwap(...txArgs),
-        `LI.FI Take ${pool.name}/${borrower}`,
-        13000
-      );
-      prepared.assertFreshQuoteStillCurrent();
-      const txRequest =
-        await prepared.factory.populateTransaction.takeWithAtomicSwap(
-          ...txArgs,
-          {
-            gasLimit,
-            nonce: nonce.toString(),
-          }
-        );
-      prepared.assertFreshQuoteStillCurrent();
-      config.onLifiQuoteResult?.({ success: true });
-      const receipt = await submitTakeTransaction(
-        prepared.takeWriteTransport,
-        txRequest,
-        params.onSubmissionAccepted
-      );
-      logTakeExecutionTelemetry({
-        path: 'lifi',
-        source: LiquiditySource.LIFI,
-        poolName: pool.name,
-        poolAddress: pool.poolAddress,
-        borrower,
-        receipt,
-        routeProfitability: prepared.approvedQuoteEvaluation.routeProfitability,
-        approvedMinOutRaw: prepared.approvedQuoteEvaluation.approvedMinOutRaw,
-        takeWriteTransport: prepared.takeWriteTransport,
-      });
-      logger.info(
-        `LI.FI Take successful - pool: ${pool.name}, borrower: ${borrower} | tx: ${receipt.transactionHash}`
-      );
-      return receipt;
-    }
-  );
+  await submitCalldataAggregatorTake({
+    factory: prepared.factory,
+    takeWriteTransport: prepared.takeWriteTransport,
+    poolName: pool.name,
+    poolAddress: pool.poolAddress,
+    borrower: liquidation.borrower,
+    auctionPrice: liquidation.auctionPrice,
+    executionCollateralWad: prepared.executionCollateralWad,
+    liquiditySource: LiquiditySource.LIFI,
+    providerId: 'lifi',
+    label: LIFI_LABEL,
+    transactionTarget: prepared.freshQuote.transactionTarget,
+    swapDetails: prepared.swapDetails,
+    routeProfitability: prepared.approvedQuoteEvaluation.routeProfitability,
+    approvedMinOutRaw: prepared.approvedQuoteEvaluation.approvedMinOutRaw,
+    assertFreshQuoteStillCurrent: prepared.assertFreshQuoteStillCurrent,
+    onQuoteConsumed: () => config.onLifiQuoteResult?.({ success: true }),
+    onSubmissionAccepted: params.onSubmissionAccepted,
+  });
 }
 
 export async function takeLiquidationLifi(params: {
@@ -522,7 +429,7 @@ export async function takeLiquidationLifi(params: {
   );
   const usesLifiExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.LIFI ||
-    suppliedQuoteEvaluation?.externalTakePath === 'lifi';
+    suppliedQuoteEvaluation?.externalTakePath === 'calldata_aggregator';
   if (!usesLifiExecutionPath) {
     logger.error(
       `LI.FI liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`

@@ -31,7 +31,7 @@ import {
 import { cloneExternalTakeQuoteEvaluation } from './evaluation';
 import { refreshAndReapproveDiscoveryExternalTake } from './final-approval';
 import {
-  isLifiExternalTakeRoute,
+  isCalldataAggregatorExternalTakeRoute,
   isOneInchExternalTakeRoute,
 } from '../../take/external-take/route';
 import {
@@ -56,7 +56,7 @@ import { ResolvedTakeTarget } from '../targets';
 
 const PROVIDER_WARN_LABEL: Record<ExternalTakePathKind, string> = {
   oneinch: '1inch',
-  lifi: 'LI.FI',
+  calldata_aggregator: 'LI.FI',
   factory: 'factory',
 };
 
@@ -535,7 +535,7 @@ export async function evaluateHybridExternalTakeForDiscovery(
       );
     if (
       isOneInchExternalTakeRoute(selected) ||
-      isLifiExternalTakeRoute(selected)
+      isCalldataAggregatorExternalTakeRoute(selected)
     ) {
       const gasQuoteFallback = await buildGasQuoteFallbackEvaluation();
       if (gasQuoteFallback) {
@@ -613,7 +613,7 @@ export async function executeHybridExternalTakeForDiscovery(params: {
     const candidateEvaluation = candidate.evaluation;
     const selection = resolveHybridExternalTakeExecutionSelection({
       quoteEvaluation: candidateEvaluation,
-      allowedExternalTakePaths: params.externalTakePaths,
+      resolvedExternalTakePaths: params.externalTakePaths,
     });
     if (!selection.approved) {
       logger.error(

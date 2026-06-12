@@ -11,16 +11,16 @@ import {
 import {
   ApprovedExternalTakeQuoteEvaluation,
   ApprovedFactoryQuoteEvaluation,
-  ApprovedLifiQuoteEvaluation,
   ApprovedOneInchQuoteEvaluation,
+  BoundCalldataAggregatorRouteEvaluation,
   BoundExternalTakeRouteEvaluation,
   BoundFactoryRouteEvaluation,
-  BoundLifiRouteEvaluation,
   BoundOneInchRouteEvaluation,
   CurvePoolSelection,
   ExternalTakeQuoteEvaluation,
 } from '../types';
 import { deriveApprovedMinOutRaw } from '../factory/shared';
+import { approveCalldataAggregatorQuoteForExecution } from '../aggregator-calldata/quote-approval';
 
 export type ExternalTakeQuoteApprovalResult<
   TQuote extends ApprovedExternalTakeQuoteEvaluation,
@@ -304,67 +304,6 @@ export function approveOneInchQuoteForExecution(params: {
   };
 }
 
-export function approveLifiQuoteForExecution(params: {
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
-  poolName: string;
-  borrower: string;
-}): ExternalTakeQuoteApprovalResult<ApprovedLifiQuoteEvaluation> {
-  const { quoteEvaluation, poolName, borrower } = params;
-  const context = getExecutionContext({ poolName, borrower });
-
-  if (!quoteEvaluation.isTakeable) {
-    return {
-      approved: false,
-      reason: `LI.FI quote no longer satisfies execution policy for ${context}: ${quoteEvaluation.reason ?? 'not takeable'}`,
-    };
-  }
-  if (!quoteEvaluation.quoteAmountRaw) {
-    return {
-      approved: false,
-      reason: `LI.FI quote is missing raw quote amount for ${context}`,
-    };
-  }
-  if (quoteEvaluation.externalTakePath !== 'lifi') {
-    return {
-      approved: false,
-      reason: `LI.FI execution received non-LI.FI approved path for ${context}`,
-    };
-  }
-  if (quoteEvaluation.selectedLiquiditySource !== LiquiditySource.LIFI) {
-    return {
-      approved: false,
-      reason: `LI.FI execution received non-LI.FI approved source for ${context}`,
-    };
-  }
-  if (!quoteEvaluation.lifiQuote) {
-    return {
-      approved: false,
-      reason: `LI.FI execution is missing validated route details for ${context}`,
-    };
-  }
-  const approvedMinOutRaw = deriveRouteExecutionFloorRaw(quoteEvaluation);
-  if (!approvedMinOutRaw) {
-    return {
-      approved: false,
-      reason: `LI.FI execution is missing approved min-out floor for ${context}`,
-    };
-  }
-  return {
-    approved: true,
-    quoteEvaluation: {
-      ...quoteEvaluation,
-      isTakeable: true,
-      externalTakePath: 'lifi',
-      quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
-      selectedLiquiditySource: LiquiditySource.LIFI,
-      routeExecutionFloorRaw:
-        quoteEvaluation.routeExecutionFloorRaw ?? approvedMinOutRaw,
-      approvedMinOutRaw,
-      lifiQuote: quoteEvaluation.lifiQuote,
-    },
-  };
-}
-
 export function approveFactoryQuoteForExecution(params: {
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   poolName: string;
@@ -446,9 +385,10 @@ export function approveExternalTakeQuoteForExecution(params: {
       quoteEvaluation: route.route.quoteEvaluation,
     });
   }
-  if (route.route.identity.source === LiquiditySource.LIFI) {
-    return approveLifiQuoteForExecution({
+  if (route.route.identity.path === 'calldata_aggregator') {
+    return approveCalldataAggregatorQuoteForExecution({
       ...params,
+      providerId: route.route.identity.providerId,
       quoteEvaluation: route.route.quoteEvaluation,
     });
   }
@@ -508,21 +448,22 @@ export function bindExternalTakeRouteForDiscovery(params: {
       } satisfies BoundOneInchRouteEvaluation,
     };
   }
-  if (route.route.identity.source === LiquiditySource.LIFI) {
-    if (!route.route.quoteEvaluation.lifiQuote) {
+  if (route.route.identity.path === 'calldata_aggregator') {
+    if (!route.route.quoteEvaluation.calldataQuote) {
       return {
         bound: false,
-        reason: `LI.FI route is missing validated route details for ${context}`,
+        reason: `calldata-aggregator route is missing validated route details for ${context}`,
       };
     }
     return {
       bound: true,
       quoteEvaluation: {
         ...boundBase,
-        externalTakePath: 'lifi',
+        externalTakePath: 'calldata_aggregator',
+        providerId: route.route.identity.providerId,
         selectedLiquiditySource: LiquiditySource.LIFI,
-        lifiQuote: route.route.quoteEvaluation.lifiQuote,
-      } satisfies BoundLifiRouteEvaluation,
+        calldataQuote: route.route.quoteEvaluation.calldataQuote,
+      } satisfies BoundCalldataAggregatorRouteEvaluation,
     };
   }
 
