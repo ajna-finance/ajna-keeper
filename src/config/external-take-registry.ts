@@ -2,14 +2,9 @@ import { ExternalTakePathKind, LiquiditySource } from './schema';
 
 export type FactoryLiquiditySource =
   | LiquiditySource.UNISWAPV3
-  | LiquiditySource.SUSHISWAP
   | LiquiditySource.CURVE;
 
-export type ExternalTakeTakerContractKey =
-  | 'UniswapV3'
-  | 'SushiSwap'
-  | 'Curve'
-  | 'Lifi';
+export type ExternalTakeTakerContractKey = 'UniswapV3' | 'Curve' | 'Lifi';
 
 export type ExternalTakeLiquiditySource =
   | LiquiditySource.ONEINCH
@@ -84,7 +79,6 @@ export type ExternalTakeDeploymentResolution =
 
 export const FACTORY_DYNAMIC_SOURCES: readonly FactoryLiquiditySource[] = [
   LiquiditySource.UNISWAPV3,
-  LiquiditySource.SUSHISWAP,
   LiquiditySource.CURVE,
 ];
 
@@ -137,12 +131,6 @@ export const EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS = {
     path: 'factory',
     label: 'Uniswap V3',
     takerContractKey: 'UniswapV3',
-  },
-  [LiquiditySource.SUSHISWAP]: {
-    source: LiquiditySource.SUSHISWAP,
-    path: 'factory',
-    label: 'SushiSwap',
-    takerContractKey: 'SushiSwap',
   },
   [LiquiditySource.CURVE]: {
     source: LiquiditySource.CURVE,

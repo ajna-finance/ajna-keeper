@@ -415,7 +415,6 @@ function logDiscoveredTakeTargetSummary(params: {
   ]);
   appendNonZeroGroup(fields, 'approvedFactorySources', [
     { label: 'uniswapV3', value: stats.approvedUniswapV3TakeDecisions },
-    { label: 'sushiswap', value: stats.approvedSushiswapTakeDecisions },
     { label: 'curve', value: stats.approvedCurveTakeDecisions },
   ]);
   appendNonZeroGroup(fields, 'executedRoutes', [
@@ -425,7 +424,6 @@ function logDiscoveredTakeTargetSummary(params: {
   ]);
   appendNonZeroGroup(fields, 'executedFactorySources', [
     { label: 'uniswapV3', value: stats.executedUniswapV3Takes },
-    { label: 'sushiswap', value: stats.executedSushiswapTakes },
     { label: 'curve', value: stats.executedCurveTakes },
   ]);
   appendNonZeroGroup(fields, 'dryRunRoutes', [
@@ -435,7 +433,6 @@ function logDiscoveredTakeTargetSummary(params: {
   ]);
   appendNonZeroGroup(fields, 'dryRunFactorySources', [
     { label: 'uniswapV3', value: stats.dryRunUniswapV3Takes },
-    { label: 'sushiswap', value: stats.dryRunSushiswapTakes },
     { label: 'curve', value: stats.dryRunCurveTakes },
   ]);
   appendNonZeroGroup(fields, 'oneInchFailures', [
@@ -561,7 +558,6 @@ export async function handleDiscoveredTakeTarget(
     approvedOneInchTakeDecisions: 0,
     approvedFactoryTakeDecisions: 0,
     approvedUniswapV3TakeDecisions: 0,
-    approvedSushiswapTakeDecisions: 0,
     approvedCurveTakeDecisions: 0,
     evaluationSkips: 0,
     revalidationSkips: 0,
@@ -574,14 +570,12 @@ export async function handleDiscoveredTakeTarget(
     executedOneInchTakes: 0,
     executedFactoryTakes: 0,
     executedUniswapV3Takes: 0,
-    executedSushiswapTakes: 0,
     executedCurveTakes: 0,
     dryRunExternalTakes: 0,
     dryRunArbTakes: 0,
     dryRunOneInchTakes: 0,
     dryRunFactoryTakes: 0,
     dryRunUniswapV3Takes: 0,
-    dryRunSushiswapTakes: 0,
     dryRunCurveTakes: 0,
     oneInchSwapDataFailures: 0,
     oneInchPreBroadcastFailures: 0,

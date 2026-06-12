@@ -22,7 +22,6 @@ export interface DiscoveredTakeTargetStats {
   approvedOneInchTakeDecisions: number;
   approvedFactoryTakeDecisions: number;
   approvedUniswapV3TakeDecisions: number;
-  approvedSushiswapTakeDecisions: number;
   approvedCurveTakeDecisions: number;
   evaluationSkips: number;
   revalidationSkips: number;
@@ -37,14 +36,12 @@ export interface DiscoveredTakeTargetStats {
   executedOneInchTakes: number;
   executedFactoryTakes: number;
   executedUniswapV3Takes: number;
-  executedSushiswapTakes: number;
   executedCurveTakes: number;
   dryRunExternalTakes: number;
   dryRunArbTakes: number;
   dryRunOneInchTakes: number;
   dryRunFactoryTakes: number;
   dryRunUniswapV3Takes: number;
-  dryRunSushiswapTakes: number;
   dryRunCurveTakes: number;
   oneInchSwapDataFailures: number;
   oneInchPreBroadcastFailures: number;
@@ -66,7 +63,6 @@ type ExecutedExternalTakeRouteStats = Pick<
   | 'executedOneInchTakes'
   | 'executedFactoryTakes'
   | 'executedUniswapV3Takes'
-  | 'executedSushiswapTakes'
   | 'executedCurveTakes'
 >;
 
@@ -74,20 +70,17 @@ export type ExternalTakeRouteStatKey =
   | 'approvedOneInchTakeDecisions'
   | 'approvedFactoryTakeDecisions'
   | 'approvedUniswapV3TakeDecisions'
-  | 'approvedSushiswapTakeDecisions'
   | 'approvedCurveTakeDecisions'
   | keyof ExecutedExternalTakeRouteStats
   | 'dryRunOneInchTakes'
   | 'dryRunFactoryTakes'
   | 'dryRunUniswapV3Takes'
-  | 'dryRunSushiswapTakes'
   | 'dryRunCurveTakes';
 
 export interface ExternalTakeRouteStatKeys {
   oneInch: ExternalTakeRouteStatKey;
   factory: ExternalTakeRouteStatKey;
   uniswapV3: ExternalTakeRouteStatKey;
-  sushiswap: ExternalTakeRouteStatKey;
   curve: ExternalTakeRouteStatKey;
 }
 
@@ -103,7 +96,6 @@ export const APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys =
     oneInch: 'approvedOneInchTakeDecisions',
     factory: 'approvedFactoryTakeDecisions',
     uniswapV3: 'approvedUniswapV3TakeDecisions',
-    sushiswap: 'approvedSushiswapTakeDecisions',
     curve: 'approvedCurveTakeDecisions',
   };
 
@@ -111,7 +103,6 @@ const EXECUTED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
   oneInch: 'executedOneInchTakes',
   factory: 'executedFactoryTakes',
   uniswapV3: 'executedUniswapV3Takes',
-  sushiswap: 'executedSushiswapTakes',
   curve: 'executedCurveTakes',
 };
 
@@ -119,7 +110,6 @@ const DRY_RUN_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
   oneInch: 'dryRunOneInchTakes',
   factory: 'dryRunFactoryTakes',
   uniswapV3: 'dryRunUniswapV3Takes',
-  sushiswap: 'dryRunSushiswapTakes',
   curve: 'dryRunCurveTakes',
 };
 
@@ -219,9 +209,6 @@ export function incrementExternalTakeRouteStats(params: {
   switch (routeIdentity?.source) {
     case LiquiditySource.UNISWAPV3:
       stats[keys.uniswapV3] += 1;
-      break;
-    case LiquiditySource.SUSHISWAP:
-      stats[keys.sushiswap] += 1;
       break;
     case LiquiditySource.CURVE:
       stats[keys.curve] += 1;

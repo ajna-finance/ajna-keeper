@@ -580,31 +580,6 @@ function validateUniswapV3TakeSource({
   }
 }
 
-function validateSushiSwapTakeSource({
-  keeperConfig,
-}: ExternalTakeSourceValidationParams): void {
-  requireRegisteredTakerContract({
-    keeperConfig,
-    source: LiquiditySource.SUSHISWAP,
-  });
-  if (!keeperConfig.dex?.sushiswap) {
-    throw new Error(
-      'TakeSettings: dex.sushiswap required when liquiditySource is SUSHISWAP'
-    );
-  }
-  const routerOverrides = keeperConfig.dex.sushiswap;
-  if (
-    !routerOverrides.swapRouterAddress ||
-    !routerOverrides.factoryAddress ||
-    !routerOverrides.wethAddress ||
-    !routerOverrides.quoterV2Address
-  ) {
-    throw new Error(
-      'TakeSettings: dex.sushiswap.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
-    );
-  }
-}
-
 function validateCurveTakeSource({
   keeperConfig,
 }: ExternalTakeSourceValidationParams): void {
@@ -655,7 +630,6 @@ function validateLifiTakeSource({
 const EXTERNAL_TAKE_SOURCE_VALIDATORS = {
   [LiquiditySource.ONEINCH]: validateOneInchTakeSource,
   [LiquiditySource.UNISWAPV3]: validateUniswapV3TakeSource,
-  [LiquiditySource.SUSHISWAP]: validateSushiSwapTakeSource,
   [LiquiditySource.CURVE]: validateCurveTakeSource,
   [LiquiditySource.LIFI]: validateLifiTakeSource,
 } satisfies Record<ExternalTakeLiquiditySource, ExternalTakeSourceValidator>;

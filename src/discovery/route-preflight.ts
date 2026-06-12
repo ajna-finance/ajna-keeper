@@ -487,30 +487,6 @@ const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
       }));
     },
   },
-  [LiquiditySource.SUSHISWAP]: {
-    usesFactoryRegistry: true,
-    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
-    getTakerAddress: ({ config, source }) =>
-      getConfiguredTakerAddress(config, source),
-    getContractCodeRequirements: ({ config }) => [
-      {
-        label: 'SushiSwap swapRouterAddress',
-        address: config.dex?.sushiswap?.swapRouterAddress,
-      },
-      {
-        label: 'SushiSwap factoryAddress',
-        address: config.dex?.sushiswap?.factoryAddress,
-      },
-      {
-        label: 'SushiSwap quoterV2Address',
-        address: config.dex?.sushiswap?.quoterV2Address,
-      },
-      {
-        label: 'SushiSwap wethAddress',
-        address: config.dex?.sushiswap?.wethAddress,
-      },
-    ],
-  },
   [LiquiditySource.CURVE]: {
     usesFactoryRegistry: true,
     takerLabel: (source) => `${formatLiquiditySource(source)} taker`,

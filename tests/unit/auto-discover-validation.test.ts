@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import {
+  CurvePoolType,
   KeeperConfig,
   LiquiditySource,
   TakeWriteTransportMode,
@@ -380,7 +381,7 @@ describe('auto-discover validation', () => {
       enabled: true,
       allowedExternalTakePaths: ['oneinch', 'factory'],
       defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-      allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+      allowedLiquiditySources: [LiquiditySource.CURVE],
       validateRouteDeployments: true,
     };
     config.discovery!.defaults!.take = {
@@ -393,14 +394,20 @@ describe('auto-discover validation', () => {
     };
     config.takers!.contracts = {
       UniswapV3: '0x3333333333333333333333333333333333333333',
-      SushiSwap: '0x4444444444444444444444444444444444444444',
+      Curve: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     };
-    config.dex!.sushiswap = {
-      swapRouterAddress: '0x5555555555555555555555555555555555555555',
-      factoryAddress: '0x7777777777777777777777777777777777777777',
-      quoterV2Address: '0x1212121212121212121212121212121212121212',
+    config.dex!.curve = {
+      poolConfigs: {
+        'WETH-USDC': {
+          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          poolType: CurvePoolType.STABLE,
+        },
+      },
       wethAddress: '0x4200000000000000000000000000000000000006',
-      defaultFeeTier: 500,
+    };
+    config.network.tokenAddresses = {
+      WETH: '0x4200000000000000000000000000000000000006',
+      USDC: '0xcccccccccccccccccccccccccccccccccccccccc',
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
@@ -838,18 +845,24 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     delete config.dex!.uniswapV3!.router;
     config.takers!.contracts = {
-      SushiSwap: '0x4444444444444444444444444444444444444444',
+      Curve: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     };
-    config.dex!.sushiswap = {
-      swapRouterAddress: '0x5555555555555555555555555555555555555555',
-      factoryAddress: '0x7777777777777777777777777777777777777777',
-      quoterV2Address: '0x1212121212121212121212121212121212121212',
+    config.dex!.curve = {
+      poolConfigs: {
+        'WETH-USDC': {
+          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          poolType: CurvePoolType.STABLE,
+        },
+      },
       wethAddress: '0x4200000000000000000000000000000000000006',
-      defaultFeeTier: 500,
+    };
+    config.network.tokenAddresses = {
+      WETH: '0x4200000000000000000000000000000000000006',
+      USDC: '0xcccccccccccccccccccccccccccccccccccccccc',
     };
     config.discovery!.take = {
       enabled: true,
-      allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+      allowedLiquiditySources: [LiquiditySource.CURVE],
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
@@ -859,18 +872,24 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.takers!.contracts = {
       UniswapV3: '0x3333333333333333333333333333333333333333',
-      SushiSwap: '0x4444444444444444444444444444444444444444',
+      Curve: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
     };
-    config.dex!.sushiswap = {
-      swapRouterAddress: '0x5555555555555555555555555555555555555555',
-      factoryAddress: '0x7777777777777777777777777777777777777777',
-      quoterV2Address: '0x1212121212121212121212121212121212121212',
+    config.dex!.curve = {
+      poolConfigs: {
+        'WETH-USDC': {
+          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          poolType: CurvePoolType.STABLE,
+        },
+      },
       wethAddress: '0x4200000000000000000000000000000000000006',
-      defaultFeeTier: 500,
+    };
+    config.network.tokenAddresses = {
+      WETH: '0x4200000000000000000000000000000000000006',
+      USDC: '0xcccccccccccccccccccccccccccccccccccccccc',
     };
     config.discovery!.take = {
       enabled: true,
-      allowedLiquiditySources: [LiquiditySource.SUSHISWAP],
+      allowedLiquiditySources: [LiquiditySource.CURVE],
       dexGasOverrides: {
         [LiquiditySource.UNISWAPV3]: '900000',
       },
