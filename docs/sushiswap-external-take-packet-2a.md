@@ -28,7 +28,10 @@ types.
   `artifactKind: 'route_shape'`.
 - Add the repo-local tooling-only evidence schema/checker in Packet 2A. This is
   the single owner for the shared evidence components and artifact wrappers used
-  by both Packet 2A and Packet 3A.
+  by both Packet 2A and Packet 3A. Decide the validation mechanism once here:
+  either a small schema-validation devDependency (e.g. `zod`) or hand-rolled
+  checks — and record the choice; Packet 3A must not introduce a second
+  mechanism.
 - Place the checker in a tooling-only location such as
   `tools/external-take-evidence/`, with a command entrypoint such as
   `scripts/check-calldata-aggregator-evidence.mjs`.

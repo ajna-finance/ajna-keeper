@@ -409,7 +409,16 @@ describe('Taker quote balance guards', () => {
     await collateralToken.mint(taker.address, COLLATERAL_AMOUNT);
     await quoteToken.mint(taker.address, QUOTE_AMOUNT_DUE);
 
-    const router = await deployFundedSwapRouter02(base, constants.Zero);
+    // Must bypass router-level min-out enforcement so the TAKER's balance-delta
+    // guard is the one that fires: a plain funded router with zero output
+    // reverts inside the mock router first, and the test never reaches
+    // InsufficientQuoteReceived (a latent false-pass surfaced when revert
+    // assertions were hardened to match extracted revert reasons only).
+    const router = await deployMinOutBypassSwap(
+      base,
+      constants.Zero,
+      constants.One
+    );
 
     const callbackData = encodeUniswapCallbackData({
       routerAddress: router.address,

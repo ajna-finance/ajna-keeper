@@ -1,6 +1,5 @@
 import { expect } from 'chai';
-import { Wallet, constants, providers, utils } from 'ethers';
-import { network } from 'hardhat';
+import { Wallet, constants } from 'ethers';
 import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
 import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
 import {
@@ -12,37 +11,19 @@ import {
   MockPoolDeployer__factory,
 } from '../../typechain-types/factories/contracts/mocks';
 import { LiquiditySource } from '../../src/config';
-
-function getProvider() {
-  return new providers.Web3Provider(network.provider as any);
-}
-
-async function fundSigner(address: string) {
-  await network.provider.send('hardhat_setBalance', [
-    address,
-    utils.parseEther('10').toHexString(),
-  ]);
-}
+import {
+  expectRevertContaining,
+  fundSigner,
+  getProvider,
+} from './helpers/mock-taker-base';
 
 describe('Factory taker registration', () => {
   it('rejects a zero Ajna pool factory at construction', async () => {
     const owner = Wallet.createRandom().connect(getProvider());
     await fundSigner(owner.address);
 
-    let error: unknown;
-    try {
-      const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
-        constants.AddressZero
-      );
-      await factory.deployed();
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).to.be.instanceOf(Error);
-    // Strict reason phrase: deploy-revert errors embed contract source, so a
-    // bare substring can false-match identifiers that appear in the code.
-    expect((error as Error).message).to.contain(
+    await expectRevertContaining(
+      new AjnaKeeperTakerFactory__factory(owner).deploy(constants.AddressZero),
       "reverted with reason string 'Zero pool factory'"
     );
   });
@@ -64,15 +45,8 @@ describe('Factory taker registration', () => {
     );
     await legacyTaker.deployed();
 
-    let error: unknown;
-    try {
-      await factory.setTaker(LiquiditySource.ONEINCH, legacyTaker.address);
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).to.be.instanceOf(Error);
-    expect((error as Error).message).to.contain(
+    await expectRevertContaining(
+      factory.setTaker(LiquiditySource.ONEINCH, legacyTaker.address),
       'LegacyDirectOneInchTakerUnsupported'
     );
   });
@@ -96,15 +70,10 @@ describe('Factory taker registration', () => {
     );
     await taker.deployed();
 
-    let error: unknown;
-    try {
-      await factory.setTaker(LiquiditySource.SUSHISWAP, taker.address);
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).to.be.instanceOf(Error);
-    expect((error as Error).message).to.contain('Factory mismatch');
+    await expectRevertContaining(
+      factory.setTaker(LiquiditySource.SUSHISWAP, taker.address),
+      'Factory mismatch'
+    );
   });
 
   it('accepts takers authorized for the registering factory', async () => {
@@ -152,15 +121,10 @@ describe('Factory taker registration', () => {
     );
     await taker.deployed();
 
-    let error: unknown;
-    try {
-      await factory.setTaker(LiquiditySource.LIFI, taker.address);
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).to.be.instanceOf(Error);
-    expect((error as Error).message).to.contain('Owner mismatch');
+    await expectRevertContaining(
+      factory.setTaker(LiquiditySource.LIFI, taker.address),
+      'Owner mismatch'
+    );
   });
 
   describe('recoverFromTaker error bubbling', () => {
@@ -191,57 +155,33 @@ describe('Factory taker registration', () => {
       const { factory, taker } = await deployFactoryWithMockTaker();
       await taker.setRecoverMode(1); // revert CustomRecoveryError()
 
-      const customErrorSelector = utils
-        .id('CustomRecoveryError()')
-        .slice(0, 10);
-
-      let error: unknown;
-      try {
-        await factory.recoverFromTaker(
-          LiquiditySource.SUSHISWAP,
-          taker.address
-        );
-      } catch (caught) {
-        error = caught;
-      }
-      expect(error).to.be.instanceOf(Error);
-      // The raw custom-error selector must surface in the revert data
-      // (previously flattened to the generic "Recovery failed" string).
-      expect((error as Error).message).to.contain(customErrorSelector);
+      // Hardhat can only decode this name because the factory re-reverted the
+      // taker's raw 4-byte error data intact (previously flattened to the
+      // generic "Recovery failed" string, which carries no error data at all).
+      await expectRevertContaining(
+        factory.recoverFromTaker(LiquiditySource.SUSHISWAP, taker.address),
+        "reverted with custom error 'CustomRecoveryError()'"
+      );
     });
 
     it('still bubbles string revert reasons', async () => {
       const { factory, taker } = await deployFactoryWithMockTaker();
       await taker.setRecoverMode(2); // revert("taker recovery reason")
 
-      let error: unknown;
-      try {
-        await factory.recoverFromTaker(
-          LiquiditySource.SUSHISWAP,
-          taker.address
-        );
-      } catch (caught) {
-        error = caught;
-      }
-      expect(error).to.be.instanceOf(Error);
-      expect((error as Error).message).to.contain('taker recovery reason');
+      await expectRevertContaining(
+        factory.recoverFromTaker(LiquiditySource.SUSHISWAP, taker.address),
+        'taker recovery reason'
+      );
     });
 
     it('falls back to the generic reason for empty reverts', async () => {
       const { factory, taker } = await deployFactoryWithMockTaker();
       await taker.setRecoverMode(3); // revert with no data
 
-      let error: unknown;
-      try {
-        await factory.recoverFromTaker(
-          LiquiditySource.SUSHISWAP,
-          taker.address
-        );
-      } catch (caught) {
-        error = caught;
-      }
-      expect(error).to.be.instanceOf(Error);
-      expect((error as Error).message).to.contain('Recovery failed');
+      await expectRevertContaining(
+        factory.recoverFromTaker(LiquiditySource.SUSHISWAP, taker.address),
+        'Recovery failed'
+      );
     });
 
     it('emits TokenRecovered when recovery succeeds', async () => {
@@ -310,14 +250,9 @@ describe('Factory taker registration', () => {
     );
     await taker.deployed();
 
-    let error: unknown;
-    try {
-      await factory.setTaker(LiquiditySource.SUSHISWAP, taker.address);
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).to.be.instanceOf(Error);
-    expect((error as Error).message).to.contain('Pool factory mismatch');
+    await expectRevertContaining(
+      factory.setTaker(LiquiditySource.SUSHISWAP, taker.address),
+      'Pool factory mismatch'
+    );
   });
 });

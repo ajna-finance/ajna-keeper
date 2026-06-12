@@ -68,6 +68,10 @@ Do not land this entire roadmap as one PR. Split it into these packets:
    - Keep separate from Sushi.
    - Add only if broad LI.FI routing can preserve fail-closed route-shape and
      allowlist guarantees.
+5. Future candidate: retire the `oneinch` execution family.
+   - Not part of this roadmap's implementation; recorded so Packet 2B designs
+     the shared contracts without foreclosing it.
+   - See "Packet 5 Candidate" section below.
 
 Packet 0 must land first so the hot-file gate is executable before Packet 1
 touches `scripts/deploy-factory-system.ts` or other large central files. Packets
@@ -91,7 +95,12 @@ the ref:
 
 The check must fail on per-file added-line growth, additions above 10 lines in
 any hot file, `scripts/deploy-factory-system.ts` reaching 1000 lines, or a
-wrong base ref. Narrow deletion fallout, input-boundary compatibility shims, and
+wrong base ref.
+
+This roadmap's meta-tooling ceiling is three checkers: the hot-file growth
+checker (Packet 0), the resolved-policy boundary check (Packet 2B), and the
+evidence schema checker (Packet 2A). Later packets extend these three; do not
+add a fourth gate mechanism. Narrow deletion fallout, input-boundary compatibility shims, and
 fail-closed guards may override the mechanical line-growth failure only when the
 packet closeout lists the file, added lines, reason, and why a focused helper or
 provider-neutral module cannot own the logic. Reject unrelated compensating
@@ -218,11 +227,12 @@ contract must be:
 - A non-empty provider list while the `calldata_aggregator` family is disabled is
   invalid. Empty, duplicate, unknown, or packet-inactive provider ids are invalid.
 
-Packet 2B must also introduce one canonical post-validation policy object:
-`ResolvedExternalTakePolicy`, produced by `resolveExternalTakePolicy(...)` in
-`src/config/route-policy.ts`. Raw compatibility parsing may still happen in
-config/env/no-spend input code, but path/provider/default-source interpretation
-must collapse into this single resolver:
+Packet 2B must also add one canonical post-validation policy object:
+`ResolvedExternalTakePolicy`, produced by `resolveExternalTakePolicy(...)`
+added to the existing `src/config/route-policy.ts` module (which already hosts
+the raw helpers that become private). Raw compatibility parsing may still
+happen in config/env/no-spend input code, but path/provider/default-source
+interpretation must collapse into this single resolver:
 
 - config/env/no-spend/operator inputs normalize once at the boundary
 - the normalized object carries canonical execution families, calldata aggregator
@@ -307,50 +317,65 @@ path, taker-key, config-key, and factory identity stay in
 
 ### Shared Solidity Core
 
-Do not share LI.FI and Sushi allowlists by accident. The simplest acceptable
-shape is one isolated taker deployment per supported calldata-aggregator source.
-There are two viable implementation shapes. Packet 2B must record the decision
-before contract edits, including compile/type-generation impact, deployment
-impact, and wrapper/base LOC comparison:
+The merged base (PR #17) already ships the lower layers:
+`contracts/base/KeeperTakerBase.sol` defines `KeeperTakerBase` (pool
+validation, `_safeApproveWithReset`, `_approveQuoteForTake`,
+`_settleAfterTake`, `_recoverToken`, reentrancy guard, shared errors, the
+standard 4-arg `SwapExecuted` event) and `FactoryAuthorizedTakerBase`
+(`IAjnaKeeperTaker` wiring getters, `onlyOwnerOrFactory`, `recover`). Every
+taker, including `LifiKeeperTaker`, already inherits them. Packet 2B must not
+re-extract those mechanics or add a sibling base beside them.
 
-1. Default: provider-specific wrappers over a shared base contract or internal
-   library. `LifiKeeperTaker` remains a concrete LI.FI wrapper and
-   `SushiAggregatorKeeperTaker` hardcodes the new Sushi aggregator source id when
-   Packet 3B is reached.
-2. Optional, only if the decision spike proves it is strictly cheaper without
-   broad interface churn: a generic `AggregatorCalldataKeeperTaker` with an
-   immutable supported source id.
+The remaining on-chain work is one aggregator-specific layer,
+`BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase`, promoted out of
+`LifiKeeperTaker`:
 
-Either shape must preserve isolated per-deployment call-target,
-approval-spender, and selector allowlists. Do not deploy one multi-source,
-multi-provider taker unless shared allowlists are an explicit product decision.
+- per-deployment call-target, approval-spender, and selector allowlist
+  storage, setters, getters, and enforcement
+- the `_activeCallbackPool` / `_activeCallbackDataHash` callback binding set
+  and cleared around `pool.take`. Today this lives only in `LifiKeeperTaker`;
+  the direct DEX takers intentionally omit it, but every calldata-aggregator
+  taker executes arbitrary allowlisted calldata and therefore requires it.
+- the exact source-balance check (`UnexpectedSourceBalance`). Calldata
+  aggregators are exact-fill by construction: opaque provider calldata cannot
+  be re-sized on-chain, so off-chain sizing debt-clamps the take and the
+  contract rejects any mismatch. Do not port the factory takers' partial-fill
+  pro-rating into this layer.
+- the allowlisted low-level call with raw revert bubbling, code-existence
+  check, and the zero-value ERC20 route policy
+- the output check `quoteReceived >= max(amountOutMinimum,
+  TakerTakeScaling.quoteAmountDueCeiling(pool, quoteAmountDue))`. The ceiling
+  (+1 token-wei when `quoteTokenScale > 1`) covers the pool's ceil-divided
+  quote pull and is a merged audited invariant. A naive floor comparison
+  reintroduces the failed-take bug PR #17 fixed for non-18-decimal quote
+  tokens.
 
-- `BaseAggregatorCalldataTaker` or an equivalent internal library owns common
-  callback execution mechanics.
-- Do not change `IAjnaKeeperTaker.getSupportedSources()` or
-  `isSourceSupported(...)` from `pure` to `view` unless the decision spike proves
-  the generic immutable-source taker is lower cost after interface, typegen,
-  existing-taker, deployment, and review impact are counted.
-- If wrappers are chosen, `LifiKeeperTaker` remains the LI.FI concrete wrapper
-  and `SushiAggregatorKeeperTaker` hardcodes the new Sushi aggregator source id.
-- If the generic immutable-source taker is chosen, LI.FI and Sushi are separate
-  deployments of that contract with different immutable source ids.
-- Each deployment owns its own call-target, approval-spender, and selector
-  allowlists.
+Do not share LI.FI and Sushi allowlists by accident: keep one isolated taker
+deployment per supported calldata-aggregator source, each owning its own
+call-target, approval-spender, and selector allowlists. Do not deploy one
+multi-source, multi-provider taker unless shared allowlists are an explicit
+product decision.
 
-The shared on-chain core should own only provider-neutral mechanics:
+The default shape is thin provider wrappers: `LifiKeeperTaker` remains the
+LI.FI concrete wrapper and `SushiAggregatorKeeperTaker` hardcodes the new
+Sushi aggregator source id when Packet 3B is reached. The alternative generic
+`AggregatorCalldataKeeperTaker` with an immutable supported source id
+intrinsically forces `isSourceSupported(...)` (and `getSupportedSources()`)
+from `pure` to `view` — immutables are not readable in `pure` — which is a
+breaking `IAjnaKeeperTaker` change rippling through every existing taker, the
+factory's registration staticcalls, and type generation. Choose it only if a
+recorded decision proves it is still strictly cheaper after that cost.
 
-- Ajna pool validation and callback binding
-- exact received-collateral approval
-- approval cleanup
-- target/spender/selector allowlist enforcement
-- zero-value ERC20 route policy
-- actual quote-token balance-delta min-out checks
-- recovery behavior
+Event rule: a calldata-aggregator taker that logs its call target needs a
+provider-distinct event name. `LifiSwapExecuted` is the merged precedent;
+Sushi uses `SushiAggregatorSwapExecuted`. Never overload the base
+`SwapExecuted` name — same-name event overloads were removed in PR #17 because
+they create ambiguous ABIs that ethers v5 warns on and indexers misdecode.
 
-Provider-specific Solidity should be avoided unless Sushi needs a different
-callback data shape for a concrete reason. A `SushiKeeperTaker` that is just a
-renamed copy of `LifiKeeperTaker` is not acceptable.
+Provider-specific Solidity beyond the thin wrapper should not exist unless
+Sushi needs a different callback data shape for a concrete reason. A
+`SushiKeeperTaker` that is just a renamed copy of `LifiKeeperTaker` is not
+acceptable.
 
 ### Factory Compatibility
 
@@ -360,8 +385,13 @@ interface that append the new source id.
 
 - Append the Solidity enum after `Lifi`; do not reindex existing values.
 - Append the TypeScript enum in the same numeric position.
-- Update the factory's source-iteration cap so `getConfiguredTakers()` includes
-  the new source.
+- Recompile the factory with the appended enum. `LAST_LIQUIDITY_SOURCE` derives
+  from `uint8(type(IAjnaKeeperTaker.LiquiditySource).max)` and auto-extends; do
+  not reintroduce a hand-maintained iteration cap — the merged factory removed
+  one precisely because it could silently lag the enum.
+- Re-point the merged last-source enumeration test in
+  `tests/integration/factory-registration.test.ts` from `LIFI` to the appended
+  Sushi aggregator id in the same diff, so it keeps guarding the boundary.
 - Use the on-chain taker shape chosen and recorded in Packet 2B. Packet 3B must
   not reopen the generic immutable-source vs wrapper decision.
 - Deployment/preflight must reject old factory bytecode or old ABI/runtime
@@ -383,7 +413,18 @@ The shared offchain core should own:
 - encoded swap-details construction for the shared on-chain calldata shape
 - execution quote freshness checks
 - quote/context revalidation against the current liquidation
-- final min-out floor comparison
+- final min-out floor comparison, priced against the ceil-rounded Ajna quote
+  due (the on-chain `quoteAmountDueCeiling` backstop), not the floored due
+- debt-clamped exact-fill sizing: key the non-resizable classification on the
+  registry's aggregator *category*, not the `calldata_aggregator` family alone
+  — 1inch is intentionally outside that family but must keep exact-fill
+  sizing. `src/config/external-take-registry.ts` already exports the correct
+  category predicate (`isAggregatorExternalTakePath`, true for `oneinch` and
+  `lifi`); Packet 2B must give the `calldata_aggregator` path descriptor
+  `category: 'aggregator'` and delete `src/take/take-sizing.ts`'s divergent
+  local copy of the predicate in favor of the registry one, so Packet 3B
+  providers inherit exact-fill sizing without touching the sizing module and
+  1inch sizing is provably unchanged
 - gas estimation and pre-broadcast failure classification
 - submission through the configured take write transport
 - shared telemetry fields
@@ -531,8 +572,16 @@ Roadmap-level requirements:
 
 - Reserve source id `3` as deprecated and unsupported without reindexing existing
   Solidity or TypeScript enum values.
-- Remove direct Sushi from external-take registries, route models, quote
-  approval, stats, telemetry, deployment, policy artifacts, and docs.
+- Before any deletion, migrate the merged audited test surface off Sushi: the
+  `factory-registration` fixtures and `MockConfigurableTaker` registrations
+  that use source id `3`, the Sushi-hosted invariant cases in
+  `taker-hardening.test.ts`, the Sushi sections of the partial-fill and
+  quote-guard suites, the `mock-taker-base.ts` Sushi helpers, and the factory
+  route harness. Details and the coverage-mapping requirement:
+  `docs/sushiswap-external-take-packet-1.md`.
+- Remove direct Sushi from external-take registries (canonically
+  `src/config/external-take-registry.ts`), route models, quote approval, stats,
+  telemetry, deployment, policy artifacts, and docs.
 - Remove direct Sushi from post-auction reward-swap config and router plumbing.
 - Add fail-closed new-factory and reused-old-factory checks for nonzero source id
   `3` taker mappings.
@@ -623,15 +672,18 @@ Reviewer gate:
 
 On-chain:
 
-- Extract common mechanics from `LifiKeeperTaker` into a shared base/library.
-- Record the on-chain shape decision before editing contracts. Default to thin
-  provider wrappers over the shared base/library; use the generic
-  immutable-source taker only if the decision spike proves it is strictly cheaper
-  without broad interface, typegen, deployment, or review cost.
+- Promote the aggregator-specific layer out of `LifiKeeperTaker` into
+  `BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase` per the Shared
+  Solidity Core section; do not re-extract the merged
+  `KeeperTakerBase`/`FactoryAuthorizedTakerBase` mechanics or add a sibling
+  base. The wrapper shape is the recorded default; the generic
+  immutable-source taker may replace it only with a recorded decision that
+  prices in its forced `pure`-to-`view` interface break.
 - Keep `LifiKeeperTaker` behavior equivalent and preserve its concrete wrapper
-  shape unless the approved generic path explicitly justifies replacing it.
-- Preserve LI.FI source id, ownership model, factory authorization, events where
-  practical, and existing allowlist semantics.
+  shape unless that approved generic path explicitly justifies replacing it.
+- Preserve LI.FI source id, ownership model, factory authorization, allowlist
+  semantics, and the `LifiSwapExecuted` event contract (provider-distinct
+  names per the Shared Solidity Core event rule).
 - Do not introduce Sushi execution in this packet.
 
 Offchain:
@@ -775,6 +827,27 @@ remain fail-closed for every resulting route:
 Do not silently remove the production `allowExchanges` requirement while adding
 Sushi. If broad routing is desired, add an explicit production mode with its own
 tests, canaries, and operator docs.
+
+## Packet 5 Candidate: Retire The `oneinch` Family (Future, Not This Roadmap)
+
+`oneinch` is semantically a calldata aggregator: opaque exact-fill executor
+calldata, a single approval target, and a balance-delta output guard. The
+terminal architecture is two execution families (`factory`,
+`calldata_aggregator`) with 1inch as a third provider — deleting a whole
+family, the second approval path, and re-homing the standalone
+`AjnaKeeperTaker` onto the shared base. This roadmap deliberately does NOT
+implement that (the live 1inch path must not churn while Sushi lands), but it
+constrains Packet 2B today:
+
+- the frozen `ApprovedCalldataAggregatorQuote`, route identity, and approval
+  helper must be reviewed against 1inch's request shape (router target +
+  executor + opaque data, exact-fill) and must not structurally preclude a
+  future `oneinch` provider id — without adding any 1inch support now
+- the sizing classification is already category-based (covers `oneinch`), so
+  no sizing change is needed at unification time
+
+A future packet that performs the unification needs its own design review,
+migration plan for live 1inch configs, and an equivalence test bar.
 
 ## Test Plan
 

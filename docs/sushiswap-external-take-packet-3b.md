@@ -29,8 +29,10 @@ reviewed diff. It must never reuse source id `3` or reindex existing sources.
   base still has `LIFI = 5`.
 - Append the Solidity enum and TypeScript enum; do not reuse source id `3` or
   reindex existing ids.
-- Deploy or require an `AjnaKeeperTakerFactory` compiled with the appended enum
-  and updated source-iteration cap.
+- Deploy or require an `AjnaKeeperTakerFactory` compiled with the appended
+  enum. The factory's `LAST_LIQUIDITY_SOURCE` derives from
+  `uint8(type(IAjnaKeeperTaker.LiquiditySource).max)` and auto-extends on
+  recompile; do not reintroduce a hand-maintained iteration cap.
 - Reuse Packet 2B's canonical `calldata_aggregator` path. Do not add path
   support in this packet.
 - Extend `CalldataAggregatorProviderId` with `sushi_aggregator` and use the
@@ -48,6 +50,15 @@ reviewed diff. It must never reuse source id `3` or reindex existing sources.
   kept the default wrapper/base shape, add `SushiAggregatorKeeperTaker` as a thin
   wrapper over the shared on-chain core. If Packet 2B explicitly approved the
   generic immutable-source taker, deploy it with the Sushi source id.
+- The Sushi taker emits a provider-distinct event,
+  `SushiAggregatorSwapExecuted`, carrying the allowlisted call target. Do not
+  overload the base `SwapExecuted` name (merged ABI lesson: `LifiSwapExecuted`
+  precedent); add monitoring migration notes for the new topic.
+- Sushi inherits exact-fill debt-clamped sizing through Packet 2B's
+  category-based classification (the `calldata_aggregator` descriptor carries
+  `category: 'aggregator'`, consumed via the registry's
+  `isAggregatorExternalTakePath`); Packet 3B must not edit the sizing module
+  or add a provider-specific sizing branch, and 1inch sizing stays untouched.
 - Add a Sushi API client and provider validator.
 - Add Sushi route-shape normalization into the provider-specific layer.
 - Normalize Sushi responses into `ApprovedCalldataAggregatorQuote`; do not add
@@ -118,7 +129,10 @@ reviewed diff. It must never reuse source id `3` or reindex existing sources.
 - Solidity `IAjnaKeeperTaker.LiquiditySource` and TypeScript `LiquiditySource`
   append the same Sushi aggregator numeric id.
 - `AjnaKeeperTakerFactory` source iteration includes the new Sushi aggregator id,
-  and `getConfiguredTakers()` can surface it.
+  and `getConfiguredTakers()` can surface it. The merged last-source
+  enumeration test in `tests/integration/factory-registration.test.ts`
+  (currently registering at `LIFI`) is re-pointed to the appended Sushi
+  aggregator id in the same diff, so it keeps guarding the actual boundary.
 - Deployment/preflight rejects an old factory when provider id
   `sushi_aggregator` is enabled.
 - Config/operator path parsing accepts `lifi` as a compatibility alias, but
@@ -136,6 +150,9 @@ reviewed diff. It must never reuse source id `3` or reindex existing sources.
   deployed Sushi instance's immutable source id is the appended Sushi aggregator
   source.
 - Sushi allowlists are isolated from LI.FI allowlists.
+- The Sushi taker's success path emits exactly one `SushiAggregatorSwapExecuted`
+  and never the base 4-arg `SwapExecuted` (ABI/topic regression test mirroring
+  the merged `lifi-taker.test.ts` event-contract test).
 - Packet closeout proves Sushi deployment config, allowlists, and canary fixtures
   match the Packet 3A `proceed` scope, and no runtime artifact-scope dependency
   was added.

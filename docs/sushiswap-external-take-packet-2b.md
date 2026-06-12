@@ -49,7 +49,11 @@ providerId }`.
 `allowedExternalTakePaths` remains a family-level switch. Packet 2B must add the
 canonical provider-level enablement field
 `allowedCalldataAggregatorProviders?: CalldataAggregatorProviderId[]` wherever
-take-policy config is parsed, validated, and normalized.
+take-policy config is parsed, validated, and normalized. The new field's
+validation rules are born in `src/config/route-policy.ts` (the resolver's
+input boundary) or provider modules — `src/config/validation.ts` is
+legacy-frozen at 1,400+ lines and gains nothing beyond, at most, a one-line
+delegation to the resolver.
 
 Provider enablement semantics are part of this packet:
 
@@ -66,9 +70,10 @@ Provider enablement semantics are part of this packet:
   `allowedCalldataAggregatorProviders` value containing `sushi_aggregator`;
   appending the provider id must not silently enable Sushi for existing configs.
 
-Packet 2B must introduce one canonical post-validation policy object:
-`ResolvedExternalTakePolicy`, produced by `resolveExternalTakePolicy(...)` in
-`src/config/route-policy.ts`. Raw operator-facing config may still contain
+Packet 2B must add one canonical post-validation policy object:
+`ResolvedExternalTakePolicy`, produced by `resolveExternalTakePolicy(...)`
+added to the existing `src/config/route-policy.ts` module (it already hosts
+the raw helpers, which become private). Raw operator-facing config may still contain
 legacy paths and optional provider fields, but downstream runtime modules must
 consume the resolved object instead of reinterpreting raw config. The resolved
 object must carry:
@@ -87,12 +92,17 @@ execution planning, stats, and telemetry must not read raw
 provider-list defaulting should become private implementation details of
 `resolveExternalTakePolicy(...)`, except in resolver tests.
 
-Add an AST/import boundary check,
+Add an import/field boundary check,
 `tests/unit/resolved-external-take-policy-boundary.test.ts`, that fails if
 production runtime modules outside `src/config/route-policy.ts` import raw
 path/default-source/provider-list resolution helpers or inspect raw policy fields
 for execution decisions. This check targets policy interpretation only; it must
-not grep for provider API string literals.
+not grep for provider API string literals. Implement it as the simplest
+import-statement and member-read text scan that works — the repo has no
+linter, and a bespoke AST framework for four banned imports is exactly the
+kind of heavy mechanism this roadmap avoids. If the repo later adopts a
+linter, migrate this rule to `no-restricted-imports`/`no-restricted-syntax`
+and delete the test.
 
 The boundary check must scan at least:
 
@@ -154,6 +164,56 @@ calldata-aggregator core, add `providerId` requirements to 1inch, or change
 - Delete `approveLifiQuoteForExecution` runtime helpers, exports, and call sites.
   Calldata-aggregator approval has one shared implementation.
 
+## On-Chain Baseline And Scope
+
+The merged PR #17 base already exists: `contracts/base/KeeperTakerBase.sol`
+(`KeeperTakerBase` + `FactoryAuthorizedTakerBase`) owns pool validation, safe
+approve/reset, exact quote approval, post-take settle/sweep, recovery,
+reentrancy, shared errors, the wiring getters, `onlyOwnerOrFactory`, and
+`recover` — and `LifiKeeperTaker` already inherits it. Packet 2B must not
+re-extract those mechanics, add a sibling base, or treat the wrapper-vs-generic
+question as open for that layer.
+
+Packet 2B's on-chain scope is exactly one new layer,
+`BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase`, promoted out of
+`LifiKeeperTaker`:
+
+- allowlist storage, setters, getters, and enforcement (call targets, approval
+  spenders, per-target selectors), kept per-deployment
+- the `_activeCallbackPool` / `_activeCallbackDataHash` callback binding
+  (currently LI.FI-only; required for every calldata-aggregator taker)
+- the exact source-balance check (`UnexpectedSourceBalance`) — calldata
+  aggregators are exact-fill; partial-fill pro-rating stays in the direct
+  takers
+- the allowlisted low-level call with raw revert bubbling, code-existence
+  check, and zero-value ERC20 policy
+- the output check `quoteReceived >= max(amountOutMinimum,
+  TakerTakeScaling.quoteAmountDueCeiling(pool, quoteAmountDue))` — preserve
+  the merged ceil-pull backstop exactly; do not regress to a floored-due
+  comparison
+- event rule: provider wrappers emit provider-distinct event names
+  (`LifiSwapExecuted` precedent); never overload the base `SwapExecuted`
+
+The generic immutable-source alternative intrinsically forces
+`isSourceSupported(...)` from `pure` to `view` (immutables are unreadable in
+`pure`), breaking `IAjnaKeeperTaker` for every taker and the factory's
+registration staticcalls; it may be chosen only with a recorded decision that
+prices in that interface break.
+
+The inheritance layer must pay measurable rent: after promotion,
+`LifiKeeperTaker` (300 lines today) must reduce to construction, source
+identity, its event declaration, and provider natspec — roughly 120 lines or
+less. If the wrapper cannot shrink to that, the base-contract bet failed;
+take the internal-library shape (shared mechanics as a library consumed by
+flat takers) instead of keeping a fourth inheritance layer that does not
+delete leaf code.
+
+Forward-compatibility constraint (see the roadmap's Packet 5 candidate): the
+shared quote shape, route identity, and approval helper frozen in this packet
+must be reviewed against 1inch's request shape and must not structurally
+preclude a future `oneinch` calldata-aggregator provider. Do not add 1inch
+support, provider ids, or placeholders now — only avoid foreclosing them.
+
 ## Hot-File Gate
 
 The packet must declare its exact target base ref for the hot-file check.
@@ -180,18 +240,44 @@ Narrow deletion fallout, input-boundary compatibility shims, and fail-closed
 guards may override the mechanical line-growth failure only when that review
 justification is recorded in the packet closeout.
 
+One exception is pre-authorized: `src/discovery/route-preflight.ts` (a hot
+file) currently imports the raw policy helpers this packet privatizes
+(`resolveExternalTakePaths`, `resolveFactoryRouteSelectionSources`), so its
+migration to `ResolvedExternalTakePolicy` is expected churn. The closeout must
+still record the file and added lines, but the migration itself does not need
+a fresh justification; replacing raw interpretation with resolved-policy reads
+should be near line-neutral.
+
 ## Tests
 
 - LI.FI unit and integration behavior remains unchanged after extraction.
 - `LifiKeeperTaker` still supports only `LiquiditySource.LIFI`.
-- The on-chain shape decision is recorded before contract edits, including
-  interface/type-generation impact and wrapper/base LOC comparison.
-- The default on-chain shape is thin provider wrappers over a shared base or
-  internal library.
+- The on-chain work is limited to the `BaseAggregatorCalldataTaker` layer over
+  the existing merged `KeeperTakerBase`/`FactoryAuthorizedTakerBase`; no base
+  helper is re-extracted and no sibling base is added.
+- The promoted layer preserves the merged invariants byte-for-byte in
+  behavior: callback binding (`UnexpectedCallback`), exact-fill source-balance
+  check, allowlist isolation, and the
+  `max(amountOutMinimum, quoteAmountDueCeiling)` output backstop — proven by
+  porting the existing LI.FI callback-binding, ceiling, and exact-fill tests
+  against the new layer.
+- The callback binding is regression-tested for BOTH halves after promotion: a
+  callback outside an active take reverts `UnexpectedCallback` (exists today),
+  AND a callback from the active pool whose data does not hash-match the
+  in-flight take reverts `UnexpectedCallback` (new — the current suite does
+  not cover data mutation, so an extraction that kept `_activeCallbackPool`
+  but dropped `_activeCallbackDataHash` would pass it).
 - `IAjnaKeeperTaker.getSupportedSources()` and `isSourceSupported(...)` remain
-  `pure` unless the recorded decision proves a generic immutable-source taker is
-  strictly cheaper after interface, typegen, existing-taker, deployment, and
-  review impact.
+  `pure` unless a recorded decision adopts the generic immutable-source taker
+  and explicitly prices in the forced `pure`-to-`view` interface break.
+- The non-resizable aggregator sizing classification is keyed on the
+  registry's aggregator *category*: `take-sizing.ts` consumes
+  `isAggregatorExternalTakePath` from `src/config/external-take-registry.ts`
+  (deleting its divergent local copy), and the `calldata_aggregator` path
+  descriptor carries `category: 'aggregator'`. A sizing unit test proves
+  `oneinch` still receives the debt-clamped size after the refactor (1inch is
+  outside the `calldata_aggregator` family but must keep exact-fill sizing),
+  and LI.FI sizing behavior is unchanged.
 - If the generic immutable-source taker is chosen, source support is immutable
   per deployment and old LI.FI behavior is equivalent.
 - Wrapper code is thin and common callback mechanics live in the shared core.
@@ -278,9 +364,13 @@ justification is recorded in the packet closeout.
   `ApprovedCalldataAggregatorQuote` / `calldataQuote`.
 - Shared `lifiQuote?` state is deleted.
 - LI.FI-specific runtime approval helpers are deleted.
-- The on-chain shared core defaults to wrapper/base reuse without changing
-  `IAjnaKeeperTaker` mutability. A generic immutable-source taker is accepted only
-  if its recorded decision proves lower total complexity.
+- The on-chain shared core is the `BaseAggregatorCalldataTaker` layer over the
+  existing merged base, preserving callback binding, exact-fill, allowlist
+  isolation, the `quoteAmountDueCeiling` output backstop, and provider-distinct
+  event names, without changing `IAjnaKeeperTaker` mutability. A generic
+  immutable-source taker is accepted only if its recorded decision prices in
+  the forced `pure`-to-`view` interface break and proves lower total
+  complexity.
 - `CalldataAggregatorProviderId` is only `lifi` in Packet 2B; no inactive Sushi
   provider id or descriptor is predeclared.
 - Any shared layer-specific calldata-aggregator registries compile against the

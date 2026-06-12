@@ -68,6 +68,12 @@ if (!forkConfig) {
 }
 
 const config: HardhatUserConfig = {
+  // Integration tests are deterministic local-network tests, but hardhat's
+  // default 40s mocha timeout flakes on the slower LI.FI fixtures when the
+  // machine is under load (each test deploys a full factory/taker stack).
+  mocha: {
+    timeout: 120000,
+  },
   //solidity: '0.8.28',
   solidity: {
     version: '0.8.28',

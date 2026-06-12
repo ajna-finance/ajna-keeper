@@ -14,6 +14,9 @@
   "scripts": {
     "start": "./node_modules/ts-node/dist/bin.js src/index.ts",
     "format": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "slither": "slither . --filter-paths \"node_modules|mocks\" --exclude-informational --exclude-optimization",
+    "curve-selector-canary": "./node_modules/ts-node/dist/bin.js scripts/curve-pool-selector-canary.ts",
     "compile": "npx hardhat compile",
     "unit-tests": "npx mocha --require ts-node/register 'tests/unit/**/*.test.ts'",
     "integration-tests": "npx hardhat test",

@@ -39,6 +39,32 @@ export async function fundSigner(address: string) {
   ]);
 }
 
+/**
+ * Extracts only the revert-reason segments from a hardhat/ethers error
+ * message. Hardhat embeds contract source (sourceContent) in some revert
+ * errors, so matching against the full message can FALSE-PASS on any
+ * identifier that merely appears in the source code. Matching against the
+ * extracted segments binds assertions to the actual revert reason. Falls back
+ * to the full message when no revert pattern is present (plain JS errors).
+ */
+export function extractRevertSegments(message: string): string {
+  const patterns = [
+    /reverted with reason string '[^']*'/g,
+    /reverted with custom error '[^']*'/g,
+    /reverted with panic code [^\s,)]+/g,
+    /reverted with an unrecognized custom error \(return data: 0x[0-9a-fA-F]*\)/g,
+    /Transaction reverted without a reason string/g,
+    /Transaction reverted: function call to a non-contract account/g,
+  ];
+  const segments: string[] = [];
+  for (const pattern of patterns) {
+    for (const match of message.match(pattern) ?? []) {
+      segments.push(match);
+    }
+  }
+  return segments.length > 0 ? segments.join('\n') : message;
+}
+
 export async function expectRevertContaining(
   action: Promise<unknown>,
   expected: string
@@ -52,7 +78,11 @@ export async function expectRevertContaining(
   expect(caught, `expected revert containing "${expected}"`).to.be.instanceOf(
     Error
   );
-  expect((caught as Error).message).to.contain(expected);
+  const revertSegments = extractRevertSegments((caught as Error).message);
+  expect(
+    revertSegments,
+    `expected revert reason containing "${expected}"`
+  ).to.contain(expected);
 }
 
 /**
