@@ -33,7 +33,10 @@ See `docs/calldata-aggregator-packet-4-lifi-broad-policy.md`.
 
 Packet 5 is a future architecture migration. It turns 1inch into another
 `calldata_aggregator` provider and removes the standalone `oneinch` execution
-family only after a reviewed migration and equivalence test bar.
+family only after a reviewed migration and equivalence test bar. The intended
+terminal state also removes the legacy standalone `AjnaKeeperTaker` contract and
+renames the factory-managed execution entrypoint from "factory" terminology to
+router terminology.
 
 See `docs/calldata-aggregator-packet-5-oneinch-provider.md`.
 
@@ -68,4 +71,3 @@ provider-local or provider-neutral helper cannot own the logic.
    discovery.
 4. Implement Packet 5 only after a separate design review and migration plan,
    because it changes live 1inch contracts/config/runtime semantics.
-

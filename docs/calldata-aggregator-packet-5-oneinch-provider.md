@@ -35,6 +35,36 @@ LI.FI and Sushi already share:
 - `calldata_aggregator` route identity plus provider id
 - provider-local API normalization and execution wrappers
 
+## Current Contract Roles
+
+The current names are historical and should not be carried into the terminal
+architecture unchanged:
+
+- `contracts/AjnaKeeperTaker.sol` is the legacy standalone 1inch taker. It is
+  owner-only, directly implements the Ajna pool callback, and is intentionally
+  not factory-managed.
+- `contracts/factories/AjnaKeeperTakerFactory.sol` is not a deployer factory.
+  It is a source-to-taker registry and execution router: it validates registered
+  takers, maps `LiquiditySource` values to taker deployments, forwards
+  `takeWithAtomicSwap(...)`, and recovers tokens from registered takers.
+- `FactoryAuthorizedTakerBase` is the shim that makes factory-managed takers
+  compatible with the router: it exposes `authorizedFactory()`, implements
+  owner-or-factory access control, and shares the `IAjnaKeeperTaker` getters.
+- `KeeperTakerBase` is the common taker core used by both the legacy standalone
+  1inch taker and the factory-managed takers.
+- `BaseAggregatorCalldataTaker` is the shared calldata-aggregator execution
+  engine used by LI.FI and Sushi today. It is the intended base for migrated
+  1inch execution.
+
+The desired terminal state is:
+
+- remove the standalone `AjnaKeeperTaker` contract after 1inch has equivalent
+  calldata-aggregator coverage;
+- keep the source-to-taker registry/router concept, but rename it from
+  `AjnaKeeperTakerFactory` to `TakerRouter` or `AjnaKeeperTakerRouter`;
+- update operator-facing config/docs away from `takers.factory` naming toward a
+  router name, while preserving enum source ids.
+
 ## Non-Goals
 
 - Do not break existing live 1inch configs without a migration path.
@@ -54,6 +84,9 @@ Before implementation, record the contract migration decision:
    release while configs migrate.
 3. Later retire the standalone taker after equivalence evidence and operator
    migration.
+4. Rename the factory-managed execution entrypoint to `TakerRouter` or
+   `AjnaKeeperTakerRouter`, because the current contract routes to already
+   deployed takers and does not deploy them.
 
 The first implementation packet should not delete the legacy taker until the new
 factory-registered path has passing equivalence and canary evidence.
@@ -83,6 +116,11 @@ discovery: {
 The compatibility path must be obvious in logs and docs, because operators need
 to know when they are using the old standalone taker versus the new
 factory-registered provider.
+
+The config cleanup target is to replace `takers.factory` terminology with a
+router-facing field name in the same migration window. Compatibility aliases can
+exist during migration, but new examples and production docs should use the
+router name.
 
 ## Implementation Phases
 
@@ -128,8 +166,14 @@ factory-registered provider.
 - Do not change `IAjnaKeeperTaker` mutability unless a separate recorded
   decision accepts the generic immutable-source taker tradeoff.
 
-### Phase 4: Runtime Migration
+### Phase 4: Router Rename And Runtime Migration
 
+- Rename or replace `AjnaKeeperTakerFactory` with the chosen router contract
+  name (`TakerRouter` or `AjnaKeeperTakerRouter`).
+- Update TypeChain imports, deployment scripts, preflight labels, telemetry, and
+  production docs from factory terminology to router terminology.
+- Add compatibility handling only where needed to let existing configs move from
+  `takers.factory` to the router field without ambiguous runtime behavior.
 - Add `oneinch` to `CalldataAggregatorProviderId`.
 - Extend `AggregatorProviderIdentity` with inert 1inch metadata only.
 - Change provider registry and hybrid selection to dispatch 1inch by
@@ -147,8 +191,11 @@ factory-registered provider.
 Only after migration evidence:
 
 - remove internal `oneinch` path dispatch;
+- remove legacy standalone `AjnaKeeperTaker`;
 - delete the standalone approval path;
 - retire standalone `AjnaKeeperTaker` deployment docs;
+- remove or fail-closed any remaining `takers.oneInch` standalone execution
+  config;
 - leave compatibility config parsing only where needed for existing operators;
 - update tests to ensure no production runtime path reinterprets `oneinch` as a
   separate execution family.
@@ -197,4 +244,7 @@ The new provider path must prove equivalence or intentional improvement for:
 - No raw provider payloads are added to shared execution types.
 - Old standalone 1inch execution is removed only after compatibility and
   equivalence gates pass.
-
+- The legacy standalone `AjnaKeeperTaker` contract is removed from production
+  deployment docs and runtime dispatch.
+- The factory-managed execution entrypoint is named as a router, not a factory,
+  in new contracts, config, docs, telemetry, and scripts.
