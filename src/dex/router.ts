@@ -14,7 +14,6 @@ import { logger } from '../logging';
 import { swapToWeth } from './uniswap';
 import { getErrorMessage, tokenChangeDecimals } from '../utils';
 import { swapWithUniversalRouter } from './universal-router';
-import { swapWithSushiswapRouter } from './sushiswap-router';
 import { swapWithCurveRouter } from './curve-router';
 import { NonceTracker } from '../nonce';
 import {
@@ -543,46 +542,6 @@ export class DexRouter {
     return { success: false, error: 'Max retries reached for 1inch swap' };
   }
 
-  private async swapWithSushiswap(
-    chainId: number,
-    amount: BigNumber,
-    tokenIn: string,
-    tokenOut: string,
-    to: string,
-    slippage: number,
-    feeAmount?: number,
-    sushiswapSettings?: any
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      if (!sushiswapSettings) {
-        return {
-          success: false,
-          error: 'SushiSwap configuration not found',
-        };
-      }
-
-      const result = await swapWithSushiswapRouter(
-        this.signer,
-        tokenIn,
-        amount,
-        tokenOut,
-        slippage,
-        sushiswapSettings.swapRouterAddress!,
-        sushiswapSettings.quoterV2Address!,
-        feeAmount ||
-          sushiswapSettings.defaultFeeTier ||
-          DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
-        sushiswapSettings.factoryAddress
-      );
-
-      return result;
-    } catch (error) {
-      return {
-        success: false,
-        error: `SushiSwap swap failed: ${error}`,
-      };
-    }
-  }
 
   // CURVE INTEGRATION: Simplified helper to find pool config by token pair
   public getCurvePoolForTokenPair(
@@ -709,7 +668,6 @@ export class DexRouter {
         defaultFeeTier?: number;
         defaultSlippage?: number;
       };
-      sushiswap?: any;
       curve?: CurveRouterOverrides;
     }
   ): Promise<{ success: boolean; error?: string }> {
@@ -852,18 +810,6 @@ export class DexRouter {
             return { success: false, error: `Uniswap swap failed: ${error}` };
           }
         }
-
-      case PostAuctionDex.SUSHISWAP:
-        return await this.swapWithSushiswap(
-          chainId,
-          adjustedAmount,
-          tokenIn,
-          tokenOut,
-          to,
-          slippage,
-          feeAmount,
-          combinedSettings?.sushiswap
-        );
 
       case PostAuctionDex.CURVE:
         // CURVE INTEGRATION: New case for Curve post-auction swaps

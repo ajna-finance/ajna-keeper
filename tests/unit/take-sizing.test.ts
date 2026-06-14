@@ -1,9 +1,9 @@
 import { expect } from 'chai';
 import { BigNumber, utils } from 'ethers';
+import { isAggregatorExternalTakePath } from '../../src/config/external-take-registry';
 import {
   getDebtConstrainedTakeCollateralWad,
   getExpectedQuotedCollateralWad,
-  isAggregatorExternalTakePath,
 } from '../../src/take/take-sizing';
 
 // Live-incident shape: 67.35 collateral, debt ~7.18, price ~0.4646 — Ajna
@@ -90,7 +90,7 @@ describe('take sizing', () => {
       ).to.equal(true);
       expect(
         getExpectedQuotedCollateralWad({
-          externalTakePath: 'lifi',
+          externalTakePath: 'calldata_aggregator',
           ...params,
         }).eq(clamped)
       ).to.equal(true);
@@ -112,9 +112,10 @@ describe('take sizing', () => {
   describe('isAggregatorExternalTakePath', () => {
     it('classifies paths', () => {
       expect(isAggregatorExternalTakePath('oneinch')).to.equal(true);
-      expect(isAggregatorExternalTakePath('lifi')).to.equal(true);
+      expect(isAggregatorExternalTakePath('calldata_aggregator')).to.equal(
+        true
+      );
       expect(isAggregatorExternalTakePath('factory')).to.equal(false);
-      expect(isAggregatorExternalTakePath(undefined)).to.equal(false);
     });
   });
 });

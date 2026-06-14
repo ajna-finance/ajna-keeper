@@ -20,18 +20,14 @@ import {
   DEADLINE,
   ERC20_NON_SUBSET_HASH,
   MockTakerBase,
-  SUSHI_DETAILS_TYPE,
   ZERO_FACTORY,
   deployCurveTaker,
   deployFundedCurvePool,
-  deployFundedSushiRouter,
   deployFundedSwapRouter02,
   deployMinOutBypassSwap,
   deployMockTakerBase,
-  deploySushiTaker,
   deployUniswapTaker,
   encodeCurveKeeperDetails,
-  encodeSushiKeeperDetails,
   encodeTakerCallbackData,
   encodeUniswapDetails,
   expectRevertContaining,
@@ -47,7 +43,6 @@ const DUE_FULL = utils.parseEther('5');
 const AUCTION_PRICE = utils.parseEther('1');
 const SOURCE_ONEINCH = 1;
 const SOURCE_UNISWAP_V3 = 2;
-const SOURCE_SUSHISWAP = 3;
 const SOURCE_CURVE = 4;
 
 const ONE_INCH_DETAILS_TYPE =
@@ -224,34 +219,10 @@ describe('Taker hardening regressions', () => {
   });
 
   describe('callback output-token binding', () => {
-    it('rejects crafted sushiswap callbacks whose target token is not the pool quote', async () => {
-      const base = await deployMockTakerBase();
-      const { owner, pool } = base;
-      const taker = await deploySushiTaker(base);
-
-      const fakeToken = await new MockERC20__factory(owner).deploy(
-        'Fake Quote',
-        'FAKE',
-        18
-      );
-      await fakeToken.deployed();
-
-      const callbackData = encodeTakerCallbackData(
-        SUSHI_DETAILS_TYPE,
-        [owner.address, fakeToken.address, 500, FULL_MIN_OUT, DEADLINE],
-        MAX_AMOUNT
-      );
-
-      await expectRevertContaining(
-        pool.callAtomicSwapCallback(
-          taker.address,
-          TAKEN_PARTIAL,
-          DUE_PARTIAL,
-          callbackData
-        ),
-        'InvalidSwapDetails'
-      );
-    });
+    // The direct-Sushi crafted-callback case was removed with the direct Sushi
+    // path; the curve tokenOut/tokenIn binding cases below cover the same
+    // re-binding invariant (both takers share the FactoryAuthorizedTakerBase
+    // callback shape).
 
     it('rejects crafted curve callbacks whose tokenOut is not the pool quote', async () => {
       const base = await deployMockTakerBase();
@@ -468,19 +439,21 @@ describe('Taker hardening regressions', () => {
       const taker = await deployUniswapTaker(base);
       const router = await deployFundedSwapRouter02(base, DUE_RAW.add(1));
 
-      await taker.takeWithAtomicSwap(
-        base.pool.address,
-        base.owner.address,
-        AUCTION_PRICE,
-        MAX_AMOUNT,
-        SOURCE_UNISWAP_V3,
-        router.address,
-        encodeUniswapDetails({
-          routerAddress: router.address,
-          targetToken: base.quoteToken.address,
-          amountOutMinimum: 1,
-        })
-      );
+      const receipt = await (
+        await taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          router.address,
+          encodeUniswapDetails({
+            routerAddress: router.address,
+            targetToken: base.quoteToken.address,
+            amountOutMinimum: 1,
+          })
+        )
+      ).wait();
 
       expect((await base.pool.takeCount()).eq(1)).to.equal(true);
       expect(
@@ -488,6 +461,19 @@ describe('Taker hardening regressions', () => {
           DUE_RAW.add(1)
         )
       ).to.equal(true);
+
+      // AUDIT FIX regression (ported from the removed direct-Sushi case): the
+      // factory takers' SwapExecuted was declared but never emitted, leaving
+      // successful takes invisible to per-swap monitoring. UniswapV3 is the
+      // surviving direct-DEX taker carrying this emission assertion.
+      const swapEvent = receipt.events?.find((e) => e.event === 'SwapExecuted');
+      expect(swapEvent, 'expected a SwapExecuted event').to.not.equal(
+        undefined
+      );
+      expect(swapEvent!.args!.tokenIn).to.equal(base.collateralToken.address);
+      expect(swapEvent!.args!.tokenOut).to.equal(base.quoteToken.address);
+      expect(swapEvent!.args!.amountIn.eq(MAX_AMOUNT)).to.equal(true);
+      expect(swapEvent!.args!.amountOut.eq(DUE_RAW.add(1))).to.equal(true);
     });
 
     it('documents the conservative over-reject when the quote due divides exactly', async () => {
@@ -523,60 +509,9 @@ describe('Taker hardening regressions', () => {
       );
     });
 
-    it('rejects sushiswap swaps that only cover the floored quote due', async () => {
-      const base = await setupScaledQuoteBase();
-      const taker = await deploySushiTaker(base);
-      const router = await deployFundedSushiRouter(base, DUE_RAW);
-
-      await expectRevertContaining(
-        taker.takeWithAtomicSwap(
-          base.pool.address,
-          base.owner.address,
-          AUCTION_PRICE,
-          MAX_AMOUNT,
-          SOURCE_SUSHISWAP,
-          router.address,
-          encodeSushiKeeperDetails(BigNumber.from(1))
-        ),
-        'InsufficientQuoteReceived'
-      );
-    });
-
-    it('accepts sushiswap swaps that cover the ceil-rounded pull', async () => {
-      const base = await setupScaledQuoteBase();
-      const taker = await deploySushiTaker(base);
-      const router = await deployFundedSushiRouter(base, DUE_RAW.add(1));
-
-      const receipt = await (
-        await taker.takeWithAtomicSwap(
-          base.pool.address,
-          base.owner.address,
-          AUCTION_PRICE,
-          MAX_AMOUNT,
-          SOURCE_SUSHISWAP,
-          router.address,
-          encodeSushiKeeperDetails(BigNumber.from(1))
-        )
-      ).wait();
-
-      expect((await base.pool.takeCount()).eq(1)).to.equal(true);
-      expect(
-        (await base.quoteToken.balanceOf(base.pool.address)).eq(
-          DUE_RAW.add(1)
-        )
-      ).to.equal(true);
-
-      // AUDIT FIX regression: SwapExecuted was declared but never emitted,
-      // leaving successful Sushi takes invisible to per-swap monitoring.
-      const swapEvent = receipt.events?.find((e) => e.event === 'SwapExecuted');
-      expect(swapEvent, 'expected a SwapExecuted event').to.not.equal(
-        undefined
-      );
-      expect(swapEvent!.args!.tokenIn).to.equal(base.collateralToken.address);
-      expect(swapEvent!.args!.tokenOut).to.equal(base.quoteToken.address);
-      expect(swapEvent!.args!.amountIn.eq(MAX_AMOUNT)).to.equal(true);
-      expect(swapEvent!.args!.amountOut.eq(DUE_RAW.add(1))).to.equal(true);
-    });
+    // Direct-Sushi quote-ceiling cases removed with the direct Sushi path; the
+    // uniswap (above, with the ported SwapExecuted assertion) and curve cases
+    // cover the identical ceil-rounded-pull reject/accept invariants.
 
     it('rejects curve swaps that only cover the floored quote due', async () => {
       const base = await setupScaledQuoteBase();

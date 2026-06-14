@@ -3,7 +3,7 @@ import {
   LiquiditySource,
   isFactoryDynamicSource,
   normalizeExternalTakeRouteSelectionMode,
-  resolveExternalTakePaths,
+  resolveExternalTakePolicy,
   resolveHybridGasQuoteFallbackPolicy,
 } from '../../config';
 import { ZERO_BN } from '../../constants';
@@ -50,13 +50,14 @@ const ZERO = ZERO_BN;
 function requiresHybridNetProfitRanking(
   takePolicy: AutoDiscoverTakePolicyRuntime
 ): boolean {
-  const paths = takePolicy?.allowedExternalTakePaths;
-  return !!(
-    paths !== undefined &&
-    paths.length > 1 &&
-    normalizeExternalTakeRouteSelectionMode(
-      takePolicy?.externalTakeRouteSelectionMode
-    ) === 'maximize_profit'
+  const resolved = resolveExternalTakePolicy({
+    defaultLiquiditySource: undefined,
+    takePolicy,
+  });
+  return (
+    resolved.externalTakePathsExplicitlyConfigured &&
+    resolved.externalTakePaths.length > 1 &&
+    resolved.routeSelectionMode === 'maximize_profit'
   );
 }
 
@@ -171,10 +172,10 @@ export async function approveExternalTakeForDiscovery(
       routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
         takePolicy?.externalTakeRouteSelectionMode
       ),
-      externalTakePaths: resolveExternalTakePaths({
+      externalTakePaths: resolveExternalTakePolicy({
         defaultLiquiditySource: target.take.liquiditySource,
-        allowedExternalTakePaths: takePolicy?.allowedExternalTakePaths,
-      }),
+        takePolicy,
+      }).externalTakePaths,
       maxGasCostNative: takePolicy?.maxGasCostNative,
       maxGasCostQuote: takePolicy?.maxGasCostQuote,
       minExpectedProfitQuote: takePolicy?.minExpectedProfitQuote,
@@ -347,7 +348,10 @@ export async function approveExternalTakeForDiscovery(
     takePolicy?.minProfitNative !== undefined;
   const needsSimpleProfitability =
     quoteAmountRaw !== undefined &&
-    (takePolicy?.allowedExternalTakePaths !== undefined ||
+    (resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy,
+    }).externalTakePathsExplicitlyConfigured ||
       hasQuoteProfitFloor ||
       gasCostQuoteRaw !== undefined);
   let quoteTokenDecimals = gasPolicy.quoteTokenDecimals;

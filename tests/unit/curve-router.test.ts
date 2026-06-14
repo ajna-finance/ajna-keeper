@@ -14,7 +14,7 @@ describe('Curve Router Module', () => {
     // Reset sinon after each test
     sinon.restore();
 
-    // Create basic mocks - same pattern as sushiswap-router.test.ts
+    // Create basic mocks - same pattern as the V3 router tests
     mockSigner = {
       getAddress: sinon.stub().resolves('0xTestAddress'),
       getChainId: sinon.stub().resolves(8453), // Base chain ID
@@ -30,7 +30,7 @@ describe('Curve Router Module', () => {
       }),
     };
 
-    // Mock NonceTracker - same pattern as sushiswap-router.test.ts
+    // Mock NonceTracker - same pattern as the V3 router tests
     queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
       .callsFake(async (signer, txFunc) => {
@@ -190,7 +190,7 @@ describe('Curve Router Module', () => {
     });
   });
 
-  // Test NonceTracker integration - same pattern as sushiswap-router.test.ts
+  // Test NonceTracker integration - same pattern as the V3 router tests
   describe('Integration with NonceTracker', () => {
     it('should use NonceTracker.queueTransaction for transactions', async () => {
       // Restore the original method before this test

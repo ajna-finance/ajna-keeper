@@ -3,8 +3,7 @@ import {
   ExternalTakePathKind,
   LiquiditySource,
   normalizeExternalTakeRouteSelectionMode,
-  resolveDefaultFactoryLiquiditySource,
-  resolveExternalTakePaths,
+  resolveExternalTakePolicy,
 } from '../config';
 import { logger } from '../logging';
 import { ExternalTakeAdapter } from '../take/engine';
@@ -29,10 +28,12 @@ import {
   LifiPathQuoteFn,
   OneInchCircuitOutcome,
   OneInchPathQuoteFn,
+  SushiAggregatorPathQuoteFn,
   quoteFactoryPathForDiscovery,
   quoteKeeperTakerOneInchTakeForDiscovery,
   quoteLifiPathForDiscovery,
   quoteOneInchPathForDiscovery,
+  quoteSushiAggregatorPathForDiscovery,
   recordLifiCircuitOutcomeForDiscovery,
   recordOneInchCircuitOutcomeForDiscovery,
 } from './external-take/quotes';
@@ -91,18 +92,17 @@ export function createDiscoveredTakeTargetRuntime(params: {
   externalTakeProbeTimeoutMs: number;
   buildFactoryRouteProfitabilityContext: DiscoveryFactoryRouteProfitabilityContextBuilder;
 }): DiscoveredTakeTargetRuntime {
-  const externalTakePaths = resolveExternalTakePaths({
+  const resolvedExternalTakePolicy = resolveExternalTakePolicy({
     defaultLiquiditySource: params.target.take.liquiditySource,
-    allowedExternalTakePaths: params.takePolicy?.allowedExternalTakePaths,
+    takePolicy: params.takePolicy,
   });
-  const defaultFactoryLiquiditySource = resolveDefaultFactoryLiquiditySource({
-    defaultLiquiditySource: params.target.take.liquiditySource,
-    configuredDefaultFactoryLiquiditySource:
-      params.takePolicy?.defaultFactoryLiquiditySource,
-  });
+  const externalTakePaths = Array.from(
+    resolvedExternalTakePolicy.externalTakePaths
+  );
+  const defaultFactoryLiquiditySource =
+    resolvedExternalTakePolicy.defaultFactoryLiquiditySource;
   const factoryQuoteConfig = {
     uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
-    sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
     tokenAddresses: params.config.tokenAddresses,
   };
@@ -144,7 +144,7 @@ export function createDiscoveredTakeTargetRuntime(params: {
       transports: params.transports,
       rpcCache: params.rpcCache,
       takePolicy: params.takePolicy,
-      defaultFactoryLiquiditySource,
+      resolvedDefaultFactoryLiquiditySource: defaultFactoryLiquiditySource,
       routeProbeLimiter: params.routeProbeLimiter,
       factoryQuoteConfig,
       buildFactoryRouteProfitabilityContext:
@@ -173,6 +173,17 @@ export function createDiscoveredTakeTargetRuntime(params: {
     });
   const quoteLifiPath: LifiPathQuoteFn = (quoteParams) =>
     quoteLifiPathForDiscovery({
+      ...quoteParams,
+      config: params.config,
+      rpcCache: params.rpcCache,
+      takePolicy: params.takePolicy,
+      recordCircuitOutcome: quoteParams.recordCircuitOutcome,
+      routeProbeLimiter: params.routeProbeLimiter,
+      probeTimeoutMs: params.externalTakeProbeTimeoutMs,
+      getTokenDecimalsCache: getDiscoveryTokenDecimalsCache,
+    });
+  const quoteSushiAggregatorPath: SushiAggregatorPathQuoteFn = (quoteParams) =>
+    quoteSushiAggregatorPathForDiscovery({
       ...quoteParams,
       config: params.config,
       rpcCache: params.rpcCache,
@@ -212,6 +223,7 @@ export function createDiscoveredTakeTargetRuntime(params: {
       quoteKeeperTakerOneInchTake,
       quoteFactoryPath,
       quoteLifiPath,
+      quoteSushiAggregatorPath,
       recordOneInchCircuitOutcome,
       recordLifiCircuitOutcome,
     });
@@ -254,7 +266,6 @@ export function createDiscoveredTakeTargetRuntime(params: {
     lifi: params.config.lifi,
     lifiTaker: params.config.lifiTaker,
     uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
-    sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
     tokenAddresses: params.config.tokenAddresses,
     takeWriteTransport: params.takeWriteTransport,
@@ -299,7 +310,19 @@ export function createDiscoveredTakeTargetRuntime(params: {
         );
       }
     },
-    onLifiExecutionFailure: recordExternalTakeExecutionFailure('lifi'),
+    onLifiExecutionFailure: recordExternalTakeExecutionFailure(
+      'calldata_aggregator'
+    ),
+    onSushiAggregatorQuoteResult: (result) => {
+      if (!result.success) {
+        logger.debug(
+          `Sushi aggregator execution quote refresh failed: ${result.error ?? result.errorCode ?? 'unknown error'}`
+        );
+      }
+    },
+    onSushiAggregatorExecutionFailure: recordExternalTakeExecutionFailure(
+      'calldata_aggregator'
+    ),
   };
 
   return {

@@ -5,7 +5,6 @@ import {
   ExternalTakeDeploymentRuntimeConfig,
   LifiDexConfig,
   PoolConfig,
-  SushiswapRouterOverrides,
   UniswapV3RouterOverrides,
   formatLiquiditySource,
   resolveExternalTakeDeployment,
@@ -46,7 +45,6 @@ export interface ManualFactoryContextConfig
   extends ManualTakeCommonContextConfig {
   keeperTakerFactory?: string;
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
-  sushiswapRouterOverrides?: SushiswapRouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
 }
@@ -131,7 +129,7 @@ export function formatManualExternalTakeDeployment(params: {
       return `Using manual 1inch external take strategy for pool: ${params.poolName}`;
     case 'factory':
       return `Using factory external take strategy for pool: ${params.poolName}`;
-    case 'lifi':
+    case 'calldata_aggregator':
       return `Using manual LI.FI external take strategy for pool: ${params.poolName}`;
   }
 }
@@ -181,7 +179,7 @@ export function formatManualTakeContextStart(params: {
   switch (path) {
     case 'factory':
       return `Manual factory external take context starting for pool: ${params.poolName}`;
-    case 'lifi':
+    case 'calldata_aggregator':
       return `Manual LI.FI external take context starting for pool: ${params.poolName}`;
     case 'oneinch':
       return `Manual 1inch take context starting for pool: ${params.poolName}`;
@@ -245,7 +243,6 @@ function createManualFactoryTakeContext(params: {
     externalTakeAdapter: createFactoryTakeAdapter({
       quoteConfig: {
         uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
-        sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
         curveRouterOverrides: params.config.curveRouterOverrides,
         tokenAddresses: params.config.tokenAddresses,
       },
@@ -259,7 +256,6 @@ function createManualFactoryTakeContext(params: {
       dryRun: params.config.dryRun,
       keeperTakerFactory: params.config.keeperTakerFactory,
       uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
-      sushiswapRouterOverrides: params.config.sushiswapRouterOverrides,
       curveRouterOverrides: params.config.curveRouterOverrides,
       tokenAddresses: params.config.tokenAddresses,
       takeWriteTransport: params.takeWriteTransport,
@@ -310,7 +306,7 @@ function createManualTakeContext(params: {
         config: params.config,
         takeWriteTransport: params.takeWriteTransport,
       });
-    case 'lifi':
+    case 'calldata_aggregator':
       return createManualLifiTakeContext({
         config: {
           ...params.config,

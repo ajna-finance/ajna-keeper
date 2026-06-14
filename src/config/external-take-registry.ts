@@ -1,20 +1,27 @@
-import { ExternalTakePathKind, LiquiditySource } from './schema';
+import {
+  CalldataAggregatorProviderId,
+  ExternalTakePathKind,
+  LiquiditySource,
+} from './schema';
 
 export type FactoryLiquiditySource =
   | LiquiditySource.UNISWAPV3
-  | LiquiditySource.SUSHISWAP
   | LiquiditySource.CURVE;
 
 export type ExternalTakeTakerContractKey =
   | 'UniswapV3'
-  | 'SushiSwap'
   | 'Curve'
-  | 'Lifi';
+  | 'Lifi'
+  | 'SushiAggregator';
+
+export type CalldataAggregatorLiquiditySource =
+  | LiquiditySource.LIFI
+  | LiquiditySource.SUSHI_AGGREGATOR;
 
 export type ExternalTakeLiquiditySource =
   | LiquiditySource.ONEINCH
   | FactoryLiquiditySource
-  | LiquiditySource.LIFI;
+  | CalldataAggregatorLiquiditySource;
 
 export type ExternalTakePathCategory = 'aggregator' | 'factory';
 
@@ -38,7 +45,7 @@ export interface ExternalTakeLiquiditySourceDescriptor {
 export type ExternalTakeDeploymentType =
   | 'factory'
   | 'oneinch'
-  | 'lifi'
+  | 'calldata_aggregator'
   | 'none';
 export type ActiveExternalTakeDeploymentType = Exclude<
   ExternalTakeDeploymentType,
@@ -63,16 +70,17 @@ export type FactoryExternalTakeDeploymentResolution = {
   resolvedTakerAddress: string;
 };
 
-export type LifiExternalTakeDeploymentResolution = {
-  deploymentType: 'lifi';
-  requestedLiquiditySource: LiquiditySource.LIFI;
+export type CalldataAggregatorExternalTakeDeploymentResolution = {
+  deploymentType: 'calldata_aggregator';
+  providerId: CalldataAggregatorProviderId;
+  requestedLiquiditySource: CalldataAggregatorLiquiditySource;
   resolvedTakerAddress: string;
 };
 
 export type ActiveExternalTakeDeploymentResolution =
   | OneInchExternalTakeDeploymentResolution
   | FactoryExternalTakeDeploymentResolution
-  | LifiExternalTakeDeploymentResolution;
+  | CalldataAggregatorExternalTakeDeploymentResolution;
 
 export type ExternalTakeDeploymentResolution =
   | ActiveExternalTakeDeploymentResolution
@@ -84,14 +92,13 @@ export type ExternalTakeDeploymentResolution =
 
 export const FACTORY_DYNAMIC_SOURCES: readonly FactoryLiquiditySource[] = [
   LiquiditySource.UNISWAPV3,
-  LiquiditySource.SUSHISWAP,
   LiquiditySource.CURVE,
 ];
 
 export const SUPPORTED_EXTERNAL_TAKE_PATHS: readonly ExternalTakePathKind[] = [
   'oneinch',
   'factory',
-  'lifi',
+  'calldata_aggregator',
 ];
 
 export const EXTERNAL_TAKE_PATHS: ReadonlySet<ExternalTakePathKind> = new Set(
@@ -99,7 +106,12 @@ export const EXTERNAL_TAKE_PATHS: ReadonlySet<ExternalTakePathKind> = new Set(
 );
 
 export const SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES: readonly ExternalTakeLiquiditySource[] =
-  [LiquiditySource.ONEINCH, ...FACTORY_DYNAMIC_SOURCES, LiquiditySource.LIFI];
+  [
+    LiquiditySource.ONEINCH,
+    ...FACTORY_DYNAMIC_SOURCES,
+    LiquiditySource.LIFI,
+    LiquiditySource.SUSHI_AGGREGATOR,
+  ];
 
 export const EXTERNAL_TAKE_PATH_DESCRIPTORS = {
   oneinch: {
@@ -115,12 +127,12 @@ export const EXTERNAL_TAKE_PATH_DESCRIPTORS = {
     label: 'factory',
     sources: FACTORY_DYNAMIC_SOURCES,
   },
-  lifi: {
-    path: 'lifi',
+  calldata_aggregator: {
+    path: 'calldata_aggregator',
     category: 'aggregator',
-    label: 'LI.FI',
+    label: 'calldata aggregator',
     defaultSource: LiquiditySource.LIFI,
-    sources: [LiquiditySource.LIFI],
+    sources: [LiquiditySource.LIFI, LiquiditySource.SUSHI_AGGREGATOR],
     requiresRouteDeploymentValidation: true,
     requiresDexGasOverride: true,
   },
@@ -138,12 +150,6 @@ export const EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS = {
     label: 'Uniswap V3',
     takerContractKey: 'UniswapV3',
   },
-  [LiquiditySource.SUSHISWAP]: {
-    source: LiquiditySource.SUSHISWAP,
-    path: 'factory',
-    label: 'SushiSwap',
-    takerContractKey: 'SushiSwap',
-  },
   [LiquiditySource.CURVE]: {
     source: LiquiditySource.CURVE,
     path: 'factory',
@@ -152,9 +158,15 @@ export const EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS = {
   },
   [LiquiditySource.LIFI]: {
     source: LiquiditySource.LIFI,
-    path: 'lifi',
+    path: 'calldata_aggregator',
     label: 'LI.FI',
     takerContractKey: 'Lifi',
+  },
+  [LiquiditySource.SUSHI_AGGREGATOR]: {
+    source: LiquiditySource.SUSHI_AGGREGATOR,
+    path: 'calldata_aggregator',
+    label: 'Sushi Aggregator',
+    takerContractKey: 'SushiAggregator',
   },
 } satisfies Record<
   ExternalTakeLiquiditySource,
@@ -202,6 +214,15 @@ export function isAggregatorExternalTakePath(
   path: ExternalTakePathKind
 ): boolean {
   return getExternalTakePathDescriptor(path).category === 'aggregator';
+}
+
+export function isCalldataAggregatorLiquiditySource(
+  source: LiquiditySource | undefined
+): source is CalldataAggregatorLiquiditySource {
+  return (
+    source === LiquiditySource.LIFI ||
+    source === LiquiditySource.SUSHI_AGGREGATOR
+  );
 }
 
 export function isFactoryLiquiditySource(
@@ -316,9 +337,13 @@ export function resolveExternalTakeDeployment(params: {
         : 'registered taker contract is not configured',
     };
   }
-  if (source === LiquiditySource.LIFI) {
+  if (
+    source === LiquiditySource.LIFI ||
+    source === LiquiditySource.SUSHI_AGGREGATOR
+  ) {
     return {
-      deploymentType: 'lifi',
+      deploymentType: 'calldata_aggregator',
+      providerId: source === LiquiditySource.LIFI ? 'lifi' : 'sushi_aggregator',
       requestedLiquiditySource: source,
       resolvedTakerAddress,
     };

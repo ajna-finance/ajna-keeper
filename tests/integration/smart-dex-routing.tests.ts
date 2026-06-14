@@ -82,7 +82,7 @@ describe('Manual External Take Routing Integration Tests', () => {
         },
       });
 
-      expectManualDeploymentType(resolution, 'lifi');
+      expectManualDeploymentType(resolution, 'calldata_aggregator');
       expect(resolution.requestedLiquiditySource).to.equal(
         LiquiditySource.LIFI
       );
@@ -131,7 +131,7 @@ describe('Manual External Take Routing Integration Tests', () => {
 
       expect(oneInchDeployment.deploymentType).to.equal('oneinch');
       expect(factoryDeployment.deploymentType).to.equal('factory');
-      expect(lifiDeployment.deploymentType).to.equal('lifi');
+      expect(lifiDeployment.deploymentType).to.equal('calldata_aggregator');
     });
 
     it('resolves missing requested external deployment as arb-only fallback', () => {

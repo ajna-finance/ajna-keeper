@@ -118,7 +118,7 @@ describe('LI.FI config validation', () => {
     delete (config.discovery!.take as any).validateRouteDeployments;
 
     expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
-      'AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include lifi'
+      'AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include calldata_aggregator'
     );
   });
 
@@ -149,7 +149,7 @@ describe('LI.FI config validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
-      'AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include lifi'
+      'AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include calldata_aggregator'
     );
   });
 
@@ -158,7 +158,7 @@ describe('LI.FI config validation', () => {
     delete (config.discovery!.take as any).dexGasOverrides;
 
     expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
-      'AutoDiscoverConfig.take: dexGasOverrides.LIFI required when resolved external take paths include lifi'
+      'AutoDiscoverConfig.take: dexGasOverrides.LIFI required when resolved external take paths include calldata_aggregator'
     );
   });
 
@@ -547,7 +547,7 @@ describe('LI.FI config validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
-      'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3, SUSHISWAP, and CURVE'
+      'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3 and CURVE'
     );
   });
 });

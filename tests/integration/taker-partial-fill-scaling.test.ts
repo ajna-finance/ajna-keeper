@@ -4,14 +4,11 @@ import {
   MockTakerBase,
   deployCurveTaker,
   deployFundedCurvePool,
-  deployFundedSushiRouter,
   deployFundedSwapRouter02,
   deployMinOutBypassSwap,
   deployMockTakerBase,
-  deploySushiTaker,
   deployUniswapTaker,
   encodeCurveKeeperDetails,
-  encodeSushiKeeperDetails,
   encodeUniswapCallbackData,
   encodeUniswapDetails,
   expectRevertContaining,
@@ -27,7 +24,6 @@ const SCALED_MIN_OUT = utils.parseEther('2.4');
 const DUE_PARTIAL = utils.parseEther('1.8');
 const AUCTION_PRICE = utils.parseEther('1');
 const SOURCE_UNISWAP_V3 = 2;
-const SOURCE_SUSHISWAP = 3;
 const SOURCE_CURVE = 4;
 
 describe('Taker partial-fill min-out scaling', () => {
@@ -377,65 +373,9 @@ describe('Taker partial-fill min-out scaling', () => {
     });
   });
 
-  describe('SushiSwapKeeperTaker', () => {
-    it('executes a debt-constrained partial fill that the full-size floor would reject', async () => {
-      const base = await deployMockTakerBase();
-      const { owner, collateralToken, quoteToken, pool } = base;
-      const taker = await deploySushiTaker(base);
-      await setupPartialFill(base);
-
-      const routerOutput = utils.parseEther('2.5');
-      const router = await deployFundedSushiRouter(base, routerOutput);
-
-      const ownerQuoteBefore = await quoteToken.balanceOf(owner.address);
-
-      await taker.takeWithAtomicSwap(
-        pool.address,
-        owner.address,
-        AUCTION_PRICE,
-        MAX_AMOUNT,
-        SOURCE_SUSHISWAP,
-        router.address,
-        encodeSushiKeeperDetails(FULL_MIN_OUT)
-      );
-
-      expect((await pool.takeCount()).eq(1)).to.equal(true);
-      expect(
-        (await collateralToken.balanceOf(router.address)).eq(TAKEN_PARTIAL)
-      ).to.equal(true);
-      expect(
-        (await quoteToken.balanceOf(owner.address)).eq(
-          ownerQuoteBefore.add(routerOutput.sub(DUE_PARTIAL))
-        )
-      ).to.equal(true);
-    });
-
-    it('enforces the pro-rated floor on balance deltas when a router bypasses min-out', async () => {
-      const base = await deployMockTakerBase();
-      const { owner, pool } = base;
-      const taker = await deploySushiTaker(base);
-      await setupPartialFill(base);
-
-      const router = await deployMinOutBypassSwap(
-        base,
-        SCALED_MIN_OUT.sub(1),
-        FULL_MIN_OUT
-      );
-
-      await expectRevertContaining(
-        taker.takeWithAtomicSwap(
-          pool.address,
-          owner.address,
-          AUCTION_PRICE,
-          MAX_AMOUNT,
-          SOURCE_SUSHISWAP,
-          router.address,
-          encodeSushiKeeperDetails(FULL_MIN_OUT)
-        ),
-        'InsufficientQuoteReceived'
-      );
-    });
-  });
+  // Direct-Sushi partial-fill scaling cases removed with the direct Sushi path;
+  // the UniswapV3 and Curve describe blocks cover the identical pro-rated-floor
+  // and balance-delta invariants.
 
   describe('CurveKeeperTaker', () => {
     it('executes a debt-constrained partial fill that the full-size floor would reject', async () => {

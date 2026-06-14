@@ -94,7 +94,6 @@ export class RewardActionTracker {
         ...this.config.dex?.uniswapV3?.legacy,
         ...this.config.dex?.uniswapV3?.universalRouter,
       },
-      sushiswap: this.config.dex?.sushiswap,
       curve: this.config.dex?.curve,
     };
     const result = await this.dexRouter.swap(

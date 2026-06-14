@@ -161,12 +161,13 @@ export async function runLifiSubmissionBoundaryScenario(params: {
       collateral: fromAmount,
       externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
         isTakeable: true,
-        externalTakePath: 'lifi',
+        externalTakePath: 'calldata_aggregator',
         selectedLiquiditySource: LiquiditySource.LIFI,
         quoteAmountRaw,
         routeMinOutRaw,
         approvedMinOutRaw: routeMinOutRaw,
-        lifiQuote: {
+        calldataQuote: {
+          providerId: 'lifi',
           quoteAmountRaw,
           routeMinOutRaw,
         },

@@ -6,7 +6,6 @@ import {
   KeeperConfig,
   LiquiditySource,
   PostAuctionDex,
-  SushiswapRouterOverrides,
   SettlementConfig,
   TakeSettings,
   TakeWriteTransportMode,
@@ -18,15 +17,14 @@ import {
   hasNonEmptyObject,
 } from './schema';
 import {
-  EXTERNAL_TAKE_PATHS,
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
   isFactoryDynamicSource,
   normalizeExternalTakeRouteSelectionMode,
-  resolveExternalTakePaths,
-  resolveFactoryRouteSelectionSources,
+  resolveExternalTakePolicy,
   resolveHybridGasQuoteFallbackPolicy,
 } from './route-policy';
+import type { RawExternalTakePolicyInputs } from './route-policy';
 import {
   formatSupportedExternalTakeLiquiditySources,
   formatSupportedExternalTakePaths,
@@ -51,6 +49,7 @@ import { logger } from '../logging';
 import { ethers } from 'ethers';
 import { MARKET_FACTOR_SCALE } from '../constants';
 import { LIFI_POLICY_BOUNDS, assertValidLifiDexConfig } from './lifi-policy';
+import { validateSushiAggregatorDexRequirements } from './sushi-aggregator-policy';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -238,8 +237,6 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
   const uniswapConfig: UniswapV3RouterOverrides | undefined =
     config.dex?.uniswapV3?.router;
   const universalRouterConfig = config.dex?.uniswapV3?.universalRouter;
-  const sushiConfig: SushiswapRouterOverrides | undefined =
-    config.dex?.sushiswap;
   requireOptionalPercentage(
     config.dex?.oneInch?.defaultSlippage,
     'KeeperConfig.dex.oneInch.defaultSlippage must be a number between 0 and 100'
@@ -259,11 +256,6 @@ function validateRouterFeeTiers(config: KeeperConfig): void {
     universalRouterConfig?.defaultFeeTier,
     'KeeperConfig.dex.uniswapV3.universalRouter'
   );
-  validateCandidateFeeTiers(
-    sushiConfig?.candidateFeeTiers,
-    sushiConfig?.defaultFeeTier,
-    'KeeperConfig.dex.sushiswap'
-  );
 }
 
 function parseLiquiditySourceKey(source: string): LiquiditySource | undefined {
@@ -282,11 +274,10 @@ function getEffectiveFactoryRouteSources(
   defaultFactoryLiquiditySource?: LiquiditySource
 ): Set<LiquiditySource> {
   return new Set(
-    resolveFactoryRouteSelectionSources({
+    resolveExternalTakePolicy({
       defaultLiquiditySource: discoveredTake.liquiditySource,
-      allowedLiquiditySources,
-      configuredDefaultFactoryLiquiditySource: defaultFactoryLiquiditySource,
-    })
+      takePolicy: { allowedLiquiditySources, defaultFactoryLiquiditySource },
+    }).factoryRouteSources
   );
 }
 
@@ -310,43 +301,19 @@ function getEffectiveTakeGasOverrideSources(
   return sources;
 }
 
+// Path/provider/default-source interpretation and its validation live in
+// resolveExternalTakePolicy (src/config/route-policy.ts); this is the
+// one-line delegation the resolver boundary allows in this legacy-frozen file.
 function getEffectiveExternalTakePaths(
   discoveredTake: TakeSettings,
-  allowedExternalTakePaths: ExternalTakePathKind[] | undefined
+  takePolicy: RawExternalTakePolicyInputs | undefined
 ): Set<ExternalTakePathKind> {
   return new Set(
-    resolveExternalTakePaths({
+    resolveExternalTakePolicy({
       defaultLiquiditySource: discoveredTake.liquiditySource,
-      allowedExternalTakePaths,
-    })
+      takePolicy,
+    }).externalTakePaths
   );
-}
-
-function validateAllowedExternalTakePaths(
-  paths: ExternalTakePathKind[] | undefined
-): void {
-  if (paths === undefined) {
-    return;
-  }
-  if (!Array.isArray(paths) || paths.length === 0) {
-    throw new Error(
-      'AutoDiscoverConfig.take: allowedExternalTakePaths must be non-empty'
-    );
-  }
-  const seen = new Set<ExternalTakePathKind>();
-  for (const path of paths) {
-    if (!EXTERNAL_TAKE_PATHS.has(path)) {
-      throw new Error(
-        `AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only ${formatSupportedExternalTakePaths()}`
-      );
-    }
-    if (seen.has(path)) {
-      throw new Error(
-        'AutoDiscoverConfig.take: allowedExternalTakePaths cannot contain duplicates'
-      );
-    }
-    seen.add(path);
-  }
 }
 
 function validateExternalTakeTransportPolicy(
@@ -485,13 +452,6 @@ export function validatePostAuctionDex(
         );
       }
       return;
-    case PostAuctionDex.SUSHISWAP:
-      if (!config.dex?.sushiswap) {
-        throw new Error(
-          'PostAuctionDex.SUSHISWAP requires dex.sushiswap configuration'
-        );
-      }
-      return;
     case PostAuctionDex.CURVE:
       if (!config.dex?.curve) {
         throw new Error(
@@ -580,31 +540,6 @@ function validateUniswapV3TakeSource({
   }
 }
 
-function validateSushiSwapTakeSource({
-  keeperConfig,
-}: ExternalTakeSourceValidationParams): void {
-  requireRegisteredTakerContract({
-    keeperConfig,
-    source: LiquiditySource.SUSHISWAP,
-  });
-  if (!keeperConfig.dex?.sushiswap) {
-    throw new Error(
-      'TakeSettings: dex.sushiswap required when liquiditySource is SUSHISWAP'
-    );
-  }
-  const routerOverrides = keeperConfig.dex.sushiswap;
-  if (
-    !routerOverrides.swapRouterAddress ||
-    !routerOverrides.factoryAddress ||
-    !routerOverrides.wethAddress ||
-    !routerOverrides.quoterV2Address
-  ) {
-    throw new Error(
-      'TakeSettings: dex.sushiswap.swapRouterAddress, factoryAddress, wethAddress, and quoterV2Address required when liquiditySource is SUSHISWAP'
-    );
-  }
-}
-
 function validateCurveTakeSource({
   keeperConfig,
 }: ExternalTakeSourceValidationParams): void {
@@ -652,12 +587,23 @@ function validateLifiTakeSource({
   });
 }
 
+function validateSushiAggregatorTakeSource({
+  keeperConfig,
+  chainId,
+}: ExternalTakeSourceValidationParams): void {
+  requireRegisteredTakerContract({
+    keeperConfig,
+    source: LiquiditySource.SUSHI_AGGREGATOR,
+  });
+  validateSushiAggregatorDexRequirements({ keeperConfig, chainId });
+}
+
 const EXTERNAL_TAKE_SOURCE_VALIDATORS = {
   [LiquiditySource.ONEINCH]: validateOneInchTakeSource,
   [LiquiditySource.UNISWAPV3]: validateUniswapV3TakeSource,
-  [LiquiditySource.SUSHISWAP]: validateSushiSwapTakeSource,
   [LiquiditySource.CURVE]: validateCurveTakeSource,
   [LiquiditySource.LIFI]: validateLifiTakeSource,
+  [LiquiditySource.SUSHI_AGGREGATOR]: validateSushiAggregatorTakeSource,
 } satisfies Record<ExternalTakeLiquiditySource, ExternalTakeSourceValidator>;
 
 function validateExternalTakeSourceRequirements(params: {
@@ -982,10 +928,9 @@ export function validateAutoDiscoverConfig(
       }
     }
 
-    validateAllowedExternalTakePaths(takePolicy.allowedExternalTakePaths);
     const externalTakePaths = getEffectiveExternalTakePaths(
       discoveredTake,
-      takePolicy.allowedExternalTakePaths
+      takePolicy
     );
     if (takePolicy.hybridGasQuoteFailureFallbackMode === 'factory_first') {
       const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
@@ -1012,7 +957,7 @@ export function validateAutoDiscoverConfig(
       !isFactoryDynamicSource(takePolicy.defaultFactoryLiquiditySource)
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource must be UNISWAPV3, SUSHISWAP, or CURVE'
+        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource must be UNISWAPV3 or CURVE'
       );
     }
     const effectiveDefaultFactoryLiquiditySource = isFactoryDynamicSource(
@@ -1126,7 +1071,7 @@ export function validateAutoDiscoverConfig(
         }
         if (!isFactoryDynamicSource(source)) {
           throw new Error(
-            'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3, SUSHISWAP, and CURVE'
+            'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3 and CURVE'
           );
         }
         validateTakeSettings(
@@ -1200,14 +1145,6 @@ export function validateAutoDiscoverConfig(
     ) {
       logger.warn(
         'KeeperConfig.dex.uniswapV3.router.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
-      );
-    }
-    if (
-      config.dex?.sushiswap?.candidateFeeTiers !== undefined &&
-      !effectiveFactorySources.has(LiquiditySource.SUSHISWAP)
-    ) {
-      logger.warn(
-        'KeeperConfig.dex.sushiswap.candidateFeeTiers configured but SUSHISWAP is not an enabled autodiscover factory route source'
       );
     }
 

@@ -1,6 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import {
   ActiveExternalTakeRouteSelectionMode,
+  CalldataAggregatorProviderId,
   ExternalTakePathKind,
   formatLiquiditySource,
   resolveHybridGasQuoteFallbackPolicy,
@@ -31,7 +32,7 @@ import {
 import { cloneExternalTakeQuoteEvaluation } from './evaluation';
 import { refreshAndReapproveDiscoveryExternalTake } from './final-approval';
 import {
-  isLifiExternalTakeRoute,
+  isCalldataAggregatorExternalTakeRoute,
   isOneInchExternalTakeRoute,
 } from '../../take/external-take/route';
 import {
@@ -56,7 +57,7 @@ import { ResolvedTakeTarget } from '../targets';
 
 const PROVIDER_WARN_LABEL: Record<ExternalTakePathKind, string> = {
   oneinch: '1inch',
-  lifi: 'LI.FI',
+  calldata_aggregator: 'LI.FI',
   factory: 'factory',
 };
 
@@ -67,6 +68,7 @@ export interface HybridExternalTakeStats {
 
 export type HybridExternalTakeProbeResult = {
   path: ExternalTakePathKind;
+  providerId?: CalldataAggregatorProviderId;
   durationMs: number;
   evaluation?: BoundExternalTakeRouteEvaluation;
   reason?: string;
@@ -81,28 +83,50 @@ type ProbeControl = {
   abortController: AbortController;
 };
 
+type HybridProbeUnit = {
+  path: ExternalTakePathKind;
+  providerId?: CalldataAggregatorProviderId;
+};
+
+// One probe unit per executable provider: the calldata_aggregator family
+// expands into its enabled providers so LI.FI and Sushi are probed (and
+// compete) independently instead of sharing a single path-keyed slot.
 function resolveProbeOrder(params: {
   externalTakePaths: ExternalTakePathKind[];
+  calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
   routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
-}): ExternalTakePathKind[] {
-  if (params.routeSelectionMode !== 'factory_first') {
-    return [...params.externalTakePaths];
+}): HybridProbeUnit[] {
+  const orderedPaths =
+    params.routeSelectionMode !== 'factory_first'
+      ? [...params.externalTakePaths]
+      : (() => {
+          const pathOrder = new Map<ExternalTakePathKind, number>(
+            params.externalTakePaths.map((path, index) => [path, index])
+          );
+          return [...params.externalTakePaths].sort((left, right) => {
+            if (left === right) {
+              return 0;
+            }
+            if (left === 'factory') {
+              return -1;
+            }
+            if (right === 'factory') {
+              return 1;
+            }
+            return (pathOrder.get(left) ?? 0) - (pathOrder.get(right) ?? 0);
+          });
+        })();
+  const units: HybridProbeUnit[] = [];
+  for (const path of orderedPaths) {
+    if (path === 'calldata_aggregator') {
+      for (const providerId of params.calldataAggregatorProviders) {
+        units.push({ path, providerId });
+      }
+    } else {
+      units.push({ path });
+    }
   }
-  const pathOrder = new Map<ExternalTakePathKind, number>(
-    params.externalTakePaths.map((path, index) => [path, index])
-  );
-  return [...params.externalTakePaths].sort((left, right) => {
-    if (left === right) {
-      return 0;
-    }
-    if (left === 'factory') {
-      return -1;
-    }
-    if (right === 'factory') {
-      return 1;
-    }
-    return (pathOrder.get(left) ?? 0) - (pathOrder.get(right) ?? 0);
-  });
+  return units;
 }
 
 async function probeExternalTakePath(
@@ -135,6 +159,7 @@ async function probeExternalTakePath(
     if (params.control.abandoned) {
       return {
         path: params.provider.path,
+        providerId: params.provider.providerId,
         durationMs: Date.now() - startedAt,
         reason: 'probe abandoned after timeout',
       };
@@ -145,6 +170,7 @@ async function probeExternalTakePath(
         evaluation.routeProfitability?.gasPolicyRejectCode;
       return {
         path: params.provider.path,
+        providerId: params.provider.providerId,
         durationMs: Date.now() - startedAt,
         reason: evaluation.reason ?? 'not takeable',
         rejectCategory:
@@ -166,6 +192,7 @@ async function probeExternalTakePath(
     if (!approval.approved) {
       return {
         path: params.provider.path,
+        providerId: params.provider.providerId,
         durationMs: Date.now() - startedAt,
         reason: approval.reason ?? 'policy rejected path',
         rejectCategory: approval.rejectCategory,
@@ -176,6 +203,7 @@ async function probeExternalTakePath(
     }
     return {
       path: params.provider.path,
+      providerId: params.provider.providerId,
       durationMs: Date.now() - startedAt,
       evaluation: approval.quoteEvaluation,
       circuitOutcome,
@@ -183,6 +211,7 @@ async function probeExternalTakePath(
   } catch (error) {
     return {
       path: params.provider.path,
+      providerId: params.provider.providerId,
       durationMs: Date.now() - startedAt,
       reason: getErrorMessage(error),
       circuitOutcome:
@@ -199,7 +228,10 @@ function recordProbeCircuitOutcome(params: {
 }): void {
   if (params.result.circuitOutcome) {
     params.providerRegistry
-      .selectExternalTakeProvider({ selectedPath: params.result.path })
+      .selectExternalTakeProvider({
+        selectedPath: params.result.path,
+        providerId: params.result.providerId,
+      })
       .recordQuoteCircuitOutcome?.(params.result.circuitOutcome);
   }
 }
@@ -255,6 +287,7 @@ async function runHybridExternalTakeProbes(
     signer: Signer;
     poolConfig: ResolvedTakeTarget;
     externalTakePaths: ExternalTakePathKind[];
+    calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
     routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
     probeTimeoutMs: number;
     price: number;
@@ -275,10 +308,11 @@ async function runHybridExternalTakeProbes(
 
   if (params.routeSelectionMode !== 'factory_first') {
     const probeResults = await Promise.all(
-      probeOrder.map((path) =>
+      probeOrder.map((unit) =>
         withProbeTimeout({
           provider: params.providerRegistry.selectExternalTakeProvider({
-            selectedPath: path,
+            selectedPath: unit.path,
+            providerId: unit.providerId,
           }),
           probeTimeoutMs: params.probeTimeoutMs,
           probe: runProbe,
@@ -295,10 +329,11 @@ async function runHybridExternalTakeProbes(
   }
 
   const probeResults: HybridExternalTakeProbeResult[] = [];
-  for (const path of probeOrder) {
+  for (const unit of probeOrder) {
     const result = await withProbeTimeout({
       provider: params.providerRegistry.selectExternalTakeProvider({
-        selectedPath: path,
+        selectedPath: unit.path,
+        providerId: unit.providerId,
       }),
       probeTimeoutMs: params.probeTimeoutMs,
       probe: runProbe,
@@ -352,6 +387,7 @@ async function buildHybridGasQuoteFallbackEvaluation(
     poolConfig: ResolvedTakeTarget;
     takePolicy: AutoDiscoverTakePolicyRuntime;
     externalTakePaths: ExternalTakePathKind[];
+    calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
     routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
     price: number;
     providerRegistry: DiscoveryExternalTakeProviderRegistry;
@@ -465,6 +501,7 @@ export async function evaluateHybridExternalTakeForDiscovery(
     poolConfig: ResolvedTakeTarget;
     takePolicy: AutoDiscoverTakePolicyRuntime;
     externalTakePaths: ExternalTakePathKind[];
+    calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
     routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
     probeTimeoutMs: number;
     price: number;
@@ -535,7 +572,7 @@ export async function evaluateHybridExternalTakeForDiscovery(
       );
     if (
       isOneInchExternalTakeRoute(selected) ||
-      isLifiExternalTakeRoute(selected)
+      isCalldataAggregatorExternalTakeRoute(selected)
     ) {
       const gasQuoteFallback = await buildGasQuoteFallbackEvaluation();
       if (gasQuoteFallback) {
@@ -596,6 +633,7 @@ export async function executeHybridExternalTakeForDiscovery(params: {
   liquidation: TakeLiquidationPlan<DiscoveryExternalTakeApprovalContext>;
   config: DiscoveryExternalExecutionConfig;
   externalTakePaths: ExternalTakePathKind[];
+  calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
   providerRegistry: DiscoveryExternalTakeProviderRegistry;
   approveExternalTake: DiscoveryExternalTakeApprover;
   takeAuctionStatusReader: TakeAuctionStatusReader;
@@ -613,7 +651,7 @@ export async function executeHybridExternalTakeForDiscovery(params: {
     const candidateEvaluation = candidate.evaluation;
     const selection = resolveHybridExternalTakeExecutionSelection({
       quoteEvaluation: candidateEvaluation,
-      allowedExternalTakePaths: params.externalTakePaths,
+      resolvedExternalTakePaths: params.externalTakePaths,
     });
     if (!selection.approved) {
       logger.error(
@@ -677,6 +715,10 @@ export async function executeHybridExternalTakeForDiscovery(params: {
 
     const provider = params.providerRegistry.selectExternalTakeProvider({
       selectedPath,
+      providerId:
+        'providerId' in approvedEvaluation
+          ? approvedEvaluation.providerId
+          : undefined,
     });
     const attempt = await provider.execute({
       pool: params.pool,

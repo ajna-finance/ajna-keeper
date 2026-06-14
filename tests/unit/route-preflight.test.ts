@@ -435,7 +435,7 @@ describe('route deployment preflight', () => {
     const config = manualLifiConfig();
 
     expect(resolveExternalTakeRoutePreflightRequirements(config)).to.deep.equal(
-      [{ path: 'lifi', source: LiquiditySource.LIFI }]
+      [{ path: 'calldata_aggregator', source: LiquiditySource.LIFI }]
     );
     expect(shouldValidateExternalTakeRouteDeployments(config)).to.equal(true);
 
@@ -462,7 +462,7 @@ describe('route deployment preflight', () => {
     const config = addManualLifiPool(lifiConfig());
 
     expect(resolveExternalTakeRoutePreflightRequirements(config)).to.deep.equal(
-      [{ path: 'lifi', source: LiquiditySource.LIFI }]
+      [{ path: 'calldata_aggregator', source: LiquiditySource.LIFI }]
     );
   });
 

@@ -6,8 +6,8 @@ import {
   ExternalTakeTakerContractKey,
   KeeperConfig,
   LifiDexConfig,
+  SushiAggregatorDexConfig,
   LiquiditySource,
-  SushiswapRouterOverrides,
   UniswapV3RouterOverrides,
   resolveExternalTakeDeployment,
 } from '../config';
@@ -31,10 +31,11 @@ export interface DiscoveryExecutionConfig {
   takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
   lifi?: LifiDexConfig;
   lifiTaker?: string;
+  sushiAggregator?: SushiAggregatorDexConfig;
+  sushiAggregatorTaker?: string;
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
-  sushiswapRouterOverrides?: SushiswapRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
 }
@@ -52,6 +53,13 @@ export function getDiscoveryExecutionConfig(
       takerContracts: config.takers?.contracts,
     },
   });
+  const sushiAggregatorDeployment = resolveExternalTakeDeployment({
+    liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
+    config: {
+      keeperTakerFactory: config.takers?.factory,
+      takerContracts: config.takers?.contracts,
+    },
+  });
   return {
     autoDiscover: config.discovery,
     connectorTokens: config.dex?.oneInch?.connectorTokens,
@@ -63,14 +71,18 @@ export function getDiscoveryExecutionConfig(
     takerContracts: config.takers?.contracts,
     lifi: config.dex?.lifi,
     lifiTaker:
-      lifiDeployment.deploymentType === 'lifi'
+      lifiDeployment.deploymentType === 'calldata_aggregator'
         ? lifiDeployment.resolvedTakerAddress
+        : undefined,
+    sushiAggregator: config.dex?.sushiAggregator,
+    sushiAggregatorTaker:
+      sushiAggregatorDeployment.deploymentType === 'calldata_aggregator'
+        ? sushiAggregatorDeployment.resolvedTakerAddress
         : undefined,
     oneInchAggregationExecutorAllowlist:
       config.dex?.oneInch?.aggregationExecutorAllowlist,
     oneInchDefaultSlippage: config.dex?.oneInch?.defaultSlippage,
     oneInchRouters: config.dex?.oneInch?.routers,
-    sushiswapRouterOverrides: config.dex?.sushiswap,
     tokenAddresses: config.network.tokenAddresses,
     uniswapV3RouterOverrides: config.dex?.uniswapV3?.router,
   };

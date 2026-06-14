@@ -29,7 +29,6 @@ import {
 import {
   DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
   getCurveQuoteProvider,
-  getSushiSwapQuoteProvider,
   getUniswapV3QuoteProvider,
 } from '../take/factory/shared';
 import { GasPolicyRejectCode, GasQuoteAttempt } from '../take/types';
@@ -236,7 +235,6 @@ function getGasQuoteSourceCandidates(params: {
   for (const source of [
     LiquiditySource.ONEINCH,
     LiquiditySource.UNISWAPV3,
-    LiquiditySource.SUSHISWAP,
     LiquiditySource.CURVE,
   ]) {
     pushIfConfigured(source);
@@ -480,26 +478,6 @@ function getGasQuoteSourceConfigIdentity(params: {
           ),
         };
       }
-      if (source === LiquiditySource.SUSHISWAP) {
-        const sushiConfig = params.config.sushiswapRouterOverrides;
-        return {
-          source,
-          swapRouterAddress: normalizeIdentityAddress(
-            sushiConfig?.swapRouterAddress
-          ),
-          factoryAddress: normalizeIdentityAddress(sushiConfig?.factoryAddress),
-          quoterV2Address: normalizeIdentityAddress(
-            sushiConfig?.quoterV2Address
-          ),
-          wethAddress: normalizeIdentityAddress(sushiConfig?.wethAddress),
-          feeTiers: getGasQuoteFeeTiers(
-            sushiConfig?.defaultFeeTier,
-            sushiConfig?.candidateFeeTiers,
-            DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
-            STANDARD_V3_FEE_TIERS
-          ),
-        };
-      }
       if (source === LiquiditySource.CURVE) {
         const curveConfig = params.config.curveRouterOverrides;
         return {
@@ -721,36 +699,6 @@ async function quoteTokensByLiquiditySource(params: {
       defaultFeeTier: quoteConfig.defaultFeeTier,
       candidateFeeTiers: quoteConfig.candidateFeeTiers,
       fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3],
-      automaticCandidateFeeTiers: STANDARD_V3_FEE_TIERS,
-    });
-  }
-
-  if (params.liquiditySource === LiquiditySource.SUSHISWAP) {
-    const sushiConfig = params.config.sushiswapRouterOverrides;
-    if (
-      !sushiConfig?.swapRouterAddress ||
-      !sushiConfig.factoryAddress ||
-      !sushiConfig.wethAddress ||
-      !sushiConfig.quoterV2Address
-    ) {
-      return { reason: 'SushiSwap gas quote configuration incomplete' };
-    }
-    const quoteProvider = await getSushiSwapQuoteProvider({
-      signer: params.signer,
-      routerConfig: sushiConfig,
-      runtimeCache: params.rpcCache?.factoryQuoteProviders,
-    });
-    if (!quoteProvider) {
-      return { reason: 'SushiSwap quote provider unavailable' };
-    }
-    return await quoteFactoryV3GasConversion({
-      quoteProvider,
-      amountIn: params.amountIn,
-      tokenIn: params.tokenIn,
-      tokenOut: params.tokenOut,
-      defaultFeeTier: sushiConfig.defaultFeeTier,
-      candidateFeeTiers: sushiConfig.candidateFeeTiers,
-      fallbackFeeTier: DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.SUSHISWAP],
       automaticCandidateFeeTiers: STANDARD_V3_FEE_TIERS,
     });
   }

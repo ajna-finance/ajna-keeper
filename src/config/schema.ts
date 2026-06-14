@@ -87,10 +87,29 @@ export enum LiquiditySource {
   SUSHISWAP = 3,
   CURVE = 4,
   LIFI = 5,
+  SUSHI_AGGREGATOR = 6,
 }
 
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
-export type ExternalTakePathKind = 'oneinch' | 'factory' | 'lifi';
+/**
+ * Canonical internal execution families. `calldata_aggregator` is the shared
+ * family for opaque-calldata aggregator providers (LI.FI today); provider
+ * identity travels separately as CalldataAggregatorProviderId.
+ */
+export type ExternalTakePathKind = 'oneinch' | 'factory' | 'calldata_aggregator';
+/**
+ * Operator/config-facing path names. `lifi` survives only as a legacy input
+ * alias and normalizes to family `calldata_aggregator` plus provider `lifi`
+ * at the resolveExternalTakePolicy boundary.
+ */
+export type ConfiguredExternalTakePathKind = ExternalTakePathKind | 'lifi';
+/**
+ * Calldata-aggregator providers active in the current packet. Packet 3B
+ * extended the union with `sushi_aggregator` in the same diff that added
+ * Sushi support; an omitted allowedCalldataAggregatorProviders list still
+ * resolves to LI.FI only, so Sushi is never silently enabled.
+ */
+export type CalldataAggregatorProviderId = 'lifi' | 'sushi_aggregator';
 export type ExternalTakeRouteSelectionMode =
   | 'maximize_profit'
   | 'factory_first';
@@ -140,7 +159,6 @@ export enum RewardActionLabel {
 export enum PostAuctionDex {
   ONEINCH = 'oneinch',
   UNISWAP_V3 = 'uniswap_v3',
-  SUSHISWAP = 'sushiswap',
   CURVE = 'curve',
 }
 
@@ -229,9 +247,17 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   /**
    * External take execution paths eligible for discovered liquidation takes.
    * When omitted, autodiscover preserves the single-path behavior from
-   * discovery.defaults.take.liquiditySource.
+   * discovery.defaults.take.liquiditySource. Accepts the legacy `lifi` alias,
+   * which normalizes to the `calldata_aggregator` family with provider `lifi`.
    */
-  allowedExternalTakePaths?: ExternalTakePathKind[];
+  allowedExternalTakePaths?: ConfiguredExternalTakePathKind[];
+  /**
+   * Calldata-aggregator providers allowed to quote and compete inside the
+   * `calldata_aggregator` family. Omitted resolves to `['lifi']` when the
+   * family is enabled. A non-empty list requires the family to be enabled;
+   * empty lists, duplicates, and unknown or packet-inactive ids are invalid.
+   */
+  allowedCalldataAggregatorProviders?: CalldataAggregatorProviderId[];
   /**
    * Factory path to use when discovery.defaults.take.liquiditySource is 1inch
    * but allowedExternalTakePaths also enables the factory execution path.
@@ -445,16 +471,6 @@ export interface UniswapV3RouterOverrides {
   wethAddress?: string;
 }
 
-export interface SushiswapRouterOverrides {
-  swapRouterAddress?: string;
-  quoterV2Address?: string;
-  factoryAddress?: string;
-  defaultFeeTier?: number;
-  candidateFeeTiers?: number[];
-  defaultSlippage?: number;
-  wethAddress?: string;
-}
-
 export interface CurveRouterOverrides {
   poolConfigs?: {
     [tokenPair: string]: {
@@ -586,6 +602,25 @@ export interface LifiProductionDexConfig extends LifiDexBaseConfig {
 
 export type LifiDexConfig = LifiCanaryDexConfig | LifiProductionDexConfig;
 
+/**
+ * Sushi same-chain aggregator provider config (Packet 3B). Entirely separate
+ * from the removed direct-router surface: validated, allowlisted, fail-closed.
+ * Initial production scope is bounded by the Packet 3A proceed artifact;
+ * enabling a new chain or route requires a new reviewed evidence artifact
+ * before the config/allowlist change.
+ */
+export interface SushiAggregatorDexConfig {
+  mode: 'production';
+  apiBaseUrl?: string;
+  defaultSlippage?: number;
+  quoteTimeoutMs?: number;
+  maxQuoteAgeMs?: number;
+  maxPriceImpact?: number;
+  callTargetAllowlist: ChainAddressAllowlist;
+  approvalSpenderAllowlist: ChainAddressAllowlist;
+  selectorAllowlist: ChainTargetSelectorAllowlist;
+}
+
 export interface UniswapV3DexConfig {
   legacy?: UniswapV3Overrides;
   router?: UniswapV3RouterOverrides;
@@ -595,8 +630,8 @@ export interface UniswapV3DexConfig {
 export interface DexConfig {
   oneInch?: OneInchDexConfig;
   lifi?: LifiDexConfig;
+  sushiAggregator?: SushiAggregatorDexConfig;
   uniswapV3?: UniswapV3DexConfig;
-  sushiswap?: SushiswapRouterOverrides;
   curve?: CurveRouterOverrides;
 }
 

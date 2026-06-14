@@ -4,7 +4,6 @@ import { BigNumber, Contract, utils, Wallet } from 'ethers';
 import {
   AjnaKeeperTakerFactory__factory,
   CurveKeeperTaker__factory,
-  SushiSwapKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../typechain-types';
 import ERC20_ABI from '../../src/abis/erc20.abi.json';
@@ -139,12 +138,6 @@ async function deployFactorySystem(signer: Wallet) {
   );
   await uniswapTaker.deployed();
 
-  const sushiTaker = await new SushiSwapKeeperTaker__factory(signer).deploy(
-    MAINNET_CONFIG.AJNA_CONFIG.erc20PoolFactory,
-    factory.address
-  );
-  await sushiTaker.deployed();
-
   const curveTaker = await new CurveKeeperTaker__factory(signer).deploy(
     MAINNET_CONFIG.AJNA_CONFIG.erc20PoolFactory,
     factory.address
@@ -152,13 +145,11 @@ async function deployFactorySystem(signer: Wallet) {
   await curveTaker.deployed();
 
   await factory.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address);
-  await factory.setTaker(LiquiditySource.SUSHISWAP, sushiTaker.address);
   await factory.setTaker(LiquiditySource.CURVE, curveTaker.address);
 
   return {
     factory,
     uniswapTaker,
-    sushiTaker,
     curveTaker,
   };
 }

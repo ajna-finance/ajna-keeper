@@ -2,7 +2,7 @@
 //
 // This is the ONLY test that drives the real keeper discovery loop
 // (`handleDiscoveredTakeTarget`) end to end on a fork with ALL external-take
-// providers enabled — 1inch + factory (Uniswap/Sushi/Curve) + LI.FI — so the
+// providers enabled — 1inch + factory (Uniswap/Curve) + LI.FI — so the
 // hybrid ranking and fallback are exercised against REAL aggregator routes
 // (li.quest + 1inch APIs) and real on-chain DEX liquidity. Every other fork
 // test (production-route-selection, live-liquidity-execution, base-cadc-replay,
@@ -44,7 +44,6 @@ import {
   AjnaKeeperTaker__factory,
   AjnaKeeperTakerFactory__factory,
   CurveKeeperTaker__factory,
-  SushiSwapKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../typechain-types';
 import {
@@ -237,10 +236,6 @@ async function deployHybridFactorySystem(signer: Wallet) {
     BASE_AJNA_CONFIG.erc20PoolFactory,
     factory.address
   );
-  const sushiTaker = await new SushiSwapKeeperTaker__factory(signer).deploy(
-    BASE_AJNA_CONFIG.erc20PoolFactory,
-    factory.address
-  );
   const curveTaker = await new CurveKeeperTaker__factory(signer).deploy(
     BASE_AJNA_CONFIG.erc20PoolFactory,
     factory.address
@@ -249,14 +244,11 @@ async function deployHybridFactorySystem(signer: Wallet) {
     BASE_AJNA_CONFIG.erc20PoolFactory,
     factory.address
   );
-  for (const taker of [uniswapTaker, sushiTaker, curveTaker, lifiTaker]) {
+  for (const taker of [uniswapTaker, curveTaker, lifiTaker]) {
     await taker.deployed();
   }
   await (
     await factory.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address)
-  ).wait();
-  await (
-    await factory.setTaker(LiquiditySource.SUSHISWAP, sushiTaker.address)
   ).wait();
   await (
     await factory.setTaker(LiquiditySource.CURVE, curveTaker.address)
@@ -268,7 +260,6 @@ async function deployHybridFactorySystem(signer: Wallet) {
     factory,
     oneInchTaker,
     uniswapTaker,
-    sushiTaker,
     curveTaker,
     lifiTaker,
   };

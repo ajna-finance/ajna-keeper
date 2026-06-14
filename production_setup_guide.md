@@ -10,7 +10,7 @@ While the main README covers the basic setup process, production deployments ben
 
 - **RPC Provider**: Alchemy or QuickNode (hosted)
 - **Subgraph**: BuiltByMom/Ajna-subgraph deployed on Goldsky (hosted)
-- **External-Take Liquidity**: 1inch single-contract aggregation, LI.FI same-chain aggregation through a factory-registered taker after production canary gates pass, or factory direct-DEX adapters for Uniswap V3, SushiSwap V3, and Curve
+- **External-Take Liquidity**: 1inch single-contract aggregation, LI.FI same-chain aggregation through a factory-registered taker after production canary gates pass, or factory direct-DEX adapters for Uniswap V3 and Curve
 - **Monitoring**: Goldsky subgraph monitoring + custom logging
 
 ## Step 1: RPC Provider Setup
@@ -62,7 +62,7 @@ Important operational details:
 
 ### What the Current Keeper Actually Does
 
-For Uniswap V3 and SushiSwap external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route, as a deterministic tie-breaker among otherwise equal routes, and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, both V3 factory sources automatically probe standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set; use `candidateFeeTiers: [defaultFeeTier]` for default-tier-only probing.
+For Uniswap V3 external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route, as a deterministic tie-breaker among otherwise equal routes, and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, the V3 factory source automatically probes standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set; use `candidateFeeTiers: [defaultFeeTier]` for default-tier-only probing.
 
 ```typescript
 dex: {
@@ -74,24 +74,18 @@ dex: {
       // ... other settings
     },
   },
-  sushiswap: {
-    defaultFeeTier: 500,  // Preferred/default SushiSwap external-take route
-    // Omit candidateFeeTiers to auto-probe standard V3 tiers; uncomment only to narrow/customize.
-    // candidateFeeTiers: [3000],
-    // ... other settings
-  },
 }
 ```
 
 Implications:
 
 - External takes prefer the configured default, then quote viable candidate tiers
-- Uniswap V3 and SushiSwap auto-probe standard tiers when `candidateFeeTiers` is unset; set `candidateFeeTiers: [defaultFeeTier]` to opt out
-- Missing Uni/Sushi pools are skipped before `takeRouteQuoteBudgetPerCandidate` is applied
+- Uniswap V3 auto-probes standard tiers when `candidateFeeTiers` is unset; set `candidateFeeTiers: [defaultFeeTier]` to opt out
+- Missing Uniswap pools are skipped before `takeRouteQuoteBudgetPerCandidate` is applied
 - Budget-approved factory routes are quoted with bounded parallelism, then ranked deterministically by expected net profit
 - `allowedLiquiditySources`, when set, is the complete factory route allowlist; include the default source explicitly if it should remain eligible
 - `allowedExternalTakePaths` can compare enabled providers such as `['oneinch', 'factory']`, `['factory', 'lifi']`, or `['factory', 'oneinch', 'lifi']`
-- `factory` means typed direct-DEX adapters only: Uniswap V3, SushiSwap, and Curve. LI.FI uses a factory-registered taker, but it remains a separate aggregator path.
+- `factory` means typed direct-DEX adapters only: Uniswap V3 and Curve. LI.FI uses a factory-registered taker, but it remains a separate aggregator path.
 - Low `takeRouteQuoteBudgetPerCandidate` values reduce quote latency but can skip a more profitable route that was not probed
 - Changing fee-tier policy is a config-and-restart change, not a contract redeploy
 - There is no per-pool external-take fee override in the current config schema
@@ -119,12 +113,6 @@ For Uniswap V3:
 
 1. Visit [Uniswap Info](https://info.uniswap.org/#/pools) → your network
 2. For each token pair, compare TVL across fee tiers
-3. Weight the result by expected liquidation volume and value
-
-For SushiSwap:
-
-1. Check [SushiSwap Analytics](https://www.sushi.com/base/pool) → your network
-2. Verify pools exist for your pairs before enabling external takes
 3. Weight the result by expected liquidation volume and value
 
 **Step 3: Make a Strategic Default Selection**
@@ -157,10 +145,6 @@ dex: {
       // Omit candidateFeeTiers to auto-probe standard V3 tiers.
     },
   },
-  sushiswap: {
-    defaultFeeTier: 3000, // SushiSwap external takes default to 0.3% in this keeper instance
-    candidateFeeTiers: [500], // Optional: also probe 0.05%; defaultFeeTier is always included
-  },
 }
 ```
 
@@ -181,12 +165,12 @@ This makes fee tier selection a runtime route-optimization decision. It is still
 
 ### Decision Matrix: Which Approach to Use?
 
-| Chain Type                                                 | 1inch Available? | Uniswap V3? | SushiSwap V3? | Curve? | Recommended Approach                        | Deployment Script                  |
-| ---------------------------------------------------------- | ---------------- | ----------- | ------------- | ------ | ------------------------------------------- | ---------------------------------- |
-| **Major Chains**<br/>(Ethereum, Avalanche, Base, Arbitrum) | ✅ Yes           | ✅ Yes      | ✅ Yes        | ✅ Yes | **1inch Single-Contract Aggregator**        | `scripts/query-1inch.ts`           |
-| **Emerging L2s**<br/>(Hemi, Scroll, etc.)                  | ❌ No            | ✅ Yes      | ✅ Yes        | ✅ Yes | **Factory Direct-DEX Adapters**             | `scripts/deploy-factory-system.ts` |
-| **Stablecoin-Heavy Chains**                                | ❌ No            | ✅ Yes      | ❌ No         | ✅ Yes | **Factory Direct-DEX (Uniswap V3 + Curve)** | `scripts/deploy-factory-system.ts` |
-| **Uniswap-only Chains**                                    | ❌ No            | ✅ Yes      | ❌ No         | ❌ No  | **Factory Direct-DEX (Uniswap V3 Only)**    | `scripts/deploy-factory-system.ts` |
+| Chain Type                                                 | 1inch Available? | Uniswap V3? | Curve? | Recommended Approach                        | Deployment Script                  |
+| ---------------------------------------------------------- | ---------------- | ----------- | ------ | ------------------------------------------- | ---------------------------------- |
+| **Major Chains**<br/>(Ethereum, Avalanche, Base, Arbitrum) | ✅ Yes           | ✅ Yes      | ✅ Yes | **1inch Single-Contract Aggregator**        | `scripts/query-1inch.ts`           |
+| **Emerging L2s**<br/>(Hemi, Scroll, etc.)                  | ❌ No            | ✅ Yes      | ✅ Yes | **Factory Direct-DEX Adapters**             | `scripts/deploy-factory-system.ts` |
+| **Stablecoin-Heavy Chains**                                | ❌ No            | ✅ Yes      | ✅ Yes | **Factory Direct-DEX (Uniswap V3 + Curve)** | `scripts/deploy-factory-system.ts` |
+| **Uniswap-only Chains**                                    | ❌ No            | ✅ Yes      | ❌ No  | **Factory Direct-DEX (Uniswap V3 Only)**    | `scripts/deploy-factory-system.ts` |
 
 The LI.FI integration is an optional same-chain aggregator path for chains and pairs where reviewed LI.FI routes can fill gaps left by direct-DEX adapters. It is not part of the `factory` path in keeper route selection, even though execution is dispatched through `AjnaKeeperTakerFactory` to a factory-registered `LifiKeeperTaker`. LI.FI production support for a chain/pair remains gated on the required-live route-shape canary and callback-path fork execution canary.
 
@@ -276,9 +260,9 @@ const config: KeeperConfig = {
 };
 ```
 
-### Option B: Factory Direct-DEX Adapter Deployment (Uniswap/Sushi/Curve)
+### Option B: Factory Direct-DEX Adapter Deployment (Uniswap/Curve)
 
-**Best for:** Newer chains without aggregator coverage, chains with strong direct Uniswap V3, SushiSwap V3, or Curve liquidity
+**Best for:** Newer chains without aggregator coverage, chains with strong direct Uniswap V3 or Curve liquidity
 
 **Prerequisites:**
 
@@ -287,9 +271,8 @@ const config: KeeperConfig = {
 # 2. Compile contracts first
 yarn compile
 
-# 3. Verify Uniswap SwapRouter02, quote routing, and SushiSwap addresses for your chain
+# 3. Verify Uniswap SwapRouter02 and quote routing for your chain
 # Uniswap V3 Gov Post: https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323/8
-# SushiSwap: Check official documentation or block explorers
 ```
 
 **Deployment Steps:**
@@ -301,8 +284,7 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 # Expected output:
 # ✅ AjnaKeeperTakerFactory deployed to: 0x[factory-address]
 # ✅ UniswapV3KeeperTaker deployed to: 0x[uniswap-taker-address]
-# ✅ SushiSwapKeeperTaker deployed to: 0x[sushiswap-taker-address]
-# ✅ Factory configured with UniswapV3 and SushiSwap takers
+# ✅ Factory configured with UniswapV3 taker
 # ✅ All verification checks passed
 ```
 
@@ -315,7 +297,6 @@ const config: KeeperConfig = {
     factory: '0x[factory-address]',
     contracts: {
       UniswapV3: '0x[uniswap-taker-address]',
-      SushiSwap: '0x[sushiswap-taker-address]',
     },
   },
   dex: {
@@ -330,16 +311,6 @@ const config: KeeperConfig = {
         defaultSlippage: 0.5, // 0.5% slippage tolerance
       },
     },
-
-    // ADD: SushiSwap configuration
-    sushiswap: {
-      swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD',
-      quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
-      factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
-      wethAddress: '0x4200000000000000000000000000000000000006',
-      defaultFeeTier: 3000, // Global runtime default for SushiSwap external takes
-      defaultSlippage: 1.0, // 1% slippage tolerance
-    },
   },
 
   manual: {
@@ -347,7 +318,7 @@ const config: KeeperConfig = {
       {
         take: {
           // ADD: Configure external takes - choose your preferred DEX
-          liquiditySource: LiquiditySource.SUSHISWAP, // or UNISWAPV3
+          liquiditySource: LiquiditySource.UNISWAPV3, // or CURVE
           marketPriceFactor: 0.99, // Take when auction price < market * 0.99
           allowSubsidy: false, // Set true only for reviewed defensive pools
           minCollateral: 0.01, // Minimum collateral to attempt take
@@ -360,7 +331,7 @@ const config: KeeperConfig = {
             address: '0x[collateral-token-address]',
             targetToken: 'usdc_t',
             slippage: 2,
-            dexProvider: PostAuctionDex.SUSHISWAP, // or UNISWAP_V3
+            dexProvider: PostAuctionDex.UNISWAP_V3, // or CURVE
             fee: FeeAmount.LOW, // Can use different fee tier than external takes!
           },
         },
@@ -438,15 +409,12 @@ const config: KeeperConfig = {
 const config: KeeperConfig = {
   // No takers config needed for arbTake-only operation
 
-  // ADD: For LP reward swaps only (no contracts needed for Uniswap V3/SushiSwap)
+  // ADD: For LP reward swaps only (no contracts needed for Uniswap V3/Curve)
   dex: {
     uniswapV3: {
       universalRouter: {
         // ... Uniswap configuration for LP rewards
       },
-    },
-    sushiswap: {
-      // ... SushiSwap configuration for LP rewards
     },
   },
 
@@ -467,7 +435,7 @@ const config: KeeperConfig = {
             address: '0x[collateral-token-address]',
             targetToken: 'usdc',
             slippage: 1,
-            dexProvider: PostAuctionDex.SUSHISWAP, // LP rewards work without contracts
+            dexProvider: PostAuctionDex.UNISWAP_V3, // LP rewards work without contracts
             fee: FeeAmount.MEDIUM,
           },
         },
@@ -593,16 +561,6 @@ Use SwapRouter02 as the swap executor for factory external takes. Do not put the
 
 Universal Router remains optional for code paths that explicitly use Universal Router and Permit2. It is not required for factory external takes.
 
-### SushiSwap V3 Router Addresses
-
-**Production Verified Addresses:**
-
-| Network   | Swap Router                                  | QuoterV2                                     | Factory                                      | Notes                |
-| --------- | -------------------------------------------- | -------------------------------------------- | -------------------------------------------- | -------------------- |
-| Hemi      | `0x33d91116e0370970444B0281AB117e161fEbFcdD` | `0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C` | `0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959` | Production Tested    |
-| Base      | `0x[verify-on-deployment]`                   | `0x[verify-on-deployment]`                   | `0x[verify-on-deployment]`                   | Check SushiSwap docs |
-| Avalanche | `0x[verify-on-deployment]`                   | `0x[verify-on-deployment]`                   | `0x[verify-on-deployment]`                   | Check SushiSwap docs |
-
 ### 1inch Router Addresses
 
 | Network   | 1inch Router Address                         |
@@ -632,11 +590,6 @@ Universal Router remains optional for code paths that explicitly use Universal R
 - Free tier: 1 request/second, 100,000 requests/month, so only request once every 60 seconds to be under 100k limit
 - Paid tiers: Higher limits available
 - Get API key at [portal.1inch.dev](https://portal.1inch.dev/)
-
-**SushiSwap:**
-
-- No API rate limits (direct contract interaction)
-- May have RPC rate limits depending on provider
 
 **Uniswap V3:**
 
@@ -701,7 +654,7 @@ Recommended rollout order:
 8. Keep `discovery.defaults.take.allowSubsidy` unset or `false` for normal production discovery. The route-derived policy then requires external takes to clear auction repayment plus route gas/profit floors when quote-normalized inputs are configured or available.
 9. Use `allowSubsidy: true` only on manually reviewed defensive pools where spending keeper P&L to repay an auction earlier is acceptable. Subsidized takes still enforce repayment and swap min-out safety, but they may execute below gas/profit floors.
 10. Set `marketPriceFactor` below 1 for normal operation, for example `0.99` to target auctions below roughly 99% of market. Config validation rejects non-positive values and values above 2, which catches common typos like `99` instead of `0.99`; values above 1 weaken market-factor protection and should be intentional.
-11. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH` or `LIFI`. Uniswap V3 and SushiSwap auto-probe standard fee tiers when `candidateFeeTiers` is unset; set `candidateFeeTiers` only to narrow/customize that set.
+11. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH` or `LIFI`. Uniswap V3 auto-probes standard fee tiers when `candidateFeeTiers` is unset; set `candidateFeeTiers` only to narrow/customize that set.
 12. Use `externalTakeProbeTimeoutMs` to bound each hybrid provider probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow aggregator settings do not stall hot loops. Explicit values from 1ms to 10000ms are supported for slow infrastructure, but values above 5000ms directly increase the worst-case time spent on each hot auction candidate.
 13. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing aggregator API calls is worth potentially skipping a better aggregator route; it tries factory first and stops once factory is approved without subsidy. Subsidized factory approvals continue probing remaining paths so a self-funding route can still win.
 14. Keep `hybridGasQuoteFailureFallbackMode` unset or `'disabled'` for strict hybrid ranking. Use `'factory_first'` only as an explicit fallback when the factory route is viable but strict hybrid ranking cannot convert native gas into the pool quote token. It requires `maxGasCostNative`, is skipped when `maxGasCostQuote`, `minExpectedProfitQuote`, or `minProfitNative` are configured, and does not execute subsidized factory routes.
@@ -729,7 +682,7 @@ External take latency and API-cost controls:
 | `discovery.take.maxConcurrentCandidateEvaluations` | `1`                                               | Evaluates up to 4 same-pool candidates concurrently. Execution is still one decision at a time with final revalidation, so this reduces quote latency without concurrent take submission.                                                                                                                                                                                                                                                    |
 | `discovery.take.maxExecutionsPerPoolPerRun`        | `1`                                               | Allows defensive same-pool cascades to execute more than one borrower in a single discovered take cycle. Counts successful borrower/candidate decisions, not raw transactions; a borrower that executes both an external take and follow-up arbTake counts once. Values above 1 force same-pool candidate evaluation back to sequential mode so stale pre-execution status is not reused after a state-changing take.                        |
 | `discovery.take.maxInFlightRouteProbes`            | `3` when candidate concurrency is above 1         | Caps combined aggregator and factory route quote/API/RPC probes across a parallel candidate window. Raise only after measuring provider latency and rate limits.                                                                                                                                                                                                                                                                             |
-| V3 factory `candidateFeeTiers` unset               | `[defaultFeeTier, 100, 500, 3000, 10000]` deduped | Auto-probes standard Uniswap V3/SushiSwap tiers. Adds up to three extra pool-existence checks per V3 factory candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`. Set `candidateFeeTiers: [defaultFeeTier]` for default-only probing. |
+| V3 factory `candidateFeeTiers` unset               | `[defaultFeeTier, 100, 500, 3000, 10000]` deduped | Auto-probes standard Uniswap V3 tiers. Adds up to three extra pool-existence checks per V3 factory candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`. Set `candidateFeeTiers: [defaultFeeTier]` for default-only probing. |
 | `dex.oneInch.defaultSlippage`                      | `1.0`                                             | 1inch external-take min-out slippage percentage. Tighten for stable routes; widen only for reviewed volatile or thin routes.                                                                                                                                                                                                                                                                                                                 |
 | `discovery.take.oneInchQuoteTimeoutMs`             | `2000`                                            | Bounds each discovered 1inch quote and swap-data request.                                                                                                                                                                                                                                                                                                                                                                                    |
 | `discovery.take.externalTakeProbeTimeoutMs`        | `min(oneInchQuoteTimeoutMs + 1000, 5000)`         | Bounds each hybrid path probe. Explicit values may be `1..10000ms`.                                                                                                                                                                                                                                                                                                                                                                          |
@@ -743,7 +696,7 @@ External take latency and API-cost controls:
 
 ### Pool Liquidity Verification
 
-For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `defaultFeeTier` and can probe candidate routes per take. Both V3 factory sources automatically check standard tiers when `candidateFeeTiers` is unset. Missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
+For Uniswap V3 factory external takes, the keeper prefers `defaultFeeTier` and can probe candidate routes per take. The V3 factory source automatically checks standard tiers when `candidateFeeTiers` is unset. Missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
 
 **For Uniswap V3:**
 
@@ -755,14 +708,6 @@ For Uniswap V3 and SushiSwap factory external takes, the keeper prefers `default
    - 10000 (1%) - exotic or volatile pairs
 4. Set `defaultFeeTier` to the preferred route; add `candidateFeeTiers` only to narrow/customize the automatic standard set
 5. For LP rewards, set `fee: FeeAmount.MEDIUM` (or the appropriate tier)
-
-**For SushiSwap:**
-
-1. Check [SushiSwap Analytics](https://www.sushi.com/pool) → your network
-2. Verify pool existence and liquidity for your pairs
-3. Most SushiSwap pools use 500 (0.05%) or 3000 (0.3%) tiers
-4. Set `defaultFeeTier` to the best-supported option; add `candidateFeeTiers` only to narrow or customize the automatic standard set
-5. Use higher `defaultSlippage` (5-10%) when liquidity is thinner
 
 **For Curve:**
 
@@ -858,7 +803,7 @@ manual: {
 
 1. **For External Takes**: Focus on your highest-value pools and most common token pairs
 2. **For Post-Auction LP Rewards**: Research each specific token pair individually
-3. Use Uniswap Info or SushiSwap Analytics to compare TVL across fee tiers
+3. Use Uniswap Info to compare TVL across fee tiers
 4. Set global defaults conservatively, then optimize individual pools as needed
 
 ### Production Monitoring
@@ -1065,7 +1010,6 @@ const config: KeeperConfig = {
     factory: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
     contracts: {
       UniswapV3: '0x[DEPLOYED_UNISWAP_TAKER_ADDRESS]',
-      SushiSwap: '0x[DEPLOYED_SUSHISWAP_TAKER_ADDRESS]',
     },
   },
 
@@ -1081,17 +1025,6 @@ const config: KeeperConfig = {
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
       },
-    },
-
-    // SushiSwap configuration
-    sushiswap: {
-      swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD', // address for Hemi Chain
-      quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C',
-      factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959',
-      wethAddress: '0x4200000000000000000000000000000000000006',
-      defaultFeeTier: 3000, // Preferred/default SushiSwap external-take route
-      candidateFeeTiers: [500], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
-      defaultSlippage: 1.0,
     },
   },
 
@@ -1123,15 +1056,15 @@ const config: KeeperConfig = {
           checkBotIncentive: false,
         },
         take: {
-          // External take via SushiSwap (uses this keeper's configured 0.3% default)
-          liquiditySource: LiquiditySource.SUSHISWAP,
+          // External take via Uniswap V3 (uses this keeper's configured 0.3% default)
+          liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.99,
           allowSubsidy: false,
           minCollateral: 0.01,
           // ArbTake as backup
           hpbPriceFactor: 0.985,
         },
-        // LP reward swapping via SushiSwap (can override fee tier)
+        // LP reward swapping via Uniswap V3 (can override fee tier)
         collectLpReward: {
           minAmountQuote: 0.01,
           minAmountCollateral: 0.01,
@@ -1139,7 +1072,7 @@ const config: KeeperConfig = {
             action: RewardActionLabel.EXCHANGE,
             address: '0x1f0d51a052aa79527fffaf3108fb4440d3f53ce6', // USD_T1
             targetToken: 'usdc_t',
-            dexProvider: PostAuctionDex.SUSHISWAP,
+            dexProvider: PostAuctionDex.UNISWAP_V3,
             fee: FeeAmount.MEDIUM, // Can use different tier than external takes!
             slippage: 3,
           },
@@ -1320,7 +1253,7 @@ yarn ts-node scripts/query-1inch.ts --config config.ts --action deploy
 **Factory Deployment Failures:**
 
 ```bash
-# Error: "Missing dex.uniswapV3.router or dex.sushiswap"
+# Error: "Missing dex.uniswapV3.router.[field] for Uniswap V3"
 # Solution: Add complete router configs to config.ts
 
 # Error: "Network mismatch"
@@ -1344,8 +1277,9 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 # Log: "dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3"
 # Solution: Add complete Uniswap V3 factory-take routing configuration
 
-# Log: "dex.sushiswap required when liquiditySource is SUSHISWAP"
-# Solution: Add complete SushiSwap configuration
+# Log: "AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3 and CURVE"
+# Cause: A legacy config still lists the removed direct SushiSwap source (id 3)
+# Solution: Migrate those pools to UNISWAPV3 or CURVE, or route SushiSwap liquidity through an aggregator path (1inch, or LI.FI exchange filters)
 ```
 
 **LP Reward Configuration Issues:**
@@ -1353,7 +1287,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 ```bash
 # Log: "Unsupported DEX provider: undefined"
 # Cause: Missing dexProvider enum in rewardAction
-# Solution: Replace old boolean logic with dexProvider: PostAuctionDex.ONEINCH/UNISWAP_V3/SUSHISWAP
+# Solution: Replace old boolean logic with dexProvider: PostAuctionDex.ONEINCH/UNISWAP_V3/CURVE
 
 # Log: "Configuration validation failed for oneinch: Missing takers.oneInch"
 # Cause: 1inch external takes are enabled without the deployed taker contract
@@ -1386,12 +1320,6 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 - Use `defaultFeeTier: 3000` for most pairs
 - Adjust `defaultSlippage` based on volatility
 - Monitor `quoterV2Address` for network-specific optimizations
-
-**SushiSwap Configuration:**
-
-- Use `defaultFeeTier: 500` for conservative approach
-- Set higher slippage (10%+) for volatile pairs
-- Verify factory and router addresses per chain
 
 **Curve Pool Selection:**
 
@@ -1429,7 +1357,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 "Detection Results - Type: factory, Valid: true"
 
 # LP reward swaps
-"Successfully swapped 1.5 of 0x123... to usdc_t via sushiswap"
+"Successfully swapped 1.5 of 0x123... to usdc_t via uniswap_v3"
 
 # Fee-tier defaults are configuration-driven
 # Review `defaultFeeTier` in config when troubleshooting routing quality
@@ -1557,27 +1485,16 @@ This indicates the auction needs more settlement iterations or has complex debt 
 # Solution: Normal in mixed-pair deployments; consider candidate fee tiers or separate keeper configs if the gap matters operationally
 ```
 
-**SushiSwap Quote Provider Issues:**
-
-```bash
-# Log: "SushiSwap quote failed: INSUFFICIENT_LIQUIDITY"
-# Solution: Check if pool exists for the token pair and fee tier
-
-# Log: "SushiSwap quoter reverted"
-# Solution: Verify quoterV2Address and factory addresses
-
-# Log: "No SushiSwap pool for tokenA/tokenB with fee 3000"
-# Solution: Add the deployed fee tier to candidateFeeTiers or verify token addresses
-```
-
 **Factory Direct-DEX Issues:**
 
 ```bash
 # Log: "Factory: Unsupported liquidity source: 3"
-# Solution: Ensure takers.contracts includes 'SushiSwap' entry
+# Cause: Source id 3 is the removed direct SushiSwap path; it is deprecated and fails closed
+# Solution: Migrate the pool to UNISWAPV3 or CURVE; reach SushiSwap liquidity only through an aggregator path (1inch, or LI.FI exchange filters)
 
-# Log: "Factory: Missing required SushiSwap configuration"
-# Solution: Add complete dex.sushiswap to config
+# Revert: DeprecatedLiquiditySource (AjnaKeeperTakerFactory.setTaker)
+# Cause: Attempted to register a taker contract for deprecated source id 3
+# Solution: Do not register source id 3; clear legacy mappings with setTaker(3, address(0)) and verify takerContracts(3) == address(0) before live use
 ```
 
 This production setup guide reflects real-world deployment experience across multiple networks and external-take liquidity integrations, significantly reducing setup time and common issues when running the Ajna keeper in production environments.

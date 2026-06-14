@@ -5,6 +5,7 @@ import { DiscoveryReadTransports } from '../../read-transports';
 import * as takeFactoryModule from '../../take/factory';
 import { FactoryRouteProfitabilityContext } from '../../take/factory';
 import * as lifiExecutionModule from '../../take/lifi/execution';
+import * as sushiAggregatorModule from '../../take/sushi-aggregator/quote-evaluation';
 import * as oneInchExecutionModule from '../../take/one-inch-execution';
 import { getDebtConstrainedTakeCollateralWad } from '../../take/take-sizing';
 import {
@@ -63,6 +64,11 @@ export interface LifiPathQuoteInput extends FactoryPathQuoteInput {
   recordCircuitOutcome?: boolean;
 }
 
+export interface SushiAggregatorPathQuoteInput extends FactoryPathQuoteInput {
+  price: number;
+  recordCircuitOutcome?: boolean;
+}
+
 export type FactoryPathQuoteFn = (
   quoteParams: FactoryPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
@@ -75,9 +81,12 @@ export type LifiPathQuoteFn = (
   quoteParams: LifiPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
+export type SushiAggregatorPathQuoteFn = (
+  quoteParams: SushiAggregatorPathQuoteInput
+) => Promise<ExternalTakeQuoteEvaluation>;
+
 export type DiscoveryFactoryQuoteConfig = {
   uniswapV3RouterOverrides: DiscoveryExecutionConfig['uniswapV3RouterOverrides'];
-  sushiswapRouterOverrides: DiscoveryExecutionConfig['sushiswapRouterOverrides'];
   curveRouterOverrides: DiscoveryExecutionConfig['curveRouterOverrides'];
   tokenAddresses: DiscoveryExecutionConfig['tokenAddresses'];
 };
@@ -197,13 +206,13 @@ export async function quoteFactoryPathForDiscovery(
     transports: DiscoveryReadTransports;
     rpcCache?: DiscoveryRpcCache;
     takePolicy: AutoDiscoverTakePolicyRuntime;
-    defaultFactoryLiquiditySource: LiquiditySource | undefined;
+    resolvedDefaultFactoryLiquiditySource: LiquiditySource | undefined;
     routeProbeLimiter?: AsyncOperationLimiter;
     factoryQuoteConfig: DiscoveryFactoryQuoteConfig;
     buildFactoryRouteProfitabilityContext: DiscoveryFactoryRouteProfitabilityContextBuilder;
   } & FactoryPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
-  if (params.defaultFactoryLiquiditySource === undefined) {
+  if (params.resolvedDefaultFactoryLiquiditySource === undefined) {
     return {
       isTakeable: false,
       externalTakePath: 'factory',
@@ -212,7 +221,7 @@ export async function quoteFactoryPathForDiscovery(
   }
   const factoryPoolConfig = withTakeLiquiditySource(
     params.poolConfig,
-    params.defaultFactoryLiquiditySource
+    params.resolvedDefaultFactoryLiquiditySource
   );
   const routeProfitabilityContextFactory = async (sources: LiquiditySource[]) =>
     await params.buildFactoryRouteProfitabilityContext({
@@ -221,7 +230,7 @@ export async function quoteFactoryPathForDiscovery(
       config: params.config,
       transports: params.transports,
       rpcCache: params.rpcCache,
-      defaultLiquiditySource: params.defaultFactoryLiquiditySource,
+      defaultLiquiditySource: params.resolvedDefaultFactoryLiquiditySource,
       sources,
       allowSubsidy: params.poolConfig.take.allowSubsidy === true,
       takePolicy: params.takePolicy,
@@ -271,7 +280,7 @@ export function getCircuitGuardedQuoteOutcome(
 async function quoteCircuitGuardedPath(params: {
   poolName: string;
   label: string;
-  externalTakePath: 'oneinch' | 'lifi';
+  externalTakePath: 'oneinch' | 'calldata_aggregator';
   selectedLiquiditySource: LiquiditySource;
   auctionPrice: BigNumber;
   collateral: BigNumber;
@@ -486,7 +495,7 @@ export async function quoteLifiPathForDiscovery(
   return quoteCircuitGuardedPath({
     poolName: params.pool.name,
     label: 'LI.FI',
-    externalTakePath: 'lifi',
+    externalTakePath: 'calldata_aggregator',
     selectedLiquiditySource: LiquiditySource.LIFI,
     auctionPrice: params.auctionPrice,
     collateral: quoteCollateralWad,
@@ -519,5 +528,50 @@ export async function quoteLifiPathForDiscovery(
         config: params.config,
         outcome,
       }),
+  });
+}
+
+export async function quoteSushiAggregatorPathForDiscovery(
+  params: {
+    config: DiscoveryExecutionConfig;
+    rpcCache?: DiscoveryRpcCache;
+    takePolicy: AutoDiscoverTakePolicyRuntime;
+    recordCircuitOutcome?: boolean;
+    routeProbeLimiter?: AsyncOperationLimiter;
+    probeTimeoutMs: number;
+    getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
+  } & SushiAggregatorPathQuoteInput
+): Promise<ExternalTakeQuoteEvaluation> {
+  const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
+  return quoteCircuitGuardedPath({
+    poolName: params.pool.name,
+    label: 'Sushi Aggregator',
+    externalTakePath: 'calldata_aggregator',
+    selectedLiquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
+    auctionPrice: params.auctionPrice,
+    collateral: quoteCollateralWad,
+    recordCircuitOutcome: false,
+    routeProbeLimiter: params.routeProbeLimiter,
+    routeProbeAbortSignal: params.routeProbeAbortSignal,
+    probeTimeoutMs: params.probeTimeoutMs,
+    abortErrorMessage: 'Sushi aggregator external take quote aborted',
+    timeoutLabel: 'Sushi aggregator external take quote',
+    evaluate: async (signal) =>
+      await sushiAggregatorModule.getSushiAggregatorPathQuoteEvaluation(
+        params.pool,
+        params.price,
+        quoteCollateralWad,
+        params.poolConfig,
+        {
+          sushiAggregator: params.config.sushiAggregator,
+          sushiAggregatorTaker: params.config.sushiAggregatorTaker,
+          sushiAggregatorRequestAbortSignal: signal,
+          chainId: params.rpcCache?.chainId,
+          tokenDecimalsCache: params.getTokenDecimalsCache(params.rpcCache),
+        },
+        params.signer,
+        params.auctionPrice
+      ),
+    recordOutcome: () => undefined,
   });
 }

@@ -3,7 +3,6 @@ import { BigNumber, Wallet, constants, providers, utils } from 'ethers';
 import { network } from 'hardhat';
 import {
   CurveKeeperTaker__factory,
-  SushiSwapKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../../typechain-types/factories/contracts/takers';
 import {
@@ -12,7 +11,6 @@ import {
   MockERC20__factory,
   MockMinOutBypassSwap__factory,
   MockPoolDeployer__factory,
-  MockSushiSwapRouter__factory,
   MockSwapRouter02__factory,
 } from '../../../typechain-types/factories/contracts/mocks';
 
@@ -24,7 +22,6 @@ export const ZERO_FACTORY = constants.AddressZero;
 
 // Keeper- and callback-payload detail shapes shared by the taker contracts.
 export const UNISWAP_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
-export const SUSHI_DETAILS_TYPE = '(address,address,uint24,uint256,uint256)';
 export const CURVE_DETAILS_TYPE =
   '(address,address,address,uint8,uint8,uint8,uint256,uint256)';
 
@@ -37,6 +34,32 @@ export async function fundSigner(address: string) {
     address,
     utils.parseEther('10').toHexString(),
   ]);
+}
+
+/**
+ * Extracts only the revert-reason segments from a hardhat/ethers error
+ * message. Hardhat embeds contract source (sourceContent) in some revert
+ * errors, so matching against the full message can FALSE-PASS on any
+ * identifier that merely appears in the source code. Matching against the
+ * extracted segments binds assertions to the actual revert reason. Falls back
+ * to the full message when no revert pattern is present (plain JS errors).
+ */
+export function extractRevertSegments(message: string): string {
+  const patterns = [
+    /reverted with reason string '[^']*'/g,
+    /reverted with custom error '[^']*'/g,
+    /reverted with panic code [^\s,)]+/g,
+    /reverted with an unrecognized custom error \(return data: 0x[0-9a-fA-F]*\)/g,
+    /Transaction reverted without a reason string/g,
+    /Transaction reverted: function call to a non-contract account/g,
+  ];
+  const segments: string[] = [];
+  for (const pattern of patterns) {
+    for (const match of message.match(pattern) ?? []) {
+      segments.push(match);
+    }
+  }
+  return segments.length > 0 ? segments.join('\n') : message;
 }
 
 export async function expectRevertContaining(
@@ -52,7 +75,11 @@ export async function expectRevertContaining(
   expect(caught, `expected revert containing "${expected}"`).to.be.instanceOf(
     Error
   );
-  expect((caught as Error).message).to.contain(expected);
+  const revertSegments = extractRevertSegments((caught as Error).message);
+  expect(
+    revertSegments,
+    `expected revert reason containing "${expected}"`
+  ).to.contain(expected);
 }
 
 /**
@@ -117,18 +144,6 @@ export async function deployUniswapTaker(
   return taker;
 }
 
-export async function deploySushiTaker(
-  base: MockTakerBase,
-  authorizedFactory: string = ZERO_FACTORY
-) {
-  const taker = await new SushiSwapKeeperTaker__factory(base.owner).deploy(
-    base.poolDeployer.address,
-    authorizedFactory
-  );
-  await taker.deployed();
-  return taker;
-}
-
 export async function deployCurveTaker(
   base: MockTakerBase,
   authorizedFactory: string = ZERO_FACTORY
@@ -146,20 +161,6 @@ export async function deployFundedSwapRouter02(
   amountOut: BigNumber
 ) {
   const router = await new MockSwapRouter02__factory(base.owner).deploy(
-    amountOut
-  );
-  await router.deployed();
-  if (amountOut.gt(0)) {
-    await base.quoteToken.mint(router.address, amountOut);
-  }
-  return router;
-}
-
-export async function deployFundedSushiRouter(
-  base: MockTakerBase,
-  amountOut: BigNumber
-) {
-  const router = await new MockSushiSwapRouter__factory(base.owner).deploy(
     amountOut
   );
   await router.deployed();
@@ -255,16 +256,6 @@ export function encodeUniswapCallbackData(
   );
 }
 
-/** Keeper-facing SushiSwap details encoding (feeTier, amountOutMinimum, deadline). */
-export function encodeSushiKeeperDetails(
-  amountOutMinimum: BigNumber,
-  options: { feeTier?: number; deadline?: number } = {}
-) {
-  return utils.defaultAbiCoder.encode(
-    ['uint24', 'uint256', 'uint256'],
-    [options.feeTier ?? 500, amountOutMinimum, options.deadline ?? DEADLINE]
-  );
-}
 
 /** Keeper-facing Curve details encoding (pool, poolType, indices, min, deadline). */
 export function encodeCurveKeeperDetails(

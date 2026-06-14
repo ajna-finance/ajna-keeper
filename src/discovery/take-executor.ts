@@ -7,7 +7,7 @@ import {
   TakeWriteTransportMode,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
-  resolveFactoryRouteSelectionSources,
+  resolveExternalTakePolicy,
 } from '../config';
 import { ResolvedTakeTarget } from './targets';
 import {
@@ -176,10 +176,12 @@ async function buildFactoryRouteProfitabilityContext(params: {
 }): Promise<FactoryRouteProfitabilityContext | undefined> {
   const sources =
     params.sources ??
-    resolveFactoryRouteSelectionSources({
-      defaultLiquiditySource: params.defaultLiquiditySource,
-      allowedLiquiditySources: params.takePolicy?.allowedLiquiditySources,
-    });
+    Array.from(
+      resolveExternalTakePolicy({
+        defaultLiquiditySource: params.defaultLiquiditySource,
+        takePolicy: params.takePolicy,
+      }).factoryRouteSources
+    );
   const requiresRouteGasRanking = sources.length > 1;
   const requiresQuoteProfitability =
     params.takePolicy?.minExpectedProfitQuote !== undefined ||
@@ -411,31 +413,28 @@ function logDiscoveredTakeTargetSummary(params: {
   appendNonZeroGroup(fields, 'approvedRoutes', [
     { label: 'oneinch', value: getPathStat('oneinch', 'approved') },
     { label: 'factory', value: getPathStat('factory', 'approved') },
-    { label: 'lifi', value: getPathStat('lifi', 'approved') },
+    { label: 'lifi', value: getPathStat('calldata_aggregator', 'approved') },
   ]);
   appendNonZeroGroup(fields, 'approvedFactorySources', [
     { label: 'uniswapV3', value: stats.approvedUniswapV3TakeDecisions },
-    { label: 'sushiswap', value: stats.approvedSushiswapTakeDecisions },
     { label: 'curve', value: stats.approvedCurveTakeDecisions },
   ]);
   appendNonZeroGroup(fields, 'executedRoutes', [
     { label: 'oneinch', value: getPathStat('oneinch', 'executed') },
     { label: 'factory', value: getPathStat('factory', 'executed') },
-    { label: 'lifi', value: getPathStat('lifi', 'executed') },
+    { label: 'lifi', value: getPathStat('calldata_aggregator', 'executed') },
   ]);
   appendNonZeroGroup(fields, 'executedFactorySources', [
     { label: 'uniswapV3', value: stats.executedUniswapV3Takes },
-    { label: 'sushiswap', value: stats.executedSushiswapTakes },
     { label: 'curve', value: stats.executedCurveTakes },
   ]);
   appendNonZeroGroup(fields, 'dryRunRoutes', [
     { label: 'oneinch', value: getPathStat('oneinch', 'dryRun') },
     { label: 'factory', value: getPathStat('factory', 'dryRun') },
-    { label: 'lifi', value: getPathStat('lifi', 'dryRun') },
+    { label: 'lifi', value: getPathStat('calldata_aggregator', 'dryRun') },
   ]);
   appendNonZeroGroup(fields, 'dryRunFactorySources', [
     { label: 'uniswapV3', value: stats.dryRunUniswapV3Takes },
-    { label: 'sushiswap', value: stats.dryRunSushiswapTakes },
     { label: 'curve', value: stats.dryRunCurveTakes },
   ]);
   appendNonZeroGroup(fields, 'oneInchFailures', [
@@ -450,11 +449,11 @@ function logDiscoveredTakeTargetSummary(params: {
   appendNonZeroGroup(fields, 'lifiFailures', [
     {
       label: 'preBroadcast',
-      value: getPathStat('lifi', 'preBroadcastFailures'),
+      value: getPathStat('calldata_aggregator', 'preBroadcastFailures'),
     },
     {
       label: 'postSubmission',
-      value: getPathStat('lifi', 'postSubmissionFailures'),
+      value: getPathStat('calldata_aggregator', 'postSubmissionFailures'),
     },
   ]);
   appendNonZeroField(
@@ -561,7 +560,6 @@ export async function handleDiscoveredTakeTarget(
     approvedOneInchTakeDecisions: 0,
     approvedFactoryTakeDecisions: 0,
     approvedUniswapV3TakeDecisions: 0,
-    approvedSushiswapTakeDecisions: 0,
     approvedCurveTakeDecisions: 0,
     evaluationSkips: 0,
     revalidationSkips: 0,
@@ -574,14 +572,12 @@ export async function handleDiscoveredTakeTarget(
     executedOneInchTakes: 0,
     executedFactoryTakes: 0,
     executedUniswapV3Takes: 0,
-    executedSushiswapTakes: 0,
     executedCurveTakes: 0,
     dryRunExternalTakes: 0,
     dryRunArbTakes: 0,
     dryRunOneInchTakes: 0,
     dryRunFactoryTakes: 0,
     dryRunUniswapV3Takes: 0,
-    dryRunSushiswapTakes: 0,
     dryRunCurveTakes: 0,
     oneInchSwapDataFailures: 0,
     oneInchPreBroadcastFailures: 0,

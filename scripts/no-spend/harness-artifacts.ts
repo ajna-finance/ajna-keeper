@@ -267,9 +267,14 @@ function optionalExternalTakePathsEnv(
   }
   return raw.split(',').map((part) => {
     const value = part.trim().toLowerCase();
-    if (value !== 'oneinch' && value !== 'factory' && value !== 'lifi') {
+    // Env input boundary: the legacy lifi alias is accepted here and
+    // normalized immediately to the canonical calldata_aggregator family.
+    if (value === 'lifi' || value === 'calldata_aggregator') {
+      return 'calldata_aggregator';
+    }
+    if (value !== 'oneinch' && value !== 'factory') {
       throw new Error(
-        'AJNA_AGENT_HARNESS_ALLOWED_EXTERNAL_TAKE_PATHS must contain only oneinch, factory, or lifi'
+        'AJNA_AGENT_HARNESS_ALLOWED_EXTERNAL_TAKE_PATHS must contain only oneinch, factory, calldata_aggregator, or lifi'
       );
     }
     return value;
@@ -285,7 +290,9 @@ function parseLiquiditySourceLabel(raw: string): LiquiditySource {
     return LiquiditySource.ONEINCH;
   }
   if (value === 'SUSHISWAP' || value === 'SUSHI' || value === '3') {
-    return LiquiditySource.SUSHISWAP;
+    throw new Error(
+      'SushiSwap (source id 3) is deprecated and unsupported as an active liquidity source'
+    );
   }
   if (value === 'CURVE' || value === '4') {
     return LiquiditySource.CURVE;
@@ -468,7 +475,7 @@ function sumDiscoveryCounter(
 
 function sumDiscoveryPathCounter(
   stats: DiscoveredTakeTargetStats[],
-  pathName: 'factory' | 'oneinch' | 'lifi',
+  pathName: 'factory' | 'oneinch' | 'calldata_aggregator',
   field:
     | 'approved'
     | 'dryRun'

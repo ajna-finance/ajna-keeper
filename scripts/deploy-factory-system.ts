@@ -36,7 +36,6 @@ import {
 interface DeploymentAddresses {
   factory?: string;
   uniswapTaker?: string;
-  sushiTaker?: string;
   curveTaker?: string;
   lifiTaker?: string;
   // Future: uniswapV4, pancakeswap, balancer, izumi, etc.
@@ -361,57 +360,6 @@ async function deployUniswapTaker(
   return taker.address;
 }
 
-async function deploySushiSwapTaker(
-  deployer: ethers.Wallet,
-  ajnaPoolFactory: string,
-  factoryAddress: string,
-  chainId: number
-): Promise<string> {
-  console.log('\n📦 Step 2b: Deploying SushiSwapKeeperTaker...');
-
-  const takerArtifactPath = path.join(
-    __dirname,
-    '..',
-    'artifacts',
-    'contracts',
-    'takers',
-    'SushiSwapKeeperTaker.sol',
-    'SushiSwapKeeperTaker.json'
-  );
-  const takerArtifact = require(takerArtifactPath);
-  const SushiSwapKeeperTaker = new ethers.ContractFactory(
-    takerArtifact.abi,
-    takerArtifact.bytecode,
-    deployer
-  );
-
-  // Get gas configuration
-  const gasConfig = getGasConfig(chainId);
-  const deployOptions: any = {
-    gasLimit: gasConfig.gasLimit,
-  };
-
-  if (gasConfig.gasPrice) {
-    deployOptions.gasPrice = gasConfig.gasPrice;
-  }
-
-  // Deploy with factory authorization
-  const taker = await SushiSwapKeeperTaker.deploy(
-    ajnaPoolFactory, // Ajna pool factory
-    factoryAddress, // Authorized factory
-    deployOptions
-  );
-  console.log(
-    '✅ SushiSwap taker deployment tx:',
-    taker.deployTransaction.hash
-  );
-
-  await taker.deployed();
-  console.log('🎉 SushiSwapKeeperTaker deployed to:', taker.address);
-
-  return taker.address;
-}
-
 async function deployCurveKeeperTaker(
   deployer: ethers.Wallet,
   ajnaPoolFactory: string,
@@ -491,14 +439,6 @@ async function configureFactory(
     console.log('✅ UniswapV3 configuration tx:', setUniTakerTx.hash);
     await setUniTakerTx.wait();
     console.log('🎉 Factory configured with UniswapV3 taker');
-  }
-
-  // Register SushiSwap taker (LiquiditySource.SUSHISWAP = 3)
-  if (addresses.sushiTaker) {
-    const setSushiTakerTx = await factory.setTaker(3, addresses.sushiTaker);
-    console.log('✅ SushiSwap configuration tx:', setSushiTakerTx.hash);
-    await setSushiTakerTx.wait();
-    console.log('🎉 Factory configured with SushiSwap taker');
   }
 
   // Register Curve taker (LiquiditySource.CURVE = 4)
@@ -669,7 +609,6 @@ function generateConfigUpdate(
   if (
     addresses.factory ||
     addresses.uniswapTaker ||
-    addresses.sushiTaker ||
     addresses.curveTaker ||
     addresses.lifiTaker
   ) {
@@ -681,16 +620,12 @@ function generateConfigUpdate(
 
   if (
     addresses.uniswapTaker ||
-    addresses.sushiTaker ||
     addresses.curveTaker ||
     addresses.lifiTaker
   ) {
     console.log('  contracts: {');
     if (addresses.uniswapTaker) {
       console.log(`    UniswapV3: '${addresses.uniswapTaker}',`);
-    }
-    if (addresses.sushiTaker) {
-      console.log(`    SushiSwap: '${addresses.sushiTaker}',`);
     }
     if (addresses.curveTaker) {
       console.log(`    Curve: '${addresses.curveTaker}',`);
@@ -703,7 +638,6 @@ function generateConfigUpdate(
   if (
     addresses.factory ||
     addresses.uniswapTaker ||
-    addresses.sushiTaker ||
     addresses.curveTaker ||
     addresses.lifiTaker
   ) {
@@ -717,9 +651,6 @@ function generateConfigUpdate(
   }
   if (addresses.uniswapTaker) {
     console.log(`🦄 UniswapV3KeeperTaker: ${addresses.uniswapTaker}`);
-  }
-  if (addresses.sushiTaker) {
-    console.log(`🍣 SushiSwapKeeperTaker: ${addresses.sushiTaker}`);
   }
   if (addresses.curveTaker) {
     console.log(`🌊 CurveKeeperTaker: ${addresses.curveTaker}`);
@@ -846,17 +777,6 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
     }
 
-    // Deploy SushiSwap taker if configured
-    if (config.dex?.sushiswap) {
-      addresses.sushiTaker = await deploySushiSwapTaker(
-        deployer,
-        config.ajna.erc20PoolFactory,
-        addresses.factory,
-        chainInfo.chainId
-      );
-      // ADD DELAY AFTER UNISWAP DEPLOYMENT
-      await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
-    }
 
     // Deploy curve taker if configured
     if (config.dex?.curve) {

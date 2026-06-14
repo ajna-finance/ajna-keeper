@@ -1,8 +1,13 @@
-import { ExternalTakePathKind, isFactoryDynamicSource } from '../../config';
+import {
+  CalldataAggregatorProviderId,
+  ExternalTakePathKind,
+  isFactoryDynamicSource,
+} from '../../config';
 import { logger } from '../../logging';
 import * as takeFactoryModule from '../../take/factory';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../take/external-take/execution-plan';
 import * as lifiExecutionModule from '../../take/lifi/execution';
+import * as sushiAggregatorExecutionModule from '../../take/sushi-aggregator/execution';
 import * as oneInchExecutionModule from '../../take/one-inch-execution';
 import { ResolvedTakeTarget } from '../targets';
 import {
@@ -23,6 +28,7 @@ import {
   OneInchCircuitOutcome,
   OneInchPathQuoteInput,
   OneInchPathQuoteFn,
+  SushiAggregatorPathQuoteFn,
 } from './quotes';
 import { getLifiCircuitOpenReason } from './lifi-circuit';
 import { DiscoveryExecutionConfig, DiscoveryRpcCache } from '../types';
@@ -36,9 +42,13 @@ export type DiscoveryExternalTakeRouteProvider = ExternalTakeRouteProvider<
 export interface DiscoveryExternalTakeProviderRegistry {
   oneInchProvider: DiscoveryExternalTakeRouteProvider;
   lifiProvider: DiscoveryExternalTakeRouteProvider;
+  sushiAggregatorProvider: DiscoveryExternalTakeRouteProvider;
   factoryProvider: DiscoveryExternalTakeRouteProvider;
+  // Calldata-aggregator dispatch is path + provider id: LI.FI and Sushi
+  // never compete for a single path-keyed slot.
   selectExternalTakeProvider(params: {
     selectedPath: DiscoveryExternalTakeRouteProvider['path'];
+    providerId?: CalldataAggregatorProviderId;
   }): DiscoveryExternalTakeRouteProvider;
 }
 
@@ -78,6 +88,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
   quoteKeeperTakerOneInchTake: OneInchPathQuoteFn;
   quoteFactoryPath: FactoryPathQuoteFn;
   quoteLifiPath: LifiPathQuoteFn;
+  quoteSushiAggregatorPath: SushiAggregatorPathQuoteFn;
   recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
   recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
 }): DiscoveryExternalTakeProviderRegistry {
@@ -152,7 +163,8 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
   };
 
   const lifiProvider: DiscoveryExternalTakeRouteProvider = {
-    path: 'lifi',
+    path: 'calldata_aggregator',
+    providerId: 'lifi',
     quote: async ({
       intent,
       pool,
@@ -212,6 +224,52 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
     },
   };
 
+  const sushiAggregatorProvider: DiscoveryExternalTakeRouteProvider = {
+    path: 'calldata_aggregator',
+    providerId: 'sushi_aggregator',
+    quote: async ({
+      intent,
+      pool,
+      signer,
+      poolConfig,
+      price,
+      auctionPrice,
+      collateral,
+      debtToCover,
+    }) =>
+      params.quoteSushiAggregatorPath({
+        pool,
+        signer,
+        poolConfig,
+        price,
+        auctionPrice,
+        collateral,
+        debtToCover,
+        ...getAggregatorQuoteIntentOptions(intent),
+      }),
+    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
+      const executionFailureCapture = createPreBroadcastFailureCapture(
+        config.onSushiAggregatorExecutionFailure
+      );
+      const sushiConfig = {
+        ...config,
+        onSushiAggregatorExecutionFailure: executionFailureCapture.handler,
+      };
+      const succeeded =
+        await sushiAggregatorExecutionModule.takeLiquidationSushiAggregator({
+          pool,
+          signer,
+          poolConfig,
+          liquidation,
+          config: sushiConfig,
+        });
+      return {
+        succeeded,
+        preBroadcastFailed: executionFailureCapture.didFailPreBroadcast(),
+      };
+    },
+  };
+
   const factoryProvider: DiscoveryExternalTakeRouteProvider = {
     path: 'factory',
     quote: async ({
@@ -263,15 +321,22 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
     DiscoveryExternalTakeRouteProvider
   > = {
     oneinch: oneInchProvider,
-    lifi: lifiProvider,
+    calldata_aggregator: lifiProvider,
     factory: factoryProvider,
   };
 
   return {
     oneInchProvider,
     lifiProvider,
+    sushiAggregatorProvider,
     factoryProvider,
-    selectExternalTakeProvider: ({ selectedPath }) => {
+    selectExternalTakeProvider: ({ selectedPath, providerId }) => {
+      if (
+        selectedPath === 'calldata_aggregator' &&
+        providerId === 'sushi_aggregator'
+      ) {
+        return sushiAggregatorProvider;
+      }
       const provider = providersByPath[selectedPath];
       if (provider === undefined) {
         throw new Error(`Unsupported external take path: ${selectedPath}`);

@@ -1,11 +1,13 @@
 import { BigNumber } from 'ethers';
-import { ApprovedLifiQuote } from '../dex/lifi';
 import {
+  CalldataAggregatorProviderId,
   CurvePoolType,
   ExternalTakePathKind,
   LiquiditySource,
   TakeSettings,
 } from '../config';
+import type { CalldataAggregatorLiquiditySource } from '../config';
+import { ApprovedCalldataAggregatorQuote } from './aggregator-calldata/types';
 
 export type GasPolicyRejectCode =
   | 'gas_price_above_cap'
@@ -64,7 +66,7 @@ export interface TakeActionConfig {
 export type ExternalTakeStrategyKind =
   | 'none'
   | 'oneinch'
-  | 'lifi'
+  | 'calldata_aggregator'
   | 'factory'
   | 'hybrid';
 
@@ -94,7 +96,7 @@ export interface ExternalTakeQuoteEvaluation {
   quotedCollateralWad?: BigNumber;
   auctionIdentity?: string;
   curvePool?: CurvePoolSelection;
-  lifiQuote?: ApprovedLifiQuote;
+  calldataQuote?: ApprovedCalldataAggregatorQuote;
   reason?: string;
 }
 
@@ -143,18 +145,6 @@ export interface ApprovedUniswapV3FactoryQuoteEvaluation
   selectedFeeTier: number;
 }
 
-export interface BoundSushiSwapFactoryRouteEvaluation
-  extends BoundExternalTakeRouteBase<LiquiditySource.SUSHISWAP> {
-  externalTakePath: 'factory';
-  selectedFeeTier: number;
-}
-
-export interface ApprovedSushiSwapFactoryQuoteEvaluation
-  extends ApprovedExternalTakeQuoteBase<LiquiditySource.SUSHISWAP> {
-  externalTakePath: 'factory';
-  selectedFeeTier: number;
-}
-
 export interface BoundCurveFactoryRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.CURVE> {
   externalTakePath: 'factory';
@@ -167,32 +157,32 @@ export interface ApprovedCurveFactoryQuoteEvaluation
   curvePool: CurvePoolSelection;
 }
 
-export interface ApprovedLifiQuoteEvaluation
-  extends ApprovedExternalTakeQuoteBase<LiquiditySource.LIFI> {
-  externalTakePath: 'lifi';
-  lifiQuote: ApprovedLifiQuote;
+export interface ApprovedCalldataAggregatorQuoteEvaluation
+  extends ApprovedExternalTakeQuoteBase<CalldataAggregatorLiquiditySource> {
+  externalTakePath: 'calldata_aggregator';
+  providerId: CalldataAggregatorProviderId;
+  calldataQuote: ApprovedCalldataAggregatorQuote;
 }
 
-export interface BoundLifiRouteEvaluation
-  extends BoundExternalTakeRouteBase<LiquiditySource.LIFI> {
-  externalTakePath: 'lifi';
-  lifiQuote: ApprovedLifiQuote;
+export interface BoundCalldataAggregatorRouteEvaluation
+  extends BoundExternalTakeRouteBase<CalldataAggregatorLiquiditySource> {
+  externalTakePath: 'calldata_aggregator';
+  providerId: CalldataAggregatorProviderId;
+  calldataQuote: ApprovedCalldataAggregatorQuote;
 }
 
 export type BoundFactoryRouteEvaluation =
   | BoundUniswapV3FactoryRouteEvaluation
-  | BoundSushiSwapFactoryRouteEvaluation
   | BoundCurveFactoryRouteEvaluation;
 
 export type ApprovedFactoryQuoteEvaluation =
   | ApprovedUniswapV3FactoryQuoteEvaluation
-  | ApprovedSushiSwapFactoryQuoteEvaluation
   | ApprovedCurveFactoryQuoteEvaluation;
 
 export type BoundExternalTakeRouteEvaluation =
   | BoundOneInchRouteEvaluation
   | BoundFactoryRouteEvaluation
-  | BoundLifiRouteEvaluation;
+  | BoundCalldataAggregatorRouteEvaluation;
 
 export interface ExternalTakeExecutionCandidate<TApprovalContext = unknown> {
   readonly evaluation: BoundExternalTakeRouteEvaluation;
@@ -218,7 +208,7 @@ export type ExternalTakeEvaluationResult<TApprovalContext = unknown> =
 export type ApprovedExternalTakeQuoteEvaluation =
   | ApprovedOneInchQuoteEvaluation
   | ApprovedFactoryQuoteEvaluation
-  | ApprovedLifiQuoteEvaluation;
+  | ApprovedCalldataAggregatorQuoteEvaluation;
 
 export interface ArbTakeEvaluation {
   isArbTakeable: boolean;

@@ -12,9 +12,8 @@ import {
   getExternalTakePathDescriptor,
   getManualPools,
   isExternalTakeLiquiditySource,
-  resolveExternalTakePaths,
+  resolveExternalTakePolicy,
   resolveExternalTakePathFromSource,
-  resolveFactoryRouteSelectionSources,
 } from '../config';
 import {
   LIFI_TAKER_ALLOWLIST_ABI,
@@ -23,6 +22,7 @@ import {
   readLifiTakerAllowlistSnapshot,
 } from '../dex/lifi';
 import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
+import { validateSushiAggregatorAllowlistPreflight } from '../dex/sushi-aggregator/preflight';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
 
@@ -81,10 +81,12 @@ function getAutodiscoverExternalTakePaths(
     return [];
   }
   const discoveredTake = config.discovery?.defaults?.take;
-  return resolveExternalTakePaths({
-    defaultLiquiditySource: discoveredTake?.liquiditySource,
-    allowedExternalTakePaths: takePolicy?.allowedExternalTakePaths,
-  });
+  return Array.from(
+    resolveExternalTakePolicy({
+      defaultLiquiditySource: discoveredTake?.liquiditySource,
+      takePolicy,
+    }).externalTakePaths
+  );
 }
 
 function addPreflightRequirement(
@@ -109,13 +111,11 @@ function addExternalTakePathRequirements(
   const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
   for (const path of paths) {
     if (path === 'factory') {
-      for (const source of resolveFactoryRouteSelectionSources({
+      for (const source of resolveExternalTakePolicy({
         defaultLiquiditySource:
           config.discovery?.defaults?.take?.liquiditySource,
-        allowedLiquiditySources: takePolicy?.allowedLiquiditySources,
-        configuredDefaultFactoryLiquiditySource:
-          takePolicy?.defaultFactoryLiquiditySource,
-      })) {
+        takePolicy,
+      }).factoryRouteSources) {
         addPreflightRequirement(requirements, source);
       }
       continue;
@@ -487,30 +487,6 @@ const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
       }));
     },
   },
-  [LiquiditySource.SUSHISWAP]: {
-    usesFactoryRegistry: true,
-    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
-    getTakerAddress: ({ config, source }) =>
-      getConfiguredTakerAddress(config, source),
-    getContractCodeRequirements: ({ config }) => [
-      {
-        label: 'SushiSwap swapRouterAddress',
-        address: config.dex?.sushiswap?.swapRouterAddress,
-      },
-      {
-        label: 'SushiSwap factoryAddress',
-        address: config.dex?.sushiswap?.factoryAddress,
-      },
-      {
-        label: 'SushiSwap quoterV2Address',
-        address: config.dex?.sushiswap?.quoterV2Address,
-      },
-      {
-        label: 'SushiSwap wethAddress',
-        address: config.dex?.sushiswap?.wethAddress,
-      },
-    ],
-  },
   [LiquiditySource.CURVE]: {
     usesFactoryRegistry: true,
     takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
@@ -543,6 +519,22 @@ const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
       errors,
     }) => {
       await validateLifiAllowlistPreflight({
+        config,
+        provider,
+        chainId,
+        takerAddress,
+        errors,
+      });
+    },
+  },
+  [LiquiditySource.SUSHI_AGGREGATOR]: {
+    usesFactoryRegistry: true,
+    takerLabel: () => 'Sushi aggregator taker',
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
+    getContractCodeRequirements: () => [],
+    validateAdditional: async ({ config, provider, chainId, takerAddress, errors }) => {
+      await validateSushiAggregatorAllowlistPreflight({
         config,
         provider,
         chainId,

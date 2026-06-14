@@ -48,7 +48,7 @@ describe('manual take context helpers', () => {
         takerContracts: { Lifi: '0xlifi' },
       },
     });
-    expectManualDeploymentType(lifiDeployment, 'lifi');
+    expectManualDeploymentType(lifiDeployment, 'calldata_aggregator');
     expect(lifiDeployment.resolvedTakerAddress).to.equal('0xlifi');
 
     const lifiWithoutCanonicalTaker = resolveManualTakeDeployment({
@@ -146,7 +146,7 @@ describe('manual take context helpers', () => {
           takerContracts: { Lifi: '0xlifi' },
         },
       }).context.externalTakeAdapter.kind
-    ).to.equal('lifi');
+    ).to.equal('calldata_aggregator');
 
     expect(
       resolveManualTakeContext({
@@ -206,7 +206,7 @@ describe('manual take context helpers', () => {
   it('formats manual external take deployment logs outside the config registry', () => {
     expect(
       formatManualExternalTakeDeployment({
-        deploymentType: 'lifi',
+        deploymentType: 'calldata_aggregator',
         poolName: 'LI.FI pool',
       })
     ).to.equal(
@@ -307,7 +307,6 @@ describe('manual take context helpers', () => {
         keeperTakerFactory: '0xfactory',
         takerContracts: { UniswapV3: '0xuniswap' },
         uniswapV3RouterOverrides: { swapRouter02Address: '0xswaprouter02' },
-        sushiswapRouterOverrides: { swapRouterAddress: '0xsushi' },
         curveRouterOverrides: {
           poolConfigs: {
             WETH_USDC: {
@@ -341,7 +340,7 @@ describe('manual take context helpers', () => {
       },
     }).context;
 
-    expect(context.externalTakeAdapter.kind).to.equal('lifi');
+    expect(context.externalTakeAdapter.kind).to.equal('calldata_aggregator');
     expect(context.externalExecutionConfig).to.deep.include({
       keeperTakerFactory: '0xfactory',
       lifi: { mode: 'canary' },
@@ -367,7 +366,7 @@ describe('manual take context helpers', () => {
       },
     }).context;
 
-    expect(context.externalTakeAdapter.kind).to.equal('lifi');
+    expect(context.externalTakeAdapter.kind).to.equal('calldata_aggregator');
     expect(context.externalExecutionConfig).to.deep.include({
       lifiTaker: '0x2222222222222222222222222222222222222222',
     });

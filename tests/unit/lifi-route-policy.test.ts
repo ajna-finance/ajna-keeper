@@ -5,18 +5,27 @@ import {
   getExternalTakePathDefaultSource,
   getExternalTakePathDescriptor,
   isAggregatorExternalTakePath,
-  resolveExternalTakePaths,
+  resolveExternalTakePolicy,
   resolveExternalTakePathFromSource,
   resolveHybridGasQuoteFallbackPolicy,
 } from '../../src/config';
 
 describe('LI.FI route policy', () => {
-  it('resolves LIFI defaults to the lifi external take path', () => {
+  it('resolves LIFI defaults to the calldata_aggregator external take path', () => {
     expect(
-      resolveExternalTakePaths({
+      resolveExternalTakePolicy({
         defaultLiquiditySource: LiquiditySource.LIFI,
-      })
-    ).to.deep.equal(['lifi']);
+      }).externalTakePaths
+    ).to.deep.equal(['calldata_aggregator']);
+  });
+
+  it('resolves the legacy lifi config input to the calldata_aggregator family', () => {
+    expect(
+      resolveExternalTakePolicy({
+        defaultLiquiditySource: undefined,
+        takePolicy: { allowedExternalTakePaths: ['lifi'] },
+      }).externalTakePaths
+    ).to.deep.equal(['calldata_aggregator']);
   });
 
   it('does not treat LIFI as a factory dynamic source', () => {
@@ -27,12 +36,12 @@ describe('LI.FI route policy', () => {
     expect(getExternalTakePathDefaultSource('oneinch')).to.equal(
       LiquiditySource.ONEINCH
     );
-    expect(getExternalTakePathDefaultSource('lifi')).to.equal(
+    expect(getExternalTakePathDefaultSource('calldata_aggregator')).to.equal(
       LiquiditySource.LIFI
     );
     expect(getExternalTakePathDefaultSource('factory')).to.equal(undefined);
     expect(isAggregatorExternalTakePath('oneinch')).to.equal(true);
-    expect(isAggregatorExternalTakePath('lifi')).to.equal(true);
+    expect(isAggregatorExternalTakePath('calldata_aggregator')).to.equal(true);
     expect(isAggregatorExternalTakePath('factory')).to.equal(false);
   });
 
@@ -41,7 +50,7 @@ describe('LI.FI route policy', () => {
       'oneinch'
     );
     expect(resolveExternalTakePathFromSource(LiquiditySource.LIFI)).to.equal(
-      'lifi'
+      'calldata_aggregator'
     );
     expect(resolveExternalTakePathFromSource(LiquiditySource.UNISWAPV3)).to.equal(
       'factory'
@@ -49,7 +58,7 @@ describe('LI.FI route policy', () => {
   });
 
   it('marks LI.FI as requiring fail-closed deployment validation and gas overrides', () => {
-    const lifiDescriptor = getExternalTakePathDescriptor('lifi');
+    const lifiDescriptor = getExternalTakePathDescriptor('calldata_aggregator');
 
     expect(lifiDescriptor.requiresRouteDeploymentValidation).to.equal(true);
     expect(lifiDescriptor.requiresDexGasOverride).to.equal(true);
@@ -60,7 +69,7 @@ describe('LI.FI route policy', () => {
       resolveHybridGasQuoteFallbackPolicy({
         fallbackMode: 'factory_first',
         routeSelectionMode: 'maximize_profit',
-        externalTakePaths: ['factory', 'lifi'],
+        externalTakePaths: ['factory', 'calldata_aggregator'],
         maxGasCostNative: 1,
       })
     ).to.deep.equal({ eligible: true });

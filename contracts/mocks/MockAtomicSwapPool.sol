@@ -21,6 +21,10 @@ contract MockAtomicSwapPool {
     ///      Real Ajna passes floor(quoteWad/scale) to the callback but pulls
     ///      ceil(quoteWad/scale) — set this to quoteAmountDue + 1 to model that gap.
     uint256 public quotePullOverride;
+    /// @dev When true, take() delivers callback data that differs from the bytes the
+    ///      taker handed to take(), modeling a compromised pool. Calldata-aggregator
+    ///      takers must reject this via their callback data-hash binding.
+    bool public mutateCallbackData;
     address public lastBorrower;
     address public lastCallee;
     uint256 public lastCollateralTaken;
@@ -48,6 +52,10 @@ contract MockAtomicSwapPool {
         quotePullOverride = quotePullOverride_;
     }
 
+    function setMutateCallbackData(bool mutateCallbackData_) external {
+        mutateCallbackData = mutateCallbackData_;
+    }
+
     function take(
         address borrowerAddress_,
         uint256 maxAmount_,
@@ -64,7 +72,7 @@ contract MockAtomicSwapPool {
         IERC20Taker(callee_).atomicSwapCallback(
             collateralTaken_,
             quoteAmountDue,
-            data_
+            mutateCallbackData ? bytes.concat(data_, hex"00") : data_
         );
         // Real Ajna pulls from msg.sender (the take caller), not the callee, and pulls
         // the ceil-divided amount which can exceed the callback's floored due by 1 wei.

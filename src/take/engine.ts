@@ -947,7 +947,7 @@ export function formatTakeStrategyLog(
   const takeLabel =
     strategyKind === 'factory'
       ? 'factory take'
-      : strategyKind === 'lifi'
+      : strategyKind === 'calldata_aggregator'
         ? 'LI.FI take'
         : 'take';
   if (approvedTake && approvedArbTake) {

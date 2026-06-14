@@ -47,21 +47,11 @@ const config: KeeperConfig = {
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5', // QuoterV2 for accurate pricing
       },
     },
-    sushiswap: {
-      swapRouterAddress: '0x33d91116e0370970444B0281AB117e161fEbFcdD', // From production test
-      quoterV2Address: '0x1400feFD6F9b897970f00Df6237Ff2B8b27Dc82C', // From production test
-      factoryAddress: '0xCdBCd51a5E8728E0AF4895ce5771b7d17fF71959', // From production test
-      wethAddress: '0x4200000000000000000000000000000000000006', // WETH on Hemi
-      defaultFeeTier: 500, // Preferred/default 0.05% fee tier
-      candidateFeeTiers: [3000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
-      defaultSlippage: 10.0, // 10% conservative slippage (from production test)
-    },
   },
   takers: {
     factory: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
     contracts: {
       UniswapV3: '0x[DEPLOYED_UNISWAP_TAKER_ADDRESS]', // Individual taker contract addresses
-      SushiSwap: '0x[DEPLOYED_SUSHISWAP_TAKER_ADDRESS]', // SushiSwap taker contract
     },
   },
   pricing: {
@@ -97,7 +87,7 @@ const config: KeeperConfig = {
 
           // External Takes via Uniswap V3 (requires factory deployment)
           liquiditySource: LiquiditySource.UNISWAPV3, // Use Uniswap V3 for external takes
-          // liquiditySource: LiquiditySource.SUSHISWAP, // Alternative: Use SushiSwap for external takes
+          // liquiditySource: LiquiditySource.CURVE, // Alternative: Use Curve for external takes
           marketPriceFactor: 0.99, // Take when auction price < market * 0.99
           allowSubsidy: false,
         },
@@ -141,9 +131,8 @@ const config: KeeperConfig = {
           minCollateral: 0.1, // Enable arbTake when collateral >= 0.1
           hpbPriceFactor: 0.98, // ArbTake when price < hpb * 0.98
 
-          // External Takes via SushiSwap (requires factory deployment)
-          liquiditySource: LiquiditySource.SUSHISWAP, // Use SushiSwap for external takes
-          // liquiditySource: LiquiditySource.UNISWAPV3, // Alternative: Use Uniswap V3 for external takes
+          // External Takes via Uniswap V3 (requires factory deployment)
+          liquiditySource: LiquiditySource.UNISWAPV3, // Use Uniswap V3 for external takes
           marketPriceFactor: 0.99, // Take when auction price < market * 0.99
           allowSubsidy: false,
         },
@@ -152,13 +141,13 @@ const config: KeeperConfig = {
           redeemFirst: TokenToCollect.COLLATERAL, // For kickers, redeem collateral first
           minAmountQuote: 0.001, // Minimum quote to redeem
           minAmountCollateral: 0.001, // Minimum collateral to redeem
-          // Configure collateral to use SushiSwap to get back quote_token
+          // Configure collateral to use Uniswap V3 to get back quote_token
           rewardActionCollateral: {
             action: RewardActionLabel.EXCHANGE,
             address: '0x00b2fee99fe3fc9aab91d1b249c99c9ffbb1ccde', // USD_T4
             targetToken: 'usd_t3', // Or keep as USD_T3 if preferred
-            slippage: 10, // Higher slippage for SushiSwap
-            dexProvider: PostAuctionDex.SUSHISWAP, // Use SushiSwap for LP rewards
+            slippage: 2,
+            dexProvider: PostAuctionDex.UNISWAP_V3, // Use Uniswap V3 for LP rewards
             fee: FeeAmount.LOW, // 0.05% fee tier
           },
         },
@@ -210,7 +199,7 @@ const config: KeeperConfig = {
             address: '0x[collateral-token-address]',
             targetToken: 'weth',
             slippage: 10,
-            dexProvider: PostAuctionDex.SUSHISWAP, // Use SushiSwap for collateral rewards (higher slippage tolerance)
+            dexProvider: PostAuctionDex.UNISWAP_V3, // Use Uniswap V3 for collateral rewards
             fee: FeeAmount.LOW,
           },
         },

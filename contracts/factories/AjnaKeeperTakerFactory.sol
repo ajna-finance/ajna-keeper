@@ -37,6 +37,11 @@ contract AjnaKeeperTakerFactory {
     error TakerNotSet();           // sig: 0x28c25087
     error InvalidTaker();          // sig: 0x1f7e75fc
     error LegacyDirectOneInchTakerUnsupported();
+    /// @notice Source id 3 (formerly direct SushiSwap) is permanently deprecated and
+    ///         must never be registered on a newly compiled factory. See the
+    ///         SushiSwap aggregator roadmap: direct Sushi is removed, the slot is
+    ///         reserved, and first-class Sushi support is a new appended source id.
+    error DeprecatedLiquiditySource();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for this deployment
     constructor(PoolDeployer ajnaErc20PoolFactory) {
@@ -53,7 +58,13 @@ contract AjnaKeeperTakerFactory {
     function setTaker(IAjnaKeeperTaker.LiquiditySource source, address takerAddress) external onlyOwner {
         // AUDIT FIX: Revert on invalid source early
         require(source != IAjnaKeeperTaker.LiquiditySource.None, "Invalid source");
-        
+        // Fail closed on the deprecated direct-SushiSwap slot. A nonzero registration
+        // is rejected outright; clearing the slot (address(0)) stays allowed so an
+        // operator reusing a factory can zero a stale mapping.
+        if (source == IAjnaKeeperTaker.LiquiditySource.SushiSwap && takerAddress != address(0)) {
+            revert DeprecatedLiquiditySource();
+        }
+
         address oldTaker = takerContracts[source];
         
         if (takerAddress != address(0)) {

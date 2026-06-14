@@ -20,7 +20,7 @@ function quoteEvaluation(
 describe('hybrid external take selection', () => {
   it('rejects disabled hybrid execution paths before dispatch', () => {
     const disabledPath = resolveHybridExternalTakeExecutionSelection({
-      allowedExternalTakePaths: ['factory'],
+      resolvedExternalTakePaths: ['factory'],
       quoteEvaluation: quoteEvaluation({
         externalTakePath: 'oneinch',
         selectedLiquiditySource: LiquiditySource.ONEINCH,
@@ -38,7 +38,7 @@ describe('hybrid external take selection', () => {
     });
 
     const missingFactorySource = resolveHybridExternalTakeExecutionSelection({
-      allowedExternalTakePaths: ['factory'],
+      resolvedExternalTakePaths: ['factory'],
       quoteEvaluation: quoteEvaluation({
         externalTakePath: 'factory',
         quoteAmount: 125,
@@ -55,7 +55,7 @@ describe('hybrid external take selection', () => {
     });
 
     const missingSelectedPath = resolveHybridExternalTakeExecutionSelection({
-      allowedExternalTakePaths: ['oneinch', 'factory'],
+      resolvedExternalTakePaths: ['oneinch', 'factory'],
       quoteEvaluation: quoteEvaluation({
         quoteAmount: 125,
         quoteAmountRaw: ethers.utils.parseUnits('125', 6),
@@ -71,7 +71,7 @@ describe('hybrid external take selection', () => {
     });
 
     const lifiSourceOnly = resolveHybridExternalTakeExecutionSelection({
-      allowedExternalTakePaths: ['lifi'],
+      resolvedExternalTakePaths: ['calldata_aggregator'],
       quoteEvaluation: quoteEvaluation({
         selectedLiquiditySource: LiquiditySource.LIFI,
         quoteAmount: 125,
@@ -84,11 +84,11 @@ describe('hybrid external take selection', () => {
 
     expect(lifiSourceOnly).to.deep.include({
       approved: true,
-      effectiveSelectedPath: 'lifi',
+      effectiveSelectedPath: 'calldata_aggregator',
     });
 
     const inconsistentLifiPath = resolveHybridExternalTakeExecutionSelection({
-      allowedExternalTakePaths: ['factory', 'lifi'],
+      resolvedExternalTakePaths: ['factory', 'calldata_aggregator'],
       quoteEvaluation: quoteEvaluation({
         externalTakePath: 'factory',
         selectedLiquiditySource: LiquiditySource.LIFI,
@@ -131,7 +131,7 @@ describe('hybrid external take selection', () => {
     expect(
       selectBestExternalTakeQuoteEvaluation({
         evaluations: [subsidized, nonSubsidized],
-        externalTakePaths: ['oneinch', 'factory', 'lifi'],
+        externalTakePaths: ['oneinch', 'factory', 'calldata_aggregator'],
       })
     ).to.equal(nonSubsidized);
   });
@@ -148,7 +148,7 @@ describe('hybrid external take selection', () => {
       },
     });
     const lifi = quoteEvaluation({
-      externalTakePath: 'lifi',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.LIFI,
       quoteAmountRaw: BigNumber.from(135),
       routeProfitability: {
@@ -171,7 +171,7 @@ describe('hybrid external take selection', () => {
     expect(
       selectBestExternalTakeQuoteEvaluation({
         evaluations: [oneInch, lifi, factoryTie],
-        externalTakePaths: ['oneinch', 'lifi', 'factory'],
+        externalTakePaths: ['oneinch', 'calldata_aggregator', 'factory'],
       })
     ).to.equal(lifi);
   });

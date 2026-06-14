@@ -1,5 +1,5 @@
 // src/dex/curve-router.ts
-// Simplified Curve integration for Base L2 - follows sushiswap-router-module.ts patterns
+// Simplified Curve integration for Base L2 - follows the V3 router-module pattern
 import { Contract, BigNumber, Signer, providers, ethers } from 'ethers';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
@@ -41,7 +41,7 @@ const CRYPTOSWAP_ABI = [
 
 /**
  * Swaps tokens using Curve pools - Simplified for Base L2
- * Based on sushiswap-router-module.ts patterns and working curve test scripts
+ * Based on the V3 router-module pattern and working curve test scripts
  */
 export async function swapWithCurveRouter(
   signer: Signer,
