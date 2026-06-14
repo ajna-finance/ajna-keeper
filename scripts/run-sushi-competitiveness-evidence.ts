@@ -7,9 +7,9 @@
 // failures to record reproducibility, collects allowlist-stability refreshes
 // for chains where Sushi succeeded, derives the per-row assessment and the
 // proceed/defer decision from the recorded data, and writes the typed
-// competitiveness artifact plus the markdown summary derived from it.
+// competitiveness artifact.
 //
-// Decision standard applied (packet-3a.md):
+// Decision standard applied:
 // - coverage basis: Sushi succeeds where BOTH incumbents have reproducible
 //   unsupported_chain/no_route outcomes (credentials, rate limits, transient
 //   errors, malformed responses never count toward proceed)
@@ -63,13 +63,6 @@ const ARTIFACT_PATH = path.join(
   FIXTURES_DIR,
   'sushi-competitiveness.artifact.json'
 );
-const SUMMARY_PATH = path.join(
-  __dirname,
-  '..',
-  'docs',
-  'sushiswap-external-take-packet-3a-decision.md'
-);
-
 const LIFI_API_BASE = 'https://li.quest/v1/quote';
 const ONEINCH_API_BASE = 'https://api.1inch.dev/swap/v6.0';
 const STABILITY_SAMPLES = 3;
@@ -761,66 +754,8 @@ async function main(): Promise<void> {
   }
 
   fs.writeFileSync(ARTIFACT_PATH, JSON.stringify(artifact, null, 2) + '\n');
-  fs.writeFileSync(SUMMARY_PATH, renderSummary(artifact));
   console.log(`ok artifact: ${path.relative(process.cwd(), ARTIFACT_PATH)}`);
-  console.log(`ok summary: ${path.relative(process.cwd(), SUMMARY_PATH)}`);
   console.log(`ok decision: ${artifact.decision.decision}`);
-}
-
-function renderSummary(artifact: CompetitivenessArtifact): string {
-  const lines: string[] = [];
-  lines.push('# Packet 3A Decision: Sushi Competitiveness');
-  lines.push('');
-  lines.push(
-    '<!-- Derived from the checked typed artifact at ' +
-      'tools/external-take-evidence/fixtures/sushi-competitiveness.artifact.json. -->'
-  );
-  lines.push('');
-  lines.push(`Generated: ${artifact.generatedAt}`);
-  lines.push('');
-  lines.push(`## Decision: \`${artifact.decision.decision}\``);
-  lines.push('');
-  lines.push(artifact.decision.rationale);
-  lines.push('');
-  if (artifact.decision.decision === 'proceed' && artifact.decision.scope) {
-    const scope = artifact.decision.scope;
-    lines.push('### Packet 3B scope (the only unlocked surface)');
-    lines.push('');
-    lines.push(`- Chains: ${scope.chains.join(', ')}`);
-    lines.push(`- Pairs: ${scope.pairs.join(', ')}`);
-    lines.push(`- Source filters: ${(scope.sourceFilters ?? []).join(', ')}`);
-    lines.push('- Allowlist (target / selector / spender):');
-    for (const entry of scope.allowlist ?? []) {
-      lines.push(`  - ${entry.target} / ${entry.selector} / ${entry.spender}`);
-    }
-    lines.push('');
-  }
-  lines.push('## Sample rows');
-  lines.push('');
-  lines.push('| Chain | Pair | Sushi | LI.FI | 1inch | Assessment |');
-  lines.push('| --- | --- | --- | --- | --- | --- |');
-  for (const row of artifact.rows) {
-    const by = (provider: string) => {
-      const result = row.providerResults.find(r => r.provider === provider);
-      if (!result) {
-        return 'missing';
-      }
-      return result.outcome === 'success'
-        ? 'success'
-        : `${result.classification}${result.reproducible ? ' (reproducible)' : ''}`;
-    };
-    lines.push(
-      `| ${row.chainName} (${row.chainId}) | ${row.pair.tokenIn.symbol}/${row.pair.tokenOut.symbol} | ${by('sushi')} | ${by('lifi')} | ${by('oneinch')} | ${row.assessment?.rationale ?? ''} |`
-    );
-  }
-  lines.push('');
-  lines.push(
-    'Failure-classification policy: incumbent `missing_credentials`, ' +
-      '`rate_limited`, `transient_error`, and `malformed_response` outcomes ' +
-      'never count toward a proceed decision (packet-3a.md).'
-  );
-  lines.push('');
-  return lines.join('\n');
 }
 
 if (require.main === module) {

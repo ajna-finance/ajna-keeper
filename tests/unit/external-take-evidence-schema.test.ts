@@ -308,7 +308,8 @@ describe('competitiveness artifact rules (Packet 3A)', () => {
     const artifact = cloneArtifact();
     for (const evidence of artifact.decision.stabilityEvidence) {
       evidence.samples = [];
-      evidence.modelDocRef = 'docs/sushiswap-external-take-packet-3a-decision.md';
+      evidence.modelDocRef =
+        'tools/external-take-evidence/fixtures/sushi-competitiveness.artifact.json';
     }
     const result = validateCompetitivenessArtifact(artifact);
     expect(result.ok, JSON.stringify(result.ok ? '' : result.errors)).to.equal(

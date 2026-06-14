@@ -1,6 +1,6 @@
 // Packet 2A boundary check: production src/** must not import the
 // tooling-only evidence checker, its evidence-only types, or recorded
-// route-shape artifacts (packet-2a.md Evidence Requirements). The evidence
+// route-shape artifacts. The evidence
 // tooling lives in tools/external-take-evidence/ and is reachable only from
 // tests/ and scripts/ entrypoints.
 import { expect } from 'chai';

@@ -5,11 +5,11 @@
 // (ProviderResult, SampleRow, FailureClassification) and the discriminated
 // artifact union (route_shape | competitiveness) used by Packets 2A and 3A.
 //
-// Validation mechanism decision (recorded per packet-2a.md): HAND-ROLLED
-// checks, no schema-validation dependency. Rationale: zero new dependencies
-// under the pinned toolchain (docs/adr/0001), matching the repo's existing
-// hand-rolled parser posture (no-spend env/policy parsing). Packet 3A must
-// reuse this module and must not introduce a second validation mechanism.
+// Validation mechanism decision: HAND-ROLLED checks, no schema-validation
+// dependency. Rationale: zero new dependencies under the pinned toolchain
+// (docs/adr/0001), matching the repo's existing hand-rolled parser posture
+// (no-spend env/policy parsing). Competitiveness evidence must reuse this
+// module and must not introduce a second validation mechanism.
 //
 // BOUNDARY: production src/** must never import this module, its types, or
 // recorded evidence artifacts. tests/unit/evidence-tooling-boundary.test.ts

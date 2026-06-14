@@ -1,6 +1,6 @@
 // Read-only Packet 2A evidence refresher (SushiSwap aggregator roadmap).
 //
-// Fetches the minimum same-chain Sushi route fixture matrix (packet-2a.md):
+// Fetches the minimum same-chain Sushi route fixture matrix:
 // Ethereum mainnet, Base, Arbitrum, Optimism, Polygon, Avalanche, and Hemi,
 // wrapped-native (or substituted keeper-relevant collateral) into the chain's
 // production USDC/stable token. Writes raw response fixtures, normalizes each
@@ -167,7 +167,7 @@ export const MATRIX: readonly MatrixEntry[] = [
 
 // Real Polygon wrapped-native pair that produced the unproven second
 // response shape during the spike; committed as the ambiguous fail-closed
-// fixture required by packet-2a.md.
+// fixture required by the evidence tooling.
 const POLYGON_AMBIGUOUS_PAIR = {
   chainId: 137,
   chainName: 'polygon',
