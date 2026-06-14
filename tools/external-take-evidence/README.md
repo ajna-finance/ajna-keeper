@@ -1,7 +1,7 @@
 # External-Take Evidence Tooling (Packets 2A / 3A)
 
 Tooling-only evidence schema, checker, and Sushi route-shape normalizer for
-the SushiSwap aggregator roadmap (`docs/sushiswap-external-take-plan.md`).
+the calldata-aggregator implementation.
 This directory is the single owner of the shared evidence components
 (`ProviderResult`, `SampleRow`, `FailureClassification`) and the
 discriminated artifact union (`route_shape` for Packet 2A,

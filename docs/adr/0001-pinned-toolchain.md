@@ -1,8 +1,8 @@
 # ADR 0001: Pinned ethers v5 / OpenZeppelin 4.9 toolchain
 
-Status: accepted (2026-06-12). Revisit trigger: before the next major feature
-after the SushiSwap aggregator roadmap (`docs/sushiswap-external-take-plan.md`)
-ships, or earlier if a security advisory lands against a pinned major.
+Status: accepted (2026-06-12). Revisit trigger: before the next major
+calldata-aggregator feature ships, or earlier if a security advisory lands
+against a pinned major.
 
 ## Decision
 

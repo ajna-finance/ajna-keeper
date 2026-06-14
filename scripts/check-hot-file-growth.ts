@@ -1,11 +1,11 @@
-// Roadmap hot-file growth checker (SushiSwap aggregator roadmap, Packet 0).
+// Roadmap hot-file growth checker for calldata-aggregator feature packets.
 //
 // Compares the current tree (including uncommitted changes) against an
 // EXPLICIT base ref and fails when a roadmap hot file grows. Packets touching
 // hot files must run this against their declared base ref; overrides happen
 // only through packet-closeout justification, never by editing the rules.
 //
-// Rules (docs/sushiswap-external-take-packet-0.md):
+// Rules:
 //   1. net-growth:     a hot file's final line count exceeds its base count
 //   2. added-lines:    more than MAX_ADDED_LINES gross added lines in a hot
 //                      file, even when net growth is zero or negative
