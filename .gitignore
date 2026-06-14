@@ -22,6 +22,7 @@ yarn-error.log*
 _archivepackage-lock.json
 /local
 .codex
+.claude/
 .context/
 *.dot
 .vscode/
