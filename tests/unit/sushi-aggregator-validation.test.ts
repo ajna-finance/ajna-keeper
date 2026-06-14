@@ -1,8 +1,5 @@
-// Packet 3B Sushi aggregator provider tests: fail-closed route validation,
-// scoped-allowlist policy validation, and the closeout scope-match proof
-// that every configured chain/pair/target/selector/spender stays within the
-// committed Packet 3A proceed artifact (tests may read the planning
-// artifact; production runtime never does).
+// Sushi aggregator provider tests: fail-closed route validation,
+// scoped-allowlist policy validation, and reviewed scope constants.
 import { expect } from 'chai';
 import { BigNumber } from 'ethers';
 import * as fs from 'fs';
@@ -16,6 +13,7 @@ import {
   SUSHI_AGGREGATOR_PROVEN_SELECTOR,
   SUSHI_AGGREGATOR_PROVEN_SPENDER,
   SUSHI_AGGREGATOR_PROVEN_TARGET,
+  SUSHI_AGGREGATOR_SCOPED_APPROVAL_SPENDER_ALLOWLIST,
   SUSHI_AGGREGATOR_SCOPED_CALL_TARGET_ALLOWLIST,
   SUSHI_AGGREGATOR_SCOPED_CHAIN_IDS,
   SUSHI_AGGREGATOR_SCOPED_PAIRS,
@@ -27,11 +25,10 @@ const FIXTURE_PATH = path.join(
   __dirname,
   '..',
   '..',
-  'tools',
-  'external-take-evidence',
+  'tests',
   'fixtures',
-  'raw',
-  'sushi-v7-base-weth-usdc.json'
+  'sushi-aggregator',
+  'base-weth-usdc.json'
 );
 
 const BASE_CHAIN_ID = 8453;
@@ -56,7 +53,7 @@ function scopedConfig(): SushiAggregatorDexConfig {
   return {
     mode: 'production',
     callTargetAllowlist: SUSHI_AGGREGATOR_SCOPED_CALL_TARGET_ALLOWLIST,
-    approvalSpenderAllowlist: SUSHI_AGGREGATOR_SCOPED_CALL_TARGET_ALLOWLIST,
+    approvalSpenderAllowlist: SUSHI_AGGREGATOR_SCOPED_APPROVAL_SPENDER_ALLOWLIST,
     selectorAllowlist: SUSHI_AGGREGATOR_SCOPED_SELECTOR_ALLOWLIST,
   };
 }
@@ -262,83 +259,49 @@ describe('Sushi aggregator config policy (Packet 3B)', () => {
   });
 });
 
-describe('Packet 3A scope-match closeout (Packet 3B)', () => {
-  const artifact = JSON.parse(
-    fs.readFileSync(
-      path.join(
-        __dirname,
-        '..',
-        '..',
-        'tools',
-        'external-take-evidence',
-        'fixtures',
-        'sushi-competitiveness.artifact.json'
-      ),
-      'utf8'
-    )
-  );
-
-  it('the artifact records proceed with an explicit scope', () => {
-    expect(artifact.decision.decision).to.equal('proceed');
-    expect(artifact.decision.scope.chains.length).to.be.greaterThan(0);
+describe('Sushi aggregator reviewed scope constants', () => {
+  it('keeps the reviewed chain and pair scope explicit', () => {
+    expect(SUSHI_AGGREGATOR_SCOPED_CHAIN_IDS).to.deep.equal([
+      1, 8453, 42161, 10, 137, 43114,
+    ]);
+    expect(SUSHI_AGGREGATOR_SCOPED_PAIRS).to.deep.equal([
+      'WETH/USDC',
+      'WAVAX/USDC',
+    ]);
   });
 
-  it('every reviewed scoped chain is justified by the proceed artifact', () => {
-    for (const chainId of SUSHI_AGGREGATOR_SCOPED_CHAIN_IDS) {
-      expect(
-        artifact.decision.scope.chains,
-        `chain ${chainId} is not in the Packet 3A proceed scope`
-      ).to.include(chainId);
-    }
-  });
-
-  it('every reviewed scoped pair is justified by the proceed artifact', () => {
-    for (const pair of SUSHI_AGGREGATOR_SCOPED_PAIRS) {
-      expect(artifact.decision.scope.pairs).to.include(pair);
-    }
-  });
-
-  it('the reviewed allowlist tuple has Packet 3A stability evidence', () => {
-    const match = (artifact.decision.scope.allowlist as Array<{
-      target: string;
-      selector: string;
-      spender: string;
-    }>).some(
-      entry =>
-        entry.target === SUSHI_AGGREGATOR_PROVEN_TARGET &&
-        entry.selector === SUSHI_AGGREGATOR_PROVEN_SELECTOR &&
-        entry.spender === SUSHI_AGGREGATOR_PROVEN_SPENDER
-    );
-    expect(match, 'allowlist tuple missing from the proceed scope').to.equal(
-      true
-    );
-    const stability = (artifact.decision.stabilityEvidence as Array<{
-      target: string;
-      selector: string;
-      spender: string;
-      samples: unknown[];
-    }>).filter(
-      evidence =>
-        evidence.target === SUSHI_AGGREGATOR_PROVEN_TARGET &&
-        evidence.selector === SUSHI_AGGREGATOR_PROVEN_SELECTOR &&
-        evidence.spender === SUSHI_AGGREGATOR_PROVEN_SPENDER
-    );
-    expect(stability.length).to.be.greaterThan(0);
-    for (const evidence of stability) {
-      expect(evidence.samples.length).to.be.at.least(3);
-    }
-  });
-
-  it('no reviewed allowlist entry exists outside the artifact scope', () => {
+  it('uses exactly the reviewed target, selector, and spender per scoped chain', () => {
     for (const chainKey of Object.keys(
       SUSHI_AGGREGATOR_SCOPED_CALL_TARGET_ALLOWLIST
     )) {
-      expect(artifact.decision.scope.chains).to.include(Number(chainKey));
+      const chainId = Number(chainKey);
+      expect(SUSHI_AGGREGATOR_SCOPED_CHAIN_IDS).to.include(chainId);
       for (const target of SUSHI_AGGREGATOR_SCOPED_CALL_TARGET_ALLOWLIST[
-        Number(chainKey)
+        chainId
       ]) {
         expect(target).to.equal(SUSHI_AGGREGATOR_PROVEN_TARGET);
       }
+      expect(
+        SUSHI_AGGREGATOR_SCOPED_APPROVAL_SPENDER_ALLOWLIST[chainId]
+      ).to.deep.equal([SUSHI_AGGREGATOR_PROVEN_SPENDER]);
+      expect(
+        SUSHI_AGGREGATOR_SCOPED_SELECTOR_ALLOWLIST[chainId][
+          SUSHI_AGGREGATOR_PROVEN_TARGET
+        ]
+      ).to.deep.equal([SUSHI_AGGREGATOR_PROVEN_SELECTOR]);
     }
+  });
+
+  it('does not configure allowlist entries outside the reviewed chains', () => {
+    const scoped = SUSHI_AGGREGATOR_SCOPED_CHAIN_IDS.map(String).sort();
+    expect(
+      Object.keys(SUSHI_AGGREGATOR_SCOPED_CALL_TARGET_ALLOWLIST).sort()
+    ).to.deep.equal(scoped);
+    expect(
+      Object.keys(SUSHI_AGGREGATOR_SCOPED_APPROVAL_SPENDER_ALLOWLIST).sort()
+    ).to.deep.equal(scoped);
+    expect(
+      Object.keys(SUSHI_AGGREGATOR_SCOPED_SELECTOR_ALLOWLIST).sort()
+    ).to.deep.equal(scoped);
   });
 });

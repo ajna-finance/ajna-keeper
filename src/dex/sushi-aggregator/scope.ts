@@ -1,15 +1,13 @@
 import { ChainAddressAllowlist, ChainTargetSelectorAllowlist } from '../../config';
 
 /**
- * Reviewed initial Sushi aggregator scope (Packet 3B). These constants are
- * the human-reviewed transcription of the Packet 3A `proceed` artifact's
- * scope — the ONLY chains, pairs, and target/selector/spender values with
- * recorded allowlist-stability evidence. They are reviewed configuration
- * defaults: runtime code never reads the planning artifact (a unit test
- * asserts these constants stay within the committed artifact's scope).
+ * Reviewed initial Sushi aggregator scope. These constants are the ONLY
+ * chains, pairs, and target/selector/spender values accepted by the default
+ * reviewed production config. They are reviewed configuration defaults:
+ * runtime code does not read implementation-planning artifacts.
  *
  * Enabling Sushi on any other chain or route requires a new reviewed
- * evidence artifact BEFORE the config/allowlist change.
+ * scope decision BEFORE the config/allowlist change.
  */
 export const SUSHI_AGGREGATOR_SCOPED_CHAIN_IDS: readonly number[] = [
   1, 8453, 42161, 10, 137, 43114,

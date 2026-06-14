@@ -1,7 +1,0 @@
-{
-  "request": "https://api.1inch.dev/swap/v6.0/1/quote?src=0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2&dst=0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48&amount=1000000000000000000",
-  "capturedAt": "2026-06-12T10:27:38.425Z",
-  "httpStatus": 401,
-  "bodyText": "Invalid API key",
-  "body": "Invalid API key"
-}
