@@ -9,8 +9,13 @@ import {
 import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
 import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
-import { estimateGasWithBuffer, getErrorMessage } from '../../utils';
+import {
+  estimateGasWithBuffer,
+  getErrorMessage,
+  weiToDecimaled,
+} from '../../utils';
 import { logTakeExecutionTelemetry } from '../execution-telemetry';
+import { getCachedTokenDecimals } from '../external-take/chain';
 import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
 import {
   ApprovedCalldataAggregatorQuoteEvaluation,
@@ -278,19 +283,18 @@ export async function prepareCalldataAggregatorExecution<
   missingRouterReason: string;
   missingTakerReason: string;
   collateralRoundsToZeroReason: string;
-  getQuoteEvaluation: (params: {
-    executionCollateralWad: BigNumber;
-  }) => Promise<ExternalTakeQuoteEvaluation>;
+  getPathQuoteEvaluation: (
+    pool: FungiblePool,
+    price: number,
+    collateralWad: BigNumber,
+    poolConfig: TakeActionConfig,
+    quoteConfig: TConfig,
+    signer: Signer,
+    auctionPrice?: BigNumber
+  ) => Promise<ExternalTakeQuoteEvaluation>;
   getTakerAddress: (config: TConfig) => string | undefined;
   resolveChainId: (config: TConfig, signer: Signer) => Promise<number>;
-  getCollateralTokenDecimals: (params: {
-    signer: Signer;
-    tokenAddress: string;
-    chainId: number;
-    cache?: Map<string, number>;
-    config: TConfig;
-  }) => Promise<number>;
-  requestFreshQuote: (params: {
+  requestValidatedQuote: (params: {
     pool: FungiblePool;
     signer: Signer;
     config: TConfig;
@@ -298,6 +302,10 @@ export async function prepareCalldataAggregatorExecution<
     chainId: number;
     collateralInTokenDecimals: BigNumber;
   }) => Promise<ApprovedCalldataAggregatorQuote>;
+  getFailureMetadata: (error: unknown) => {
+    retryable?: boolean;
+    code?: number | string;
+  };
   getMaxQuoteAgeMs: (config: TConfig) => number;
   onQuoteResult: (
     config: TConfig,
@@ -310,9 +318,19 @@ export async function prepareCalldataAggregatorExecution<
     auctionPrice: liquidation.auctionPrice,
     debtToCover: liquidation.debtToCover,
   });
-  const quoteEvaluation = await params.getQuoteEvaluation({
-    executionCollateralWad,
-  });
+  const quoteEvaluation =
+    getExternalTakeExecutionPlanPrimaryEvaluation(
+      liquidation.externalTakeExecutionPlan
+    ) ??
+    (await params.getPathQuoteEvaluation(
+      pool,
+      Number(weiToDecimaled(liquidation.auctionPrice)),
+      executionCollateralWad,
+      poolConfig,
+      config,
+      signer,
+      liquidation.auctionPrice
+    ));
   const approval = approveCalldataAggregatorQuoteForExecution({
     quoteEvaluation,
     providerId: params.providerId,
@@ -347,12 +365,11 @@ export async function prepareCalldataAggregatorExecution<
   }
 
   const chainId = await params.resolveChainId(config, signer);
-  const collateralDecimals = await params.getCollateralTokenDecimals({
+  const collateralDecimals = await getCachedTokenDecimals({
     signer,
     tokenAddress: pool.collateralAddress,
     chainId,
     cache: config.tokenDecimalsCache,
-    config,
   });
   const collateralInTokenDecimals = convertWadToTokenDecimals(
     executionCollateralWad,
@@ -365,14 +382,26 @@ export async function prepareCalldataAggregatorExecution<
     };
   }
 
-  const freshQuote = await params.requestFreshQuote({
-    pool,
-    signer,
-    config,
-    takerAddress,
-    chainId,
-    collateralInTokenDecimals,
-  });
+  let freshQuote: ApprovedCalldataAggregatorQuote;
+  try {
+    freshQuote = await params.requestValidatedQuote({
+      pool,
+      signer,
+      config,
+      takerAddress,
+      chainId,
+      collateralInTokenDecimals,
+    });
+  } catch (error) {
+    const failure = params.getFailureMetadata(error);
+    params.onQuoteResult(config, {
+      success: false,
+      retryable: failure.retryable,
+      errorCode: failure.code,
+      error: getErrorMessage(error),
+    });
+    throw error;
+  }
   const floorError = getAggregatorFreshQuoteFloorError({
     freshQuote,
     approvedMinOutRaw: approvedQuoteEvaluation.approvedMinOutRaw,

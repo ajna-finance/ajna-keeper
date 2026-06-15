@@ -1,20 +1,15 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber } from 'ethers';
 import { LiquiditySource } from '../../config';
 import { DEFAULT_SUSHI_AGGREGATOR_MAX_QUOTE_AGE_MS } from '../../config/sushi-aggregator-policy';
-import { getErrorMessage, weiToDecimaled } from '../../utils';
 import {
   makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
-import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
-import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../external-take/execution-plan';
 import { SushiAggregatorExecutionConfig } from './types';
 import { getSushiAggregatorPathQuoteEvaluation } from './quote-evaluation';
 import {
   getSushiAggregatorQuoteFailureMetadata,
-  getSushiAggregatorTokenDecimals,
   requestValidatedSushiAggregatorQuote,
   requireSushiAggregatorConfig,
   resolveSushiAggregatorChainId,
@@ -28,37 +23,6 @@ function getSushiMaxQuoteAgeMs(config: SushiAggregatorExecutionConfig): number {
     config.sushiAggregator?.maxQuoteAgeMs ??
     DEFAULT_SUSHI_AGGREGATOR_MAX_QUOTE_AGE_MS
   );
-}
-
-async function requestFreshSushiAggregatorExecutionQuote(params: {
-  pool: FungiblePool;
-  config: SushiAggregatorExecutionConfig;
-  takerAddress: string;
-  chainId: number;
-  collateralInTokenDecimals: BigNumber;
-}): Promise<ApprovedCalldataAggregatorQuote> {
-  try {
-    const sushiConfig = requireSushiAggregatorConfig(
-      params.config.sushiAggregator
-    );
-    return await requestValidatedSushiAggregatorQuote({
-      pool: params.pool,
-      sushiConfig,
-      takerAddress: params.takerAddress,
-      chainId: params.chainId,
-      collateralInTokenDecimals: params.collateralInTokenDecimals,
-      signal: params.config.sushiAggregatorRequestAbortSignal,
-    });
-  } catch (error) {
-    const failure = getSushiAggregatorQuoteFailureMetadata(error);
-    params.config.onSushiAggregatorQuoteResult?.({
-      success: false,
-      retryable: failure.retryable,
-      errorCode: failure.code,
-      error: getErrorMessage(error),
-    });
-    throw error;
-  }
 }
 
 async function prepareSushiAggregatorExecution(params: {
@@ -83,29 +47,27 @@ async function prepareSushiAggregatorExecution(params: {
       'Sushi aggregator execution requires sushiAggregatorTaker',
     collateralRoundsToZeroReason:
       'Sushi aggregator collateral rounds to zero in token decimals',
-    getQuoteEvaluation: async ({ executionCollateralWad }) =>
-      getExternalTakeExecutionPlanPrimaryEvaluation(
-        liquidation.externalTakeExecutionPlan
-      ) ??
-      (await getSushiAggregatorPathQuoteEvaluation(
-        pool,
-        Number(weiToDecimaled(liquidation.auctionPrice)),
-        executionCollateralWad,
-        poolConfig,
-        config,
-        signer,
-        liquidation.auctionPrice
-      )),
+    getPathQuoteEvaluation: getSushiAggregatorPathQuoteEvaluation,
     getTakerAddress: (config) => config.sushiAggregatorTaker,
     resolveChainId: resolveSushiAggregatorChainId,
-    getCollateralTokenDecimals: ({ signer, tokenAddress, chainId, cache }) =>
-      getSushiAggregatorTokenDecimals({
-        signer,
-        tokenAddress,
+    requestValidatedQuote: async ({
+      pool,
+      config,
+      takerAddress,
+      chainId,
+      collateralInTokenDecimals,
+    }) => {
+      const sushiConfig = requireSushiAggregatorConfig(config.sushiAggregator);
+      return await requestValidatedSushiAggregatorQuote({
+        pool,
+        sushiConfig,
+        takerAddress,
         chainId,
-        cache,
-      }),
-    requestFreshQuote: requestFreshSushiAggregatorExecutionQuote,
+        collateralInTokenDecimals,
+        signal: config.sushiAggregatorRequestAbortSignal,
+      });
+    },
+    getFailureMetadata: getSushiAggregatorQuoteFailureMetadata,
     getMaxQuoteAgeMs: getSushiMaxQuoteAgeMs,
     onQuoteResult: (config, result) =>
       config.onSushiAggregatorQuoteResult?.(result),

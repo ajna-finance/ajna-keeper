@@ -1,21 +1,16 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber } from 'ethers';
 import { LifiDexConfig, LiquiditySource } from '../../config';
 import type { ExternalTakeTakerContractKey } from '../../config';
 import { DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../../dex/lifi';
-import { getErrorMessage, weiToDecimaled } from '../../utils';
 import {
   makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
-import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
-import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../external-take/execution-plan';
 import { LifiExecutionConfig } from './types';
 import { getLifiPathQuoteEvaluation } from './quote-evaluation';
 import {
   getLifiQuoteFailureMetadata,
-  getLifiTokenDecimals,
   normalizeApprovedLifiQuote,
   requestValidatedLifiQuote,
   requireProductionLifiConfig,
@@ -54,37 +49,6 @@ function getLifiMaxQuoteAgeMs(config: LifiDexConfig): number {
   return config.maxQuoteAgeMs ?? DEFAULT_LIFI_QUOTE_MAX_AGE_MS;
 }
 
-async function requestFreshLifiExecutionQuote(params: {
-  pool: FungiblePool;
-  signer: Signer;
-  config: LifiExecutionConfig;
-  takerAddress: string;
-  chainId: number;
-  collateralInTokenDecimals: BigNumber;
-}): Promise<ApprovedCalldataAggregatorQuote> {
-  try {
-    const lifiConfig = requireProductionLifiConfig(params.config.lifi);
-    const validated = await requestValidatedLifiQuote({
-      pool: params.pool,
-      lifiConfig,
-      lifiTaker: params.takerAddress,
-      chainId: params.chainId,
-      collateralInTokenDecimals: params.collateralInTokenDecimals,
-      signal: params.config.lifiRequestAbortSignal,
-    });
-    return normalizeApprovedLifiQuote(validated, params.chainId);
-  } catch (error) {
-    const failure = getLifiQuoteFailureMetadata(error);
-    params.config.onLifiQuoteResult?.({
-      success: false,
-      retryable: failure.retryable,
-      errorCode: failure.code,
-      error: getErrorMessage(error),
-    });
-    throw error;
-  }
-}
-
 async function prepareLifiExecution(params: {
   pool: FungiblePool;
   signer: Signer;
@@ -105,30 +69,29 @@ async function prepareLifiExecution(params: {
     missingTakerReason: 'LI.FI execution requires lifiTaker',
     collateralRoundsToZeroReason:
       'LI.FI collateral rounds to zero in token decimals',
-    getQuoteEvaluation: async ({ executionCollateralWad }) =>
-      getExternalTakeExecutionPlanPrimaryEvaluation(
-        liquidation.externalTakeExecutionPlan
-      ) ??
-      (await getLifiPathQuoteEvaluation(
-        pool,
-        Number(weiToDecimaled(liquidation.auctionPrice)),
-        executionCollateralWad,
-        poolConfig,
-        config,
-        signer,
-        liquidation.auctionPrice
-      )),
+    getPathQuoteEvaluation: getLifiPathQuoteEvaluation,
     getTakerAddress: (config) =>
       resolveLifiTakerAddress({ lifiTaker: config.lifiTaker }),
     resolveChainId: resolveLifiChainId,
-    getCollateralTokenDecimals: ({ signer, tokenAddress, chainId, cache }) =>
-      getLifiTokenDecimals({
-        signer,
-        tokenAddress,
+    requestValidatedQuote: async ({
+      pool,
+      config,
+      takerAddress,
+      chainId,
+      collateralInTokenDecimals,
+    }) => {
+      const lifiConfig = requireProductionLifiConfig(config.lifi);
+      const validated = await requestValidatedLifiQuote({
+        pool,
+        lifiConfig,
+        lifiTaker: takerAddress,
         chainId,
-        cache,
-      }),
-    requestFreshQuote: requestFreshLifiExecutionQuote,
+        collateralInTokenDecimals,
+        signal: config.lifiRequestAbortSignal,
+      });
+      return normalizeApprovedLifiQuote(validated, chainId);
+    },
+    getFailureMetadata: getLifiQuoteFailureMetadata,
     getMaxQuoteAgeMs: (config) =>
       getLifiMaxQuoteAgeMs(requireProductionLifiConfig(config.lifi)),
     onQuoteResult: (config, result) => config.onLifiQuoteResult?.(result),
