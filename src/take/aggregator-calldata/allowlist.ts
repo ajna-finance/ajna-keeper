@@ -4,8 +4,12 @@
 // snapshot normalization, reconciliation-plan construction, and
 // contains/exact assertion helpers promoted out of src/dex/lifi (which
 // keeps compatibility re-exports). Every calldata-aggregator provider
-// keeps its own isolated per-deployment allowlists; nothing here is
-// LI.FI-specific.
+// keeps its own isolated per-deployment allowlists. The helper MECHANICS
+// are provider-neutral (no provider branching in the logic), but their
+// fallback diagnostic labels default to the LI.FI provider for backward
+// compatibility; non-LI.FI providers (e.g. Sushi) override them via the
+// `label`/`labelPrefix` params (e.g. src/dex/sushi-aggregator/preflight.ts
+// passes 'Sushi aggregator taker').
 import { ethers } from 'ethers';
 
 // Neutral expected-policy shape consumed by the assertion/reconciliation

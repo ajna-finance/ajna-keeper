@@ -98,9 +98,6 @@ export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
  * separately as CalldataAggregatorProviderId.
  */
 export type ExternalTakePathKind = 'direct_dex' | 'calldata_aggregator';
-export type ConfiguredExternalTakePathKind =
-  | 'direct_dex'
-  | 'calldata_aggregator';
 /**
  * Calldata-aggregator providers active in the current packet. Packet 3B
  * extended the union with `sushi_aggregator` in the same diff that added
@@ -252,7 +249,7 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    * allowedCalldataAggregatorProviders explicitly enables multiple providers
    * inside the derived calldata_aggregator family.
    */
-  allowedExternalTakePaths?: ConfiguredExternalTakePathKind[];
+  allowedExternalTakePaths?: ExternalTakePathKind[];
   /**
    * Calldata-aggregator providers allowed to quote and compete inside the
    * `calldata_aggregator` family. Omitted follows source-derived defaults

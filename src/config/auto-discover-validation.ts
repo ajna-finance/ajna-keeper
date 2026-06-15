@@ -1,10 +1,14 @@
 import {
+  AutoDiscoverSettlementPolicy,
+  AutoDiscoverTakePolicy,
   KeeperConfig,
   LiquiditySource,
+  TakeSettings,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
 } from './schema';
 import {
+  ResolvedExternalTakePolicy,
   isDirectDexDynamicSource,
   resolveExternalTakePolicy,
 } from './route-policy';
@@ -70,10 +74,60 @@ export function validateAutoDiscoverConfig(
   );
 
   if (takePolicy) {
-    requireOptionalPositiveInteger(
-      takePolicy.maxPoolsPerRun,
-      'AutoDiscoverConfig.take: maxPoolsPerRun must be a positive integer'
-    );
+    validateAutoDiscoverTakePolicy(config, takePolicy, chainId);
+  }
+
+  if (settlementPolicy) {
+    validateAutoDiscoverSettlementPolicy(config, settlementPolicy, chainId);
+  }
+}
+
+function validateAutoDiscoverTakePolicy(
+  config: KeeperConfig,
+  takePolicy: AutoDiscoverTakePolicy,
+  chainId?: number
+): void {
+  validateTakeScalarBounds(config, takePolicy);
+  const discoveredTake = requireDiscoveredTakeAndWarnSubsidy(config, takePolicy);
+  const {
+    resolvedExternalTakePolicy,
+    externalTakePaths,
+    calldataAggregatorSources,
+    effectiveDefaultDirectDexLiquiditySource,
+  } = validateResolvedTakePathRequirements(
+    config,
+    takePolicy,
+    discoveredTake,
+    chainId
+  );
+  validateTakeLiquiditySourceSettings(
+    config,
+    takePolicy,
+    discoveredTake,
+    externalTakePaths,
+    calldataAggregatorSources,
+    effectiveDefaultDirectDexLiquiditySource,
+    chainId
+  );
+  validateTakeGasOverridesAndProfitFloors(
+    config,
+    takePolicy,
+    discoveredTake,
+    resolvedExternalTakePolicy,
+    externalTakePaths,
+    calldataAggregatorSources,
+    chainId
+  );
+}
+
+function validateTakeScalarBounds(
+  config: KeeperConfig,
+  takePolicy: AutoDiscoverTakePolicy
+): void {
+  requireOptionalPositiveInteger(
+    takePolicy.maxPoolsPerRun,
+    'AutoDiscoverConfig.take: maxPoolsPerRun must be a positive integer'
+  );
     requireOptionalPositiveInteger(
       takePolicy.takeQuoteBudgetPerRun,
       'AutoDiscoverConfig.take: takeQuoteBudgetPerRun must be a positive integer'
@@ -239,7 +293,12 @@ export function validateAutoDiscoverConfig(
       takePolicy.maxGasCostQuote,
       'AutoDiscoverConfig.take: maxGasCostQuote cannot be negative'
     );
+}
 
+function requireDiscoveredTakeAndWarnSubsidy(
+  config: KeeperConfig,
+  takePolicy: AutoDiscoverTakePolicy
+): TakeSettings {
     const discoveredTake = config.discovery?.defaults?.take;
     if (!discoveredTake) {
       throw new Error(
@@ -259,7 +318,20 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
+    return discoveredTake;
+}
 
+function validateResolvedTakePathRequirements(
+  config: KeeperConfig,
+  takePolicy: AutoDiscoverTakePolicy,
+  discoveredTake: TakeSettings,
+  chainId?: number
+): {
+  resolvedExternalTakePolicy: ResolvedExternalTakePolicy;
+  externalTakePaths: Set<string>;
+  calldataAggregatorSources: LiquiditySource[];
+  effectiveDefaultDirectDexLiquiditySource: LiquiditySource | undefined;
+} {
     const resolvedExternalTakePolicy = resolveExternalTakePolicy({
       defaultLiquiditySource: discoveredTake.liquiditySource,
       takePolicy,
@@ -361,7 +433,23 @@ export function validateAutoDiscoverConfig(
         'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires an enabled direct_dex external take path'
       );
     }
+    return {
+      resolvedExternalTakePolicy,
+      externalTakePaths,
+      calldataAggregatorSources,
+      effectiveDefaultDirectDexLiquiditySource,
+    };
+}
 
+function validateTakeLiquiditySourceSettings(
+  config: KeeperConfig,
+  takePolicy: AutoDiscoverTakePolicy,
+  discoveredTake: TakeSettings,
+  externalTakePaths: Set<string>,
+  calldataAggregatorSources: LiquiditySource[],
+  effectiveDefaultDirectDexLiquiditySource: LiquiditySource | undefined,
+  chainId?: number
+): void {
     if (takePolicy.allowedLiquiditySources !== undefined) {
       if (!externalTakePaths.has('direct_dex')) {
         throw new Error(
@@ -440,7 +528,17 @@ export function validateAutoDiscoverConfig(
     if (!externalTakePaths.size) {
       validateTakeSettings(discoveredTake, config, chainId);
     }
+}
 
+function validateTakeGasOverridesAndProfitFloors(
+  config: KeeperConfig,
+  takePolicy: AutoDiscoverTakePolicy,
+  discoveredTake: TakeSettings,
+  resolvedExternalTakePolicy: ResolvedExternalTakePolicy,
+  externalTakePaths: Set<string>,
+  calldataAggregatorSources: LiquiditySource[],
+  chainId?: number
+): void {
     const effectiveDirectDexSources = new Set(
       resolvedExternalTakePolicy.directDexRouteSources
     );
@@ -538,9 +636,13 @@ export function validateAutoDiscoverConfig(
         chainId
       );
     }
-  }
+}
 
-  if (settlementPolicy) {
+function validateAutoDiscoverSettlementPolicy(
+  config: KeeperConfig,
+  settlementPolicy: AutoDiscoverSettlementPolicy,
+  chainId?: number
+): void {
     requireOptionalPositive(
       settlementPolicy.maxPoolsPerRun,
       'AutoDiscoverConfig.settlement: maxPoolsPerRun must be greater than 0'
@@ -572,5 +674,4 @@ export function validateAutoDiscoverConfig(
       );
     }
     validateSettlementSettings(discoveredSettlement);
-  }
 }

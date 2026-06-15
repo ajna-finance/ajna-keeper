@@ -111,7 +111,7 @@ export function validate(
     toToken: quoteToken,
     fromAmount,
     takerAddress: taker,
-    allowedExchangeTools: ['uniswap'],
+    exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
     callTargetAllowlist: [target],
     approvalSpenderAllowlist: [spender],
     selectorAllowlist: {

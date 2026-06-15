@@ -1,6 +1,5 @@
 import {
   CalldataAggregatorProviderId,
-  ConfiguredExternalTakePathKind,
   ExternalTakePathKind,
   ExternalTakeRouteSelectionMode,
   HybridGasQuoteFailureFallbackMode,
@@ -8,9 +7,11 @@ import {
 } from './schema';
 import {
   CALLDATA_AGGREGATOR_PROVIDER_IDS,
+  formatSupportedExternalTakePaths,
   isAggregatorExternalTakePath,
   isCalldataAggregatorProviderId,
   isDirectDexLiquiditySource,
+  isExternalTakePath,
   resolveCalldataAggregatorProviderForSource,
   resolveExternalTakePathFromSource,
 } from './external-take-descriptors';
@@ -94,37 +95,14 @@ export function normalizeExternalTakeRouteSelectionMode(
   return mode ?? DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE;
 }
 
-export function isConfiguredExternalTakePath(
-  path: unknown
-): path is ConfiguredExternalTakePathKind {
-  return (
-    typeof path === 'string' &&
-    (path === 'direct_dex' || path === 'calldata_aggregator')
-  );
-}
-
-export function normalizeConfiguredExternalTakePath(
-  path: ConfiguredExternalTakePathKind
-): ExternalTakePathKind {
-  return path;
-}
-
-export function formatSupportedConfiguredExternalTakePaths(): string {
-  return 'direct_dex or calldata_aggregator';
-}
-
 // Raw path resolution. Private: downstream runtime modules consume
 // resolveExternalTakePolicy(...) instead of reinterpreting raw config.
 function resolveExternalTakePaths(params: {
   defaultLiquiditySource: LiquiditySource | undefined;
-  allowedExternalTakePaths?: readonly ConfiguredExternalTakePathKind[];
+  allowedExternalTakePaths?: readonly ExternalTakePathKind[];
 }): ExternalTakePathKind[] {
   if (params.allowedExternalTakePaths !== undefined) {
-    return Array.from(
-      new Set(
-        params.allowedExternalTakePaths.map(normalizeConfiguredExternalTakePath)
-      )
-    );
+    return Array.from(new Set(params.allowedExternalTakePaths));
   }
   const path = resolveExternalTakePathFromSource(params.defaultLiquiditySource);
   return path !== undefined ? [path] : [];
@@ -216,7 +194,7 @@ function resolveDirectDexRouteSelectionSources(params: {
  * Structural subset of the discovery take-policy config.
  */
 export interface RawExternalTakePolicyInputs {
-  allowedExternalTakePaths?: readonly ConfiguredExternalTakePathKind[];
+  allowedExternalTakePaths?: readonly ExternalTakePathKind[];
   allowedCalldataAggregatorProviders?: readonly CalldataAggregatorProviderId[];
   allowedLiquiditySources?: readonly LiquiditySource[];
   defaultDirectDexLiquiditySource?: LiquiditySource;
@@ -302,13 +280,13 @@ export function resolveExternalTakePolicy(params: {
     }
     const seen = new Set<ExternalTakePathKind>();
     for (const path of rawPaths) {
-      if (!isConfiguredExternalTakePath(path)) {
+      if (!isExternalTakePath(path)) {
         throw new Error(
           'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports ' +
-            `only ${formatSupportedConfiguredExternalTakePaths()}`
+            `only ${formatSupportedExternalTakePaths()}`
         );
       }
-      const canonical = normalizeConfiguredExternalTakePath(path);
+      const canonical = path;
       if (seen.has(canonical)) {
         throw new Error(
           'AutoDiscoverConfig.take: allowedExternalTakePaths cannot contain duplicates'

@@ -43,6 +43,15 @@ import { ethers } from 'ethers';
 import { MARKET_FACTOR_SCALE } from '../constants';
 import { LIFI_POLICY_BOUNDS, assertValidLifiDexConfig } from './lifi-policy';
 import { validateSushiAggregatorDexRequirements } from './sushi-aggregator-policy';
+import {
+  isFiniteNumber,
+  requireOptionalPositive,
+  requireOptionalIntegerRange,
+} from './numeric-validation';
+export {
+  requireOptionalPositive,
+  requireOptionalIntegerRange,
+} from './numeric-validation';
 
 const EXTERNAL_TAKE_TRANSPORT_POLICIES = new Set<ExternalTakeTransportPolicy>([
   'allow_public',
@@ -105,10 +114,6 @@ export function validateDecimalStringBigInt(
   }
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
 function requirePositive(value: unknown, message: string): void {
   if (!isFiniteNumber(value) || value <= 0) {
     throw new Error(message);
@@ -118,12 +123,6 @@ function requirePositive(value: unknown, message: string): void {
 function requireNonNegative(value: unknown, message: string): void {
   if (!isFiniteNumber(value) || value < 0) {
     throw new Error(message);
-  }
-}
-
-export function requireOptionalPositive(value: unknown, message: string): void {
-  if (value !== undefined) {
-    requirePositive(value, message);
   }
 }
 
@@ -159,25 +158,6 @@ function requireOptionalPercentage(value: unknown, message: string): void {
 
 export function requireOptionalBoolean(value: unknown, message: string): void {
   if (value !== undefined && typeof value !== 'boolean') {
-    throw new Error(message);
-  }
-}
-
-export function requireOptionalIntegerRange(
-  value: unknown,
-  min: number,
-  max: number,
-  message: string
-): void {
-  if (value === undefined) {
-    return;
-  }
-  if (
-    typeof value !== 'number' ||
-    !Number.isInteger(value) ||
-    value < min ||
-    value > max
-  ) {
     throw new Error(message);
   }
 }

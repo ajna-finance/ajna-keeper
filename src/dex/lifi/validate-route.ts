@@ -32,33 +32,12 @@ export interface ValidateLifiQuoteParams {
   toToken: string;
   fromAmount: BigNumber;
   takerAddress: string;
-  exchangePolicy?: LifiExchangePolicy;
-  allowedExchangeTools?: readonly string[];
+  exchangePolicy: LifiExchangePolicy;
   callTargetAllowlist: readonly string[];
   approvalSpenderAllowlist: readonly string[];
   selectorAllowlist?: Record<string, readonly string[]>;
   feeCostPolicy?: LifiFeeCostPolicy;
   nowMs?: number;
-}
-
-function resolveValidationExchangePolicy(
-  params: Pick<
-    ValidateLifiQuoteParams,
-    'exchangePolicy' | 'allowedExchangeTools'
-  >
-): LifiExchangePolicy {
-  if (params.exchangePolicy !== undefined) {
-    return params.exchangePolicy;
-  }
-  if (params.allowedExchangeTools === undefined) {
-    throw new Error('LI.FI exchangePolicy is required');
-  }
-  return {
-    kind: 'concrete_allowlist',
-    filters: {
-      allowExchanges: [...params.allowedExchangeTools],
-    },
-  };
 }
 
 function assertIncludedStepEstimate(params: {
@@ -126,7 +105,10 @@ export function validateLifiQuote(
     throw new Error('LI.FI quote type must be swap or lifi');
   }
 
-  const exchangePolicy = resolveValidationExchangePolicy(params);
+  const exchangePolicy = params.exchangePolicy;
+  if (exchangePolicy === undefined) {
+    throw new Error('LI.FI exchangePolicy is required');
+  }
   const allowedTools = normalizeLifiAllowedToolSet(
     exchangePolicy.kind === 'concrete_allowlist'
       ? exchangePolicy.filters.allowExchanges

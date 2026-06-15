@@ -455,7 +455,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -474,7 +474,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target, target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -491,7 +491,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender, spender],
         selectorAllowlist: {
@@ -510,7 +510,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: ['0x0000000000000000000000000000000000000000'],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -541,7 +541,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -592,7 +592,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target, otherTarget],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -611,7 +611,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -633,7 +633,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {},
@@ -783,7 +783,7 @@ describe('LI.FI quote validation', () => {
           toToken: quoteToken,
           fromAmount,
           takerAddress: taker,
-          allowedExchangeTools: [tool],
+          exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: [tool] } },
           callTargetAllowlist: [target],
           approvalSpenderAllowlist: [spender],
           selectorAllowlist: {
@@ -808,7 +808,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['feeCollection'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['feeCollection'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {

@@ -286,7 +286,10 @@ describe('LI.FI callback-path fork execution canary', function () {
       toToken,
       fromAmount,
       takerAddress: taker.address,
-      allowedExchangeTools: lifiConfig.allowExchanges,
+      exchangePolicy: {
+        kind: 'concrete_allowlist',
+        filters: { allowExchanges: [...lifiConfig.allowExchanges] },
+      },
       callTargetAllowlist: lifiConfig.callTargetAllowlist[BASE_CHAIN_ID],
       approvalSpenderAllowlist:
         lifiConfig.approvalSpenderAllowlist[BASE_CHAIN_ID],

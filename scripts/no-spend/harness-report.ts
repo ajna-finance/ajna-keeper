@@ -9,7 +9,7 @@ import type {
 import {
   LiquiditySource,
   formatLiquiditySource,
-  type ConfiguredExternalTakePathKind,
+  type ExternalTakePathKind,
 } from '../../src/config';
 import type { ConfigArtifact } from './config-smoke';
 
@@ -135,7 +135,7 @@ export type RouteArtifact = {
 };
 
 export type PolicyArtifact = {
-  allowedExternalTakePaths: ConfiguredExternalTakePathKind[];
+  allowedExternalTakePaths: ExternalTakePathKind[];
   allowedLiquiditySources: string[];
   externalTakeRouteSelectionMode: 'maximize_profit' | 'direct_dex_first';
   hybridGasQuoteFailureFallbackMode?: 'disabled' | 'direct_dex_first';
@@ -259,8 +259,8 @@ function optionalPositiveIntegerEnv(name: string, fallback: number): number {
 }
 
 function optionalExternalTakePathsEnv(
-  fallback: ConfiguredExternalTakePathKind[]
-): ConfiguredExternalTakePathKind[] {
+  fallback: ExternalTakePathKind[]
+): ExternalTakePathKind[] {
   const raw = process.env.AJNA_AGENT_HARNESS_ALLOWED_EXTERNAL_TAKE_PATHS;
   if (raw === undefined || raw.trim().length === 0) {
     return fallback;

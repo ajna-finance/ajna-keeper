@@ -414,7 +414,10 @@ async function runLifiCallbackExecutionProof(params: {
     toToken,
     fromAmount,
     takerAddress: taker.address,
-    allowedExchangeTools: params.lifi.allowExchanges,
+    exchangePolicy: {
+      kind: 'concrete_allowlist',
+      filters: { allowExchanges: [...(params.lifi.allowExchanges ?? [])] },
+    },
     callTargetAllowlist: params.lifi.callTargetAllowlist[BASE_CHAIN_ID],
     approvalSpenderAllowlist:
       params.lifi.approvalSpenderAllowlist[BASE_CHAIN_ID],

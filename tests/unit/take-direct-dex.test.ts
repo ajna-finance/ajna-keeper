@@ -1,6 +1,5 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { BigNumber } from 'ethers';
 import {
   KeeperConfig,
   LiquiditySource,
@@ -217,24 +216,6 @@ describe('Direct DEX take routing', () => {
   describe('Configuration Validation - Business Logic', () => {
     // Test the parameter validation logic that happens before external calls
 
-    it('should handle missing marketPriceFactor gracefully', () => {
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          // Missing marketPriceFactor
-          minCollateral: 1.0,
-        },
-      };
-
-      // This tests the validation logic - marketPriceFactor is required for takes
-      expect((poolConfig.take as any).marketPriceFactor).to.be.undefined;
-
-      // Business logic: if no marketPriceFactor, external takes should not be attempted
-      const hasMarketPriceFactor = !!(poolConfig.take as any).marketPriceFactor;
-      expect(hasMarketPriceFactor).to.be.false;
-    });
-
     it('should validate required fields for Uniswap V3 configuration', () => {
       const validHemiConfig = makeUniswapTakeConfig({
         swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
@@ -258,248 +239,15 @@ describe('Direct DEX take routing', () => {
         'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
       );
     });
-
-    it('should handle unsupported liquiditySource gracefully', () => {
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH, // Not supported in Direct DEX
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      // Business logic: Direct DEX only supports certain DEX types
-      const isSupportedByDirectDex =
-        poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3;
-      expect(isSupportedByDirectDex).to.be.false;
-    });
-
-    it('should validate collateral amount is positive', () => {
-      const validCollateral = BigNumber.from('1000000000000000000'); // 1 token
-      const zeroCollateral = BigNumber.from('0');
-      const negativeCollateral = BigNumber.from('-1');
-
-      // Business logic: collateral must be positive for takes
-      expect(validCollateral.gt(0)).to.be.true;
-      expect(zeroCollateral.gt(0)).to.be.false;
-      expect(negativeCollateral.gt(0)).to.be.false;
-    });
-  });
-
-  describe('Routing Logic - DEX Selection', () => {
-    it('should route to Uniswap V3 for UNISWAPV3 liquiditySource', () => {
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      // Business logic: routing decision based on liquiditySource
-      const shouldRouteToUniswap =
-        poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3;
-      expect(shouldRouteToUniswap).to.be.true;
-    });
-
-    it('should not support 1inch in Direct DEX path', () => {
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      // Business logic: direct_dex doesn't support 1inch.
-      const isDirectDexSupported =
-        poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3;
-      expect(isDirectDexSupported).to.be.false;
-    });
-
-    it('should handle unknown liquiditySource values', () => {
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: 999 as LiquiditySource, // Invalid value
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      // Business logic: only specific values are supported
-      const supportedSources = [LiquiditySource.UNISWAPV3];
-      const isSupported = supportedSources.includes(
-        poolConfig.take.liquiditySource
-      );
-      expect(isSupported).to.be.false;
-    });
-  });
-
-  describe('DryRun Mode Behavior', () => {
-    it('should log and return early when dryRun is true for takeLiquidationDirectDex', async () => {
-      const liquidation = {
-        borrower: '0xBorrower',
-        hpbIndex: 1000,
-        collateral: BigNumber.from('1000000000000000000'),
-        auctionPrice: BigNumber.from('1000000000000000000'),
-        isTakeable: true,
-        isArbTakeable: false,
-      };
-
-      const config = {
-        dryRun: true,
-        keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi router
-        uniswapV3RouterOverrides: {
-          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
-          wethAddress: '0x4200000000000000000000000000000000000006',
-        },
-      };
-
-      const poolConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      // Test the DryRun logic directly - this is pure business logic
-      if (config.dryRun) {
-        // In dryRun mode, should log and return without executing
-        expect(config.dryRun).to.be.true;
-        // Verify this is the path taken
-        const shouldExecuteTransaction = !config.dryRun;
-        expect(shouldExecuteTransaction).to.be.false;
-      }
-    });
-
-    it('should proceed to execution when dryRun is false', () => {
-      const config = {
-        dryRun: false,
-        keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi router
-        uniswapV3RouterOverrides: {
-          poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
-          wethAddress: '0x4200000000000000000000000000000000000006',
-        },
-      };
-
-      // Business logic: when not in dryRun, should proceed to execution
-      const shouldExecuteTransaction = !config.dryRun;
-      expect(shouldExecuteTransaction).to.be.true;
-    });
   });
 
   describe('Parameter Validation and Error Handling', () => {
-    it('should handle missing keeperTakerRouter address', () => {
-      const config = {
-        dryRun: false,
-        // Missing keeperTakerRouter
-        uniswapV3RouterOverrides: {},
-      };
-
-      // Business logic: keeperTakerRouter is required for execution
-      const hasRequiredRouter = !!(config as any).keeperTakerRouter;
-      expect(hasRequiredRouter).to.be.false;
-    });
-
     it('should validate Uniswap configuration completeness', () => {
       const missingConfig = makeUniswapTakeConfig();
 
       expect(() => validateTakeSettingsForChain(missingConfig, 8453)).to.throw(
         'TakeSettings: dex.uniswapV3.router required when liquiditySource is UNISWAPV3'
       );
-    });
-
-    it('should handle chain compatibility for DEX availability', () => {
-      // Business logic: different chains have different DEX availability
-      const chainConfigs = [
-        { chainId: 1, hasUniswapV3: true, has1inch: true }, // Ethereum
-        { chainId: 43114, hasUniswapV3: true, has1inch: true }, // Avalanche
-        { chainId: 123456, hasUniswapV3: false, has1inch: false }, // New/small chain
-      ];
-
-      chainConfigs.forEach((chain) => {
-        const canUseUniswapV3 = chain.hasUniswapV3;
-        const canUse1inch = chain.has1inch;
-
-        if (chain.chainId === 123456) {
-          // New chain - no DEX support
-          expect(canUseUniswapV3).to.be.false;
-          expect(canUse1inch).to.be.false;
-        } else {
-          // Major chains - should have DEX support
-          expect(canUseUniswapV3).to.be.true;
-          expect(canUse1inch).to.be.true;
-        }
-      });
-    });
-  });
-
-  describe('ArbTake Configuration Validation', () => {
-    it('should validate arbTake settings independently from external takes', () => {
-      const arbTakeOnlyConfig = {
-        name: 'Test Pool',
-        take: {
-          // Only arbTake settings, no external DEX
-          minCollateral: 1.0,
-          hpbPriceFactor: 0.98,
-          // No liquiditySource or marketPriceFactor
-        },
-      };
-
-      const externalTakeConfig = {
-        name: 'Test Pool',
-        take: {
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.99,
-          // No arbTake settings
-        },
-      };
-
-      const bothConfig = {
-        name: 'Test Pool',
-        take: {
-          minCollateral: 1.0,
-          hpbPriceFactor: 0.98,
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          marketPriceFactor: 0.99,
-        },
-      };
-
-      // Business logic: arbTake and external takes are independent
-      const hasArbTake = (config: any) =>
-        !!(config.take.minCollateral && config.take.hpbPriceFactor);
-      const hasExternalTake = (config: any) =>
-        !!(config.take.liquiditySource && config.take.marketPriceFactor);
-
-      expect(hasArbTake(arbTakeOnlyConfig)).to.be.true;
-      expect(hasExternalTake(arbTakeOnlyConfig)).to.be.false;
-
-      expect(hasArbTake(externalTakeConfig)).to.be.false;
-      expect(hasExternalTake(externalTakeConfig)).to.be.true;
-
-      expect(hasArbTake(bothConfig)).to.be.true;
-      expect(hasExternalTake(bothConfig)).to.be.true;
-    });
-
-    it('should validate minCollateral and hpbPriceFactor values', () => {
-      const validArbTakeConfig = {
-        minCollateral: 1.0,
-        hpbPriceFactor: 0.98,
-      };
-
-      const invalidArbTakeConfig = {
-        minCollateral: 0, // Invalid: must be positive
-        hpbPriceFactor: -0.5, // Invalid: must be positive
-      };
-
-      // Business logic: validate arbTake parameter ranges
-      const isValidArbTake = (config: any) => {
-        return config.minCollateral > 0 && config.hpbPriceFactor > 0;
-      };
-
-      expect(isValidArbTake(validArbTakeConfig)).to.be.true;
-      expect(isValidArbTake(invalidArbTakeConfig)).to.be.false;
     });
   });
 
@@ -530,70 +278,6 @@ describe('Direct DEX take routing', () => {
           swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481',
         })
       ).to.equal(undefined);
-    });
-  });
-
-  describe('Error Path Validation', () => {
-    it('should identify configuration errors before execution attempts', () => {
-      const scenarios = [
-        {
-          name: 'Missing router address',
-          config: { dryRun: false },
-          hasError: true,
-          errorType: 'missing_router',
-        },
-        {
-          name: 'Missing Uniswap config for Uniswap take',
-          config: {
-            dryRun: false,
-            keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi router
-            // Missing uniswapV3RouterOverrides
-          },
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          hasError: true,
-          errorType: 'missing_uniswap_config',
-        },
-        {
-          name: 'Valid Hemi configuration',
-          config: {
-            dryRun: false,
-            keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi router
-            uniswapV3RouterOverrides: {},
-          },
-          liquiditySource: LiquiditySource.UNISWAPV3,
-          hasError: false,
-          errorType: null,
-        },
-      ];
-
-      scenarios.forEach((scenario) => {
-        // Business logic: validate configuration completeness
-        let hasConfigError = false;
-        let errorType = null;
-
-        if (
-          !(scenario.config as any).keeperTakerRouter &&
-          !scenario.config.dryRun
-        ) {
-          hasConfigError = true;
-          errorType = 'missing_router';
-        } else if (
-          scenario.liquiditySource === LiquiditySource.UNISWAPV3 &&
-          !(scenario.config as any).uniswapV3RouterOverrides
-        ) {
-          hasConfigError = true;
-          errorType = 'missing_uniswap_config';
-        }
-
-        expect(hasConfigError).to.equal(
-          scenario.hasError,
-          `Scenario: ${scenario.name}`
-        );
-        expect(errorType).to.equal(
-          scenario.errorType,
-          `Scenario: ${scenario.name}`
-        );
-      });
     });
   });
 });

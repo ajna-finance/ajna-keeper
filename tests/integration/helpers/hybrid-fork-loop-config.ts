@@ -1,7 +1,7 @@
 import { utils } from 'ethers';
 import {
   AutoDiscoverTakePolicy,
-  ConfiguredExternalTakePathKind,
+  ExternalTakePathKind,
   DiscoveryConfig,
   LifiDexConfig,
   LiquiditySource,
@@ -35,7 +35,7 @@ export interface HybridForkFixture {
   marketPriceFactor: number;
   minCollateral: number;
   liveTake: boolean;
-  paths: ConfiguredExternalTakePathKind[];
+  paths: ExternalTakePathKind[];
 }
 
 export type HybridForcedDiscoveryPolicy = DiscoveryConfig & {
@@ -52,7 +52,7 @@ export type HybridForcedDiscoveryPolicy = DiscoveryConfig & {
 export const HYBRID_FORK_CONFIG_ENV = 'AJNA_AGENT_HYBRID_FORK_CONFIG';
 export const DEFAULT_BASE_WETH_USDC_POOL =
   '0x0b17159f2486f669a1f930926638008e2ccb4287';
-export const DEFAULT_HYBRID_EXTERNAL_TAKE_PATHS: ConfiguredExternalTakePathKind[] =
+export const DEFAULT_HYBRID_EXTERNAL_TAKE_PATHS: ExternalTakePathKind[] =
   ['calldata_aggregator', 'direct_dex'];
 
 export function optionalHybridEnv(
@@ -135,7 +135,7 @@ export function getHybridLifiApiKey(
 
 export function parseHybridPaths(
   env: HybridForkEnv = process.env
-): ConfiguredExternalTakePathKind[] {
+): ExternalTakePathKind[] {
   const raw = optionalHybridEnv(env, 'AJNA_AGENT_HYBRID_PATHS');
   if (!raw) {
     return DEFAULT_HYBRID_EXTERNAL_TAKE_PATHS;
@@ -145,7 +145,7 @@ export function parseHybridPaths(
     .map((value) => value.trim().toLowerCase())
     .filter((value) => value.length > 0);
   const valid = parsed.filter(
-    (value): value is ConfiguredExternalTakePathKind =>
+    (value): value is ExternalTakePathKind =>
       (DEFAULT_HYBRID_EXTERNAL_TAKE_PATHS as string[]).includes(value)
   );
   if (valid.length === 0 || valid.length !== parsed.length) {
@@ -157,7 +157,7 @@ export function parseHybridPaths(
 }
 
 export function fixtureLiquiditySourceForHybridPaths(
-  paths: readonly ConfiguredExternalTakePathKind[]
+  paths: readonly ExternalTakePathKind[]
 ): LiquiditySource {
   if (paths.includes('direct_dex')) {
     return LiquiditySource.UNISWAPV3;

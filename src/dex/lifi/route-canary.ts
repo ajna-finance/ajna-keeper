@@ -257,14 +257,13 @@ async function runLifiQuoteCheck(params: {
       toToken: params.route.toToken,
       fromAmount: BigNumber.from(params.route.fromAmount),
       takerAddress: routeTaker,
-      ...(exchangePolicy !== undefined
-        ? { exchangePolicy }
-        : {
-            allowedExchangeTools:
-              params.validationExchangeTools ??
-              params.config.allowExchanges ??
-              [],
-          }),
+      exchangePolicy: exchangePolicy ?? {
+        kind: 'concrete_allowlist',
+        filters: {
+          allowExchanges:
+            params.validationExchangeTools ?? params.config.allowExchanges ?? [],
+        },
+      },
       callTargetAllowlist: params.callTargets,
       approvalSpenderAllowlist: params.approvalSpenders,
       selectorAllowlist: params.selectorAllowlist,

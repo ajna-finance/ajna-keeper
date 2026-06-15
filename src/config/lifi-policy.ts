@@ -10,6 +10,11 @@ import {
   requirePositiveIntegerPolicy as requirePositiveIntegerApiPolicy,
   validateLifiIntegrator,
 } from '../dex/lifi/api-policy';
+import {
+  isFiniteNumber,
+  requireOptionalPositive,
+  requireOptionalIntegerRange,
+} from './numeric-validation';
 export {
   getConfiguredLifiCompletePolicyChainIds,
   normalizeLifiCanaryChainPolicy,
@@ -33,35 +38,6 @@ export const LIFI_POLICY_BOUNDS = {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function requireOptionalPositive(value: unknown, message: string): void {
-  if (value !== undefined && (!isFiniteNumber(value) || value <= 0)) {
-    throw new Error(message);
-  }
-}
-
-function requireOptionalIntegerRange(
-  value: unknown,
-  min: number,
-  max: number,
-  message: string
-): void {
-  if (value === undefined) {
-    return;
-  }
-  if (
-    typeof value !== 'number' ||
-    !Number.isInteger(value) ||
-    value < min ||
-    value > max
-  ) {
-    throw new Error(message);
-  }
 }
 
 export function assertValidLifiDexConfig(params: {
