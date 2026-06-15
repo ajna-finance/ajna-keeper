@@ -1,5 +1,6 @@
 import {
   ActiveExternalTakeDeploymentType,
+  CalldataAggregatorProviderId,
   CurveRouterOverrides,
   ExternalTakeDeploymentResolution,
   ExternalTakeDeploymentRuntimeConfig,
@@ -93,6 +94,19 @@ export type ResolvedManualTakeContext =
   | ManualTakeContext<LifiExecutionConfig>
   | ManualTakeContext<OneInchAggregatorExecutionConfig>
   | ManualTakeContext<SushiAggregatorExecutionConfig>;
+
+type ManualCalldataAggregatorTakeContext = Extract<
+  ResolvedManualTakeContext,
+  | ManualTakeContext<LifiExecutionConfig>
+  | ManualTakeContext<OneInchAggregatorExecutionConfig>
+  | ManualTakeContext<SushiAggregatorExecutionConfig>
+>;
+
+type ManualCalldataAggregatorContextFactory = (params: {
+  config: ManualTakeRuntimeConfig;
+  takerAddress: string;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}) => ManualCalldataAggregatorTakeContext;
 
 export type ManualTakeDeploymentResolution =
   ExternalTakeDeploymentResolution & {
@@ -401,40 +415,47 @@ function createManualCalldataAggregatorTakeContext(params: {
     { deploymentType: 'calldata_aggregator' }
   >;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
-}): Extract<
-  ResolvedManualTakeContext,
-  | ManualTakeContext<LifiExecutionConfig>
-  | ManualTakeContext<OneInchAggregatorExecutionConfig>
-  | ManualTakeContext<SushiAggregatorExecutionConfig>
-> {
-  switch (params.deploymentResolution.providerId) {
-    case 'lifi':
-      return createManualLifiTakeContext({
-        config: {
-          ...params.config,
-          lifiTaker: params.deploymentResolution.resolvedTakerAddress,
-        },
-        takeWriteTransport: params.takeWriteTransport,
-      });
-    case 'oneinch':
-      return createManualOneInchAggregatorTakeContext({
-        config: {
-          ...params.config,
-          oneInchAggregatorTaker:
-            params.deploymentResolution.resolvedTakerAddress,
-        },
-        takeWriteTransport: params.takeWriteTransport,
-      });
-    case 'sushi_aggregator':
-      return createManualSushiAggregatorTakeContext({
-        config: {
-          ...params.config,
-          sushiAggregatorTaker: params.deploymentResolution.resolvedTakerAddress,
-        },
-        takeWriteTransport: params.takeWriteTransport,
-      });
-  }
+}): ManualCalldataAggregatorTakeContext {
+  const createContext =
+    MANUAL_CALLDATA_AGGREGATOR_CONTEXT_FACTORIES[
+      params.deploymentResolution.providerId
+    ];
+  return createContext({
+    config: params.config,
+    takerAddress: params.deploymentResolution.resolvedTakerAddress,
+    takeWriteTransport: params.takeWriteTransport,
+  });
 }
+
+const MANUAL_CALLDATA_AGGREGATOR_CONTEXT_FACTORIES = {
+  lifi: ({ config, takerAddress, takeWriteTransport }) =>
+    createManualLifiTakeContext({
+      config: {
+        ...config,
+        lifiTaker: takerAddress,
+      },
+      takeWriteTransport,
+    }),
+  oneinch: ({ config, takerAddress, takeWriteTransport }) =>
+    createManualOneInchAggregatorTakeContext({
+      config: {
+        ...config,
+        oneInchAggregatorTaker: takerAddress,
+      },
+      takeWriteTransport,
+    }),
+  sushi_aggregator: ({ config, takerAddress, takeWriteTransport }) =>
+    createManualSushiAggregatorTakeContext({
+      config: {
+        ...config,
+        sushiAggregatorTaker: takerAddress,
+      },
+      takeWriteTransport,
+    }),
+} satisfies Record<
+  CalldataAggregatorProviderId,
+  ManualCalldataAggregatorContextFactory
+>;
 
 function createManualTakeContext(params: {
   config: ManualTakeRuntimeConfig;

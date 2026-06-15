@@ -3,8 +3,8 @@ import {
   ActiveExternalTakeRouteSelectionMode,
   CalldataAggregatorProviderId,
   ExternalTakePathKind,
+  HybridGasQuoteFallbackPolicyResolution,
   formatLiquiditySource,
-  resolveHybridGasQuoteFallbackPolicy,
 } from '../../config';
 import { logger } from '../../logging';
 import { isSubsidizedExternalTakeQuote } from '../../take/external-take/policy';
@@ -368,6 +368,7 @@ async function buildHybridGasQuoteFallbackEvaluation(
     externalTakePaths: ExternalTakePathKind[];
     calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
     routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+    hybridGasQuoteFallbackPolicy: HybridGasQuoteFallbackPolicyResolution;
     price: number;
     providerRegistry: DiscoveryExternalTakeProviderRegistry;
     approveExternalTake: DiscoveryExternalTakeApprover;
@@ -382,15 +383,7 @@ async function buildHybridGasQuoteFallbackEvaluation(
       result.path === 'direct_dex' &&
       result.gasPolicyRejectCode === 'native_to_quote_conversion_unavailable'
   );
-  const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
-    fallbackMode: params.takePolicy?.hybridGasQuoteFailureFallbackMode,
-    routeSelectionMode: params.routeSelectionMode,
-    externalTakePaths: params.externalTakePaths,
-    maxGasCostNative: params.takePolicy?.maxGasCostNative,
-    maxGasCostQuote: params.takePolicy?.maxGasCostQuote,
-    minExpectedProfitQuote: params.takePolicy?.minExpectedProfitQuote,
-    minProfitNative: params.takePolicy?.minProfitNative,
-  });
+  const fallbackEligibility = params.hybridGasQuoteFallbackPolicy;
   const fallbackIneligibleReason = fallbackEligibility.eligible
     ? resolveHybridGasQuoteFallbackTriggerReason({
         directDexNativeToQuoteReject,
@@ -490,6 +483,7 @@ export async function evaluateHybridExternalTakeForDiscovery(
     externalTakePaths: ExternalTakePathKind[];
     calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
     routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+    hybridGasQuoteFallbackPolicy: HybridGasQuoteFallbackPolicyResolution;
     probeTimeoutMs: number;
     price: number;
     providerRegistry: DiscoveryExternalTakeProviderRegistry;

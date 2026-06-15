@@ -1,4 +1,8 @@
 import { AsyncOperationLimiter } from '../../utils';
+import {
+  CALLDATA_AGGREGATOR_PROVIDER_IDS,
+  CalldataAggregatorProviderId,
+} from '../../config';
 import * as lifiExecutionModule from '../../take/lifi/execution';
 import * as oneInchAggregatorExecutionModule from '../../take/oneinch-aggregator/execution';
 import * as sushiAggregatorExecutionModule from '../../take/sushi-aggregator/execution';
@@ -105,8 +109,8 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
     });
   };
 
-  return [
-    createCalldataAggregatorRouteProvider({
+  const providersById = {
+    lifi: createCalldataAggregatorRouteProvider({
       providerId: 'lifi',
       quotePath: quoteLifiPath,
       getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
@@ -133,7 +137,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
         getLifiExecutionRefreshCircuitOpenReason,
       executeTake: lifiExecutionModule.takeLiquidationLifi,
     }),
-    createCalldataAggregatorRouteProvider({
+    oneinch: createCalldataAggregatorRouteProvider({
       providerId: 'oneinch',
       quotePath: quoteOneInchAggregatorPath,
       getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
@@ -162,7 +166,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
       executeTake:
         oneInchAggregatorExecutionModule.takeLiquidationOneInchAggregator,
     }),
-    createCalldataAggregatorRouteProvider({
+    sushi_aggregator: createCalldataAggregatorRouteProvider({
       providerId: 'sushi_aggregator',
       quotePath: quoteSushiAggregatorPath,
       decorateExecutionConfig: ({
@@ -177,5 +181,12 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
       executeTake:
         sushiAggregatorExecutionModule.takeLiquidationSushiAggregator,
     }),
-  ];
+  } satisfies Record<
+    CalldataAggregatorProviderId,
+    DiscoveryExternalTakeRouteProvider
+  >;
+
+  return CALLDATA_AGGREGATOR_PROVIDER_IDS.map(
+    (providerId) => providersById[providerId]
+  );
 }

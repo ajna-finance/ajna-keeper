@@ -1,8 +1,6 @@
 import {
   ExternalTakeRouteSelectionMode,
   ExternalTakeTransportPolicy,
-  ExternalTakePathKind,
-  CalldataAggregatorProviderId,
   HybridGasQuoteFailureFallbackMode,
   KeeperConfig,
   LiquiditySource,
@@ -21,15 +19,10 @@ import {
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
   isDirectDexDynamicSource,
-  normalizeExternalTakeRouteSelectionMode,
-  resolveExternalTakePolicy,
-  resolveHybridGasQuoteFallbackPolicy,
 } from './route-policy';
-import type { RawExternalTakePolicyInputs } from './route-policy';
 import {
   formatSupportedExternalTakeLiquiditySources,
   formatSupportedExternalTakePaths,
-  getAggregatorProviderIdentity,
   getExternalTakeTakerContractKeyForSource,
   getExternalTakePathDescriptor,
   isExternalTakeLiquiditySource,
@@ -101,7 +94,10 @@ export function validateQuoteDenominatedGasPolicy(
   }
 }
 
-export function validateDecimalStringBigInt(value: unknown, fieldName: string): void {
+export function validateDecimalStringBigInt(
+  value: unknown,
+  fieldName: string
+): void {
   if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
     throw new Error(
       `${fieldName} must be a non-negative decimal integer string`
@@ -131,7 +127,10 @@ export function requireOptionalPositive(value: unknown, message: string): void {
   }
 }
 
-export function requireOptionalPositiveInteger(value: unknown, message: string): void {
+export function requireOptionalPositiveInteger(
+  value: unknown,
+  message: string
+): void {
   if (
     value !== undefined &&
     (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)
@@ -140,7 +139,10 @@ export function requireOptionalPositiveInteger(value: unknown, message: string):
   }
 }
 
-export function requireOptionalNonNegative(value: unknown, message: string): void {
+export function requireOptionalNonNegative(
+  value: unknown,
+  message: string
+): void {
   if (value !== undefined) {
     requireNonNegative(value, message);
   }
@@ -258,7 +260,9 @@ export function validateRouterFeeTiers(config: KeeperConfig): void {
   );
 }
 
-export function parseLiquiditySourceKey(source: string): LiquiditySource | undefined {
+export function parseLiquiditySourceKey(
+  source: string
+): LiquiditySource | undefined {
   const parsed = Number(source);
   if (!Number.isInteger(parsed)) {
     return undefined;
@@ -266,76 +270,6 @@ export function parseLiquiditySourceKey(source: string): LiquiditySource | undef
   return Object.values(LiquiditySource).includes(parsed)
     ? (parsed as LiquiditySource)
     : undefined;
-}
-
-export function getEffectiveDirectDexRouteSources(
-  discoveredTake: TakeSettings,
-  allowedLiquiditySources: LiquiditySource[] | undefined,
-  defaultDirectDexLiquiditySource?: LiquiditySource
-): Set<LiquiditySource> {
-  return new Set(
-    resolveExternalTakePolicy({
-      defaultLiquiditySource: discoveredTake.liquiditySource,
-      takePolicy: { allowedLiquiditySources, defaultDirectDexLiquiditySource },
-    }).directDexRouteSources
-  );
-}
-
-export function getEffectiveTakeGasOverrideSources(
-  discoveredTake: TakeSettings,
-  allowedLiquiditySources: LiquiditySource[] | undefined,
-  defaultDirectDexLiquiditySource: LiquiditySource | undefined,
-  externalTakePaths: Set<ExternalTakePathKind>,
-  calldataAggregatorSources: readonly ExternalTakeLiquiditySource[]
-): Set<LiquiditySource> {
-  const sources = getEffectiveDirectDexRouteSources(
-    discoveredTake,
-    allowedLiquiditySources,
-    defaultDirectDexLiquiditySource
-  );
-  if (externalTakePaths.has('calldata_aggregator')) {
-    for (const source of calldataAggregatorSources) {
-      sources.add(source);
-    }
-  }
-  return sources;
-}
-
-// Path/provider interpretation and its validation live in
-// resolveExternalTakePolicy (src/config/route-policy.ts); this is the
-// one-line delegation the resolver boundary allows in this legacy-frozen file.
-export function getEffectiveExternalTakePaths(
-  discoveredTake: TakeSettings,
-  takePolicy: RawExternalTakePolicyInputs | undefined
-): Set<ExternalTakePathKind> {
-  return new Set(
-    resolveExternalTakePolicy({
-      defaultLiquiditySource: discoveredTake.liquiditySource,
-      takePolicy,
-    }).externalTakePaths
-  );
-}
-
-function getEffectiveCalldataAggregatorProviders(
-  discoveredTake: TakeSettings,
-  takePolicy: RawExternalTakePolicyInputs | undefined
-): Set<CalldataAggregatorProviderId> {
-  return new Set(
-    resolveExternalTakePolicy({
-      defaultLiquiditySource: discoveredTake.liquiditySource,
-      takePolicy,
-    }).calldataAggregatorProviders
-  );
-}
-
-export function getEffectiveCalldataAggregatorSources(
-  discoveredTake: TakeSettings,
-  takePolicy: RawExternalTakePolicyInputs | undefined
-): ExternalTakeLiquiditySource[] {
-  return Array.from(
-    getEffectiveCalldataAggregatorProviders(discoveredTake, takePolicy),
-    (providerId) => getAggregatorProviderIdentity(providerId).liquiditySource
-  );
 }
 
 export function validateExternalTakeTransportPolicy(
@@ -554,7 +488,9 @@ function validateUniswapV3TakeSource({
     );
   }
   const routerOverrides = keeperConfig.dex.uniswapV3.router;
-  if (getMissingUniswapV3DirectDexRouteConfigFields(routerOverrides).length > 0) {
+  if (
+    getMissingUniswapV3DirectDexRouteConfigFields(routerOverrides).length > 0
+  ) {
     throw new Error(
       'TakeSettings: dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3'
     );

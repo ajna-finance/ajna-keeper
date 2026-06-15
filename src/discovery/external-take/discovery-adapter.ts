@@ -1,12 +1,4 @@
-import {
-  ActiveExternalTakeRouteSelectionMode,
-  ExternalTakePathKind,
-  LiquiditySource,
-  isDirectDexDynamicSource,
-  resolveCalldataAggregatorProviderForSource,
-  resolveExternalTakePolicy,
-  resolveExternalTakePathFromSource,
-} from '../../config';
+import { ResolvedExternalTakePolicy } from '../../config';
 import { ExternalTakeAdapter } from '../../take/engine';
 import { TakeAuctionStatusReader } from '../../take/liquidation-status';
 import {
@@ -100,10 +92,8 @@ function createProviderBackedDirectAdapter(params: {
 }
 
 export function createExternalTakeAdapterForDiscovery(params: {
-  target: ResolvedTakeTarget;
   takePolicy: AutoDiscoverTakePolicyRuntime;
-  externalTakePaths: ExternalTakePathKind[];
-  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+  resolvedExternalTakePolicy: ResolvedExternalTakePolicy;
   probeTimeoutMs: number;
   approveExternalTake: DiscoveryExternalTakeApprover;
   takeAuctionStatusReader: TakeAuctionStatusReader;
@@ -114,11 +104,11 @@ export function createExternalTakeAdapterForDiscovery(params: {
   DiscoveryExternalExecutionConfig,
   DiscoveryExternalTakeApprovalContext
 > {
-  const resolvedExternalTakePolicy = resolveExternalTakePolicy({
-    defaultLiquiditySource: params.target.take.liquiditySource,
-    takePolicy: params.takePolicy,
-  });
-  if (resolvedExternalTakePolicy.externalTakePathsExplicitlyConfigured) {
+  const resolvedExternalTakePolicy = params.resolvedExternalTakePolicy;
+  const externalTakePaths = Array.from(
+    resolvedExternalTakePolicy.externalTakePaths
+  );
+  if (resolvedExternalTakePolicy.externalTakeSelectorEnabled) {
     return {
       kind: 'hybrid',
       evaluateExternalTake: async ({
@@ -135,10 +125,12 @@ export function createExternalTakeAdapterForDiscovery(params: {
           signer,
           poolConfig,
           takePolicy: params.takePolicy,
-          externalTakePaths: params.externalTakePaths,
+          externalTakePaths,
           calldataAggregatorProviders:
             resolvedExternalTakePolicy.calldataAggregatorProviders,
-          routeSelectionMode: params.routeSelectionMode,
+          routeSelectionMode: resolvedExternalTakePolicy.routeSelectionMode,
+          hybridGasQuoteFallbackPolicy:
+            resolvedExternalTakePolicy.hybridGasQuoteFallbackPolicy,
           probeTimeoutMs: params.probeTimeoutMs,
           price,
           auctionPrice,
@@ -161,7 +153,7 @@ export function createExternalTakeAdapterForDiscovery(params: {
           poolConfig,
           liquidation,
           config,
-          externalTakePaths: params.externalTakePaths,
+          externalTakePaths,
           calldataAggregatorProviders:
             resolvedExternalTakePolicy.calldataAggregatorProviders,
           providerRegistry: params.providerRegistry,
@@ -172,13 +164,10 @@ export function createExternalTakeAdapterForDiscovery(params: {
     };
   }
 
-  const targetPath = resolveExternalTakePathFromSource(
-    params.target.take.liquiditySource
-  );
+  const targetPath = externalTakePaths[0];
   if (targetPath === 'calldata_aggregator') {
-    const providerId = resolveCalldataAggregatorProviderForSource(
-      params.target.take.liquiditySource
-    );
+    const providerId =
+      resolvedExternalTakePolicy.calldataAggregatorProviders[0];
     if (!providerId) {
       return createNoExternalTakeAdapter<DiscoveryExternalTakeApprovalContext>();
     }
@@ -192,7 +181,7 @@ export function createExternalTakeAdapterForDiscovery(params: {
     });
   }
 
-  if (isDirectDexDynamicSource(params.target.take.liquiditySource)) {
+  if (targetPath === 'direct_dex') {
     return createProviderBackedDirectAdapter({
       kind: 'direct_dex',
       provider: params.providerRegistry.selectExternalTakeProvider({

@@ -54,6 +54,7 @@ describe('external take quote approval', () => {
         isTakeable: true,
         externalTakePath: 'calldata_aggregator',
         quoteAmountRaw: BigNumber.from(200),
+        routeMinOutRaw: oneInchCalldataQuote.routeMinOutRaw,
         selectedLiquiditySource: LiquiditySource.ONEINCH,
         calldataQuote: oneInchCalldataQuote,
       },
@@ -75,6 +76,27 @@ describe('external take quote approval', () => {
     expect(boundQuote.selectedLiquiditySource).to.equal(
       LiquiditySource.ONEINCH
     );
+  });
+
+  it('rejects discovery route binding without an explicit execution floor', () => {
+    const binding = bindExternalTakeRouteForDiscovery({
+      quoteEvaluation: {
+        isTakeable: true,
+        externalTakePath: 'calldata_aggregator',
+        quoteAmountRaw: BigNumber.from(200),
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        calldataQuote: oneInchCalldataQuote,
+      },
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      poolName: 'Missing Floor Pool',
+      borrower: '0xBorrower',
+    });
+
+    expect(binding).to.deep.equal({
+      bound: false,
+      reason:
+        'external take quote is missing route execution floor for Missing Floor Pool/0xBorrower',
+    });
   });
 
   it('rejects conflicting calldata aggregator provider identities', () => {

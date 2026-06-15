@@ -97,8 +97,7 @@ export type DiscoveryDirectDexRouteProfitabilityContextBuilder = (params: {
   config: DiscoveryExecutionConfig;
   transports: DiscoveryReadTransports;
   rpcCache?: DiscoveryRpcCache;
-  defaultLiquiditySource: LiquiditySource | undefined;
-  sources?: LiquiditySource[];
+  sources: LiquiditySource[];
   allowSubsidy?: boolean;
   takePolicy: AutoDiscoverTakePolicyRuntime;
 }) => Promise<DirectDexRouteProfitabilityContext | undefined>;
@@ -218,7 +217,6 @@ export async function quoteDirectDexPathForDiscovery(
       config: params.config,
       transports: params.transports,
       rpcCache: params.rpcCache,
-      defaultLiquiditySource: params.resolvedDefaultDirectDexLiquiditySource,
       sources,
       allowSubsidy: params.poolConfig.take.allowSubsidy === true,
       takePolicy: params.takePolicy,

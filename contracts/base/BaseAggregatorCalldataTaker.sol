@@ -18,11 +18,13 @@ import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 ///        allowlists (storage, setters, getters, enforcement)
 ///      - the active-callback binding (pool + calldata hash) set and cleared
 ///        around pool.take
-///      - the exact source-balance check: calldata aggregators are exact-fill
-///        by construction (opaque provider calldata cannot be re-sized
-///        on-chain), so off-chain sizing debt-clamps the take and this layer
-///        rejects any mismatch. Do not port the factory takers' partial-fill
-///        pro-rating into this layer.
+///      - the exact pre-call source-balance check: calldata aggregators use
+///        provider calldata sized off-chain and cannot be re-sized on-chain, so
+///        off-chain sizing debt-clamps the take and this layer rejects any
+///        mismatch before calling the aggregator. Do not port the factory
+///        takers' partial-fill pro-rating into this layer.
+///      - the post-call residue policy: source-token residue returned by an
+///        aggregator is allowed and swept by the standard settlement path.
 ///      - the allowlisted low-level call with raw revert bubbling, the
 ///        code-existence check, and the zero-value ERC20 route policy
 ///      - the output backstop quoteReceived >= max(amountOutMinimum,
@@ -67,7 +69,6 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
     error SelectorNotAllowed();
     error StaleSourceBalance();
     error UnexpectedSourceBalance();
-    error SourceNotConsumed();
     error UnexpectedCallback();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.

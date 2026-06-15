@@ -191,6 +191,7 @@ describe('LI.FI discovery handlers', () => {
         collateralAmount: 1,
         marketPrice: 125,
         takeablePrice: 123.75,
+        routeMinOutRaw: ethers.utils.parseUnits('120', 6),
         quotedCollateralWad: ethers.utils.parseEther('1'),
         quotedAuctionPriceWad: ethers.utils.parseEther('100'),
         calldataQuote: makeTestCalldataAggregatorQuote({
@@ -533,6 +534,7 @@ describe('LI.FI discovery handlers', () => {
         collateralAmount: 1,
         marketPrice: 125,
         takeablePrice: 123.75,
+        routeMinOutRaw: ethers.utils.parseUnits('120', 6),
         quotedCollateralWad: ethers.utils.parseEther('1'),
         quotedAuctionPriceWad: ethers.utils.parseEther('100'),
         calldataQuote: makeTestCalldataAggregatorQuote({

@@ -418,10 +418,12 @@ export function compareTakerAllowlistPolicy(params: {
   expected: NormalizedTakerAllowlistPolicy;
   actual: TakerAllowlistSnapshot;
   mode: TakerAllowlistCompareMode;
+  labelPrefix?: string;
 }): string[] {
+  const labelPrefix = params.labelPrefix ?? 'LI.FI taker';
   const errors: string[] = [];
   const callTargetMismatch = getSetMismatch({
-    label: 'LI.FI taker call target allowlist',
+    label: `${labelPrefix} call target allowlist`,
     expected: params.expected.callTargets,
     actual: params.actual.callTargets,
     mode: params.mode,
@@ -431,7 +433,7 @@ export function compareTakerAllowlistPolicy(params: {
   }
 
   const approvalSpenderMismatch = getSetMismatch({
-    label: 'LI.FI taker approval spender allowlist',
+    label: `${labelPrefix} approval spender allowlist`,
     expected: params.expected.approvalSpenders,
     actual: params.actual.approvalSpenders,
     mode: params.mode,
@@ -453,7 +455,7 @@ export function compareTakerAllowlistPolicy(params: {
       getSelectorsForTarget(params.actual.selectorAllowlist, target)
     );
     const selectorMismatch = getSetMismatch({
-      label: `LI.FI taker selector allowlist for ${target}`,
+      label: `${labelPrefix} selector allowlist for ${target}`,
       expected: expectedSelectors,
       actual: actualSelectors,
       mode: params.mode,
@@ -470,6 +472,7 @@ export function assertTakerAllowlistPolicy(params: {
   expected: NormalizedTakerAllowlistPolicy;
   actual: TakerAllowlistSnapshot;
   mode: TakerAllowlistCompareMode;
+  labelPrefix?: string;
 }): void {
   const errors = compareTakerAllowlistPolicy(params);
   if (errors.length > 0) {

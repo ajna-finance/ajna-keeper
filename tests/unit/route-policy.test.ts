@@ -140,11 +140,102 @@ describe('allowedCalldataAggregatorProviders enablement (Packet 2B)', () => {
       },
     });
     expect(explicit.externalTakePathsExplicitlyConfigured).to.equal(true);
+    expect(explicit.externalTakeSelectorEnabled).to.equal(true);
     const derived = resolveExternalTakePolicy({
       defaultLiquiditySource: LiquiditySource.ONEINCH,
       takePolicy: {},
     });
     expect(derived.externalTakePathsExplicitlyConfigured).to.equal(false);
+    expect(derived.externalTakeSelectorEnabled).to.equal(false);
+  });
+
+  it('counts concrete calldata providers for net-profit route ranking', () => {
+    const singleProvider = resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy: {
+        allowedExternalTakePaths: ['calldata_aggregator'],
+        allowedCalldataAggregatorProviders: ['lifi'],
+      },
+    });
+    expect(singleProvider.externalTakeRouteCount).to.equal(1);
+    expect(singleProvider.requiresExternalTakeNetProfitRanking).to.equal(
+      false
+    );
+
+    const multipleProviders = resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy: {
+        allowedExternalTakePaths: ['calldata_aggregator'],
+        allowedCalldataAggregatorProviders: ['lifi', 'sushi_aggregator'],
+      },
+    });
+    expect(multipleProviders.externalTakeRouteCount).to.equal(2);
+    expect(multipleProviders.requiresExternalTakeNetProfitRanking).to.equal(
+      true
+    );
+
+    const implicitMultipleProviders = resolveExternalTakePolicy({
+      defaultLiquiditySource: LiquiditySource.ONEINCH,
+      takePolicy: {
+        allowedCalldataAggregatorProviders: ['oneinch', 'sushi_aggregator'],
+      },
+    });
+    expect(implicitMultipleProviders.externalTakePaths).to.deep.equal([
+      'calldata_aggregator',
+    ]);
+    expect(
+      implicitMultipleProviders.externalTakePathsExplicitlyConfigured
+    ).to.equal(false);
+    expect(implicitMultipleProviders.externalTakeSelectorEnabled).to.equal(
+      true
+    );
+    expect(implicitMultipleProviders.externalTakeRouteCount).to.equal(2);
+    expect(
+      implicitMultipleProviders.requiresExternalTakeNetProfitRanking
+    ).to.equal(true);
+
+    const directDexFirst = resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy: {
+        allowedExternalTakePaths: ['calldata_aggregator'],
+        allowedCalldataAggregatorProviders: ['lifi', 'sushi_aggregator'],
+        externalTakeRouteSelectionMode: 'direct_dex_first',
+      },
+    });
+    expect(directDexFirst.externalTakeRouteCount).to.equal(2);
+    expect(directDexFirst.requiresExternalTakeNetProfitRanking).to.equal(
+      false
+    );
+  });
+
+  it('resolves hybrid gas quote fallback eligibility onto the policy', () => {
+    const eligible = resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy: {
+        allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+        allowedCalldataAggregatorProviders: ['lifi'],
+        hybridGasQuoteFailureFallbackMode: 'direct_dex_first',
+        maxGasCostNative: 0.01,
+      },
+    });
+    expect(eligible.hybridGasQuoteFallbackPolicy).to.deep.equal({
+      eligible: true,
+    });
+
+    const ineligible = resolveExternalTakePolicy({
+      defaultLiquiditySource: undefined,
+      takePolicy: {
+        allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+        allowedCalldataAggregatorProviders: ['lifi'],
+        hybridGasQuoteFailureFallbackMode: 'direct_dex_first',
+        maxGasCostNative: 0.01,
+        minExpectedProfitQuote: 1,
+      },
+    });
+    expect(ineligible.hybridGasQuoteFallbackPolicy).to.deep.equal({
+      eligible: false,
+      reason: 'minExpectedProfitQuote is configured',
+    });
   });
 });
 

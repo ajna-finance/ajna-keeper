@@ -8,7 +8,6 @@ import {
   TakeWriteTransportMode,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
-  resolveExternalTakePolicy,
 } from '../config';
 import { ResolvedTakeTarget } from './targets';
 import {
@@ -172,19 +171,11 @@ async function buildDirectDexRouteProfitabilityContext(params: {
   config: DiscoveryExecutionConfig;
   transports: DiscoveryReadTransports;
   rpcCache?: DiscoveryRpcCache;
-  defaultLiquiditySource: LiquiditySource | undefined;
-  sources?: LiquiditySource[];
+  sources: LiquiditySource[];
   allowSubsidy?: boolean;
   takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>;
 }): Promise<DirectDexRouteProfitabilityContext | undefined> {
-  const sources =
-    params.sources ??
-    Array.from(
-      resolveExternalTakePolicy({
-        defaultLiquiditySource: params.defaultLiquiditySource,
-        takePolicy: params.takePolicy,
-      }).directDexRouteSources
-    );
+  const sources = params.sources;
   const requiresRouteGasRanking = sources.length > 1;
   const requiresQuoteProfitability =
     params.takePolicy?.minExpectedProfitQuote !== undefined ||

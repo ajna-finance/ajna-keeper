@@ -70,13 +70,16 @@ function withTestCalldataAggregatorQuote(
   if (providerId === undefined) {
     return quoteEvaluation;
   }
+  const calldataQuote =
+    quoteEvaluation.calldataQuote ??
+    createTestCalldataQuote(quoteEvaluation, providerId);
   return {
     ...quoteEvaluation,
     externalTakePath: 'calldata_aggregator',
     providerId,
-    calldataQuote:
-      quoteEvaluation.calldataQuote ??
-      createTestCalldataQuote(quoteEvaluation, providerId),
+    routeMinOutRaw:
+      quoteEvaluation.routeMinOutRaw ?? calldataQuote.routeMinOutRaw,
+    calldataQuote,
   };
 }
 

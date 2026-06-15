@@ -221,6 +221,11 @@ export interface RawExternalTakePolicyInputs {
   allowedLiquiditySources?: readonly LiquiditySource[];
   defaultDirectDexLiquiditySource?: LiquiditySource;
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
+  hybridGasQuoteFailureFallbackMode?: HybridGasQuoteFailureFallbackMode;
+  maxGasCostNative?: number;
+  maxGasCostQuote?: number;
+  minExpectedProfitQuote?: number;
+  minProfitNative?: string;
 }
 
 /**
@@ -233,8 +238,8 @@ export interface ResolvedExternalTakePolicy {
   readonly externalTakePaths: readonly ExternalTakePathKind[];
   /**
    * Providers enabled inside the calldata_aggregator family. Empty when the
-   * family is not enabled; defaults to ['lifi'] when the family is enabled
-   * without an explicit list.
+   * family is not enabled; omitted lists follow source-derived defaults such
+   * as ONEINCH -> oneinch and otherwise fall back to LI.FI.
    */
   readonly calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
   /** Direct DEX route allowlist for the direct_dex family. */
@@ -244,11 +249,43 @@ export interface ResolvedExternalTakePolicy {
     | undefined;
   readonly routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   /**
-   * True when the operator explicitly configured allowedExternalTakePaths
-   * (hybrid machinery engages on explicit configuration, not on derived
-   * single-path defaults).
+   * Concrete routes under the resolved external-take families: one direct_dex
+   * quote plus one quote per enabled calldata provider.
+   */
+  readonly externalTakeRouteCount: number;
+  /**
+   * True when route selection needs quote-denominated gas cost so competing
+   * external routes are ranked by net profit instead of gross quote amount.
+   */
+  readonly requiresExternalTakeNetProfitRanking: boolean;
+  /**
+   * True when discovery should evaluate the resolved external routes through
+   * the hybrid selector instead of binding directly to a single adapter:
+   * explicit path configuration always opts in, and explicit multi-provider
+   * calldata lists opt in even when the calldata family came from defaults.
+   */
+  readonly externalTakeSelectorEnabled: boolean;
+  /** Resolved once so runtime layers do not reinterpret raw fallback config. */
+  readonly hybridGasQuoteFallbackPolicy: HybridGasQuoteFallbackPolicyResolution;
+  /**
+   * True when the operator explicitly configured allowedExternalTakePaths.
+   * Runtime selector decisions should use externalTakeSelectorEnabled.
    */
   readonly externalTakePathsExplicitlyConfigured: boolean;
+}
+
+function countExternalTakeRoutes(params: {
+  externalTakePaths: readonly ExternalTakePathKind[];
+  calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
+}): number {
+  let routeCount = 0;
+  if (params.externalTakePaths.includes('direct_dex')) {
+    routeCount += 1;
+  }
+  if (params.externalTakePaths.includes('calldata_aggregator')) {
+    routeCount += params.calldataAggregatorProviders.length;
+  }
+  return routeCount;
 }
 
 export function resolveExternalTakePolicy(params: {
@@ -330,6 +367,29 @@ export function resolveExternalTakePolicy(params: {
       ? [defaultProvider ?? 'lifi']
       : [];
   }
+  const routeSelectionMode = normalizeExternalTakeRouteSelectionMode(
+    takePolicy.externalTakeRouteSelectionMode
+  );
+  const externalTakeRouteCount = countExternalTakeRoutes({
+    externalTakePaths,
+    calldataAggregatorProviders,
+  });
+  const externalTakeSelectorEnabled =
+    rawPaths !== undefined ||
+    (rawProviders !== undefined && externalTakeRouteCount > 1);
+  const requiresExternalTakeNetProfitRanking =
+    externalTakeSelectorEnabled &&
+    externalTakeRouteCount > 1 &&
+    routeSelectionMode === 'maximize_profit';
+  const hybridGasQuoteFallbackPolicy = resolveHybridGasQuoteFallbackPolicy({
+    fallbackMode: takePolicy.hybridGasQuoteFailureFallbackMode,
+    routeSelectionMode,
+    externalTakePaths,
+    maxGasCostNative: takePolicy.maxGasCostNative,
+    maxGasCostQuote: takePolicy.maxGasCostQuote,
+    minExpectedProfitQuote: takePolicy.minExpectedProfitQuote,
+    minProfitNative: takePolicy.minProfitNative,
+  });
 
   return {
     externalTakePaths,
@@ -345,9 +405,11 @@ export function resolveExternalTakePolicy(params: {
       configuredDefaultDirectDexLiquiditySource:
         takePolicy.defaultDirectDexLiquiditySource,
     }),
-    routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
-      takePolicy.externalTakeRouteSelectionMode
-    ),
+    routeSelectionMode,
+    externalTakeRouteCount,
+    requiresExternalTakeNetProfitRanking,
+    externalTakeSelectorEnabled,
+    hybridGasQuoteFallbackPolicy,
     externalTakePathsExplicitlyConfigured: rawPaths !== undefined,
   };
 }

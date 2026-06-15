@@ -221,6 +221,55 @@ function bindDirectDexRouteEvaluation(params: {
   };
 }
 
+function bindCalldataAggregatorRouteEvaluation(params: {
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  selectedLiquiditySource: BoundCalldataAggregatorRouteEvaluation['selectedLiquiditySource'];
+  providerId: BoundCalldataAggregatorRouteEvaluation['providerId'];
+  quoteAmountRaw: NonNullable<ExternalTakeQuoteEvaluation['quoteAmountRaw']>;
+  routeExecutionFloorRaw: NonNullable<
+    ExternalTakeQuoteEvaluation['routeExecutionFloorRaw']
+  >;
+  calldataQuote: BoundCalldataAggregatorRouteEvaluation['calldataQuote'];
+}): ExternalTakeRouteBindingResult<BoundCalldataAggregatorRouteEvaluation> {
+  return {
+    bound: true,
+    quoteEvaluation: {
+      ...params.quoteEvaluation,
+      isTakeable: true,
+      externalTakePath: 'calldata_aggregator',
+      quoteAmountRaw: params.quoteAmountRaw,
+      selectedLiquiditySource: params.selectedLiquiditySource,
+      routeExecutionFloorRaw: params.routeExecutionFloorRaw,
+      providerId: params.providerId,
+      calldataQuote: params.calldataQuote,
+    },
+  };
+}
+
+function requireRouteExecutionFloorRaw(params: {
+  quoteEvaluation: ExternalTakeQuoteEvaluation;
+  context: string;
+}):
+  | {
+      ok: true;
+      routeExecutionFloorRaw: NonNullable<
+        ExternalTakeQuoteEvaluation['routeExecutionFloorRaw']
+      >;
+    }
+  | { ok: false; reason: string } {
+  const routeExecutionFloorRaw = deriveRouteExecutionFloorRaw(
+    params.quoteEvaluation
+  );
+  if (!routeExecutionFloorRaw) {
+    return {
+      ok: false,
+      reason: `external take quote is missing route execution floor for ${params.context}`,
+    };
+  }
+
+  return { ok: true, routeExecutionFloorRaw };
+}
+
 export function approveDirectDexQuoteForExecution(params: {
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   poolName: string;
@@ -337,42 +386,46 @@ export function bindExternalTakeRouteForDiscovery(params: {
     };
   }
 
-  const routeExecutionFloorRaw =
-    deriveRouteExecutionFloorRaw(route.route.quoteEvaluation) ??
-    route.route.quoteEvaluation.quoteAmountRaw;
-  const boundBase = {
-    ...route.route.quoteEvaluation,
-    isTakeable: true as const,
-    externalTakePath: route.route.identity.path,
-    quoteAmountRaw: route.route.quoteEvaluation.quoteAmountRaw,
-    selectedLiquiditySource: route.route.identity.source,
-    routeExecutionFloorRaw,
-  };
-
   if (route.route.identity.path === 'calldata_aggregator') {
-    if (!route.route.quoteEvaluation.calldataQuote) {
+    const calldataQuote = route.route.quoteEvaluation.calldataQuote;
+    if (!calldataQuote) {
       return {
         bound: false,
         reason: `calldata-aggregator route is missing validated route details for ${context}`,
       };
     }
-    return {
-      bound: true,
-      quoteEvaluation: {
-        ...boundBase,
-        externalTakePath: 'calldata_aggregator',
-        providerId: route.route.identity.providerId,
-        selectedLiquiditySource: route.route.identity.source,
-        calldataQuote: route.route.quoteEvaluation.calldataQuote,
-      } satisfies BoundCalldataAggregatorRouteEvaluation,
-    };
+
+    const routeExecutionFloor = requireRouteExecutionFloorRaw({
+      quoteEvaluation: route.route.quoteEvaluation,
+      context,
+    });
+    if (!routeExecutionFloor.ok) {
+      return { bound: false, reason: routeExecutionFloor.reason };
+    }
+
+    return bindCalldataAggregatorRouteEvaluation({
+      quoteEvaluation: route.route.quoteEvaluation,
+      selectedLiquiditySource: route.route.identity.source,
+      providerId: route.route.identity.providerId,
+      quoteAmountRaw: route.route.quoteEvaluation.quoteAmountRaw,
+      routeExecutionFloorRaw: routeExecutionFloor.routeExecutionFloorRaw,
+      calldataQuote,
+    });
+  }
+
+  const routeExecutionFloor = requireRouteExecutionFloorRaw({
+    quoteEvaluation: route.route.quoteEvaluation,
+    context,
+  });
+  if (!routeExecutionFloor.ok) {
+    return { bound: false, reason: routeExecutionFloor.reason };
   }
 
   return bindDirectDexRouteEvaluation({
-    quoteEvaluation: boundBase,
+    quoteEvaluation: route.route.quoteEvaluation,
     selectedLiquiditySource: route.route.identity.source,
     quoteAmountRaw: route.route.quoteEvaluation.quoteAmountRaw,
-    routeExecutionFloorRaw,
+    routeExecutionFloorRaw: routeExecutionFloor.routeExecutionFloorRaw,
     context,
   });
 }

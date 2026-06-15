@@ -4,7 +4,6 @@ import {
   LiquiditySource,
   formatLiquiditySource,
   getAggregatorProviderIdentity,
-  normalizeExternalTakeRouteSelectionMode,
   resolveExternalTakePolicy,
 } from '../config';
 import { logger } from '../logging';
@@ -121,6 +120,7 @@ export function createDiscoveredTakeTargetRuntime(params: {
       target: params.target,
       rpcCache: params.rpcCache,
       takePolicy: params.takePolicy,
+      resolvedExternalTakePolicy,
       takeWriteTransport: params.takeWriteTransport,
       stats: params.stats,
       price,
@@ -200,12 +200,8 @@ export function createDiscoveredTakeTargetRuntime(params: {
     }
   };
   const externalTakeAdapter = createExternalTakeAdapterForDiscovery({
-    target: params.target,
     takePolicy: params.takePolicy,
-    externalTakePaths,
-    routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
-      params.takePolicy?.externalTakeRouteSelectionMode
-    ),
+    resolvedExternalTakePolicy,
     probeTimeoutMs: params.externalTakeProbeTimeoutMs,
     approveExternalTake,
     takeAuctionStatusReader: params.takeAuctionStatusReader,

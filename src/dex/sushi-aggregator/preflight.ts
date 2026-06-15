@@ -1,5 +1,5 @@
 import { ethers, providers } from 'ethers';
-import { KeeperConfig } from '../../config';
+import { KeeperConfig, LiquiditySource } from '../../config';
 import { normalizeSushiAggregatorChainPolicy } from '../../config/sushi-aggregator-policy';
 import {
   AGGREGATOR_TAKER_ALLOWLIST_ABI,
@@ -22,7 +22,7 @@ import { getErrorMessage } from '../../utils';
 const FACTORY_CONFIGURED_TAKERS_ABI = [
   'function getConfiguredTakers() view returns (uint8[] memory sources, address[] memory takers)',
 ];
-const SUSHI_AGGREGATOR_SOURCE_ID = 6;
+const SUSHI_AGGREGATOR_SOURCE_ID = LiquiditySource.SUSHI_AGGREGATOR;
 const PREFLIGHT_READ_RETRY_DELAYS_MS = [100, 250, 500];
 
 function sleepMs(ms: number): Promise<void> {
@@ -72,12 +72,11 @@ export async function validateSushiAggregatorTakerRouterSupport(params: {
       label: 'Sushi aggregator TakerRouter getConfiguredTakers',
       operation: () => factory.getConfiguredTakers(),
     })) as [number[], string[]];
-    const lastSource = configured[0].length;
-    if (lastSource < SUSHI_AGGREGATOR_SOURCE_ID) {
+    const configuredSources = configured[0].map(Number);
+    if (!configuredSources.includes(SUSHI_AGGREGATOR_SOURCE_ID)) {
       params.errors.push(
         `Sushi aggregator preflight: TakerRouter ${factoryAddress} was compiled ` +
-          `before source id ${SUSHI_AGGREGATOR_SOURCE_ID} (last supported ` +
-          `source ${lastSource}); deploy a TakerRouter compiled with the appended ` +
+          `without source id ${SUSHI_AGGREGATOR_SOURCE_ID}; deploy a TakerRouter compiled with the appended ` +
           'SushiAggregator enum before enabling provider sushi_aggregator'
       );
     }
@@ -133,6 +132,7 @@ export async function validateSushiAggregatorAllowlistPreflight(params: {
         expected: policy,
         actual,
         mode: 'exact',
+        labelPrefix: 'Sushi aggregator taker',
       })
     );
   } catch (error) {

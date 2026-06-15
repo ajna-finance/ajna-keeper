@@ -63,6 +63,10 @@ describe('hybrid external take probes', () => {
       externalTakePaths: ['calldata_aggregator'],
       calldataAggregatorProviders: ['lifi'],
       routeSelectionMode: 'maximize_profit',
+      hybridGasQuoteFallbackPolicy: {
+        eligible: false,
+        reason: 'fallback disabled',
+      },
       probeTimeoutMs: 1,
       price: 1,
       auctionPrice: BigNumber.from(1),

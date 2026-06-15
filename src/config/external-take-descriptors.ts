@@ -110,7 +110,27 @@ export const EXTERNAL_TAKE_SOURCE_IDENTITIES = {
     providerId: 'oneinch',
     configKey: 'oneInch',
   },
-} satisfies Record<ExternalTakeLiquiditySource, ExternalTakeSourceIdentity>;
+} as const satisfies Record<
+  ExternalTakeLiquiditySource,
+  ExternalTakeSourceIdentity
+>;
+
+type CalldataAggregatorProviderIdsFromSourceIdentities = Extract<
+  (typeof EXTERNAL_TAKE_SOURCE_IDENTITIES)[ExternalTakeLiquiditySource],
+  { path: 'calldata_aggregator' }
+>['providerId'];
+
+type ExactCalldataAggregatorProviderIds =
+  CalldataAggregatorProviderId extends CalldataAggregatorProviderIdsFromSourceIdentities
+    ? CalldataAggregatorProviderIdsFromSourceIdentities extends CalldataAggregatorProviderId
+      ? true
+      : never
+    : never;
+
+// Compile-time guard: schema provider IDs and source-table provider IDs must
+// stay exact mirrors before the runtime provider map is derived.
+const _EXACT_CALLDATA_AGGREGATOR_PROVIDER_IDS: ExactCalldataAggregatorProviderIds =
+  true;
 
 const EXTERNAL_TAKE_SOURCE_ORDER: readonly ExternalTakeLiquiditySource[] = [
   LiquiditySource.UNISWAPV3,
@@ -298,24 +318,33 @@ function toAggregatorProviderIdentity(
   };
 }
 
-const LIFI_PROVIDER_IDENTITY =
-  EXTERNAL_TAKE_SOURCE_IDENTITIES[LiquiditySource.LIFI];
-const SUSHI_AGGREGATOR_PROVIDER_IDENTITY =
-  EXTERNAL_TAKE_SOURCE_IDENTITIES[LiquiditySource.SUSHI_AGGREGATOR];
-const ONEINCH_PROVIDER_IDENTITY =
-  EXTERNAL_TAKE_SOURCE_IDENTITIES[LiquiditySource.ONEINCH];
+function buildAggregatorProviderIdentities(
+  identities: readonly CalldataAggregatorSourceIdentity[]
+): Record<CalldataAggregatorProviderId, AggregatorProviderIdentity> {
+  const identitiesByProvider: Partial<
+    Record<CalldataAggregatorProviderId, AggregatorProviderIdentity>
+  > = {};
+  const seenProviderIds = new Set<CalldataAggregatorProviderId>();
 
-export const AGGREGATOR_PROVIDER_IDENTITIES = {
-  [LIFI_PROVIDER_IDENTITY.providerId]: toAggregatorProviderIdentity(
-    LIFI_PROVIDER_IDENTITY
-  ),
-  [SUSHI_AGGREGATOR_PROVIDER_IDENTITY.providerId]: toAggregatorProviderIdentity(
-    SUSHI_AGGREGATOR_PROVIDER_IDENTITY
-  ),
-  [ONEINCH_PROVIDER_IDENTITY.providerId]: toAggregatorProviderIdentity(
-    ONEINCH_PROVIDER_IDENTITY
-  ),
-} satisfies Record<CalldataAggregatorProviderId, AggregatorProviderIdentity>;
+  for (const identity of identities) {
+    if (seenProviderIds.has(identity.providerId)) {
+      throw new Error(
+        `Duplicate calldata aggregator provider id: ${identity.providerId}`
+      );
+    }
+    seenProviderIds.add(identity.providerId);
+    identitiesByProvider[identity.providerId] =
+      toAggregatorProviderIdentity(identity);
+  }
+
+  return identitiesByProvider as Record<
+    CalldataAggregatorProviderId,
+    AggregatorProviderIdentity
+  >;
+}
+
+export const AGGREGATOR_PROVIDER_IDENTITIES =
+  buildAggregatorProviderIdentities(CALLDATA_AGGREGATOR_PROVIDER_IDENTITY_ORDER);
 
 export const CALLDATA_AGGREGATOR_PROVIDER_IDS: readonly CalldataAggregatorProviderId[] =
   Object.keys(AGGREGATOR_PROVIDER_IDENTITIES) as CalldataAggregatorProviderId[];

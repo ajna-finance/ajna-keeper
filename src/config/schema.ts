@@ -104,8 +104,8 @@ export type ConfiguredExternalTakePathKind =
 /**
  * Calldata-aggregator providers active in the current packet. Packet 3B
  * extended the union with `sushi_aggregator` in the same diff that added
- * Sushi support; an omitted allowedCalldataAggregatorProviders list still
- * resolves to LI.FI only, so Sushi is never silently enabled.
+ * Sushi support; an omitted allowedCalldataAggregatorProviders list follows
+ * source-derived defaults, so Sushi is never silently enabled.
  */
 export type CalldataAggregatorProviderId =
   | 'lifi'
@@ -248,14 +248,19 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   /**
    * External take execution paths eligible for discovered liquidation takes.
    * When omitted, autodiscover preserves the single-path behavior from
-   * discovery.defaults.take.liquiditySource.
+   * discovery.defaults.take.liquiditySource unless
+   * allowedCalldataAggregatorProviders explicitly enables multiple providers
+   * inside the derived calldata_aggregator family.
    */
   allowedExternalTakePaths?: ConfiguredExternalTakePathKind[];
   /**
    * Calldata-aggregator providers allowed to quote and compete inside the
-   * `calldata_aggregator` family. Omitted resolves to `['lifi']` when the
-   * family is enabled. A non-empty list requires the family to be enabled;
-   * empty lists, duplicates, and unknown or packet-inactive ids are invalid.
+   * `calldata_aggregator` family. Omitted follows source-derived defaults
+   * such as ONEINCH -> oneinch and otherwise falls back to LI.FI when the
+   * family is enabled. An explicit multi-provider list engages hybrid
+   * provider selection even when allowedExternalTakePaths is omitted. A
+   * non-empty list requires the family to be enabled; empty lists, duplicates,
+   * and unknown or packet-inactive ids are invalid.
    */
   allowedCalldataAggregatorProviders?: CalldataAggregatorProviderId[];
   /**

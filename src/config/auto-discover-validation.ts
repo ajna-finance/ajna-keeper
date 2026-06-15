@@ -6,10 +6,10 @@ import {
 } from './schema';
 import {
   isDirectDexDynamicSource,
-  normalizeExternalTakeRouteSelectionMode,
-  resolveHybridGasQuoteFallbackPolicy,
+  resolveExternalTakePolicy,
 } from './route-policy';
 import {
+  getAggregatorProviderIdentity,
   getExternalTakePathDescriptor,
   getExternalTakePathDescriptors,
   resolveExternalTakePathFromSource,
@@ -22,10 +22,6 @@ import {
   MIN_DEX_GAS_OVERRIDE,
   VALIDATION_BOUNDS,
   getConfiguredTakeWriteMode,
-  getEffectiveCalldataAggregatorSources,
-  getEffectiveDirectDexRouteSources,
-  getEffectiveExternalTakePaths,
-  getEffectiveTakeGasOverrideSources,
   isPrivateOrRelayTakeWriteMode,
   parseLiquiditySourceKey,
   requireOptionalBoolean,
@@ -264,26 +260,21 @@ export function validateAutoDiscoverConfig(
       }
     }
 
-    const externalTakePaths = getEffectiveExternalTakePaths(
-      discoveredTake,
-      takePolicy
+    const resolvedExternalTakePolicy = resolveExternalTakePolicy({
+      defaultLiquiditySource: discoveredTake.liquiditySource,
+      takePolicy,
+    });
+    const externalTakePaths = new Set(
+      resolvedExternalTakePolicy.externalTakePaths
     );
-    const calldataAggregatorSources = getEffectiveCalldataAggregatorSources(
-      discoveredTake,
-      takePolicy
-    );
+    const calldataAggregatorSources =
+      resolvedExternalTakePolicy.calldataAggregatorProviders.map(
+        (providerId) =>
+          getAggregatorProviderIdentity(providerId).liquiditySource
+      );
     if (takePolicy.hybridGasQuoteFailureFallbackMode === 'direct_dex_first') {
-      const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
-        fallbackMode: takePolicy.hybridGasQuoteFailureFallbackMode,
-        routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
-          takePolicy.externalTakeRouteSelectionMode
-        ),
-        externalTakePaths: Array.from(externalTakePaths),
-        maxGasCostNative: takePolicy.maxGasCostNative,
-        maxGasCostQuote: takePolicy.maxGasCostQuote,
-        minExpectedProfitQuote: takePolicy.minExpectedProfitQuote,
-        minProfitNative: takePolicy.minProfitNative,
-      });
+      const fallbackEligibility =
+        resolvedExternalTakePolicy.hybridGasQuoteFallbackPolicy;
       if (!fallbackEligibility.eligible) {
         const reason =
           fallbackEligibility.reason === 'maxGasCostNative is not configured'
@@ -300,11 +291,8 @@ export function validateAutoDiscoverConfig(
         'AutoDiscoverConfig.take: defaultDirectDexLiquiditySource must be UNISWAPV3 or CURVE'
       );
     }
-    const effectiveDefaultDirectDexLiquiditySource = isDirectDexDynamicSource(
-      discoveredTake.liquiditySource
-    )
-      ? discoveredTake.liquiditySource
-      : takePolicy.defaultDirectDexLiquiditySource;
+    const effectiveDefaultDirectDexLiquiditySource =
+      resolvedExternalTakePolicy.defaultDirectDexLiquiditySource;
     if (
       externalTakePaths.has('direct_dex') &&
       effectiveDefaultDirectDexLiquiditySource === undefined
@@ -325,9 +313,7 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
-    if (
-      calldataAggregatorSources.includes(LiquiditySource.ONEINCH)
-    ) {
+    if (calldataAggregatorSources.includes(LiquiditySource.ONEINCH)) {
       if (
         !config.dex?.oneInch?.aggregationExecutorAllowlist ||
         Object.keys(config.dex.oneInch.aggregationExecutorAllowlist).length ===
@@ -360,7 +346,7 @@ export function validateAutoDiscoverConfig(
         }
       }
     }
-    if (externalTakePaths.size > 1) {
+    if (resolvedExternalTakePolicy.requiresExternalTakeNetProfitRanking) {
       validateQuoteDenominatedGasPolicy(
         config,
         'AutoDiscoverConfig.take: hybrid external take route ranking',
@@ -455,18 +441,17 @@ export function validateAutoDiscoverConfig(
       validateTakeSettings(discoveredTake, config, chainId);
     }
 
-    const effectiveDirectDexSources = getEffectiveDirectDexRouteSources(
-      discoveredTake,
-      takePolicy.allowedLiquiditySources,
-      effectiveDefaultDirectDexLiquiditySource
+    const effectiveDirectDexSources = new Set(
+      resolvedExternalTakePolicy.directDexRouteSources
     );
-    const effectiveTakeGasOverrideSources = getEffectiveTakeGasOverrideSources(
-      discoveredTake,
-      takePolicy.allowedLiquiditySources,
-      effectiveDefaultDirectDexLiquiditySource,
-      externalTakePaths,
-      calldataAggregatorSources
+    const effectiveTakeGasOverrideSources = new Set<LiquiditySource>(
+      resolvedExternalTakePolicy.directDexRouteSources
     );
+    if (externalTakePaths.has('calldata_aggregator')) {
+      for (const source of calldataAggregatorSources) {
+        effectiveTakeGasOverrideSources.add(source);
+      }
+    }
     if (
       config.dex?.uniswapV3?.router?.candidateFeeTiers !== undefined &&
       !effectiveDirectDexSources.has(LiquiditySource.UNISWAPV3)
