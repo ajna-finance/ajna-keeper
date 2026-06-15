@@ -9,7 +9,7 @@ import { PoolDeployer } from "../AjnaInterfaces.sol";
 contract MockConfigurableTaker {
     address public immutable owner;
     PoolDeployer public immutable poolFactory;
-    address public immutable authorizedFactory;
+    address public immutable authorizedRouter;
     uint8 public immutable supportedSource;
 
     /// @dev 0 = succeed, 1 = revert custom error, 2 = revert string, 3 = revert empty
@@ -17,10 +17,10 @@ contract MockConfigurableTaker {
 
     error CustomRecoveryError();
 
-    constructor(PoolDeployer poolFactory_, address authorizedFactory_, uint8 supportedSource_) {
+    constructor(PoolDeployer poolFactory_, address authorizedRouter_, uint8 supportedSource_) {
         owner = msg.sender;
         poolFactory = poolFactory_;
-        authorizedFactory = authorizedFactory_;
+        authorizedRouter = authorizedRouter_;
         supportedSource = supportedSource_;
     }
 

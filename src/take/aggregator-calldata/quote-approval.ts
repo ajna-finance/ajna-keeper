@@ -3,14 +3,17 @@ import {
   CalldataAggregatorProviderId,
   getAggregatorProviderIdentity,
 } from '../../config';
-import { deriveApprovedMinOutRaw } from '../factory/shared';
+import { deriveApprovedMinOutRaw } from '../direct-dex/shared';
 import {
   ApprovedCalldataAggregatorQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
 } from '../types';
 
 export type CalldataAggregatorQuoteApprovalResult =
-  | { approved: true; quoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation }
+  | {
+      approved: true;
+      quoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
+    }
   | { approved: false; reason: string };
 
 function deriveRouteExecutionFloorRaw(

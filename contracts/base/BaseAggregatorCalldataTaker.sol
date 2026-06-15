@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
-import { FactoryAuthorizedTakerBase } from "./KeeperTakerBase.sol";
+import { RouterAuthorizedTakerBase } from "./KeeperTakerBase.sol";
 import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 
 /// @notice Shared layer for calldata-aggregator takers: executes one
@@ -34,7 +34,7 @@ import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 ///      Provider wrappers stay thin: construction, source identity, and a
 ///      provider-distinct execution event (LifiSwapExecuted precedent — never
 ///      overload the base SwapExecuted name).
-abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
+abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
     struct AggregatorSwapDetails {
         address approvalSpender;
         address srcToken;
@@ -71,14 +71,14 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
     error UnexpectedCallback();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
-    /// @param authorizedFactory_ Factory contract address that can also call functions.
+    /// @param authorizedRouter_ Router contract address that can also call functions.
     ///        Unlike the direct-DEX takers, calldata-aggregator takers are
-    ///        factory-only by design and refuse standalone (zero factory)
+    ///        router-only by design and refuse standalone (zero router)
     ///        deployment.
-    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedFactory_)
-        FactoryAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedFactory_)
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
+        RouterAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
     {
-        require(authorizedFactory_ != address(0), "Zero authorized factory");
+        require(authorizedRouter_ != address(0), "Zero authorized router");
     }
 
     /// @dev Provider wrappers declare which single liquidity source they serve.
@@ -102,7 +102,7 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
         LiquiditySource source,
         address swapRouter,
         bytes calldata swapDetails
-    ) external onlyOwnerOrFactory {
+    ) external onlyOwnerOrRouter {
         if (!_isSupportedSource(source)) revert UnsupportedSource();
         if (!_validatePool(pool)) revert InvalidPool();
 

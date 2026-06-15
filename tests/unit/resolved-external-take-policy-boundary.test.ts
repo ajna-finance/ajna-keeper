@@ -41,16 +41,22 @@ const BANNED_IMPORT_NAMES = [
 const BANNED_MEMBER_READS = [
   'allowedExternalTakePaths',
   'allowedCalldataAggregatorProviders',
-  'defaultFactoryLiquiditySource',
+  'defaultDirectDexLiquiditySource',
 ];
 
 // Legacy `lifi` may not be interpreted as an external-take path/kind/
 // deployment sentinel outside config/env/no-spend input parsing. Provider
 // ids, provider payload literals, labels, and dex.lifi config keys are fine.
 const LIFI_PATH_ALIAS_PATTERNS: { re: RegExp; what: string }[] = [
-  { re: /externalTakePath\s*[!=]==?\s*'lifi'/, what: "externalTakePath compared to 'lifi'" },
+  {
+    re: /externalTakePath\s*[!=]==?\s*'lifi'/,
+    what: "externalTakePath compared to 'lifi'",
+  },
   { re: /externalTakePath:\s*'lifi'/, what: "externalTakePath: 'lifi'" },
-  { re: /\bdeploymentType\s*[!=]==?\s*'lifi'/, what: "deploymentType compared to 'lifi'" },
+  {
+    re: /\bdeploymentType\s*[!=]==?\s*'lifi'/,
+    what: "deploymentType compared to 'lifi'",
+  },
   { re: /\bdeploymentType:\s*'lifi'/, what: "deploymentType: 'lifi'" },
   { re: /\bpath\s*[!=]==?\s*'lifi'/, what: "path compared to 'lifi'" },
   { re: /\bpath:\s*'lifi'/, what: "path: 'lifi'" },
@@ -105,15 +111,19 @@ describe('resolved external-take policy boundary (Packet 2B)', () => {
     const offenders: string[] = [];
     for (const file of files) {
       const content = fs.readFileSync(file, 'utf8');
-      const importRe = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"][^'"]+['"]/g;
+      const importRe =
+        /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"][^'"]+['"]/g;
       let match: RegExpExecArray | null;
       while ((match = importRe.exec(content)) !== null) {
         for (const banned of BANNED_IMPORT_NAMES) {
           // Match the exact imported binding, not substrings of longer names
           // (resolveExternalTakePolicy must stay importable).
-          const names = match[1]
-            .split(',')
-            .map(part => part.trim().split(/\s+as\s+/)[0].trim());
+          const names = match[1].split(',').map((part) =>
+            part
+              .trim()
+              .split(/\s+as\s+/)[0]
+              .trim()
+          );
           if (names.indexOf(banned) >= 0) {
             offenders.push(`${relative(file)}: imports ${banned}`);
           }

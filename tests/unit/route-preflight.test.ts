@@ -57,7 +57,7 @@ describe('route deployment preflight', () => {
       },
     },
     takers: {
-      factory: '0x1111111111111111111111111111111111111111',
+      router: '0x1111111111111111111111111111111111111111',
       contracts: {
         UniswapV3: '0x2222222222222222222222222222222222222222',
       },
@@ -93,7 +93,7 @@ describe('route deployment preflight', () => {
       },
     },
     takers: {
-      factory: '0x1111111111111111111111111111111111111111',
+      router: '0x1111111111111111111111111111111111111111',
       contracts: {
         Lifi: '0x2222222222222222222222222222222222222222',
       },
@@ -279,7 +279,7 @@ describe('route deployment preflight', () => {
     } catch (error) {
       expect(error).to.be.instanceOf(Error);
       expect((error as Error).message).to.include(
-        'keeperTakerFactory registry maps UNISWAPV3'
+        'keeperTakerRouter registry maps UNISWAPV3'
       );
     }
   });
@@ -310,7 +310,7 @@ describe('route deployment preflight', () => {
     } catch (error) {
       expect(error).to.be.instanceOf(Error);
       expect((error as Error).message).to.include(
-        'keeperTakerFactory registry has no taker for UNISWAPV3'
+        'keeperTakerRouter registry has no taker for UNISWAPV3'
       );
     }
   });
@@ -334,7 +334,7 @@ describe('route deployment preflight', () => {
     } catch (error) {
       expect(error).to.be.instanceOf(Error);
       expect((error as Error).message).to.include(
-        'keeperTakerFactory registry for UNISWAPV3 could not be read'
+        'keeperTakerRouter registry for UNISWAPV3 could not be read'
       );
     }
   });
@@ -367,7 +367,7 @@ describe('route deployment preflight', () => {
       const error = await validationPromise;
       expect(error).to.be.instanceOf(Error);
       expect((error as Error).message).to.include(
-        'keeperTakerFactory registry for UNISWAPV3 could not be read after retries'
+        'keeperTakerRouter registry for UNISWAPV3 could not be read after retries'
       );
       expect(provider.call.callCount).to.equal(4);
     } finally {
@@ -481,14 +481,15 @@ describe('route deployment preflight', () => {
 
     expect(resolveExternalTakeRoutePreflightRequirements(config)).to.deep.equal(
       [
-        { path: 'oneinch', source: LiquiditySource.ONEINCH },
-        { path: 'factory', source: LiquiditySource.UNISWAPV3 },
+        { path: 'calldata_aggregator', source: LiquiditySource.ONEINCH },
+        { path: 'direct_dex', source: LiquiditySource.UNISWAPV3 },
       ]
     );
     expect(
       resolveExternalTakeRouteDeploymentPreflight(config).requirements
     ).to.deep.equal([
-      { path: 'factory', source: LiquiditySource.UNISWAPV3 },
+      { path: 'direct_dex', source: LiquiditySource.UNISWAPV3 },
+      { path: 'calldata_aggregator', source: LiquiditySource.ONEINCH },
     ]);
   });
 

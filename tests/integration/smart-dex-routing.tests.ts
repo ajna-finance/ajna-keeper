@@ -28,11 +28,14 @@ describe('Manual External Take Routing Integration Tests', () => {
           },
         },
         config: {
-          keeperTaker: '0x1234567890123456789012345678901234567890',
+          keeperTakerRouter: '0x1234567890123456789012345678901234567890',
+          takerContracts: {
+            OneInchAggregator: '0x1234567890123456789012345678901234567890',
+          },
         },
       });
 
-      expectManualDeploymentType(resolution, 'oneinch');
+      expectManualDeploymentType(resolution, 'calldata_aggregator');
       expect(resolution.requestedLiquiditySource).to.equal(
         LiquiditySource.ONEINCH
       );
@@ -50,14 +53,14 @@ describe('Manual External Take Routing Integration Tests', () => {
           },
         },
         config: {
-          keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+          keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
           takerContracts: {
             UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
           },
         },
       });
 
-      expectManualDeploymentType(resolution, 'factory');
+      expectManualDeploymentType(resolution, 'direct_dex');
       expect(resolution.requestedLiquiditySource).to.equal(
         LiquiditySource.UNISWAPV3
       );
@@ -75,7 +78,7 @@ describe('Manual External Take Routing Integration Tests', () => {
           },
         },
         config: {
-          keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+          keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
           takerContracts: {
             Lifi: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
           },
@@ -93,9 +96,9 @@ describe('Manual External Take Routing Integration Tests', () => {
 
     it('routes mixed configs by pool source instead of preferring factory globally', () => {
       const config = {
-        keeperTaker: '0x1111111111111111111111111111111111111111',
-        keeperTakerFactory: '0x2222222222222222222222222222222222222222',
+        keeperTakerRouter: '0x2222222222222222222222222222222222222222',
         takerContracts: {
+          OneInchAggregator: '0x1111111111111111111111111111111111111111',
           UniswapV3: '0x3333333333333333333333333333333333333333',
           Lifi: '0x4444444444444444444444444444444444444444',
         },
@@ -129,8 +132,8 @@ describe('Manual External Take Routing Integration Tests', () => {
         config,
       });
 
-      expect(oneInchDeployment.deploymentType).to.equal('oneinch');
-      expect(factoryDeployment.deploymentType).to.equal('factory');
+      expect(oneInchDeployment.deploymentType).to.equal('calldata_aggregator');
+      expect(factoryDeployment.deploymentType).to.equal('direct_dex');
       expect(lifiDeployment.deploymentType).to.equal('calldata_aggregator');
     });
 
@@ -143,7 +146,7 @@ describe('Manual External Take Routing Integration Tests', () => {
           },
         },
         config: {
-          keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+          keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         },
       });
 
@@ -191,10 +194,13 @@ describe('Manual External Take Routing Integration Tests', () => {
       }).to.not.throw();
     });
 
-    it('validates 1inch take settings with keeperTaker config', async () => {
+    it('validates 1inch take settings with calldata aggregator taker config', async () => {
       const oneInchConfig = {
         takers: {
-          oneInch: '0x1234567890123456789012345678901234567890',
+          router: '0x1234567890123456789012345678901234567890',
+          contracts: {
+            OneInchAggregator: '0x1234567890123456789012345678901234567890',
+          },
         },
         dex: {
           oneInch: {

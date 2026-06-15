@@ -40,7 +40,7 @@ describe('LifiKeeperTaker', () => {
         poolDeployer.address,
         constants.AddressZero
       ),
-      "reverted with reason string 'Zero authorized factory'"
+      "reverted with reason string 'Zero authorized router'"
     );
   });
 

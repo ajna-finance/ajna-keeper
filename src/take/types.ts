@@ -65,8 +65,8 @@ export interface TakeActionConfig {
 
 export type ExternalTakeStrategyKind =
   | 'none'
-  | 'oneinch'
   | 'calldata_aggregator'
+  | 'direct_dex'
   | 'factory'
   | 'hybrid';
 
@@ -85,6 +85,7 @@ export interface ExternalTakeQuoteEvaluation {
   quoteFailureRetryable?: boolean;
   quoteFailureCode?: number | string;
   selectedLiquiditySource?: LiquiditySource;
+  providerId?: CalldataAggregatorProviderId;
   selectedFeeTier?: number;
   routeMinOutRaw?: BigNumber;
   profitMinOutRaw?: BigNumber;
@@ -125,35 +126,37 @@ interface ApprovedExternalTakeQuoteBase<TSource extends LiquiditySource>
 
 export interface BoundOneInchRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.ONEINCH> {
-  externalTakePath: 'oneinch';
+  externalTakePath: 'calldata_aggregator';
+  providerId?: 'oneinch';
 }
 
 export interface ApprovedOneInchQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.ONEINCH> {
-  externalTakePath: 'oneinch';
+  externalTakePath: 'calldata_aggregator';
+  providerId?: 'oneinch';
 }
 
 export interface BoundUniswapV3FactoryRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.UNISWAPV3> {
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   selectedFeeTier: number;
 }
 
 export interface ApprovedUniswapV3FactoryQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.UNISWAPV3> {
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   selectedFeeTier: number;
 }
 
 export interface BoundCurveFactoryRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.CURVE> {
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   curvePool: CurvePoolSelection;
 }
 
 export interface ApprovedCurveFactoryQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.CURVE> {
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   curvePool: CurvePoolSelection;
 }
 
@@ -175,7 +178,7 @@ export type BoundFactoryRouteEvaluation =
   | BoundUniswapV3FactoryRouteEvaluation
   | BoundCurveFactoryRouteEvaluation;
 
-export type ApprovedFactoryQuoteEvaluation =
+export type ApprovedDirectDexQuoteEvaluation =
   | ApprovedUniswapV3FactoryQuoteEvaluation
   | ApprovedCurveFactoryQuoteEvaluation;
 
@@ -207,7 +210,7 @@ export type ExternalTakeEvaluationResult<TApprovalContext = unknown> =
 
 export type ApprovedExternalTakeQuoteEvaluation =
   | ApprovedOneInchQuoteEvaluation
-  | ApprovedFactoryQuoteEvaluation
+  | ApprovedDirectDexQuoteEvaluation
   | ApprovedCalldataAggregatorQuoteEvaluation;
 
 export interface ArbTakeEvaluation {

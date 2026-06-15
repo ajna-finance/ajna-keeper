@@ -24,7 +24,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'oneinch',
+          externalTakePath: 'calldata_aggregator',
           quotedCollateralWad: CLAMPED,
           quotedAuctionPriceWad: PRICE,
         },
@@ -49,7 +49,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           quotedCollateralWad: COLLATERAL,
         },
         ...FACTS,
@@ -61,7 +61,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           quotedCollateralWad: COLLATERAL,
           quotedAuctionPriceWad: PRICE.sub(1),
         },
@@ -74,7 +74,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           quotedCollateralWad: COLLATERAL,
           quotedAuctionPriceWad: PRICE.add(1),
         },
@@ -86,7 +86,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
   it('accepts evaluations without quote-context fields', () => {
     expect(
       getRevalidatedQuoteContextIssue({
-        quoteEvaluation: { externalTakePath: 'oneinch' },
+        quoteEvaluation: { externalTakePath: 'calldata_aggregator' },
         ...FACTS,
       })
     ).to.equal(undefined);

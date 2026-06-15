@@ -165,6 +165,57 @@ describe('LI.FI quote request building', () => {
     expect(url.searchParams.get('preferExchanges')).to.equal('kyberswap');
   });
 
+  it('omits allowExchanges for reviewed-broad production quote requests', () => {
+    const url = new URL(
+      buildLifiQuoteUrl({
+        config: {
+          mode: 'production',
+          exchangePolicy: 'reviewed_broad',
+          apiBaseUrl: 'https://li.quest/v1/',
+          denyExchanges: ['BadTool'],
+          preferExchanges: ['GoodTool'],
+          defaultSlippage: 0.005,
+        },
+        request: {
+          chainId,
+          fromToken: collateral,
+          toToken: quoteToken,
+          fromAmount,
+          fromAddress: taker,
+          toAddress: taker,
+        },
+      })
+    );
+
+    expect(url.searchParams.has('allowExchanges')).to.equal(false);
+    expect(url.searchParams.get('denyExchanges')).to.equal('badtool');
+    expect(url.searchParams.get('preferExchanges')).to.equal('goodtool');
+  });
+
+  it('rejects request allowExchanges overrides for reviewed-broad production quote requests', () => {
+    expect(() =>
+      buildLifiQuoteUrl({
+        config: {
+          mode: 'production',
+          exchangePolicy: 'reviewed_broad',
+          apiBaseUrl: 'https://li.quest/v1/',
+          defaultSlippage: 0.005,
+        },
+        request: {
+          chainId,
+          fromToken: collateral,
+          toToken: quoteToken,
+          fromAmount,
+          fromAddress: taker,
+          toAddress: taker,
+          allowExchanges: ['uniswap'],
+        },
+      })
+    ).to.throw(
+      'dex.lifi.allowExchanges must be omitted when exchangePolicy is reviewed_broad'
+    );
+  });
+
   it('rejects duplicate request-level exchange filters across allow and prefer', () => {
     expect(() =>
       buildLifiQuoteUrl({

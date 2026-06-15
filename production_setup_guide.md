@@ -172,7 +172,7 @@ This makes fee tier selection a runtime route-optimization decision. It is still
 | **Stablecoin-Heavy Chains**                                | ❌ No            | ✅ Yes      | ✅ Yes | **Factory Direct-DEX (Uniswap V3 + Curve)** | `scripts/deploy-factory-system.ts` |
 | **Uniswap-only Chains**                                    | ❌ No            | ✅ Yes      | ❌ No  | **Factory Direct-DEX (Uniswap V3 Only)**    | `scripts/deploy-factory-system.ts` |
 
-The LI.FI integration is an optional same-chain aggregator path for chains and pairs where reviewed LI.FI routes can fill gaps left by direct-DEX adapters. It is not part of the `factory` path in keeper route selection, even though execution is dispatched through `AjnaKeeperTakerFactory` to a factory-registered `LifiKeeperTaker`. LI.FI production support for a chain/pair remains gated on the required-live route-shape canary and callback-path fork execution canary.
+The LI.FI integration is an optional same-chain aggregator path for chains and pairs where reviewed LI.FI routes can fill gaps left by direct-DEX adapters. It is not part of the `factory` path in keeper route selection, even though execution is dispatched through `TakerRouter` to a factory-registered `LifiKeeperTaker`. LI.FI production support for a chain/pair remains gated on the required-live route-shape canary and callback-path fork execution canary.
 
 ### Option A: 1inch Single-Contract Aggregator Deployment
 
@@ -282,7 +282,7 @@ yarn compile
 yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 # Expected output:
-# ✅ AjnaKeeperTakerFactory deployed to: 0x[factory-address]
+# ✅ TakerRouter deployed to: 0x[factory-address]
 # ✅ UniswapV3KeeperTaker deployed to: 0x[uniswap-taker-address]
 # ✅ Factory configured with UniswapV3 taker
 # ✅ All verification checks passed
@@ -1492,7 +1492,7 @@ This indicates the auction needs more settlement iterations or has complex debt 
 # Cause: Source id 3 is the removed direct SushiSwap path; it is deprecated and fails closed
 # Solution: Migrate the pool to UNISWAPV3 or CURVE; reach SushiSwap liquidity only through an aggregator path (1inch, or LI.FI exchange filters)
 
-# Revert: DeprecatedLiquiditySource (AjnaKeeperTakerFactory.setTaker)
+# Revert: DeprecatedLiquiditySource (TakerRouter.setTaker)
 # Cause: Attempted to register a taker contract for deprecated source id 3
 # Solution: Do not register source id 3; clear legacy mappings with setTaker(3, address(0)) and verify takerContracts(3) == address(0) before live use
 ```

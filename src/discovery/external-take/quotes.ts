@@ -2,11 +2,11 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import { LiquiditySource, getAutoDiscoverTakePolicy } from '../../config';
 import { DiscoveryReadTransports } from '../../read-transports';
-import * as takeFactoryModule from '../../take/factory';
-import { FactoryRouteProfitabilityContext } from '../../take/factory';
+import * as takeFactoryModule from '../../take/direct-dex';
+import { FactoryRouteProfitabilityContext } from '../../take/direct-dex';
 import * as lifiExecutionModule from '../../take/lifi/execution';
 import * as sushiAggregatorModule from '../../take/sushi-aggregator/quote-evaluation';
-import * as oneInchExecutionModule from '../../take/one-inch-execution';
+import * as oneInchAggregatorModule from '../../take/oneinch-aggregator/quote-evaluation';
 import { getDebtConstrainedTakeCollateralWad } from '../../take/take-sizing';
 import {
   AuctionTakeFacts,
@@ -46,7 +46,7 @@ export type AutoDiscoverTakePolicyRuntime = ReturnType<
 export type OneInchCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
 export type LifiCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
 
-export interface FactoryPathQuoteInput extends AuctionTakeFacts {
+export interface DirectDexPathQuoteInput extends AuctionTakeFacts {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: ResolvedTakeTarget;
@@ -54,27 +54,28 @@ export interface FactoryPathQuoteInput extends AuctionTakeFacts {
   routeProbeAbortSignal?: AbortSignal;
 }
 
-export interface OneInchPathQuoteInput extends FactoryPathQuoteInput {
+export interface OneInchAggregatorPathQuoteInput
+  extends DirectDexPathQuoteInput {
   price: number;
   recordCircuitOutcome?: boolean;
 }
 
-export interface LifiPathQuoteInput extends FactoryPathQuoteInput {
+export interface LifiPathQuoteInput extends DirectDexPathQuoteInput {
   price: number;
   recordCircuitOutcome?: boolean;
 }
 
-export interface SushiAggregatorPathQuoteInput extends FactoryPathQuoteInput {
+export interface SushiAggregatorPathQuoteInput extends DirectDexPathQuoteInput {
   price: number;
   recordCircuitOutcome?: boolean;
 }
 
 export type FactoryPathQuoteFn = (
-  quoteParams: FactoryPathQuoteInput
+  quoteParams: DirectDexPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
-export type OneInchPathQuoteFn = (
-  quoteParams: OneInchPathQuoteInput
+export type OneInchAggregatorPathQuoteFn = (
+  quoteParams: OneInchAggregatorPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
 export type LifiPathQuoteFn = (
@@ -106,18 +107,6 @@ export type DiscoveryFactoryRouteProfitabilityContextBuilder = (params: {
 export type DiscoveryTokenDecimalsCacheResolver = (
   rpcCache?: DiscoveryRpcCache
 ) => Map<string, number> | undefined;
-
-type DiscoveryOneInchQuoteOptions = {
-  oneInchRequestTimeoutMs: number;
-  oneInchRequestAbortSignal?: AbortSignal;
-  chainId?: number;
-  tokenDecimalsCache?: Map<string, number>;
-};
-
-type OneInchDiscoveryQuoteEvaluator = (
-  quoteOptions: DiscoveryOneInchQuoteOptions,
-  quoteCollateralWad: BigNumber
-) => Promise<ExternalTakeQuoteEvaluation>;
 
 async function withCombinedAbortSignal<T>(
   signals: Array<AbortSignal | undefined>,
@@ -210,13 +199,13 @@ export async function quoteFactoryPathForDiscovery(
     routeProbeLimiter?: AsyncOperationLimiter;
     factoryQuoteConfig: DiscoveryFactoryQuoteConfig;
     buildFactoryRouteProfitabilityContext: DiscoveryFactoryRouteProfitabilityContextBuilder;
-  } & FactoryPathQuoteInput
+  } & DirectDexPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   if (params.resolvedDefaultFactoryLiquiditySource === undefined) {
     return {
       isTakeable: false,
-      externalTakePath: 'factory',
-      reason: 'factory external take path is not configured',
+      externalTakePath: 'direct_dex',
+      reason: 'direct_dex external take path is not configured',
     };
   }
   const factoryPoolConfig = withTakeLiquiditySource(
@@ -258,7 +247,7 @@ export async function quoteFactoryPathForDiscovery(
   );
   return {
     ...evaluation,
-    externalTakePath: 'factory',
+    externalTakePath: 'direct_dex',
     quotedAuctionPriceWad:
       evaluation.quotedAuctionPriceWad ?? params.auctionPrice,
     quotedCollateralWad: evaluation.quotedCollateralWad ?? params.collateral,
@@ -280,7 +269,7 @@ export function getCircuitGuardedQuoteOutcome(
 async function quoteCircuitGuardedPath(params: {
   poolName: string;
   label: string;
-  externalTakePath: 'oneinch' | 'calldata_aggregator';
+  externalTakePath: 'calldata_aggregator';
   selectedLiquiditySource: LiquiditySource;
   auctionPrice: BigNumber;
   collateral: BigNumber;
@@ -364,28 +353,26 @@ async function quoteCircuitGuardedPath(params: {
   };
 }
 
-async function quoteOneInchForDiscovery(
+export async function quoteOneInchAggregatorPathForDiscovery(
   params: {
+    config: DiscoveryExecutionConfig;
     rpcCache?: DiscoveryRpcCache;
     takePolicy: AutoDiscoverTakePolicyRuntime;
     recordCircuitOutcome?: boolean;
-    evaluate: OneInchDiscoveryQuoteEvaluator;
     routeProbeLimiter?: AsyncOperationLimiter;
     probeTimeoutMs: number;
     getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
-  } & OneInchPathQuoteInput
+  } & OneInchAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   const circuitOpenReason = getOneInchCircuitOpenReason({
     rpcCache: params.rpcCache,
     takePolicy: params.takePolicy,
   });
-  const oneInchRequestTimeoutMs = getOneInchQuoteTimeoutMs(params.takePolicy);
-  // Aggregator quotes are denominated in the debt-clamped take size.
   const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
   return quoteCircuitGuardedPath({
     poolName: params.pool.name,
     label: '1inch',
-    externalTakePath: 'oneinch',
+    externalTakePath: 'calldata_aggregator',
     selectedLiquiditySource: LiquiditySource.ONEINCH,
     auctionPrice: params.auctionPrice,
     collateral: quoteCollateralWad,
@@ -394,17 +381,28 @@ async function quoteOneInchForDiscovery(
     routeProbeLimiter: params.routeProbeLimiter,
     routeProbeAbortSignal: params.routeProbeAbortSignal,
     probeTimeoutMs: params.probeTimeoutMs,
-    abortErrorMessage: '1inch external take quote aborted',
-    timeoutLabel: '1inch external take quote',
+    abortErrorMessage: '1inch aggregator external take quote aborted',
+    timeoutLabel: '1inch aggregator external take quote',
     evaluate: async (signal) =>
-      await params.evaluate(
+      await oneInchAggregatorModule.getOneInchAggregatorPathQuoteEvaluation(
+        params.pool,
+        params.price,
+        quoteCollateralWad,
+        params.poolConfig,
         {
-          oneInchRequestTimeoutMs,
+          connectorTokens: params.config.connectorTokens,
+          oneInchAggregatorTaker: params.config.oneInchAggregatorTaker,
+          oneInchAggregationExecutorAllowlist:
+            params.config.oneInchAggregationExecutorAllowlist,
+          oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
+          oneInchRouters: params.config.oneInchRouters,
           oneInchRequestAbortSignal: signal,
+          oneInchRequestTimeoutMs: getOneInchQuoteTimeoutMs(params.takePolicy),
           chainId: params.rpcCache?.chainId,
           tokenDecimalsCache: params.getTokenDecimalsCache(params.rpcCache),
         },
-        quoteCollateralWad
+        params.signer,
+        params.auctionPrice
       ),
     recordOutcome: (outcome) =>
       recordOneInchCircuitOutcomeForDiscovery({
@@ -412,67 +410,6 @@ async function quoteOneInchForDiscovery(
         takePolicy: params.takePolicy,
         outcome,
       }),
-  });
-}
-
-export async function quoteOneInchPathForDiscovery(
-  params: {
-    config: DiscoveryExecutionConfig;
-    rpcCache?: DiscoveryRpcCache;
-    takePolicy: AutoDiscoverTakePolicyRuntime;
-    recordCircuitOutcome?: boolean;
-    routeProbeLimiter?: AsyncOperationLimiter;
-    probeTimeoutMs: number;
-    getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
-  } & OneInchPathQuoteInput
-): Promise<ExternalTakeQuoteEvaluation> {
-  return quoteOneInchForDiscovery({
-    ...params,
-    evaluate: (quoteOptions, quoteCollateralWad) =>
-      oneInchExecutionModule.getOneInchPathQuoteEvaluation(
-        params.pool,
-        params.price,
-        quoteCollateralWad,
-        params.poolConfig,
-        {
-          ...quoteOptions,
-          oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
-        },
-        params.signer,
-        params.config.oneInchRouters,
-        params.config.connectorTokens,
-        params.auctionPrice
-      ),
-  });
-}
-
-export async function quoteKeeperTakerOneInchTakeForDiscovery(
-  params: {
-    config: DiscoveryExecutionConfig;
-    rpcCache?: DiscoveryRpcCache;
-    takePolicy: AutoDiscoverTakePolicyRuntime;
-    routeProbeLimiter?: AsyncOperationLimiter;
-    probeTimeoutMs: number;
-    getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
-  } & OneInchPathQuoteInput
-): Promise<ExternalTakeQuoteEvaluation> {
-  return quoteOneInchForDiscovery({
-    ...params,
-    evaluate: (quoteOptions, quoteCollateralWad) =>
-      oneInchExecutionModule.getOneInchTakeQuoteEvaluation(
-        params.pool,
-        params.price,
-        quoteCollateralWad,
-        params.poolConfig,
-        {
-          ...quoteOptions,
-          oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
-        },
-        params.signer,
-        params.config.oneInchRouters,
-        params.config.connectorTokens,
-        params.auctionPrice
-      ),
   });
 }
 

@@ -122,7 +122,7 @@ If either route cannot quote, the script exits before the final kick.
 ### Fallback Regression
 
 Use fallback regression mode to validate
-`hybridGasQuoteFailureFallbackMode: 'factory_first'`:
+`hybridGasQuoteFailureFallbackMode: 'direct_dex_first'`:
 
 ```bash
 export AJNA_AGENT_UNISWAP_LIQUIDITY_MODE=fallback_regression
@@ -154,7 +154,7 @@ npm run run-fixture-keeper-harness -- \
 npm run run-fixture-keeper-harness -- \
   --summary /tmp/ajna-fallback-fixture-summary.json \
   --mode discovery \
-  --hybrid-gas-quote-fallback factory_first \
+  --hybrid-gas-quote-fallback direct_dex_first \
   --auto-warp-to-take \
   --max-take-warps 0 \
   --dry-run

@@ -32,19 +32,7 @@ import {
 } from './manual-context';
 import { createArbTakeStrategy } from './arb-strategy';
 
-export type {
-  OneInchExecutionConfig,
-  OneInchQuoteConfig,
-} from './one-inch-types';
-export {
-  getOneInchPathQuoteEvaluation,
-  getOneInchTakeQuoteEvaluation,
-  takeLiquidation,
-} from './one-inch-execution';
-export {
-  createNoExternalTakeAdapter,
-  createOneInchTakeAdapter,
-} from './one-inch-adapter';
+export { createNoExternalTakeAdapter } from './no-external-take-adapter';
 export { createLifiTakeAdapter } from './lifi/adapter';
 export type {
   TakeAuctionStatus,
@@ -68,7 +56,7 @@ interface HandleTakeParams {
 
 interface ResolvedHandleTakeParams extends Omit<HandleTakeParams, 'config'> {
   config: HandleTakeConfig;
-  context: ResolvedManualTakeContext;
+  context: ManualTakeContext<any>;
 }
 
 export async function handleTakes({

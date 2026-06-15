@@ -60,7 +60,10 @@ const config: KeeperConfig = {
     },
   },
   takers: {
-    oneInch: '0x[DEPLOY_WITH_query-1inch.ts]',
+    router: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
+    contracts: {
+      OneInchAggregator: '0x[DEPLOYED_ONEINCH_AGGREGATOR_TAKER_ADDRESS]',
+    },
   },
   pricing: {
     coinGeckoApiKey: process.env.COINGECKO_API_KEY,
@@ -93,7 +96,7 @@ const config: KeeperConfig = {
           minCollateral: 0.07,
           hpbPriceFactor: 0.9,
 
-          // External Takes via 1inch (requires takers.oneInch deployment)
+          // External Takes via 1inch (requires takers.router and takers.contracts.OneInchAggregator)
           liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.98, // Take when auction price < market * 0.98
           allowSubsidy: false,

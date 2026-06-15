@@ -16,7 +16,7 @@ import type { DiscoveryReadTransports } from '../../../src/read-transports';
 import * as lifiExecutionModule from '../../../src/take/lifi/execution';
 import { normalizeApprovedLifiQuote } from '../../../src/take/lifi/quote-service';
 import type { ApprovedCalldataAggregatorQuote } from '../../../src/take/aggregator-calldata/types';
-import * as takeFactoryModule from '../../../src/take/factory';
+import * as takeFactoryModule from '../../../src/take/direct-dex';
 import type { ExternalTakeQuoteEvaluation } from '../../../src/take/types';
 import type { TakeWriteTransport } from '../../../src/take/write-transport';
 import { createDiscoveryTransports } from '../../helpers/discovery';
@@ -125,7 +125,7 @@ export function createHybridGasFallbackFactoryQuote(
 ): ExternalTakeQuoteEvaluation {
   return {
     isTakeable: true,
-    externalTakePath: 'factory',
+    externalTakePath: 'direct_dex',
     selectedLiquiditySource: LiquiditySource.UNISWAPV3,
     selectedFeeTier: 500,
     quoteAmount: 125,
@@ -145,7 +145,7 @@ export function createNativeToQuoteGasConversionReject(
 ): ExternalTakeQuoteEvaluation {
   return {
     isTakeable: false,
-    externalTakePath: 'factory',
+    externalTakePath: 'direct_dex',
     selectedLiquiditySource: LiquiditySource.UNISWAPV3,
     reason: 'failed to quote gas cost into quote token',
     routeProfitability: {
@@ -175,8 +175,8 @@ export async function runLifiHybridGasFallbackScenario(
   const takeLiquidationLifiStub = sinon
     .stub(lifiExecutionModule, 'takeLiquidationLifi')
     .resolves(true);
-  const takeLiquidationFactoryStub = sinon
-    .stub(takeFactoryModule, 'takeLiquidationFactory')
+  const takeLiquidationDirectDexStub = sinon
+    .stub(takeFactoryModule, 'takeLiquidationDirectDex')
     .resolves(true);
   const lifiQuoteStub = sinon
     .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
@@ -253,10 +253,11 @@ export async function runLifiHybridGasFallbackScenario(
           enabled: true,
           take: {
             enabled: true,
-            allowedExternalTakePaths: ['lifi', 'factory'],
+            allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+            allowedCalldataAggregatorProviders: ['lifi'],
             externalTakeRouteSelectionMode: 'maximize_profit',
-            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-            hybridGasQuoteFailureFallbackMode: 'factory_first',
+            defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
+            hybridGasQuoteFailureFallbackMode: 'direct_dex_first',
             maxGasCostNative: 1,
           },
         },
@@ -279,7 +280,7 @@ export async function runLifiHybridGasFallbackScenario(
     factoryQuoteStub,
     lifiQuoteStub,
     takeLiquidationLifiStub,
-    takeLiquidationFactoryStub,
+    takeLiquidationDirectDexStub,
   };
 }
 
@@ -332,7 +333,7 @@ export function createHybridLifiFallbackScenario(
     .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
     .resolves({
       isTakeable: true,
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
       selectedFeeTier: 500,
       quoteAmount: 120,
@@ -353,8 +354,8 @@ export function createHybridLifiFallbackScenario(
         gasPolicyEvaluatedAt,
       },
     });
-  const takeLiquidationFactoryStub = sinon
-    .stub(takeFactoryModule, 'takeLiquidationFactory')
+  const takeLiquidationDirectDexStub = sinon
+    .stub(takeFactoryModule, 'takeLiquidationDirectDex')
     .resolves(true);
 
   const pool = {
@@ -373,7 +374,7 @@ export function createHybridLifiFallbackScenario(
   return {
     lifiQuoteStub,
     factoryQuoteStub,
-    takeLiquidationFactoryStub,
+    takeLiquidationDirectDexStub,
     params: makeDiscoveredTakeParams({
       pool,
       signer: {
@@ -410,9 +411,10 @@ export function createHybridLifiFallbackScenario(
           enabled: true,
           take: {
             enabled: true,
-            allowedExternalTakePaths: ['lifi', 'factory'],
+            allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+            allowedCalldataAggregatorProviders: ['lifi'],
             externalTakeRouteSelectionMode: 'maximize_profit',
-            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+            defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
             dexGasOverrides: {
               [LiquiditySource.LIFI]: '900000',
               [LiquiditySource.UNISWAPV3]: '900000',

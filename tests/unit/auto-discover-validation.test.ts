@@ -50,7 +50,7 @@ describe('auto-discover validation', () => {
       },
     },
     takers: {
-      factory: '0x1234567890123456789012345678901234567890',
+      router: '0x1234567890123456789012345678901234567890',
       contracts: {
         UniswapV3: '0x3333333333333333333333333333333333333333',
       },
@@ -69,6 +69,18 @@ describe('auto-discover validation', () => {
     },
   });
 
+  const configureOneInchAggregatorTake = (config: KeeperConfig): void => {
+    config.takers = {
+      ...config.takers,
+      router:
+        config.takers?.router ?? '0x1234567890123456789012345678901234567890',
+      contracts: {
+        ...config.takers?.contracts,
+        OneInchAggregator: '0x1234567890123456789012345678901234567890',
+      },
+    };
+  };
+
   it('rejects 1inch gas overrides unless discovered takes use 1inch', () => {
     const config = baseConfig();
     config.discovery!.take = {
@@ -79,7 +91,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires an enabled 1inch external take path'
+      'AutoDiscoverConfig.take: dexGasOverrides.ONEINCH requires an enabled calldata aggregator external take path'
     );
   });
 
@@ -87,6 +99,7 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
+      validateRouteDeployments: true,
       dexGasOverrides: {
         [LiquiditySource.ONEINCH]: '900000',
       },
@@ -95,7 +108,7 @@ describe('auto-discover validation', () => {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    configureOneInchAggregatorTake(config);
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
@@ -107,8 +120,9 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['oneinch', 'factory'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['oneinch'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
       validateRouteDeployments: true,
       dexGasOverrides: {
@@ -120,7 +134,7 @@ describe('auto-discover validation', () => {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    configureOneInchAggregatorTake(config);
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
@@ -142,17 +156,21 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['oneinch', 'factory'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['oneinch'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       validateRouteDeployments: true,
-      hybridGasQuoteFailureFallbackMode: 'factory_first',
+      dexGasOverrides: {
+        [LiquiditySource.ONEINCH]: '900000',
+      },
+      hybridGasQuoteFailureFallbackMode: 'direct_dex_first',
       maxGasCostNative: 0.01,
     };
     config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    configureOneInchAggregatorTake(config);
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
@@ -165,10 +183,11 @@ describe('auto-discover validation', () => {
     const lifiCallTarget = '0x8888888888888888888888888888888888888888';
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['lifi', 'factory'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['lifi'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       validateRouteDeployments: true,
-      hybridGasQuoteFailureFallbackMode: 'factory_first',
+      hybridGasQuoteFailureFallbackMode: 'direct_dex_first',
       maxGasCostNative: 0.01,
       dexGasOverrides: {
         [LiquiditySource.LIFI]: '650000',
@@ -204,7 +223,7 @@ describe('auto-discover validation', () => {
           .getCalls()
           .some((call) =>
             String(call.args[0]).includes(
-              'hybridGasQuoteFailureFallbackMode=factory_first is only eligible'
+              'hybridGasQuoteFailureFallbackMode=direct_dex_first is only eligible'
             )
           )
       ).to.equal(false);
@@ -222,7 +241,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode must be disabled or factory_first'
+      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode must be disabled or direct_dex_first'
     );
   });
 
@@ -230,22 +249,23 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['oneinch', 'factory'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['oneinch'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       validateRouteDeployments: true,
-      hybridGasQuoteFailureFallbackMode: 'factory_first',
+      hybridGasQuoteFailureFallbackMode: 'direct_dex_first',
     };
     config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    configureOneInchAggregatorTake(config);
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first requires maxGasCostNative'
+      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=direct_dex_first requires maxGasCostNative'
     );
   });
 
@@ -296,18 +316,22 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['oneinch', 'factory'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['oneinch'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
       validateRouteDeployments: true,
+      dexGasOverrides: {
+        [LiquiditySource.ONEINCH]: '900000',
+      },
       externalTakeProbeTimeoutMs: 1500,
-      externalTakeRouteSelectionMode: 'factory_first',
+      externalTakeRouteSelectionMode: 'direct_dex_first',
     };
     config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    configureOneInchAggregatorTake(config);
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
@@ -322,7 +346,7 @@ describe('auto-discover validation', () => {
     (config.discovery!.take as any).externalTakeProbeTimeoutMs = 1500;
     (config.discovery!.take as any).externalTakeRouteSelectionMode = 'fastest';
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or direct_dex_first'
     );
   });
 
@@ -330,16 +354,20 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['oneinch', 'factory'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['oneinch'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
       validateRouteDeployments: true,
+      dexGasOverrides: {
+        [LiquiditySource.ONEINCH]: '900000',
+      },
     };
     config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    configureOneInchAggregatorTake(config);
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
@@ -357,21 +385,22 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['oneinch', 'factory'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['oneinch'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
     };
     config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    configureOneInchAggregatorTake(config);
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
+      'AutoDiscoverConfig.take: validateRouteDeployments=true required when resolved external take paths include calldata_aggregator'
     );
   });
 
@@ -379,16 +408,20 @@ describe('auto-discover validation', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['oneinch', 'factory'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['oneinch'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.CURVE],
       validateRouteDeployments: true,
+      dexGasOverrides: {
+        [LiquiditySource.ONEINCH]: '900000',
+      },
     };
     config.discovery!.defaults!.take = {
       liquiditySource: LiquiditySource.ONEINCH,
       marketPriceFactor: 0.99,
     };
-    config.takers!.oneInch = '0x1234567890123456789012345678901234567890';
+    configureOneInchAggregatorTake(config);
     config.dex!.oneInch!.routers = {
       1: '0x1111111111111111111111111111111111111111',
     };
@@ -411,7 +444,7 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: allowedLiquiditySources must include the effective default factory liquidity source'
+      'AutoDiscoverConfig.take: allowedLiquiditySources must include the effective default direct DEX liquidity source'
     );
   });
 
@@ -805,12 +838,12 @@ describe('auto-discover validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only oneinch, factory, and calldata_aggregator (legacy alias: lifi)'
+      'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports only direct_dex or calldata_aggregator'
     );
 
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['factory', 'factory'] as any,
+      allowedExternalTakePaths: ['direct_dex', 'direct_dex'] as any,
     };
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(

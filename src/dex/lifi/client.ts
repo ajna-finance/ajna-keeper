@@ -1,14 +1,16 @@
 import axios, { AxiosResponse } from 'axios';
 import { ethers } from 'ethers';
-import {
-  normalizeLifiApiBaseUrl,
-  validateLifiIntegrator,
-} from './api-policy';
+import { normalizeLifiApiBaseUrl, validateLifiIntegrator } from './api-policy';
 import { getErrorMessage } from '../../utils';
 import {
   normalizeLifiExchangeFilters,
   type LifiExchangeFilterConfig,
 } from './filters';
+import {
+  normalizeProductionLifiExchangePolicy,
+  type LifiProductionExchangePolicyKind,
+  type LifiProductionExchangePolicyConfig,
+} from './exchange-policy';
 import {
   DEFAULT_LIFI_API_BASE_URL,
   DEFAULT_LIFI_QUOTE_TIMEOUT_MS,
@@ -21,12 +23,16 @@ import {
 const MAX_LIFI_DECIMAL_POLICY_VALUE = 0.5;
 
 export interface LifiQuoteClientConfig extends LifiExchangeFilterConfig {
+  exchangePolicy?: LifiProductionExchangePolicyKind;
   apiBaseUrl?: string;
   defaultSlippage?: number;
   quoteTimeoutMs?: number;
   maxPriceImpact?: number;
   integrator?: string;
 }
+
+type ProductionLifiQuoteClientConfig = LifiQuoteClientConfig &
+  LifiProductionExchangePolicyConfig;
 
 function requirePositiveChainId(chainId: number): number {
   if (!Number.isSafeInteger(chainId) || chainId <= 0) {
@@ -163,12 +169,23 @@ export function buildLifiQuoteUrl(params: {
   request: LifiQuoteRequest;
 }): string {
   const request = normalizeLifiQuoteRequest(params.request);
-  const filters = normalizeLifiExchangeFilters({
+  const allowExchanges = request.allowExchanges ?? params.config.allowExchanges;
+  const denyExchanges = request.denyExchanges ?? params.config.denyExchanges;
+  const preferExchanges =
+    request.preferExchanges ?? params.config.preferExchanges;
+  const filterConfig = {
     ...params.config,
-    allowExchanges: request.allowExchanges ?? params.config.allowExchanges,
-    denyExchanges: request.denyExchanges ?? params.config.denyExchanges,
-    preferExchanges: request.preferExchanges ?? params.config.preferExchanges,
-  });
+    ...(allowExchanges !== undefined ? { allowExchanges } : {}),
+    ...(denyExchanges !== undefined ? { denyExchanges } : {}),
+    ...(preferExchanges !== undefined ? { preferExchanges } : {}),
+  };
+  const filters =
+    filterConfig.mode === 'production'
+      ? normalizeProductionLifiExchangePolicy({
+          config: filterConfig as ProductionLifiQuoteClientConfig,
+          fieldName: 'dex.lifi',
+        }).filters
+      : normalizeLifiExchangeFilters(filterConfig);
   const query = new URLSearchParams();
   query.set('fromChain', String(request.chainId));
   query.set('toChain', String(request.chainId));
@@ -189,7 +206,10 @@ export function buildLifiQuoteUrl(params: {
   query.set('skipSimulation', 'true');
   query.set('allowDestinationCall', 'false');
   query.set('denyBridges', 'all');
-  appendCsvParam(query, 'allowExchanges', filters.allowExchanges);
+  const allowExchangeFilters = (
+    filters as { allowExchanges?: readonly string[] }
+  ).allowExchanges;
+  appendCsvParam(query, 'allowExchanges', allowExchangeFilters);
   appendCsvParam(query, 'denyExchanges', filters.denyExchanges);
   appendCsvParam(query, 'preferExchanges', filters.preferExchanges);
   const maxPriceImpact = request.maxPriceImpact ?? params.config.maxPriceImpact;

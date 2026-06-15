@@ -1,7 +1,5 @@
 import type { LifiDexConfig } from './schema';
-import {
-  normalizeLifiExchangeFilters,
-} from '../dex/lifi/filters';
+import { normalizeLifiExchangeFilters } from '../dex/lifi/filters';
 import {
   LIFI_CHAIN_POLICY_BOUNDS,
   assertValidLifiCanaryAllowlistPolicy,
@@ -158,22 +156,17 @@ export function assertValidLifiDexConfig(params: {
     );
   }
 
-  const filters = normalizeLifiExchangeFilters(lifi, {
-    fieldName: params.fieldName,
-    mode: lifi.mode,
-  });
   if (lifi.mode === 'production') {
-    if ((filters.allowExchanges ?? []).length === 0) {
-      throw new Error(
-        `${params.fieldName}.allowExchanges must be non-empty in production`
-      );
-    }
     normalizeProductionPolicyForValidation({
       config: lifi,
       fieldName: params.fieldName,
       chainId: params.chainId,
     });
   } else {
+    normalizeLifiExchangeFilters(lifi, {
+      fieldName: params.fieldName,
+      mode: lifi.mode,
+    });
     assertValidLifiCanaryAllowlistPolicy({
       config: lifi,
       fieldName: params.fieldName,
@@ -198,7 +191,10 @@ export function getLifiRequiredLiveProductionPolicyError(
   fieldName = 'config.dex.lifi'
 ): string | undefined {
   try {
-    const policy = normalizeProductionPolicyForValidation({ config, fieldName });
+    const policy = normalizeProductionPolicyForValidation({
+      config,
+      fieldName,
+    });
     if (policy.chains.length === 0) {
       return 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires at least one complete production LI.FI chain policy';
     }

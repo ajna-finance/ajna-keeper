@@ -8,7 +8,7 @@ import type { DiscoveryRpcCache } from '../../src/discovery/handlers';
 import { logger } from '../../src/logging';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../src/take/external-take/execution-plan';
 import * as lifiExecutionModule from '../../src/take/lifi/execution';
-import * as takeFactoryModule from '../../src/take/factory';
+import * as takeFactoryModule from '../../src/take/direct-dex';
 import { createDiscoveryTransports } from '../helpers/discovery';
 import {
   createHybridGasFallbackFactoryQuote,
@@ -24,7 +24,7 @@ type LifiTakeParams = Parameters<
   typeof lifiExecutionModule.takeLiquidationLifi
 >[0];
 type FactoryTakeParams = Parameters<
-  typeof takeFactoryModule.takeLiquidationFactory
+  typeof takeFactoryModule.takeLiquidationDirectDex
 >[0];
 
 describe('LI.FI discovery handlers', () => {
@@ -45,8 +45,8 @@ describe('LI.FI discovery handlers', () => {
         });
         return false;
       });
-    const takeLiquidationFactoryStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationFactory')
+    const takeLiquidationDirectDexStub = sinon
+      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation').resolves({
       isTakeable: true,
@@ -123,10 +123,11 @@ describe('LI.FI discovery handlers', () => {
             enabled: true,
             take: {
               enabled: true,
-              allowedExternalTakePaths: ['lifi', 'factory'],
+              allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+              allowedCalldataAggregatorProviders: ['lifi'],
               externalTakeRouteSelectionMode: 'maximize_profit',
-              defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-              hybridGasQuoteFailureFallbackMode: 'factory_first',
+              defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
+              hybridGasQuoteFailureFallbackMode: 'direct_dex_first',
               maxGasCostNative: 1,
             },
           },
@@ -148,7 +149,7 @@ describe('LI.FI discovery handlers', () => {
     );
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
-    expect(takeLiquidationFactoryStub.calledOnce).to.equal(true);
+    expect(takeLiquidationDirectDexStub.calledOnce).to.equal(true);
     expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
     expect(
       warnStub
@@ -166,12 +167,12 @@ describe('LI.FI discovery handlers', () => {
       factoryQuoteStub,
       lifiQuoteStub,
       takeLiquidationLifiStub,
-      takeLiquidationFactoryStub,
+      takeLiquidationDirectDexStub,
     } = await runLifiHybridGasFallbackScenario();
 
     expect(lifiQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.called).to.equal(false);
-    expect(takeLiquidationFactoryStub.calledOnce).to.equal(true);
+    expect(takeLiquidationDirectDexStub.calledOnce).to.equal(true);
     expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
   });
 
@@ -476,11 +477,10 @@ describe('LI.FI discovery handlers', () => {
     );
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
-    const approvedEvaluation =
-      getExternalTakeExecutionPlanPrimaryEvaluation(
-        takeLiquidationLifiStub.firstCall.args[0].liquidation
-          .externalTakeExecutionPlan
-      )!;
+    const approvedEvaluation = getExternalTakeExecutionPlanPrimaryEvaluation(
+      takeLiquidationLifiStub.firstCall.args[0].liquidation
+        .externalTakeExecutionPlan
+    )!;
     expect(
       approvedEvaluation.approvedMinOutRaw!.eq(expectedApprovedMinOutRaw)
     ).to.equal(true);
@@ -612,7 +612,9 @@ describe('LI.FI discovery handlers', () => {
 
     expect(lifiQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.called).to.equal(false);
-    expect(stats.externalTakeByPath.calldata_aggregator?.preBroadcastFailures).to.equal(1);
+    expect(
+      stats.externalTakeByPath.calldata_aggregator?.preBroadcastFailures
+    ).to.equal(1);
     expect(stats.externalTakeByPath.calldata_aggregator?.executed).to.equal(0);
     expect(
       warnStub
@@ -740,7 +742,7 @@ describe('LI.FI discovery handlers', () => {
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
     expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
-    expect(scenario.takeLiquidationFactoryStub.calledOnce).to.equal(true);
+    expect(scenario.takeLiquidationDirectDexStub.calledOnce).to.equal(true);
     expect(stats.hybridFallbackAttempts).to.equal(1);
     expect(stats.hybridFallbackSuccesses).to.equal(1);
     expect(
@@ -774,8 +776,10 @@ describe('LI.FI discovery handlers', () => {
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
     expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.called).to.equal(false);
-    expect(scenario.takeLiquidationFactoryStub.calledOnce).to.equal(true);
-    expect(stats.externalTakeByPath.calldata_aggregator?.preBroadcastFailures).to.equal(1);
+    expect(scenario.takeLiquidationDirectDexStub.calledOnce).to.equal(true);
+    expect(
+      stats.externalTakeByPath.calldata_aggregator?.preBroadcastFailures
+    ).to.equal(1);
     expect(stats.hybridFallbackAttempts).to.equal(1);
     expect(stats.hybridFallbackSuccesses).to.equal(1);
     expect(
@@ -798,7 +802,7 @@ describe('LI.FI discovery handlers', () => {
       refreshedCollateral,
       refreshedAuctionPrice,
     });
-    scenario.takeLiquidationFactoryStub.callsFake(
+    scenario.takeLiquidationDirectDexStub.callsFake(
       async (params: FactoryTakeParams) => {
         params.config.onFactoryExecutionFailure?.({
           preBroadcast: true,
@@ -815,7 +819,7 @@ describe('LI.FI discovery handlers', () => {
 
     expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
-    expect(scenario.takeLiquidationFactoryStub.calledOnce).to.equal(true);
+    expect(scenario.takeLiquidationDirectDexStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
     expect(stats.hybridFallbackAttempts).to.equal(1);
     expect(stats.hybridFallbackSuccesses).to.equal(1);
@@ -852,7 +856,7 @@ describe('LI.FI discovery handlers', () => {
     const stats = await handleDiscoveredTakeTarget(scenario.params);
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
-    expect(scenario.takeLiquidationFactoryStub.called).to.equal(false);
+    expect(scenario.takeLiquidationDirectDexStub.called).to.equal(false);
     expect(stats.hybridFallbackAttempts).to.equal(0);
     expect(stats.hybridFallbackSuccesses).to.equal(0);
   });

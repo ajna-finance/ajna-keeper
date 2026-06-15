@@ -88,7 +88,7 @@ type FixtureSummary = {
     };
     expectedExecutionFeeTier?: number;
     deployment: {
-      keeperTakerFactory: string;
+      keeperTakerRouter: string;
       uniswapV3Taker: string;
     };
   };
@@ -101,7 +101,7 @@ type FixtureSummary = {
 };
 
 function usage() {
-  return `Usage: ts-node scripts/run-fixture-keeper-harness.ts --summary /path/to/fixture-summary.json [--mode manual|discovery] [--hybrid-gas-quote-fallback disabled|factory_first] [--dry-run] [--state-only] [--auto-warp-to-take] [--take-warp-seconds N] [--max-take-warps N]\n\nRequired env:\n- AJNA_AGENT_KEEPER_KEY\n\nOptional env:\n- AJNA_AGENT_HARNESS_OUTPUT_PATH\n`;
+  return `Usage: ts-node scripts/run-fixture-keeper-harness.ts --summary /path/to/fixture-summary.json [--mode manual|discovery] [--hybrid-gas-quote-fallback disabled|direct_dex_first] [--dry-run] [--state-only] [--auto-warp-to-take] [--take-warp-seconds N] [--max-take-warps N]\n\nRequired env:\n- AJNA_AGENT_KEEPER_KEY\n\nOptional env:\n- AJNA_AGENT_HARNESS_OUTPUT_PATH\n`;
 }
 
 // Defaults calibrated against the verified 1-day/3-day local-fixture
@@ -158,7 +158,7 @@ async function sendLocalEvmControl(
 function parseArgs(argv: string[]) {
   let summaryPath: string | undefined;
   let mode: 'manual' | 'discovery' = 'manual';
-  let hybridGasQuoteFailureFallbackMode: 'disabled' | 'factory_first' =
+  let hybridGasQuoteFailureFallbackMode: 'disabled' | 'direct_dex_first' =
     'disabled';
   let dryRun = false;
   let stateOnly = false;
@@ -184,9 +184,9 @@ function parseArgs(argv: string[]) {
     }
     if (arg === '--hybrid-gas-quote-fallback') {
       const value = argv[i + 1];
-      if (value !== 'disabled' && value !== 'factory_first') {
+      if (value !== 'disabled' && value !== 'direct_dex_first') {
         throw new Error(
-          '--hybrid-gas-quote-fallback must be disabled or factory_first'
+          '--hybrid-gas-quote-fallback must be disabled or direct_dex_first'
         );
       }
       hybridGasQuoteFailureFallbackMode = value;
@@ -334,7 +334,7 @@ async function runDiscoveredTakeAttempt(params: {
   keeper: Wallet;
   provider: ethers.providers.JsonRpcProvider;
   dryRun: boolean;
-  hybridGasQuoteFailureFallbackMode: 'disabled' | 'factory_first';
+  hybridGasQuoteFailureFallbackMode: 'disabled' | 'direct_dex_first';
   policyArtifact: PolicyArtifact;
   liquidationStatus?: Awaited<ReturnType<typeof getLiquidationStatus>> | null;
   routeDecisionEvents: RouteDecisionEvent[];
@@ -396,7 +396,7 @@ async function runDiscoveredTakeAttempt(params: {
           enabled: true,
           allowedExternalTakePaths:
             params.policyArtifact.allowedExternalTakePaths,
-          defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+          defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
           allowedLiquiditySources: liquiditySourceLabelsToValues(
             params.policyArtifact.allowedLiquiditySources
           ),
@@ -405,14 +405,12 @@ async function runDiscoveredTakeAttempt(params: {
           hybridGasQuoteFailureFallbackMode:
             params.hybridGasQuoteFailureFallbackMode,
           maxGasCostNative: params.policyArtifact.maxGasCostNative,
-          minExpectedProfitQuote:
-            params.policyArtifact.minExpectedProfitQuote,
+          minExpectedProfitQuote: params.policyArtifact.minExpectedProfitQuote,
           oneInchQuoteTimeoutMs: 25,
           externalTakeProbeTimeoutMs: 1000,
           maxConcurrentCandidateEvaluations:
             params.policyArtifact.maxConcurrentCandidateEvaluations,
-          maxInFlightRouteProbes:
-            params.policyArtifact.maxInFlightRouteProbes,
+          maxInFlightRouteProbes: params.policyArtifact.maxInFlightRouteProbes,
           maxExecutionsPerPoolPerRun:
             params.policyArtifact.maxExecutionsPerPoolPerRun,
           takeRouteQuoteBudgetPerCandidate:
@@ -420,8 +418,7 @@ async function runDiscoveredTakeAttempt(params: {
           takeQuoteBudgetPerRun: params.policyArtifact.takeQuoteBudgetPerRun,
         },
       },
-      keeperTaker: uniswapV3ExternalTake.deployment.uniswapV3Taker,
-      keeperTakerFactory: uniswapV3ExternalTake.deployment.keeperTakerFactory,
+      keeperTakerRouter: uniswapV3ExternalTake.deployment.keeperTakerRouter,
       uniswapV3RouterOverrides: uniswapV3ExternalTake.routerConfig,
       tokenAddresses: {
         weth: uniswapV3ExternalTake.routerConfig.wethAddress,
@@ -609,7 +606,7 @@ async function main() {
                 selectedDeploymentFromManualConfig:
                   routeArtifact.factoryRegistryAddress ===
                     summary.uniswapV3ExternalTake.deployment
-                      .keeperTakerFactory &&
+                      .keeperTakerRouter &&
                   routeArtifact.selectedTakerAddress ===
                     summary.uniswapV3ExternalTake.deployment.uniswapV3Taker,
                 lifiNoBroadcastPolicyContextResolved: true,
@@ -695,18 +692,18 @@ async function main() {
       takeAttempts += 1;
       if (mode === 'discovery') {
         const attempt = await runDiscoveredTakeAttempt({
-            pool,
-            summary,
-            keeper,
-            provider,
-            dryRun,
-            hybridGasQuoteFailureFallbackMode,
-            policyArtifact,
-            liquidationStatus: liquidationStatusAfterTake,
-            routeDecisionEvents,
-            routeSkipEvents,
-            targetOverride: configTargetOverride,
-          });
+          pool,
+          summary,
+          keeper,
+          provider,
+          dryRun,
+          hybridGasQuoteFailureFallbackMode,
+          policyArtifact,
+          liquidationStatus: liquidationStatusAfterTake,
+          routeDecisionEvents,
+          routeSkipEvents,
+          targetOverride: configTargetOverride,
+        });
         discoveryStats.push(attempt.stats);
         lastRpcCacheStats = attempt.rpcCacheStats;
       } else {
@@ -717,8 +714,8 @@ async function main() {
           config: {
             dryRun,
             subgraphUrl: FIXTURE_SUBGRAPH_SENTINEL_URL,
-            keeperTakerFactory:
-              summary.uniswapV3ExternalTake.deployment.keeperTakerFactory,
+            keeperTakerRouter:
+              summary.uniswapV3ExternalTake.deployment.keeperTakerRouter,
             takerContracts: {
               UniswapV3:
                 summary.uniswapV3ExternalTake.deployment.uniswapV3Taker,
@@ -781,7 +778,7 @@ async function main() {
       provider,
       fromBlockExclusive: blockBeforeTake,
       factoryAddress:
-        summary.uniswapV3ExternalTake.deployment.keeperTakerFactory,
+        summary.uniswapV3ExternalTake.deployment.keeperTakerRouter,
       keeperAddress: keeper.address,
     });
     const approvalArtifact = await finalizeApprovalChecks({
@@ -840,7 +837,7 @@ async function main() {
           ? {
               selectedDeploymentFromManualConfig:
                 routeArtifact.factoryRegistryAddress ===
-                  summary.uniswapV3ExternalTake.deployment.keeperTakerFactory &&
+                  summary.uniswapV3ExternalTake.deployment.keeperTakerRouter &&
                 routeArtifact.selectedTakerAddress ===
                   summary.uniswapV3ExternalTake.deployment.uniswapV3Taker,
               lifiNoBroadcastPolicyContextResolved: true,
@@ -854,9 +851,9 @@ async function main() {
         collateralReduced: collateralReducedByTake,
         debtReducedOrNoCollateralRemaining:
           hasDebtReducedOrNoCollateralRemaining({
-          before: liquidationStatusAfterKick,
-          after: liquidationStatusAfterTake,
-        }),
+            before: liquidationStatusAfterKick,
+            after: liquidationStatusAfterTake,
+          }),
         blockBeforeTake,
         blockAfterTake,
       },

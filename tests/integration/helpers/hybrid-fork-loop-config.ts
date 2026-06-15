@@ -53,7 +53,7 @@ export const HYBRID_FORK_CONFIG_ENV = 'AJNA_AGENT_HYBRID_FORK_CONFIG';
 export const DEFAULT_BASE_WETH_USDC_POOL =
   '0x0b17159f2486f669a1f930926638008e2ccb4287';
 export const DEFAULT_HYBRID_EXTERNAL_TAKE_PATHS: ConfiguredExternalTakePathKind[] =
-  ['oneinch', 'factory', 'lifi'];
+  ['calldata_aggregator', 'direct_dex'];
 
 export function optionalHybridEnv(
   env: HybridForkEnv,
@@ -144,12 +144,13 @@ export function parseHybridPaths(
     .split(',')
     .map((value) => value.trim().toLowerCase())
     .filter((value) => value.length > 0);
-  const valid = parsed.filter((value): value is ConfiguredExternalTakePathKind =>
-    (DEFAULT_HYBRID_EXTERNAL_TAKE_PATHS as string[]).includes(value)
+  const valid = parsed.filter(
+    (value): value is ConfiguredExternalTakePathKind =>
+      (DEFAULT_HYBRID_EXTERNAL_TAKE_PATHS as string[]).includes(value)
   );
   if (valid.length === 0 || valid.length !== parsed.length) {
     throw new Error(
-      'AJNA_AGENT_HYBRID_PATHS must be a non-empty CSV subset of: oneinch,factory,lifi'
+      'AJNA_AGENT_HYBRID_PATHS must be a non-empty CSV subset of: calldata_aggregator,direct_dex'
     );
   }
   return valid;
@@ -158,10 +159,10 @@ export function parseHybridPaths(
 export function defaultSourceForHybridPaths(
   paths: readonly ConfiguredExternalTakePathKind[]
 ): LiquiditySource {
-  if (paths.includes('factory')) {
+  if (paths.includes('direct_dex')) {
     return LiquiditySource.UNISWAPV3;
   }
-  if (paths.includes('lifi')) {
+  if (paths.includes('calldata_aggregator')) {
     return LiquiditySource.LIFI;
   }
   return LiquiditySource.ONEINCH;
@@ -240,7 +241,7 @@ export function shouldRunLifiCallbackProof(
   env: HybridForkEnv = process.env
 ): boolean {
   return (
-    fixture.paths.includes('lifi') &&
+    fixture.paths.includes('calldata_aggregator') &&
     env.AJNA_AGENT_HYBRID_LIFI_CALLBACK_PROOF === 'true'
   );
 }
@@ -258,11 +259,11 @@ export function buildForcedDiscoveryPolicy(
     externalTakeProbeTimeoutMs: 8000,
     oneInchQuoteTimeoutMs: 8000,
   };
-  if (paths.includes('factory')) {
-    take.defaultFactoryLiquiditySource = LiquiditySource.UNISWAPV3;
+  if (paths.includes('direct_dex')) {
+    take.defaultDirectDexLiquiditySource = LiquiditySource.UNISWAPV3;
     take.allowedLiquiditySources = [LiquiditySource.UNISWAPV3];
   }
-  if (paths.includes('lifi')) {
+  if (paths.includes('calldata_aggregator')) {
     take.dexGasOverrides = { [LiquiditySource.LIFI]: '900000' };
   }
   return {

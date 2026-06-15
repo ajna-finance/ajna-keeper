@@ -1,6 +1,6 @@
 import { BigNumber, constants } from 'ethers';
 import { ExternalTakePathKind } from '../config/schema';
-import { isAggregatorExternalTakePath } from '../config/external-take-registry';
+import { isAggregatorExternalTakePath } from '../config/external-take-descriptors';
 import { AuctionTakeFacts } from './types';
 
 /**

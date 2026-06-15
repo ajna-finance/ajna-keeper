@@ -24,27 +24,31 @@ function expectManualDeploymentType<
 
 describe('manual take context helpers', () => {
   it('resolves manual external take deployments from source-specific config', () => {
-    expect(
-      resolveManualTakeDeployment({
-        poolConfig: { take: { liquiditySource: LiquiditySource.ONEINCH } },
-        config: { keeperTaker: '0xoneinch' },
-      }).deploymentType
-    ).to.equal('oneinch');
+    const oneInchDeployment = resolveManualTakeDeployment({
+      poolConfig: { take: { liquiditySource: LiquiditySource.ONEINCH } },
+      config: {
+        keeperTakerRouter: '0xfactory',
+        takerContracts: { OneInchAggregator: '0xoneinch' },
+      },
+    });
+    expectManualDeploymentType(oneInchDeployment, 'calldata_aggregator');
+    expect(oneInchDeployment.providerId).to.equal('oneinch');
+    expect(oneInchDeployment.resolvedTakerAddress).to.equal('0xoneinch');
 
     expect(
       resolveManualTakeDeployment({
         poolConfig: { take: { liquiditySource: LiquiditySource.UNISWAPV3 } },
         config: {
-          keeperTakerFactory: '0xfactory',
+          keeperTakerRouter: '0xfactory',
           takerContracts: { UniswapV3: '0xuniswap' },
         },
       }).deploymentType
-    ).to.equal('factory');
+    ).to.equal('direct_dex');
 
     const lifiDeployment = resolveManualTakeDeployment({
       poolConfig: { take: { liquiditySource: LiquiditySource.LIFI } },
       config: {
-        keeperTakerFactory: '0xfactory',
+        keeperTakerRouter: '0xfactory',
         takerContracts: { Lifi: '0xlifi' },
       },
     });
@@ -54,7 +58,7 @@ describe('manual take context helpers', () => {
     const lifiWithoutCanonicalTaker = resolveManualTakeDeployment({
       poolConfig: { take: { liquiditySource: LiquiditySource.LIFI } },
       config: {
-        keeperTakerFactory: '0xfactory',
+        keeperTakerRouter: '0xfactory',
       },
     });
     expectManualDeploymentType(lifiWithoutCanonicalTaker, 'none');
@@ -67,7 +71,7 @@ describe('manual take context helpers', () => {
     const resolution = resolveManualTakeDeployment({
       poolConfig: { take: { liquiditySource: LiquiditySource.UNISWAPV3 } },
       config: {
-        keeperTakerFactory: '0xfactory',
+        keeperTakerRouter: '0xfactory',
         takerContracts: { Lifi: '0xlifi' },
       },
     });
@@ -84,7 +88,7 @@ describe('manual take context helpers', () => {
       runtime: { dryRun: true },
       network: { tokenAddresses: {} },
       takers: {
-        factory: '0x0000000000000000000000000000000000000001',
+        router: '0x0000000000000000000000000000000000000001',
         contracts: {
           UniswapV3: '0x0000000000000000000000000000000000000002',
         },
@@ -104,8 +108,8 @@ describe('manual take context helpers', () => {
       config: executionConfig,
     });
 
-    expect(context.deploymentResolution.deploymentType).to.equal('factory');
-    expect(context.context.externalTakeAdapter.kind).to.equal('factory');
+    expect(context.deploymentResolution.deploymentType).to.equal('direct_dex');
+    expect(context.context.externalTakeAdapter.kind).to.equal('direct_dex');
   });
 
   it('resolves manual take runtime context through deployment-aware fallback', () => {
@@ -116,11 +120,12 @@ describe('manual take context helpers', () => {
           take: { liquiditySource: LiquiditySource.ONEINCH },
         } as any,
         config: {
-          keeperTaker: '0xkeeper',
+          keeperTakerRouter: '0xfactory',
+          takerContracts: { OneInchAggregator: '0xkeeper' },
           oneInchRouters: { 1: '0xrouter' },
         },
       }).context.externalTakeAdapter.kind
-    ).to.equal('oneinch');
+    ).to.equal('calldata_aggregator');
 
     expect(
       resolveManualTakeContext({
@@ -129,11 +134,11 @@ describe('manual take context helpers', () => {
           take: { liquiditySource: LiquiditySource.UNISWAPV3 },
         } as any,
         config: {
-          keeperTakerFactory: '0xfactory',
+          keeperTakerRouter: '0xfactory',
           takerContracts: { UniswapV3: '0xuniswap' },
         },
       }).context.externalTakeAdapter.kind
-    ).to.equal('factory');
+    ).to.equal('direct_dex');
 
     expect(
       resolveManualTakeContext({
@@ -142,7 +147,7 @@ describe('manual take context helpers', () => {
           take: { liquiditySource: LiquiditySource.LIFI },
         } as any,
         config: {
-          keeperTakerFactory: '0xfactory',
+          keeperTakerRouter: '0xfactory',
           takerContracts: { Lifi: '0xlifi' },
         },
       }).context.externalTakeAdapter.kind
@@ -168,7 +173,7 @@ describe('manual take context helpers', () => {
         },
       } as any,
       config: {
-        keeperTakerFactory: '0xfactory',
+        keeperTakerRouter: '0xfactory',
       },
     });
 
@@ -199,7 +204,7 @@ describe('manual take context helpers', () => {
         poolName: 'LI.FI pool',
       })
     ).to.equal(
-      'Manual LI.FI external take context starting for pool: LI.FI pool'
+      'Manual calldata_aggregator external take context starting for pool: LI.FI pool'
     );
   });
 
@@ -210,14 +215,14 @@ describe('manual take context helpers', () => {
         poolName: 'LI.FI pool',
       })
     ).to.equal(
-      'Using manual LI.FI external take strategy for pool: LI.FI pool'
+      'Using manual calldata_aggregator external take strategy for pool: LI.FI pool'
     );
   });
 
   it('formats manual deployment resolution and fallback logs from one model', () => {
     const missingDeployment = resolveManualTakeDeployment({
       poolConfig: { take: { liquiditySource: LiquiditySource.UNISWAPV3 } },
-      config: { keeperTakerFactory: '0xfactory' },
+      config: { keeperTakerRouter: '0xfactory' },
     });
 
     expect(
@@ -264,7 +269,7 @@ describe('manual take context helpers', () => {
     );
   });
 
-  it('builds the manual 1inch adapter only for 1inch pools', () => {
+  it('builds the manual 1inch aggregator adapter only for router-registered 1inch pools', () => {
     const oneInchContext = resolveManualTakeContext({
       poolConfig: {
         name: '1inch pool',
@@ -274,11 +279,14 @@ describe('manual take context helpers', () => {
         dryRun: true,
         connectorTokens: ['0xconnector'],
         oneInchRouters: { 1: '0xrouter' },
-        keeperTaker: '0xkeeper',
+        keeperTakerRouter: '0xfactory',
+        takerContracts: { OneInchAggregator: '0xkeeper' },
       },
     }).context;
 
-    expect(oneInchContext.externalTakeAdapter.kind).to.equal('oneinch');
+    expect(oneInchContext.externalTakeAdapter.kind).to.equal(
+      'calldata_aggregator'
+    );
 
     const arbOnlyContext = resolveManualTakeContext({
       poolConfig: {
@@ -289,7 +297,6 @@ describe('manual take context helpers', () => {
         dryRun: true,
         connectorTokens: ['0xconnector'],
         oneInchRouters: { 1: '0xrouter' },
-        keeperTaker: '0xkeeper',
       },
     }).context;
 
@@ -304,7 +311,7 @@ describe('manual take context helpers', () => {
       } as any,
       config: {
         dryRun: true,
-        keeperTakerFactory: '0xfactory',
+        keeperTakerRouter: '0xfactory',
         takerContracts: { UniswapV3: '0xuniswap' },
         uniswapV3RouterOverrides: { swapRouter02Address: '0xswaprouter02' },
         curveRouterOverrides: {
@@ -319,9 +326,9 @@ describe('manual take context helpers', () => {
       },
     }).context;
 
-    expect(context.externalTakeAdapter.kind).to.equal('factory');
+    expect(context.externalTakeAdapter.kind).to.equal('direct_dex');
     expect(context.externalExecutionConfig).to.deep.include({
-      keeperTakerFactory: '0xfactory',
+      keeperTakerRouter: '0xfactory',
     });
     expect(context.foundLogLevel).to.equal('debug');
   });
@@ -334,7 +341,7 @@ describe('manual take context helpers', () => {
       } as any,
       config: {
         dryRun: true,
-        keeperTakerFactory: '0xfactory',
+        keeperTakerRouter: '0xfactory',
         lifi: { mode: 'canary' },
         takerContracts: { Lifi: '0xlifi' },
       },
@@ -342,7 +349,7 @@ describe('manual take context helpers', () => {
 
     expect(context.externalTakeAdapter.kind).to.equal('calldata_aggregator');
     expect(context.externalExecutionConfig).to.deep.include({
-      keeperTakerFactory: '0xfactory',
+      keeperTakerRouter: '0xfactory',
       lifi: { mode: 'canary' },
       lifiTaker: '0xlifi',
     });
@@ -358,7 +365,7 @@ describe('manual take context helpers', () => {
       } as any,
       config: {
         dryRun: true,
-        keeperTakerFactory: '0xfactory',
+        keeperTakerRouter: '0xfactory',
         lifiTaker: '0x1111111111111111111111111111111111111111',
         takerContracts: {
           Lifi: '0x2222222222222222222222222222222222222222',

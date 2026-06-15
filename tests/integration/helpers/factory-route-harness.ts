@@ -11,19 +11,19 @@ import {
 import {
   createFactoryQuoteProviderRuntimeCache,
   FactoryExecutionConfig,
-  takeLiquidationFactory,
-} from '../../../src/take/factory';
-import { deriveApprovedMinOutRaw } from '../../../src/take/factory/shared';
-import { ApprovedFactoryQuoteEvaluation } from '../../../src/take/types';
+  takeLiquidationDirectDex,
+} from '../../../src/take/direct-dex';
+import { deriveApprovedMinOutRaw } from '../../../src/take/direct-dex/shared';
+import { ApprovedDirectDexQuoteEvaluation } from '../../../src/take/types';
 import { RequireFields } from '../../../src/utils';
 import { setBalance } from '../test-utils';
 import { singleExternalTakeExecutionPlan } from '../../helpers/external-take-plan';
-import { AjnaKeeperTakerFactory } from '../../../typechain-types/contracts/factories';
+import { TakerRouter } from '../../../typechain-types/contracts/factories';
 import {
   CurveKeeperTaker,
   UniswapV3KeeperTaker,
 } from '../../../typechain-types/contracts/takers';
-import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import {
   CurveKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
@@ -70,7 +70,7 @@ export interface FactoryHarness {
   collateralToken: MockERC20;
   quoteToken: MockERC20;
   pool: MockAtomicSwapPool;
-  factory: AjnaKeeperTakerFactory;
+  factory: TakerRouter;
   uniswapTaker: UniswapV3KeeperTaker;
   curveTaker: CurveKeeperTaker;
   quoteAmountDue: BigNumber;
@@ -125,7 +125,7 @@ export async function deployFactoryHarness(options?: {
     pool.address
   );
 
-  const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+  const factory = await new TakerRouter__factory(owner).deploy(
     poolDeployer.address
   );
   await factory.deployed();
@@ -241,7 +241,7 @@ async function expectFactoryStateUnchanged(
   ).to.be.true;
 }
 
-export function buildApprovedFactoryQuoteEvaluation(params: {
+export function buildApprovedDirectDexQuoteEvaluation(params: {
   source: LiquiditySource;
   quoteAmountRaw: BigNumber;
   routeMinOutRaw: BigNumber;
@@ -254,7 +254,7 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
     tokenInIndex: number;
     tokenOutIndex: number;
   };
-}): ApprovedFactoryQuoteEvaluation & { routeExecutionFloorRaw: BigNumber } {
+}): ApprovedDirectDexQuoteEvaluation & { routeExecutionFloorRaw: BigNumber } {
   const approvedMinOutRaw =
     params.approvedMinOutRaw ??
     deriveApprovedMinOutRaw({
@@ -267,7 +267,7 @@ export function buildApprovedFactoryQuoteEvaluation(params: {
 
   const base = {
     isTakeable: true as const,
-    externalTakePath: 'factory' as const,
+    externalTakePath: 'direct_dex' as const,
     quoteAmountRaw: params.quoteAmountRaw,
     routeMinOutRaw: params.routeMinOutRaw,
     profitMinOutRaw: params.profitMinOutRaw,
@@ -444,11 +444,12 @@ async function expectRejectedFactoryExecutionWithPreparedRoute(
 
   const config: FactoryExecutionConfig = {
     dryRun: false,
-    keeperTakerFactory: factory.address,
+    keeperTakerRouter: factory.address,
     runtimeCache: createFactoryQuoteProviderRuntimeCache(),
     ...route.configOverrides,
   };
-  const executionFailures: Array<{ preBroadcast: boolean; error?: string }> = [];
+  const executionFailures: Array<{ preBroadcast: boolean; error?: string }> =
+    [];
   config.onFactoryExecutionFailure = (failure) => {
     executionFailures.push(failure);
   };
@@ -465,7 +466,7 @@ async function expectRejectedFactoryExecutionWithPreparedRoute(
     quoteToken,
     takerAddress: route.takerAddress,
   });
-  const quoteEvaluation = buildApprovedFactoryQuoteEvaluation({
+  const quoteEvaluation = buildApprovedDirectDexQuoteEvaluation({
     source: params.source,
     quoteAmountRaw: params.quoteAmountRaw,
     routeMinOutRaw: params.routeMinOutRaw,
@@ -478,7 +479,7 @@ async function expectRejectedFactoryExecutionWithPreparedRoute(
     curvePool: route.curvePool,
   });
 
-  const executed = await takeLiquidationFactory({
+  const executed = await takeLiquidationDirectDex({
     pool: asFungiblePool(poolView),
     poolConfig: buildFactoryTakePoolConfig(poolView, params.source),
     signer: owner,
@@ -489,9 +490,8 @@ async function expectRejectedFactoryExecutionWithPreparedRoute(
       auctionPrice: AUCTION_PRICE,
       isTakeable: true,
       isArbTakeable: false,
-      externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
-        quoteEvaluation
-      ),
+      externalTakeExecutionPlan:
+        singleExternalTakeExecutionPlan(quoteEvaluation),
     },
     config,
   });

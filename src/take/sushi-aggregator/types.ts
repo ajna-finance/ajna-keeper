@@ -13,7 +13,7 @@ export interface SushiAggregatorExecutionConfig
   extends SushiAggregatorQuoteConfig,
     TakeWriteTransportConfig {
   dryRun?: boolean;
-  keeperTakerFactory?: string;
+  keeperTakerRouter?: string;
   onSushiAggregatorQuoteResult?: (result: {
     success: boolean;
     retryable?: boolean;

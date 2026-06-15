@@ -13,7 +13,7 @@ export interface LifiExecutionConfig
   extends LifiQuoteConfig,
     TakeWriteTransportConfig {
   dryRun?: boolean;
-  keeperTakerFactory?: string;
+  keeperTakerRouter?: string;
   onLifiQuoteResult?: (result: {
     success: boolean;
     retryable?: boolean;

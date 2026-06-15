@@ -55,10 +55,10 @@ export async function validateSushiAggregatorFactorySupport(params: {
   provider: providers.Provider;
   errors: string[];
 }): Promise<void> {
-  const factoryAddress = params.config.takers?.factory;
+  const factoryAddress = params.config.takers?.router;
   if (!factoryAddress) {
     params.errors.push(
-      'Sushi aggregator preflight: takers.factory is not configured'
+      'Sushi aggregator preflight: takers.router is not configured'
     );
     return;
   }

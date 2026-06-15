@@ -47,7 +47,7 @@ const DEFAULT_BASE_FORK_BLOCK = 'latest';
 let hardhatNode;
 
 function usage() {
-  return `Usage: node scripts/run-no-spend-validation.mjs [--port N] [--base-fork-block N|latest] [--scenario NAME] [--mode discovery|manual] [--expect success|skip] [--dry-run-only] [--hybrid-gas-quote-fallback disabled|factory_first] [--run-config-smoke] [--run-daemon-smoke] [--daemon-smoke-only] [--expected-fee-tier N] [--output /path/report.json]
+  return `Usage: node scripts/run-no-spend-validation.mjs [--port N] [--base-fork-block N|latest] [--scenario NAME] [--mode discovery|manual] [--expect success|skip] [--dry-run-only] [--hybrid-gas-quote-fallback disabled|direct_dex_first] [--run-config-smoke] [--run-daemon-smoke] [--daemon-smoke-only] [--expected-fee-tier N] [--output /path/report.json]
 
 Runs a no-spend Base fork replay:
 1. starts a local Base fork
@@ -83,11 +83,10 @@ function parseArgs(argv) {
     dryRunOnly: process.env.AJNA_AGENT_NO_SPEND_DRY_RUN_ONLY === '1',
     hybridGasQuoteFallback:
       process.env.AJNA_AGENT_NO_SPEND_HYBRID_GAS_QUOTE_FALLBACK ??
-      'factory_first',
+      'direct_dex_first',
     runConfigSmoke: process.env.AJNA_AGENT_NO_SPEND_CONFIG_SMOKE === '1',
     runDaemonSmoke: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE === '1',
-    daemonSmokeOnly:
-      process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE_ONLY === '1',
+    daemonSmokeOnly: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE_ONLY === '1',
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
       ? Number(process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER)
       : undefined,
@@ -170,23 +169,25 @@ function parseArgs(argv) {
   }
   if (
     options.baseForkBlock !== 'latest' &&
-    (!/^\d+$/.test(options.baseForkBlock) ||
-      Number(options.baseForkBlock) <= 0)
+    (!/^\d+$/.test(options.baseForkBlock) || Number(options.baseForkBlock) <= 0)
   ) {
     throw new Error('--base-fork-block must be a positive integer or latest');
   }
   if (options.harnessMode !== 'discovery' && options.harnessMode !== 'manual') {
     throw new Error('--mode must be discovery or manual');
   }
-  if (options.expectedResult !== 'success' && options.expectedResult !== 'skip') {
+  if (
+    options.expectedResult !== 'success' &&
+    options.expectedResult !== 'skip'
+  ) {
     throw new Error('--expect must be success or skip');
   }
   if (
     options.hybridGasQuoteFallback !== 'disabled' &&
-    options.hybridGasQuoteFallback !== 'factory_first'
+    options.hybridGasQuoteFallback !== 'direct_dex_first'
   ) {
     throw new Error(
-      '--hybrid-gas-quote-fallback must be disabled or factory_first'
+      '--hybrid-gas-quote-fallback must be disabled or direct_dex_first'
     );
   }
   if (
@@ -204,17 +205,20 @@ function parseArgs(argv) {
 
 function startHardhatNode(params) {
   const logStream = fs.createWriteStream(params.logPath, { flags: 'a' });
-  const nodeEnv = withNoEgressGuard(baseChildEnv({
-    FORK_NETWORK: 'base',
-    HARDHAT_CHAIN_ID: '8453',
-    BASE_FORK_BLOCK: String(params.resolvedForkBlockNumber),
-    AJNA_AGENT_RPC_URL: params.forkRpcUrl,
-    AJNA_RPC_URL_BASE: params.forkRpcUrl,
-    BASE_RPC_URL: params.forkRpcUrl,
-  }), {
-    allowedHosts: params.allowedHosts,
-    reportPath: params.egressReportPath,
-  });
+  const nodeEnv = withNoEgressGuard(
+    baseChildEnv({
+      FORK_NETWORK: 'base',
+      HARDHAT_CHAIN_ID: '8453',
+      BASE_FORK_BLOCK: String(params.resolvedForkBlockNumber),
+      AJNA_AGENT_RPC_URL: params.forkRpcUrl,
+      AJNA_RPC_URL_BASE: params.forkRpcUrl,
+      BASE_RPC_URL: params.forkRpcUrl,
+    }),
+    {
+      allowedHosts: params.allowedHosts,
+      reportPath: params.egressReportPath,
+    }
+  );
 
   const child = spawn(
     process.execPath,
@@ -319,9 +323,7 @@ function assertFixtureSummary(summary) {
     'Uniswap seeding status recorded as seeded'
   );
   requireInvariant(
-    ['deployed', 'reused'].includes(
-      summary.stages?.deployExternalTake?.mode
-    ),
+    ['deployed', 'reused'].includes(summary.stages?.deployExternalTake?.mode),
     'external-take factory/taker deployed or reused'
   );
   requireInvariant(
@@ -329,12 +331,11 @@ function assertFixtureSummary(summary) {
     'final kick status is kicked or already_active'
   );
   requireInvariant(
-    summary.uniswapV3ExternalTake?.routeShapeVerification?.status ===
-      'passed',
+    summary.uniswapV3ExternalTake?.routeShapeVerification?.status === 'passed',
     'route-shape verification passed'
   );
   requireInvariant(
-    typeof summary.uniswapV3ExternalTake?.deployment?.keeperTakerFactory ===
+    typeof summary.uniswapV3ExternalTake?.deployment?.keeperTakerRouter ===
       'string',
     'keeper taker factory address recorded'
   );
@@ -385,7 +386,11 @@ function assertSuccessfulDryRunReport(report, options) {
       report,
       'dryRunExternalTakes'
     );
-    const dryRunFactoryPathTakes = sumPathCounter(report, 'factory', 'dryRun');
+    const dryRunFactoryPathTakes = sumPathCounter(
+      report,
+      'direct_dex',
+      'dryRun'
+    );
     if (dryRunExternalTakes < 1 || dryRunFactoryPathTakes < 1) {
       throw new Error(
         `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} factoryDryRuns=${dryRunFactoryPathTakes}`
@@ -393,7 +398,7 @@ function assertSuccessfulDryRunReport(report, options) {
     }
   }
   requireInvariant(
-    report.routeArtifact?.selectedPath === 'factory',
+    report.routeArtifact?.selectedPath === 'direct_dex',
     'dry-run routeArtifact selected factory path'
   );
   requireInvariant(
@@ -455,7 +460,7 @@ function assertExecutionReport(report, options) {
     );
     const executedFactoryPathTakes = sumPathCounter(
       report,
-      'factory',
+      'direct_dex',
       'executed'
     );
     if (executedExternalTakes < 1 || executedFactoryPathTakes < 1) {
@@ -465,7 +470,7 @@ function assertExecutionReport(report, options) {
     }
   }
   requireInvariant(
-    report.routeArtifact?.selectedPath === 'factory',
+    report.routeArtifact?.selectedPath === 'direct_dex',
     'execution routeArtifact selected factory path'
   );
   requireInvariant(
@@ -541,8 +546,7 @@ function assertConfigArtifact(report) {
       artifact.manualFactoryResolvedThroughExecutionConfig,
     wrongDeploymentPoolSkipped: artifact.wrongDeploymentPoolSkipped,
     hydrationCooldownRecorded: artifact.hydrationCooldownRecorded,
-    hydrationCooldownPreventedRepeat:
-      artifact.hydrationCooldownPreventedRepeat,
+    hydrationCooldownPreventedRepeat: artifact.hydrationCooldownPreventedRepeat,
   })) {
     requireInvariant(value === true, `config smoke ${field}`);
   }
@@ -559,48 +563,50 @@ function fixtureEnv(params) {
     }
   }
   const expectedFeeTierEnv =
-    params.expectedFeeTier ??
-    process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER;
+    params.expectedFeeTier ?? process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER;
 
-  const env = withNoEgressGuard(baseChildEnv({
-    ...optionalRepoEnv,
-    AJNA_AGENT_RPC_URL: params.rpcUrl,
-    AJNA_RPC_URL_BASE: params.rpcUrl,
-    AJNA_AGENT_KEEPER_KEY: HARDHAT_DEFAULT_KEEPER_KEY,
-    AJNA_AGENT_KEY_FILE: params.keyFilePath,
-    AJNA_AGENT_OUTPUT_PATH: params.summaryPath,
-    AJNA_AGENT_ALLOW_EVM_TIME_TRAVEL: 'yes',
-    AJNA_AGENT_FINAL_KICK: 'yes',
-    AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE: '1',
-    AJNA_AGENT_PROFILE: 'realistic-1d',
-    AJNA_AGENT_FUND_NATIVE_GAS: 'yes',
-    AJNA_AGENT_CREATE_POOL: 'yes',
-    AJNA_AGENT_DEPLOY_TOKENS: 'yes',
-    AJNA_AGENT_TRANSFER_TOKENS: 'yes',
-    AJNA_AGENT_SEED_UNISWAP: 'yes',
-    AJNA_AGENT_DEPLOY_EXTERNAL_TAKE: 'yes',
-    AJNA_AGENT_UNISWAP_LIQUIDITY_MODE:
-      process.env.AJNA_AGENT_NO_SPEND_UNISWAP_LIQUIDITY_MODE ??
-      'strict_hybrid',
-    AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE:
-      process.env.AJNA_AGENT_NO_SPEND_UNISWAP_FEE_TIER_TEST_MODE ??
-      'all_configured',
-    ...(expectedFeeTierEnv
-      ? {
-          AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER:
-            String(expectedFeeTierEnv),
-        }
-      : {}),
-    AJNA_AGENT_UNISWAP_WETH_LIQUIDITY_RAW:
-      process.env.AJNA_AGENT_NO_SPEND_UNISWAP_WETH_LIQUIDITY_RAW ??
-      '1000000000000000000',
-    AJNA_AGENT_UNISWAP_WETH_QUOTE_LIQUIDITY_RAW:
-      process.env.AJNA_AGENT_NO_SPEND_UNISWAP_WETH_QUOTE_LIQUIDITY_RAW ??
-      '3000000000000000000000',
-  }), {
-    allowedHosts: params.allowedHosts,
-    reportPath: params.egressReportPath,
-  });
+  const env = withNoEgressGuard(
+    baseChildEnv({
+      ...optionalRepoEnv,
+      AJNA_AGENT_RPC_URL: params.rpcUrl,
+      AJNA_RPC_URL_BASE: params.rpcUrl,
+      AJNA_AGENT_KEEPER_KEY: HARDHAT_DEFAULT_KEEPER_KEY,
+      AJNA_AGENT_KEY_FILE: params.keyFilePath,
+      AJNA_AGENT_OUTPUT_PATH: params.summaryPath,
+      AJNA_AGENT_ALLOW_EVM_TIME_TRAVEL: 'yes',
+      AJNA_AGENT_FINAL_KICK: 'yes',
+      AJNA_AGENT_ENABLE_UNISWAP_V3_EXTERNAL_TAKE: '1',
+      AJNA_AGENT_PROFILE: 'realistic-1d',
+      AJNA_AGENT_FUND_NATIVE_GAS: 'yes',
+      AJNA_AGENT_CREATE_POOL: 'yes',
+      AJNA_AGENT_DEPLOY_TOKENS: 'yes',
+      AJNA_AGENT_TRANSFER_TOKENS: 'yes',
+      AJNA_AGENT_SEED_UNISWAP: 'yes',
+      AJNA_AGENT_DEPLOY_EXTERNAL_TAKE: 'yes',
+      AJNA_AGENT_UNISWAP_LIQUIDITY_MODE:
+        process.env.AJNA_AGENT_NO_SPEND_UNISWAP_LIQUIDITY_MODE ??
+        'strict_hybrid',
+      AJNA_AGENT_UNISWAP_FEE_TIER_TEST_MODE:
+        process.env.AJNA_AGENT_NO_SPEND_UNISWAP_FEE_TIER_TEST_MODE ??
+        'all_configured',
+      ...(expectedFeeTierEnv
+        ? {
+            AJNA_AGENT_UNISWAP_EXPECTED_EXECUTION_FEE_TIER:
+              String(expectedFeeTierEnv),
+          }
+        : {}),
+      AJNA_AGENT_UNISWAP_WETH_LIQUIDITY_RAW:
+        process.env.AJNA_AGENT_NO_SPEND_UNISWAP_WETH_LIQUIDITY_RAW ??
+        '1000000000000000000',
+      AJNA_AGENT_UNISWAP_WETH_QUOTE_LIQUIDITY_RAW:
+        process.env.AJNA_AGENT_NO_SPEND_UNISWAP_WETH_QUOTE_LIQUIDITY_RAW ??
+        '3000000000000000000000',
+    }),
+    {
+      allowedHosts: params.allowedHosts,
+      reportPath: params.egressReportPath,
+    }
+  );
 
   for (const name of [
     'AJNA_AGENT_LENDER_KEY',
@@ -638,16 +644,19 @@ function harnessEnv(params) {
   if (params.configSmoke) {
     scenarioEnv.AJNA_AGENT_HARNESS_CONFIG_SMOKE = '1';
   }
-  return withNoEgressGuard(baseChildEnv({
-    ...scenarioEnv,
-    AJNA_AGENT_RPC_URL: params.rpcUrl,
-    AJNA_RPC_URL_BASE: params.rpcUrl,
-    AJNA_AGENT_KEEPER_KEY: HARDHAT_DEFAULT_KEEPER_KEY,
-    AJNA_AGENT_HARNESS_OUTPUT_PATH: params.outputPath,
-  }), {
-    allowedHosts: params.allowedHosts,
-    reportPath: params.egressReportPath,
-  });
+  return withNoEgressGuard(
+    baseChildEnv({
+      ...scenarioEnv,
+      AJNA_AGENT_RPC_URL: params.rpcUrl,
+      AJNA_RPC_URL_BASE: params.rpcUrl,
+      AJNA_AGENT_KEEPER_KEY: HARDHAT_DEFAULT_KEEPER_KEY,
+      AJNA_AGENT_HARNESS_OUTPUT_PATH: params.outputPath,
+    }),
+    {
+      allowedHosts: params.allowedHosts,
+      reportPath: params.egressReportPath,
+    }
+  );
 }
 
 async function stopHardhatNode() {
@@ -698,7 +707,7 @@ async function main() {
   });
 
   process.stdout.write(
-      `[no-spend] tempDir=${tempDir}\n` +
+    `[no-spend] tempDir=${tempDir}\n` +
       `[no-spend] scenario=${options.scenarioName}\n` +
       `[no-spend] localRpc=${rpcUrl}\n` +
       `[no-spend] requestedBaseForkBlock=${options.baseForkBlock}\n` +
@@ -977,7 +986,7 @@ main().catch(async (error) => {
   await stopHardhatNode();
   process.stderr.write(
     `[no-spend] validation failed: ${
-      error instanceof Error ? error.stack ?? error.message : String(error)
+      error instanceof Error ? (error.stack ?? error.message) : String(error)
     }\n`
   );
   process.exitCode = 1;

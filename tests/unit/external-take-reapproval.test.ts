@@ -15,7 +15,7 @@ describe('external take reapproval', () => {
   it('reports the reapproved external take plan to execution callbacks', async () => {
     const initialEvaluation: BoundExternalTakeRouteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'oneinch',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       takeablePrice: 1.2,
       quoteAmountRaw: BigNumber.from(100),
@@ -23,7 +23,7 @@ describe('external take reapproval', () => {
     };
     const reapprovedEvaluation: BoundExternalTakeRouteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'oneinch',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       takeablePrice: 1.3,
       quoteAmountRaw: BigNumber.from(120),

@@ -28,10 +28,10 @@ import { NonceTracker } from '../../src/nonce';
 import { configureAjna } from '../../src/config';
 import {
   computeFactoryAmountOutMinimum,
-  takeLiquidationFactory,
-} from '../../src/take/factory';
+  takeLiquidationDirectDex,
+} from '../../src/take/direct-dex';
 import { arrayFromAsync } from '../../src/utils';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../typechain-types/factories/contracts/factories';
 import { UniswapV3KeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
 import { MockSwapRouter02__factory } from '../../typechain-types/factories/contracts/mocks';
 
@@ -109,7 +109,7 @@ describe('Factory slippage bound', function () {
   }
 
   async function deployFactorySystem() {
-    const factory = await new AjnaKeeperTakerFactory__factory(signer).deploy(
+    const factory = await new TakerRouter__factory(signer).deploy(
       MAINNET_CONFIG.AJNA_CONFIG.erc20PoolFactory
     );
     await factory.deployed();
@@ -201,7 +201,7 @@ describe('Factory slippage bound', function () {
       },
       quoteEvaluation: {
         isTakeable: true,
-        externalTakePath: 'factory',
+        externalTakePath: 'direct_dex',
         quoteAmountRaw: quotedAmountRaw,
         approvedMinOutRaw,
         selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -214,7 +214,7 @@ describe('Factory slippage bound', function () {
 
     const initialQuoteBalance = await quoteToken.balanceOf(signer.address);
 
-    await takeLiquidationFactory({
+    await takeLiquidationDirectDex({
       pool,
       poolConfig: {
         name: MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.name,
@@ -233,7 +233,7 @@ describe('Factory slippage bound', function () {
         isArbTakeable: false,
         externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
           isTakeable: true,
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           quoteAmountRaw: quotedAmountRaw,
           routeExecutionFloorRaw: approvedMinOutRaw,
           approvedMinOutRaw,
@@ -247,7 +247,7 @@ describe('Factory slippage bound', function () {
       },
       config: {
         dryRun: false,
-        keeperTakerFactory: factory.address,
+        keeperTakerRouter: factory.address,
         uniswapV3RouterOverrides: {
           swapRouter02Address: mockRouter.address,
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
@@ -299,7 +299,15 @@ describe('Factory slippage bound', function () {
     // UniswapV3SwapDetails tuple with a weak (1 wei) encoded minimum.
     const weakSwapDetails = ethers.utils.defaultAbiCoder.encode(
       ['(address,address,uint24,uint256,uint256)'],
-      [[mockRouter.address, pool.quoteAddress, 500, BigNumber.from(1), deadline]]
+      [
+        [
+          mockRouter.address,
+          pool.quoteAddress,
+          500,
+          BigNumber.from(1),
+          deadline,
+        ],
+      ]
     );
 
     const tx = await factory.takeWithAtomicSwap(

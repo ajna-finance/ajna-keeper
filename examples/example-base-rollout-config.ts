@@ -49,12 +49,12 @@ const config: KeeperConfig = {
         // LiquiditySource and list every direct-DEX factory route that may execute:
         // allowedLiquiditySources: [LiquiditySource.UNISWAPV3, LiquiditySource.CURVE],
         // To compare aggregators against the best factory route for discovered takes:
-        // allowedExternalTakePaths: ['oneinch', 'factory'],
-        // allowedExternalTakePaths: ['factory', 'lifi'],
-        // allowedExternalTakePaths: ['oneinch', 'factory', 'lifi'],
-        // defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+        // allowedExternalTakePaths: ['oneinch', 'direct_dex'],
+        // allowedExternalTakePaths: ['direct_dex', 'lifi'],
+        // allowedExternalTakePaths: ['oneinch', 'direct_dex', 'lifi'],
+        // defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
         // externalTakeProbeTimeoutMs: 2_000,
-        // externalTakeRouteSelectionMode: 'factory_first', // lower aggregator API use, can skip a better aggregator route
+        // externalTakeRouteSelectionMode: 'direct_dex_first', // lower aggregator API use, can skip a better aggregator route
         // takeRouteQuoteBudgetPerCandidate: 2,
         // minProfitNative: '1000000000000000', // 0.001 ETH minimum net profit
         // LI.FI is an aggregator path, not a factory source. Before enabling it,

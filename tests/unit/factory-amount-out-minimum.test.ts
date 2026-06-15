@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
-import { computeFactoryAmountOutMinimum } from '../../src/take/factory';
+import { computeFactoryAmountOutMinimum } from '../../src/take/direct-dex';
 import { LiquiditySource } from '../../src/config';
 import { ApprovedUniswapV3FactoryQuoteEvaluation } from '../../src/take/types';
 
@@ -19,7 +19,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('120'),
       approvedMinOutRaw: ethers.utils.parseEther('118.8'),
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -49,7 +49,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('101'),
       approvedMinOutRaw: ethers.utils.parseEther('99'),
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -86,7 +86,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('126'),
       routeMinOutRaw: ethers.utils.parseEther('125'),
       profitMinOutRaw: ethers.utils.parseEther('105'),
@@ -118,7 +118,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('150'),
       routeMinOutRaw: ethers.utils.parseEther('98'),
       profitMinOutRaw: ethers.utils.parseEther('130'),
@@ -150,7 +150,7 @@ describe('Factory amountOutMinimum', () => {
 
     const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('101'),
       routeMinOutRaw: ethers.utils.parseEther('98'),
       profitMinOutRaw: ethers.utils.parseEther('100'),

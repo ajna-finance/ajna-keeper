@@ -14,7 +14,7 @@ import {
 import {
   FactoryQuoteProviderRuntimeCache,
   FactoryQuoteProviderRuntimeStats,
-} from '../take/factory';
+} from '../take/direct-dex';
 import {
   DiscoveryReadTransportConfig,
   getDiscoveryReadTransportConfig,
@@ -26,13 +26,13 @@ export interface DiscoveryExecutionConfig {
   curveRouterOverrides?: CurveRouterOverrides;
   dryRun?: boolean;
   discoveredDefaults?: DiscoveredDefaultsConfig;
-  keeperTaker?: string;
-  keeperTakerFactory?: string;
+  keeperTakerRouter?: string;
   takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
   lifi?: LifiDexConfig;
   lifiTaker?: string;
   sushiAggregator?: SushiAggregatorDexConfig;
   sushiAggregatorTaker?: string;
+  oneInchAggregatorTaker?: string;
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
@@ -49,14 +49,21 @@ export function getDiscoveryExecutionConfig(
   const lifiDeployment = resolveExternalTakeDeployment({
     liquiditySource: LiquiditySource.LIFI,
     config: {
-      keeperTakerFactory: config.takers?.factory,
+      keeperTakerRouter: config.takers?.router,
       takerContracts: config.takers?.contracts,
     },
   });
   const sushiAggregatorDeployment = resolveExternalTakeDeployment({
     liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
     config: {
-      keeperTakerFactory: config.takers?.factory,
+      keeperTakerRouter: config.takers?.router,
+      takerContracts: config.takers?.contracts,
+    },
+  });
+  const oneInchAggregatorDeployment = resolveExternalTakeDeployment({
+    liquiditySource: LiquiditySource.ONEINCH,
+    config: {
+      keeperTakerRouter: config.takers?.router,
       takerContracts: config.takers?.contracts,
     },
   });
@@ -66,8 +73,7 @@ export function getDiscoveryExecutionConfig(
     curveRouterOverrides: config.dex?.curve,
     dryRun: config.runtime.dryRun,
     discoveredDefaults: config.discovery?.defaults,
-    keeperTaker: config.takers?.oneInch,
-    keeperTakerFactory: config.takers?.factory,
+    keeperTakerRouter: config.takers?.router,
     takerContracts: config.takers?.contracts,
     lifi: config.dex?.lifi,
     lifiTaker:
@@ -78,6 +84,10 @@ export function getDiscoveryExecutionConfig(
     sushiAggregatorTaker:
       sushiAggregatorDeployment.deploymentType === 'calldata_aggregator'
         ? sushiAggregatorDeployment.resolvedTakerAddress
+        : undefined,
+    oneInchAggregatorTaker:
+      oneInchAggregatorDeployment.deploymentType === 'calldata_aggregator'
+        ? oneInchAggregatorDeployment.resolvedTakerAddress
         : undefined,
     oneInchAggregationExecutorAllowlist:
       config.dex?.oneInch?.aggregationExecutorAllowlist,

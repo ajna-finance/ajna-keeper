@@ -1,14 +1,15 @@
 import {
   CalldataAggregatorProviderId,
   ExternalTakePathKind,
-  isFactoryDynamicSource,
+  getAggregatorProviderIdentity,
+  isDirectDexDynamicSource,
 } from '../../config';
 import { logger } from '../../logging';
-import * as takeFactoryModule from '../../take/factory';
+import * as takeFactoryModule from '../../take/direct-dex';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../take/external-take/execution-plan';
 import * as lifiExecutionModule from '../../take/lifi/execution';
 import * as sushiAggregatorExecutionModule from '../../take/sushi-aggregator/execution';
-import * as oneInchExecutionModule from '../../take/one-inch-execution';
+import * as oneInchAggregatorExecutionModule from '../../take/oneinch-aggregator/execution';
 import { ResolvedTakeTarget } from '../targets';
 import {
   createPreBroadcastFailureCapture,
@@ -19,15 +20,14 @@ import {
   withTakeLiquiditySource,
 } from './provider';
 import {
-  FactoryPathQuoteInput,
+  DirectDexPathQuoteInput,
   FactoryPathQuoteFn,
   getCircuitGuardedQuoteOutcome,
   LifiCircuitOutcome,
   LifiPathQuoteInput,
   LifiPathQuoteFn,
   OneInchCircuitOutcome,
-  OneInchPathQuoteInput,
-  OneInchPathQuoteFn,
+  OneInchAggregatorPathQuoteFn,
   SushiAggregatorPathQuoteFn,
 } from './quotes';
 import { getLifiCircuitOpenReason } from './lifi-circuit';
@@ -40,10 +40,6 @@ export type DiscoveryExternalTakeRouteProvider = ExternalTakeRouteProvider<
 >;
 
 export interface DiscoveryExternalTakeProviderRegistry {
-  oneInchProvider: DiscoveryExternalTakeRouteProvider;
-  lifiProvider: DiscoveryExternalTakeRouteProvider;
-  sushiAggregatorProvider: DiscoveryExternalTakeRouteProvider;
-  factoryProvider: DiscoveryExternalTakeRouteProvider;
   // Calldata-aggregator dispatch is path + provider id: LI.FI and Sushi
   // never compete for a single path-keyed slot.
   selectExternalTakeProvider(params: {
@@ -52,10 +48,19 @@ export interface DiscoveryExternalTakeProviderRegistry {
   }): DiscoveryExternalTakeRouteProvider;
 }
 
+function routeProviderKey(params: {
+  selectedPath: ExternalTakePathKind;
+  providerId?: CalldataAggregatorProviderId;
+}): string {
+  return params.providerId
+    ? `${params.selectedPath}:${params.providerId}`
+    : params.selectedPath;
+}
+
 function getAggregatorQuoteIntentOptions(
   intent: ExternalTakeQuoteIntent
 ): Pick<
-  OneInchPathQuoteInput | LifiPathQuoteInput,
+  LifiPathQuoteInput,
   'routeProbeAbortSignal' | 'recordCircuitOutcome'
 > {
   if (intent.kind !== 'hybrid_probe') {
@@ -70,7 +75,7 @@ function getAggregatorQuoteIntentOptions(
 function getFactoryQuoteIntentOptions(
   intent: ExternalTakeQuoteIntent
 ): Pick<
-  FactoryPathQuoteInput,
+  DirectDexPathQuoteInput,
   'routeProbeAbortSignal' | 'factoryGasQuoteFallback'
 > {
   if (intent.kind === 'hybrid_probe') {
@@ -84,8 +89,7 @@ function getFactoryQuoteIntentOptions(
 export function createDiscoveryExternalTakeProviderRegistry(params: {
   config: Pick<DiscoveryExecutionConfig, 'lifi'>;
   rpcCache?: DiscoveryRpcCache;
-  quoteOneInchPath: OneInchPathQuoteFn;
-  quoteKeeperTakerOneInchTake: OneInchPathQuoteFn;
+  quoteOneInchAggregatorPath: OneInchAggregatorPathQuoteFn;
   quoteFactoryPath: FactoryPathQuoteFn;
   quoteLifiPath: LifiPathQuoteFn;
   quoteSushiAggregatorPath: SushiAggregatorPathQuoteFn;
@@ -103,63 +107,6 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       lifiConfig: params.config.lifi,
       purpose: 'execution_refresh',
     });
-  };
-
-  const oneInchProvider: DiscoveryExternalTakeRouteProvider = {
-    path: 'oneinch',
-    quote: async ({
-      intent,
-      pool,
-      signer,
-      poolConfig,
-      price,
-      auctionPrice,
-      collateral,
-      debtToCover,
-    }) => {
-      const quoteOneInch =
-        intent.kind === 'direct'
-          ? params.quoteKeeperTakerOneInchTake
-          : params.quoteOneInchPath;
-      return quoteOneInch({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-        debtToCover,
-        ...getAggregatorQuoteIntentOptions(intent),
-      });
-    },
-    getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
-    recordQuoteCircuitOutcome: params.recordOneInchCircuitOutcome,
-    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
-      const swapDataCapture = createPreSubmitResultCapture(
-        config.onOneInchSwapDataResult
-      );
-      const executionFailureCapture = createPreBroadcastFailureCapture(
-        config.onOneInchExecutionFailure
-      );
-      const oneInchConfig = {
-        ...config,
-        onOneInchSwapDataResult: swapDataCapture.handler,
-        onOneInchExecutionFailure: executionFailureCapture.handler,
-      };
-      const succeeded = await oneInchExecutionModule.takeLiquidation({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config: oneInchConfig,
-      });
-      return {
-        succeeded,
-        preBroadcastFailed:
-          swapDataCapture.didRejectBeforeSubmit() ||
-          executionFailureCapture.didFailPreBroadcast(),
-      };
-    },
   };
 
   const lifiProvider: DiscoveryExternalTakeRouteProvider = {
@@ -224,6 +171,56 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
     },
   };
 
+  const oneInchAggregatorProvider: DiscoveryExternalTakeRouteProvider = {
+    path: 'calldata_aggregator',
+    providerId: 'oneinch',
+    quote: async ({
+      intent,
+      pool,
+      signer,
+      poolConfig,
+      price,
+      auctionPrice,
+      collateral,
+      debtToCover,
+    }) =>
+      params.quoteOneInchAggregatorPath({
+        pool,
+        signer,
+        poolConfig,
+        price,
+        auctionPrice,
+        collateral,
+        debtToCover,
+        ...getAggregatorQuoteIntentOptions(intent),
+      }),
+    getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
+    recordQuoteCircuitOutcome: params.recordOneInchCircuitOutcome,
+    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
+      const executionFailureCapture = createPreBroadcastFailureCapture(
+        config.onOneInchAggregatorExecutionFailure
+      );
+      const oneInchConfig = {
+        ...config,
+        onOneInchAggregatorExecutionFailure: executionFailureCapture.handler,
+      };
+      const succeeded =
+        await oneInchAggregatorExecutionModule.takeLiquidationOneInchAggregator(
+          {
+            pool,
+            signer,
+            poolConfig,
+            liquidation,
+            config: oneInchConfig,
+          }
+        );
+      return {
+        succeeded,
+        preBroadcastFailed: executionFailureCapture.didFailPreBroadcast(),
+      };
+    },
+  };
+
   const sushiAggregatorProvider: DiscoveryExternalTakeRouteProvider = {
     path: 'calldata_aggregator',
     providerId: 'sushi_aggregator',
@@ -271,7 +268,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
   };
 
   const factoryProvider: DiscoveryExternalTakeRouteProvider = {
-    path: 'factory',
+    path: 'direct_dex',
     quote: async ({
       intent,
       pool,
@@ -293,7 +290,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
         liquidation.externalTakeExecutionPlan
       )?.selectedLiquiditySource;
       const factoryPoolConfig =
-        selectedSource !== undefined && isFactoryDynamicSource(selectedSource)
+        selectedSource !== undefined && isDirectDexDynamicSource(selectedSource)
           ? withTakeLiquiditySource(poolConfig, selectedSource)
           : poolConfig;
       const executionFailureCapture = createPreBroadcastFailureCapture(
@@ -303,7 +300,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
         ...config,
         onFactoryExecutionFailure: executionFailureCapture.handler,
       };
-      const succeeded = await takeFactoryModule.takeLiquidationFactory({
+      const succeeded = await takeFactoryModule.takeLiquidationDirectDex({
         pool,
         signer,
         poolConfig: factoryPoolConfig,
@@ -316,30 +313,49 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       };
     },
   };
-  const providersByPath: Record<
-    ExternalTakePathKind,
-    DiscoveryExternalTakeRouteProvider
-  > = {
-    oneinch: oneInchProvider,
-    calldata_aggregator: lifiProvider,
-    factory: factoryProvider,
-  };
+  const lifiIdentity = getAggregatorProviderIdentity('lifi');
+  const sushiAggregatorIdentity =
+    getAggregatorProviderIdentity('sushi_aggregator');
+  const oneInchAggregatorIdentity = getAggregatorProviderIdentity('oneinch');
+  const providersByRoute = new Map<string, DiscoveryExternalTakeRouteProvider>([
+    [routeProviderKey({ selectedPath: 'direct_dex' }), factoryProvider],
+    [
+      routeProviderKey({
+        selectedPath: lifiIdentity.canonicalPath,
+        providerId: lifiIdentity.providerId,
+      }),
+      lifiProvider,
+    ],
+    [
+      routeProviderKey({ selectedPath: lifiIdentity.canonicalPath }),
+      lifiProvider,
+    ],
+    [
+      routeProviderKey({
+        selectedPath: sushiAggregatorIdentity.canonicalPath,
+        providerId: sushiAggregatorIdentity.providerId,
+      }),
+      sushiAggregatorProvider,
+    ],
+    [
+      routeProviderKey({
+        selectedPath: oneInchAggregatorIdentity.canonicalPath,
+        providerId: oneInchAggregatorIdentity.providerId,
+      }),
+      oneInchAggregatorProvider,
+    ],
+  ]);
 
   return {
-    oneInchProvider,
-    lifiProvider,
-    sushiAggregatorProvider,
-    factoryProvider,
     selectExternalTakeProvider: ({ selectedPath, providerId }) => {
-      if (
-        selectedPath === 'calldata_aggregator' &&
-        providerId === 'sushi_aggregator'
-      ) {
-        return sushiAggregatorProvider;
-      }
-      const provider = providersByPath[selectedPath];
+      const provider = providersByRoute.get(
+        routeProviderKey({ selectedPath, providerId })
+      );
       if (provider === undefined) {
-        throw new Error(`Unsupported external take path: ${selectedPath}`);
+        throw new Error(
+          `Unsupported external take route: ${selectedPath}` +
+            (providerId ? `/${providerId}` : '')
+        );
       }
       return provider;
     },

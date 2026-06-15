@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import { LifiDexConfig, LiquiditySource } from '../../config';
 import type { ExternalTakeTakerContractKey } from '../../config';
 import { DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../../dex/lifi';
@@ -299,8 +299,8 @@ async function prepareLifiExecution(params: {
     };
   }
 
-  if (!config.keeperTakerFactory) {
-    throw new Error('LI.FI execution requires keeperTakerFactory');
+  if (!config.keeperTakerRouter) {
+    throw new Error('LI.FI execution requires keeperTakerRouter');
   }
   const lifiConfig = requireProductionLifiConfig(config.lifi);
   const lifiTaker = config.lifiTaker;
@@ -374,8 +374,8 @@ async function prepareLifiExecution(params: {
     }),
     executionCollateralWad,
     takeWriteTransport: resolveTakeWriteTransport(signer, config),
-    factory: AjnaKeeperTakerFactory__factory.connect(
-      config.keeperTakerFactory,
+    factory: TakerRouter__factory.connect(
+      config.keeperTakerRouter,
       signer
     ),
     assertFreshQuoteStillCurrent: createLifiFreshQuoteCurrentGuard({

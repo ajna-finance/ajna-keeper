@@ -41,9 +41,9 @@ import { expect } from 'chai';
 import { BigNumber, Contract, Wallet, constants, utils } from 'ethers';
 import { network } from 'hardhat';
 import {
-  AjnaKeeperTaker__factory,
-  AjnaKeeperTakerFactory__factory,
+  TakerRouter__factory,
   CurveKeeperTaker__factory,
+  OneInchAggregatorKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../typechain-types';
 import {
@@ -220,18 +220,16 @@ function makeFixtureSubgraphReader(
   };
 }
 
-// One factory registers ALL FOUR factory/lifi takers; the legacy single-contract
-// AjnaKeeperTaker (1inch path) is deployed separately and owned by the signer so
-// the 1inch path can also win execution, not just compete in ranking.
+// One router registers all direct DEX and calldata-aggregator takers so every
+// provider can win execution, not just compete in ranking.
 async function deployHybridFactorySystem(signer: Wallet) {
-  const oneInchTaker = await new AjnaKeeperTaker__factory(signer).deploy(
-    BASE_AJNA_CONFIG.erc20PoolFactory
-  );
-  await oneInchTaker.deployed();
-  const factory = await new AjnaKeeperTakerFactory__factory(signer).deploy(
+  const factory = await new TakerRouter__factory(signer).deploy(
     BASE_AJNA_CONFIG.erc20PoolFactory
   );
   await factory.deployed();
+  const oneInchTaker = await new OneInchAggregatorKeeperTaker__factory(
+    signer
+  ).deploy(BASE_AJNA_CONFIG.erc20PoolFactory, factory.address);
   const uniswapTaker = await new UniswapV3KeeperTaker__factory(signer).deploy(
     BASE_AJNA_CONFIG.erc20PoolFactory,
     factory.address
@@ -244,9 +242,12 @@ async function deployHybridFactorySystem(signer: Wallet) {
     BASE_AJNA_CONFIG.erc20PoolFactory,
     factory.address
   );
-  for (const taker of [uniswapTaker, curveTaker, lifiTaker]) {
+  for (const taker of [oneInchTaker, uniswapTaker, curveTaker, lifiTaker]) {
     await taker.deployed();
   }
+  await (
+    await factory.setTaker(LiquiditySource.ONEINCH, oneInchTaker.address)
+  ).wait();
   await (
     await factory.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address)
   ).wait();
@@ -364,7 +365,7 @@ async function runLifiCallbackExecutionProof(params: {
     toToken,
     pool.address
   );
-  const factory = await new AjnaKeeperTakerFactory__factory(
+  const factory = await new TakerRouter__factory(
     params.owner
   ).deploy(poolDeployer.address);
   await factory.deployed();
@@ -650,7 +651,7 @@ describe('Hybrid Base-fork discovery loop (oneinch + factory + lifi)', function 
     overrideGetLiquidations(makeGetLiquidationsFromSdk(pool));
     overrideGetHighestMeaningfulBucket(makeGetHighestMeaningfulBucket(pool));
 
-    const { factory, oneInchTaker, lifiTaker } =
+    const { factory, oneInchTaker, uniswapTaker, curveTaker, lifiTaker } =
       await deployHybridFactorySystem(signer);
     await configureLifiTakerAllowlists(
       new Contract(lifiTaker.address, LifiKeeperTaker__factory.abi, signer),
@@ -716,9 +717,16 @@ describe('Hybrid Base-fork discovery loop (oneinch + factory + lifi)', function 
         config: {
           ...execBase,
           dryRun: !fixture.liveTake,
-          keeperTaker: oneInchTaker.address,
-          keeperTakerFactory: factory.address,
+          keeperTakerRouter: factory.address,
+          oneInchAggregatorTaker: oneInchTaker.address,
           lifiTaker: lifiTaker.address,
+          takerContracts: {
+            ...execBase.takerContracts,
+            OneInchAggregator: oneInchTaker.address,
+            Lifi: lifiTaker.address,
+            UniswapV3: uniswapTaker.address,
+            Curve: curveTaker.address,
+          },
         },
       });
       const executedNow =

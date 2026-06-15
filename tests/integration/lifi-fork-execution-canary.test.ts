@@ -8,7 +8,7 @@ import {
   utils,
 } from 'ethers';
 import { network } from 'hardhat';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../typechain-types/factories/contracts/factories';
 import {
   MockAtomicSwapPool__factory,
   MockPoolDeployer__factory,
@@ -106,7 +106,7 @@ async function requireConfiguredProductionTakerRegistration(params: {
 }): Promise<void> {
   await requireForkContractCode({
     provider: params.provider,
-    label: 'config.takers.factory',
+    label: 'config.takers.router',
     address: params.config.configuredFactoryAddress,
   });
   await requireForkContractCode({
@@ -115,7 +115,7 @@ async function requireConfiguredProductionTakerRegistration(params: {
     address: params.config.configuredTakerAddress,
   });
 
-  const configuredFactory = AjnaKeeperTakerFactory__factory.connect(
+  const configuredFactory = TakerRouter__factory.connect(
     params.config.configuredFactoryAddress,
     params.provider
   );
@@ -249,7 +249,7 @@ describe('LI.FI callback-path fork execution canary', function () {
       toToken,
       pool.address
     );
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();

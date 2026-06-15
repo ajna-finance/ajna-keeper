@@ -2,6 +2,7 @@ import {
   ExternalTakeRouteSelectionMode,
   ExternalTakeTransportPolicy,
   ExternalTakePathKind,
+  CalldataAggregatorProviderId,
   HybridGasQuoteFailureFallbackMode,
   KeeperConfig,
   LiquiditySource,
@@ -19,7 +20,7 @@ import {
 import {
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
-  isFactoryDynamicSource,
+  isDirectDexDynamicSource,
   normalizeExternalTakeRouteSelectionMode,
   resolveExternalTakePolicy,
   resolveHybridGasQuoteFallbackPolicy,
@@ -28,14 +29,15 @@ import type { RawExternalTakePolicyInputs } from './route-policy';
 import {
   formatSupportedExternalTakeLiquiditySources,
   formatSupportedExternalTakePaths,
+  getAggregatorProviderIdentity,
   getExternalTakeTakerContractKeyForSource,
   getExternalTakePathDefaultSource,
   getExternalTakePathDescriptor,
   getExternalTakePathDescriptors,
   isExternalTakeLiquiditySource,
   resolveExternalTakePathFromSource,
-} from './external-take-registry';
-import type { ExternalTakeLiquiditySource } from './external-take-registry';
+} from './external-take-descriptors';
+import type { ExternalTakeLiquiditySource } from './external-take-descriptors';
 import {
   formatLiquiditySource,
   getLiquiditySourceConfig,
@@ -271,28 +273,35 @@ function parseLiquiditySourceKey(source: string): LiquiditySource | undefined {
 function getEffectiveFactoryRouteSources(
   discoveredTake: TakeSettings,
   allowedLiquiditySources: LiquiditySource[] | undefined,
-  defaultFactoryLiquiditySource?: LiquiditySource
+  defaultDirectDexLiquiditySource?: LiquiditySource
 ): Set<LiquiditySource> {
   return new Set(
     resolveExternalTakePolicy({
       defaultLiquiditySource: discoveredTake.liquiditySource,
-      takePolicy: { allowedLiquiditySources, defaultFactoryLiquiditySource },
-    }).factoryRouteSources
+      takePolicy: { allowedLiquiditySources, defaultDirectDexLiquiditySource },
+    }).directDexRouteSources
   );
 }
 
 function getEffectiveTakeGasOverrideSources(
   discoveredTake: TakeSettings,
   allowedLiquiditySources: LiquiditySource[] | undefined,
-  defaultFactoryLiquiditySource: LiquiditySource | undefined,
-  externalTakePaths: Set<ExternalTakePathKind>
+  defaultDirectDexLiquiditySource: LiquiditySource | undefined,
+  externalTakePaths: Set<ExternalTakePathKind>,
+  calldataAggregatorSources: readonly ExternalTakeLiquiditySource[]
 ): Set<LiquiditySource> {
   const sources = getEffectiveFactoryRouteSources(
     discoveredTake,
     allowedLiquiditySources,
-    defaultFactoryLiquiditySource
+    defaultDirectDexLiquiditySource
   );
   for (const path of Array.from(externalTakePaths)) {
+    if (path === 'calldata_aggregator') {
+      for (const source of calldataAggregatorSources) {
+        sources.add(source);
+      }
+      continue;
+    }
     const defaultSource = getExternalTakePathDefaultSource(path);
     if (defaultSource !== undefined) {
       sources.add(defaultSource);
@@ -313,6 +322,28 @@ function getEffectiveExternalTakePaths(
       defaultLiquiditySource: discoveredTake.liquiditySource,
       takePolicy,
     }).externalTakePaths
+  );
+}
+
+function getEffectiveCalldataAggregatorProviders(
+  discoveredTake: TakeSettings,
+  takePolicy: RawExternalTakePolicyInputs | undefined
+): Set<CalldataAggregatorProviderId> {
+  return new Set(
+    resolveExternalTakePolicy({
+      defaultLiquiditySource: discoveredTake.liquiditySource,
+      takePolicy,
+    }).calldataAggregatorProviders
+  );
+}
+
+function getEffectiveCalldataAggregatorSources(
+  discoveredTake: TakeSettings,
+  takePolicy: RawExternalTakePolicyInputs | undefined
+): ExternalTakeLiquiditySource[] {
+  return Array.from(
+    getEffectiveCalldataAggregatorProviders(discoveredTake, takePolicy),
+    (providerId) => getAggregatorProviderIdentity(providerId).liquiditySource
   );
 }
 
@@ -337,7 +368,7 @@ function validateExternalTakeRouteSelectionMode(
   }
   if (!EXTERNAL_TAKE_ROUTE_SELECTION_MODES.has(mode)) {
     throw new Error(
-      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or factory_first'
+      'AutoDiscoverConfig.take: externalTakeRouteSelectionMode must be maximize_profit or direct_dex_first'
     );
   }
 }
@@ -350,7 +381,7 @@ function validateHybridGasQuoteFailureFallbackMode(
   }
   if (!HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES.has(mode)) {
     throw new Error(
-      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode must be disabled or factory_first'
+      'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode must be disabled or direct_dex_first'
     );
   }
 }
@@ -484,9 +515,9 @@ function requireRegisteredTakerContract(params: {
       `TakeSettings: liquiditySource ${sourceName} does not use a registered taker contract`
     );
   }
-  if (!params.keeperConfig.takers?.factory) {
+  if (!params.keeperConfig.takers?.router) {
     throw new Error(
-      `TakeSettings: takers.factory required when liquiditySource is ${sourceName}`
+      `TakeSettings: takers.router required when liquiditySource is ${sourceName}`
     );
   }
   if (!params.keeperConfig.takers.contracts?.[contractKey]) {
@@ -500,11 +531,10 @@ function validateOneInchTakeSource({
   keeperConfig,
   chainId,
 }: ExternalTakeSourceValidationParams): void {
-  if (!keeperConfig.takers?.oneInch) {
-    throw new Error(
-      'TakeSettings: takers.oneInch required when liquiditySource is ONEINCH'
-    );
-  }
+  requireRegisteredTakerContract({
+    keeperConfig,
+    source: LiquiditySource.ONEINCH,
+  });
   if (
     !keeperConfig.dex?.oneInch?.routers ||
     Object.keys(keeperConfig.dex.oneInch.routers).length === 0
@@ -887,7 +917,7 @@ export function validateAutoDiscoverConfig(
       }
     }
     if (
-      takePolicy.externalTakeRouteSelectionMode === 'factory_first' &&
+      takePolicy.externalTakeRouteSelectionMode === 'direct_dex_first' &&
       (takePolicy.minExpectedProfitQuote !== undefined ||
         takePolicy.minProfitNative !== undefined)
     ) {
@@ -932,7 +962,11 @@ export function validateAutoDiscoverConfig(
       discoveredTake,
       takePolicy
     );
-    if (takePolicy.hybridGasQuoteFailureFallbackMode === 'factory_first') {
+    const calldataAggregatorSources = getEffectiveCalldataAggregatorSources(
+      discoveredTake,
+      takePolicy
+    );
+    if (takePolicy.hybridGasQuoteFailureFallbackMode === 'direct_dex_first') {
       const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
         fallbackMode: takePolicy.hybridGasQuoteFailureFallbackMode,
         routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
@@ -947,39 +981,30 @@ export function validateAutoDiscoverConfig(
       if (!fallbackEligibility.eligible) {
         const reason =
           fallbackEligibility.reason === 'maxGasCostNative is not configured'
-            ? 'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first requires maxGasCostNative'
-            : `AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=factory_first is ineligible because ${fallbackEligibility.reason}`;
+            ? 'AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=direct_dex_first requires maxGasCostNative'
+            : `AutoDiscoverConfig.take: hybridGasQuoteFailureFallbackMode=direct_dex_first is ineligible because ${fallbackEligibility.reason}`;
         throw new Error(reason);
       }
     }
     if (
-      takePolicy.defaultFactoryLiquiditySource !== undefined &&
-      !isFactoryDynamicSource(takePolicy.defaultFactoryLiquiditySource)
+      takePolicy.defaultDirectDexLiquiditySource !== undefined &&
+      !isDirectDexDynamicSource(takePolicy.defaultDirectDexLiquiditySource)
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource must be UNISWAPV3 or CURVE'
+        'AutoDiscoverConfig.take: defaultDirectDexLiquiditySource must be UNISWAPV3 or CURVE'
       );
     }
-    const effectiveDefaultFactoryLiquiditySource = isFactoryDynamicSource(
+    const effectiveDefaultDirectDexLiquiditySource = isDirectDexDynamicSource(
       discoveredTake.liquiditySource
     )
       ? discoveredTake.liquiditySource
-      : takePolicy.defaultFactoryLiquiditySource;
+      : takePolicy.defaultDirectDexLiquiditySource;
     if (
-      externalTakePaths.has('factory') &&
-      effectiveDefaultFactoryLiquiditySource === undefined
+      externalTakePaths.has('direct_dex') &&
+      effectiveDefaultDirectDexLiquiditySource === undefined
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: defaultFactoryLiquiditySource required when allowedExternalTakePaths includes factory and discovery.defaults.take.liquiditySource is not a factory source'
-      );
-    }
-    if (
-      externalTakePaths.has('factory') &&
-      externalTakePaths.has('oneinch') &&
-      takePolicy.validateRouteDeployments !== true
-    ) {
-      throw new Error(
-        'AutoDiscoverConfig.take: validateRouteDeployments=true required when allowedExternalTakePaths includes both oneinch and factory'
+        'AutoDiscoverConfig.take: defaultDirectDexLiquiditySource required when allowedExternalTakePaths includes direct_dex and discovery.defaults.take.liquiditySource is not a direct DEX source'
       );
     }
     for (const descriptor of getExternalTakePathDescriptors(
@@ -994,7 +1019,9 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
-    if (externalTakePaths.has('oneinch')) {
+    if (
+      calldataAggregatorSources.includes(LiquiditySource.ONEINCH)
+    ) {
       if (
         !config.dex?.oneInch?.aggregationExecutorAllowlist ||
         Object.keys(config.dex.oneInch.aggregationExecutorAllowlist).length ===
@@ -1017,6 +1044,19 @@ export function validateAutoDiscoverConfig(
     )) {
       const defaultSource = descriptor.defaultSource;
       if (
+        descriptor.path === 'calldata_aggregator' &&
+        descriptor.requiresDexGasOverride
+      ) {
+        for (const source of calldataAggregatorSources) {
+          if (takePolicy.dexGasOverrides?.[source] === undefined) {
+            throw new Error(
+              `AutoDiscoverConfig.take: dexGasOverrides.${formatLiquiditySource(source)} required when resolved external take paths include ${descriptor.path}`
+            );
+          }
+        }
+        continue;
+      }
+      if (
         descriptor.requiresDexGasOverride &&
         defaultSource !== undefined &&
         takePolicy.dexGasOverrides?.[defaultSource] === undefined
@@ -1026,10 +1066,7 @@ export function validateAutoDiscoverConfig(
         );
       }
     }
-    if (
-      externalTakePaths.size > 1 ||
-      (externalTakePaths.has('factory') && externalTakePaths.has('oneinch'))
-    ) {
+    if (externalTakePaths.size > 1) {
       validateQuoteDenominatedGasPolicy(
         config,
         'AutoDiscoverConfig.take: hybrid external take route ranking',
@@ -1038,17 +1075,17 @@ export function validateAutoDiscoverConfig(
     }
     if (
       takePolicy.takeRouteQuoteBudgetPerCandidate !== undefined &&
-      !externalTakePaths.has('factory')
+      !externalTakePaths.has('direct_dex')
     ) {
       throw new Error(
-        'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires an enabled factory external take path'
+        'AutoDiscoverConfig.take: takeRouteQuoteBudgetPerCandidate requires an enabled direct_dex external take path'
       );
     }
 
     if (takePolicy.allowedLiquiditySources !== undefined) {
-      if (!externalTakePaths.has('factory')) {
+      if (!externalTakePaths.has('direct_dex')) {
         throw new Error(
-          'AutoDiscoverConfig.take: allowedLiquiditySources requires a factory external take path'
+          'AutoDiscoverConfig.take: allowedLiquiditySources requires a direct_dex external take path'
         );
       }
       if (takePolicy.allowedLiquiditySources.length === 0) {
@@ -1066,10 +1103,10 @@ export function validateAutoDiscoverConfig(
         seenSources.add(source);
         if (source === LiquiditySource.ONEINCH) {
           throw new Error(
-            'AutoDiscoverConfig.take: allowedLiquiditySources cannot include ONEINCH for factory external takes'
+            'AutoDiscoverConfig.take: allowedLiquiditySources cannot include ONEINCH for direct_dex external takes'
           );
         }
-        if (!isFactoryDynamicSource(source)) {
+        if (!isDirectDexDynamicSource(source)) {
           throw new Error(
             'AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3 and CURVE'
           );
@@ -1084,22 +1121,22 @@ export function validateAutoDiscoverConfig(
         );
       }
       if (
-        takePolicy.defaultFactoryLiquiditySource !== undefined &&
-        effectiveDefaultFactoryLiquiditySource !== undefined &&
+        takePolicy.defaultDirectDexLiquiditySource !== undefined &&
+        effectiveDefaultDirectDexLiquiditySource !== undefined &&
         !takePolicy.allowedLiquiditySources.includes(
-          effectiveDefaultFactoryLiquiditySource
+          effectiveDefaultDirectDexLiquiditySource
         )
       ) {
         throw new Error(
-          'AutoDiscoverConfig.take: allowedLiquiditySources must include the effective default factory liquidity source'
+          'AutoDiscoverConfig.take: allowedLiquiditySources must include the effective default direct DEX liquidity source'
         );
       }
     } else {
-      if (externalTakePaths.has('factory')) {
+      if (externalTakePaths.has('direct_dex')) {
         validateTakeSettings(
           {
             ...discoveredTake,
-            liquiditySource: effectiveDefaultFactoryLiquiditySource,
+            liquiditySource: effectiveDefaultDirectDexLiquiditySource,
           },
           config,
           chainId
@@ -1111,6 +1148,19 @@ export function validateAutoDiscoverConfig(
       externalTakePaths
     )) {
       const defaultSource = descriptor.defaultSource;
+      if (descriptor.path === 'calldata_aggregator') {
+        for (const source of calldataAggregatorSources) {
+          validateTakeSettings(
+            {
+              ...discoveredTake,
+              liquiditySource: source,
+            },
+            config,
+            chainId
+          );
+        }
+        continue;
+      }
       if (defaultSource === undefined) {
         continue;
       }
@@ -1131,20 +1181,21 @@ export function validateAutoDiscoverConfig(
     const effectiveFactorySources = getEffectiveFactoryRouteSources(
       discoveredTake,
       takePolicy.allowedLiquiditySources,
-      effectiveDefaultFactoryLiquiditySource
+      effectiveDefaultDirectDexLiquiditySource
     );
     const effectiveTakeGasOverrideSources = getEffectiveTakeGasOverrideSources(
       discoveredTake,
       takePolicy.allowedLiquiditySources,
-      effectiveDefaultFactoryLiquiditySource,
-      externalTakePaths
+      effectiveDefaultDirectDexLiquiditySource,
+      externalTakePaths,
+      calldataAggregatorSources
     );
     if (
       config.dex?.uniswapV3?.router?.candidateFeeTiers !== undefined &&
       !effectiveFactorySources.has(LiquiditySource.UNISWAPV3)
     ) {
       logger.warn(
-        'KeeperConfig.dex.uniswapV3.router.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover factory route source'
+        'KeeperConfig.dex.uniswapV3.router.candidateFeeTiers configured but UNISWAPV3 is not an enabled autodiscover direct DEX route source'
       );
     }
 
@@ -1168,7 +1219,7 @@ export function validateAutoDiscoverConfig(
         const sourcePath = resolveExternalTakePathFromSource(liquiditySource);
         if (
           sourcePath !== undefined &&
-          sourcePath !== 'factory' &&
+          sourcePath !== 'direct_dex' &&
           !effectiveTakeGasOverrideSources.has(liquiditySource)
         ) {
           throw new Error(

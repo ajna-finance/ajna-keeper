@@ -193,7 +193,7 @@ type ExternalTakeDeploymentSummary = {
   mode: 'deployed' | 'reused';
   owner: string;
   ajnaPoolFactory: string;
-  keeperTakerFactory: string;
+  keeperTakerRouter: string;
   uniswapV3Taker: string;
 };
 
@@ -348,7 +348,7 @@ const AJNA_KEEPER_TAKER_FACTORY_ABI = [
 const UNISWAP_V3_KEEPER_TAKER_ABI = [
   'function owner() view returns (address)',
   'function poolFactory() view returns (address)',
-  'function authorizedFactory() view returns (address)',
+  'function authorizedRouter() view returns (address)',
 ];
 const WETH9_ABI = [
   'function balanceOf(address) view returns (uint256)',
@@ -1376,19 +1376,19 @@ async function assertEvmTimeTravelSupported(
 async function resolveExistingUniswapV3ExternalTakeDeployment(params: {
   provider: ethers.providers.Provider;
   ajnaPoolFactoryAddress: string;
-  keeperTakerFactoryAddress: string;
+  keeperTakerRouterAddress: string;
   uniswapV3TakerAddress: string;
 }): Promise<ExternalTakeDeploymentSummary> {
   const ajnaPoolFactoryAddress = normalizeAddress(
     params.ajnaPoolFactoryAddress
   );
-  const keeperTakerFactoryAddress = normalizeAddress(
-    params.keeperTakerFactoryAddress
+  const keeperTakerRouterAddress = normalizeAddress(
+    params.keeperTakerRouterAddress
   );
   const uniswapV3TakerAddress = normalizeAddress(params.uniswapV3TakerAddress);
 
-  const keeperTakerFactory = new Contract(
-    keeperTakerFactoryAddress,
+  const keeperTakerRouter = new Contract(
+    keeperTakerRouterAddress,
     AJNA_KEEPER_TAKER_FACTORY_ABI,
     params.provider
   );
@@ -1404,25 +1404,25 @@ async function resolveExistingUniswapV3ExternalTakeDeployment(params: {
     configuredUniswapV3Taker,
     takerOwner,
     takerPoolFactory,
-    authorizedFactory,
+    authorizedRouter,
   ] = await Promise.all([
-    keeperTakerFactory.owner(),
-    keeperTakerFactory.poolFactory(),
-    keeperTakerFactory.takerContracts(UNISWAP_V3_LIQUIDITY_SOURCE),
+    keeperTakerRouter.owner(),
+    keeperTakerRouter.poolFactory(),
+    keeperTakerRouter.takerContracts(UNISWAP_V3_LIQUIDITY_SOURCE),
     uniswapV3Taker.owner(),
     uniswapV3Taker.poolFactory(),
-    uniswapV3Taker.authorizedFactory(),
+    uniswapV3Taker.authorizedRouter(),
   ]);
 
   if (normalizeAddress(configuredPoolFactory) !== ajnaPoolFactoryAddress) {
     throw new Error(
-      `Existing keeper taker factory ${keeperTakerFactoryAddress} targets Ajna pool factory ${configuredPoolFactory}, expected ${ajnaPoolFactoryAddress}`
+      `Existing keeper taker factory ${keeperTakerRouterAddress} targets Ajna pool factory ${configuredPoolFactory}, expected ${ajnaPoolFactoryAddress}`
     );
   }
 
   if (normalizeAddress(configuredUniswapV3Taker) !== uniswapV3TakerAddress) {
     throw new Error(
-      `Existing keeper taker factory ${keeperTakerFactoryAddress} has UniswapV3 taker ${configuredUniswapV3Taker}, expected ${uniswapV3TakerAddress}`
+      `Existing keeper taker factory ${keeperTakerRouterAddress} has UniswapV3 taker ${configuredUniswapV3Taker}, expected ${uniswapV3TakerAddress}`
     );
   }
 
@@ -1438,9 +1438,9 @@ async function resolveExistingUniswapV3ExternalTakeDeployment(params: {
     );
   }
 
-  if (normalizeAddress(authorizedFactory) !== keeperTakerFactoryAddress) {
+  if (normalizeAddress(authorizedRouter) !== keeperTakerRouterAddress) {
     throw new Error(
-      `Existing UniswapV3 taker ${uniswapV3TakerAddress} authorizes factory ${authorizedFactory}, expected ${keeperTakerFactoryAddress}`
+      `Existing UniswapV3 taker ${uniswapV3TakerAddress} authorizes router ${authorizedRouter}, expected ${keeperTakerRouterAddress}`
     );
   }
 
@@ -1448,7 +1448,7 @@ async function resolveExistingUniswapV3ExternalTakeDeployment(params: {
     mode: 'reused',
     owner: normalizeAddress(owner),
     ajnaPoolFactory: ajnaPoolFactoryAddress,
-    keeperTakerFactory: keeperTakerFactoryAddress,
+    keeperTakerRouter: keeperTakerRouterAddress,
     uniswapV3Taker: uniswapV3TakerAddress,
   };
 }
@@ -2458,8 +2458,8 @@ async function deployUniswapV3ExternalTakeContracts(params: {
       'artifacts',
       'contracts',
       'factories',
-      'AjnaKeeperTakerFactory.sol',
-      'AjnaKeeperTakerFactory.json'
+      'TakerRouter.sol',
+      'TakerRouter.json'
     )
   );
   const takerArtifact = readArtifact(
@@ -2482,13 +2482,13 @@ async function deployUniswapV3ExternalTakeContracts(params: {
   );
   const keeperFactoryDeployGasEstimate =
     await params.ownerSigner.estimateGas(factoryDeployTx);
-  const keeperTakerFactory = await factoryFactory.deploy(
+  const keeperTakerRouter = await factoryFactory.deploy(
     params.ajnaPoolFactoryAddress,
     {
       gasLimit: withGasBuffer(keeperFactoryDeployGasEstimate, 1_500_000),
     }
   );
-  await keeperTakerFactory.deployed();
+  await keeperTakerRouter.deployed();
 
   const uniswapTakerFactory = new ContractFactory(
     takerArtifact.abi,
@@ -2497,22 +2497,22 @@ async function deployUniswapV3ExternalTakeContracts(params: {
   );
   const takerDeployTx = uniswapTakerFactory.getDeployTransaction(
     params.ajnaPoolFactoryAddress,
-    keeperTakerFactory.address
+    keeperTakerRouter.address
   );
   const uniswapTakerDeployGasEstimate =
     await params.ownerSigner.estimateGas(takerDeployTx);
   const uniswapV3Taker = await uniswapTakerFactory.deploy(
     params.ajnaPoolFactoryAddress,
-    keeperTakerFactory.address,
+    keeperTakerRouter.address,
     { gasLimit: withGasBuffer(uniswapTakerDeployGasEstimate, 1_500_000) }
   );
   await uniswapV3Taker.deployed();
 
-  const setTakerGasEstimate = await keeperTakerFactory.estimateGas.setTaker(
+  const setTakerGasEstimate = await keeperTakerRouter.estimateGas.setTaker(
     UNISWAP_V3_LIQUIDITY_SOURCE,
     uniswapV3Taker.address
   );
-  const setTakerTx = await keeperTakerFactory.setTaker(
+  const setTakerTx = await keeperTakerRouter.setTaker(
     UNISWAP_V3_LIQUIDITY_SOURCE,
     uniswapV3Taker.address,
     { gasLimit: withGasBuffer(setTakerGasEstimate, 250_000) }
@@ -2523,7 +2523,7 @@ async function deployUniswapV3ExternalTakeContracts(params: {
     mode: 'deployed',
     owner: await params.ownerSigner.getAddress(),
     ajnaPoolFactory: params.ajnaPoolFactoryAddress,
-    keeperTakerFactory: keeperTakerFactory.address,
+    keeperTakerRouter: keeperTakerRouter.address,
     uniswapV3Taker: uniswapV3Taker.address,
   };
 }
@@ -2535,7 +2535,7 @@ function buildKeeperExternalTakeSnippet(params: {
   routerConfig: UniswapV3RouterConfig;
   deployment: ExternalTakeDeploymentSummary;
 }): string {
-  return `// Merge this into an existing Base keeper config.\n// Note: manual kick/take tests against this fresh local pool still need either a\n// local subgraph/indexer or a repo-local subgraph override harness.\n{\n  takers: {\n    factory: '${params.deployment.keeperTakerFactory}',\n    contracts: {\n      UniswapV3: '${params.deployment.uniswapV3Taker}',\n    },\n  },\n  dex: {\n    uniswapV3: {\n      router: {\n        swapRouter02Address: '${params.routerConfig.swapRouter02Address}',\n        poolFactoryAddress: '${params.routerConfig.poolFactoryAddress}',\n        quoterV2Address: '${params.routerConfig.quoterV2Address}',\n        wethAddress: '${params.routerConfig.wethAddress}',\n        defaultFeeTier: ${params.routerConfig.defaultFeeTier},\n        candidateFeeTiers: [${params.routerConfig.candidateFeeTiers.join(', ')}],\n        defaultSlippage: ${params.routerConfig.defaultSlippage},\n      },\n    },\n  },\n  manual: {\n    pools: [\n      {\n        name: '${params.collateralToken.symbol} / ${params.quoteToken.symbol} Local Fixture',\n        address: '${params.poolAddress}',\n        price: { source: PriceOriginSource.FIXED, value: 1 },\n        kick: {\n          enabled: true,\n          minDebt: 0.001,\n          priceFactor: 0.99,\n        },\n        take: {\n          minCollateral: 0.01,\n          liquiditySource: LiquiditySource.UNISWAPV3,\n          marketPriceFactor: 0.98,\n        },\n      },\n    ],\n  },\n}`;
+  return `// Merge this into an existing Base keeper config.\n// Note: manual kick/take tests against this fresh local pool still need either a\n// local subgraph/indexer or a repo-local subgraph override harness.\n{\n  takers: {\n    factory: '${params.deployment.keeperTakerRouter}',\n    contracts: {\n      UniswapV3: '${params.deployment.uniswapV3Taker}',\n    },\n  },\n  dex: {\n    uniswapV3: {\n      router: {\n        swapRouter02Address: '${params.routerConfig.swapRouter02Address}',\n        poolFactoryAddress: '${params.routerConfig.poolFactoryAddress}',\n        quoterV2Address: '${params.routerConfig.quoterV2Address}',\n        wethAddress: '${params.routerConfig.wethAddress}',\n        defaultFeeTier: ${params.routerConfig.defaultFeeTier},\n        candidateFeeTiers: [${params.routerConfig.candidateFeeTiers.join(', ')}],\n        defaultSlippage: ${params.routerConfig.defaultSlippage},\n      },\n    },\n  },\n  manual: {\n    pools: [\n      {\n        name: '${params.collateralToken.symbol} / ${params.quoteToken.symbol} Local Fixture',\n        address: '${params.poolAddress}',\n        price: { source: PriceOriginSource.FIXED, value: 1 },\n        kick: {\n          enabled: true,\n          minDebt: 0.001,\n          priceFactor: 0.99,\n        },\n        take: {\n          minCollateral: 0.01,\n          liquiditySource: LiquiditySource.UNISWAPV3,\n          marketPriceFactor: 0.98,\n        },\n      },\n    ],\n  },\n}`;
 }
 
 let activeFailureCheckpointWriter: ((error: unknown) => void) | undefined;
@@ -3226,7 +3226,7 @@ async function main() {
         ? await resolveExistingUniswapV3ExternalTakeDeployment({
             provider,
             ajnaPoolFactoryAddress,
-            keeperTakerFactoryAddress: existingKeeperTakerFactoryAddress,
+            keeperTakerRouterAddress: existingKeeperTakerFactoryAddress,
             uniswapV3TakerAddress: existingUniswapV3TakerAddress,
           })
         : await deployUniswapV3ExternalTakeContracts({
@@ -3237,7 +3237,7 @@ async function main() {
         ? await resolveExistingUniswapV3ExternalTakeDeployment({
             provider,
             ajnaPoolFactoryAddress,
-            keeperTakerFactoryAddress: existingKeeperTakerFactoryAddress,
+            keeperTakerRouterAddress: existingKeeperTakerFactoryAddress,
             uniswapV3TakerAddress: existingUniswapV3TakerAddress,
           })
         : undefined;

@@ -101,11 +101,11 @@ const config: KeeperConfig = {
   },
   takers: {
     // Placeholders — the hybrid-fork-loop harness deploys + registers fresh
-    // contracts on the fork and overrides keeperTaker/keeperTakerFactory/lifiTaker
+    // contracts on the fork and overrides keeperTakerRouter/taker contracts
     // at runtime. Replace with deployed addresses for real production use.
-    factory: '0x0000000000000000000000000000000000000F00',
-    oneInch: '0x0000000000000000000000000000000000000F01',
+    router: '0x0000000000000000000000000000000000000F00',
     contracts: {
+      OneInchAggregator: '0x0000000000000000000000000000000000000F01',
       UniswapV3: '0x0000000000000000000000000000000000000F02',
       Lifi: '0x0000000000000000000000000000000000000F03',
     },
@@ -114,9 +114,10 @@ const config: KeeperConfig = {
     enabled: true,
     take: {
       enabled: true,
-      allowedExternalTakePaths: ['oneinch', 'factory', 'lifi'],
+      allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      allowedCalldataAggregatorProviders: ['oneinch', 'lifi'],
       externalTakeRouteSelectionMode: 'maximize_profit',
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
       validateRouteDeployments: true,
       dexGasOverrides: { [LiquiditySource.LIFI]: '900000' },

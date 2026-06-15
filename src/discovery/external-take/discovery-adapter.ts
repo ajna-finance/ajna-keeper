@@ -2,8 +2,10 @@ import {
   ActiveExternalTakeRouteSelectionMode,
   ExternalTakePathKind,
   LiquiditySource,
-  isFactoryDynamicSource,
+  isDirectDexDynamicSource,
+  resolveCalldataAggregatorProviderForSource,
   resolveExternalTakePolicy,
+  resolveExternalTakePathFromSource,
 } from '../../config';
 import { ExternalTakeAdapter } from '../../take/engine';
 import { TakeAuctionStatusReader } from '../../take/liquidation-status';
@@ -11,7 +13,7 @@ import {
   bindExternalTakeQuoteToExecutionResult,
   getExternalTakeExecutionPlanPrimaryEvaluation,
 } from '../../take/external-take/execution-plan';
-import { createNoExternalTakeAdapter } from '../../take/one-inch-adapter';
+import { createNoExternalTakeAdapter } from '../../take/no-external-take-adapter';
 import {
   DiscoveryExternalTakeApprovalContext,
   DiscoveryExternalTakeApprover,
@@ -33,7 +35,7 @@ import {
 import { ResolvedTakeTarget } from '../targets';
 
 function createProviderBackedDirectAdapter(params: {
-  kind: 'oneinch' | 'calldata_aggregator' | 'factory';
+  kind: 'calldata_aggregator' | 'direct_dex';
   provider: DiscoveryExternalTakeRouteProvider;
   stats: DiscoveredTakeTargetStats;
 }): ExternalTakeAdapter<
@@ -171,36 +173,32 @@ export function createExternalTakeAdapterForDiscovery(params: {
     };
   }
 
-  if (params.target.take.liquiditySource === LiquiditySource.ONEINCH) {
-    return createProviderBackedDirectAdapter({
-      kind: 'oneinch',
-      provider: params.providerRegistry.oneInchProvider,
-      stats: params.stats,
-    });
-  }
-
-  if (params.target.take.liquiditySource === LiquiditySource.LIFI) {
-    return createProviderBackedDirectAdapter({
-      kind: 'calldata_aggregator',
-      provider: params.providerRegistry.lifiProvider,
-      stats: params.stats,
-    });
-  }
-
-  if (
-    params.target.take.liquiditySource === LiquiditySource.SUSHI_AGGREGATOR
-  ) {
+  const targetPath = resolveExternalTakePathFromSource(
+    params.target.take.liquiditySource
+  );
+  if (targetPath === 'calldata_aggregator') {
+    const providerId = resolveCalldataAggregatorProviderForSource(
+      params.target.take.liquiditySource
+    );
+    if (!providerId) {
+      return createNoExternalTakeAdapter<DiscoveryExternalTakeApprovalContext>();
+    }
     return createProviderBackedDirectAdapter({
       kind: 'calldata_aggregator',
-      provider: params.providerRegistry.sushiAggregatorProvider,
+      provider: params.providerRegistry.selectExternalTakeProvider({
+        selectedPath: 'calldata_aggregator',
+        providerId,
+      }),
       stats: params.stats,
     });
   }
 
-  if (isFactoryDynamicSource(params.target.take.liquiditySource)) {
+  if (isDirectDexDynamicSource(params.target.take.liquiditySource)) {
     return createProviderBackedDirectAdapter({
-      kind: 'factory',
-      provider: params.providerRegistry.factoryProvider,
+      kind: 'direct_dex',
+      provider: params.providerRegistry.selectExternalTakeProvider({
+        selectedPath: 'direct_dex',
+      }),
       stats: params.stats,
     });
   }

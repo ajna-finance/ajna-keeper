@@ -351,7 +351,7 @@ describe('shared arbTake helpers', () => {
         evaluateExternalTake: sinon.stub().resolves(
           externalTakeEvaluation({
             isTakeable: true,
-            externalTakePath: 'oneinch',
+            externalTakePath: 'calldata_aggregator',
             selectedLiquiditySource: LiquiditySource.ONEINCH,
             takeablePrice: 2,
             quoteAmountRaw: BigNumber.from(100),
@@ -417,7 +417,7 @@ describe('shared arbTake helpers', () => {
         evaluateExternalTake: sinon.stub().resolves(
           externalTakeEvaluation({
             isTakeable: true,
-            externalTakePath: 'oneinch',
+            externalTakePath: 'calldata_aggregator',
             selectedLiquiditySource: LiquiditySource.ONEINCH,
             takeablePrice: 2,
             quoteAmountRaw: BigNumber.from(100),
@@ -496,7 +496,7 @@ describe('shared arbTake helpers', () => {
         evaluateExternalTake: sinon.stub().resolves(
           externalTakeEvaluation({
             isTakeable: true,
-            externalTakePath: 'oneinch',
+            externalTakePath: 'calldata_aggregator',
             selectedLiquiditySource: LiquiditySource.ONEINCH,
             takeablePrice: 1,
             quoteAmountRaw: BigNumber.from(100),
@@ -563,7 +563,7 @@ describe('shared arbTake helpers', () => {
         evaluateExternalTake: sinon.stub().resolves(
           externalTakeEvaluation({
             isTakeable: true,
-            externalTakePath: 'oneinch',
+            externalTakePath: 'calldata_aggregator',
             selectedLiquiditySource: LiquiditySource.ONEINCH,
             takeablePrice: 1,
             quoteAmountRaw: BigNumber.from(100),
@@ -809,9 +809,9 @@ describe('shared arbTake helpers', () => {
     );
     expect(read.notCalled).to.equal(true);
     expect(executeExternalTake.calledOnce).to.equal(true);
-    expect(
-      executeExternalTake.firstCall.args[0].liquidation.borrower
-    ).to.equal(borrowers[0]);
+    expect(executeExternalTake.firstCall.args[0].liquidation.borrower).to.equal(
+      borrowers[0]
+    );
   });
 
   it('does not reuse preloaded evaluation statuses after a state-changing execution when continuing', async () => {
@@ -879,11 +879,7 @@ describe('shared arbTake helpers', () => {
   });
 
   it('continues same-pool execution until maxExecutions is reached', async () => {
-    const borrowers = [
-      '0xBorrowerA',
-      '0xBorrowerB',
-      '0xBorrowerC',
-    ];
+    const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
     const statusReader = {
       read: sinon.stub().callsFake(async ({ borrower }) => ({
         borrower,

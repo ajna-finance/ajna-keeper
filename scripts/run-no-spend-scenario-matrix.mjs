@@ -47,8 +47,7 @@ function parseArgs(argv) {
   }
   if (
     options.baseForkBlock !== 'latest' &&
-    (!/^\d+$/.test(options.baseForkBlock) ||
-      Number(options.baseForkBlock) <= 0)
+    (!/^\d+$/.test(options.baseForkBlock) || Number(options.baseForkBlock) <= 0)
   ) {
     throw new Error('--base-fork-block must be a positive integer or latest');
   }
@@ -70,7 +69,7 @@ function buildNoSpendCommand(params) {
     '--base-fork-block',
     String(params.blockNumber),
     '--hybrid-gas-quote-fallback',
-    params.hybridGasQuoteFallback ?? 'factory_first',
+    params.hybridGasQuoteFallback ?? 'direct_dex_first',
     '--expect',
     params.expect ?? 'success',
     '--output',
@@ -110,7 +109,9 @@ function summarizeNoSpendReport(reportPath, expectedBlock) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ajna-no-spend-matrix-'));
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'ajna-no-spend-matrix-')
+  );
   const outputPath =
     options.outputPath ?? path.join(tempDir, 'scenario-matrix-report.json');
   const forkRpc = resolveForkRpcUrl();
@@ -141,7 +142,7 @@ async function main() {
     {
       name: 'fallback-regression-factory-first',
       expect: 'success',
-      hybridGasQuoteFallback: 'factory_first',
+      hybridGasQuoteFallback: 'direct_dex_first',
       env: {
         AJNA_AGENT_NO_SPEND_UNISWAP_LIQUIDITY_MODE: 'fallback_regression',
       },
@@ -161,8 +162,7 @@ async function main() {
       expectedFeeTier: 500,
       env: {
         AJNA_AGENT_NO_SPEND_UNISWAP_LIQUIDITY_MODE: 'strict_hybrid',
-        AJNA_AGENT_NO_SPEND_UNISWAP_FEE_TIER_TEST_MODE:
-          'single_non_default',
+        AJNA_AGENT_NO_SPEND_UNISWAP_FEE_TIER_TEST_MODE: 'single_non_default',
         AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER: '500',
       },
     },
@@ -219,7 +219,8 @@ async function main() {
     };
     if (result.status === 'passed' && result.sameFork !== true) {
       result.status = 'failed';
-      result.error = 'scenario report did not use the matrix resolved fork block';
+      result.error =
+        'scenario report did not use the matrix resolved fork block';
     }
     results.push(result);
   }
@@ -290,7 +291,7 @@ async function main() {
 main().catch((error) => {
   process.stderr.write(
     `[matrix] failed: ${
-      error instanceof Error ? error.stack ?? error.message : String(error)
+      error instanceof Error ? (error.stack ?? error.message) : String(error)
     }\n`
   );
   process.exitCode = 1;

@@ -49,7 +49,7 @@ const config: KeeperConfig = {
     },
   },
   takers: {
-    factory: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
+    router: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
     contracts: {
       UniswapV3: '0x[DEPLOYED_UNISWAP_TAKER_ADDRESS]', // Individual taker contract addresses
     },

@@ -53,7 +53,7 @@ describe('LI.FI config validation', () => {
         },
       },
       takers: {
-        factory: '0x1234567890123456789012345678901234567890',
+        router: '0x1234567890123456789012345678901234567890',
         contracts: {
           Lifi: '0x3333333333333333333333333333333333333333',
         },
@@ -88,10 +88,10 @@ describe('LI.FI config validation', () => {
 
   it('rejects LI.FI autodiscovery without the canonical factory taker config', () => {
     const missingFactory = baseConfig();
-    delete (missingFactory.takers as any).factory;
+    delete (missingFactory.takers as any).router;
 
     expect(() => validateAutoDiscoverConfig(missingFactory, chainId)).to.throw(
-      'TakeSettings: takers.factory required when liquiditySource is LIFI'
+      'TakeSettings: takers.router required when liquiditySource is LIFI'
     );
 
     const missingLifiTaker = baseConfig();
@@ -128,8 +128,9 @@ describe('LI.FI config validation', () => {
       LiquiditySource.UNISWAPV3;
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['factory', 'lifi'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['direct_dex', 'calldata_aggregator'],
+      allowedCalldataAggregatorProviders: ['lifi'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       dexGasOverrides: {
         [LiquiditySource.UNISWAPV3]: '900000',
         [LiquiditySource.LIFI]: '900000',
@@ -399,6 +400,61 @@ describe('LI.FI config validation', () => {
     );
   });
 
+  it('rejects missing concrete production exchange allowlists', () => {
+    const config = baseConfig();
+    delete (config.dex!.lifi as any).allowExchanges;
+
+    expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
+      'KeeperConfig.dex.lifi.allowExchanges must be non-empty in production'
+    );
+  });
+
+  it('accepts reviewed-broad production LI.FI policy without allowExchanges', () => {
+    const config = baseConfig();
+    config.dex!.lifi = {
+      mode: 'production',
+      exchangePolicy: 'reviewed_broad',
+      callTargetAllowlist: {
+        [chainId]: [callTarget],
+      },
+      approvalSpenderAllowlist: {
+        [chainId]: [spender],
+      },
+      selectorAllowlist: {
+        [chainId]: {
+          [callTarget]: ['0xabcdef12'],
+        },
+      },
+      denyExchanges: ['badtool'],
+      preferExchanges: ['goodtool'],
+      defaultSlippage: 0.005,
+      maxQuoteAgeMs: 30_000,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config, chainId)).to.not.throw();
+  });
+
+  it('rejects reviewed-broad production LI.FI policy when allowExchanges is present', () => {
+    const config = baseConfig();
+    config.dex!.lifi = {
+      ...(config.dex!.lifi as any),
+      exchangePolicy: 'reviewed_broad',
+      allowExchanges: ['uniswap'],
+    };
+
+    expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
+      'KeeperConfig.dex.lifi.allowExchanges must be omitted when exchangePolicy is reviewed_broad'
+    );
+
+    const undefinedAllow = baseConfig();
+    (undefinedAllow.dex!.lifi as any).exchangePolicy = 'reviewed_broad';
+    (undefinedAllow.dex!.lifi as any).allowExchanges = undefined;
+
+    expect(() => validateAutoDiscoverConfig(undefinedAllow, chainId)).to.throw(
+      'KeeperConfig.dex.lifi.allowExchanges must be omitted when exchangePolicy is reviewed_broad'
+    );
+  });
+
   it('rejects fee-collection exchange filters', () => {
     const config = baseConfig();
     config.dex!.lifi = {
@@ -525,8 +581,9 @@ describe('LI.FI config validation', () => {
       LiquiditySource.UNISWAPV3;
     config.discovery!.take = {
       enabled: true,
-      allowedExternalTakePaths: ['factory', 'lifi'],
-      defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+      allowedExternalTakePaths: ['direct_dex', 'calldata_aggregator'],
+      allowedCalldataAggregatorProviders: ['lifi'],
+      defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
       allowedLiquiditySources: [LiquiditySource.LIFI],
       validateRouteDeployments: true,
       dexGasOverrides: {

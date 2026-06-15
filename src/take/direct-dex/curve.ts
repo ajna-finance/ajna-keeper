@@ -1,14 +1,10 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import {
-  DEFAULT_FEE_TIER_BY_SOURCE,
-  LiquiditySource,
-  resolveUniswapV3FactoryRouteConfig,
-} from '../../config';
+import { CurvePoolType, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
 import {
-  ApprovedUniswapV3FactoryQuoteEvaluation,
+  ApprovedCurveFactoryQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -19,7 +15,7 @@ import {
   weiToDecimaled,
   withTimeout,
 } from '../../utils';
-import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types';
+import { TakerRouter__factory } from '../../../typechain-types';
 import {
   FactoryExecutionConfig,
   FactoryQuoteConfig,
@@ -33,8 +29,8 @@ import {
   formatFactoryPriceCheckLog,
   formatFactoryQuoteRequestLog,
   formatFactoryTakeSubmissionLog,
+  getCurveQuoteProvider,
   getSlippageFloorQuoteRaw,
-  getUniswapV3QuoteProvider,
   getSwapDeadlineCached,
 } from './shared';
 import {
@@ -43,7 +39,7 @@ import {
 } from '../write-transport';
 import { logTakeExecutionTelemetry } from '../execution-telemetry';
 
-export async function evaluateUniswapV3FactoryQuote({
+export async function evaluateCurveFactoryQuote({
   pool,
   auctionPriceWad,
   collateral,
@@ -51,52 +47,55 @@ export async function evaluateUniswapV3FactoryQuote({
   config,
   signer,
   runtimeCache,
-  feeTier,
   routeContext,
 }: {
   pool: FungiblePool;
   auctionPriceWad: BigNumber;
   collateral: BigNumber;
   poolConfig: TakeActionConfig;
-  config: Pick<FactoryQuoteConfig, 'uniswapV3RouterOverrides'>;
+  config: Pick<FactoryQuoteConfig, 'curveRouterOverrides' | 'tokenAddresses'>;
   signer: Signer;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
-  feeTier?: number;
   routeContext?: FactoryRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
-  const routerConfig = resolveUniswapV3FactoryRouteConfig(
-    config.uniswapV3RouterOverrides
-  );
-  if (!routerConfig) {
+  if (!config.curveRouterOverrides) {
     logger.debug(
-      `Factory: Incomplete uniswapV3RouterOverrides configured for pool ${pool.name}`
+      `Factory: No curveRouterOverrides configured for pool ${pool.name}`
     );
     return {
       isTakeable: false,
-      reason: 'missing required Uniswap V3 factory route configuration',
+      reason: 'missing curveRouterOverrides',
+    };
+  }
+
+  const curveConfig = config.curveRouterOverrides;
+
+  if (!curveConfig.poolConfigs || !curveConfig.wethAddress) {
+    logger.debug(
+      `Factory: Missing required Curve configuration for pool ${pool.name}`
+    );
+    return {
+      isTakeable: false,
+      reason: 'missing required Curve configuration',
     };
   }
 
   try {
-    const quoteProvider = getUniswapV3QuoteProvider({
+    const quoteProvider = await getCurveQuoteProvider({
       signer,
-      quoteConfig: routerConfig,
+      routerConfig: curveConfig,
+      tokenAddresses: config.tokenAddresses,
       runtimeCache,
     });
     if (!quoteProvider) {
       logger.debug(
-        `Factory: UniswapV3QuoteProvider not available for pool ${pool.name}`
+        `Factory: Curve quote provider not available for pool ${pool.name}`
       );
       return {
         isTakeable: false,
-        reason: 'Uniswap V3 quote provider unavailable',
+        reason: 'Curve quote provider unavailable',
       };
     }
-
-    const quoterAddress = quoteProvider.getQuoterAddress();
-    logger.debug(
-      `Factory: Using QuoterV2 at ${quoterAddress} for pool ${pool.name}`
-    );
 
     const context =
       routeContext ??
@@ -109,19 +108,14 @@ export async function evaluateUniswapV3FactoryQuote({
         runtimeCache,
       }));
 
-    const selectedFeeTier =
-      feeTier ??
-      routerConfig.defaultFeeTier ??
-      DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3];
     logger.debug(
       formatFactoryQuoteRequestLog({
-        source: LiquiditySource.UNISWAPV3,
+        source: LiquiditySource.CURVE,
         poolName: pool.name,
         collateralAmount: ethers.utils.formatUnits(
           context.collateralInTokenDecimals,
           context.collateralTokenDecimals
         ),
-        feeTier: selectedFeeTier,
       })
     );
 
@@ -130,28 +124,27 @@ export async function evaluateUniswapV3FactoryQuote({
         context.collateralInTokenDecimals,
         pool.collateralAddress,
         pool.quoteAddress,
-        selectedFeeTier,
         {
           inputDecimals: context.collateralTokenDecimals,
           outputDecimals: context.quoteTokenDecimals,
         }
       ),
       DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-      'Uniswap V3 quote'
+      'Curve quote'
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
       logger.debug(
-        `Factory: Failed to get official Uniswap V3 quote for pool ${pool.name}: ${quoteResult.error}`
+        `Factory: Failed to get Curve quote for pool ${pool.name}: ${quoteResult.error}`
       );
       return {
         isTakeable: false,
-        reason: quoteResult.error ?? 'Uniswap V3 quote failed',
+        reason: quoteResult.error ?? 'Curve quote failed',
       };
     }
 
-    const quoteAmountRaw = BigNumber.from(quoteResult.dstAmount);
     const collateralAmount = context.collateralAmount;
+    const quoteAmountRaw = quoteResult.dstAmount;
     const quoteAmount = Number(
       ethers.utils.formatUnits(quoteAmountRaw, context.quoteTokenDecimals)
     );
@@ -163,7 +156,7 @@ export async function evaluateUniswapV3FactoryQuote({
       );
       return {
         isTakeable: false,
-        reason: 'invalid Uniswap V3 quote amounts',
+        reason: 'invalid Curve quote amounts',
       };
     }
 
@@ -186,34 +179,34 @@ export async function evaluateUniswapV3FactoryQuote({
       quoteAmountRaw,
       quoteAmount,
       collateralAmount,
-      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-      selectedFeeTier,
+      selectedLiquiditySource: LiquiditySource.CURVE,
       existingSlippageFloorQuoteRaw: getSlippageFloorQuoteRaw(
         quoteAmountRaw,
-        routerConfig.defaultSlippage
+        curveConfig.defaultSlippage
       ),
       allowSubsidy: poolConfig.take.allowSubsidy === true,
       routeContext: context,
-      failureReason:
-        'quoted output below required Uniswap V3 profitability floor',
+      failureReason: 'quoted output below required Curve profitability floor',
     });
 
     logger.debug(
       formatFactoryPriceCheckLog({
-        source: LiquiditySource.UNISWAPV3,
+        source: LiquiditySource.CURVE,
         poolName: pool.name,
         auctionPrice,
         marketPrice: evaluation.marketPrice,
         takeablePrice: evaluation.takeablePrice,
-        feeTier: selectedFeeTier,
         profitable: evaluation.isTakeable,
       })
     );
 
-    return evaluation;
+    return {
+      ...evaluation,
+      curvePool: quoteResult.selectedPool,
+    };
   } catch (error) {
     logger.error(
-      `Factory: Error getting official Uniswap V3 quote for pool ${pool.name}: ${error}`
+      `Factory: Error getting Curve quote for pool ${pool.name}: ${error}`
     );
     return {
       isTakeable: false,
@@ -222,7 +215,7 @@ export async function evaluateUniswapV3FactoryQuote({
   }
 }
 
-export async function executeUniswapV3FactoryTake({
+export async function executeCurveFactoryTake({
   pool,
   poolConfig,
   signer,
@@ -234,11 +227,12 @@ export async function executeUniswapV3FactoryTake({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation;
+  quoteEvaluation: ApprovedCurveFactoryQuoteEvaluation;
   config: Pick<
     FactoryExecutionConfig,
-    | 'keeperTakerFactory'
-    | 'uniswapV3RouterOverrides'
+    | 'keeperTakerRouter'
+    | 'curveRouterOverrides'
+    | 'tokenAddresses'
     | 'takeWriteTransport'
     | 'runtimeCache'
     | 'onFactoryExecutionFailure'
@@ -247,22 +241,23 @@ export async function executeUniswapV3FactoryTake({
   let attemptedSubmission = false;
   try {
     const takeWriteTransport = resolveTakeWriteTransport(signer, config);
-    const factory = AjnaKeeperTakerFactory__factory.connect(
-      config.keeperTakerFactory!,
+    const factory = TakerRouter__factory.connect(
+      config.keeperTakerRouter!,
       signer
     );
 
-    const routerConfig = resolveUniswapV3FactoryRouteConfig(
-      config.uniswapV3RouterOverrides
-    );
-    if (!routerConfig) {
-      const message =
-        'Factory: complete dex.uniswapV3.router configuration required for UniswapV3 takes';
+    if (!config.curveRouterOverrides) {
+      const message = 'Factory: curveRouterOverrides required for Curve takes';
       logger.error(message);
       throw new Error(message);
     }
-    const swapRouterAddress = routerConfig.swapRouter02Address;
-    const routerAmountOutMinimum = await computeFactoryAmountOutMinimum({
+    const resolvedCurvePool = quoteEvaluation.curvePool;
+
+    logger.debug(
+      `Factory: Found Curve pool tokens: ${pool.collateralAddress}@${resolvedCurvePool.tokenInIndex}, ${pool.quoteAddress}@${resolvedCurvePool.tokenOutIndex}`
+    );
+
+    const minimalAmountOut = await computeFactoryAmountOutMinimum({
       pool,
       liquidation,
       quoteEvaluation,
@@ -274,42 +269,46 @@ export async function executeUniswapV3FactoryTake({
 
     logger.debug(
       formatFactoryExecutionLog({
-        source: LiquiditySource.UNISWAPV3,
+        source: LiquiditySource.CURVE,
         poolName: pool.name,
         collateralWad: liquidation.collateral,
         auctionPriceWad: liquidation.auctionPrice,
-        minimalAmountOut: routerAmountOutMinimum,
+        minimalAmountOut,
+        extraLines: [
+          `Pool Address: ${resolvedCurvePool.address}`,
+          `Pool Type: ${resolvedCurvePool.poolType}`,
+          `Token Indices: ${resolvedCurvePool.tokenInIndex} -> ${resolvedCurvePool.tokenOutIndex}`,
+        ],
       })
     );
 
-    const swapDetails = {
-      swapRouter: swapRouterAddress,
-      targetToken: pool.quoteAddress,
-      feeTier: quoteEvaluation.selectedFeeTier,
-      amountOutMinimum: routerAmountOutMinimum,
-      deadline,
-    };
-
     const encodedSwapDetails = ethers.utils.defaultAbiCoder.encode(
-      ['(address,address,uint24,uint256,uint256)'],
+      ['address', 'uint8', 'uint8', 'uint8', 'uint256', 'uint256'],
       [
-        [
-          swapDetails.swapRouter,
-          swapDetails.targetToken,
-          swapDetails.feeTier,
-          swapDetails.amountOutMinimum,
-          swapDetails.deadline,
-        ],
+        resolvedCurvePool.address,
+        resolvedCurvePool.poolType === CurvePoolType.STABLE ? 0 : 1,
+        resolvedCurvePool.tokenInIndex,
+        resolvedCurvePool.tokenOutIndex,
+        minimalAmountOut,
+        deadline,
       ]
     );
 
     logger.debug(
       formatFactoryTakeSubmissionLog({
-        source: LiquiditySource.UNISWAPV3,
+        source: LiquiditySource.CURVE,
         poolAddress: pool.poolAddress,
         borrower: liquidation.borrower,
       })
     );
+
+    const executionDelayMs = config.curveRouterOverrides.executionDelayMs ?? 0;
+    if (executionDelayMs > 0) {
+      logger.debug(
+        `Adding ${executionDelayMs}ms Curve execution delay before factory take`
+      );
+      await new Promise((resolve) => setTimeout(resolve, executionDelayMs));
+    }
 
     const receipt = await NonceTracker.queueTransaction(
       takeWriteTransport.signer,
@@ -319,13 +318,13 @@ export async function executeUniswapV3FactoryTake({
           liquidation.borrower,
           liquidation.auctionPrice,
           liquidation.collateral,
-          Number(LiquiditySource.UNISWAPV3),
-          swapDetails.swapRouter,
+          Number(LiquiditySource.CURVE),
+          resolvedCurvePool.address,
           encodedSwapDetails,
         ] as const;
         const gasLimit = await estimateGasWithBuffer(
           () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
-          `Factory Uniswap take ${pool.name}/${liquidation.borrower}`,
+          `Factory Curve take ${pool.name}/${liquidation.borrower}`,
           13000
         );
         const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
@@ -345,24 +344,24 @@ export async function executeUniswapV3FactoryTake({
       }
     );
     logTakeExecutionTelemetry({
-      path: 'factory',
-      source: LiquiditySource.UNISWAPV3,
+      path: 'direct_dex',
+      source: LiquiditySource.CURVE,
       poolName: pool.name,
       poolAddress: pool.poolAddress,
       borrower: liquidation.borrower,
       receipt,
       routeProfitability: quoteEvaluation.routeProfitability,
       approvedMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-      selectedFeeTier: quoteEvaluation.selectedFeeTier,
+      curvePoolAddress: resolvedCurvePool.address,
       takeWriteTransport,
     });
 
     logger.info(
-      `Factory Uniswap V3 Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
+      `Factory Curve Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
     );
   } catch (error) {
     logger.error(
-      `Factory: Failed to Uniswap V3 Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
+      `Factory: Failed to Curve Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
       error
     );
     config.onFactoryExecutionFailure?.({

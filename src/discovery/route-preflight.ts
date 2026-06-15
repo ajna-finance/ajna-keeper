@@ -110,12 +110,12 @@ function addExternalTakePathRequirements(
 ): void {
   const takePolicy = getAutoDiscoverTakePolicy(config.discovery);
   for (const path of paths) {
-    if (path === 'factory') {
+    if (path === 'direct_dex') {
       for (const source of resolveExternalTakePolicy({
         defaultLiquiditySource:
           config.discovery?.defaults?.take?.liquiditySource,
         takePolicy,
-      }).factoryRouteSources) {
+      }).directDexRouteSources) {
         addPreflightRequirement(requirements, source);
       }
       continue;
@@ -139,8 +139,8 @@ function addManualTakeRequirements(
     if (
       options.onlyRequired &&
       (path === undefined ||
-        getExternalTakePathDescriptor(path).requiresRouteDeploymentValidation !==
-          true)
+        getExternalTakePathDescriptor(path)
+          .requiresRouteDeploymentValidation !== true)
     ) {
       continue;
     }
@@ -157,10 +157,7 @@ function getPreflightRequirements(
 export function resolveManualRequiredRoutePreflightRequirements(
   config: KeeperConfig
 ): ExternalTakeRoutePreflightRequirement[] {
-  const requirements = new Map<
-    string,
-    ExternalTakeRoutePreflightRequirement
-  >();
+  const requirements = new Map<string, ExternalTakeRoutePreflightRequirement>();
   addManualTakeRequirements(requirements, config, { onlyRequired: true });
   return getPreflightRequirements(requirements);
 }
@@ -168,10 +165,7 @@ export function resolveManualRequiredRoutePreflightRequirements(
 export function resolveAutodiscoverRoutePreflightRequirements(
   config: KeeperConfig
 ): ExternalTakeRoutePreflightRequirement[] {
-  const requirements = new Map<
-    string,
-    ExternalTakeRoutePreflightRequirement
-  >();
+  const requirements = new Map<string, ExternalTakeRoutePreflightRequirement>();
   addExternalTakePathRequirements(
     requirements,
     config,
@@ -183,10 +177,7 @@ export function resolveAutodiscoverRoutePreflightRequirements(
 export function resolveExternalTakeRoutePreflightRequirements(
   config: KeeperConfig
 ): ExternalTakeRoutePreflightRequirement[] {
-  const requirements = new Map<
-    string,
-    ExternalTakeRoutePreflightRequirement
-  >();
+  const requirements = new Map<string, ExternalTakeRoutePreflightRequirement>();
   addManualTakeRequirements(requirements, config);
   addExternalTakePathRequirements(
     requirements,
@@ -199,10 +190,7 @@ export function resolveExternalTakeRoutePreflightRequirements(
 export function resolveExternalTakeRouteDeploymentPreflight(
   config: KeeperConfig
 ): ExternalTakeRouteDeploymentPreflightPlan {
-  const requirements = new Map<
-    string,
-    ExternalTakeRoutePreflightRequirement
-  >();
+  const requirements = new Map<string, ExternalTakeRoutePreflightRequirement>();
   if (
     getAutoDiscoverTakePolicy(config.discovery)?.validateRouteDeployments ===
     true
@@ -352,7 +340,7 @@ async function validateFactoryRegistry(params: {
     );
     if (registeredTaker === undefined) {
       params.errors.push(
-        `keeperTakerFactory registry for ${formatLiquiditySource(params.source)} could not be read after retries: ${getErrorMessage(error)}`
+        `keeperTakerRouter registry for ${formatLiquiditySource(params.source)} could not be read after retries: ${getErrorMessage(error)}`
       );
       return;
     }
@@ -362,18 +350,18 @@ async function validateFactoryRegistry(params: {
         ethers.constants.AddressZero.toLowerCase()
     ) {
       params.errors.push(
-        `keeperTakerFactory registry has no taker for ${formatLiquiditySource(params.source)}, expected ${params.expectedTaker}`
+        `keeperTakerRouter registry has no taker for ${formatLiquiditySource(params.source)}, expected ${params.expectedTaker}`
       );
       return;
     }
     if (registeredTaker.toLowerCase() !== params.expectedTaker.toLowerCase()) {
       params.errors.push(
-        `keeperTakerFactory registry maps ${formatLiquiditySource(params.source)} to ${registeredTaker}, expected ${params.expectedTaker}`
+        `keeperTakerRouter registry maps ${formatLiquiditySource(params.source)} to ${registeredTaker}, expected ${params.expectedTaker}`
       );
     }
   } catch (error) {
     params.errors.push(
-      `keeperTakerFactory registry for ${formatLiquiditySource(params.source)} could not be read: ${getErrorMessage(error)}`
+      `keeperTakerRouter registry for ${formatLiquiditySource(params.source)} could not be read: ${getErrorMessage(error)}`
     );
   }
 }
@@ -465,8 +453,9 @@ async function validateLifiAllowlistPreflight(params: {
 const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
   [LiquiditySource.ONEINCH]: {
     usesFactoryRegistry: false,
-    takerLabel: () => 'takers.oneInch',
-    getTakerAddress: ({ config }) => config.takers?.oneInch,
+    takerLabel: (source) => `${formatLiquiditySource(source)} taker`,
+    getTakerAddress: ({ config, source }) =>
+      getConfiguredTakerAddress(config, source),
     getContractCodeRequirements: ({ config, chainId }) => [
       {
         label: `1inch router for chain ${chainId}`,
@@ -533,7 +522,13 @@ const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
     getTakerAddress: ({ config, source }) =>
       getConfiguredTakerAddress(config, source),
     getContractCodeRequirements: () => [],
-    validateAdditional: async ({ config, provider, chainId, takerAddress, errors }) => {
+    validateAdditional: async ({
+      config,
+      provider,
+      chainId,
+      takerAddress,
+      errors,
+    }) => {
       await validateSushiAggregatorAllowlistPreflight({
         config,
         provider,
@@ -578,7 +573,7 @@ async function validateExternalTakeSourcePreflight(params: {
   if (params.descriptor.usesFactoryRegistry) {
     await validateFactoryRegistry({
       provider: params.provider,
-      factoryAddress: params.config.takers?.factory,
+      factoryAddress: params.config.takers?.router,
       source: params.source,
       expectedTaker: takerAddress,
       errors: params.errors,
@@ -628,14 +623,12 @@ export async function validateExternalTakeRouteDeployments(params: {
     descriptor: getExternalTakeSourcePreflightDescriptor(requirement.source),
   }));
   if (
-    sourcePreflights.some(
-      ({ descriptor }) => descriptor.usesFactoryRegistry
-    )
+    sourcePreflights.some(({ descriptor }) => descriptor.usesFactoryRegistry)
   ) {
     await requireContractCode({
       provider: params.provider,
-      label: 'takers.factory',
-      address: params.config.takers?.factory,
+      label: 'takers.router',
+      address: params.config.takers?.router,
       errors,
     });
   }

@@ -47,7 +47,7 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+      keeperTakerRouter: '0x1234567890123456789012345678901234567890',
       takerContracts: {
         UniswapV3: '0x2234567890123456789012345678901234567890',
       },
@@ -80,22 +80,25 @@ describe('Take Integration Tests', () => {
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual factory external take context starting')
+        sinon.match('Manual direct_dex external take context starting')
       )
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual 1inch take context starting')
+        sinon.match('Manual calldata_aggregator external take context starting')
       )
     ).to.be.false;
   });
 
-  it('routes 1inch pools through the manual 1inch take path', async () => {
+  it('routes 1inch pools through the manual calldata aggregator take path', async () => {
     const debugSpy = sinon.spy(logger, 'debug');
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      keeperTaker: '0x1234567890123456789012345678901234567890',
+      keeperTakerRouter: '0x2222222222222222222222222222222222222222',
+      takerContracts: {
+        OneInchAggregator: '0x1234567890123456789012345678901234567890',
+      },
       oneInchRouters: {
         1: '0x1111111254EEB25477B68fb85Ed929f73A960582',
       },
@@ -129,12 +132,12 @@ describe('Take Integration Tests', () => {
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual 1inch take context starting')
+        sinon.match('Manual calldata_aggregator external take context starting')
       )
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual factory external take context starting')
+        sinon.match('Manual direct_dex external take context starting')
       )
     ).to.be.false;
   });
@@ -144,7 +147,7 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+      keeperTakerRouter: '0x1234567890123456789012345678901234567890',
       takerContracts: {
         Lifi: '0x2234567890123456789012345678901234567890',
       },
@@ -178,17 +181,12 @@ describe('Take Integration Tests', () => {
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual LI.FI external take context starting')
+        sinon.match('Manual calldata_aggregator external take context starting')
       )
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual factory external take context starting')
-      )
-    ).to.be.false;
-    expect(
-      debugSpy.calledWithMatch(
-        sinon.match('Manual 1inch take context starting')
+        sinon.match('Manual direct_dex external take context starting')
       )
     ).to.be.false;
   });
@@ -220,7 +218,7 @@ describe('Take Integration Tests', () => {
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual 1inch take context starting')
+        sinon.match('Manual calldata_aggregator external take context starting')
       )
     ).to.be.false;
   });
@@ -230,10 +228,10 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      keeperTaker: '0x1111111111111111111111111111111111111111',
       oneInchRouters: { 1: '0x1111111254EEB25477B68fb85Ed929f73A960582' },
-      keeperTakerFactory: '0x2222222222222222222222222222222222222222',
+      keeperTakerRouter: '0x2222222222222222222222222222222222222222',
       takerContracts: {
+        OneInchAggregator: '0x1111111111111111111111111111111111111111',
         UniswapV3: '0x3333333333333333333333333333333333333333',
         Lifi: '0x4444444444444444444444444444444444444444',
       },
@@ -284,17 +282,12 @@ describe('Take Integration Tests', () => {
       .true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual factory external take context starting')
+        sinon.match('Manual direct_dex external take context starting')
       )
     ).to.be.true;
     expect(
       debugSpy.calledWithMatch(
-        sinon.match('Manual 1inch take context starting')
-      )
-    ).to.be.true;
-    expect(
-      debugSpy.calledWithMatch(
-        sinon.match('Manual LI.FI external take context starting')
+        sinon.match('Manual calldata_aggregator external take context starting')
       )
     ).to.be.true;
   });
@@ -304,7 +297,7 @@ describe('Take Integration Tests', () => {
     const config = {
       dryRun: true,
       subgraphUrl: 'http://test-url',
-      keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+      keeperTakerRouter: '0x1234567890123456789012345678901234567890',
     };
 
     const poolConfig: PoolConfig = {
@@ -390,7 +383,7 @@ describe('Take Integration Tests', () => {
         } as any,
         config: {
           subgraphUrl: 'http://test-url',
-          keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+          keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         } as any,
       })
     );

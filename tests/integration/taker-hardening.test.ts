@@ -1,6 +1,5 @@
 import { expect } from 'chai';
 import { BigNumber, Wallet, constants, utils } from 'ethers';
-import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
 import {
   CurveKeeperTaker__factory,
 } from '../../typechain-types/factories/contracts/takers';
@@ -8,12 +7,10 @@ import {
   MockAtomicSwapPool__factory,
   MockCurveTricryptoPool__factory,
   MockERC20__factory,
-  MockOneInchUnderdeliveryRouter__factory,
   MockPoolDeployer__factory,
   MockStrictApprovalToken__factory,
   MockSwapRouter02__factory,
 } from '../../typechain-types/factories/contracts/mocks';
-import { MockReentrantOneInchRouter__factory } from '../../typechain-types/factories/contracts/mocks/MockReentrantOneInchRouter.sol';
 import { UniswapV3KeeperTaker__factory } from '../../typechain-types/factories/contracts/takers/UniswapV3KeeperTaker__factory';
 import {
   CURVE_DETAILS_TYPE,
@@ -41,12 +38,8 @@ const FULL_MIN_OUT = utils.parseEther('6');
 const DUE_PARTIAL = utils.parseEther('1.8');
 const DUE_FULL = utils.parseEther('5');
 const AUCTION_PRICE = utils.parseEther('1');
-const SOURCE_ONEINCH = 1;
 const SOURCE_UNISWAP_V3 = 2;
 const SOURCE_CURVE = 4;
-
-const ONE_INCH_DETAILS_TYPE =
-  '(address,(address,address,address,address,uint256,uint256,uint256),bytes)';
 
 async function deployFundedTricryptoPool(
   base: MockTakerBase,
@@ -61,35 +54,6 @@ async function deployFundedTricryptoPool(
     await base.quoteToken.mint(curvePool.address, amountOut);
   }
   return curvePool;
-}
-
-function encodeOneInchDetails(params: {
-  executor: string;
-  srcToken: string;
-  dstToken: string;
-  srcReceiver: string;
-  dstReceiver: string;
-  amount: BigNumber;
-  minReturnAmount: BigNumber;
-}) {
-  return utils.defaultAbiCoder.encode(
-    [ONE_INCH_DETAILS_TYPE],
-    [
-      [
-        params.executor,
-        [
-          params.srcToken,
-          params.dstToken,
-          params.srcReceiver,
-          params.dstReceiver,
-          params.amount,
-          params.minReturnAmount,
-          0,
-        ],
-        '0x',
-      ],
-    ]
-  );
 }
 
 describe('Taker hardening regressions', () => {
@@ -221,7 +185,7 @@ describe('Taker hardening regressions', () => {
   describe('callback output-token binding', () => {
     // The direct-Sushi crafted-callback case was removed with the direct Sushi
     // path; the curve tokenOut/tokenIn binding cases below cover the same
-    // re-binding invariant (both takers share the FactoryAuthorizedTakerBase
+    // re-binding invariant (both takers share the RouterAuthorizedTakerBase
     // callback shape).
 
     it('rejects crafted curve callbacks whose tokenOut is not the pool quote', async () => {
@@ -300,95 +264,6 @@ describe('Taker hardening regressions', () => {
         ),
         'InvalidSwapDetails'
       );
-    });
-  });
-
-  describe('AjnaKeeperTaker 1inch min-return rounding', () => {
-    // planned 3, actual 1, full min-return 10: the pro-rated floor must be
-    // ceil(10/3) = 4. Floor division (the old behavior) demanded only 3.
-    const PLANNED = BigNumber.from(3);
-    const TAKEN = BigNumber.from(1);
-    const FULL_MIN_RETURN = BigNumber.from(10);
-    const DUE = BigNumber.from(1);
-
-    async function setupOneInchPartialFill(forcedReturnAmount: BigNumber) {
-      const base = await deployMockTakerBase();
-      const taker = await new AjnaKeeperTaker__factory(base.owner).deploy(
-        base.poolDeployer.address
-      );
-      await taker.deployed();
-
-      await base.pool.setCollateralTakenOverride(TAKEN);
-      await base.pool.setQuoteAmountDue(DUE);
-      await base.collateralToken.mint(base.pool.address, TAKEN);
-
-      const router = await new MockOneInchUnderdeliveryRouter__factory(
-        base.owner
-      ).deploy(forcedReturnAmount);
-      await router.deployed();
-      await base.quoteToken.mint(router.address, FULL_MIN_RETURN);
-
-      const details = encodeOneInchDetails({
-        executor: router.address,
-        srcToken: base.collateralToken.address,
-        dstToken: base.quoteToken.address,
-        srcReceiver: router.address,
-        dstReceiver: taker.address,
-        amount: PLANNED,
-        minReturnAmount: FULL_MIN_RETURN,
-      });
-
-      return { base, taker, router, details };
-    }
-
-    it('rejects routes that satisfy only the floored pro-rata minimum', async () => {
-      const { base, taker, router, details } = await setupOneInchPartialFill(
-        BigNumber.from(3)
-      );
-
-      await expectRevertContaining(
-        taker.takeWithAtomicSwap(
-          base.pool.address,
-          base.owner.address,
-          AUCTION_PRICE,
-          PLANNED,
-          SOURCE_ONEINCH,
-          router.address,
-          details
-        ),
-        'InsufficientQuoteReceived'
-      );
-    });
-
-    it('accepts routes that meet the rounded-up pro-rata minimum', async () => {
-      const { base, taker, router, details } = await setupOneInchPartialFill(
-        BigNumber.from(4)
-      );
-
-      const receipt = await (
-        await taker.takeWithAtomicSwap(
-          base.pool.address,
-          base.owner.address,
-          AUCTION_PRICE,
-          PLANNED,
-          SOURCE_ONEINCH,
-          router.address,
-          details
-        )
-      ).wait();
-
-      expect((await base.pool.takeCount()).eq(1)).to.equal(true);
-
-      // AUDIT FIX regression: the direct 1inch taker previously emitted no events
-      // at all, leaving direct takes invisible to per-swap monitoring.
-      const swapEvent = receipt.events?.find((e) => e.event === 'SwapExecuted');
-      expect(swapEvent, 'expected a SwapExecuted event').to.not.equal(
-        undefined
-      );
-      expect(swapEvent!.args!.tokenIn).to.equal(base.collateralToken.address);
-      expect(swapEvent!.args!.tokenOut).to.equal(base.quoteToken.address);
-      expect(swapEvent!.args!.amountIn.eq(TAKEN)).to.equal(true);
-      expect(swapEvent!.args!.amountOut.eq(BigNumber.from(4))).to.equal(true);
     });
   });
 
@@ -556,57 +431,6 @@ describe('Taker hardening regressions', () => {
     });
   });
 
-  describe('AjnaKeeperTaker reentrancy guard', () => {
-    it('blocks a malicious router from re-entering the callback through a second take', async () => {
-      const base = await deployMockTakerBase();
-      const { collateralToken, owner, pool } = base;
-      const taker = await new AjnaKeeperTaker__factory(owner).deploy(
-        base.poolDeployer.address
-      );
-      await taker.deployed();
-
-      const takeAmount = utils.parseEther('2');
-      await pool.setQuoteAmountDue(0);
-      // Fund the pool for both the outer take and the attempted nested take.
-      await collateralToken.mint(pool.address, takeAmount.mul(2));
-
-      const router = await new MockReentrantOneInchRouter__factory(
-        owner
-      ).deploy();
-      await router.deployed();
-      await router.setReentry(
-        pool.address,
-        owner.address,
-        takeAmount,
-        taker.address,
-        '0x'
-      );
-
-      const details = encodeOneInchDetails({
-        executor: router.address,
-        srcToken: collateralToken.address,
-        dstToken: base.quoteToken.address,
-        srcReceiver: router.address,
-        dstReceiver: taker.address,
-        amount: takeAmount,
-        minReturnAmount: BigNumber.from(1),
-      });
-
-      await expectRevertContaining(
-        taker.takeWithAtomicSwap(
-          pool.address,
-          owner.address,
-          AUCTION_PRICE,
-          takeAmount,
-          SOURCE_ONEINCH,
-          router.address,
-          details
-        ),
-        'ReentrancyGuard: reentrant call'
-      );
-    });
-  });
-
   describe('constructor validation', () => {
     it('rejects a zero Ajna pool factory', async () => {
       const base = await deployMockTakerBase();
@@ -621,14 +445,14 @@ describe('Taker hardening regressions', () => {
       );
     });
 
-    it('still allows standalone (zero authorizedFactory) deployments', async () => {
+    it('still allows standalone (zero authorizedRouter) deployments', async () => {
       const base = await deployMockTakerBase();
       const taker = await new CurveKeeperTaker__factory(base.owner).deploy(
         base.poolDeployer.address,
         constants.AddressZero
       );
       await taker.deployed();
-      expect(await taker.authorizedFactory()).to.equal(constants.AddressZero);
+      expect(await taker.authorizedRouter()).to.equal(constants.AddressZero);
     });
   });
 
@@ -714,87 +538,6 @@ describe('Taker hardening regressions', () => {
         ),
         'InsufficientQuoteReceived'
       );
-    });
-  });
-
-  describe('AjnaKeeperTaker quote pull ceiling for non-18-decimal quote tokens', () => {
-    // Mirrors the factory-taker ceiling coverage for the standalone 1inch path,
-    // which shares quoteAmountDueCeiling but was previously tested only at scale 1.
-    const QUOTE_SCALE = BigNumber.from(10).pow(12);
-    const DUE_RAW = BigNumber.from(5_000_000); // 5 USDC at 6 decimals
-    const ONEINCH_MAX_AMOUNT = utils.parseEther('10');
-
-    async function setupScaledOneInch(forcedReturnAmount: BigNumber) {
-      const base = await deployMockTakerBase({
-        quoteDecimals: 6,
-        quoteTokenScale: QUOTE_SCALE,
-      });
-      const taker = await new AjnaKeeperTaker__factory(base.owner).deploy(
-        base.poolDeployer.address
-      );
-      await taker.deployed();
-
-      await base.pool.setQuoteAmountDue(DUE_RAW);
-      await base.pool.setQuotePullOverride(DUE_RAW.add(1));
-      await base.collateralToken.mint(base.pool.address, ONEINCH_MAX_AMOUNT);
-
-      const router = await new MockOneInchUnderdeliveryRouter__factory(
-        base.owner
-      ).deploy(forcedReturnAmount);
-      await router.deployed();
-      await base.quoteToken.mint(router.address, forcedReturnAmount);
-
-      const details = encodeOneInchDetails({
-        executor: router.address,
-        srcToken: base.collateralToken.address,
-        dstToken: base.quoteToken.address,
-        srcReceiver: router.address,
-        dstReceiver: taker.address,
-        amount: ONEINCH_MAX_AMOUNT,
-        minReturnAmount: BigNumber.from(1),
-      });
-
-      return { base, taker, router, details };
-    }
-
-    it('rejects 1inch swaps that only cover the floored quote due', async () => {
-      const { base, taker, router, details } = await setupScaledOneInch(
-        DUE_RAW
-      );
-
-      await expectRevertContaining(
-        taker.takeWithAtomicSwap(
-          base.pool.address,
-          base.owner.address,
-          AUCTION_PRICE,
-          ONEINCH_MAX_AMOUNT,
-          SOURCE_ONEINCH,
-          router.address,
-          details
-        ),
-        'InsufficientQuoteReceived'
-      );
-    });
-
-    it('accepts 1inch swaps that cover the ceil-rounded pull', async () => {
-      const { base, taker, router, details } = await setupScaledOneInch(
-        DUE_RAW.add(1)
-      );
-
-      await taker.takeWithAtomicSwap(
-        base.pool.address,
-        base.owner.address,
-        AUCTION_PRICE,
-        ONEINCH_MAX_AMOUNT,
-        SOURCE_ONEINCH,
-        router.address,
-        details
-      );
-
-      expect((await base.pool.takeCount()).eq(1)).to.equal(true);
-      expect(
-        (await base.quoteToken.balanceOf(base.pool.address)).eq(DUE_RAW.add(1))
-      ).to.equal(true);
     });
   });
 

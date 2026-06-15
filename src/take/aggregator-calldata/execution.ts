@@ -1,5 +1,5 @@
 import { BigNumber, ethers } from 'ethers';
-import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import { CalldataAggregatorProviderId, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
@@ -22,7 +22,7 @@ import { ApprovedCalldataAggregatorQuote } from './types';
  */
 
 export type AggregatorTakerFactory = ReturnType<
-  typeof AjnaKeeperTakerFactory__factory.connect
+  typeof TakerRouter__factory.connect
 >;
 
 /**

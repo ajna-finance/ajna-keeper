@@ -8,7 +8,7 @@ import {
   getLifiTakerAddress,
   takeLiquidationLifi,
 } from '../../src/take/lifi/execution';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../typechain-types/factories/contracts/factories';
 import { logger } from '../../src/logging';
 import { NonceConsumedTransactionError, NonceTracker } from '../../src/nonce';
 import {
@@ -385,7 +385,7 @@ describe('LI.FI execution', () => {
       nowMs = 1_005;
       return ethers.BigNumber.from(500_000);
     });
-    sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns({
+    sinon.stub(TakerRouter__factory, 'connect').returns({
       estimateGas: {
         takeWithAtomicSwap: estimateGas,
       },
@@ -437,7 +437,7 @@ describe('LI.FI execution', () => {
         }),
       } as any,
       config: {
-        keeperTakerFactory: '0x9999999999999999999999999999999999999999',
+        keeperTakerRouter: '0x9999999999999999999999999999999999999999',
         lifiTaker,
         chainId,
         lifi: {
@@ -522,7 +522,7 @@ describe('LI.FI execution', () => {
     const estimateGas = sinon
       .stub()
       .rejects(new Error('gas estimation failed'));
-    sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns({
+    sinon.stub(TakerRouter__factory, 'connect').returns({
       estimateGas: {
         takeWithAtomicSwap: estimateGas,
       },
@@ -573,7 +573,7 @@ describe('LI.FI execution', () => {
         }),
       } as any,
       config: {
-        keeperTakerFactory: '0x9999999999999999999999999999999999999999',
+        keeperTakerRouter: '0x9999999999999999999999999999999999999999',
         lifiTaker,
         chainId,
         lifi: {
@@ -709,7 +709,7 @@ describe('LI.FI execution', () => {
       data: '0x',
     });
     const estimateGas = sinon.stub().resolves(ethers.BigNumber.from(500_000));
-    sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns({
+    sinon.stub(TakerRouter__factory, 'connect').returns({
       estimateGas: {
         takeWithAtomicSwap: estimateGas,
       },
@@ -768,7 +768,7 @@ describe('LI.FI execution', () => {
         }),
       } as any,
       config: {
-        keeperTakerFactory: '0x9999999999999999999999999999999999999999',
+        keeperTakerRouter: '0x9999999999999999999999999999999999999999',
         lifiTaker,
         chainId,
         lifi: {

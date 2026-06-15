@@ -9,7 +9,7 @@ import type {
 import {
   LiquiditySource,
   formatLiquiditySource,
-  type ExternalTakePathKind,
+  type ConfiguredExternalTakePathKind,
 } from '../../src/config';
 import type { ConfigArtifact } from './config-smoke';
 
@@ -41,7 +41,7 @@ type FixtureSummary = {
     };
     expectedExecutionFeeTier?: number;
     deployment: {
-      keeperTakerFactory: string;
+      keeperTakerRouter: string;
       uniswapV3Taker: string;
     };
   };
@@ -49,7 +49,7 @@ type FixtureSummary = {
 
 export type HarnessReport = {
   mode: 'manual' | 'discovery';
-  hybridGasQuoteFailureFallbackMode?: 'disabled' | 'factory_first';
+  hybridGasQuoteFailureFallbackMode?: 'disabled' | 'direct_dex_first';
   summaryPath: string;
   rpcUrl: string;
   borrower: string;
@@ -135,10 +135,10 @@ export type RouteArtifact = {
 };
 
 export type PolicyArtifact = {
-  allowedExternalTakePaths: ExternalTakePathKind[];
+  allowedExternalTakePaths: ConfiguredExternalTakePathKind[];
   allowedLiquiditySources: string[];
-  externalTakeRouteSelectionMode: 'maximize_profit' | 'factory_first';
-  hybridGasQuoteFailureFallbackMode?: 'disabled' | 'factory_first';
+  externalTakeRouteSelectionMode: 'maximize_profit' | 'direct_dex_first';
+  hybridGasQuoteFailureFallbackMode?: 'disabled' | 'direct_dex_first';
   maxGasCostNative?: number;
   minExpectedProfitQuote?: number;
   maxConcurrentCandidateEvaluations: number;
@@ -259,22 +259,20 @@ function optionalPositiveIntegerEnv(name: string, fallback: number): number {
 }
 
 function optionalExternalTakePathsEnv(
-  fallback: ExternalTakePathKind[]
-): ExternalTakePathKind[] {
+  fallback: ConfiguredExternalTakePathKind[]
+): ConfiguredExternalTakePathKind[] {
   const raw = process.env.AJNA_AGENT_HARNESS_ALLOWED_EXTERNAL_TAKE_PATHS;
   if (raw === undefined || raw.trim().length === 0) {
     return fallback;
   }
   return raw.split(',').map((part) => {
     const value = part.trim().toLowerCase();
-    // Env input boundary: the legacy lifi alias is accepted here and
-    // normalized immediately to the canonical calldata_aggregator family.
-    if (value === 'lifi' || value === 'calldata_aggregator') {
+    if (value === 'calldata_aggregator') {
       return 'calldata_aggregator';
     }
-    if (value !== 'oneinch' && value !== 'factory') {
+    if (value !== 'direct_dex') {
       throw new Error(
-        'AJNA_AGENT_HARNESS_ALLOWED_EXTERNAL_TAKE_PATHS must contain only oneinch, factory, calldata_aggregator, or lifi'
+        'AJNA_AGENT_HARNESS_ALLOWED_EXTERNAL_TAKE_PATHS must contain only direct_dex or calldata_aggregator'
       );
     }
     return value;
@@ -319,35 +317,34 @@ function optionalLiquiditySourcesEnv(
     .map(parseLiquiditySourceLabel);
 }
 
-function optionalRouteSelectionMode(): 'maximize_profit' | 'factory_first' {
+function optionalRouteSelectionMode(): 'maximize_profit' | 'direct_dex_first' {
   const raw = process.env.AJNA_AGENT_HARNESS_ROUTE_SELECTION_MODE;
   if (raw === undefined || raw.trim().length === 0) {
     return 'maximize_profit';
   }
-  if (raw !== 'maximize_profit' && raw !== 'factory_first') {
+  if (raw !== 'maximize_profit' && raw !== 'direct_dex_first') {
     throw new Error(
-      'AJNA_AGENT_HARNESS_ROUTE_SELECTION_MODE must be maximize_profit or factory_first'
+      'AJNA_AGENT_HARNESS_ROUTE_SELECTION_MODE must be maximize_profit or direct_dex_first'
     );
   }
   return raw;
 }
 
 export function buildPolicyArtifact(params: {
-  hybridGasQuoteFailureFallbackMode: 'disabled' | 'factory_first';
+  hybridGasQuoteFailureFallbackMode: 'disabled' | 'direct_dex_first';
 }): PolicyArtifact {
   return {
     allowedExternalTakePaths: optionalExternalTakePathsEnv([
-      'oneinch',
-      'factory',
+      'calldata_aggregator',
+      'direct_dex',
     ]),
     allowedLiquiditySources: optionalLiquiditySourcesEnv([
       LiquiditySource.UNISWAPV3,
     ]).map(formatLiquiditySource),
     externalTakeRouteSelectionMode: optionalRouteSelectionMode(),
     hybridGasQuoteFailureFallbackMode: params.hybridGasQuoteFailureFallbackMode,
-    maxGasCostNative: optionalNumberEnv(
-      'AJNA_AGENT_HARNESS_MAX_GAS_COST_NATIVE'
-    ) ?? 1,
+    maxGasCostNative:
+      optionalNumberEnv('AJNA_AGENT_HARNESS_MAX_GAS_COST_NATIVE') ?? 1,
     minExpectedProfitQuote: optionalNumberEnv(
       'AJNA_AGENT_HARNESS_MIN_EXPECTED_PROFIT_QUOTE'
     ),
@@ -475,7 +472,7 @@ function sumDiscoveryCounter(
 
 function sumDiscoveryPathCounter(
   stats: DiscoveredTakeTargetStats[],
-  pathName: 'factory' | 'oneinch' | 'calldata_aggregator',
+  pathName: 'direct_dex' | 'calldata_aggregator',
   field:
     | 'approved'
     | 'dryRun'
@@ -502,7 +499,7 @@ export function buildRouteArtifact(params: {
   return {
     selectedPath:
       lastRouteEvent?.route?.path ??
-      (params.mode === 'manual' ? 'factory' : undefined),
+      (params.mode === 'manual' ? 'direct_dex' : undefined),
     selectedLiquiditySource:
       lastRouteEvent?.route?.selectedLiquiditySource ??
       (params.mode === 'manual' ? expectedSource : undefined),
@@ -511,7 +508,8 @@ export function buildRouteArtifact(params: {
       uniswapV3ExternalTake?.expectedExecutionFeeTier ??
       uniswapV3ExternalTake?.routerConfig.defaultFeeTier,
     expectedExecutionFeeTier: uniswapV3ExternalTake?.expectedExecutionFeeTier,
-    factoryRegistryAddress: uniswapV3ExternalTake?.deployment.keeperTakerFactory,
+    factoryRegistryAddress:
+      uniswapV3ExternalTake?.deployment.keeperTakerRouter,
     selectedTakerAddress: uniswapV3ExternalTake?.deployment.uniswapV3Taker,
     decisions: params.routeDecisionEvents,
     counters:
@@ -519,17 +517,17 @@ export function buildRouteArtifact(params: {
         ? {
             approvedFactoryPathTakes: sumDiscoveryPathCounter(
               params.discoveryStats,
-              'factory',
+              'direct_dex',
               'approved'
             ),
             dryRunFactoryPathTakes: sumDiscoveryPathCounter(
               params.discoveryStats,
-              'factory',
+              'direct_dex',
               'dryRun'
             ),
             executedFactoryPathTakes: sumDiscoveryPathCounter(
               params.discoveryStats,
-              'factory',
+              'direct_dex',
               'executed'
             ),
             approvedUniswapV3Takes: sumDiscoveryCounter(
@@ -546,12 +544,12 @@ export function buildRouteArtifact(params: {
             ),
             preBroadcastFailures: sumDiscoveryPathCounter(
               params.discoveryStats,
-              'factory',
+              'direct_dex',
               'preBroadcastFailures'
             ),
             postSubmissionFailures: sumDiscoveryPathCounter(
               params.discoveryStats,
-              'factory',
+              'direct_dex',
               'postSubmissionFailures'
             ),
           }

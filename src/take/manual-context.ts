@@ -16,13 +16,9 @@ import {
   createFactoryQuoteProviderRuntimeCache,
   createFactoryTakeAdapter,
   FactoryExecutionConfig,
-} from './factory';
+} from './direct-dex';
 import { ExternalTakeAdapter } from './engine';
-import {
-  createNoExternalTakeAdapter,
-  createOneInchTakeAdapter,
-} from './one-inch-adapter';
-import { OneInchExecutionConfig } from './one-inch-types';
+import { createNoExternalTakeAdapter } from './no-external-take-adapter';
 import { createLifiTakeAdapter } from './lifi/adapter';
 import { LifiExecutionConfig } from './lifi/types';
 import { TakeActionConfig } from './types';
@@ -38,19 +34,18 @@ export interface ManualOneInchContextConfig
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
-  keeperTaker?: string;
 }
 
 export interface ManualFactoryContextConfig
   extends ManualTakeCommonContextConfig {
-  keeperTakerFactory?: string;
+  keeperTakerRouter?: string;
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
   tokenAddresses?: { [tokenSymbol: string]: string };
 }
 
 export interface ManualLifiContextConfig extends ManualTakeCommonContextConfig {
-  keeperTakerFactory?: string;
+  keeperTakerRouter?: string;
   lifi?: LifiDexConfig;
   lifiTaker?: string;
 }
@@ -70,13 +65,14 @@ export interface ManualTakeContext<TExecutionConfig> {
 }
 
 export type ResolvedManualTakeContext =
-  | ManualTakeContext<OneInchExecutionConfig>
+  | ManualTakeContext<unknown>
   | ManualTakeContext<FactoryExecutionConfig>
   | ManualTakeContext<LifiExecutionConfig>;
 
-export type ManualTakeDeploymentResolution = ExternalTakeDeploymentResolution & {
-  requestedLiquiditySourceLabel: string;
-};
+export type ManualTakeDeploymentResolution =
+  ExternalTakeDeploymentResolution & {
+    requestedLiquiditySourceLabel: string;
+  };
 
 export interface ManualTakeDeploymentResolutionLog {
   level: 'debug' | 'warn';
@@ -125,12 +121,10 @@ export function formatManualExternalTakeDeployment(params: {
   poolName: string;
 }): string {
   switch (params.deploymentType) {
-    case 'oneinch':
-      return `Using manual 1inch external take strategy for pool: ${params.poolName}`;
-    case 'factory':
-      return `Using factory external take strategy for pool: ${params.poolName}`;
+    case 'direct_dex':
+      return `Using direct_dex external take strategy for pool: ${params.poolName}`;
     case 'calldata_aggregator':
-      return `Using manual LI.FI external take strategy for pool: ${params.poolName}`;
+      return `Using manual calldata_aggregator external take strategy for pool: ${params.poolName}`;
   }
 }
 
@@ -177,57 +171,24 @@ export function formatManualTakeContextStart(params: {
     params.poolConfig.take.liquiditySource
   );
   switch (path) {
-    case 'factory':
-      return `Manual factory external take context starting for pool: ${params.poolName}`;
+    case 'direct_dex':
+      return `Manual direct_dex external take context starting for pool: ${params.poolName}`;
     case 'calldata_aggregator':
-      return `Manual LI.FI external take context starting for pool: ${params.poolName}`;
-    case 'oneinch':
-      return `Manual 1inch take context starting for pool: ${params.poolName}`;
+      return `Manual calldata_aggregator external take context starting for pool: ${params.poolName}`;
     default:
       return `Manual arbTake context starting for pool: ${params.poolName}`;
   }
 }
 
-function createManualOneInchTakeContext(params: {
-  config: ManualOneInchContextConfig;
-  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
-}): ManualTakeContext<OneInchExecutionConfig> {
-  return {
-    externalTakeAdapter: createOneInchTakeAdapter({
-      oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
-      oneInchRouters: params.config.oneInchRouters,
-      connectorTokens: params.config.connectorTokens,
-    }),
-    arbTakeStrategy: createArbTakeStrategy(),
-    externalExecutionConfig: {
-      dryRun: params.config.dryRun,
-      connectorTokens: params.config.connectorTokens,
-      oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
-      oneInchRouters: params.config.oneInchRouters,
-      oneInchAggregationExecutorAllowlist:
-        params.config.oneInchAggregationExecutorAllowlist,
-      keeperTaker: params.config.keeperTaker,
-      takeWriteTransport: params.takeWriteTransport,
-    },
-    foundLogLevel: 'info',
-  };
-}
-
 function createManualArbOnlyTakeContext(params: {
   config: ManualOneInchContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
-}): ManualTakeContext<OneInchExecutionConfig> {
+}): ManualTakeContext<unknown> {
   return {
     externalTakeAdapter: createNoExternalTakeAdapter(),
     arbTakeStrategy: createArbTakeStrategy(),
     externalExecutionConfig: {
       dryRun: params.config.dryRun,
-      connectorTokens: params.config.connectorTokens,
-      oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
-      oneInchRouters: params.config.oneInchRouters,
-      oneInchAggregationExecutorAllowlist:
-        params.config.oneInchAggregationExecutorAllowlist,
-      keeperTaker: params.config.keeperTaker,
       takeWriteTransport: params.takeWriteTransport,
     },
     foundLogLevel: 'info',
@@ -254,7 +215,7 @@ function createManualFactoryTakeContext(params: {
     }),
     externalExecutionConfig: {
       dryRun: params.config.dryRun,
-      keeperTakerFactory: params.config.keeperTakerFactory,
+      keeperTakerRouter: params.config.keeperTakerRouter,
       uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
       curveRouterOverrides: params.config.curveRouterOverrides,
       tokenAddresses: params.config.tokenAddresses,
@@ -284,7 +245,7 @@ function createManualLifiTakeContext(params: {
     }),
     externalExecutionConfig: {
       dryRun: params.config.dryRun,
-      keeperTakerFactory: params.config.keeperTakerFactory,
+      keeperTakerRouter: params.config.keeperTakerRouter,
       lifi: params.config.lifi,
       lifiTaker,
       takeWriteTransport: params.takeWriteTransport,
@@ -301,7 +262,7 @@ function createManualTakeContext(params: {
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
 }): ResolvedManualTakeContext {
   switch (params.deploymentResolution.deploymentType) {
-    case 'factory':
+    case 'direct_dex':
       return createManualFactoryTakeContext({
         config: params.config,
         takeWriteTransport: params.takeWriteTransport,
@@ -312,11 +273,6 @@ function createManualTakeContext(params: {
           ...params.config,
           lifiTaker: params.deploymentResolution.resolvedTakerAddress,
         },
-        takeWriteTransport: params.takeWriteTransport,
-      });
-    case 'oneinch':
-      return createManualOneInchTakeContext({
-        config: params.config,
         takeWriteTransport: params.takeWriteTransport,
       });
     default:

@@ -1,7 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import {
   LiquiditySource,
-  isFactoryDynamicSource,
+  isDirectDexDynamicSource,
   normalizeExternalTakeRouteSelectionMode,
   resolveExternalTakePolicy,
   resolveHybridGasQuoteFallbackPolicy,
@@ -72,23 +72,23 @@ function resolveApprovedExternalTakeSource(params: {
 } {
   let selectedLiquiditySource = params.quoteEvaluation.selectedLiquiditySource;
   if (
-    params.quoteEvaluation.externalTakePath === 'factory' &&
+    params.quoteEvaluation.externalTakePath === 'direct_dex' &&
     selectedLiquiditySource === undefined
   ) {
     return {
       approved: false,
-      reason: 'selected factory path without a concrete factory source',
+      reason: 'selected direct_dex path without a concrete direct DEX source',
     };
   }
   if (selectedLiquiditySource === undefined) {
     const configuredLiquiditySource = params.target.take.liquiditySource;
     if (
       configuredLiquiditySource !== LiquiditySource.ONEINCH &&
-      isFactoryDynamicSource(configuredLiquiditySource)
+      isDirectDexDynamicSource(configuredLiquiditySource)
     ) {
       return {
         approved: false,
-        reason: 'factory route approval missing selected liquidity source',
+        reason: 'direct_dex route approval missing selected liquidity source',
       };
     }
     selectedLiquiditySource = configuredLiquiditySource;
@@ -96,7 +96,7 @@ function resolveApprovedExternalTakeSource(params: {
 
   const selectedFactoryLiquiditySource =
     selectedLiquiditySource !== undefined &&
-    isFactoryDynamicSource(selectedLiquiditySource)
+    isDirectDexDynamicSource(selectedLiquiditySource)
       ? selectedLiquiditySource
       : undefined;
 

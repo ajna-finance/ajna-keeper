@@ -1,6 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import { LiquiditySource } from '../../config';
 import {
   DEFAULT_SUSHI_AGGREGATOR_MAX_QUOTE_AGE_MS,
@@ -151,8 +151,8 @@ async function prepareSushiAggregatorExecution(params: {
     return { kind: 'dry_run', approvedQuoteEvaluation };
   }
 
-  if (!config.keeperTakerFactory) {
-    throw new Error('Sushi aggregator execution requires keeperTakerFactory');
+  if (!config.keeperTakerRouter) {
+    throw new Error('Sushi aggregator execution requires keeperTakerRouter');
   }
   const sushiConfig = requireSushiAggregatorConfig(config.sushiAggregator);
   const sushiTaker = config.sushiAggregatorTaker;
@@ -232,8 +232,8 @@ async function prepareSushiAggregatorExecution(params: {
     }),
     executionCollateralWad,
     takeWriteTransport: resolveTakeWriteTransport(signer, config),
-    factory: AjnaKeeperTakerFactory__factory.connect(
-      config.keeperTakerFactory,
+    factory: TakerRouter__factory.connect(
+      config.keeperTakerRouter,
       signer
     ),
     assertFreshQuoteStillCurrent: () => {

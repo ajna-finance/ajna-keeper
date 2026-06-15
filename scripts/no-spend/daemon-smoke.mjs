@@ -38,13 +38,10 @@ function getFixtureAuction(summary) {
     borrower: summary.borrower.owner,
     kickTime: String(summary.finalKick?.auction?.kickTime ?? '0'),
     debtRemaining:
-      summary.finalKick?.auction?.debtToCover ??
-      summary.borrower.debt ??
-      '0',
+      summary.finalKick?.auction?.debtToCover ?? summary.borrower.debt ?? '0',
     collateralRemaining: summary.borrower.collateral ?? '0',
     neutralPrice:
-      summary.finalKick?.auction?.neutralPrice ??
-      summary.borrower.neutralPrice,
+      summary.finalKick?.auction?.neutralPrice ?? summary.borrower.neutralPrice,
     debt: summary.borrower.debt ?? '0',
     collateral: summary.borrower.collateral ?? '0',
     pool: {
@@ -187,8 +184,8 @@ function buildDaemonConfig(params) {
       },
       take: {
         enabled: true,
-        allowedExternalTakePaths: ['factory'],
-        defaultFactoryLiquiditySource: 2,
+        allowedExternalTakePaths: ['direct_dex'],
+        defaultDirectDexLiquiditySource: 2,
         allowedLiquiditySources: [2],
         externalTakeRouteSelectionMode: 'maximize_profit',
         hybridGasQuoteFailureFallbackMode: 'disabled',
@@ -207,7 +204,7 @@ function buildDaemonConfig(params) {
       },
     },
     takers: {
-      factory: uniswap.deployment.keeperTakerFactory,
+      factory: uniswap.deployment.keeperTakerRouter,
       contracts: {
         UniswapV3: uniswap.deployment.uniswapV3Taker,
       },
@@ -304,7 +301,10 @@ export async function runDaemonSmoke(params) {
     rpcUrl: params.rpcUrl,
   });
   const password = `ajna-local-${Date.now()}`;
-  const passwordPath = path.join(params.tempDir, 'daemon-keystore-password.txt');
+  const passwordPath = path.join(
+    params.tempDir,
+    'daemon-keystore-password.txt'
+  );
   const wrongPasswordPath = path.join(
     params.tempDir,
     'daemon-keystore-password-wrong.txt'
@@ -321,7 +321,10 @@ export async function runDaemonSmoke(params) {
     mode: 0o600,
   });
 
-  const dryRunConfigPath = path.join(params.tempDir, 'daemon-dry-run-config.json');
+  const dryRunConfigPath = path.join(
+    params.tempDir,
+    'daemon-dry-run-config.json'
+  );
   const executionConfigPath = path.join(
     params.tempDir,
     'daemon-execution-config.json'
@@ -409,9 +412,15 @@ export async function runDaemonSmoke(params) {
     });
     await requestJsonRpc(params.rpcUrl, 'evm_revert', [dryRunSnapshot]);
 
-    const executionSnapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
+    const executionSnapshot = await requestJsonRpc(
+      params.rpcUrl,
+      'evm_snapshot'
+    );
     await warpLocalTakeWindow(params.rpcUrl);
-    const beforeStatePath = path.join(params.tempDir, 'daemon-before-state.json');
+    const beforeStatePath = path.join(
+      params.tempDir,
+      'daemon-before-state.json'
+    );
     const afterStatePath = path.join(params.tempDir, 'daemon-after-state.json');
     const beforeState = await runStateOnlyHarness({
       label: 'daemon pre-execution state read',
@@ -493,7 +502,8 @@ export async function runDaemonSmoke(params) {
       dryRunPassed: artifact.dryRunPassed,
       dryRunSubmittedNoTransactions: artifact.dryRunSubmittedNoTransactions,
       executionPassed: artifact.executionPassed,
-      executionSubmittedTransaction: artifact.executionTransactionsFromKeeper > 0,
+      executionSubmittedTransaction:
+        artifact.executionTransactionsFromKeeper > 0,
       localExecutionCollateralReduced: artifact.localExecutionCollateralReduced,
     })) {
       requireNoSpendInvariant(value === true, `daemon smoke ${field}`);

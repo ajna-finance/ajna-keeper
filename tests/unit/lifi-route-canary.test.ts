@@ -346,10 +346,7 @@ describe('LI.FI route canary', function () {
     expect(summary, result.stderr).to.not.equal(undefined);
     expect(summary.status).to.equal('skipped');
     expect(summary.checks[0].error).to.include(
-      'requires concrete production LI.FI exchange filters'
-    );
-    expect(summary.checks[0].error).to.include(
-      'allowBroadExchangeFilters is canary-only'
+      'config.dex.lifi.allowExchanges cannot use broad LI.FI filter keyword "all" outside canary allowBroadExchangeFilters mode'
     );
     expect(fs.existsSync(requestsPath)).to.equal(false);
   });

@@ -6,13 +6,13 @@ import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-/// @notice Factory contract that routes take requests to appropriate taker implementations
-/// @dev Maintains backward compatibility while enabling multi-DEX support
-contract AjnaKeeperTakerFactory {
+/// @notice Router contract that forwards take requests to source-specific taker implementations.
+/// @dev Maintains a source-to-taker registry for multi-DEX support.
+contract TakerRouter {
     using SafeERC20 for IERC20; 
     /// @dev Hash used for all ERC20 pools, used for pool validation
     bytes32 public constant ERC20_NON_SUBSET_HASH = keccak256("ERC20_NON_SUBSET_HASH");
-    /// @dev Actor allowed to take auctions using this factory
+    /// @dev Actor allowed to take auctions using this router.
     address public immutable owner;
     /// @dev Identifies the Ajna deployment, used to validate pools
     PoolDeployer public immutable poolFactory;
@@ -84,8 +84,8 @@ contract AjnaKeeperTakerFactory {
                 revert InvalidTaker();
             }
 
-            try IAjnaKeeperTaker(takerAddress).authorizedFactory() returns (address factoryAddress) {
-                require(factoryAddress == address(this), "Factory mismatch");
+            try IAjnaKeeperTaker(takerAddress).authorizedRouter() returns (address routerAddress) {
+                require(routerAddress == address(this), "Router mismatch");
             } catch {
                 revert InvalidTaker();
             }
@@ -200,8 +200,8 @@ contract AjnaKeeperTakerFactory {
         return takerContracts[source] != address(0);
     }
 
-    /// @notice Owner may call to recover ERC20 tokens sent directly to this factory contract  
-    /// @param token The ERC20 token to recover from the factory
+    /// @notice Owner may call to recover ERC20 tokens sent directly to this router.
+    /// @param token The ERC20 token to recover from the router.
     function recoverToken(IERC20 token) external onlyOwner {
         uint256 balance = token.balanceOf(address(this));
         if (balance > 0) {
@@ -219,9 +219,9 @@ contract AjnaKeeperTakerFactory {
 
         (bool hasOwner, ) = takerAddress.staticcall(abi.encodeWithSignature("owner()"));
         (bool hasPoolFactory, ) = takerAddress.staticcall(abi.encodeWithSignature("poolFactory()"));
-        (bool hasAuthorizedFactory, ) = takerAddress.staticcall(abi.encodeWithSignature("authorizedFactory()"));
+        (bool hasAuthorizedRouter, ) = takerAddress.staticcall(abi.encodeWithSignature("authorizedRouter()"));
 
-        return hasOwner && hasPoolFactory && !hasAuthorizedFactory;
+        return hasOwner && hasPoolFactory && !hasAuthorizedRouter;
     }
 
     /// @dev Validates that the pool is from our Ajna deployment

@@ -12,7 +12,7 @@ import {
   ceilDiv,
   getMarketPriceFactorUnits,
   MARKET_FACTOR_SCALE,
-} from '../../take/factory/shared';
+} from '../../take/direct-dex/shared';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,

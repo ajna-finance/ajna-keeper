@@ -64,7 +64,7 @@ const config: KeeperConfig = {
     },
   },
   takers: {
-    factory: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
+    router: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
     contracts: {
       Curve: '0x[DEPLOYED_CURVE_TAKER_ADDRESS]',
     },

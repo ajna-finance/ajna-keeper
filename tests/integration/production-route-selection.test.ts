@@ -6,11 +6,11 @@ import * as erc20 from '../../src/erc20';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import {
   getFactoryTakeQuoteEvaluation,
-  takeLiquidationFactory,
-} from '../../src/take/factory';
+  takeLiquidationDirectDex,
+} from '../../src/take/direct-dex';
 import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
-import { createFactoryQuoteProviderRuntimeCache } from '../../src/take/factory/shared';
+import { createFactoryQuoteProviderRuntimeCache } from '../../src/take/direct-dex/shared';
 import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { getProvider, resetHardhat } from './test-utils';
 import {
@@ -18,7 +18,7 @@ import {
   asFungiblePool,
   AUCTION_PRICE,
   BORROWER,
-  buildApprovedFactoryQuoteEvaluation,
+  buildApprovedDirectDexQuoteEvaluation,
   buildFactoryPoolView,
   buildFactoryTakePoolConfig,
   COLLATERAL_AMOUNT,
@@ -107,14 +107,14 @@ describe('Production route selection fork verification', function () {
       quoteToken,
       name: 'USDC Quote Factory Route Pool',
     });
-    const quoteEvaluation = buildApprovedFactoryQuoteEvaluation({
+    const quoteEvaluation = buildApprovedDirectDexQuoteEvaluation({
       source: LiquiditySource.UNISWAPV3,
       quoteAmountRaw: USDC_ROUTER_AMOUNT_OUT,
       routeMinOutRaw: USDC_APPROVED_MIN_OUT,
       selectedFeeTier: 500,
     });
 
-    const executed = await takeLiquidationFactory({
+    const executed = await takeLiquidationDirectDex({
       pool: asFungiblePool(poolView),
       poolConfig: buildFactoryTakePoolConfig(
         poolView,
@@ -128,13 +128,12 @@ describe('Production route selection fork verification', function () {
         auctionPrice: AUCTION_PRICE,
         isTakeable: true,
         isArbTakeable: false,
-        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
-          quoteEvaluation
-        ),
+        externalTakeExecutionPlan:
+          singleExternalTakeExecutionPlan(quoteEvaluation),
       },
       config: {
         dryRun: false,
-        keeperTakerFactory: factory.address,
+        keeperTakerRouter: factory.address,
         uniswapV3RouterOverrides: {
           swapRouter02Address: router.address,
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
@@ -175,10 +174,7 @@ describe('Production route selection fork verification', function () {
     const profitFloor = APPROVED_MIN_OUT;
     const underDeliveredOutput = profitFloor.sub(1);
 
-    for (const source of [
-      LiquiditySource.UNISWAPV3,
-      LiquiditySource.CURVE,
-    ]) {
+    for (const source of [LiquiditySource.UNISWAPV3, LiquiditySource.CURVE]) {
       await expectFactoryExecutionRejectedWithoutStateMutation({
         source,
         routerAmountOut: underDeliveredOutput,
@@ -418,7 +414,7 @@ describe('Production route selection fork verification', function () {
     const ownerQuoteBefore = await quoteToken.balanceOf(owner.address);
     const takeCountBefore = await pool.takeCount();
 
-    const executed = await takeLiquidationFactory({
+    const executed = await takeLiquidationDirectDex({
       pool: asFungiblePool(poolView),
       poolConfig,
       signer: owner,
@@ -435,7 +431,7 @@ describe('Production route selection fork verification', function () {
       },
       config: {
         dryRun: false,
-        keeperTakerFactory: factory.address,
+        keeperTakerRouter: factory.address,
         uniswapV3RouterOverrides: config.uniswapV3RouterOverrides,
         runtimeCache,
       },

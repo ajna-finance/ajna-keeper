@@ -2,7 +2,7 @@ import { AjnaSDK, FungiblePool, Provider } from '@ajna-finance/sdk';
 import { expect } from 'chai';
 import { BigNumber, Contract, utils, Wallet } from 'ethers';
 import {
-  AjnaKeeperTakerFactory__factory,
+  TakerRouter__factory,
   CurveKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../typechain-types';
@@ -19,13 +19,13 @@ import { NonceTracker } from '../../src/nonce';
 import {
   createFactoryQuoteProviderRuntimeCache,
   getFactoryTakeQuoteEvaluation,
-  takeLiquidationFactory,
-} from '../../src/take/factory';
+  takeLiquidationDirectDex,
+} from '../../src/take/direct-dex';
 import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval';
 import {
   filterFactoryRouteCandidatesByAvailability,
   getFactoryRouteCandidates,
-} from '../../src/take/factory/shared';
+} from '../../src/take/direct-dex/shared';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
 import {
   BoundExternalTakeRouteEvaluation,
@@ -127,7 +127,7 @@ async function getAjnaPool(
 }
 
 async function deployFactorySystem(signer: Wallet) {
-  const factory = await new AjnaKeeperTakerFactory__factory(signer).deploy(
+  const factory = await new TakerRouter__factory(signer).deploy(
     MAINNET_CONFIG.AJNA_CONFIG.erc20PoolFactory
   );
   await factory.deployed();
@@ -406,14 +406,14 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
     signer.address
   );
 
-  const executed = await takeLiquidationFactory({
+  const executed = await takeLiquidationDirectDex({
     pool,
     poolConfig,
     signer,
     liquidation,
     config: {
       dryRun: false,
-      keeperTakerFactory: factory.address,
+      keeperTakerRouter: factory.address,
       uniswapV3RouterOverrides: fixture.uniswap,
       runtimeCache,
     },

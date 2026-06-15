@@ -1,7 +1,11 @@
-import { ExternalTakePathKind, LiquiditySource } from '../../config';
+import {
+  CalldataAggregatorProviderId,
+  ExternalTakePathKind,
+  LiquiditySource,
+} from '../../config';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import {
-  isFactoryExternalTakeRoute,
+  isDirectDexExternalTakeRoute,
   isOneInchExternalTakeRoute,
   resolveExternalTakePathFromEvaluation,
   resolveExternalTakeRouteIdentity,
@@ -158,6 +162,7 @@ export function recordExternalTakePathFailureStats(params: {
     | 'factoryPostSubmissionFailures'
   >;
   path: ExternalTakePathKind;
+  providerId?: CalldataAggregatorProviderId;
   preBroadcast: boolean;
 }): void {
   const field = params.preBroadcast
@@ -166,20 +171,18 @@ export function recordExternalTakePathFailureStats(params: {
   const pathCounters = getExternalTakePathCounters(params.stats, params.path);
   pathCounters[field] += 1;
 
-  if (params.path === 'oneinch') {
-    if (params.preBroadcast) {
-      params.stats.oneInchPreBroadcastFailures += 1;
-    } else {
-      params.stats.oneInchPostSubmissionFailures += 1;
-    }
-    return;
-  }
-
-  if (params.path === 'factory') {
+  if (params.path === 'direct_dex') {
     if (params.preBroadcast) {
       params.stats.factoryPreBroadcastFailures += 1;
     } else {
       params.stats.factoryPostSubmissionFailures += 1;
+    }
+  }
+  if (params.providerId === 'oneinch') {
+    if (params.preBroadcast) {
+      params.stats.oneInchPreBroadcastFailures += 1;
+    } else {
+      params.stats.oneInchPostSubmissionFailures += 1;
     }
   }
 }
@@ -202,7 +205,7 @@ export function incrementExternalTakeRouteStats(params: {
   if (isOneInchExternalTakeRoute(quoteEvaluation)) {
     stats[keys.oneInch] += 1;
   }
-  if (isFactoryExternalTakeRoute(quoteEvaluation)) {
+  if (isDirectDexExternalTakeRoute(quoteEvaluation)) {
     stats[keys.factory] += 1;
   }
 

@@ -21,9 +21,9 @@ contract LifiKeeperTaker is BaseAggregatorCalldataTaker {
     event LifiSwapExecuted(address indexed tokenIn, address indexed tokenOut, address indexed target, uint256 amountIn, uint256 amountOut);
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
-    /// @param authorizedFactory_ Factory contract address that can also call functions.
-    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedFactory_)
-        BaseAggregatorCalldataTaker(ajnaErc20PoolFactory, authorizedFactory_)
+    /// @param authorizedRouter_ Router contract address that can also call functions.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
+        BaseAggregatorCalldataTaker(ajnaErc20PoolFactory, authorizedRouter_)
     {}
 
     /// @inheritdoc IAjnaKeeperTaker

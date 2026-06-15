@@ -53,7 +53,7 @@ import { createDiscoveryRpcCache } from './rpc-cache';
 import {
   FactoryQuoteProviderRuntimeCache,
   createFactoryQuoteProviderRuntimeCache,
-} from '../take/factory';
+} from '../take/direct-dex';
 import {
   DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS,
   DEFAULT_MAX_HOT_AUCTION_CANDIDATES,

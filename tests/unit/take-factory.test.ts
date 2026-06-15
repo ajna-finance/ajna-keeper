@@ -11,7 +11,7 @@ import {
   validateTakeSettingsForChain,
 } from '../../src/config';
 import { logger } from '../../src/logging';
-import * as takeFactory from '../../src/take/factory';
+import * as takeFactory from '../../src/take/direct-dex';
 import { processManualTakeCandidates } from '../../src/take';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
@@ -28,7 +28,7 @@ import {
   recordFactoryRouteSuccess,
   selectBestFactoryRouteEvaluation,
   MARKET_FACTOR_SCALE,
-} from '../../src/take/factory/shared';
+} from '../../src/take/direct-dex/shared';
 import { RouteProbeLimiter } from '../../src/utils';
 
 const TEST_UNISWAP_SWAP_ROUTER_02_ADDRESS =
@@ -76,7 +76,7 @@ function makeUniswapTakeConfig(
       uniswapV3: routerConfig ? { router: routerConfig } : {},
     },
     takers: {
-      factory: '0x0000000000000000000000000000000000000007',
+      router: '0x0000000000000000000000000000000000000007',
       contracts: {
         UniswapV3: '0x0000000000000000000000000000000000000008',
       },
@@ -191,7 +191,7 @@ describe('Take Factory', () => {
       const config = {
         dryRun: true, // Use dryRun to avoid actual transactions
         subgraphUrl: 'http://localhost:8000/subgraphs/name/ajna-test',
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+        keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
@@ -221,12 +221,14 @@ describe('Take Factory', () => {
         config: config as any,
       });
 
-      // Should log the debug message about using the manual factory external take context
+      // Should log the debug message about using the manual direct DEX external take context
       const debugCalls = loggerDebugStub.getCalls();
       const factoryLogFound = debugCalls.some(
         (call) =>
           call.args[0] &&
-          call.args[0].includes('Manual factory external take context starting')
+          call.args[0].includes(
+            'Manual direct_dex external take context starting'
+          )
       );
       expect(factoryLogFound).to.be.true;
 
@@ -331,7 +333,7 @@ describe('Take Factory', () => {
         },
       };
 
-      // Business logic: factory doesn't support 1inch (use keeperTaker instead)
+      // Business logic: direct_dex doesn't support 1inch.
       const isFactorySupported =
         poolConfig.take.liquiditySource === LiquiditySource.UNISWAPV3;
       expect(isFactorySupported).to.be.false;
@@ -356,7 +358,7 @@ describe('Take Factory', () => {
   });
 
   describe('DryRun Mode Behavior', () => {
-    it('should log and return early when dryRun is true for takeLiquidationFactory', async () => {
+    it('should log and return early when dryRun is true for takeLiquidationDirectDex', async () => {
       const liquidation = {
         borrower: '0xBorrower',
         hpbIndex: 1000,
@@ -368,7 +370,7 @@ describe('Take Factory', () => {
 
       const config = {
         dryRun: true,
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
+        keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
         uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -396,7 +398,7 @@ describe('Take Factory', () => {
     it('should proceed to execution when dryRun is false', () => {
       const config = {
         dryRun: false,
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
+        keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
         uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           wethAddress: '0x4200000000000000000000000000000000000006',
@@ -410,16 +412,15 @@ describe('Take Factory', () => {
   });
 
   describe('Parameter Validation and Error Handling', () => {
-    it('should handle missing keeperTakerFactory address', () => {
+    it('should handle missing keeperTakerRouter address', () => {
       const config = {
         dryRun: false,
-        // Missing keeperTakerFactory
-        uniswapV3RouterOverrides: {
-        },
+        // Missing keeperTakerRouter
+        uniswapV3RouterOverrides: {},
       };
 
-      // Business logic: keeperTakerFactory is required for execution
-      const hasRequiredFactory = !!(config as any).keeperTakerFactory;
+      // Business logic: keeperTakerRouter is required for execution
+      const hasRequiredFactory = !!(config as any).keeperTakerRouter;
       expect(hasRequiredFactory).to.be.false;
     });
 
@@ -1439,9 +1440,7 @@ describe('Take Factory', () => {
         dstAmount: ethers.utils.parseUnits('120', 6),
       } as any);
       sinon.stub(CurveQuoteProvider.prototype, 'initialize').resolves(true);
-      sinon
-        .stub(CurveQuoteProvider.prototype, 'poolExists')
-        .resolves(false);
+      sinon.stub(CurveQuoteProvider.prototype, 'poolExists').resolves(false);
       const curveQuoteStub = sinon.stub(
         CurveQuoteProvider.prototype,
         'getQuote'
@@ -1483,7 +1482,15 @@ describe('Take Factory', () => {
             wethAddress: '0x5555555555555555555555555555555555555555',
             quoterV2Address: '0x6666666666666666666666666666666666666666',
           },
-          curveRouterOverrides: {            poolConfigs: {              'COLL-QUOTE': {                address: '0xcccccccccccccccccccccccccccccccccccccccc',                poolType: CurvePoolType.STABLE,              },            },            wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',          },
+          curveRouterOverrides: {
+            poolConfigs: {
+              'COLL-QUOTE': {
+                address: '0xcccccccccccccccccccccccccccccccccccccccc',
+                poolType: CurvePoolType.STABLE,
+              },
+            },
+            wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          },
         } as any,
         ethers.Wallet.createRandom().connect(
           new ethers.providers.JsonRpcProvider()
@@ -1832,7 +1839,15 @@ describe('Take Factory', () => {
           wethAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
         },
-        curveRouterOverrides: {          poolConfigs: {            'COLL-QUOTE': {              address: '0xcccccccccccccccccccccccccccccccccccccccc',              poolType: CurvePoolType.STABLE,            },          },          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',        },
+        curveRouterOverrides: {
+          poolConfigs: {
+            'COLL-QUOTE': {
+              address: '0xcccccccccccccccccccccccccccccccccccccccc',
+              poolType: CurvePoolType.STABLE,
+            },
+          },
+          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
       };
       const runtimeCache = takeFactory.createFactoryQuoteProviderRuntimeCache();
       runtimeCache.recentRouteSuccesses = new Map([
@@ -2020,7 +2035,15 @@ describe('Take Factory', () => {
           wethAddress: '0x5555555555555555555555555555555555555555',
           quoterV2Address: '0x6666666666666666666666666666666666666666',
         },
-        curveRouterOverrides: {          poolConfigs: {            'COLL-QUOTE': {              address: '0xcccccccccccccccccccccccccccccccccccccccc',              poolType: CurvePoolType.STABLE,            },          },          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',        },
+        curveRouterOverrides: {
+          poolConfigs: {
+            'COLL-QUOTE': {
+              address: '0xcccccccccccccccccccccccccccccccccccccccc',
+              poolType: CurvePoolType.STABLE,
+            },
+          },
+          wethAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
       };
 
       const evaluation = await takeFactory.getFactoryTakeQuoteEvaluation(
@@ -2335,7 +2358,7 @@ describe('Take Factory', () => {
           name: 'Missing Uniswap config for Uniswap take',
           config: {
             dryRun: false,
-            keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
+            keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
             // Missing uniswapV3RouterOverrides
           },
           liquiditySource: LiquiditySource.UNISWAPV3,
@@ -2346,9 +2369,8 @@ describe('Take Factory', () => {
           name: 'Valid Hemi configuration',
           config: {
             dryRun: false,
-            keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
-            uniswapV3RouterOverrides: {
-            },
+            keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D', // Real Hemi factory
+            uniswapV3RouterOverrides: {},
           },
           liquiditySource: LiquiditySource.UNISWAPV3,
           hasError: false,
@@ -2362,7 +2384,7 @@ describe('Take Factory', () => {
         let errorType = null;
 
         if (
-          !(scenario.config as any).keeperTakerFactory &&
+          !(scenario.config as any).keeperTakerRouter &&
           !scenario.config.dryRun
         ) {
           hasConfigError = true;

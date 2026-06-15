@@ -10,7 +10,7 @@ import {
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
 } from '../external-take/policy';
-import * as factoryShared from '../factory/shared';
+import * as factoryShared from '../direct-dex/shared';
 import { LifiQuoteConfig } from './types';
 import {
   getLifiQuoteFailureMetadata,

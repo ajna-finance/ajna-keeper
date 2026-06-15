@@ -54,6 +54,25 @@ describe('LI.FI quote validation', () => {
     expect(approved.tool).to.equal('uniswap');
   });
 
+  it('accepts reviewed-broad routes without an exchange-tool allowlist', () => {
+    const approved = validate(
+      quote({
+        type: 'lifi',
+        tool: 'lifi',
+        includedSteps: [step({ tool: 'balancer' })],
+      }),
+      {
+        exchangePolicy: {
+          kind: 'reviewed_broad',
+          filters: {},
+        },
+      }
+    );
+
+    expect(approved.topLevelTool).to.equal('lifi');
+    expect(approved.tool).to.equal('balancer');
+  });
+
   it('accepts current LI.FI same-chain shape with source-token feeCollection metadata', () => {
     const approved = validate(
       cloneFixture(currentSameChainFeeCollectionFixture)

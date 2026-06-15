@@ -3,7 +3,7 @@ import { ReadRpc } from '../read-transports';
 import {
   FactoryQuoteProviderRuntimeCache,
   createFactoryQuoteProviderRuntimeCache,
-} from '../take/factory';
+} from '../take/direct-dex';
 import {
   DiscoveryRpcCache,
   ExternalProviderCircuits,

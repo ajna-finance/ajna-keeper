@@ -99,10 +99,10 @@ export type DiscoveryExternalExecutionConfig = Pick<
   | 'connectorTokens'
   | 'curveRouterOverrides'
   | 'dryRun'
-  | 'keeperTaker'
-  | 'keeperTakerFactory'
+  | 'keeperTakerRouter'
   | 'lifi'
   | 'lifiTaker'
+  | 'oneInchAggregatorTaker'
   | 'sushiAggregator'
   | 'sushiAggregatorTaker'
   | 'oneInchAggregationExecutorAllowlist'
@@ -116,13 +116,8 @@ export type DiscoveryExternalExecutionConfig = Pick<
   oneInchRequestTimeoutMs?: number;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
-  onOneInchSwapDataResult?: (result: {
-    success: boolean;
-    retryable?: boolean;
-    errorCode?: number | string;
-    error?: string;
-  }) => void;
-  onOneInchExecutionFailure?: (
+  onOneInchAggregatorQuoteResult?: (result: ExternalTakeQuoteResult) => void;
+  onOneInchAggregatorExecutionFailure?: (
     result: ExternalTakeExecutionFailureResult
   ) => void;
   onFactoryExecutionFailure?: (

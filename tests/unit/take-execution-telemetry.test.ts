@@ -18,7 +18,7 @@ describe('take execution telemetry', () => {
     const warnStub = sinon.stub(logger, 'warn');
 
     logTakeExecutionTelemetry({
-      path: 'factory',
+      path: 'direct_dex',
       source: LiquiditySource.UNISWAPV3,
       poolName: 'Telemetry Pool',
       poolAddress: '0x1111111111111111111111111111111111111111',
@@ -56,7 +56,7 @@ describe('take execution telemetry', () => {
     const warnStub = sinon.stub(logger, 'warn');
 
     logTakeExecutionTelemetry({
-      path: 'oneinch',
+      path: 'calldata_aggregator',
       source: LiquiditySource.ONEINCH,
       poolName: 'Telemetry Pool',
       poolAddress: '0x1111111111111111111111111111111111111111',

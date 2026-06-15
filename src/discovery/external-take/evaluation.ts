@@ -8,7 +8,7 @@ import {
 export {
   bindExternalTakeRoute,
   isCalldataAggregatorExternalTakeRoute,
-  isFactoryExternalTakeRoute,
+  isDirectDexExternalTakeRoute,
   isOneInchExternalTakeRoute,
   resolveExternalTakePathFromEvaluation,
   resolveExternalTakePathFromSource,

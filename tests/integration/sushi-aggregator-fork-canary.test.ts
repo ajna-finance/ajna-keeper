@@ -27,7 +27,7 @@ import {
 } from '../../src/dex/sushi-aggregator/scope';
 import { validateSushiAggregatorQuote } from '../../src/dex/sushi-aggregator/validate-route';
 import { encodeAggregatorSwapDetails } from '../../src/take/aggregator-calldata/execution';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../typechain-types/factories/contracts/factories';
 import {
   MockAtomicSwapPool__factory,
   MockPoolDeployer__factory,
@@ -86,7 +86,7 @@ describe('Sushi aggregator fork execution canary (Packet 3B)', function () {
       pool.address
     );
 
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();

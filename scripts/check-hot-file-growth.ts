@@ -22,6 +22,9 @@ export const HOT_FILES: readonly string[] = [
   'src/take/external-take/quote-approval.ts',
   'src/discovery/route-preflight.ts',
   'scripts/deploy-factory-system.ts',
+  'scripts/run-fixture-keeper-harness.ts',
+  'scripts/no-spend/harness-artifacts.ts',
+  'scripts/create-liquidatable-ajna-fixture.ts',
 ];
 
 export const MAX_ADDED_LINES = 10;

@@ -44,9 +44,9 @@ interface IAjnaKeeperTaker is IERC20Taker {
     /// @return The address of the contract owner.
     function owner() external view returns (address);
 
-    /// @notice Returns the factory contract authorized to invoke this taker.
-    /// @return The authorized factory address.
-    function authorizedFactory() external view returns (address);
+    /// @notice Returns the router contract authorized to invoke this taker.
+    /// @return The authorized router address.
+    function authorizedRouter() external view returns (address);
 
     /// @notice Returns the Ajna pool factory this taker validates pools against.
     /// @return The Ajna pool factory address.

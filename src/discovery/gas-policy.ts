@@ -30,7 +30,7 @@ import {
   DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
   getCurveQuoteProvider,
   getUniswapV3QuoteProvider,
-} from '../take/factory/shared';
+} from '../take/direct-dex/shared';
 import { GasPolicyRejectCode, GasQuoteAttempt } from '../take/types';
 import {
   DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS,

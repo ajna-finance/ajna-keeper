@@ -20,7 +20,7 @@ import {
 /**
  * Universal Factory System Deployment Script
  *
- * Deploys AjnaKeeperTakerFactory + DEX-specific takers for any chain
+ * Deploys TakerRouter + DEX-specific takers for any chain
  * Usage: npx ts-node scripts/deploy-factory-system.ts <config-file-path>
  *
  * Features:
@@ -126,8 +126,8 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     'artifacts',
     'contracts',
     'factories',
-    'AjnaKeeperTakerFactory.sol',
-    'AjnaKeeperTakerFactory.json'
+    'TakerRouter.sol',
+    'TakerRouter.json'
   );
   const takerArtifactPath = path.join(
     __dirname,
@@ -226,7 +226,7 @@ async function deployFactory(
   ajnaPoolFactory: string,
   chainId: number
 ): Promise<string> {
-  console.log('\n📦 Step 1: Deploying AjnaKeeperTakerFactory...');
+  console.log('\n📦 Step 1: Deploying TakerRouter...');
 
   const factoryArtifact = require(
     path.join(
@@ -235,11 +235,11 @@ async function deployFactory(
       'artifacts',
       'contracts',
       'factories',
-      'AjnaKeeperTakerFactory.sol',
-      'AjnaKeeperTakerFactory.json'
+      'TakerRouter.sol',
+      'TakerRouter.json'
     )
   );
-  const AjnaKeeperTakerFactory = new ethers.ContractFactory(
+  const TakerRouter = new ethers.ContractFactory(
     factoryArtifact.abi,
     factoryArtifact.bytecode,
     deployer
@@ -263,7 +263,7 @@ async function deployFactory(
   console.log('🚀 Deploying with manual gas settings...');
 
   try {
-    const factory = await AjnaKeeperTakerFactory.deploy(
+    const factory = await TakerRouter.deploy(
       ajnaPoolFactory,
       deployOptions
     );
@@ -271,7 +271,7 @@ async function deployFactory(
 
     console.log('⏳ Waiting for deployment confirmation...');
     await factory.deployed();
-    console.log('🎉 AjnaKeeperTakerFactory deployed to:', factory.address);
+    console.log('🎉 TakerRouter deployed to:', factory.address);
 
     return factory.address;
   } catch (error: any) {
@@ -289,7 +289,7 @@ async function deployFactory(
 
       console.log(`⛽ Retry gas limit: ${higherGasLimit}`);
 
-      const factory = await AjnaKeeperTakerFactory.deploy(
+      const factory = await TakerRouter.deploy(
         ajnaPoolFactory,
         retryOptions
       );
@@ -299,7 +299,7 @@ async function deployFactory(
       );
 
       await factory.deployed();
-      console.log('🎉 AjnaKeeperTakerFactory deployed to:', factory.address);
+      console.log('🎉 TakerRouter deployed to:', factory.address);
 
       return factory.address;
     }
@@ -423,8 +423,8 @@ async function configureFactory(
       'artifacts',
       'contracts',
       'factories',
-      'AjnaKeeperTakerFactory.sol',
-      'AjnaKeeperTakerFactory.json'
+      'TakerRouter.sol',
+      'TakerRouter.json'
     )
   );
   const factory = new ethers.Contract(
@@ -478,8 +478,8 @@ async function verifyDeployment(
       'artifacts',
       'contracts',
       'factories',
-      'AjnaKeeperTakerFactory.sol',
-      'AjnaKeeperTakerFactory.json'
+      'TakerRouter.sol',
+      'TakerRouter.json'
     )
   );
   const factory = new ethers.Contract(
@@ -520,18 +520,18 @@ async function verifyDeployment(
     );
 
     const takerOwner = await taker.owner();
-    const authorizedFactory = await taker.authorizedFactory();
+    const authorizedRouter = await taker.authorizedRouter();
 
     console.log(`- Taker Owner: ${takerOwner}`);
-    console.log(`- Authorized Factory: ${authorizedFactory}`);
-    console.log(`- Expected Factory: ${addresses.factory}`);
+    console.log(`- Authorized Router: ${authorizedRouter}`);
+    console.log(`- Expected Router: ${addresses.factory}`);
 
     // Validation checks
     if (!hasUniswapTaker || registeredTaker !== addresses.uniswapTaker) {
       throw new Error('❌ Factory configuration verification failed');
     }
 
-    if (authorizedFactory !== addresses.factory) {
+    if (authorizedRouter !== addresses.factory) {
       throw new Error('❌ Taker authorization verification failed');
     }
 
@@ -567,11 +567,11 @@ async function verifyDeployment(
     );
 
     const takerOwner = await taker.owner();
-    const authorizedFactory = await taker.authorizedFactory();
+    const authorizedRouter = await taker.authorizedRouter();
 
     console.log(`- LI.FI Taker Owner: ${takerOwner}`);
-    console.log(`- LI.FI Authorized Factory: ${authorizedFactory}`);
-    console.log(`- Expected Factory: ${addresses.factory}`);
+    console.log(`- LI.FI Authorized Router: ${authorizedRouter}`);
+    console.log(`- Expected Router: ${addresses.factory}`);
 
     if (
       !hasLifiTaker ||
@@ -580,7 +580,7 @@ async function verifyDeployment(
       throw new Error('❌ LI.FI factory configuration verification failed');
     }
 
-    if (authorizedFactory.toLowerCase() !== addresses.factory.toLowerCase()) {
+    if (authorizedRouter.toLowerCase() !== addresses.factory.toLowerCase()) {
       throw new Error('❌ LI.FI taker authorization verification failed');
     }
 
@@ -647,7 +647,7 @@ function generateConfigUpdate(
 
   console.log('\n📋 Deployed Contract Addresses:');
   if (addresses.factory) {
-    console.log(`🏭 AjnaKeeperTakerFactory: ${addresses.factory}`);
+    console.log(`🏭 TakerRouter: ${addresses.factory}`);
   }
   if (addresses.uniswapTaker) {
     console.log(`🦄 UniswapV3KeeperTaker: ${addresses.uniswapTaker}`);

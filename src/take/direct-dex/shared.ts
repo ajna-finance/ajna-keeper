@@ -32,7 +32,7 @@ import {
 import { CurveQuoteProvider } from '../../dex/providers/curve-quote-provider';
 import { UniswapV3QuoteProvider } from '../../dex/providers/uniswap-quote-provider';
 import {
-  ApprovedFactoryQuoteEvaluation,
+  ApprovedDirectDexQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   GasPolicyRejectCode,
   GasQuoteAttempt,
@@ -108,7 +108,7 @@ export interface FactoryRouteProfitabilityContext {
 
 export interface FactoryTakeConfigBase {
   dryRun?: boolean;
-  keeperTakerFactory?: string;
+  keeperTakerRouter?: string;
   takerContracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
   curveRouterOverrides?: CurveRouterOverrides;
@@ -129,7 +129,7 @@ export interface FactoryTakeParams {
 export type FactoryExecutionConfig = Pick<
   FactoryTakeConfig,
   | 'dryRun'
-  | 'keeperTakerFactory'
+  | 'keeperTakerRouter'
   | 'uniswapV3RouterOverrides'
   | 'curveRouterOverrides'
   | 'tokenAddresses'
@@ -1517,7 +1517,7 @@ export async function computeFactoryAmountOutMinimum({
 }: {
   pool: FungiblePool;
   liquidation: Pick<TakeLiquidationPlan, 'auctionPrice' | 'collateral'>;
-  quoteEvaluation: ApprovedFactoryQuoteEvaluation;
+  quoteEvaluation: ApprovedDirectDexQuoteEvaluation;
 }): Promise<BigNumber> {
   const approvedMinOutRaw = deriveApprovedMinOutRaw({
     routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
@@ -1584,7 +1584,7 @@ export async function buildFactoryQuoteEvaluation(params: {
   return mergeRoutePolicyIntoEvaluation({
     evaluation: {
       isTakeable: policy.isEconomicallyExecutable,
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       marketPrice: params.quoteAmount / collateralAmount,
       quoteAmount: params.quoteAmount,
       quoteAmountRaw: params.quoteAmountRaw,

@@ -5,7 +5,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IAggregationExecutor, IGenericRouter, SwapDescription } from "../OneInchInterfaces.sol";
 
 /// @notice Wraps the real Uniswap V3 SwapRouter behind the 1inch IGenericRouter interface.
-/// @dev Allows the AjnaKeeperTaker (which expects 1inch) to execute real swaps
+/// @dev Allows keeper taker tests to execute real swaps
 /// through Uniswap V3 without any mocking. Used for integration testing.
 contract UniswapV3SwapAdapter is IGenericRouter {
     /// @notice Uniswap V3 SwapRouter interface (subset)
@@ -22,7 +22,7 @@ contract UniswapV3SwapAdapter is IGenericRouter {
         SwapDescription calldata desc,
         bytes calldata
     ) external override returns (uint256 returnAmount, uint256 spentAmount) {
-        // Pull srcToken from caller (the AjnaKeeperTaker)
+        // Pull srcToken from caller (the keeper taker)
         IERC20(desc.srcToken).transferFrom(msg.sender, address(this), desc.amount);
 
         // Approve Uniswap V3 router to spend srcToken

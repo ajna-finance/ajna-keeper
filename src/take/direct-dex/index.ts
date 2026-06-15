@@ -7,7 +7,7 @@ import { LiquiditySource, formatLiquiditySource } from '../../config';
 import { logger } from '../../logging';
 import { BigNumber } from 'ethers';
 import {
-  ApprovedFactoryQuoteEvaluation,
+  ApprovedDirectDexQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -64,7 +64,7 @@ export function createFactoryTakeAdapter(params: {
   routeSelection?: FactoryRouteSelectionOptions;
 }): ExternalTakeAdapter<TakeActionConfig, FactoryExecutionConfig> {
   return {
-    kind: 'factory',
+    kind: 'direct_dex',
     evaluateExternalTake: async ({
       pool,
       signer,
@@ -101,7 +101,7 @@ export function createFactoryTakeAdapter(params: {
         params.runtimeCache && !config.runtimeCache
           ? { ...config, runtimeCache: params.runtimeCache }
           : config;
-      return takeLiquidationFactory({
+      return takeLiquidationDirectDex({
         pool,
         signer,
         poolConfig,
@@ -462,7 +462,7 @@ function failFactoryTakeExecution(message: string): false {
 
 function recordExecutedFactoryRouteSuccess(params: {
   pool: FungiblePool;
-  quoteEvaluation: ApprovedFactoryQuoteEvaluation;
+  quoteEvaluation: ApprovedDirectDexQuoteEvaluation;
   runtimeCache?: FactoryQuoteProviderRuntimeCache;
 }): void {
   recordFactoryRouteSuccess({
@@ -483,7 +483,7 @@ interface FactoryLiquidationExecutionParams {
   config: Pick<
     FactoryTakeParams['config'],
     | 'dryRun'
-    | 'keeperTakerFactory'
+    | 'keeperTakerRouter'
     | 'uniswapV3RouterOverrides'
     | 'curveRouterOverrides'
     | 'tokenAddresses'
@@ -496,7 +496,7 @@ interface FactoryLiquidationExecutionParams {
 
 async function executeSelectedFactoryRoute(
   params: FactoryLiquidationExecutionParams & {
-    quoteEvaluation: ApprovedFactoryQuoteEvaluation;
+    quoteEvaluation: ApprovedDirectDexQuoteEvaluation;
   }
 ): Promise<boolean> {
   const { pool, poolConfig, signer, liquidation, config, quoteEvaluation } =
@@ -533,7 +533,7 @@ async function executeSelectedFactoryRoute(
 /**
  * Execute external take using factory pattern
  */
-export async function takeLiquidationFactory({
+export async function takeLiquidationDirectDex({
   pool,
   poolConfig,
   signer,
@@ -541,7 +541,7 @@ export async function takeLiquidationFactory({
   config,
 }: FactoryLiquidationExecutionParams): Promise<boolean> {
   const { borrower } = liquidation;
-  const { dryRun, keeperTakerFactory } = config;
+  const { dryRun, keeperTakerRouter } = config;
 
   const externalTakeQuoteEvaluation =
     getExternalTakeExecutionPlanPrimaryEvaluation(
@@ -574,9 +574,9 @@ export async function takeLiquidationFactory({
     return true;
   }
 
-  if (!keeperTakerFactory) {
+  if (!keeperTakerRouter) {
     return failFactoryTakeExecution(
-      'Factory: keeperTakerFactory address not configured'
+      'Factory: keeperTakerRouter address not configured'
     );
   }
 

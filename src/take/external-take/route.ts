@@ -1,11 +1,11 @@
 import {
   CalldataAggregatorProviderId,
+  DirectDexLiquiditySource,
   ExternalTakePathKind,
-  FactoryLiquiditySource,
   LiquiditySource,
   formatLiquiditySource,
   getExternalTakePathDefaultSource,
-  isFactoryDynamicSource,
+  isDirectDexDynamicSource,
   isCalldataAggregatorLiquiditySource,
   resolveCalldataAggregatorProviderForSource,
   resolveExternalTakePathFromSource,
@@ -15,17 +15,13 @@ import { ExternalTakeQuoteEvaluation } from '../types';
 
 export type ExternalTakeRouteIdentity =
   | {
-      path: 'oneinch';
-      source: LiquiditySource.ONEINCH;
-    }
-  | {
       path: 'calldata_aggregator';
       providerId: CalldataAggregatorProviderId;
       source: CalldataAggregatorLiquiditySource;
     }
   | {
-      path: 'factory';
-      source: FactoryLiquiditySource;
+      path: 'direct_dex';
+      source: DirectDexLiquiditySource;
     };
 
 export type ExternalTakeRouteBindingFailure =
@@ -77,20 +73,6 @@ type ExternalTakeRouteQuoteEvaluation<
   selectedLiquiditySource: TSource;
 };
 
-type BoundOneInchExternalTakeRouteBinding<
-  TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
-> = {
-  bound: true;
-  identity: Extract<ExternalTakeRouteIdentity, { path: 'oneinch' }>;
-  path: 'oneinch';
-  source: LiquiditySource.ONEINCH;
-  quoteEvaluation: ExternalTakeRouteQuoteEvaluation<
-    TQuoteEvaluation,
-    'oneinch',
-    LiquiditySource.ONEINCH
-  >;
-};
-
 type BoundCalldataAggregatorExternalTakeRouteBinding<
   TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
 > = {
@@ -106,26 +88,25 @@ type BoundCalldataAggregatorExternalTakeRouteBinding<
   >;
 };
 
-type BoundFactoryExternalTakeRouteBinding<
+type BoundDirectDexExternalTakeRouteBinding<
   TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
 > = {
   bound: true;
-  identity: Extract<ExternalTakeRouteIdentity, { path: 'factory' }>;
-  path: 'factory';
-  source: FactoryLiquiditySource;
+  identity: Extract<ExternalTakeRouteIdentity, { path: 'direct_dex' }>;
+  path: 'direct_dex';
+  source: DirectDexLiquiditySource;
   quoteEvaluation: ExternalTakeRouteQuoteEvaluation<
     TQuoteEvaluation,
-    'factory',
-    FactoryLiquiditySource
+    'direct_dex',
+    DirectDexLiquiditySource
   >;
 };
 
 export type BoundExternalTakeRouteBinding<
   TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
 > =
-  | BoundOneInchExternalTakeRouteBinding<TQuoteEvaluation>
   | BoundCalldataAggregatorExternalTakeRouteBinding<TQuoteEvaluation>
-  | BoundFactoryExternalTakeRouteBinding<TQuoteEvaluation>;
+  | BoundDirectDexExternalTakeRouteBinding<TQuoteEvaluation>;
 
 export type ExternalTakeRouteBinding<
   TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
@@ -139,15 +120,23 @@ export function resolveExternalTakeRouteIdentityFromParts(params: {
   path: ExternalTakePathKind;
   source: LiquiditySource;
 }): ExternalTakeRouteIdentity | undefined {
-  if (params.path === 'oneinch' && params.source === LiquiditySource.ONEINCH) {
-    return { path: 'oneinch', source: LiquiditySource.ONEINCH };
+  if (
+    params.path === 'calldata_aggregator' &&
+    isCalldataAggregatorLiquiditySource(params.source)
+  ) {
+    const providerId = resolveCalldataAggregatorProviderForSource(
+      params.source
+    );
+    return (
+      providerId && {
+        path: 'calldata_aggregator',
+        providerId,
+        source: params.source,
+      }
+    );
   }
-  if (params.path === 'calldata_aggregator' && isCalldataAggregatorLiquiditySource(params.source)) {
-    const providerId = resolveCalldataAggregatorProviderForSource(params.source);
-    return providerId && { path: 'calldata_aggregator', providerId, source: params.source };
-  }
-  if (params.path === 'factory' && isFactoryDynamicSource(params.source)) {
-    return { path: 'factory', source: params.source };
+  if (params.path === 'direct_dex' && isDirectDexDynamicSource(params.source)) {
+    return { path: 'direct_dex', source: params.source };
   }
   return undefined;
 }
@@ -160,18 +149,6 @@ function createBoundExternalTakeRouteBinding<
 }): BoundExternalTakeRouteBinding<TQuoteEvaluation> {
   const identity = params.identity;
   switch (identity.path) {
-    case 'oneinch':
-      return {
-        bound: true,
-        identity,
-        path: 'oneinch',
-        source: LiquiditySource.ONEINCH,
-        quoteEvaluation: {
-          ...params.quoteEvaluation,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-        },
-      };
     case 'calldata_aggregator':
       return {
         bound: true,
@@ -185,15 +162,15 @@ function createBoundExternalTakeRouteBinding<
           selectedLiquiditySource: identity.source,
         },
       };
-    case 'factory':
+    case 'direct_dex':
       return {
         bound: true,
         identity,
-        path: 'factory',
+        path: 'direct_dex',
         source: identity.source,
         quoteEvaluation: {
           ...params.quoteEvaluation,
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           selectedLiquiditySource: identity.source,
         },
       };
@@ -392,8 +369,8 @@ export function formatExternalTakeRouteSelectionFailure(
     case 'missing_path':
       return 'hybrid external take selection missing selected path';
     case 'missing_source':
-      return failure.path === 'factory'
-        ? 'selected factory path without a concrete factory source'
+      return failure.path === 'direct_dex'
+        ? 'selected direct_dex path without a concrete direct DEX source'
         : `selected path=${failure.path} without a concrete source`;
     case 'unsupported_source':
       return `selected unsupported source=${formatLiquiditySource(failure.source)}`;
@@ -403,13 +380,19 @@ export function formatExternalTakeRouteSelectionFailure(
 export function isOneInchExternalTakeRoute(
   quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
 ): boolean {
-  return resolveExternalTakeRouteIdentity(quoteEvaluation)?.path === 'oneinch';
+  const identity = resolveExternalTakeRouteIdentity(quoteEvaluation);
+  return (
+    identity?.path === 'calldata_aggregator' &&
+    identity.providerId === 'oneinch'
+  );
 }
 
-export function isFactoryExternalTakeRoute(
+export function isDirectDexExternalTakeRoute(
   quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
 ): boolean {
-  return resolveExternalTakeRouteIdentity(quoteEvaluation)?.path === 'factory';
+  return (
+    resolveExternalTakeRouteIdentity(quoteEvaluation)?.path === 'direct_dex'
+  );
 }
 
 export function isCalldataAggregatorExternalTakeRoute(

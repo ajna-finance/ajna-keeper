@@ -10,7 +10,7 @@ import {
 } from './route';
 import {
   ApprovedExternalTakeQuoteEvaluation,
-  ApprovedFactoryQuoteEvaluation,
+  ApprovedDirectDexQuoteEvaluation,
   ApprovedOneInchQuoteEvaluation,
   BoundCalldataAggregatorRouteEvaluation,
   BoundExternalTakeRouteEvaluation,
@@ -19,7 +19,7 @@ import {
   CurvePoolSelection,
   ExternalTakeQuoteEvaluation,
 } from '../types';
-import { deriveApprovedMinOutRaw } from '../factory/shared';
+import { deriveApprovedMinOutRaw } from '../direct-dex/shared';
 import { approveCalldataAggregatorQuoteForExecution } from '../aggregator-calldata/quote-approval';
 
 export type ExternalTakeQuoteApprovalResult<
@@ -30,9 +30,7 @@ export type ExternalTakeQuoteApprovalResult<
 
 export type ExternalTakeRouteBindingResult<
   TQuote extends BoundExternalTakeRouteEvaluation,
-> =
-  | { bound: true; quoteEvaluation: TQuote }
-  | { bound: false; reason: string };
+> = { bound: true; quoteEvaluation: TQuote } | { bound: false; reason: string };
 
 type ResolvedExternalTakeRouteBinding =
   | {
@@ -95,7 +93,7 @@ function deriveRouteExecutionFloorRaw(
 
 type FactoryRouteBase = ExternalTakeQuoteEvaluation & {
   isTakeable: true;
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   quoteAmountRaw: NonNullable<ExternalTakeQuoteEvaluation['quoteAmountRaw']>;
   routeExecutionFloorRaw: NonNullable<
     ExternalTakeQuoteEvaluation['routeExecutionFloorRaw']
@@ -118,8 +116,8 @@ type FactoryRouteFields =
       curvePool: CurvePoolSelection;
     };
 
-type FactoryRouteEvaluation<TBase extends FactoryRouteBase> =
-  TBase & FactoryRouteFields;
+type FactoryRouteEvaluation<TBase extends FactoryRouteBase> = TBase &
+  FactoryRouteFields;
 
 function resolveFactoryRouteFields(params: {
   quoteEvaluation: ExternalTakeQuoteEvaluation;
@@ -185,7 +183,7 @@ function approveFactoryRouteBinding(params: {
     ExternalTakeQuoteEvaluation['approvedMinOutRaw']
   >;
   context: string;
-}): ExternalTakeQuoteApprovalResult<ApprovedFactoryQuoteEvaluation> {
+}): ExternalTakeQuoteApprovalResult<ApprovedDirectDexQuoteEvaluation> {
   const fields = resolveFactoryRouteFields({ ...params, action: 'execute' });
   if (!fields.ok) {
     return { approved: false, reason: fields.reason };
@@ -194,7 +192,7 @@ function approveFactoryRouteBinding(params: {
   const approvedBase: ApprovedFactoryRouteBase = {
     ...params.quoteEvaluation,
     isTakeable: true,
-    externalTakePath: 'factory',
+    externalTakePath: 'direct_dex',
     quoteAmountRaw: params.quoteAmountRaw,
     routeExecutionFloorRaw:
       params.quoteEvaluation.routeExecutionFloorRaw ?? params.approvedMinOutRaw,
@@ -226,7 +224,7 @@ function bindFactoryRouteEvaluation(params: {
   const boundBase: FactoryRouteBase = {
     ...params.quoteEvaluation,
     isTakeable: true,
-    externalTakePath: 'factory',
+    externalTakePath: 'direct_dex',
     quoteAmountRaw: params.quoteAmountRaw,
     routeExecutionFloorRaw: params.routeExecutionFloorRaw,
   };
@@ -263,11 +261,11 @@ export function approveOneInchQuoteForExecution(params: {
 
   if (
     quoteEvaluation.externalTakePath !== undefined &&
-    quoteEvaluation.externalTakePath !== 'oneinch'
+    quoteEvaluation.externalTakePath !== 'calldata_aggregator'
   ) {
     return {
       approved: false,
-      reason: `1inch atomic take received non-1inch approved path for ${context}`,
+      reason: `1inch atomic take received non-calldata_aggregator approved path for ${context}`,
     };
   }
 
@@ -294,7 +292,8 @@ export function approveOneInchQuoteForExecution(params: {
     quoteEvaluation: {
       ...quoteEvaluation,
       isTakeable: true,
-      externalTakePath: 'oneinch',
+      externalTakePath: 'calldata_aggregator',
+      providerId: 'oneinch',
       quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       routeExecutionFloorRaw:
@@ -308,7 +307,7 @@ export function approveFactoryQuoteForExecution(params: {
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   poolName: string;
   borrower: string;
-}): ExternalTakeQuoteApprovalResult<ApprovedFactoryQuoteEvaluation> {
+}): ExternalTakeQuoteApprovalResult<ApprovedDirectDexQuoteEvaluation> {
   const { quoteEvaluation, poolName, borrower } = params;
   const context = getExecutionContext({ poolName, borrower });
 
@@ -339,10 +338,10 @@ export function approveFactoryQuoteForExecution(params: {
       reason: route.reason,
     };
   }
-  if (route.route.identity.path !== 'factory') {
+  if (route.route.identity.path !== 'direct_dex') {
     return {
       approved: false,
-      reason: `Factory: Received non-factory approved path for ${context}; refusing to execute an unbound route`,
+      reason: `Factory: Received non-direct_dex approved path for ${context}; refusing to execute an unbound route`,
     };
   }
 
@@ -379,12 +378,6 @@ export function approveExternalTakeQuoteForExecution(params: {
     };
   }
 
-  if (route.route.identity.source === LiquiditySource.ONEINCH) {
-    return approveOneInchQuoteForExecution({
-      ...params,
-      quoteEvaluation: route.route.quoteEvaluation,
-    });
-  }
   if (route.route.identity.path === 'calldata_aggregator') {
     return approveCalldataAggregatorQuoteForExecution({
       ...params,
@@ -438,16 +431,6 @@ export function bindExternalTakeRouteForDiscovery(params: {
     routeExecutionFloorRaw,
   };
 
-  if (route.route.identity.source === LiquiditySource.ONEINCH) {
-    return {
-      bound: true,
-      quoteEvaluation: {
-        ...boundBase,
-        externalTakePath: 'oneinch',
-        selectedLiquiditySource: LiquiditySource.ONEINCH,
-      } satisfies BoundOneInchRouteEvaluation,
-    };
-  }
   if (route.route.identity.path === 'calldata_aggregator') {
     if (!route.route.quoteEvaluation.calldataQuote) {
       return {

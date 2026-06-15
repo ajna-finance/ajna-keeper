@@ -32,11 +32,11 @@ import { createArbTakeStrategy } from '../take/arb-strategy';
 import { processTakeCandidates, TAKE_SKIP_REASONS } from '../take/engine';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../take/external-take/execution-plan';
 import { TakeWriteTransport } from '../take/write-transport';
-import { FactoryRouteProfitabilityContext } from '../take/factory';
+import { FactoryRouteProfitabilityContext } from '../take/direct-dex';
 import {
   prewarmFactoryRouteAvailability,
   withFactoryRuntimeStats,
-} from '../take/factory/shared';
+} from '../take/direct-dex/shared';
 import {
   AsyncOperationLimiter,
   RouteProbeLimiter,
@@ -180,7 +180,7 @@ async function buildFactoryRouteProfitabilityContext(params: {
       resolveExternalTakePolicy({
         defaultLiquiditySource: params.defaultLiquiditySource,
         takePolicy: params.takePolicy,
-      }).factoryRouteSources
+      }).directDexRouteSources
     );
   const requiresRouteGasRanking = sources.length > 1;
   const requiresQuoteProfitability =
@@ -411,27 +411,33 @@ function logDiscoveredTakeTargetSummary(params: {
   appendNonZeroField(fields, 'dryRunExternalTakes', stats.dryRunExternalTakes);
   appendNonZeroField(fields, 'dryRunArbTakes', stats.dryRunArbTakes);
   appendNonZeroGroup(fields, 'approvedRoutes', [
-    { label: 'oneinch', value: getPathStat('oneinch', 'approved') },
-    { label: 'factory', value: getPathStat('factory', 'approved') },
-    { label: 'lifi', value: getPathStat('calldata_aggregator', 'approved') },
+    { label: 'direct_dex', value: getPathStat('direct_dex', 'approved') },
+    {
+      label: 'calldata_aggregator',
+      value: getPathStat('calldata_aggregator', 'approved'),
+    },
   ]);
   appendNonZeroGroup(fields, 'approvedFactorySources', [
     { label: 'uniswapV3', value: stats.approvedUniswapV3TakeDecisions },
     { label: 'curve', value: stats.approvedCurveTakeDecisions },
   ]);
   appendNonZeroGroup(fields, 'executedRoutes', [
-    { label: 'oneinch', value: getPathStat('oneinch', 'executed') },
-    { label: 'factory', value: getPathStat('factory', 'executed') },
-    { label: 'lifi', value: getPathStat('calldata_aggregator', 'executed') },
+    { label: 'direct_dex', value: getPathStat('direct_dex', 'executed') },
+    {
+      label: 'calldata_aggregator',
+      value: getPathStat('calldata_aggregator', 'executed'),
+    },
   ]);
   appendNonZeroGroup(fields, 'executedFactorySources', [
     { label: 'uniswapV3', value: stats.executedUniswapV3Takes },
     { label: 'curve', value: stats.executedCurveTakes },
   ]);
   appendNonZeroGroup(fields, 'dryRunRoutes', [
-    { label: 'oneinch', value: getPathStat('oneinch', 'dryRun') },
-    { label: 'factory', value: getPathStat('factory', 'dryRun') },
-    { label: 'lifi', value: getPathStat('calldata_aggregator', 'dryRun') },
+    { label: 'direct_dex', value: getPathStat('direct_dex', 'dryRun') },
+    {
+      label: 'calldata_aggregator',
+      value: getPathStat('calldata_aggregator', 'dryRun'),
+    },
   ]);
   appendNonZeroGroup(fields, 'dryRunFactorySources', [
     { label: 'uniswapV3', value: stats.dryRunUniswapV3Takes },
@@ -446,7 +452,7 @@ function logDiscoveredTakeTargetSummary(params: {
     { label: 'preBroadcast', value: stats.factoryPreBroadcastFailures },
     { label: 'postSubmission', value: stats.factoryPostSubmissionFailures },
   ]);
-  appendNonZeroGroup(fields, 'lifiFailures', [
+  appendNonZeroGroup(fields, 'calldataAggregatorFailures', [
     {
       label: 'preBroadcast',
       value: getPathStat('calldata_aggregator', 'preBroadcastFailures'),
@@ -648,7 +654,7 @@ export async function handleDiscoveredTakeTarget(
   });
   const {
     externalTakePaths,
-    defaultFactoryLiquiditySource,
+    defaultDirectDexLiquiditySource,
     factoryQuoteConfig,
     externalTakeAdapter,
     externalExecutionConfig,
@@ -664,15 +670,15 @@ export async function handleDiscoveredTakeTarget(
       rpcCache?.stats?.factory,
       async () => {
         const prewarmFactoryRoutes =
-          externalTakePaths.includes('factory') &&
-          defaultFactoryLiquiditySource !== undefined &&
+          externalTakePaths.includes('direct_dex') &&
+          defaultDirectDexLiquiditySource !== undefined &&
           candidates.length > 0
             ? prewarmFactoryRouteAvailability({
                 pool: params.pool,
                 signer: params.signer,
                 poolConfig: withTakeLiquiditySource(
                   params.target,
-                  defaultFactoryLiquiditySource
+                  defaultDirectDexLiquiditySource
                 ),
                 quoteConfig: factoryQuoteConfig,
                 routeSelection: {
