@@ -4,9 +4,8 @@ import { LiquiditySource } from '../../config';
 import { DEFAULT_SUSHI_AGGREGATOR_MAX_QUOTE_AGE_MS } from '../../config/sushi-aggregator-policy';
 import { getErrorMessage, weiToDecimaled } from '../../utils';
 import {
-  CalldataAggregatorPreBroadcastRejection,
+  makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
-  recordCalldataAggregatorPreBroadcastRejection,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
@@ -29,20 +28,6 @@ function getSushiMaxQuoteAgeMs(config: SushiAggregatorExecutionConfig): number {
     config.sushiAggregator?.maxQuoteAgeMs ??
     DEFAULT_SUSHI_AGGREGATOR_MAX_QUOTE_AGE_MS
   );
-}
-
-function recordPreparedSushiRejection(
-  config: SushiAggregatorExecutionConfig,
-  rejection: CalldataAggregatorPreBroadcastRejection
-): void {
-  recordCalldataAggregatorPreBroadcastRejection({
-    config,
-    rejection,
-    onQuoteResult: (config, result) =>
-      config.onSushiAggregatorQuoteResult?.(result),
-    onExecutionFailure: (config, result) =>
-      config.onSushiAggregatorExecutionFailure?.(result),
-  });
 }
 
 async function requestFreshSushiAggregatorExecutionQuote(params: {
@@ -140,7 +125,13 @@ export async function takeLiquidationSushiAggregator(params: {
     liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
     label: SUSHI_LABEL,
     prepareExecution: prepareSushiAggregatorExecution,
-    recordPreparedRejection: recordPreparedSushiRejection,
+    recordPreparedRejection:
+      makeCalldataAggregatorProviderRejectionRecorder<SushiAggregatorExecutionConfig>(
+        {
+          onQuoteResult: (c, r) => c.onSushiAggregatorQuoteResult?.(r),
+          onExecutionFailure: (c, r) => c.onSushiAggregatorExecutionFailure?.(r),
+        }
+      ),
     onQuoteConsumed: (config) =>
       config.onSushiAggregatorQuoteResult?.({ success: true }),
     onExecutionFailure: (config, result) =>

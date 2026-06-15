@@ -1,6 +1,5 @@
 import { LiquiditySource } from '../../config';
 import { getOneInchAggregatorPathQuoteEvaluation } from '../../take/oneinch-aggregator/quote-evaluation';
-import { getDebtConstrainedTakeCollateralWad } from '../../take/take-sizing';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import { AsyncOperationLimiter } from '../../utils';
 import { DiscoveryExecutionConfig, DiscoveryRpcCache } from '../types';
@@ -13,7 +12,7 @@ import {
   DiscoveryTokenDecimalsCacheResolver,
   OneInchAggregatorPathQuoteInput,
   QuoteCircuitPolicy,
-  quoteCircuitGuardedPath,
+  quoteCalldataAggregatorPathForDiscovery,
   recordOneInchCircuitOutcomeForDiscovery,
 } from './quotes';
 
@@ -27,38 +26,30 @@ export async function quoteOneInchAggregatorPathForDiscovery(
     getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
   } & OneInchAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
-  const circuitOpenReason = getOneInchCircuitOpenReason({
-    rpcCache: params.rpcCache,
-    takePolicy: params.takePolicy,
-  });
-  const circuit: QuoteCircuitPolicy =
-    params.quoteCircuitMode === 'observe'
-      ? { kind: 'observe', openReason: circuitOpenReason }
-      : {
-          kind: 'record',
-          openReason: circuitOpenReason,
-          recordOutcome: (outcome) =>
-            recordOneInchCircuitOutcomeForDiscovery({
-              rpcCache: params.rpcCache,
-              takePolicy: params.takePolicy,
-              outcome,
-            }),
-        };
-  const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
-  return quoteCircuitGuardedPath({
-    poolName: params.pool.name,
+  return quoteCalldataAggregatorPathForDiscovery(params, {
     label: '1inch',
-    externalTakePath: 'calldata_aggregator',
     selectedLiquiditySource: LiquiditySource.ONEINCH,
-    auctionPrice: params.auctionPrice,
-    collateral: quoteCollateralWad,
-    circuit,
-    routeProbeLimiter: params.routeProbeLimiter,
-    routeProbeAbortSignal: params.routeProbeAbortSignal,
-    probeTimeoutMs: params.probeTimeoutMs,
     abortErrorMessage: '1inch aggregator external take quote aborted',
     timeoutLabel: '1inch aggregator external take quote',
-    evaluate: async (signal) =>
+    circuitFactory: (params): QuoteCircuitPolicy => {
+      const circuitOpenReason = getOneInchCircuitOpenReason({
+        rpcCache: params.rpcCache,
+        takePolicy: params.takePolicy,
+      });
+      return params.quoteCircuitMode === 'observe'
+        ? { kind: 'observe', openReason: circuitOpenReason }
+        : {
+            kind: 'record',
+            openReason: circuitOpenReason,
+            recordOutcome: (outcome) =>
+              recordOneInchCircuitOutcomeForDiscovery({
+                rpcCache: params.rpcCache,
+                takePolicy: params.takePolicy,
+                outcome,
+              }),
+          };
+    },
+    evaluate: async (signal, params, quoteCollateralWad) =>
       await getOneInchAggregatorPathQuoteEvaluation(
         params.pool,
         params.price,

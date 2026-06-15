@@ -5,9 +5,8 @@ import type { ExternalTakeTakerContractKey } from '../../config';
 import { DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../../dex/lifi';
 import { getErrorMessage, weiToDecimaled } from '../../utils';
 import {
-  CalldataAggregatorPreBroadcastRejection,
+  makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
-  recordCalldataAggregatorPreBroadcastRejection,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
@@ -55,19 +54,6 @@ function resolveLifiTakerAddress(params: {
 
 function getLifiMaxQuoteAgeMs(config: LifiDexConfig): number {
   return config.maxQuoteAgeMs ?? DEFAULT_LIFI_QUOTE_MAX_AGE_MS;
-}
-
-function recordPreparedLifiRejection(
-  config: LifiExecutionConfig,
-  rejection: CalldataAggregatorPreBroadcastRejection
-): void {
-  recordCalldataAggregatorPreBroadcastRejection({
-    config,
-    rejection,
-    onQuoteResult: (config, result) => config.onLifiQuoteResult?.(result),
-    onExecutionFailure: (config, result) =>
-      config.onLifiExecutionFailure?.(result),
-  });
 }
 
 async function requestFreshLifiExecutionQuote(params: {
@@ -164,7 +150,11 @@ export async function takeLiquidationLifi(params: {
     liquiditySource: LiquiditySource.LIFI,
     label: LIFI_LABEL,
     prepareExecution: prepareLifiExecution,
-    recordPreparedRejection: recordPreparedLifiRejection,
+    recordPreparedRejection:
+      makeCalldataAggregatorProviderRejectionRecorder<LifiExecutionConfig>({
+        onQuoteResult: (c, r) => c.onLifiQuoteResult?.(r),
+        onExecutionFailure: (c, r) => c.onLifiExecutionFailure?.(r),
+      }),
     onQuoteConsumed: (config) => config.onLifiQuoteResult?.({ success: true }),
     onExecutionFailure: (config, result) =>
       config.onLifiExecutionFailure?.(result),

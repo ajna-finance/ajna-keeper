@@ -15,6 +15,7 @@ import {
   ExternalTakeQuoteEvaluation,
 } from '../../take/types';
 import { resolveCalldataAggregatorQuoteIdentity } from '../../take/external-take/route-binding';
+import { getDebtConstrainedTakeCollateralWad } from '../../take/take-sizing';
 import {
   AsyncOperationLimiter,
   getErrorMessage,
@@ -327,6 +328,56 @@ function getCalldataAggregatorQuoteIdentityMismatch(params: {
     return `${params.label} quote returned an executable amount without provider identity`;
   }
   return undefined;
+}
+
+/**
+ * Provider-neutral discovery quote shell. The three calldata-aggregator
+ * discovery wrappers (LI.FI, 1inch, Sushi) are structurally identical apart
+ * from their label/source/timeout strings, their circuit policy construction,
+ * and their underlying path-quote evaluation call. This collapses that shared
+ * structure: each provider supplies a descriptor that reproduces its own
+ * circuit branching (circuitFactory) and evaluate config (evaluate) verbatim.
+ */
+export async function quoteCalldataAggregatorPathForDiscovery<
+  TParams extends {
+    pool: FungiblePool;
+    auctionPrice: BigNumber;
+    routeProbeLimiter?: AsyncOperationLimiter;
+    routeProbeAbortSignal?: AbortSignal;
+    probeTimeoutMs: number;
+  } & AuctionTakeFacts,
+>(
+  params: TParams,
+  descriptor: {
+    label: string;
+    selectedLiquiditySource: CalldataAggregatorLiquiditySource;
+    abortErrorMessage: string;
+    timeoutLabel: string;
+    circuitFactory: (params: TParams) => QuoteCircuitPolicy;
+    evaluate: (
+      signal: AbortSignal | undefined,
+      params: TParams,
+      collateralWad: BigNumber
+    ) => Promise<ExternalTakeQuoteEvaluation>;
+  }
+): Promise<ExternalTakeQuoteEvaluation> {
+  const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
+  const circuit = descriptor.circuitFactory(params);
+  return quoteCircuitGuardedPath({
+    poolName: params.pool.name,
+    label: descriptor.label,
+    externalTakePath: 'calldata_aggregator',
+    selectedLiquiditySource: descriptor.selectedLiquiditySource,
+    auctionPrice: params.auctionPrice,
+    collateral: quoteCollateralWad,
+    circuit,
+    routeProbeLimiter: params.routeProbeLimiter,
+    routeProbeAbortSignal: params.routeProbeAbortSignal,
+    probeTimeoutMs: params.probeTimeoutMs,
+    abortErrorMessage: descriptor.abortErrorMessage,
+    timeoutLabel: descriptor.timeoutLabel,
+    evaluate: (signal) => descriptor.evaluate(signal, params, quoteCollateralWad),
+  });
 }
 
 export async function quoteCircuitGuardedPath(params: {

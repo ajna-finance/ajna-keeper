@@ -117,6 +117,34 @@ export function recordCalldataAggregatorPreBroadcastRejection<TConfig>(params: {
 }
 
 /**
+ * Builds a provider-labeled pre-broadcast rejection recorder from the
+ * provider's quote-result / execution-failure callback selectors. The shared
+ * recorder body lives in recordCalldataAggregatorPreBroadcastRejection; this
+ * factory only binds the per-provider callback field names.
+ */
+export function makeCalldataAggregatorProviderRejectionRecorder<TConfig>(selectors: {
+  onQuoteResult: (
+    config: TConfig,
+    result: CalldataAggregatorQuoteResultNotification
+  ) => void;
+  onExecutionFailure: (
+    config: TConfig,
+    result: { preBroadcast: boolean; error?: string }
+  ) => void;
+}): (
+  config: TConfig,
+  rejection: CalldataAggregatorPreBroadcastRejection
+) => void {
+  return (config, rejection) =>
+    recordCalldataAggregatorPreBroadcastRejection({
+      config,
+      rejection,
+      onQuoteResult: selectors.onQuoteResult,
+      onExecutionFailure: selectors.onExecutionFailure,
+    });
+}
+
+/**
  * Encodes the shared on-chain AggregatorSwapDetails tuple consumed by
  * BaseAggregatorCalldataTaker. The amountOutMinimum is the keeper's approved
  * execution floor, not the provider's route minimum.

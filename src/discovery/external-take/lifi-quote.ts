@@ -1,6 +1,5 @@
 import { LiquiditySource } from '../../config';
 import { getLifiPathQuoteEvaluation } from '../../take/lifi/quote-evaluation';
-import { getDebtConstrainedTakeCollateralWad } from '../../take/take-sizing';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import { AsyncOperationLimiter } from '../../utils';
 import { DiscoveryExecutionConfig, DiscoveryRpcCache } from '../types';
@@ -10,7 +9,7 @@ import {
   DiscoveryTokenDecimalsCacheResolver,
   LifiPathQuoteInput,
   QuoteCircuitPolicy,
-  quoteCircuitGuardedPath,
+  quoteCalldataAggregatorPathForDiscovery,
   recordLifiCircuitOutcomeForDiscovery,
 } from './quotes';
 
@@ -24,38 +23,30 @@ export async function quoteLifiPathForDiscovery(
     getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
   } & LifiPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
-  const circuitOpenReason = getLifiCircuitOpenReason({
-    rpcCache: params.rpcCache,
-    lifiConfig: params.config.lifi,
-  });
-  const circuit: QuoteCircuitPolicy =
-    params.quoteCircuitMode === 'observe'
-      ? { kind: 'observe', openReason: circuitOpenReason }
-      : {
-          kind: 'record',
-          openReason: circuitOpenReason,
-          recordOutcome: (outcome) =>
-            recordLifiCircuitOutcomeForDiscovery({
-              rpcCache: params.rpcCache,
-              config: params.config,
-              outcome,
-            }),
-        };
-  const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
-  return quoteCircuitGuardedPath({
-    poolName: params.pool.name,
+  return quoteCalldataAggregatorPathForDiscovery(params, {
     label: 'LI.FI',
-    externalTakePath: 'calldata_aggregator',
     selectedLiquiditySource: LiquiditySource.LIFI,
-    auctionPrice: params.auctionPrice,
-    collateral: quoteCollateralWad,
-    circuit,
-    routeProbeLimiter: params.routeProbeLimiter,
-    routeProbeAbortSignal: params.routeProbeAbortSignal,
-    probeTimeoutMs: params.probeTimeoutMs,
     abortErrorMessage: 'LI.FI external take quote aborted',
     timeoutLabel: 'LI.FI external take quote',
-    evaluate: async (signal) =>
+    circuitFactory: (params): QuoteCircuitPolicy => {
+      const circuitOpenReason = getLifiCircuitOpenReason({
+        rpcCache: params.rpcCache,
+        lifiConfig: params.config.lifi,
+      });
+      return params.quoteCircuitMode === 'observe'
+        ? { kind: 'observe', openReason: circuitOpenReason }
+        : {
+            kind: 'record',
+            openReason: circuitOpenReason,
+            recordOutcome: (outcome) =>
+              recordLifiCircuitOutcomeForDiscovery({
+                rpcCache: params.rpcCache,
+                config: params.config,
+                outcome,
+              }),
+          };
+    },
+    evaluate: async (signal, params, quoteCollateralWad) =>
       await getLifiPathQuoteEvaluation(
         params.pool,
         params.price,

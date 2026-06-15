@@ -3,9 +3,8 @@ import { BigNumber } from 'ethers';
 import { LiquiditySource } from '../../config';
 import { getErrorMessage, weiToDecimaled } from '../../utils';
 import {
-  CalldataAggregatorPreBroadcastRejection,
+  makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
-  recordCalldataAggregatorPreBroadcastRejection,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
@@ -22,20 +21,6 @@ import { OneInchAggregatorExecutionConfig } from './types';
 
 const ONEINCH_LABEL = '1inch';
 const DEFAULT_ONEINCH_AGGREGATOR_MAX_QUOTE_AGE_MS = 30_000;
-
-function recordPreparedOneInchAggregatorRejection(
-  config: OneInchAggregatorExecutionConfig,
-  rejection: CalldataAggregatorPreBroadcastRejection
-): void {
-  recordCalldataAggregatorPreBroadcastRejection({
-    config,
-    rejection,
-    onQuoteResult: (config, result) =>
-      config.onOneInchAggregatorQuoteResult?.(result),
-    onExecutionFailure: (config, result) =>
-      config.onOneInchAggregatorExecutionFailure?.(result),
-  });
-}
 
 async function requestFreshOneInchAggregatorExecutionQuote(params: {
   pool: FungiblePool;
@@ -130,7 +115,14 @@ export async function takeLiquidationOneInchAggregator(params: {
     liquiditySource: LiquiditySource.ONEINCH,
     label: ONEINCH_LABEL,
     prepareExecution: prepareOneInchAggregatorExecution,
-    recordPreparedRejection: recordPreparedOneInchAggregatorRejection,
+    recordPreparedRejection:
+      makeCalldataAggregatorProviderRejectionRecorder<OneInchAggregatorExecutionConfig>(
+        {
+          onQuoteResult: (c, r) => c.onOneInchAggregatorQuoteResult?.(r),
+          onExecutionFailure: (c, r) =>
+            c.onOneInchAggregatorExecutionFailure?.(r),
+        }
+      ),
     onQuoteConsumed: (config) =>
       config.onOneInchAggregatorQuoteResult?.({ success: true }),
     onExecutionFailure: (config, result) =>

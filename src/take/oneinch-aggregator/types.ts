@@ -1,4 +1,5 @@
 import { TakeWriteTransportConfig } from '../write-transport';
+import { CalldataAggregatorQuoteResultNotification } from '../aggregator-calldata/execution';
 
 export interface OneInchAggregatorQuoteConfig {
   connectorTokens?: Array<string>;
@@ -17,12 +18,9 @@ export interface OneInchAggregatorExecutionConfig
     TakeWriteTransportConfig {
   dryRun?: boolean;
   keeperTakerRouter?: string;
-  onOneInchAggregatorQuoteResult?: (result: {
-    success: boolean;
-    retryable?: boolean;
-    errorCode?: number | string;
-    error?: string;
-  }) => void;
+  onOneInchAggregatorQuoteResult?: (
+    result: CalldataAggregatorQuoteResultNotification
+  ) => void;
   onOneInchAggregatorExecutionFailure?: (result: {
     preBroadcast: boolean;
     error?: string;
