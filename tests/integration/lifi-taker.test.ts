@@ -44,11 +44,11 @@ describe('LifiKeeperTaker', () => {
     );
   });
 
-  it('emits LifiSwapExecuted and no generic SwapExecuted on successful takes', async () => {
+  it('emits AggregatorSwapExecuted and no generic SwapExecuted on successful takes', async () => {
     // The inherited 4-arg SwapExecuted is part of the ABI but is intentionally
-    // never emitted by this taker; monitoring must subscribe to LifiSwapExecuted
-    // (distinct topic0 carrying the allowlisted call target). This pins that
-    // event contract.
+    // never emitted by this taker; monitoring must subscribe to
+    // AggregatorSwapExecuted (distinct topic0 carrying the indexed source and
+    // the allowlisted call target). This pins that event contract.
     const result = await executeTake({});
     const receipt = await (await result.send()).wait();
 
@@ -56,7 +56,9 @@ describe('LifiKeeperTaker', () => {
       (log) => log.address.toLowerCase() === result.taker.address.toLowerCase()
     );
 
-    const lifiTopic = result.taker.interface.getEventTopic('LifiSwapExecuted');
+    const lifiTopic = result.taker.interface.getEventTopic(
+      'AggregatorSwapExecuted'
+    );
     const genericTopic = utils.id(
       'SwapExecuted(address,address,uint256,uint256)'
     );
@@ -64,6 +66,7 @@ describe('LifiKeeperTaker', () => {
     const lifiLogs = takerLogs.filter((log) => log.topics[0] === lifiTopic);
     expect(lifiLogs.length).to.equal(1);
     const parsed = result.taker.interface.parseLog(lifiLogs[0]);
+    expect(parsed.args.source).to.equal(LiquiditySource.LIFI);
     expect(parsed.args.tokenIn).to.equal(result.collateral.address);
     expect(parsed.args.tokenOut).to.equal(result.quote.address);
     expect(parsed.args.target).to.equal(result.target.address);

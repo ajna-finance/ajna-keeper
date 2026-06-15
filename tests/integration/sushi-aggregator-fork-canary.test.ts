@@ -162,14 +162,14 @@ describe('Sushi aggregator fork execution canary (Packet 3B)', function () {
     const receipt = await tx.wait();
 
     const sushiTopic = taker.interface.getEventTopic(
-      'SushiAggregatorSwapExecuted'
+      'AggregatorSwapExecuted'
     );
     const sushiEvents = receipt.logs.filter(
       (log) => log.topics[0] === sushiTopic
     );
     expect(sushiEvents.length).to.equal(1);
     const decoded = taker.interface.decodeEventLog(
-      'SushiAggregatorSwapExecuted',
+      'AggregatorSwapExecuted',
       sushiEvents[0].data,
       sushiEvents[0].topics
     );

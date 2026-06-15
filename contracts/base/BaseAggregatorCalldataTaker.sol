@@ -33,9 +33,12 @@ import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 ///        ceil-divided quote pull (merged audited invariant — a floored-due
 ///        comparison reintroduces the failed-take bug PR #17 fixed for
 ///        non-18-decimal quote tokens)
-///      Provider wrappers stay thin: construction, source identity, and a
-///      provider-distinct execution event (LifiSwapExecuted precedent — never
-///      overload the base SwapExecuted name).
+///      Provider wrappers stay thin: they forward only their single liquidity
+///      source identity to this base, which owns construction, source
+///      validation, the IAjnaKeeperTaker source getters, and the single
+///      parameterized AggregatorSwapExecuted event (whose indexed source field
+///      distinguishes providers in one ABI, replacing the former
+///      provider-distinct per-wrapper events).
 abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
     struct AggregatorSwapDetails {
         address approvalSpender;
@@ -46,6 +49,8 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
         uint256 amountOutMinimum;
         bytes callData;
     }
+
+    LiquiditySource private immutable _source;
 
     mapping(address => bool) private _callTargets;
     mapping(address => bool) private _approvalSpenders;
@@ -62,6 +67,19 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
     event CallTargetUpdated(address indexed target, bool allowed);
     event ApprovalSpenderUpdated(address indexed spender, bool allowed);
     event CallSelectorUpdated(address indexed target, bytes4 indexed selector, bool allowed);
+    /// @dev Single parameterized per-swap execution event for every
+    ///      calldata-aggregator taker. The indexed `source` distinguishes
+    ///      providers within one ABI (replacing the former provider-distinct
+    ///      events), and `target` carries the allowlisted call target. Distinct
+    ///      from the base 4-arg SwapExecuted, which these takers never emit.
+    event AggregatorSwapExecuted(
+        LiquiditySource indexed source,
+        address indexed target,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOut
+    );
 
     error CallTargetNotAllowed();
     error CallTargetHasNoCode();
@@ -76,23 +94,25 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
     ///        Unlike the direct-DEX takers, calldata-aggregator takers are
     ///        router-only by design and refuse standalone (zero router)
     ///        deployment.
-    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
+    /// @param source_ The single liquidity source this taker serves.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_, LiquiditySource source_)
         RouterAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
     {
         require(authorizedRouter_ != address(0), "Zero authorized router");
+        require(source_ != LiquiditySource.None, "Zero liquidity source");
+        _source = source_;
     }
 
-    /// @dev Provider wrappers declare which single liquidity source they serve.
-    function _isSupportedSource(LiquiditySource source) internal pure virtual returns (bool);
+    /// @inheritdoc IAjnaKeeperTaker
+    function getSupportedSources() external view returns (LiquiditySource[] memory sources) {
+        sources = new LiquiditySource[](1);
+        sources[0] = _source;
+    }
 
-    /// @dev Provider wrappers emit their provider-distinct execution event here.
-    function _emitAggregatorSwapExecuted(
-        address tokenIn,
-        address tokenOut,
-        address target,
-        uint256 amountIn,
-        uint256 amountOut
-    ) internal virtual;
+    /// @inheritdoc IAjnaKeeperTaker
+    function isSourceSupported(LiquiditySource source) external view returns (bool) {
+        return source == _source;
+    }
 
     /// @inheritdoc IAjnaKeeperTaker
     function takeWithAtomicSwap(
@@ -104,7 +124,7 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
         address swapRouter,
         bytes calldata swapDetails
     ) external onlyOwnerOrRouter {
-        if (!_isSupportedSource(source)) revert UnsupportedSource();
+        if (source != _source) revert UnsupportedSource();
         if (!_validatePool(pool)) revert InvalidPool();
 
         AggregatorSwapDetails memory details = abi.decode(swapDetails, (AggregatorSwapDetails));
@@ -270,10 +290,11 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
             revert InsufficientQuoteReceived();
         }
 
-        _emitAggregatorSwapExecuted(
+        emit AggregatorSwapExecuted(
+            _source,
+            swapRouter,
             pool.collateralAddress(),
             pool.quoteTokenAddress(),
-            swapRouter,
             details.amountInTokenUnits,
             quoteReceived
         );

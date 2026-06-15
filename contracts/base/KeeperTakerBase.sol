@@ -26,10 +26,10 @@ abstract contract KeeperTakerBase is ReentrancyGuard {
     /// @dev Identifies the Ajna deployment, used to validate pools
     PoolDeployer internal immutable _poolFactory;
 
-    /// @dev Standard per-swap monitoring event. LifiKeeperTaker does NOT emit
-    ///      this; it defines its own distinctly-named LifiSwapExecuted (extra
-    ///      indexed call-target parameter, different topic0) — provider takers
-    ///      that log a call target must follow that precedent rather than
+    /// @dev Standard per-swap monitoring event. Calldata-aggregator takers do
+    ///      NOT emit this; they emit the base AggregatorSwapExecuted (indexed
+    ///      source + call-target parameters, different topic0) — provider takers
+    ///      that log a call target use that distinctly-named event rather than
     ///      overloading this name, which creates ambiguous ABIs.
     event SwapExecuted(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
 

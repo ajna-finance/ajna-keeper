@@ -96,7 +96,7 @@ describe('SushiAggregatorKeeperTaker (Packet 3B)', () => {
     );
   });
 
-  it('emits exactly one SushiAggregatorSwapExecuted and never the base SwapExecuted', async () => {
+  it('emits exactly one AggregatorSwapExecuted and never the base SwapExecuted', async () => {
     const fixture = await deploySushiFixture();
     const amountIn = utils.parseEther('1');
     const outputAmount = utils.parseEther('1.25');
@@ -144,7 +144,7 @@ describe('SushiAggregatorKeeperTaker (Packet 3B)', () => {
     const receipt = await tx.wait();
 
     const sushiTopic = fixture.taker.interface.getEventTopic(
-      'SushiAggregatorSwapExecuted'
+      'AggregatorSwapExecuted'
     );
     const baseTopic = fixture.taker.interface.getEventTopic('SwapExecuted');
     const sushiEvents = receipt.logs.filter(
@@ -156,10 +156,11 @@ describe('SushiAggregatorKeeperTaker (Packet 3B)', () => {
     expect(sushiEvents.length).to.equal(1);
     expect(baseEvents.length).to.equal(0);
     const decoded = fixture.taker.interface.decodeEventLog(
-      'SushiAggregatorSwapExecuted',
+      'AggregatorSwapExecuted',
       sushiEvents[0].data,
       sushiEvents[0].topics
     );
+    expect(decoded.source).to.equal(LiquiditySource.SUSHI_AGGREGATOR);
     expect(decoded.target).to.equal(fixture.target.address);
     expect(decoded.amountIn.eq(amountIn)).to.equal(true);
   });
