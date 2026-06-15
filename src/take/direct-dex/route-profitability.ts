@@ -8,6 +8,7 @@ import {
 import { getMarketFactorFloorQuoteRaw } from '../external-take/quote-economics';
 import { ExternalTakeQuoteEvaluation } from '../types';
 import { DirectDexRouteProfitabilityContext } from './route-types';
+import { buildRouteRejectionEvaluation } from './route-rejection';
 
 const ZERO = ZERO_BN;
 
@@ -19,18 +20,14 @@ export function applyDirectDexRouteProfitabilityPolicy(params: {
   const rejectionReason =
     params.context?.routeRejectionReasonsBySource?.[params.liquiditySource];
   if (rejectionReason) {
-    return {
-      ...params.evaluation,
-      isTakeable: false,
+    return buildRouteRejectionEvaluation({
       reason: rejectionReason,
-      routeProfitability: {
-        ...params.evaluation.routeProfitability,
-        gasPolicyRejectCode:
-          params.context?.gasPolicyRejectCodeBySource?.[params.liquiditySource],
-        gasQuoteAttempts:
-          params.context?.gasQuoteAttemptsBySource?.[params.liquiditySource],
-      },
-    };
+      base: params.evaluation,
+      gasPolicyRejectCode:
+        params.context?.gasPolicyRejectCodeBySource?.[params.liquiditySource],
+      gasQuoteAttempts:
+        params.context?.gasQuoteAttemptsBySource?.[params.liquiditySource],
+    });
   }
 
   if (!params.context || !params.evaluation.quoteAmountRaw) {

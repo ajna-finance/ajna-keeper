@@ -23,6 +23,7 @@ import {
   DirectDexQuoteConfig,
   DirectDexQuoteProviderRuntimeCache,
   DirectDexRouteCandidate,
+  DirectDexRouteProfitabilityContext,
   DirectDexRouteSelectionOptions,
   DirectDexTakeParams,
   applyDirectDexRouteProfitabilityPolicy,
@@ -35,13 +36,15 @@ import {
   selectBestDirectDexRouteEvaluation,
   throwIfRouteProbeAborted,
 } from './route-selection';
-import { evaluateCurveDirectDexQuote, executeCurveDirectDexTake } from './curve';
-import {
-  evaluateUniswapV3DirectDexQuote,
-  executeUniswapV3DirectDexTake,
-} from './uniswap';
+import { directDexProvidersBySource } from './direct-dex-provider';
+import { buildRouteRejectionEvaluation } from './route-rejection';
 
 const DIRECT_DEX_ROUTE_QUOTE_CONCURRENCY = 3;
+
+interface DirectDexRouteEvaluationEntry {
+  route: DirectDexRouteCandidate;
+  evaluation: ExternalTakeQuoteEvaluation;
+}
 
 export type {
   DirectDexExecutionConfig,
@@ -111,6 +114,167 @@ export function createDirectDexTakeAdapter(params: {
   };
 }
 
+/**
+ * Splits ordered route candidates into the routes that still need an
+ * availability probe and the routes already rejected by the precomputed
+ * route-profitability context. Rejected routes are pushed onto `evaluations`
+ * in iteration order, preserving the original side effect.
+ */
+function prefilterRoutesByRejection(params: {
+  routes: DirectDexRouteCandidate[];
+  routeProfitabilityContext?: DirectDexRouteProfitabilityContext;
+  evaluations: DirectDexRouteEvaluationEntry[];
+}): DirectDexRouteCandidate[] {
+  const routeRejectionReasons =
+    params.routeProfitabilityContext?.routeRejectionReasonsBySource;
+  const availabilityCandidateRoutes: DirectDexRouteCandidate[] = [];
+
+  for (const route of params.routes) {
+    const rejectionReason = routeRejectionReasons?.[route.liquiditySource];
+    if (rejectionReason) {
+      params.evaluations.push({
+        route,
+        evaluation: buildRouteRejectionEvaluation({
+          reason: rejectionReason,
+          route,
+          gasPolicyRejectCode:
+            params.routeProfitabilityContext?.gasPolicyRejectCodeBySource?.[
+              route.liquiditySource
+            ],
+          gasQuoteAttempts:
+            params.routeProfitabilityContext?.gasQuoteAttemptsBySource?.[
+              route.liquiditySource
+            ],
+        }),
+      });
+    } else {
+      availabilityCandidateRoutes.push(route);
+    }
+  }
+
+  return availabilityCandidateRoutes;
+}
+
+/**
+ * Lazily builds the route-profitability context from the available sources
+ * when one was not supplied up front. Returns the existing context unchanged
+ * when already present or when no builder/source is available.
+ */
+async function resolveProfitabilityContext(params: {
+  routeProfitabilityContext?: DirectDexRouteProfitabilityContext;
+  routeSelection?: DirectDexRouteSelectionOptions;
+  availableRoutes: DirectDexRouteCandidate[];
+}): Promise<DirectDexRouteProfitabilityContext | undefined> {
+  let routeProfitabilityContext = params.routeProfitabilityContext;
+  if (
+    !routeProfitabilityContext &&
+    params.routeSelection?.routeProfitabilityContextBuilder
+  ) {
+    const availableSources = Array.from(
+      new Set(params.availableRoutes.map((route) => route.liquiditySource))
+    );
+    if (availableSources.length > 0) {
+      throwIfRouteProbeAborted(
+        params.routeSelection?.routeProbeAbortSignal,
+        'direct DEX route profitability context'
+      );
+      routeProfitabilityContext =
+        await params.routeSelection.routeProfitabilityContextBuilder(
+          availableSources
+        );
+    }
+  }
+  return routeProfitabilityContext;
+}
+
+/**
+ * Partitions available routes into gas-policy-approved and gas-policy-rejected
+ * sets. Rejected routes are pushed onto `evaluations` in iteration order,
+ * preserving the original side effect.
+ */
+function applyGasPolicyRejections(params: {
+  availableRoutes: DirectDexRouteCandidate[];
+  routeProfitabilityContext?: DirectDexRouteProfitabilityContext;
+  evaluations: DirectDexRouteEvaluationEntry[];
+}): {
+  gasApprovedRoutes: DirectDexRouteCandidate[];
+  gasRejectedRoutes: DirectDexRouteCandidate[];
+} {
+  const gasRejectedRoutes: DirectDexRouteCandidate[] = [];
+  const gasApprovedRoutes = params.availableRoutes.filter((route) => {
+    const rejectionReason =
+      params.routeProfitabilityContext?.routeRejectionReasonsBySource?.[
+        route.liquiditySource
+      ];
+    if (!rejectionReason) {
+      return true;
+    }
+    gasRejectedRoutes.push(route);
+    params.evaluations.push({
+      route,
+      evaluation: buildRouteRejectionEvaluation({
+        reason: rejectionReason,
+        route,
+        gasPolicyRejectCode:
+          params.routeProfitabilityContext?.gasPolicyRejectCodeBySource?.[
+            route.liquiditySource
+          ],
+        gasQuoteAttempts:
+          params.routeProfitabilityContext?.gasQuoteAttemptsBySource?.[
+            route.liquiditySource
+          ],
+      }),
+    });
+    return false;
+  });
+  return { gasApprovedRoutes, gasRejectedRoutes };
+}
+
+/**
+ * Applies the per-candidate route quote budget, emitting the gas-policy and
+ * budget-exhaustion debug logs in their original order, and returns the routes
+ * to evaluate alongside the routes skipped by the budget.
+ */
+function applyRouteQuoteBudget(params: {
+  gasApprovedRoutes: DirectDexRouteCandidate[];
+  gasRejectedRoutes: DirectDexRouteCandidate[];
+  routeQuoteBudget?: number;
+  routeProfitabilityContext?: DirectDexRouteProfitabilityContext;
+  poolName: string;
+}): {
+  routesToEvaluate: DirectDexRouteCandidate[];
+  skippedRoutes: DirectDexRouteCandidate[];
+} {
+  const { gasApprovedRoutes, gasRejectedRoutes, routeQuoteBudget } = params;
+  const routesToEvaluate =
+    routeQuoteBudget !== undefined
+      ? gasApprovedRoutes.slice(0, routeQuoteBudget)
+      : gasApprovedRoutes;
+  const skippedRoutes =
+    routeQuoteBudget !== undefined &&
+    gasApprovedRoutes.length > routeQuoteBudget
+      ? gasApprovedRoutes.slice(routeQuoteBudget)
+      : [];
+  if (gasRejectedRoutes.length > 0) {
+    logger.debug(
+      `Direct DEX: skipped gas-policy-rejected routes for pool ${params.poolName}: ${gasRejectedRoutes
+        .map(
+          (route) =>
+            `${formatDirectDexRouteCandidate(route)}=${params.routeProfitabilityContext?.routeRejectionReasonsBySource?.[route.liquiditySource] ?? 'route gas policy rejected source'}`
+        )
+        .join(', ')}`
+    );
+  }
+  if (skippedRoutes.length > 0) {
+    logger.debug(
+      `Direct DEX: route quote budget exhausted for pool ${params.poolName}; skipped routes=${skippedRoutes
+        .map(formatDirectDexRouteCandidate)
+        .join(', ')}`
+    );
+  }
+  return { routesToEvaluate, skippedRoutes };
+}
+
 export async function getDirectDexTakeQuoteEvaluation(
   pool: FungiblePool,
   auctionPriceWad: BigNumber,
@@ -177,40 +341,12 @@ export async function getDirectDexTakeQuoteEvaluation(
       });
       const routeQuoteBudget = routeSelection?.routeQuoteBudgetPerCandidate;
       let routeProfitabilityContext = routeSelection?.routeProfitabilityContext;
-      const routeRejectionReasons =
-        routeProfitabilityContext?.routeRejectionReasonsBySource;
-      const evaluations: Array<{
-        route: DirectDexRouteCandidate;
-        evaluation: ExternalTakeQuoteEvaluation;
-      }> = [];
-      const availabilityCandidateRoutes: DirectDexRouteCandidate[] = [];
-
-      for (const route of routes) {
-        const rejectionReason = routeRejectionReasons?.[route.liquiditySource];
-        if (rejectionReason) {
-          evaluations.push({
-            route,
-            evaluation: {
-              isTakeable: false,
-              reason: rejectionReason,
-              selectedLiquiditySource: route.liquiditySource,
-              selectedFeeTier: route.feeTier,
-              routeProfitability: {
-                gasPolicyRejectCode:
-                  routeProfitabilityContext?.gasPolicyRejectCodeBySource?.[
-                    route.liquiditySource
-                  ],
-                gasQuoteAttempts:
-                  routeProfitabilityContext?.gasQuoteAttemptsBySource?.[
-                    route.liquiditySource
-                  ],
-              },
-            },
-          });
-        } else {
-          availabilityCandidateRoutes.push(route);
-        }
-      }
+      const evaluations: DirectDexRouteEvaluationEntry[] = [];
+      const availabilityCandidateRoutes = prefilterRoutesByRejection({
+        routes,
+        routeProfitabilityContext,
+        evaluations,
+      });
 
       const { availableRoutes, unavailableRoutes } =
         await filterDirectDexRouteCandidatesByAvailability({
@@ -233,55 +369,16 @@ export async function getDirectDexTakeQuoteEvaluation(
         );
       }
 
-      if (
-        !routeProfitabilityContext &&
-        routeSelection?.routeProfitabilityContextBuilder
-      ) {
-        const availableSources = Array.from(
-          new Set(availableRoutes.map((route) => route.liquiditySource))
-        );
-        if (availableSources.length > 0) {
-          throwIfRouteProbeAborted(
-            routeSelection?.routeProbeAbortSignal,
-            'direct DEX route profitability context'
-          );
-          routeProfitabilityContext =
-            await routeSelection.routeProfitabilityContextBuilder(
-              availableSources
-            );
-        }
-      }
+      routeProfitabilityContext = await resolveProfitabilityContext({
+        routeProfitabilityContext,
+        routeSelection,
+        availableRoutes,
+      });
 
-      const gasRejectedRoutes: DirectDexRouteCandidate[] = [];
-      const gasApprovedRoutes = availableRoutes.filter((route) => {
-        const rejectionReason =
-          routeProfitabilityContext?.routeRejectionReasonsBySource?.[
-            route.liquiditySource
-          ];
-        if (!rejectionReason) {
-          return true;
-        }
-        gasRejectedRoutes.push(route);
-        evaluations.push({
-          route,
-          evaluation: {
-            isTakeable: false,
-            reason: rejectionReason,
-            selectedLiquiditySource: route.liquiditySource,
-            selectedFeeTier: route.feeTier,
-            routeProfitability: {
-              gasPolicyRejectCode:
-                routeProfitabilityContext?.gasPolicyRejectCodeBySource?.[
-                  route.liquiditySource
-                ],
-              gasQuoteAttempts:
-                routeProfitabilityContext?.gasQuoteAttemptsBySource?.[
-                  route.liquiditySource
-                ],
-            },
-          },
-        });
-        return false;
+      const { gasApprovedRoutes, gasRejectedRoutes } = applyGasPolicyRejections({
+        availableRoutes,
+        routeProfitabilityContext,
+        evaluations,
       });
 
       const availableSourceCount = new Set(
@@ -295,72 +392,39 @@ export async function getDirectDexTakeQuoteEvaluation(
         };
       }
 
-      const routesToEvaluate =
-        routeQuoteBudget !== undefined
-          ? gasApprovedRoutes.slice(0, routeQuoteBudget)
-          : gasApprovedRoutes;
-      const skippedRoutes =
-        routeQuoteBudget !== undefined &&
-        gasApprovedRoutes.length > routeQuoteBudget
-          ? gasApprovedRoutes.slice(routeQuoteBudget)
-          : [];
-      if (gasRejectedRoutes.length > 0) {
-        logger.debug(
-          `Direct DEX: skipped gas-policy-rejected routes for pool ${pool.name}: ${gasRejectedRoutes
-            .map(
-              (route) =>
-                `${formatDirectDexRouteCandidate(route)}=${routeProfitabilityContext?.routeRejectionReasonsBySource?.[route.liquiditySource] ?? 'route gas policy rejected source'}`
-            )
-            .join(', ')}`
-        );
-      }
-      if (skippedRoutes.length > 0) {
-        logger.debug(
-          `Direct DEX: route quote budget exhausted for pool ${pool.name}; skipped routes=${skippedRoutes
-            .map(formatDirectDexRouteCandidate)
-            .join(', ')}`
-        );
-      }
+      const { routesToEvaluate, skippedRoutes } = applyRouteQuoteBudget({
+        gasApprovedRoutes,
+        gasRejectedRoutes,
+        routeQuoteBudget,
+        routeProfitabilityContext,
+        poolName: pool.name,
+      });
 
       const evaluateDirectDexRoute = async (
         route: DirectDexRouteCandidate
-      ): Promise<{
-        route: DirectDexRouteCandidate;
-        evaluation: ExternalTakeQuoteEvaluation;
-      }> => {
+      ): Promise<DirectDexRouteEvaluationEntry> => {
         throwIfRouteProbeAborted(
           routeSelection?.routeProbeAbortSignal,
           `direct DEX quote ${formatDirectDexRouteCandidate(route)}`
         );
-        const rawEvaluation =
-          route.liquiditySource === LiquiditySource.UNISWAPV3
-            ? await evaluateUniswapV3DirectDexQuote({
-                pool,
-                auctionPriceWad,
-                collateral,
-                poolConfig,
-                config,
-                signer,
-                runtimeCache,
-                feeTier: route.feeTier,
-                routeContext,
-              })
-            : route.liquiditySource === LiquiditySource.CURVE
-              ? await evaluateCurveDirectDexQuote({
-                  pool,
-                  auctionPriceWad,
-                  collateral,
-                  poolConfig,
-                  config,
-                  signer,
-                  runtimeCache,
-                  routeContext,
-                })
-              : {
-                  isTakeable: false,
-                  reason: `unsupported route source ${route.liquiditySource}`,
-                  selectedLiquiditySource: route.liquiditySource,
-                };
+        const provider = directDexProvidersBySource[route.liquiditySource];
+        const rawEvaluation = provider
+          ? await provider.evaluate({
+              pool,
+              auctionPriceWad,
+              collateral,
+              poolConfig,
+              config,
+              signer,
+              runtimeCache,
+              feeTier: route.feeTier,
+              routeContext,
+            })
+          : {
+              isTakeable: false,
+              reason: `unsupported route source ${route.liquiditySource}`,
+              selectedLiquiditySource: route.liquiditySource,
+            };
         const evaluation = applyDirectDexRouteProfitabilityPolicy({
           evaluation: rawEvaluation,
           liquiditySource: route.liquiditySource,
@@ -501,25 +565,21 @@ async function executeSelectedDirectDexRoute(
   const { pool, poolConfig, signer, liquidation, config, quoteEvaluation } =
     params;
 
-  if (quoteEvaluation.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
-    await executeUniswapV3DirectDexTake({
-      pool,
-      poolConfig,
-      signer,
-      liquidation,
-      quoteEvaluation,
-      config,
-    });
-  } else {
-    await executeCurveDirectDexTake({
-      pool,
-      poolConfig,
-      signer,
-      liquidation,
-      quoteEvaluation,
-      config,
-    });
+  const provider =
+    directDexProvidersBySource[quoteEvaluation.selectedLiquiditySource];
+  if (!provider) {
+    throw new Error(
+      `Direct DEX: no execution provider for source ${quoteEvaluation.selectedLiquiditySource}`
+    );
   }
+  await provider.execute({
+    pool,
+    poolConfig,
+    signer,
+    liquidation,
+    quoteEvaluation,
+    config,
+  });
 
   recordExecutedDirectDexRouteSuccess({
     pool,
