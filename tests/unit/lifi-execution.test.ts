@@ -3,8 +3,8 @@ import sinon from 'sinon';
 import axios from 'axios';
 import { ethers } from 'ethers';
 import { LiquiditySource, TakeWriteTransportMode } from '../../src/config';
+import { getLifiPathQuoteEvaluation } from '../../src/take/lifi/quote-evaluation';
 import {
-  getLifiPathQuoteEvaluation,
   getLifiTakerAddress,
   takeLiquidationLifi,
 } from '../../src/take/lifi/execution';

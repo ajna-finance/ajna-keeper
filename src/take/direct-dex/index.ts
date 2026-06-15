@@ -36,7 +36,11 @@ import {
   selectBestDirectDexRouteEvaluation,
   throwIfRouteProbeAborted,
 } from './route-selection';
-import { directDexProvidersBySource } from './direct-dex-provider';
+import { evaluateCurveDirectDexQuote, executeCurveDirectDexTake } from './curve';
+import {
+  evaluateUniswapV3DirectDexQuote,
+  executeUniswapV3DirectDexTake,
+} from './uniswap';
 import { buildRouteRejectionEvaluation } from './route-rejection';
 
 const DIRECT_DEX_ROUTE_QUOTE_CONCURRENCY = 3;
@@ -407,24 +411,35 @@ export async function getDirectDexTakeQuoteEvaluation(
           routeSelection?.routeProbeAbortSignal,
           `direct DEX quote ${formatDirectDexRouteCandidate(route)}`
         );
-        const provider = directDexProvidersBySource[route.liquiditySource];
-        const rawEvaluation = provider
-          ? await provider.evaluate({
-              pool,
-              auctionPriceWad,
-              collateral,
-              poolConfig,
-              config,
-              signer,
-              runtimeCache,
-              feeTier: route.feeTier,
-              routeContext,
-            })
-          : {
-              isTakeable: false,
-              reason: `unsupported route source ${route.liquiditySource}`,
-              selectedLiquiditySource: route.liquiditySource,
-            };
+        const rawEvaluation =
+          route.liquiditySource === LiquiditySource.UNISWAPV3
+            ? await evaluateUniswapV3DirectDexQuote({
+                pool,
+                auctionPriceWad,
+                collateral,
+                poolConfig,
+                config,
+                signer,
+                runtimeCache,
+                feeTier: route.feeTier,
+                routeContext,
+              })
+            : route.liquiditySource === LiquiditySource.CURVE
+              ? await evaluateCurveDirectDexQuote({
+                  pool,
+                  auctionPriceWad,
+                  collateral,
+                  poolConfig,
+                  config,
+                  signer,
+                  runtimeCache,
+                  routeContext,
+                })
+              : {
+                  isTakeable: false,
+                  reason: `unsupported route source ${route.liquiditySource}`,
+                  selectedLiquiditySource: route.liquiditySource,
+                };
         const evaluation = applyDirectDexRouteProfitabilityPolicy({
           evaluation: rawEvaluation,
           liquiditySource: route.liquiditySource,
@@ -565,21 +580,25 @@ async function executeSelectedDirectDexRoute(
   const { pool, poolConfig, signer, liquidation, config, quoteEvaluation } =
     params;
 
-  const provider =
-    directDexProvidersBySource[quoteEvaluation.selectedLiquiditySource];
-  if (!provider) {
-    throw new Error(
-      `Direct DEX: no execution provider for source ${quoteEvaluation.selectedLiquiditySource}`
-    );
+  if (quoteEvaluation.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
+    await executeUniswapV3DirectDexTake({
+      pool,
+      poolConfig,
+      signer,
+      liquidation,
+      quoteEvaluation,
+      config,
+    });
+  } else {
+    await executeCurveDirectDexTake({
+      pool,
+      poolConfig,
+      signer,
+      liquidation,
+      quoteEvaluation,
+      config,
+    });
   }
-  await provider.execute({
-    pool,
-    poolConfig,
-    signer,
-    liquidation,
-    quoteEvaluation,
-    config,
-  });
 
   recordExecutedDirectDexRouteSuccess({
     pool,

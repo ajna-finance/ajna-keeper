@@ -12,7 +12,7 @@ import {
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../external-take/execution-plan';
 import { LifiExecutionConfig } from './types';
-import { getLifiPathQuoteEvaluation as evaluateLifiPathQuote } from './quote-evaluation';
+import { getLifiPathQuoteEvaluation } from './quote-evaluation';
 import {
   getLifiQuoteFailureMetadata,
   getLifiTokenDecimals,
@@ -24,8 +24,6 @@ import {
 import { TakeActionConfig, TakeLiquidationPlan } from '../types';
 
 const LIFI_LABEL = 'LI.FI';
-
-export const getLifiPathQuoteEvaluation = evaluateLifiPathQuote;
 
 function getLifiTakerAddress(
   takerContracts:

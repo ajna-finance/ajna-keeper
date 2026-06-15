@@ -1,6 +1,6 @@
 export { createLifiTakeAdapter } from './adapter';
+export { getLifiPathQuoteEvaluation } from './quote-evaluation';
 export {
-  getLifiPathQuoteEvaluation,
   getLifiTakerAddress,
   resolveLifiTakerAddress,
   takeLiquidationLifi,
