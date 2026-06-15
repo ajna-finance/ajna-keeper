@@ -25,7 +25,6 @@ export {
   isCalldataAggregatorProviderId,
   resolveCalldataAggregatorProviderForSource,
 } from './external-take-descriptors';
-export type { AggregatorProviderIdentity } from './external-take-descriptors';
 
 export {
   EXTERNAL_TAKE_PATH_DESCRIPTORS,

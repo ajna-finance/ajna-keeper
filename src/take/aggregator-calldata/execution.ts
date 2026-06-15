@@ -253,7 +253,7 @@ export function isCalldataAggregatorExecutionPathSelected(params: {
     params.liquidation.externalTakeExecutionPlan
   );
   if (suppliedQuoteEvaluation === undefined) {
-    return params.poolConfig.take.liquiditySource === identity.liquiditySource;
+    return params.poolConfig.take.liquiditySource === identity.source;
   }
 
   const suppliedQuoteIdentity = resolveCalldataAggregatorQuoteIdentity(

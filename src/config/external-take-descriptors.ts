@@ -152,19 +152,6 @@ function isAggregatorProviderIdentitySource(
   return identity.path === 'calldata_aggregator';
 }
 
-/**
- * Calldata provider view derived from EXTERNAL_TAKE_SOURCE_IDENTITIES.
- */
-export interface AggregatorProviderIdentity {
-  readonly providerId: CalldataAggregatorProviderId;
-  readonly canonicalPath: 'calldata_aggregator';
-  readonly executionFamily: 'calldata_aggregator';
-  readonly label: string;
-  readonly liquiditySource: CalldataAggregatorLiquiditySource;
-  readonly takerContractKey: ExternalTakeTakerContractKey;
-  readonly configKey: string;
-}
-
 export interface ExternalTakePathDescriptor {
   readonly path: ExternalTakePathKind;
   readonly category: ExternalTakePathCategory;
@@ -304,25 +291,11 @@ export const EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS =
     ExternalTakeLiquiditySourceDescriptor
   >;
 
-function toAggregatorProviderIdentity(
-  identity: CalldataAggregatorSourceIdentity
-): AggregatorProviderIdentity {
-  return {
-    providerId: identity.providerId,
-    canonicalPath: 'calldata_aggregator',
-    executionFamily: 'calldata_aggregator',
-    label: identity.label,
-    liquiditySource: identity.source,
-    takerContractKey: identity.takerContractKey,
-    configKey: identity.configKey,
-  };
-}
-
 function buildAggregatorProviderIdentities(
   identities: readonly CalldataAggregatorSourceIdentity[]
-): Record<CalldataAggregatorProviderId, AggregatorProviderIdentity> {
+): Record<CalldataAggregatorProviderId, CalldataAggregatorSourceIdentity> {
   const identitiesByProvider: Partial<
-    Record<CalldataAggregatorProviderId, AggregatorProviderIdentity>
+    Record<CalldataAggregatorProviderId, CalldataAggregatorSourceIdentity>
   > = {};
   const seenProviderIds = new Set<CalldataAggregatorProviderId>();
 
@@ -333,13 +306,12 @@ function buildAggregatorProviderIdentities(
       );
     }
     seenProviderIds.add(identity.providerId);
-    identitiesByProvider[identity.providerId] =
-      toAggregatorProviderIdentity(identity);
+    identitiesByProvider[identity.providerId] = identity;
   }
 
   return identitiesByProvider as Record<
     CalldataAggregatorProviderId,
-    AggregatorProviderIdentity
+    CalldataAggregatorSourceIdentity
   >;
 }
 
@@ -431,7 +403,7 @@ export function isCalldataAggregatorProviderId(
 
 export function getAggregatorProviderIdentity(
   providerId: CalldataAggregatorProviderId
-): AggregatorProviderIdentity {
+): CalldataAggregatorSourceIdentity {
   return AGGREGATOR_PROVIDER_IDENTITIES[providerId];
 }
 
@@ -442,7 +414,7 @@ export function resolveCalldataAggregatorProviderForSource(
     return undefined;
   }
   for (const providerId of CALLDATA_AGGREGATOR_PROVIDER_IDS) {
-    if (AGGREGATOR_PROVIDER_IDENTITIES[providerId].liquiditySource === source) {
+    if (AGGREGATOR_PROVIDER_IDENTITIES[providerId].source === source) {
       return providerId;
     }
   }

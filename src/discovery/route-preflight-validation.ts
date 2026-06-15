@@ -115,7 +115,7 @@ function addExternalTakePolicyRequirements(
   for (const providerId of policy.calldataAggregatorProviders) {
     addPreflightRequirement(
       requirements,
-      getAggregatorProviderIdentity(providerId).liquiditySource
+      getAggregatorProviderIdentity(providerId).source
     );
   }
 }

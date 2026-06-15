@@ -29,8 +29,8 @@ describe('external take descriptors', () => {
     );
     expect(lifi).to.include({
       providerId: 'lifi',
-      canonicalPath: 'calldata_aggregator',
-      liquiditySource: LiquiditySource.LIFI,
+      path: 'calldata_aggregator',
+      source: LiquiditySource.LIFI,
       takerContractKey: 'Lifi',
       configKey: 'lifi',
     });
@@ -42,8 +42,8 @@ describe('external take descriptors', () => {
     );
     expect(sushi).to.include({
       providerId: 'sushi_aggregator',
-      canonicalPath: 'calldata_aggregator',
-      liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
+      path: 'calldata_aggregator',
+      source: LiquiditySource.SUSHI_AGGREGATOR,
       takerContractKey: 'SushiAggregator',
       configKey: 'sushiAggregator',
     });
@@ -55,8 +55,8 @@ describe('external take descriptors', () => {
     );
     expect(oneinch).to.include({
       providerId: 'oneinch',
-      canonicalPath: 'calldata_aggregator',
-      liquiditySource: LiquiditySource.ONEINCH,
+      path: 'calldata_aggregator',
+      source: LiquiditySource.ONEINCH,
       takerContractKey: 'OneInchAggregator',
       configKey: 'oneInch',
     });

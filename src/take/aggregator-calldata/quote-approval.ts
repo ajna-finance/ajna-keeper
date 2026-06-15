@@ -52,7 +52,7 @@ export function approveCalldataAggregatorQuoteForExecution(params: {
       reason: `${label} execution received a non-calldata-aggregator approved path for ${context}`,
     };
   }
-  if (quoteEvaluation.selectedLiquiditySource !== identity.liquiditySource) {
+  if (quoteEvaluation.selectedLiquiditySource !== identity.source) {
     return {
       approved: false,
       reason: `${label} execution received an unexpected approved source for ${context}`,
@@ -85,7 +85,7 @@ export function approveCalldataAggregatorQuoteForExecution(params: {
       externalTakePath: 'calldata_aggregator',
       providerId,
       quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
-      selectedLiquiditySource: identity.liquiditySource,
+      selectedLiquiditySource: identity.source,
       routeExecutionFloorRaw:
         quoteEvaluation.routeExecutionFloorRaw ?? approvedMinOutRaw,
       approvedMinOutRaw,

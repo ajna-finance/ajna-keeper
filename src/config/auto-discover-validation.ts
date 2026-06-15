@@ -343,7 +343,7 @@ function validateResolvedTakePathRequirements(
   );
   const calldataAggregatorSources =
     resolvedExternalTakePolicy.calldataAggregatorProviders.map(
-      (providerId) => getAggregatorProviderIdentity(providerId).liquiditySource
+      (providerId) => getAggregatorProviderIdentity(providerId).source
     );
   if (takePolicy.hybridGasQuoteFailureFallbackMode === 'direct_dex_first') {
     const fallbackEligibility =

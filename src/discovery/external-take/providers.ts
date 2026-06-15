@@ -67,7 +67,7 @@ function routeProviderKeyFromRoute(route: ExternalTakeRouteIdentity): string {
   }
 
   const identity = getAggregatorProviderIdentity(route.providerId);
-  if (route.source !== identity.liquiditySource) {
+  if (route.source !== identity.source) {
     throw new Error(
       `Inconsistent external take route identity: ${route.path}/${route.providerId} source=${formatLiquiditySource(route.source)}`
     );
@@ -131,9 +131,9 @@ function getCalldataAggregatorRouteIdentity(
 ): Extract<ExternalTakeRouteIdentity, { path: 'calldata_aggregator' }> {
   const identity = getAggregatorProviderIdentity(providerId);
   return {
-    path: identity.canonicalPath,
+    path: identity.path,
     providerId: identity.providerId,
-    source: identity.liquiditySource,
+    source: identity.source,
   };
 }
 
@@ -225,7 +225,7 @@ export function createCalldataAggregatorRouteProvider<
 ): DiscoveryExternalTakeRouteProvider {
   const identity = getAggregatorProviderIdentity(params.providerId);
   return {
-    path: identity.canonicalPath,
+    path: identity.path,
     providerId: identity.providerId,
     quote: async ({
       intent,

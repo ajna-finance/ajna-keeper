@@ -145,7 +145,7 @@ export function resolveCalldataAggregatorQuoteIdentity(
   ) {
     return {
       providerId,
-      source: getAggregatorProviderIdentity(providerId).liquiditySource,
+      source: getAggregatorProviderIdentity(providerId).source,
       mismatch: {
         providerId,
         calldataQuoteProviderId,
@@ -158,7 +158,7 @@ export function resolveCalldataAggregatorQuoteIdentity(
     providerId: resolvedProviderId,
     source:
       resolvedProviderId !== undefined
-        ? getAggregatorProviderIdentity(resolvedProviderId).liquiditySource
+        ? getAggregatorProviderIdentity(resolvedProviderId).source
         : undefined,
   };
 }
