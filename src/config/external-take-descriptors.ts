@@ -38,15 +38,11 @@ interface ExternalTakeSourceIdentityBase<
   readonly takerContractKey: ExternalTakeTakerContractKey;
 }
 
-export interface DirectDexSourceIdentity
-  extends ExternalTakeSourceIdentityBase<
-    DirectDexLiquiditySource,
-    'direct_dex',
-    'direct_dex'
-  > {
-  readonly providerId?: never;
-  readonly configKey?: never;
-}
+export type DirectDexSourceIdentity = ExternalTakeSourceIdentityBase<
+  DirectDexLiquiditySource,
+  'direct_dex',
+  'direct_dex'
+>;
 
 export interface CalldataAggregatorSourceIdentity
   extends ExternalTakeSourceIdentityBase<
@@ -55,7 +51,6 @@ export interface CalldataAggregatorSourceIdentity
     'aggregator'
   > {
   readonly providerId: CalldataAggregatorProviderId;
-  readonly configKey: string;
 }
 
 export type ExternalTakeSourceIdentity =
@@ -90,7 +85,6 @@ export const EXTERNAL_TAKE_SOURCE_IDENTITIES = {
     label: 'LI.FI',
     takerContractKey: 'Lifi',
     providerId: 'lifi',
-    configKey: 'lifi',
   },
   [LiquiditySource.SUSHI_AGGREGATOR]: {
     source: LiquiditySource.SUSHI_AGGREGATOR,
@@ -99,7 +93,6 @@ export const EXTERNAL_TAKE_SOURCE_IDENTITIES = {
     label: 'Sushi Aggregator',
     takerContractKey: 'SushiAggregator',
     providerId: 'sushi_aggregator',
-    configKey: 'sushiAggregator',
   },
   [LiquiditySource.ONEINCH]: {
     source: LiquiditySource.ONEINCH,
@@ -108,7 +101,6 @@ export const EXTERNAL_TAKE_SOURCE_IDENTITIES = {
     label: '1inch',
     takerContractKey: 'OneInchAggregator',
     providerId: 'oneinch',
-    configKey: 'oneInch',
   },
 } as const satisfies Record<
   ExternalTakeLiquiditySource,

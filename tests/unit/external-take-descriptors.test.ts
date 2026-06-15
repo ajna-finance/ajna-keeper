@@ -32,7 +32,6 @@ describe('external take descriptors', () => {
       path: 'calldata_aggregator',
       source: LiquiditySource.LIFI,
       takerContractKey: 'Lifi',
-      configKey: 'lifi',
     });
     expect(lifi.takerContractKey).to.equal(lifiSource.takerContractKey);
 
@@ -45,7 +44,6 @@ describe('external take descriptors', () => {
       path: 'calldata_aggregator',
       source: LiquiditySource.SUSHI_AGGREGATOR,
       takerContractKey: 'SushiAggregator',
-      configKey: 'sushiAggregator',
     });
     expect(sushi.takerContractKey).to.equal(sushiSource.takerContractKey);
 
@@ -58,7 +56,6 @@ describe('external take descriptors', () => {
       path: 'calldata_aggregator',
       source: LiquiditySource.ONEINCH,
       takerContractKey: 'OneInchAggregator',
-      configKey: 'oneInch',
     });
     expect(oneinch.takerContractKey).to.equal(oneinchSource.takerContractKey);
   });
