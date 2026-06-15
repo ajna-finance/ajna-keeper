@@ -5,12 +5,12 @@ import { CurvePoolType, LiquiditySource } from '../../src/config';
 import * as erc20 from '../../src/erc20';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import {
-  getFactoryTakeQuoteEvaluation,
+  getDirectDexTakeQuoteEvaluation,
   takeLiquidationDirectDex,
 } from '../../src/take/direct-dex';
-import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval';
+import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval-rules';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
-import { createFactoryQuoteProviderRuntimeCache } from '../../src/take/direct-dex/shared';
+import { createDirectDexQuoteProviderRuntimeCache } from '../../src/take/direct-dex/route-selection';
 import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { getProvider, resetHardhat } from './test-utils';
 import {
@@ -19,14 +19,14 @@ import {
   AUCTION_PRICE,
   BORROWER,
   buildApprovedDirectDexQuoteEvaluation,
-  buildFactoryPoolView,
-  buildFactoryTakePoolConfig,
+  buildDirectDexPoolView,
+  buildDirectDexTakePoolConfig,
   COLLATERAL_AMOUNT,
   DEADLINE,
-  deployFactoryHarness,
+  deployDirectDexHarness,
   deployFundedSwapRouter02,
-  expectFactoryExecutionRejectedWithoutStateMutation,
-  expectSuccessfulFactoryTake,
+  expectDirectDexExecutionRejectedWithoutStateMutation,
+  expectSuccessfulDirectDexTake,
   expectUniswapNonSwapRouterExecutionRejectedWithoutStateMutation,
   QUOTE_AMOUNT_DUE,
   ROUTER_AMOUNT_OUT,
@@ -34,7 +34,7 @@ import {
   USDC_QUOTE_AMOUNT_DUE,
   USDC_QUOTE_TOKEN_SCALE,
   USDC_ROUTER_AMOUNT_OUT,
-} from './helpers/factory-route-harness';
+} from './helpers/direct-dex-route-harness';
 
 async function expectRevert(tx: Promise<unknown>, expectedMessage: string) {
   let caught: unknown;
@@ -63,36 +63,42 @@ describe('Production route selection fork verification', function () {
     sinon.restore();
   });
 
-  it('executes Uniswap V3 factory takes with selected fee tier and bound min-out', async () => {
-    await expectSuccessfulFactoryTake({
+  it('executes Uniswap V3 direct DEX takes with selected fee tier and bound min-out', async () => {
+    await expectSuccessfulDirectDexTake({
       source: LiquiditySource.UNISWAPV3,
     });
   });
 
-  // Direct-SushiSwap factory take case removed with the direct Sushi path; the
-  // Uniswap V3 and Curve cases cover factory execution.
+  // Direct-SushiSwap direct DEX take case removed with the direct Sushi path; the
+  // Uniswap V3 and Curve cases cover direct DEX execution.
 
-  it('executes Curve factory takes through stable and crypto dispatch', async () => {
-    await expectSuccessfulFactoryTake({
+  it('executes Curve direct DEX takes through stable and crypto dispatch', async () => {
+    await expectSuccessfulDirectDexTake({
       source: LiquiditySource.CURVE,
       poolType: CurvePoolType.STABLE,
     });
-    await expectSuccessfulFactoryTake({
+    await expectSuccessfulDirectDexTake({
       source: LiquiditySource.CURVE,
       poolType: CurvePoolType.CRYPTO,
     });
   });
 
-  it('executes Uniswap factory takes with non-18-decimal quote token raw units', async () => {
-    const harness = await deployFactoryHarness({
+  it('executes Uniswap direct DEX takes with non-18-decimal quote token raw units', async () => {
+    const harness = await deployDirectDexHarness({
       quoteDecimals: 6,
       quoteTokenScale: USDC_QUOTE_TOKEN_SCALE,
       quoteAmountDue: USDC_QUOTE_AMOUNT_DUE,
     });
-    const { owner, collateralToken, quoteToken, pool, factory, uniswapTaker } =
-      harness;
+    const {
+      owner,
+      collateralToken,
+      quoteToken,
+      pool,
+      router: takerRouter,
+      uniswapTaker,
+    } = harness;
 
-    const router = await deployFundedSwapRouter02(
+    const swapRouter = await deployFundedSwapRouter02(
       harness,
       USDC_ROUTER_AMOUNT_OUT
     );
@@ -101,11 +107,11 @@ describe('Production route selection fork verification', function () {
     const poolCollateralBefore = await collateralToken.balanceOf(pool.address);
     const ownerQuoteBefore = await quoteToken.balanceOf(owner.address);
     const takeCountBefore = await pool.takeCount();
-    const poolView = buildFactoryPoolView({
+    const poolView = buildDirectDexPoolView({
       pool,
       collateralToken,
       quoteToken,
-      name: 'USDC Quote Factory Route Pool',
+      name: 'USDC Quote Direct DEX Route Pool',
     });
     const quoteEvaluation = buildApprovedDirectDexQuoteEvaluation({
       source: LiquiditySource.UNISWAPV3,
@@ -116,7 +122,7 @@ describe('Production route selection fork verification', function () {
 
     const executed = await takeLiquidationDirectDex({
       pool: asFungiblePool(poolView),
-      poolConfig: buildFactoryTakePoolConfig(
+      poolConfig: buildDirectDexTakePoolConfig(
         poolView,
         LiquiditySource.UNISWAPV3
       ),
@@ -133,15 +139,15 @@ describe('Production route selection fork verification', function () {
       },
       config: {
         dryRun: false,
-        keeperTakerRouter: factory.address,
+        keeperTakerRouter: takerRouter.address,
         uniswapV3RouterOverrides: {
-          swapRouter02Address: router.address,
+          swapRouter02Address: swapRouter.address,
           poolFactoryAddress: '0x4444444444444444444444444444444444444444',
           wethAddress: quoteToken.address,
           quoterV2Address: '0x6666666666666666666666666666666666666666',
           defaultFeeTier: 500,
         },
-        runtimeCache: createFactoryQuoteProviderRuntimeCache(),
+        runtimeCache: createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -169,13 +175,13 @@ describe('Production route selection fork verification', function () {
     ).to.be.true;
   });
 
-  it('rejects factory routes that underdeliver below the configured profit floor', async () => {
+  it('rejects direct DEX routes that underdeliver below the configured profit floor', async () => {
     const routeFloor = QUOTE_AMOUNT_DUE.add(utils.parseEther('0.2'));
     const profitFloor = APPROVED_MIN_OUT;
     const underDeliveredOutput = profitFloor.sub(1);
 
     for (const source of [LiquiditySource.UNISWAPV3, LiquiditySource.CURVE]) {
-      await expectFactoryExecutionRejectedWithoutStateMutation({
+      await expectDirectDexExecutionRejectedWithoutStateMutation({
         source,
         routerAmountOut: underDeliveredOutput,
         routeMinOutRaw: routeFloor,
@@ -200,30 +206,43 @@ describe('Production route selection fork verification', function () {
     });
   });
 
-  it('fails stale factory routes without clearing collateral or weakening min-out', async () => {
-    const harness = await deployFactoryHarness();
-    const { quoteToken, collateralToken, pool, factory, uniswapTaker } =
-      harness;
+  it('fails stale direct DEX routes without clearing collateral or weakening min-out', async () => {
+    const harness = await deployDirectDexHarness();
+    const {
+      quoteToken,
+      collateralToken,
+      pool,
+      router: takerRouter,
+      uniswapTaker,
+    } = harness;
     // Router delivers below the encoded min-out, so the swap reverts inside the
     // router and the take fails closed without mutating pool state.
     const staleAmountOut = QUOTE_AMOUNT_DUE.add(utils.parseEther('0.1'));
-    const router = await deployFundedSwapRouter02(harness, staleAmountOut);
+    const swapRouter = await deployFundedSwapRouter02(harness, staleAmountOut);
 
     const poolQuoteBefore = await quoteToken.balanceOf(pool.address);
     const poolCollateralBefore = await collateralToken.balanceOf(pool.address);
     const swapDetails = utils.defaultAbiCoder.encode(
       ['(address,address,uint24,uint256,uint256)'],
-      [[router.address, quoteToken.address, 500, APPROVED_MIN_OUT, DEADLINE]]
+      [
+        [
+          swapRouter.address,
+          quoteToken.address,
+          500,
+          APPROVED_MIN_OUT,
+          DEADLINE,
+        ],
+      ]
     );
 
     await expectRevert(
-      factory.takeWithAtomicSwap(
+      takerRouter.takeWithAtomicSwap(
         pool.address,
         BORROWER,
         AUCTION_PRICE,
         COLLATERAL_AMOUNT,
         LiquiditySource.UNISWAPV3,
-        router.address,
+        swapRouter.address,
         swapDetails
       ),
       'insufficient output amount'
@@ -266,7 +285,7 @@ describe('Production route selection fork verification', function () {
       },
     };
 
-    const evaluation = await getFactoryTakeQuoteEvaluation(
+    const evaluation = await getDirectDexTakeQuoteEvaluation(
       pool as any,
       ethers.utils.parseEther('100'),
       ethers.utils.parseEther('1'),
@@ -288,7 +307,7 @@ describe('Production route selection fork verification', function () {
         },
       } as any,
       Wallet.createRandom().connect(getProvider()) as any,
-      createFactoryQuoteProviderRuntimeCache(),
+      createDirectDexQuoteProviderRuntimeCache(),
       {
         routeQuoteBudgetPerCandidate: 1,
       }
@@ -304,9 +323,15 @@ describe('Production route selection fork verification', function () {
     // marketPriceFactor range gating plus end-to-end execution on UniswapV3.
     // Multi-source best-route selection is covered by the
     // hybrid-external-take-selection unit tests.
-    const harness = await deployFactoryHarness();
-    const { owner, collateralToken, quoteToken, pool, factory, uniswapTaker } =
-      harness;
+    const harness = await deployDirectDexHarness();
+    const {
+      owner,
+      collateralToken,
+      quoteToken,
+      pool,
+      router: takerRouter,
+      uniswapTaker,
+    } = harness;
     const collateral = utils.parseEther('1');
     const beforeRangeAuctionPrice = utils.parseEther('119');
     const inRangeAuctionPrice = utils.parseEther('117.8');
@@ -330,13 +355,13 @@ describe('Production route selection fork verification', function () {
       } as any);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
 
-    const poolView = buildFactoryPoolView({
+    const poolView = buildDirectDexPoolView({
       pool,
       collateralToken,
       quoteToken,
       name: 'Market Factor Crossing Pool',
     });
-    const poolConfig = buildFactoryTakePoolConfig(
+    const poolConfig = buildDirectDexTakePoolConfig(
       poolView,
       LiquiditySource.UNISWAPV3
     );
@@ -359,9 +384,9 @@ describe('Production route selection fork verification', function () {
         },
       },
     };
-    const runtimeCache = createFactoryQuoteProviderRuntimeCache();
+    const runtimeCache = createDirectDexQuoteProviderRuntimeCache();
 
-    const beforeRangeEvaluation = await getFactoryTakeQuoteEvaluation(
+    const beforeRangeEvaluation = await getDirectDexTakeQuoteEvaluation(
       asFungiblePool(poolView),
       beforeRangeAuctionPrice,
       collateral,
@@ -377,7 +402,7 @@ describe('Production route selection fork verification', function () {
       EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold
     );
 
-    const inRangeEvaluation = await getFactoryTakeQuoteEvaluation(
+    const inRangeEvaluation = await getDirectDexTakeQuoteEvaluation(
       asFungiblePool(poolView),
       inRangeAuctionPrice,
       collateral,
@@ -431,7 +456,7 @@ describe('Production route selection fork verification', function () {
       },
       config: {
         dryRun: false,
-        keeperTakerRouter: factory.address,
+        keeperTakerRouter: takerRouter.address,
         uniswapV3RouterOverrides: config.uniswapV3RouterOverrides,
         runtimeCache,
       },

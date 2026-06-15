@@ -33,7 +33,22 @@ type BoundaryRule = {
   }) => boolean;
 };
 
-const SCAN_ROOTS = ['src', 'scripts', 'contracts', 'docs'];
+const SCAN_ROOTS = ['src', 'scripts', 'contracts', 'docs', 'examples'];
+const SCAN_FILES = [
+  'README.md',
+  'production_setup_guide.md',
+  'package.json',
+  'hardhat.config.ts',
+  'tests/integration/helpers/direct-dex-route-harness.ts',
+  'tests/integration/production-route-selection.test.ts',
+  'tests/unit/take-direct-dex.test.ts',
+  'tests/unit/direct-dex-quote-provider-cache.test.ts',
+  'tests/unit/direct-dex-route-selection.test.ts',
+  'tests/unit/direct-dex-amount-out-minimum.test.ts',
+  'tests/unit/discovery-handlers.test.ts',
+  'tests/unit/lifi-discovery-handlers.test.ts',
+  'tests/unit/take-write-submission.test.ts',
+];
 const SCAN_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
@@ -44,9 +59,10 @@ const SCAN_EXTENSIONS = new Set([
   '.json',
 ]);
 const IGNORED_PATHS: readonly RegExp[] = [
-  /^tests\//,
   /^docs\/calldata-aggregator-/,
   /^scripts\/check-external-take-boundaries\.ts$/,
+  /^scripts\/create-liquidatable-ajna-fixture-cli\.ts$/,
+  /^tests\/unit\/check-external-take-boundaries\.test\.ts$/,
 ];
 
 function isIgnoredPath(file: string): boolean {
@@ -67,6 +83,36 @@ function allowRetiredNameInValidationError(params: {
   return (
     /^src\/config\//.test(params.file.split(path.sep).join('/')) &&
     isMigrationErrorLine(params.line)
+  );
+}
+
+function allowFactoryLogOutsideDirectDexRuntime(params: {
+  file: string;
+  line: string;
+}): boolean {
+  if (allowRetiredNameInValidationError(params)) {
+    return true;
+  }
+  const normalized = params.file.split(path.sep).join('/');
+  return !(
+    normalized.startsWith('src/take/direct-dex/') ||
+    normalized === 'src/take/manual-context.ts' ||
+    normalized === 'src/take/external-take/quote-approval.ts' ||
+    normalized === 'docs/fixtures/live-base-liquidation-fixture.md' ||
+    normalized === 'README.md' ||
+    normalized === 'production_setup_guide.md'
+  );
+}
+
+function allowLegitimateFactoryTerm(params: {
+  file: string;
+  line: string;
+}): boolean {
+  if (allowRetiredNameInValidationError(params)) {
+    return true;
+  }
+  return /\b(?:[A-Za-z0-9]+__factory|poolFactoryAddress|erc20PoolFactory|erc721PoolFactory|fungiblePoolFactory|getFactoryContract)\b/.test(
+    params.line
   );
 }
 
@@ -95,7 +141,7 @@ export const BOUNDARY_RULES: readonly BoundaryRule[] = [
   {
     id: 'retired-factory-first',
     detail: 'factory_first is retired; use direct_dex_first',
-    re: /\bfactory_first\b/,
+    re: /\bfactory[_-]first\b/,
     allow: allowRetiredNameInValidationError,
   },
   {
@@ -107,7 +153,7 @@ export const BOUNDARY_RULES: readonly BoundaryRule[] = [
   },
   {
     id: 'retired-takers-factory',
-    detail: 'takers.router is retired; use takers.router',
+    detail: 'takers.factory is retired; use takers.router',
     re: /\btakers\.factory\b/,
     allow: allowRetiredNameInValidationError,
   },
@@ -142,7 +188,20 @@ export const BOUNDARY_RULES: readonly BoundaryRule[] = [
     id: 'retired-factory-symbol',
     detail:
       'factory-named direct DEX symbols are retired; use direct DEX names',
-    re: /\b(?:takeLiquidationFactory|FactoryPathQuoteInput|ApprovedFactoryQuoteEvaluation)\b/,
+    re: /\b(?:takeLiquidationFactory|Factory[A-Z][A-Za-z0-9_]*|(?!defaultFactoryLiquiditySource\b)[a-z][A-Za-z0-9_]*Factory[A-Z][A-Za-z0-9_]*|approvedFactorySources|executedFactorySources|dryRunFactorySources|factoryFailures)\b/,
+    allow: allowLegitimateFactoryTerm,
+  },
+  {
+    id: 'retired-direct-dex-factory-log',
+    detail: 'direct DEX runtime logs should not use the retired Factory prefix',
+    re: /\bFactory:\s/,
+    allow: allowFactoryLogOutsideDirectDexRuntime,
+  },
+  {
+    id: 'retired-direct-dex-operator-label',
+    detail:
+      'direct DEX operator-facing labels should not describe the route as factory-backed',
+    re: /\b(?:external-take factory\/taker|keeper taker factory address|selected factory path|factory pre-broadcast|factory post-submission|factory external takes?)\b/i,
     allow: allowRetiredNameInValidationError,
   },
   {
@@ -255,6 +314,12 @@ export function collectBoundaryFiles(repoRoot = process.cwd()): BoundaryFile[] {
   const files: string[] = [];
   for (const root of SCAN_ROOTS) {
     collectFiles(path.join(repoRoot, root), files);
+  }
+  for (const file of SCAN_FILES) {
+    const fullPath = path.join(repoRoot, file);
+    if (fs.existsSync(fullPath) && shouldScanFile(fullPath)) {
+      files.push(fullPath);
+    }
   }
   return files.map((file) => ({
     file: path.relative(repoRoot, file).split(path.sep).join('/'),

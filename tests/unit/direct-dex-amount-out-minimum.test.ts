@@ -1,10 +1,10 @@
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
-import { computeFactoryAmountOutMinimum } from '../../src/take/direct-dex';
+import { computeDirectDexAmountOutMinimum } from '../../src/take/direct-dex';
 import { LiquiditySource } from '../../src/config';
-import { ApprovedUniswapV3FactoryQuoteEvaluation } from '../../src/take/types';
+import { ApprovedUniswapV3DirectDexQuoteEvaluation } from '../../src/take/types';
 
-describe('Factory amountOutMinimum', () => {
+describe('Direct DEX amountOutMinimum', () => {
   it('preserves the legacy approved floor when split floor metadata is absent', async () => {
     const pool = {
       contract: {
@@ -17,7 +17,7 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3DirectDexQuoteEvaluation = {
       isTakeable: true,
       externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('120'),
@@ -26,7 +26,7 @@ describe('Factory amountOutMinimum', () => {
       selectedFeeTier: 3000,
     };
 
-    const amountOutMinimum = await computeFactoryAmountOutMinimum({
+    const amountOutMinimum = await computeDirectDexAmountOutMinimum({
       pool: pool as any,
       liquidation,
       quoteEvaluation,
@@ -47,7 +47,7 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3DirectDexQuoteEvaluation = {
       isTakeable: true,
       externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('101'),
@@ -58,7 +58,7 @@ describe('Factory amountOutMinimum', () => {
 
     let thrown: Error | undefined;
     try {
-      await computeFactoryAmountOutMinimum({
+      await computeDirectDexAmountOutMinimum({
         pool: pool as any,
         liquidation,
         quoteEvaluation,
@@ -68,7 +68,7 @@ describe('Factory amountOutMinimum', () => {
     }
 
     expect(thrown?.message).to.equal(
-      'Factory: approvedMinOutRaw below auction repayment floor'
+      'Direct DEX: approvedMinOutRaw below auction repayment floor'
     );
   });
 
@@ -84,7 +84,7 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3DirectDexQuoteEvaluation = {
       isTakeable: true,
       externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('126'),
@@ -95,7 +95,7 @@ describe('Factory amountOutMinimum', () => {
       selectedFeeTier: 3000,
     };
 
-    const amountOutMinimum = await computeFactoryAmountOutMinimum({
+    const amountOutMinimum = await computeDirectDexAmountOutMinimum({
       pool: pool as any,
       liquidation,
       quoteEvaluation,
@@ -116,7 +116,7 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3DirectDexQuoteEvaluation = {
       isTakeable: true,
       externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('150'),
@@ -127,7 +127,7 @@ describe('Factory amountOutMinimum', () => {
       selectedFeeTier: 3000,
     };
 
-    const amountOutMinimum = await computeFactoryAmountOutMinimum({
+    const amountOutMinimum = await computeDirectDexAmountOutMinimum({
       pool: pool as any,
       liquidation,
       quoteEvaluation,
@@ -148,7 +148,7 @@ describe('Factory amountOutMinimum', () => {
       auctionPrice: ethers.utils.parseEther('1'),
     };
 
-    const quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation = {
+    const quoteEvaluation: ApprovedUniswapV3DirectDexQuoteEvaluation = {
       isTakeable: true,
       externalTakePath: 'direct_dex',
       quoteAmountRaw: ethers.utils.parseEther('101'),
@@ -159,7 +159,7 @@ describe('Factory amountOutMinimum', () => {
       selectedFeeTier: 3000,
     };
 
-    const amountOutMinimum = await computeFactoryAmountOutMinimum({
+    const amountOutMinimum = await computeDirectDexAmountOutMinimum({
       pool: pool as any,
       liquidation,
       quoteEvaluation,
@@ -187,7 +187,7 @@ describe('Factory amountOutMinimum', () => {
 
     let thrown: Error | undefined;
     try {
-      await computeFactoryAmountOutMinimum({
+      await computeDirectDexAmountOutMinimum({
         pool: pool as any,
         liquidation,
         quoteEvaluation: quoteEvaluation as any,
@@ -197,7 +197,7 @@ describe('Factory amountOutMinimum', () => {
     }
 
     expect(thrown?.message).to.equal(
-      'Factory: approvedMinOutRaw missing from evaluation'
+      'Direct DEX: approvedMinOutRaw missing from evaluation'
     );
   });
 });

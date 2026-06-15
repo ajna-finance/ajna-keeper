@@ -27,7 +27,7 @@ import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { NonceTracker } from '../../src/nonce';
 import { configureAjna } from '../../src/config';
 import {
-  computeFactoryAmountOutMinimum,
+  computeDirectDexAmountOutMinimum,
   takeLiquidationDirectDex,
 } from '../../src/take/direct-dex';
 import { arrayFromAsync } from '../../src/utils';
@@ -52,7 +52,7 @@ async function getChainDeadline(provider: Provider, ttlSeconds: number = 1800) {
   return latestBlock.timestamp + ttlSeconds;
 }
 
-describe('Factory slippage bound', function () {
+describe('Direct DEX slippage bound', function () {
   this.timeout(FORK_INTEGRATION_TIMEOUT_MS);
 
   let provider: Provider;
@@ -164,7 +164,7 @@ describe('Factory slippage bound', function () {
     NonceTracker.clearNonces();
   });
 
-  it('rejects a manipulated factory route below the encoded minimum', async () => {
+  it('rejects a manipulated direct DEX route below the encoded minimum', async () => {
     const { factory } = await deployFactorySystem();
     const liquidationStatus = await pool.getLiquidation(borrower).getStatus();
     const quoteScale = await pool.contract.quoteTokenScale();
@@ -193,7 +193,7 @@ describe('Factory slippage bound', function () {
       .connect(quoteWhale)
       .transfer(mockRouter.address, quotedAmountRaw.mul(2));
 
-    const expectedAmountOutMinimum = await computeFactoryAmountOutMinimum({
+    const expectedAmountOutMinimum = await computeDirectDexAmountOutMinimum({
       pool,
       liquidation: {
         collateral: liquidationStatus.collateral,

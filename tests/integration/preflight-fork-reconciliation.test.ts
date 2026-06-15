@@ -20,7 +20,7 @@ import { network } from 'hardhat';
 import { TakerRouter__factory } from '../../typechain-types';
 import { LifiKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
 import { KeeperConfig, LifiDexConfig, readConfigFile } from '../../src/config';
-import { validateAutoDiscoverRouteDeployments } from '../../src/discovery/route-preflight';
+import { validateAutoDiscoverRouteDeployments } from '../../src/discovery/route-preflight-validation';
 import { getProvider, resetHardhat, setBalance } from './test-utils';
 
 const RUN_PREFLIGHT_FORK = process.env.RUN_PREFLIGHT_FORK === 'true';

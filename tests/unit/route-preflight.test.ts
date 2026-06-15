@@ -7,12 +7,13 @@ import {
   PriceOriginSource,
 } from '../../src/config';
 import {
+  resolveAutodiscoverRoutePreflightRequirements,
   resolveExternalTakeRouteDeploymentPreflight,
   resolveExternalTakeRoutePreflightRequirements,
   shouldValidateExternalTakeRouteDeployments,
   validateAutoDiscoverRouteDeployments,
   validateExternalTakeRouteDeployments,
-} from '../../src/discovery/route-preflight';
+} from '../../src/discovery/route-preflight-validation';
 
 describe('route deployment preflight', () => {
   afterEach(() => {
@@ -124,7 +125,7 @@ describe('route deployment preflight', () => {
     allowedSelectors?: string[];
   }) {
     const config = lifiConfig();
-    const factoryIface = new ethers.utils.Interface([
+    const routerIface = new ethers.utils.Interface([
       'function takerContracts(uint8 source) view returns (address)',
     ]);
     const lifiIface = new ethers.utils.Interface([
@@ -148,8 +149,8 @@ describe('route deployment preflight', () => {
         getCode: sinon.stub().resolves('0x6000'),
         call: sinon.stub().callsFake(async (tx: { data: string }) => {
           const selector = tx.data.slice(0, 10);
-          if (selector === factoryIface.getSighash('takerContracts')) {
-            return factoryIface.encodeFunctionResult('takerContracts', [
+          if (selector === routerIface.getSighash('takerContracts')) {
+            return routerIface.encodeFunctionResult('takerContracts', [
               registeredTaker,
             ]);
           }
@@ -189,13 +190,77 @@ describe('route deployment preflight', () => {
     return config;
   }
 
+  function oneInchConfig(): KeeperConfig {
+    return {
+      ...baseConfig(),
+      discovery: {
+        enabled: true,
+        take: {
+          enabled: true,
+          validateRouteDeployments: true,
+          allowedExternalTakePaths: ['calldata_aggregator'],
+          allowedCalldataAggregatorProviders: ['oneinch'],
+          dexGasOverrides: {
+            [LiquiditySource.ONEINCH]: '900000',
+          },
+        },
+        defaults: {
+          take: {
+            liquiditySource: LiquiditySource.ONEINCH,
+            marketPriceFactor: 0.99,
+          },
+        },
+      },
+      takers: {
+        router: '0x1111111111111111111111111111111111111111',
+        contracts: {
+          OneInchAggregator: '0x2222222222222222222222222222222222222222',
+        },
+      },
+      dex: {
+        oneInch: {
+          routers: {
+            1: '0x3333333333333333333333333333333333333333',
+          },
+        },
+      },
+    };
+  }
+
+  function oneInchProviderStub(params?: { registeredTaker?: string }) {
+    const config = oneInchConfig();
+    const routerIface = new ethers.utils.Interface([
+      'function takerContracts(uint8 source) view returns (address)',
+    ]);
+    const registeredTaker =
+      params?.registeredTaker ?? config.takers!.contracts!.OneInchAggregator;
+
+    return {
+      config,
+      provider: {
+        _isProvider: true,
+        resolveName: sinon.stub().callsFake(async (name: string) => name),
+        getCode: sinon.stub().resolves('0x6000'),
+        call: sinon.stub().callsFake(async (tx: { data: string }) => {
+          const selector = tx.data.slice(0, 10);
+          if (selector === routerIface.getSighash('takerContracts')) {
+            return routerIface.encodeFunctionResult('takerContracts', [
+              registeredTaker,
+            ]);
+          }
+          throw new Error(`unexpected call ${selector}`);
+        }),
+      },
+    };
+  }
+
   function manualLifiConfig(): KeeperConfig {
     const config = addManualLifiPool(lifiConfig());
     delete config.discovery;
     return config;
   }
 
-  it('passes when enabled route contracts have bytecode and factory registry matches', async () => {
+  it('passes when enabled route contracts have bytecode and router registry matches', async () => {
     const config = baseConfig();
     const provider = {
       _isProvider: true,
@@ -253,7 +318,7 @@ describe('route deployment preflight', () => {
     }
   });
 
-  it('fails startup preflight when the factory registry maps a source to a different taker', async () => {
+  it('fails startup preflight when the router registry maps a source to a different taker', async () => {
     const config = baseConfig();
     const provider = {
       _isProvider: true,
@@ -284,7 +349,7 @@ describe('route deployment preflight', () => {
     }
   });
 
-  it('fails startup preflight when the factory registry has no registered taker', async () => {
+  it('fails startup preflight when the router registry has no registered taker', async () => {
     const config = baseConfig();
     const provider = {
       _isProvider: true,
@@ -315,7 +380,7 @@ describe('route deployment preflight', () => {
     }
   });
 
-  it('fails startup preflight when the factory registry cannot be read', async () => {
+  it('fails startup preflight when the router registry cannot be read', async () => {
     const config = baseConfig();
     const provider = {
       _isProvider: true,
@@ -339,7 +404,7 @@ describe('route deployment preflight', () => {
     }
   });
 
-  it('fails startup preflight when transient factory registry read errors exhaust retries', async () => {
+  it('fails startup preflight when transient router registry read errors exhaust retries', async () => {
     const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     const config = baseConfig();
     try {
@@ -418,7 +483,7 @@ describe('route deployment preflight', () => {
     }
   });
 
-  it('passes LI.FI preflight when factory registry and on-chain allowlists match config', async () => {
+  it('passes LI.FI preflight when router registry and on-chain allowlists match config', async () => {
     const { config, provider } = lifiProviderStub();
 
     await validateAutoDiscoverRouteDeployments({
@@ -443,7 +508,7 @@ describe('route deployment preflight', () => {
     expect(shouldValidateExternalTakeRouteDeployments(config)).to.equal(false);
   });
 
-  it('passes manual LI.FI preflight when factory registry and on-chain allowlists match config', async () => {
+  it('passes manual LI.FI preflight when router registry and on-chain allowlists match config', async () => {
     const { config, provider } = lifiProviderStub();
     addManualLifiPool(config);
     delete config.discovery;
@@ -463,6 +528,31 @@ describe('route deployment preflight', () => {
 
     expect(resolveExternalTakeRoutePreflightRequirements(config)).to.deep.equal(
       [{ path: 'calldata_aggregator', source: LiquiditySource.LIFI }]
+    );
+  });
+
+  it('resolves autodiscovery calldata aggregator providers to source-specific preflight requirements', () => {
+    const config = baseConfig();
+    config.discovery!.defaults!.take!.liquiditySource = LiquiditySource.ONEINCH;
+    config.discovery!.take = {
+      enabled: true,
+      validateRouteDeployments: true,
+      allowedExternalTakePaths: ['calldata_aggregator'],
+      allowedCalldataAggregatorProviders: ['oneinch', 'sushi_aggregator'],
+      dexGasOverrides: {
+        [LiquiditySource.ONEINCH]: '900000',
+        [LiquiditySource.SUSHI_AGGREGATOR]: '900000',
+      },
+    };
+
+    expect(resolveAutodiscoverRoutePreflightRequirements(config)).to.deep.equal(
+      [
+        { path: 'calldata_aggregator', source: LiquiditySource.ONEINCH },
+        {
+          path: 'calldata_aggregator',
+          source: LiquiditySource.SUSHI_AGGREGATOR,
+        },
+      ]
     );
   });
 
@@ -491,6 +581,29 @@ describe('route deployment preflight', () => {
       { path: 'direct_dex', source: LiquiditySource.UNISWAPV3 },
       { path: 'calldata_aggregator', source: LiquiditySource.ONEINCH },
     ]);
+  });
+
+  it('fails 1inch preflight when the router registry maps the source to a different taker', async () => {
+    const { config, provider } = oneInchProviderStub({
+      registeredTaker: '0x9999999999999999999999999999999999999999',
+    });
+
+    try {
+      await validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      expect.fail('expected preflight to fail');
+    } catch (error) {
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        'keeperTakerRouter registry maps ONEINCH'
+      );
+      expect((error as Error).message).to.include(
+        config.takers!.contracts!.OneInchAggregator
+      );
+    }
   });
 
   it('fails LI.FI preflight when a partial allowlist update leaves only a subset on chain', async () => {

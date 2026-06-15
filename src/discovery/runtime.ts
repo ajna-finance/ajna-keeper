@@ -51,8 +51,8 @@ import {
 } from '../utils';
 import { createDiscoveryRpcCache } from './rpc-cache';
 import {
-  FactoryQuoteProviderRuntimeCache,
-  createFactoryQuoteProviderRuntimeCache,
+  DirectDexQuoteProviderRuntimeCache,
+  createDirectDexQuoteProviderRuntimeCache,
 } from '../take/direct-dex';
 import {
   DEFAULT_HOT_AUCTION_CANDIDATE_TTL_MS,
@@ -85,7 +85,7 @@ type BoundDiscoveryRuntimeState = DiscoveryRuntimeState & {
   readTransports: DiscoveryReadTransports;
   chainId?: number;
   hotAuctionCandidateCache?: HotAuctionCandidateCache;
-  factoryQuoteProviders: FactoryQuoteProviderRuntimeCache;
+  directDexQuoteProviders: DirectDexQuoteProviderRuntimeCache;
   oneInchQuoteCircuit: OneInchQuoteCircuitState;
   providerCircuits: ExternalProviderCircuits;
   lastDiscoveredSettlementCycleStartedAtMs?: number;
@@ -400,19 +400,19 @@ async function resolveSettlementCycleTargets(
 
 async function createDiscoveryCycleRpcCache(params: {
   state: BoundDiscoveryRuntimeState;
-  includeFactoryQuoteProviders?: boolean;
+  includeDirectDexQuoteProviders?: boolean;
 }): Promise<DiscoveryRpcCache | undefined> {
   return await createDiscoveryRpcCache({
     signer: params.state.signer,
     readRpc: params.state.readTransports.readRpc,
-    includeFactoryQuoteProviders: params.includeFactoryQuoteProviders,
-    factoryQuoteProviders: params.includeFactoryQuoteProviders
-      ? params.state.factoryQuoteProviders
+    includeDirectDexQuoteProviders: params.includeDirectDexQuoteProviders,
+    directDexQuoteProviders: params.includeDirectDexQuoteProviders
+      ? params.state.directDexQuoteProviders
       : undefined,
-    oneInchQuoteCircuit: params.includeFactoryQuoteProviders
+    oneInchQuoteCircuit: params.includeDirectDexQuoteProviders
       ? params.state.oneInchQuoteCircuit
       : undefined,
-    providerCircuits: params.includeFactoryQuoteProviders
+    providerCircuits: params.includeDirectDexQuoteProviders
       ? params.state.providerCircuits
       : undefined,
   });
@@ -504,7 +504,7 @@ async function getTakeTargetRpcCache(params: {
     createCache: async () =>
       await createDiscoveryCycleRpcCache({
         state: params.state,
-        includeFactoryQuoteProviders: true,
+        includeDirectDexQuoteProviders: true,
       }),
   });
 }
@@ -676,14 +676,14 @@ function getDiscoveryRpcStatParts(cache?: DiscoveryRpcCache): string[] {
 
   const parts: string[] = [];
   for (const [key, value] of Object.entries(stats)) {
-    if (key === 'factory' || typeof value !== 'number' || value === 0) {
+    if (key === 'directDex' || typeof value !== 'number' || value === 0) {
       continue;
     }
     parts.push(`${key}=${value}`);
   }
-  for (const [key, value] of Object.entries(stats.factory ?? {})) {
+  for (const [key, value] of Object.entries(stats.directDex ?? {})) {
     if (typeof value === 'number' && value !== 0) {
-      parts.push(`factory.${key}=${value}`);
+      parts.push(`directDex.${key}=${value}`);
     }
   }
   return parts;
@@ -989,7 +989,7 @@ export function createDiscoveryRuntime(
     hotAuctionCandidateCache: createHotAuctionCandidateCacheForConfig(
       params.config
     ),
-    factoryQuoteProviders: createFactoryQuoteProviderRuntimeCache(),
+    directDexQuoteProviders: createDirectDexQuoteProviderRuntimeCache(),
     oneInchQuoteCircuit: { failures: 0 },
     providerCircuits: {},
     readTransports: createDiscoveryReadTransports(

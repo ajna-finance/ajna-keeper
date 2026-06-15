@@ -17,7 +17,7 @@ import {
   getProvider,
 } from './helpers/mock-taker-base';
 
-describe('Factory taker registration', () => {
+describe('Direct DEX taker registration', () => {
   it('rejects a zero Ajna pool factory at construction', async () => {
     const owner = Wallet.createRandom().connect(getProvider());
     await fundSigner(owner.address);

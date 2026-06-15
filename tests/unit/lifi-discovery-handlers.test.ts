@@ -8,10 +8,10 @@ import type { DiscoveryRpcCache } from '../../src/discovery/handlers';
 import { logger } from '../../src/logging';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../src/take/external-take/execution-plan';
 import * as lifiExecutionModule from '../../src/take/lifi/execution';
-import * as takeFactoryModule from '../../src/take/direct-dex';
+import * as directDexModule from '../../src/take/direct-dex';
 import { createDiscoveryTransports } from '../helpers/discovery';
 import {
-  createHybridGasFallbackFactoryQuote,
+  createHybridGasFallbackDirectDexQuote,
   createHybridLifiFallbackScenario,
   createNativeToQuoteGasConversionReject,
   getDiscoveredTakeSummary,
@@ -23,8 +23,8 @@ import {
 type LifiTakeParams = Parameters<
   typeof lifiExecutionModule.takeLiquidationLifi
 >[0];
-type FactoryTakeParams = Parameters<
-  typeof takeFactoryModule.takeLiquidationDirectDex
+type DirectDexTakeParams = Parameters<
+  typeof directDexModule.takeLiquidationDirectDex
 >[0];
 
 describe('LI.FI discovery handlers', () => {
@@ -32,7 +32,7 @@ describe('LI.FI discovery handlers', () => {
     sinon.restore();
   });
 
-  it('uses a gas-quote fallback factory candidate when selected LI.FI fails before submission', async () => {
+  it('uses a gas-quote direct DEX fallback candidate when selected LI.FI fails before submission', async () => {
     const warnStub = sinon.stub(logger, 'warn');
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const wethAddress = '0x4200000000000000000000000000000000000006';
@@ -46,7 +46,7 @@ describe('LI.FI discovery handlers', () => {
         return false;
       });
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation').resolves({
       isTakeable: true,
@@ -64,12 +64,12 @@ describe('LI.FI discovery handlers', () => {
         quoteAmountRaw: ethers.utils.parseUnits('130', 6),
       }),
     });
-    const factoryQuoteStub = sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+    const directDexQuoteStub = sinon
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .onFirstCall()
       .resolves(createNativeToQuoteGasConversionReject())
       .onSecondCall()
-      .resolves(createHybridGasFallbackFactoryQuote());
+      .resolves(createHybridGasFallbackDirectDexQuote());
 
     const pool = {
       name: 'Hybrid LI.FI Fallback Candidate Pool',
@@ -107,7 +107,7 @@ describe('LI.FI discovery handlers', () => {
           candidates: [
             {
               poolAddress: pool.poolAddress,
-              borrower: '0xBorrowerHybridLifiThenFactoryFallback',
+              borrower: '0xBorrowerHybridLifiThenDirectDexFallback',
               kickTime: Date.now(),
               debtRemaining: '1',
               collateralRemaining: '1',
@@ -142,15 +142,15 @@ describe('LI.FI discovery handlers', () => {
           chainId: 1,
           gasPrice: ethers.utils.parseUnits('1', 'gwei'),
           gasPriceFetchedAt: Date.now(),
-          factoryQuoteProviders:
-            takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+          directDexQuoteProviders:
+            directDexModule.createDirectDexQuoteProviderRuntimeCache(),
         },
       })
     );
 
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
     expect(takeLiquidationDirectDexStub.calledOnce).to.equal(true);
-    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(directDexQuoteStub.callCount).to.be.greaterThan(1);
     expect(
       warnStub
         .getCalls()
@@ -162,9 +162,9 @@ describe('LI.FI discovery handlers', () => {
     ).to.equal(true);
   });
 
-  it('executes factory-only hybrid gas quote fallback for LI.FI plus factory routes', async () => {
+  it('executes direct DEX-only hybrid gas quote fallback for LI.FI plus direct DEX routes', async () => {
     const {
-      factoryQuoteStub,
+      directDexQuoteStub,
       lifiQuoteStub,
       takeLiquidationLifiStub,
       takeLiquidationDirectDexStub,
@@ -173,7 +173,7 @@ describe('LI.FI discovery handlers', () => {
     expect(lifiQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.called).to.equal(false);
     expect(takeLiquidationDirectDexStub.calledOnce).to.equal(true);
-    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(directDexQuoteStub.callCount).to.be.greaterThan(1);
   });
 
   it('executes a default LI.FI discovered take path and records LI.FI route stats', async () => {
@@ -267,8 +267,10 @@ describe('LI.FI discovery handlers', () => {
     expect(stats.externalTakeByPath.calldata_aggregator?.dryRun).to.equal(1);
     expect(stats.externalTakeByPath.calldata_aggregator?.executed).to.equal(0);
     const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
-    expect(summaryLog).to.include('approvedRoutes=lifi:1');
-    expect(summaryLog).to.include('dryRunRoutes=lifi:1');
+    expect(summaryLog).to.include('approvedRoutes=calldata_aggregator:1');
+    expect(summaryLog).to.include('approvedCalldataAggregatorProviders=lifi:1');
+    expect(summaryLog).to.include('dryRunRoutes=calldata_aggregator:1');
+    expect(summaryLog).to.include('dryRunCalldataAggregatorProviders=lifi:1');
   });
 
   it('passes refreshed auction context into a reapproved direct LI.FI take', async () => {
@@ -740,7 +742,7 @@ describe('LI.FI discovery handlers', () => {
     const stats = await handleDiscoveredTakeTarget(scenario.params);
 
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
-    expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
+    expect(scenario.directDexQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);
     expect(scenario.takeLiquidationDirectDexStub.calledOnce).to.equal(true);
     expect(stats.hybridFallbackAttempts).to.equal(1);
@@ -774,7 +776,7 @@ describe('LI.FI discovery handlers', () => {
     const stats = await handleDiscoveredTakeTarget(scenario.params);
 
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
-    expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
+    expect(scenario.directDexQuoteStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.called).to.equal(false);
     expect(scenario.takeLiquidationDirectDexStub.calledOnce).to.equal(true);
     expect(
@@ -798,15 +800,15 @@ describe('LI.FI discovery handlers', () => {
     const refreshedAuctionPrice = ethers.utils.parseEther('99');
     const scenario = createHybridLifiFallbackScenario({
       lifiExpectedNetProfitRaw: ethers.utils.parseEther('19'),
-      factoryExpectedNetProfitRaw: ethers.utils.parseEther('29'),
+      directDexExpectedNetProfitRaw: ethers.utils.parseEther('29'),
       refreshedCollateral,
       refreshedAuctionPrice,
     });
     scenario.takeLiquidationDirectDexStub.callsFake(
-      async (params: FactoryTakeParams) => {
-        params.config.onFactoryExecutionFailure?.({
+      async (params: DirectDexTakeParams) => {
+        params.config.onDirectDexExecutionFailure?.({
           preBroadcast: true,
-          error: 'factory gas estimate failed',
+          error: 'direct DEX gas estimate failed',
         });
         return false;
       }
@@ -817,7 +819,7 @@ describe('LI.FI discovery handlers', () => {
 
     const stats = await handleDiscoveredTakeTarget(scenario.params);
 
-    expect(scenario.factoryQuoteStub.calledOnce).to.equal(true);
+    expect(scenario.directDexQuoteStub.calledOnce).to.equal(true);
     expect(scenario.lifiQuoteStub.calledOnce).to.equal(true);
     expect(scenario.takeLiquidationDirectDexStub.calledOnce).to.equal(true);
     expect(takeLiquidationLifiStub.calledOnce).to.equal(true);

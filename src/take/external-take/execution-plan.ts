@@ -6,7 +6,7 @@ import {
   ExternalTakeExecutionPlan,
   ExternalTakeQuoteEvaluation,
 } from '../types';
-import { bindExternalTakeRouteForCandidate } from './quote-approval';
+import { bindExternalTakeRouteForCandidate } from './quote-approval-rules';
 
 export function createExternalTakeExecutionCandidate<TApprovalContext>(params: {
   evaluation: BoundExternalTakeRouteEvaluation;

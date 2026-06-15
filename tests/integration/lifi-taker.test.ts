@@ -458,7 +458,7 @@ describe('LifiKeeperTaker', () => {
     });
   });
 
-  it('rejects valid-pool callbacks outside an active factory take', async () => {
+  it('rejects valid-pool callbacks outside an active direct DEX take', async () => {
     const result = await deployFixture();
     const amountIn = utils.parseEther('1');
     const outputAmount = utils.parseEther('1.25');

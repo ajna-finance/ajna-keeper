@@ -11,6 +11,7 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../../take/types';
+import type { ExternalTakeRouteIdentity } from '../../take/external-take/route-binding';
 import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './approval';
 import { DiscoveryExecutionConfig, DiscoveryRpcCache } from '../types';
 
@@ -26,6 +27,16 @@ export type ExternalTakeQuoteResult = {
   retryable?: boolean;
   errorCode?: number | string;
   error?: string;
+};
+
+export type ExternalTakeRouteQuoteResult = {
+  route: ExternalTakeRouteIdentity;
+  result: ExternalTakeQuoteResult;
+};
+
+export type ExternalTakeRouteExecutionFailureResult = {
+  route: ExternalTakeRouteIdentity;
+  result: ExternalTakeExecutionFailureResult;
 };
 
 /**
@@ -112,22 +123,13 @@ export type DiscoveryExternalExecutionConfig = Pick<
   | 'uniswapV3RouterOverrides'
 > & {
   takeWriteTransport?: TakeWriteTransport;
-  runtimeCache?: DiscoveryRpcCache['factoryQuoteProviders'];
+  runtimeCache?: DiscoveryRpcCache['directDexQuoteProviders'];
   oneInchRequestTimeoutMs?: number;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
-  onOneInchAggregatorQuoteResult?: (result: ExternalTakeQuoteResult) => void;
-  onOneInchAggregatorExecutionFailure?: (
-    result: ExternalTakeExecutionFailureResult
-  ) => void;
-  onFactoryExecutionFailure?: (
-    result: ExternalTakeExecutionFailureResult
-  ) => void;
-  onLifiQuoteResult?: (result: ExternalTakeQuoteResult) => void;
-  onLifiExecutionFailure?: (result: ExternalTakeExecutionFailureResult) => void;
-  onSushiAggregatorQuoteResult?: (result: ExternalTakeQuoteResult) => void;
-  onSushiAggregatorExecutionFailure?: (
-    result: ExternalTakeExecutionFailureResult
+  onExternalTakeQuoteResult?: (event: ExternalTakeRouteQuoteResult) => void;
+  onExternalTakeExecutionFailure?: (
+    event: ExternalTakeRouteExecutionFailureResult
   ) => void;
 };
 

@@ -9,7 +9,7 @@ import {
   formatLiquiditySource,
   getEffectiveV3FeeTiers,
   hasConfiguredGasQuoteLiquiditySource,
-  resolveUniswapV3FactoryQuoteConfig,
+  resolveUniswapV3DirectDexQuoteConfig,
   resolveConfiguredGasQuoteLiquiditySource,
   resolveConfiguredWrappedNativeAddress,
 } from '../config';
@@ -27,10 +27,10 @@ import {
   DiscoveryRpcCache,
 } from './types';
 import {
-  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+  DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
   getCurveQuoteProvider,
   getUniswapV3QuoteProvider,
-} from '../take/direct-dex/shared';
+} from '../take/direct-dex/route-selection';
 import { GasPolicyRejectCode, GasQuoteAttempt } from '../take/types';
 import {
   DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS,
@@ -257,7 +257,7 @@ function getGasQuoteFeeTiers(
   });
 }
 
-interface FactoryV3GasQuoteProvider {
+interface DirectDexV3GasQuoteProvider {
   poolExists(
     tokenA: string,
     tokenB: string,
@@ -277,8 +277,8 @@ interface GasQuoteSourceResult {
   feeTiers?: number[];
 }
 
-async function quoteFactoryV3GasConversion(params: {
-  quoteProvider: FactoryV3GasQuoteProvider;
+async function quoteDirectDexV3GasConversion(params: {
+  quoteProvider: DirectDexV3GasQuoteProvider;
   amountIn: BigNumber;
   tokenIn: string;
   tokenOut: string;
@@ -304,8 +304,8 @@ async function quoteFactoryV3GasConversion(params: {
           params.tokenOut,
           feeTier
         ),
-        DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-        'factory gas quote pool existence check'
+        DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
+        'direct DEX gas quote pool existence check'
       );
       if (!poolExists) {
         continue;
@@ -318,8 +318,8 @@ async function quoteFactoryV3GasConversion(params: {
           params.tokenOut,
           feeTier
         ),
-        DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-        'factory gas quote'
+        DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
+        'direct DEX gas quote'
       );
       if (quoteResult.success && quoteResult.dstAmount) {
         const quote = BigNumber.from(quoteResult.dstAmount);
@@ -338,7 +338,7 @@ async function quoteFactoryV3GasConversion(params: {
     } catch (error) {
       sawQuoteFailure = true;
       logger.debug(
-        `Factory gas quote conversion skipped fee=${feeTier} for ${params.tokenIn}/${params.tokenOut}: ${getErrorMessage(error)}`
+        `Direct DEX gas quote conversion skipped fee=${feeTier} for ${params.tokenIn}/${params.tokenOut}: ${getErrorMessage(error)}`
       );
     }
   }
@@ -349,9 +349,9 @@ async function quoteFactoryV3GasConversion(params: {
     feeTiers,
     reason: sawPool
       ? sawQuoteFailure
-        ? 'factory pool exists but returned no usable gas quote'
-        : 'factory pool exists but no usable gas quote was returned'
-      : 'no factory pool at configured fee tiers',
+        ? 'direct DEX pool exists but returned no usable gas quote'
+        : 'direct DEX pool exists but no usable gas quote was returned'
+      : 'no direct DEX pool at configured fee tiers',
   };
 }
 
@@ -458,7 +458,7 @@ function getGasQuoteSourceConfigIdentity(params: {
         };
       }
       if (source === LiquiditySource.UNISWAPV3) {
-        const quoteConfig = resolveUniswapV3FactoryQuoteConfig(
+        const quoteConfig = resolveUniswapV3DirectDexQuoteConfig(
           params.config.uniswapV3RouterOverrides
         );
         return {
@@ -676,7 +676,7 @@ async function quoteTokensByLiquiditySource(params: {
   }
 
   if (params.liquiditySource === LiquiditySource.UNISWAPV3) {
-    const quoteConfig = resolveUniswapV3FactoryQuoteConfig(
+    const quoteConfig = resolveUniswapV3DirectDexQuoteConfig(
       params.config.uniswapV3RouterOverrides
     );
     if (!quoteConfig) {
@@ -686,12 +686,12 @@ async function quoteTokensByLiquiditySource(params: {
     const quoteProvider = getUniswapV3QuoteProvider({
       signer: params.signer,
       quoteConfig,
-      runtimeCache: params.rpcCache?.factoryQuoteProviders,
+      runtimeCache: params.rpcCache?.directDexQuoteProviders,
     });
     if (!quoteProvider) {
       return { reason: 'Uniswap V3 quote provider unavailable' };
     }
-    return await quoteFactoryV3GasConversion({
+    return await quoteDirectDexV3GasConversion({
       quoteProvider,
       amountIn: params.amountIn,
       tokenIn: params.tokenIn,
@@ -712,14 +712,14 @@ async function quoteTokensByLiquiditySource(params: {
       signer: params.signer,
       routerConfig: curveConfig,
       tokenAddresses: params.config.tokenAddresses,
-      runtimeCache: params.rpcCache?.factoryQuoteProviders,
+      runtimeCache: params.rpcCache?.directDexQuoteProviders,
     });
     if (!quoteProvider) {
       return { reason: 'Curve quote provider unavailable' };
     }
     const quoteResult = await withTimeout(
       quoteProvider.getQuote(params.amountIn, params.tokenIn, params.tokenOut),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
       'Curve gas quote'
     );
     return quoteResult.success && quoteResult.dstAmount

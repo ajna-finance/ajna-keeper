@@ -129,7 +129,7 @@ describe('LI.FI fork execution canary', () => {
     ).to.throw('refusing LI.FI policy env overrides');
   });
 
-  it('requires production mode, configured factory, and configured LI.FI taker', () => {
+  it('requires production mode, configured TakerRouter, and configured LI.FI taker', () => {
     expect(() =>
       resolveLifiForkCanaryConfig({
         keeperConfig: keeperConfigWithLifi({

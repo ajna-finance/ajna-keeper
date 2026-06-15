@@ -2,7 +2,6 @@ import { expect } from 'chai';
 import {
   DIRECT_DEX_DYNAMIC_SOURCES,
   LiquiditySource,
-  getExternalTakePathDefaultSource,
   getExternalTakePathDescriptor,
   isAggregatorExternalTakePath,
   resolveExternalTakePolicy,
@@ -34,11 +33,13 @@ describe('LI.FI route policy', () => {
     expect(DIRECT_DEX_DYNAMIC_SOURCES).to.not.include(LiquiditySource.LIFI);
   });
 
-  it('describes aggregator paths and their default sources centrally', () => {
-    expect(getExternalTakePathDefaultSource('calldata_aggregator')).to.equal(
-      LiquiditySource.LIFI
+  it('describes aggregator paths without assigning path-level default sources', () => {
+    expect(getExternalTakePathDescriptor('calldata_aggregator')).to.not.have.property(
+      'defaultSource'
     );
-    expect(getExternalTakePathDefaultSource('direct_dex')).to.equal(undefined);
+    expect(getExternalTakePathDescriptor('direct_dex')).to.not.have.property(
+      'defaultSource'
+    );
     expect(isAggregatorExternalTakePath('calldata_aggregator')).to.equal(true);
     expect(isAggregatorExternalTakePath('direct_dex')).to.equal(false);
   });

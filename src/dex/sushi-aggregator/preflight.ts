@@ -12,7 +12,7 @@ import { getErrorMessage } from '../../utils';
 /**
  * Sushi aggregator route-deployment preflight (Packet 3B). Fail-closed
  * before live use:
- * - the configured factory must be compiled with the appended
+ * - the configured TakerRouter must be compiled with the appended
  *   SUSHI_AGGREGATOR source id (old factories are rejected: their
  *   getConfiguredTakers() enumeration stops at the old last source)
  * - the deployed taker's on-chain call-target / approval-spender / selector
@@ -50,7 +50,7 @@ async function readWithRetries<T>(params: {
   );
 }
 
-export async function validateSushiAggregatorFactorySupport(params: {
+export async function validateSushiAggregatorTakerRouterSupport(params: {
   config: KeeperConfig;
   provider: providers.Provider;
   errors: string[];
@@ -69,15 +69,15 @@ export async function validateSushiAggregatorFactorySupport(params: {
       params.provider
     );
     const configured = (await readWithRetries({
-      label: 'Sushi aggregator factory getConfiguredTakers',
+      label: 'Sushi aggregator TakerRouter getConfiguredTakers',
       operation: () => factory.getConfiguredTakers(),
     })) as [number[], string[]];
     const lastSource = configured[0].length;
     if (lastSource < SUSHI_AGGREGATOR_SOURCE_ID) {
       params.errors.push(
-        `Sushi aggregator preflight: factory ${factoryAddress} was compiled ` +
+        `Sushi aggregator preflight: TakerRouter ${factoryAddress} was compiled ` +
           `before source id ${SUSHI_AGGREGATOR_SOURCE_ID} (last supported ` +
-          `source ${lastSource}); deploy a factory compiled with the appended ` +
+          `source ${lastSource}); deploy a TakerRouter compiled with the appended ` +
           'SushiAggregator enum before enabling provider sushi_aggregator'
       );
     }
@@ -93,7 +93,7 @@ export async function validateSushiAggregatorAllowlistPreflight(params: {
   takerAddress: string | undefined;
   errors: string[];
 }): Promise<void> {
-  await validateSushiAggregatorFactorySupport({
+  await validateSushiAggregatorTakerRouterSupport({
     config: params.config,
     provider: params.provider,
     errors: params.errors,

@@ -1,22 +1,17 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
-import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import { LiquiditySource } from '../../config';
 import {
   DEFAULT_SUSHI_AGGREGATOR_MAX_QUOTE_AGE_MS,
 } from '../../config/sushi-aggregator-policy';
-import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
 import { isNonceConsumedTransactionError } from '../../nonce';
 import { getErrorMessage, weiToDecimaled } from '../../utils';
-import { approveCalldataAggregatorQuoteForExecution } from '../aggregator-calldata/quote-approval';
 import {
-  AggregatorTakerFactory,
-  encodeAggregatorSwapDetails,
-  getAggregatorFreshQuoteFloorError,
-  getAggregatorQuoteAgeError,
-  getAggregatorQuoteContextMismatch,
-  submitCalldataAggregatorTake,
+  CalldataAggregatorPreBroadcastRejection,
+  prepareCalldataAggregatorExecution,
+  recordCalldataAggregatorPreBroadcastRejection,
+  submitPreparedCalldataAggregatorExecution,
 } from '../aggregator-calldata/execution';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../external-take/execution-plan';
@@ -29,25 +24,9 @@ import {
   requireSushiAggregatorConfig,
   resolveSushiAggregatorChainId,
 } from './quote-service';
-import {
-  ApprovedCalldataAggregatorQuoteEvaluation,
-  TakeActionConfig,
-  TakeLiquidationPlan,
-} from '../types';
-import {
-  TakeWriteTransport,
-  resolveTakeWriteTransport,
-} from '../write-transport';
-import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
+import { TakeActionConfig, TakeLiquidationPlan } from '../types';
 
 const SUSHI_LABEL = 'Sushi Aggregator';
-
-function recordSushiPreBroadcastFailure(
-  config: SushiAggregatorExecutionConfig,
-  error: string
-): void {
-  config.onSushiAggregatorExecutionFailure?.({ preBroadcast: true, error });
-}
 
 function getSushiMaxQuoteAgeMs(
   config: SushiAggregatorExecutionConfig
@@ -58,46 +37,49 @@ function getSushiMaxQuoteAgeMs(
   );
 }
 
-type SushiPreBroadcastRejection = {
-  kind: 'rejected';
-  reason: string;
-  logError?: boolean;
-  quoteResult?: {
-    success: boolean;
-    retryable?: boolean;
-    errorCode?: number | string;
-    error?: string;
-  };
-};
-
-type PreparedSushiExecution =
-  | {
-      kind: 'dry_run';
-      approvedQuoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
-    }
-  | {
-      kind: 'ready';
-      approvedQuoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
-      freshQuote: ApprovedCalldataAggregatorQuote;
-      swapDetails: string;
-      executionCollateralWad: BigNumber;
-      takeWriteTransport: TakeWriteTransport;
-      factory: AggregatorTakerFactory;
-      assertFreshQuoteStillCurrent: () => void;
-    }
-  | SushiPreBroadcastRejection;
-
 function recordPreparedSushiRejection(
   config: SushiAggregatorExecutionConfig,
-  rejection: SushiPreBroadcastRejection
+  rejection: CalldataAggregatorPreBroadcastRejection
 ): void {
-  if (rejection.logError) {
-    logger.error(rejection.reason);
+  recordCalldataAggregatorPreBroadcastRejection({
+    config,
+    rejection,
+    onQuoteResult: (config, result) =>
+      config.onSushiAggregatorQuoteResult?.(result),
+    onExecutionFailure: (config, result) =>
+      config.onSushiAggregatorExecutionFailure?.(result),
+  });
+}
+
+async function requestFreshSushiAggregatorExecutionQuote(params: {
+  pool: FungiblePool;
+  config: SushiAggregatorExecutionConfig;
+  takerAddress: string;
+  chainId: number;
+  collateralInTokenDecimals: BigNumber;
+}): Promise<ApprovedCalldataAggregatorQuote> {
+  try {
+    const sushiConfig = requireSushiAggregatorConfig(
+      params.config.sushiAggregator
+    );
+    return await requestValidatedSushiAggregatorQuote({
+      pool: params.pool,
+      sushiConfig,
+      takerAddress: params.takerAddress,
+      chainId: params.chainId,
+      collateralInTokenDecimals: params.collateralInTokenDecimals,
+      signal: params.config.sushiAggregatorRequestAbortSignal,
+    });
+  } catch (error) {
+    const failure = getSushiAggregatorQuoteFailureMetadata(error);
+    params.config.onSushiAggregatorQuoteResult?.({
+      success: false,
+      retryable: failure.retryable,
+      errorCode: failure.code,
+      error: getErrorMessage(error),
+    });
+    throw error;
   }
-  if (rejection.quoteResult) {
-    config.onSushiAggregatorQuoteResult?.(rejection.quoteResult);
-  }
-  recordSushiPreBroadcastFailure(config, rejection.reason);
 }
 
 async function prepareSushiAggregatorExecution(params: {
@@ -106,153 +88,52 @@ async function prepareSushiAggregatorExecution(params: {
   poolConfig: TakeActionConfig;
   liquidation: TakeLiquidationPlan;
   config: SushiAggregatorExecutionConfig;
-}): Promise<PreparedSushiExecution> {
+}) {
   const { pool, signer, poolConfig, liquidation, config } = params;
-  // Sushi calldata cannot be re-sized on-chain: quote and take exactly the
-  // debt-clamped size so the strict on-chain balance check passes.
-  const executionCollateralWad = getDebtConstrainedTakeCollateralWad({
-    collateral: liquidation.collateral,
-    auctionPrice: liquidation.auctionPrice,
-    debtToCover: liquidation.debtToCover,
-  });
-  const quoteEvaluation =
-    getExternalTakeExecutionPlanPrimaryEvaluation(
-      liquidation.externalTakeExecutionPlan
-    ) ??
-    (await getSushiAggregatorPathQuoteEvaluation(
-      pool,
-      Number(weiToDecimaled(liquidation.auctionPrice)),
-      executionCollateralWad,
-      poolConfig,
-      config,
-      signer,
-      liquidation.auctionPrice
-    ));
-  const approval = approveCalldataAggregatorQuoteForExecution({
-    quoteEvaluation,
-    providerId: 'sushi_aggregator',
-    poolName: pool.name,
-    borrower: liquidation.borrower,
-  });
-  if (!approval.approved) {
-    return { kind: 'rejected', reason: approval.reason, logError: true };
-  }
-  const contextMismatch = getAggregatorQuoteContextMismatch({
-    quoteEvaluation: approval.quoteEvaluation,
-    liquidation,
-    executionCollateralWad,
-    label: SUSHI_LABEL,
-  });
-  if (contextMismatch) {
-    return { kind: 'rejected', reason: contextMismatch };
-  }
-  const approvedQuoteEvaluation = approval.quoteEvaluation;
-  if (config.dryRun) {
-    return { kind: 'dry_run', approvedQuoteEvaluation };
-  }
-
-  if (!config.keeperTakerRouter) {
-    throw new Error('Sushi aggregator execution requires keeperTakerRouter');
-  }
-  const sushiConfig = requireSushiAggregatorConfig(config.sushiAggregator);
-  const sushiTaker = config.sushiAggregatorTaker;
-  if (!sushiTaker) {
-    throw new Error('Sushi aggregator execution requires sushiAggregatorTaker');
-  }
-  const chainId = await resolveSushiAggregatorChainId(config, signer);
-  const collateralDecimals = await getSushiAggregatorTokenDecimals({
+  return prepareCalldataAggregatorExecution({
+    pool,
     signer,
-    tokenAddress: pool.collateralAddress,
-    chainId,
-    cache: config.tokenDecimalsCache,
-  });
-  const collateralInTokenDecimals = convertWadToTokenDecimals(
-    executionCollateralWad,
-    collateralDecimals
-  );
-  if (collateralInTokenDecimals.isZero()) {
-    return {
-      kind: 'rejected',
-      reason: 'Sushi aggregator collateral rounds to zero in token decimals',
-    };
-  }
-
-  let freshQuote: ApprovedCalldataAggregatorQuote;
-  try {
-    freshQuote = await requestValidatedSushiAggregatorQuote({
-      pool,
-      sushiConfig,
-      takerAddress: sushiTaker,
+    poolConfig,
+    liquidation,
+    config,
+    providerId: 'sushi_aggregator',
+    label: SUSHI_LABEL,
+    missingRouterReason: 'Sushi aggregator execution requires keeperTakerRouter',
+    missingTakerReason: 'Sushi aggregator execution requires sushiAggregatorTaker',
+    collateralRoundsToZeroReason:
+      'Sushi aggregator collateral rounds to zero in token decimals',
+    getQuoteEvaluation: async ({ executionCollateralWad }) =>
+      getExternalTakeExecutionPlanPrimaryEvaluation(
+        liquidation.externalTakeExecutionPlan
+      ) ??
+      (await getSushiAggregatorPathQuoteEvaluation(
+        pool,
+        Number(weiToDecimaled(liquidation.auctionPrice)),
+        executionCollateralWad,
+        poolConfig,
+        config,
+        signer,
+        liquidation.auctionPrice
+      )),
+    getTakerAddress: (config) => config.sushiAggregatorTaker,
+    resolveChainId: resolveSushiAggregatorChainId,
+    getCollateralTokenDecimals: ({
+      signer,
+      tokenAddress,
       chainId,
-      collateralInTokenDecimals,
-      signal: config.sushiAggregatorRequestAbortSignal,
-    });
-  } catch (error) {
-    const failure = getSushiAggregatorQuoteFailureMetadata(error);
-    config.onSushiAggregatorQuoteResult?.({
-      success: false,
-      retryable: failure.retryable,
-      errorCode: failure.code,
-      error: getErrorMessage(error),
-    });
-    throw error;
-  }
-  const floorError = getAggregatorFreshQuoteFloorError({
-    freshQuote,
-    approvedMinOutRaw: approvedQuoteEvaluation.approvedMinOutRaw,
-    label: SUSHI_LABEL,
+      cache,
+    }) =>
+      getSushiAggregatorTokenDecimals({
+        signer,
+        tokenAddress,
+        chainId,
+        cache,
+      }),
+    requestFreshQuote: requestFreshSushiAggregatorExecutionQuote,
+    getMaxQuoteAgeMs: getSushiMaxQuoteAgeMs,
+    onQuoteResult: (config, result) =>
+      config.onSushiAggregatorQuoteResult?.(result),
   });
-  if (floorError) {
-    return {
-      kind: 'rejected',
-      reason: floorError,
-      quoteResult: { success: false, retryable: false, error: floorError },
-    };
-  }
-  const ageError = getAggregatorQuoteAgeError({
-    quote: freshQuote,
-    maxQuoteAgeMs: getSushiMaxQuoteAgeMs(config),
-    label: SUSHI_LABEL,
-  });
-  if (ageError) {
-    return {
-      kind: 'rejected',
-      reason: ageError,
-      quoteResult: { success: false, retryable: true, error: ageError },
-    };
-  }
-
-  return {
-    kind: 'ready',
-    approvedQuoteEvaluation,
-    freshQuote,
-    swapDetails: encodeAggregatorSwapDetails({
-      quote: freshQuote,
-      amountOutMinimum: approvedQuoteEvaluation.approvedMinOutRaw,
-    }),
-    executionCollateralWad,
-    takeWriteTransport: resolveTakeWriteTransport(signer, config),
-    factory: TakerRouter__factory.connect(
-      config.keeperTakerRouter,
-      signer
-    ),
-    assertFreshQuoteStillCurrent: () => {
-      const error = getAggregatorQuoteAgeError({
-        quote: freshQuote,
-        maxQuoteAgeMs: getSushiMaxQuoteAgeMs(config),
-        label: SUSHI_LABEL,
-      });
-      if (error) {
-        // Local nonce-queue latency, not a provider health signal.
-        config.onSushiAggregatorQuoteResult?.({
-          success: false,
-          retryable: false,
-          error,
-        });
-        throw new Error(error);
-      }
-    },
-  };
 }
 
 export async function takeLiquidationSushiAggregator(params: {
@@ -269,6 +150,7 @@ export async function takeLiquidationSushiAggregator(params: {
   );
   const usesSushiExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.SUSHI_AGGREGATOR ||
+    suppliedQuoteEvaluation?.providerId === 'sushi_aggregator' ||
     suppliedQuoteEvaluation?.calldataQuote?.providerId === 'sushi_aggregator';
   if (!usesSushiExecutionPath) {
     logger.error(
@@ -297,22 +179,13 @@ export async function takeLiquidationSushiAggregator(params: {
       return true;
     }
 
-    await submitCalldataAggregatorTake({
-      factory: prepared.factory,
-      takeWriteTransport: prepared.takeWriteTransport,
-      poolName: pool.name,
-      poolAddress: pool.poolAddress,
-      borrower,
-      auctionPrice: liquidation.auctionPrice,
-      executionCollateralWad: prepared.executionCollateralWad,
+    await submitPreparedCalldataAggregatorExecution({
+      pool,
+      liquidation,
+      prepared,
       liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
       providerId: 'sushi_aggregator',
       label: SUSHI_LABEL,
-      transactionTarget: prepared.freshQuote.transactionTarget,
-      swapDetails: prepared.swapDetails,
-      routeProfitability: prepared.approvedQuoteEvaluation.routeProfitability,
-      approvedMinOutRaw: prepared.approvedQuoteEvaluation.approvedMinOutRaw,
-      assertFreshQuoteStillCurrent: prepared.assertFreshQuoteStillCurrent,
       onQuoteConsumed: () =>
         config.onSushiAggregatorQuoteResult?.({ success: true }),
       onSubmissionAccepted: () => {

@@ -32,7 +32,7 @@ const SCAN_FILES = [
 const BANNED_IMPORT_NAMES = [
   'resolveExternalTakePaths',
   'resolveDefaultFactoryLiquiditySource',
-  'resolveFactoryRouteSelectionSources',
+  'resolveDirectDexRouteSelectionSources',
 ];
 
 // Raw take-policy fields whose interpretation belongs to the resolver.

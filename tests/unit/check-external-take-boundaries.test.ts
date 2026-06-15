@@ -47,7 +47,7 @@ describe('external-take boundary checker', () => {
   it('rejects retired factory naming in production files', () => {
     const violations = evaluateExternalTakeBoundaries([
       {
-        file: 'scripts/run-fixture-keeper-harness.ts',
+        file: 'src/take/direct-dex/index.ts',
         content: `
           const mode = 'factory_first';
           const source = take.defaultFactoryLiquiditySource;
@@ -55,16 +55,93 @@ describe('external-take boundary checker', () => {
           const address = summary.keeperTakerFactory;
           const fn = takeLiquidationFactory;
           type Input = FactoryPathQuoteInput;
+          type Candidate = FactoryRouteCandidate;
+          const adapter = createFactoryTakeAdapter();
+          logger.info('Direct DEX: Executing route');
+          appendNonZeroGroup(fields, 'approvedFactorySources', []);
         `,
       },
     ]);
     expect(violations.map((violation) => violation.rule)).to.deep.equal([
-      'retired-factory-first',
+      'retired-direct DEX-first',
       'retired-default-factory-source',
       'retired-takers-factory',
       'retired-keeper-taker-factory',
       'retired-factory-symbol',
       'retired-factory-symbol',
+      'retired-factory-symbol',
+      'retired-factory-symbol',
+      'retired-direct-dex-factory-log',
+      'retired-factory-symbol',
+    ]);
+  });
+
+  it('rejects retired direct DEX operator labels in scripts and examples', () => {
+    const violations = evaluateExternalTakeBoundaries([
+      {
+        file: 'scripts/run-no-spend-validation.mjs',
+        content: `
+          requireInvariant(ok, 'external-take factory/taker deployed or reused');
+          requireInvariant(ok, 'dry-run routeArtifact selected direct DEX path');
+          requireInvariant(ok, 'execution records no direct DEX pre-broadcast or post-submission failures');
+        `,
+      },
+      {
+        file: 'examples/example-base-rollout-config.ts',
+        content:
+          '// SwapRouter02 for direct DEX external takes; allowedExternalTakePaths: [\'oneinch\', \'direct_dex\']',
+      },
+    ]);
+    expect(violations.map((violation) => violation.rule)).to.deep.equal([
+      'retired-direct-dex-operator-label',
+      'retired-direct-dex-operator-label',
+      'retired-direct-dex-operator-label',
+      'retired-path-oneinch',
+      'retired-direct-dex-operator-label',
+    ]);
+  });
+
+  it('rejects retired direct DEX symbols in selected test helpers', () => {
+    const violations = evaluateExternalTakeBoundaries([
+      {
+        file: 'tests/integration/helpers/direct-dex-route-harness.ts',
+        content: `
+          interface FactoryRouteExecutionFixture {}
+          export function buildFactoryTakePoolConfig() {}
+        `,
+      },
+    ]);
+    expect(violations.map((violation) => violation.rule)).to.deep.equal([
+      'retired-factory-symbol',
+      'retired-factory-symbol',
+    ]);
+  });
+
+  it('allows generated contract factories and pool factory address fields', () => {
+    const violations = evaluateExternalTakeBoundaries([
+      {
+        file: 'src/take/direct-dex/uniswap.ts',
+        content: `
+          const router = TakerRouter__factory.connect(address, signer);
+          const poolFactoryAddress = config.poolFactoryAddress;
+        `,
+      },
+    ]);
+    expect(violations).to.deep.equal([]);
+  });
+
+  it('rejects retired path aliases in root operator docs', () => {
+    const violations = evaluateExternalTakeBoundaries([
+      {
+        file: 'README.md',
+        content:
+          "Use allowedExternalTakePaths: ['oneinch']. Use externalTakePath: 'factory' with direct DEX-first fallback.",
+      },
+    ]);
+    expect(violations.map((violation) => violation.rule)).to.deep.equal([
+      'retired-path-oneinch',
+      'retired-path-factory',
+      'retired-direct DEX-first',
     ]);
   });
 
@@ -106,7 +183,7 @@ describe('external-take boundary checker', () => {
     ]);
   });
 
-  it('allows migration docs, tests, and config validation error strings', () => {
+  it('allows migration docs and config validation error strings', () => {
     const violations = evaluateExternalTakeBoundaries([
       {
         file: 'docs/calldata-aggregator-packet-5-oneinch-provider.md',
@@ -114,13 +191,9 @@ describe('external-take boundary checker', () => {
           "allowedExternalTakePaths: ['oneinch']; direct_dex_first; takers.router",
       },
       {
-        file: 'tests/unit/migration-errors.test.ts',
-        content: "expect(error).to.contain('takers.router is retired')",
-      },
-      {
         file: 'src/config/validation.ts',
         content:
-          "throw new Error('takers.router is retired; use takers.router')",
+          "throw new Error('takers.factory is retired; use takers.router')",
       },
     ]);
     expect(violations).to.deep.equal([]);

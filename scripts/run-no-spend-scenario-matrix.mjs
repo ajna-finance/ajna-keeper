@@ -140,7 +140,7 @@ async function main() {
       },
     },
     {
-      name: 'fallback-regression-factory-first',
+      name: 'fallback-regression-direct-dex-first',
       expect: 'success',
       hybridGasQuoteFallback: 'direct_dex_first',
       env: {
@@ -176,7 +176,7 @@ async function main() {
       },
     },
     {
-      name: 'manual-factory',
+      name: 'manual-direct-dex',
       mode: 'manual',
       expect: 'success',
       env: {

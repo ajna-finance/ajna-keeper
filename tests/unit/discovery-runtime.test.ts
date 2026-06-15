@@ -57,8 +57,6 @@ function makeDiscoveredTakeTargetStats(
     candidateCount: 0,
     approvedTakeDecisions: 0,
     approvedArbTakeDecisions: 0,
-    approvedOneInchTakeDecisions: 0,
-    approvedFactoryTakeDecisions: 0,
     approvedUniswapV3TakeDecisions: 0,
     approvedCurveTakeDecisions: 0,
     evaluationSkips: 0,
@@ -69,22 +67,14 @@ function makeDiscoveredTakeTargetStats(
     arbProfitUnavailableRejects: 0,
     executedExternalTakes: 0,
     executedArbTakes: 0,
-    executedOneInchTakes: 0,
-    executedFactoryTakes: 0,
     executedUniswapV3Takes: 0,
     executedCurveTakes: 0,
     dryRunExternalTakes: 0,
     dryRunArbTakes: 0,
-    dryRunOneInchTakes: 0,
-    dryRunFactoryTakes: 0,
     dryRunUniswapV3Takes: 0,
     dryRunCurveTakes: 0,
-    oneInchSwapDataFailures: 0,
-    oneInchPreBroadcastFailures: 0,
-    oneInchPostSubmissionFailures: 0,
-    factoryPreBroadcastFailures: 0,
-    factoryPostSubmissionFailures: 0,
     externalTakeByPath: {},
+    externalTakeByProvider: {},
     hybridFallbackAttempts: 0,
     hybridFallbackSuccesses: 0,
     hybridGasQuoteFallbackAttempts: 0,
@@ -674,8 +664,8 @@ describe('Run Loop Discovery Integration', () => {
     expect(
       observedRpcCaches[1].providerCircuits.lifi.route_quote.failures
     ).to.equal(3);
-    expect(observedRpcCaches[1].factoryQuoteProviders).to.equal(
-      observedRpcCaches[0].factoryQuoteProviders
+    expect(observedRpcCaches[1].directDexQuoteProviders).to.equal(
+      observedRpcCaches[0].directDexQuoteProviders
     );
   });
 

@@ -36,7 +36,6 @@ export {
   formatSupportedExternalTakeLiquiditySources,
   formatSupportedExternalTakePaths,
   getExternalTakeLiquiditySourceDescriptor,
-  getExternalTakePathDefaultSource,
   getExternalTakePathDescriptor,
   getExternalTakePathDescriptors,
   getExternalTakeTakerContractKeyForSource,

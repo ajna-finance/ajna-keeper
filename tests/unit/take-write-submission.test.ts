@@ -6,11 +6,11 @@ import * as erc20 from '../../src/erc20';
 import * as oneInch from '../../src/dex/one-inch';
 import { NonceConsumedTransactionError, NonceTracker } from '../../src/nonce';
 import { takeLiquidationDirectDex } from '../../src/take/direct-dex';
-import { executeUniswapV3FactoryTake } from '../../src/take/direct-dex/uniswap';
-import { executeCurveFactoryTake } from '../../src/take/direct-dex/curve';
+import { executeUniswapV3DirectDexTake } from '../../src/take/direct-dex/uniswap';
+import { executeCurveDirectDexTake } from '../../src/take/direct-dex/curve';
 import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
 import { CurvePoolType } from '../../src/config';
-import * as shared from '../../src/take/direct-dex/shared';
+import * as shared from '../../src/take/direct-dex/route-selection';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
@@ -29,9 +29,9 @@ describe('take write submission', () => {
     sinon.restore();
   });
 
-  async function runUniswapFactorySubmissionBoundaryScenario(params: {
+  async function runUniswapDirectDexSubmissionBoundaryScenario(params: {
     submitTransaction: sinon.SinonStub;
-    onFactoryExecutionFailure: sinon.SinonSpy;
+    onDirectDexExecutionFailure: sinon.SinonSpy;
   }) {
     const readSigner = {
       provider: {
@@ -63,7 +63,7 @@ describe('take write submission', () => {
       },
     } as any);
     sinon
-      .stub(shared, 'computeFactoryAmountOutMinimum')
+      .stub(shared, 'computeDirectDexAmountOutMinimum')
       .resolves(BigNumber.from(10));
     sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (_, txFn) => {
       return await txFn(3);
@@ -71,14 +71,19 @@ describe('take write submission', () => {
 
     let thrown: unknown;
     try {
-      await executeUniswapV3FactoryTake({
+      await executeUniswapV3DirectDexTake({
         pool: {
-          name: 'Factory Boundary Pool',
+          name: 'Direct DEX Boundary Pool',
           poolAddress: '0x0000000000000000000000000000000000000011',
           quoteAddress: '0x0000000000000000000000000000000000000012',
+          contract: {
+            quoteTokenScale: sinon
+              .stub()
+              .resolves(ethers.utils.parseEther('1')),
+          },
         } as any,
         poolConfig: {
-          name: 'Factory Boundary Pool',
+          name: 'Direct DEX Boundary Pool',
           take: {
             liquiditySource: LiquiditySource.UNISWAPV3,
             marketPriceFactor: 0.95,
@@ -111,7 +116,7 @@ describe('take write submission', () => {
             defaultFeeTier: 3000,
           },
           takeWriteTransport: takeWriteTransport as any,
-          onFactoryExecutionFailure: params.onFactoryExecutionFailure,
+          onDirectDexExecutionFailure: params.onDirectDexExecutionFailure,
         },
       });
     } catch (error) {
@@ -308,8 +313,8 @@ describe('take write submission', () => {
     ).to.include('srcReceiver is not a valid address');
   });
 
-  it('keys factory token decimal cache by chain id', async () => {
-    const runtimeCache: shared.FactoryQuoteProviderRuntimeCache = {
+  it('keys direct DEX token decimal cache by chain id', async () => {
+    const runtimeCache: shared.DirectDexQuoteProviderRuntimeCache = {
       chainId: 1,
     };
     const tokenAddress = '0x0000000000000000000000000000000000000002';
@@ -320,13 +325,13 @@ describe('take write submission', () => {
       .onSecondCall()
       .resolves(18);
 
-    const firstDecimals = await shared.getCachedFactoryTokenDecimals(
+    const firstDecimals = await shared.getCachedDirectDexTokenDecimals(
       {} as any,
       tokenAddress,
       runtimeCache
     );
     runtimeCache.chainId = 2;
-    const secondDecimals = await shared.getCachedFactoryTokenDecimals(
+    const secondDecimals = await shared.getCachedDirectDexTokenDecimals(
       {} as any,
       tokenAddress,
       runtimeCache
@@ -337,7 +342,7 @@ describe('take write submission', () => {
     expect(decimalsStub.calledTwice).to.be.true;
   });
 
-  it('uses the configured take write transport for Curve factory take submission without reselecting the pool', async () => {
+  it('uses the configured take write transport for Curve direct DEX take submission without reselecting the pool', async () => {
     // Deadline reads stay on the read signer; private/relay write transports
     // should only see transaction submission and nonce reads.
     const readSigner = {
@@ -364,7 +369,7 @@ describe('take write submission', () => {
       to: '0x0000000000000000000000000000000000000013',
       data: '0x9876',
     });
-    const factory = {
+    const routerContract = {
       estimateGas: {
         takeWithAtomicSwap: estimateGasStub,
       },
@@ -375,10 +380,10 @@ describe('take write submission', () => {
 
     sinon
       .stub(TakerRouter__factory, 'connect')
-      .returns(factory as any);
+      .returns(routerContract as any);
     const approvedExecutionFloor = BigNumber.from(10);
     sinon
-      .stub(shared, 'computeFactoryAmountOutMinimum')
+      .stub(shared, 'computeDirectDexAmountOutMinimum')
       .resolves(approvedExecutionFloor);
     const queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
@@ -395,15 +400,20 @@ describe('take write submission', () => {
       'resolvePoolSelection'
     );
 
-    await executeCurveFactoryTake({
+    await executeCurveDirectDexTake({
       pool: {
-        name: 'Factory Curve Pool',
+        name: 'Direct DEX Curve Pool',
         poolAddress: '0x0000000000000000000000000000000000000011',
         collateralAddress: '0x00000000000000000000000000000000000000c1',
         quoteAddress: '0x00000000000000000000000000000000000000c2',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(ethers.utils.parseEther('1')),
+        },
       } as any,
       poolConfig: {
-        name: 'Factory Curve Pool',
+        name: 'Direct DEX Curve Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
@@ -472,16 +482,16 @@ describe('take write submission', () => {
     ).to.be.true;
   });
 
-  it('refuses factory execution when an approved quote is missing route-binding fields', async () => {
+  it('refuses direct DEX execution when an approved quote is missing route-binding fields', async () => {
     const connectStub = sinon.stub(TakerRouter__factory, 'connect');
     const basePool = {
-      name: 'Factory Take Pool',
+      name: 'Direct DEX Take Pool',
       poolAddress: '0x0000000000000000000000000000000000000011',
       collateralAddress: '0x0000000000000000000000000000000000000012',
       quoteAddress: '0x0000000000000000000000000000000000000013',
     } as any;
     const basePoolConfig = {
-      name: 'Factory Take Pool',
+      name: 'Direct DEX Take Pool',
       take: {
         liquiditySource: LiquiditySource.UNISWAPV3,
         marketPriceFactor: 0.95,
@@ -548,18 +558,18 @@ describe('take write submission', () => {
     expect(connectStub.called).to.be.false;
   });
 
-  it('validates factory dry-run quotes before reporting a would-take action', async () => {
+  it('validates direct DEX dry-run quotes before reporting a would-take action', async () => {
     const connectStub = sinon.stub(TakerRouter__factory, 'connect');
 
     const result = await takeLiquidationDirectDex({
       pool: {
-        name: 'Factory Take Pool',
+        name: 'Direct DEX Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000011',
         collateralAddress: '0x0000000000000000000000000000000000000012',
         quoteAddress: '0x0000000000000000000000000000000000000013',
       } as any,
       poolConfig: {
-        name: 'Factory Take Pool',
+        name: 'Direct DEX Take Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
@@ -592,7 +602,7 @@ describe('take write submission', () => {
     expect(connectStub.called).to.be.false;
   });
 
-  it('uses the configured take write transport for Uniswap factory take submission', async () => {
+  it('uses the configured take write transport for Uniswap direct DEX take submission', async () => {
     const readSigner = {
       provider: {
         getBlock: sinon.stub().resolves({ timestamp: 123 }),
@@ -608,8 +618,8 @@ describe('take write submission', () => {
       mode: 'private_rpc',
       signer: writeSigner,
       submitTransaction: sinon.stub().resolves({
-        txHash: '0xfactoryhash',
-        wait: sinon.stub().resolves({ transactionHash: '0xfactoryhash' }),
+        txHash: '0xd1ecde0000000000000000000000000000000000000000000000000000000000',
+        wait: sinon.stub().resolves({ transactionHash: '0xd1ecde0000000000000000000000000000000000000000000000000000000000' }),
       }),
     };
     const estimateGasStub = sinon.stub().resolves(BigNumber.from(120_000));
@@ -617,7 +627,7 @@ describe('take write submission', () => {
       to: '0x0000000000000000000000000000000000000013',
       data: '0x5678',
     });
-    const factory = {
+    const routerContract = {
       estimateGas: {
         takeWithAtomicSwap: estimateGasStub,
       },
@@ -628,10 +638,10 @@ describe('take write submission', () => {
 
     sinon
       .stub(TakerRouter__factory, 'connect')
-      .returns(factory as any);
+      .returns(routerContract as any);
     const approvedExecutionFloor = BigNumber.from(10);
     sinon
-      .stub(shared, 'computeFactoryAmountOutMinimum')
+      .stub(shared, 'computeDirectDexAmountOutMinimum')
       .resolves(approvedExecutionFloor);
     const queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
@@ -640,14 +650,19 @@ describe('take write submission', () => {
         return await txFunction(3);
       });
 
-    await executeUniswapV3FactoryTake({
+    await executeUniswapV3DirectDexTake({
       pool: {
-        name: 'Factory Take Pool',
+        name: 'Direct DEX Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000011',
         quoteAddress: '0x0000000000000000000000000000000000000012',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(ethers.utils.parseEther('1')),
+        },
       } as any,
       poolConfig: {
-        name: 'Factory Take Pool',
+        name: 'Direct DEX Take Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
@@ -715,15 +730,15 @@ describe('take write submission', () => {
     ).to.be.true;
   });
 
-  it('reports factory transport rejection before acceptance as pre-broadcast', async () => {
+  it('reports direct DEX transport rejection before acceptance as pre-broadcast', async () => {
     const submitTransaction = sinon
       .stub()
       .rejects(new Error('local send rejected'));
-    const onFactoryExecutionFailure = sinon.spy();
+    const onDirectDexExecutionFailure = sinon.spy();
 
-    const result = await runUniswapFactorySubmissionBoundaryScenario({
+    const result = await runUniswapDirectDexSubmissionBoundaryScenario({
       submitTransaction,
-      onFactoryExecutionFailure,
+      onDirectDexExecutionFailure,
     });
 
     expect(result.thrown).to.be.instanceOf(Error);
@@ -731,54 +746,54 @@ describe('take write submission', () => {
     expect(result.estimateGasStub.calledOnce).to.equal(true);
     expect(result.populateTransactionStub.calledOnce).to.equal(true);
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onDirectDexExecutionFailure.calledOnce).to.equal(true);
+    expect(onDirectDexExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: true,
       error: 'local send rejected',
     });
   });
 
-  it('does not report accepted factory submission wait failure as pre-broadcast', async () => {
+  it('does not report accepted direct DEX submission wait failure as pre-broadcast', async () => {
     const submitTransaction = sinon.stub().resolves({
       txHash: '0xhash',
       wait: sinon.stub().rejects(new Error('receipt wait failed')),
     });
-    const onFactoryExecutionFailure = sinon.spy();
+    const onDirectDexExecutionFailure = sinon.spy();
 
-    const result = await runUniswapFactorySubmissionBoundaryScenario({
+    const result = await runUniswapDirectDexSubmissionBoundaryScenario({
       submitTransaction,
-      onFactoryExecutionFailure,
+      onDirectDexExecutionFailure,
     });
 
     expect(result.thrown).to.be.instanceOf(Error);
     expect((result.thrown as Error).message).to.equal('receipt wait failed');
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onDirectDexExecutionFailure.calledOnce).to.equal(true);
+    expect(onDirectDexExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: false,
       error: 'receipt wait failed',
     });
   });
 
-  it('does not report nonce-consumed factory submission errors as pre-broadcast', async () => {
+  it('does not report nonce-consumed direct DEX submission errors as pre-broadcast', async () => {
     const submitTransaction = sinon.stub().rejects(
-      new NonceConsumedTransactionError('relay accepted factory take', {
+      new NonceConsumedTransactionError('relay accepted direct DEX take', {
         txHash: '0xhash',
       })
     );
-    const onFactoryExecutionFailure = sinon.spy();
+    const onDirectDexExecutionFailure = sinon.spy();
 
-    const result = await runUniswapFactorySubmissionBoundaryScenario({
+    const result = await runUniswapDirectDexSubmissionBoundaryScenario({
       submitTransaction,
-      onFactoryExecutionFailure,
+      onDirectDexExecutionFailure,
     });
 
     expect((result.thrown as any).nonceConsumed).to.equal(true);
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onDirectDexExecutionFailure.calledOnce).to.equal(true);
+    expect(onDirectDexExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: false,
-      error: 'relay accepted factory take',
+      error: 'relay accepted direct DEX take',
     });
   });
 });

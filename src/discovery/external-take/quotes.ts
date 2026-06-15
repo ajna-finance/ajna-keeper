@@ -2,8 +2,8 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import { LiquiditySource, getAutoDiscoverTakePolicy } from '../../config';
 import { DiscoveryReadTransports } from '../../read-transports';
-import * as takeFactoryModule from '../../take/direct-dex';
-import { FactoryRouteProfitabilityContext } from '../../take/direct-dex';
+import * as directDexModule from '../../take/direct-dex';
+import { DirectDexRouteProfitabilityContext } from '../../take/direct-dex';
 import * as lifiExecutionModule from '../../take/lifi/execution';
 import * as sushiAggregatorModule from '../../take/sushi-aggregator/quote-evaluation';
 import * as oneInchAggregatorModule from '../../take/oneinch-aggregator/quote-evaluation';
@@ -50,7 +50,7 @@ export interface DirectDexPathQuoteInput extends AuctionTakeFacts {
   pool: FungiblePool;
   signer: Signer;
   poolConfig: ResolvedTakeTarget;
-  factoryGasQuoteFallback?: boolean;
+  directDexGasQuoteFallback?: boolean;
   routeProbeAbortSignal?: AbortSignal;
 }
 
@@ -70,7 +70,7 @@ export interface SushiAggregatorPathQuoteInput extends DirectDexPathQuoteInput {
   recordCircuitOutcome?: boolean;
 }
 
-export type FactoryPathQuoteFn = (
+export type DirectDexPathQuoteFn = (
   quoteParams: DirectDexPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
@@ -86,13 +86,13 @@ export type SushiAggregatorPathQuoteFn = (
   quoteParams: SushiAggregatorPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
-export type DiscoveryFactoryQuoteConfig = {
+export type DiscoveryDirectDexQuoteConfig = {
   uniswapV3RouterOverrides: DiscoveryExecutionConfig['uniswapV3RouterOverrides'];
   curveRouterOverrides: DiscoveryExecutionConfig['curveRouterOverrides'];
   tokenAddresses: DiscoveryExecutionConfig['tokenAddresses'];
 };
 
-export type DiscoveryFactoryRouteProfitabilityContextBuilder = (params: {
+export type DiscoveryDirectDexRouteProfitabilityContextBuilder = (params: {
   pool: FungiblePool;
   signer: Signer;
   config: DiscoveryExecutionConfig;
@@ -102,7 +102,7 @@ export type DiscoveryFactoryRouteProfitabilityContextBuilder = (params: {
   sources?: LiquiditySource[];
   allowSubsidy?: boolean;
   takePolicy: AutoDiscoverTakePolicyRuntime;
-}) => Promise<FactoryRouteProfitabilityContext | undefined>;
+}) => Promise<DirectDexRouteProfitabilityContext | undefined>;
 
 export type DiscoveryTokenDecimalsCacheResolver = (
   rpcCache?: DiscoveryRpcCache
@@ -189,37 +189,37 @@ export function recordLifiCircuitOutcomeForDiscovery(params: {
   recordLifiQuoteSuccess(params.rpcCache, params.purpose);
 }
 
-export async function quoteFactoryPathForDiscovery(
+export async function quoteDirectDexPathForDiscovery(
   params: {
     config: DiscoveryExecutionConfig;
     transports: DiscoveryReadTransports;
     rpcCache?: DiscoveryRpcCache;
     takePolicy: AutoDiscoverTakePolicyRuntime;
-    resolvedDefaultFactoryLiquiditySource: LiquiditySource | undefined;
+    resolvedDefaultDirectDexLiquiditySource: LiquiditySource | undefined;
     routeProbeLimiter?: AsyncOperationLimiter;
-    factoryQuoteConfig: DiscoveryFactoryQuoteConfig;
-    buildFactoryRouteProfitabilityContext: DiscoveryFactoryRouteProfitabilityContextBuilder;
+    directDexQuoteConfig: DiscoveryDirectDexQuoteConfig;
+    buildDirectDexRouteProfitabilityContext: DiscoveryDirectDexRouteProfitabilityContextBuilder;
   } & DirectDexPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
-  if (params.resolvedDefaultFactoryLiquiditySource === undefined) {
+  if (params.resolvedDefaultDirectDexLiquiditySource === undefined) {
     return {
       isTakeable: false,
       externalTakePath: 'direct_dex',
       reason: 'direct_dex external take path is not configured',
     };
   }
-  const factoryPoolConfig = withTakeLiquiditySource(
+  const directDexPoolConfig = withTakeLiquiditySource(
     params.poolConfig,
-    params.resolvedDefaultFactoryLiquiditySource
+    params.resolvedDefaultDirectDexLiquiditySource
   );
-  const routeProfitabilityContextFactory = async (sources: LiquiditySource[]) =>
-    await params.buildFactoryRouteProfitabilityContext({
+  const routeProfitabilityContextBuilder = async (sources: LiquiditySource[]) =>
+    await params.buildDirectDexRouteProfitabilityContext({
       pool: params.pool,
       signer: params.signer,
       config: params.config,
       transports: params.transports,
       rpcCache: params.rpcCache,
-      defaultLiquiditySource: params.resolvedDefaultFactoryLiquiditySource,
+      defaultLiquiditySource: params.resolvedDefaultDirectDexLiquiditySource,
       sources,
       allowSubsidy: params.poolConfig.take.allowSubsidy === true,
       takePolicy: params.takePolicy,
@@ -230,19 +230,19 @@ export async function quoteFactoryPathForDiscovery(
       params.takePolicy?.takeRouteQuoteBudgetPerCandidate,
     routeProbeLimiter: params.routeProbeLimiter,
     routeProbeAbortSignal: params.routeProbeAbortSignal,
-    routeProfitabilityContextFactory: params.factoryGasQuoteFallback
+    routeProfitabilityContextBuilder: params.directDexGasQuoteFallback
       ? undefined
-      : routeProfitabilityContextFactory,
+      : routeProfitabilityContextBuilder,
   };
 
-  const evaluation = await takeFactoryModule.getFactoryTakeQuoteEvaluation(
+  const evaluation = await directDexModule.getDirectDexTakeQuoteEvaluation(
     params.pool,
     params.auctionPrice,
     params.collateral,
-    factoryPoolConfig,
-    params.factoryQuoteConfig,
+    directDexPoolConfig,
+    params.directDexQuoteConfig,
     params.signer,
-    params.rpcCache?.factoryQuoteProviders,
+    params.rpcCache?.directDexQuoteProviders,
     routeSelection
   );
   return {

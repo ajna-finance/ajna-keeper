@@ -17,15 +17,15 @@ import { SECONDS_PER_DAY } from '../../src/constants';
 import { getLoansToKick, kick } from '../../src/kick';
 import { NonceTracker } from '../../src/nonce';
 import {
-  createFactoryQuoteProviderRuntimeCache,
-  getFactoryTakeQuoteEvaluation,
+  createDirectDexQuoteProviderRuntimeCache,
+  getDirectDexTakeQuoteEvaluation,
   takeLiquidationDirectDex,
 } from '../../src/take/direct-dex';
-import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval';
+import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval-rules';
 import {
-  filterFactoryRouteCandidatesByAvailability,
-  getFactoryRouteCandidates,
-} from '../../src/take/direct-dex/shared';
+  filterDirectDexRouteCandidatesByAvailability,
+  getDirectDexRouteCandidates,
+} from '../../src/take/direct-dex/route-selection';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
 import {
   BoundExternalTakeRouteEvaluation,
@@ -238,11 +238,11 @@ async function expectLiveUniswapRoutesAvailable(params: {
   fixture: LiveLiquidityFixture;
   pool: FungiblePool;
   signer: Wallet;
-  runtimeCache: ReturnType<typeof createFactoryQuoteProviderRuntimeCache>;
+  runtimeCache: ReturnType<typeof createDirectDexQuoteProviderRuntimeCache>;
 }) {
   const minimumAvailableRoutes =
     params.fixture.minimumAvailableUniswapRoutes ?? 1;
-  const routes = getFactoryRouteCandidates({
+  const routes = getDirectDexRouteCandidates({
     defaultLiquiditySource: LiquiditySource.UNISWAPV3,
     config: {
       uniswapV3RouterOverrides: params.fixture.uniswap,
@@ -253,7 +253,7 @@ async function expectLiveUniswapRoutesAvailable(params: {
     'expected configured Uniswap route candidates'
   ).to.be.greaterThan(0);
 
-  const { availableRoutes } = await filterFactoryRouteCandidatesByAvailability({
+  const { availableRoutes } = await filterDirectDexRouteCandidatesByAvailability({
     routes,
     pool: params.pool,
     signer: params.signer,
@@ -329,7 +329,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
     'expected kicked liquidation collateral'
   ).to.be.true;
 
-  const runtimeCache = createFactoryQuoteProviderRuntimeCache();
+  const runtimeCache = createDirectDexQuoteProviderRuntimeCache();
   await expectLiveUniswapRoutesAvailable({
     fixture,
     pool,
@@ -339,7 +339,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
 
   const routeQuoteBudgetPerCandidate =
     fixture.routeQuoteBudgetPerCandidate ?? 1;
-  const restrictiveQuoteEvaluation = await getFactoryTakeQuoteEvaluation(
+  const restrictiveQuoteEvaluation = await getDirectDexTakeQuoteEvaluation(
     pool,
     liquidationStatus.price,
     liquidationStatus.collateral,
@@ -359,7 +359,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
   );
 
   const poolConfig = buildLiveUniswapPoolConfig(fixture, 0.99);
-  const quoteEvaluation = await getFactoryTakeQuoteEvaluation(
+  const quoteEvaluation = await getDirectDexTakeQuoteEvaluation(
     pool,
     liquidationStatus.price,
     liquidationStatus.collateral,
@@ -436,7 +436,7 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
   ).to.be.true;
 }
 
-describe('Live liquidity end-to-end factory execution', function () {
+describe('Live liquidity end-to-end direct DEX execution', function () {
   this.timeout(LIVE_LIQUIDITY_TIMEOUT_MS);
 
   before(function () {

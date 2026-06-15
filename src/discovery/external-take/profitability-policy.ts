@@ -7,12 +7,8 @@ import {
   applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
 } from '../../take/external-take/policy';
-import {
-  applyFactoryRouteProfitabilityPolicy,
-  ceilDiv,
-  getMarketPriceFactorUnits,
-  MARKET_FACTOR_SCALE,
-} from '../../take/direct-dex/shared';
+import { getMarketFactorFloorQuoteRaw } from '../../take/external-take/quote-economics';
+import { applyDirectDexRouteProfitabilityPolicy } from '../../take/direct-dex/route-profitability';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
@@ -104,7 +100,7 @@ function rejectDiscoveryProfitFloor(params: {
 export function applyDiscoveryApprovalProfitabilityPolicy(params: {
   quoteEvaluation: BoundExternalTakeRouteEvaluation;
   selectedLiquiditySource: LiquiditySource;
-  selectedFactoryLiquiditySource?: LiquiditySource;
+  selectedDirectDexLiquiditySource?: LiquiditySource;
   target: ResolvedTakeTarget;
   takePolicy: AutoDiscoverTakePolicyRuntime;
   gasPolicy: GasPolicyResult;
@@ -137,7 +133,7 @@ export function applyDiscoveryApprovalProfitabilityPolicy(params: {
   });
 
   if (
-    params.selectedFactoryLiquiditySource !== undefined &&
+    params.selectedDirectDexLiquiditySource !== undefined &&
     canApplyRawRoutePolicy
   ) {
     const auctionRepayRequirementQuoteRaw = params.auctionCostQuoteRaw;
@@ -152,11 +148,11 @@ export function applyDiscoveryApprovalProfitabilityPolicy(params: {
         stats: params.stats,
       });
     }
-    const marketFactorFloorQuoteRaw = ceilDiv(
-      auctionRepayRequirementQuoteRaw.mul(MARKET_FACTOR_SCALE),
-      BigNumber.from(getMarketPriceFactorUnits(marketPriceFactor))
-    );
-    const refreshedEvaluation = applyFactoryRouteProfitabilityPolicy({
+    const marketFactorFloorQuoteRaw = getMarketFactorFloorQuoteRaw({
+      quoteAmountDueRaw: auctionRepayRequirementQuoteRaw,
+      marketPriceFactor,
+    });
+    const refreshedEvaluation = applyDirectDexRouteProfitabilityPolicy({
       evaluation: {
         ...params.quoteEvaluation,
         routeProfitability: {
@@ -166,19 +162,19 @@ export function applyDiscoveryApprovalProfitabilityPolicy(params: {
           marketFactorFloorQuoteRaw,
         },
       },
-      liquiditySource: params.selectedFactoryLiquiditySource,
+      liquiditySource: params.selectedDirectDexLiquiditySource,
       context: {
         routeExecutionCostQuoteRawBySource: {
-          [params.selectedFactoryLiquiditySource]: params.gasCostQuoteRaw,
+          [params.selectedDirectDexLiquiditySource]: params.gasCostQuoteRaw,
         },
         nativeProfitFloorQuoteRawBySource: {
-          [params.selectedFactoryLiquiditySource]:
+          [params.selectedDirectDexLiquiditySource]:
             params.gasPolicy.minProfitNativeQuoteRaw ?? ZERO,
         },
         configuredProfitFloorQuoteRaw: params.minExpectedProfitQuoteRaw,
         allowSubsidy: params.target.take.allowSubsidy === true,
         routeGasLimitBySource: {
-          [params.selectedFactoryLiquiditySource]: params.routeGasLimit,
+          [params.selectedDirectDexLiquiditySource]: params.routeGasLimit,
         },
         gasPriceWei: gasTelemetryFields.gasPriceWei,
         gasPriceGwei: gasTelemetryFields.gasPriceGwei,
@@ -223,10 +219,10 @@ export function applyDiscoveryApprovalProfitabilityPolicy(params: {
         : params.quoteEvaluation.routeExecutionFloorRaw);
     const marketFactorFloorQuoteRaw =
       params.quoteEvaluation.routeProfitability?.marketFactorFloorQuoteRaw ??
-      ceilDiv(
-        auctionCostQuoteRaw.mul(MARKET_FACTOR_SCALE),
-        BigNumber.from(getMarketPriceFactorUnits(configuredMarketPriceFactor))
-      );
+      getMarketFactorFloorQuoteRaw({
+        quoteAmountDueRaw: auctionCostQuoteRaw,
+        marketPriceFactor: configuredMarketPriceFactor,
+      });
     const policy = applyExternalTakeRoutePolicy({
       configuredMarketPriceFactor,
       allowSubsidy: params.target.take.allowSubsidy === true,

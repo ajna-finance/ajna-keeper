@@ -8,7 +8,7 @@ import {
 import { refreshDiscoveryGasPriceIfStale } from '../../src/discovery/take-executor';
 import * as oneInchAggregatorExecutionModule from '../../src/take/oneinch-aggregator/execution';
 import * as oneInchAggregatorQuoteModule from '../../src/take/oneinch-aggregator/quote-evaluation';
-import * as takeFactoryModule from '../../src/take/direct-dex';
+import * as directDexModule from '../../src/take/direct-dex';
 import * as lifiExecutionModule from '../../src/take/lifi/execution';
 import * as settlementModule from '../../src/settlement';
 import * as arbModule from '../../src/take/arb';
@@ -605,8 +605,8 @@ describe('Discovery Handlers', () => {
       chainId: 1,
       gasPrice: BigNumber.from(1),
       gasPriceFetchedAt: Date.now(),
-      factoryQuoteProviders:
-        takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+      directDexQuoteProviders:
+        directDexModule.createDirectDexQuoteProviderRuntimeCache(),
     };
     const takeLiquidationStub = sinon
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
@@ -688,7 +688,9 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationStub.calledOnce).to.be.true;
     expect(rpcCache.oneInchQuoteCircuits?.swap_data?.failures).to.equal(1);
     const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
-    expect(summaryLog).to.include('oneInchFailures=swapData:1');
+    expect(summaryLog).to.include(
+      'calldataAggregatorProviderFailures=oneinch.quote:1'
+    );
   });
 
   it('passes the take write transport into discovered take execution', async () => {
@@ -855,17 +857,17 @@ describe('Discovery Handlers', () => {
     ).to.equal(takeWriteTransport);
   });
 
-  it('probes 1inch and factory hybrid external take paths in parallel', async () => {
+  it('probes 1inch and direct DEX hybrid external take paths in parallel', async () => {
     const loggerInfoStub = sinon.stub(logger, 'info');
     const loggerWarnStub = sinon.stub(logger, 'warn');
     const takeLiquidationStub = sinon
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     const oneInchDeferred = createDeferred<any>();
-    const factoryDeferred = createDeferred<any>();
+    const directDexDeferred = createDeferred<any>();
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const startedPaths: string[] = [];
     let resolveBothStarted!: () => void;
@@ -886,10 +888,10 @@ describe('Discovery Handlers', () => {
         return await oneInchDeferred.promise;
       });
     sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .callsFake(async () => {
         markStarted('direct_dex');
-        return await factoryDeferred.promise;
+        return await directDexDeferred.promise;
       });
 
     const pool = {
@@ -961,8 +963,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -987,7 +989,7 @@ describe('Discovery Handlers', () => {
         gasPolicyEvaluatedAt: Date.now(),
       },
     }));
-    factoryDeferred.resolve({
+    directDexDeferred.resolve({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -1030,7 +1032,7 @@ describe('Discovery Handlers', () => {
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon
@@ -1048,7 +1050,7 @@ describe('Discovery Handlers', () => {
         quotedAuctionPriceWad: ethers.utils.parseEther('100'),
         quotedCollateralWad: ethers.utils.parseEther('1'),
       }));
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -1136,8 +1138,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -1145,7 +1147,7 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationDirectDexStub.calledOnce).to.be.true;
   });
 
-  it('falls back to factory after a hybrid 1inch pre-broadcast execution failure', async () => {
+  it('falls back to direct DEX after a hybrid 1inch pre-broadcast execution failure', async () => {
     const loggerInfoStub = sinon.stub(logger, 'info');
     const takeLiquidationStub = sinon
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
@@ -1157,7 +1159,7 @@ describe('Discovery Handlers', () => {
         return false;
       });
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon
@@ -1180,7 +1182,7 @@ describe('Discovery Handlers', () => {
           gasPolicyEvaluatedAt: Date.now(),
         },
       }));
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -1277,8 +1279,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -1292,21 +1294,23 @@ describe('Discovery Handlers', () => {
     const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
     expect(summaryLog).to.include('approvedRoutes=calldata_aggregator:1');
     expect(summaryLog).to.include('executedRoutes=direct_dex:1');
-    expect(summaryLog).to.include('executedFactorySources=uniswapV3:1');
-    expect(summaryLog).to.include('oneInchFailures=preBroadcast:1');
+    expect(summaryLog).to.include('executedDirectDexSources=uniswapV3:1');
+    expect(summaryLog).to.include(
+      'calldataAggregatorProviderFailures=oneinch.preBroadcast:1'
+    );
     expect(summaryLog).to.include('hybridFallbackAttempts=1');
     expect(summaryLog).to.include('hybridFallbackSuccesses=1');
   });
 
-  it('falls back to 1inch after a hybrid factory pre-broadcast execution failure', async () => {
+  it('falls back to 1inch after a hybrid direct DEX pre-broadcast execution failure', async () => {
     const loggerInfoStub = sinon.stub(logger, 'info');
     const takeLiquidationStub = sinon
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .callsFake(async ({ config }: any) => {
-        config.onFactoryExecutionFailure?.({
+        config.onDirectDexExecutionFailure?.({
           preBroadcast: true,
           error: 'gas estimation failed',
         });
@@ -1333,7 +1337,7 @@ describe('Discovery Handlers', () => {
           gasPolicyEvaluatedAt: Date.now(),
         },
       }));
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -1354,7 +1358,7 @@ describe('Discovery Handlers', () => {
     });
 
     const pool = {
-      name: 'Hybrid Factory Pre-Broadcast Fallback Pool',
+      name: 'Hybrid Direct DEX Pre-Broadcast Fallback Pool',
       poolAddress: '0x7777777777777777777777777777777777777786',
       quoteAddress: '0x2222222222222222222222222222222222222222',
       collateralAddress: '0x3333333333333333333333333333333333333333',
@@ -1388,7 +1392,7 @@ describe('Discovery Handlers', () => {
         candidates: [
           {
             poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerHybridFactoryPreBroadcastFallback',
+            borrower: '0xBorrowerHybridDirectDexPreBroadcastFallback',
             kickTime: Date.now(),
             debtRemaining: '1',
             collateralRemaining: '1',
@@ -1425,8 +1429,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -1434,25 +1438,25 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationStub.calledOnce).to.be.true;
     const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
     expect(summaryLog).to.include('approvedRoutes=direct_dex:1');
-    expect(summaryLog).to.include('approvedFactorySources=uniswapV3:1');
+    expect(summaryLog).to.include('approvedDirectDexSources=uniswapV3:1');
     expect(summaryLog).to.include('executedRoutes=calldata_aggregator:1');
-    expect(summaryLog).to.include('factoryFailures=preBroadcast:1');
+    expect(summaryLog).to.include('directDexFailures=preBroadcast:1');
     expect(summaryLog).to.include('hybridFallbackAttempts=1');
     expect(summaryLog).to.include('hybridFallbackSuccesses=1');
   });
 
-  it('falls back to factory when the hybrid 1inch probe times out', async () => {
+  it('falls back to direct DEX when the hybrid 1inch probe times out', async () => {
     const loggerInfoStub = sinon.stub(logger, 'info');
     const loggerWarnStub = sinon.stub(logger, 'warn');
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator').resolves(true);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon
       .stub(oneInchAggregatorQuoteModule, 'getOneInchAggregatorPathQuoteEvaluation')
       .rejects(new Error('timeout of 5ms exceeded'));
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -1541,8 +1545,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -1561,12 +1565,12 @@ describe('Discovery Handlers', () => {
     expect(summaryLog).not.to.include('hybridGasQuoteFallbackSuccesses');
   });
 
-  it('does not let a slow factory hybrid probe block a valid 1inch path', async () => {
+  it('does not let a slow direct DEX hybrid probe block a valid 1inch path', async () => {
     const takeLiquidationStub = sinon
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon
@@ -1590,7 +1594,7 @@ describe('Discovery Handlers', () => {
         },
       }));
     sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .returns(new Promise(() => undefined) as any);
 
     const pool = {
@@ -1662,8 +1666,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -1671,14 +1675,14 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationDirectDexStub.called).to.be.false;
   });
 
-  it('executes 1inch when the hybrid factory probe has no collateral quote route', async () => {
+  it('executes 1inch when the hybrid direct DEX probe has no collateral quote route', async () => {
     const loggerInfoStub = sinon.stub(logger, 'info');
     const loggerWarnStub = sinon.stub(logger, 'warn');
     const takeLiquidationStub = sinon
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon
@@ -1701,17 +1705,17 @@ describe('Discovery Handlers', () => {
           gasPolicyEvaluatedAt: Date.now(),
         },
       }));
-    const factoryQuoteStub = sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+    const directDexQuoteStub = sinon
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .resolves({
         isTakeable: false,
         externalTakePath: 'direct_dex',
         selectedLiquiditySource: LiquiditySource.UNISWAPV3,
-        reason: 'no collateral/quote factory route',
+        reason: 'no collateral/quote direct DEX route',
       });
 
     const pool = {
-      name: 'Hybrid Factory No Route Pool',
+      name: 'Hybrid Direct DEX No Route Pool',
       poolAddress: '0x77777777777777777777777777777777777777b1',
       quoteAddress: '0x2222222222222222222222222222222222222222',
       collateralAddress: '0x3333333333333333333333333333333333333333',
@@ -1745,7 +1749,7 @@ describe('Discovery Handlers', () => {
         candidates: [
           {
             poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerHybridFactoryNoRoute',
+            borrower: '0xBorrowerHybridDirectDexNoRoute',
             kickTime: Date.now(),
             debtRemaining: '1',
             collateralRemaining: '1',
@@ -1778,12 +1782,12 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
-    expect(factoryQuoteStub.calledOnce).to.be.true;
+    expect(directDexQuoteStub.calledOnce).to.be.true;
     expect(takeLiquidationStub.calledOnce).to.be.true;
     expect(takeLiquidationDirectDexStub.called).to.be.false;
     expect(
@@ -1802,9 +1806,9 @@ describe('Discovery Handlers', () => {
     expect(summaryLog).not.to.include('hybridGasQuoteFallbackSuccesses');
   });
 
-  it('uses factory-first hybrid mode to avoid 1inch calls when factory approves first', async () => {
+  it('uses direct DEX first hybrid mode to avoid 1inch calls when direct DEX approves first', async () => {
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     const oneInchQuoteStub = sinon.stub(
       oneInchAggregatorQuoteModule,
@@ -1813,11 +1817,11 @@ describe('Discovery Handlers', () => {
     const oneInchGasQuoteStub = sinon
       .stub(DexRouter.prototype, 'getQuoteFromOneInch')
       .rejects(
-        new Error('factory-first mode should not require gas conversion')
+        new Error('direct DEX-first mode should not require gas conversion')
       );
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon.stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator').resolves(true);
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -1836,7 +1840,7 @@ describe('Discovery Handlers', () => {
     });
 
     const pool = {
-      name: 'Hybrid Factory First Pool',
+      name: 'Hybrid Direct DEX First Pool',
       poolAddress: '0x7777777777777777777777777777777777777782',
       quoteAddress: '0x2222222222222222222222222222222222222222',
       collateralAddress: '0x3333333333333333333333333333333333333333',
@@ -1907,8 +1911,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -1917,12 +1921,12 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationDirectDexStub.calledOnce).to.be.true;
   });
 
-  it('continues factory-first probing when the approved factory path is subsidized', async () => {
+  it('continues direct DEX first probing when the approved direct DEX path is subsidized', async () => {
     const takeLiquidationStub = sinon
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     const oneInchQuoteStub = sinon
       .stub(oneInchAggregatorQuoteModule, 'getOneInchAggregatorPathQuoteEvaluation')
@@ -1945,7 +1949,7 @@ describe('Discovery Handlers', () => {
         },
       }));
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -1966,7 +1970,7 @@ describe('Discovery Handlers', () => {
     });
 
     const pool = {
-      name: 'Hybrid Factory First Subsidy Pool',
+      name: 'Hybrid Direct DEX First Subsidy Pool',
       poolAddress: '0x7777777777777777777777777777777777777792',
       quoteAddress: '0x2222222222222222222222222222222222222222',
       collateralAddress: '0x3333333333333333333333333333333333333333',
@@ -2001,7 +2005,7 @@ describe('Discovery Handlers', () => {
         candidates: [
           {
             poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerHybridFactoryFirstSubsidy',
+            borrower: '0xBorrowerHybridDirectDexFirstSubsidy',
             kickTime: Date.now(),
             debtRemaining: '1',
             collateralRemaining: '1',
@@ -2038,8 +2042,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -2054,7 +2058,7 @@ describe('Discovery Handlers', () => {
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon
       .stub(oneInchAggregatorQuoteModule, 'getOneInchAggregatorPathQuoteEvaluation')
@@ -2062,9 +2066,9 @@ describe('Discovery Handlers', () => {
         isTakeable: false,
         reason: '1inch rejected',
       });
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: false,
-      reason: 'factory rejected',
+      reason: 'direct DEX rejected',
     });
 
     const pool = {
@@ -2132,8 +2136,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -2148,14 +2152,14 @@ describe('Discovery Handlers', () => {
     ).to.be.true;
   });
 
-  it('executes factory-first hybrid gas quote fallback when strict gas conversion fails', async () => {
+  it('executes direct DEX first hybrid gas quote fallback when strict gas conversion fails', async () => {
     const warnStub = sinon.stub(logger, 'warn');
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const takeLiquidationStub = sinon
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon
       .stub(oneInchAggregatorQuoteModule, 'getOneInchAggregatorPathQuoteEvaluation')
@@ -2165,7 +2169,7 @@ describe('Discovery Handlers', () => {
         selectedLiquiditySource: LiquiditySource.ONEINCH,
         reason: '1inch unavailable',
       });
-    const factoryQuote = {
+    const directDexQuote = {
       isTakeable: true,
       externalTakePath: 'direct_dex' as const,
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -2179,9 +2183,9 @@ describe('Discovery Handlers', () => {
       quotedAuctionPriceWad: ethers.utils.parseEther('100'),
       quotedCollateralWad: ethers.utils.parseEther('1'),
     };
-    const factoryQuoteStub = sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
-      .resolves(factoryQuote);
+    const directDexQuoteStub = sinon
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
+      .resolves(directDexQuote);
 
     const pool = {
       name: 'Hybrid Gas Fallback Pool',
@@ -2254,14 +2258,14 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
     expect(takeLiquidationStub.called).to.be.false;
     expect(takeLiquidationDirectDexStub.calledOnce).to.be.true;
-    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(directDexQuoteStub.callCount).to.be.greaterThan(1);
     expect(
       warnStub
         .getCalls()
@@ -2276,7 +2280,7 @@ describe('Discovery Handlers', () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     sinon.stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator').resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon
       .stub(oneInchAggregatorQuoteModule, 'getOneInchAggregatorPathQuoteEvaluation')
@@ -2286,8 +2290,8 @@ describe('Discovery Handlers', () => {
         selectedLiquiditySource: LiquiditySource.ONEINCH,
         reason: '1inch unavailable',
       });
-    const factoryQuoteStub = sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+    const directDexQuoteStub = sinon
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .resolves({
         isTakeable: true,
         externalTakePath: 'direct_dex',
@@ -2374,13 +2378,13 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
     expect(takeLiquidationDirectDexStub.called).to.equal(false);
-    expect(factoryQuoteStub.calledOnce).to.equal(true);
+    expect(directDexQuoteStub.calledOnce).to.equal(true);
     expect(
       debugStub
         .getCalls()
@@ -2390,7 +2394,7 @@ describe('Discovery Handlers', () => {
     ).to.equal(true);
   });
 
-  const createHybridGasFallbackFactoryQuote = (
+  const createHybridGasFallbackDirectDexQuote = (
     overrides: Record<string, unknown> = {}
   ) => ({
     isTakeable: true,
@@ -2425,14 +2429,14 @@ describe('Discovery Handlers', () => {
           amountIn: '900000000000000',
           feeTiers: [3000, 100, 500, 10000],
           success: false,
-          reason: 'no factory pool at configured fee tiers',
+          reason: 'no direct DEX pool at configured fee tiers',
         },
       ],
     },
     ...overrides,
   });
 
-  it('uses a gas-quote fallback factory candidate when selected 1inch fails before submission', async () => {
+  it('uses a gas-quote fallback direct DEX candidate when selected 1inch fails before submission', async () => {
     const warnStub = sinon.stub(logger, 'warn');
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const wethAddress = '0x4200000000000000000000000000000000000006';
@@ -2451,7 +2455,7 @@ describe('Discovery Handlers', () => {
         return false;
       });
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon
       .stub(oneInchAggregatorQuoteModule, 'getOneInchAggregatorPathQuoteEvaluation')
@@ -2476,11 +2480,11 @@ describe('Discovery Handlers', () => {
         amountIn: '900000000000000',
         feeTiers: [3000, 100, 500, 10000],
         success: false,
-        reason: 'no factory pool at configured fee tiers',
+        reason: 'no direct DEX pool at configured fee tiers',
       },
     ];
-    const factoryQuoteStub = sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+    const directDexQuoteStub = sinon
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .onFirstCall()
       .resolves({
         isTakeable: false,
@@ -2493,7 +2497,7 @@ describe('Discovery Handlers', () => {
         },
       })
       .onSecondCall()
-      .resolves(createHybridGasFallbackFactoryQuote());
+      .resolves(createHybridGasFallbackDirectDexQuote());
 
     const pool = {
       name: 'Hybrid 1inch Fallback Candidate Pool',
@@ -2530,7 +2534,7 @@ describe('Discovery Handlers', () => {
         candidates: [
           {
             poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerHybridOneInchThenFactoryFallback',
+            borrower: '0xBorrowerHybridOneInchThenDirectDexFallback',
             kickTime: Date.now(),
             debtRemaining: '1',
             collateralRemaining: '1',
@@ -2566,14 +2570,14 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
     expect(takeLiquidationStub.calledOnce).to.equal(true);
     expect(takeLiquidationDirectDexStub.calledOnce).to.equal(true);
-    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(directDexQuoteStub.callCount).to.be.greaterThan(1);
     expect(
       warnStub
         .getCalls()
@@ -2585,7 +2589,7 @@ describe('Discovery Handlers', () => {
     ).to.equal(true);
   });
 
-  it('rechecks fallback factory repayment floors against refreshed auction state before execution', async () => {
+  it('rechecks fallback direct DEX repayment floors against refreshed auction state before execution', async () => {
     const debugStub = sinon.stub(logger, 'debug');
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
     const wethAddress = '0x4200000000000000000000000000000000000006';
@@ -2606,7 +2610,7 @@ describe('Discovery Handlers', () => {
         return false;
       });
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon
       .stub(oneInchAggregatorQuoteModule, 'getOneInchAggregatorPathQuoteEvaluation')
@@ -2624,7 +2628,7 @@ describe('Discovery Handlers', () => {
         quotedCollateralWad: ethers.utils.parseEther('1'),
       }));
     sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .onFirstCall()
       .resolves({
         isTakeable: false,
@@ -2641,14 +2645,14 @@ describe('Discovery Handlers', () => {
               amountIn: '900000000000000',
               feeTiers: [3000, 100, 500, 10000],
               success: false,
-              reason: 'no factory pool at configured fee tiers',
+              reason: 'no direct DEX pool at configured fee tiers',
             },
           ],
         },
       })
       .onSecondCall()
       .resolves(
-        createHybridGasFallbackFactoryQuote({
+        createHybridGasFallbackDirectDexQuote({
           quoteAmount: 125,
           quoteAmountRaw: ethers.utils.parseUnits('125', 6),
           approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
@@ -2728,8 +2732,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -2749,7 +2753,7 @@ describe('Discovery Handlers', () => {
     options: {
       takePolicyOverrides?: Record<string, unknown>;
       targetTakeOverrides?: Record<string, unknown>;
-      factoryEvaluations?: any[];
+      directDexEvaluations?: any[];
       gasPrice?: BigNumber;
       poolName?: string;
       borrower?: string;
@@ -2762,7 +2766,7 @@ describe('Discovery Handlers', () => {
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     const lifiQuoteStub = sinon
       .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
@@ -2780,18 +2784,18 @@ describe('Discovery Handlers', () => {
         selectedLiquiditySource: LiquiditySource.ONEINCH,
         reason: '1inch unavailable',
       });
-    const factoryEvaluations = options.factoryEvaluations ?? [
-      createHybridGasFallbackFactoryQuote(),
+    const directDexEvaluations = options.directDexEvaluations ?? [
+      createHybridGasFallbackDirectDexQuote(),
     ];
-    let factoryCallIndex = 0;
-    const factoryQuoteStub = sinon
-      .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+    let directDexCallIndex = 0;
+    const directDexQuoteStub = sinon
+      .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .callsFake(async () => {
         const evaluation =
-          factoryEvaluations[
-            Math.min(factoryCallIndex, factoryEvaluations.length - 1)
+          directDexEvaluations[
+            Math.min(directDexCallIndex, directDexEvaluations.length - 1)
           ];
-        factoryCallIndex += 1;
+        directDexCallIndex += 1;
         return evaluation;
       });
 
@@ -2868,15 +2872,15 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: options.gasPrice ?? ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
     return {
       debugStub,
       warnStub,
-      factoryQuoteStub,
+      directDexQuoteStub,
       lifiQuoteStub,
       takeLiquidationStub,
       takeLiquidationDirectDexStub,
@@ -2884,7 +2888,7 @@ describe('Discovery Handlers', () => {
   }
 
   it('does not execute hybrid gas quote fallback when fallback mode is disabled', async () => {
-    const { debugStub, factoryQuoteStub, takeLiquidationDirectDexStub } =
+    const { debugStub, directDexQuoteStub, takeLiquidationDirectDexStub } =
       await runHybridGasFallbackScenario({
         takePolicyOverrides: {
           hybridGasQuoteFailureFallbackMode: 'disabled',
@@ -2892,7 +2896,7 @@ describe('Discovery Handlers', () => {
       });
 
     expect(takeLiquidationDirectDexStub.called).to.equal(false);
-    expect(factoryQuoteStub.calledOnce).to.equal(true);
+    expect(directDexQuoteStub.calledOnce).to.equal(true);
     expect(
       debugStub
         .getCalls()
@@ -2919,14 +2923,14 @@ describe('Discovery Handlers', () => {
     },
   ]) {
     it(`does not execute hybrid gas quote fallback when ${name}`, async () => {
-      const { debugStub, factoryQuoteStub, takeLiquidationDirectDexStub } =
+      const { debugStub, directDexQuoteStub, takeLiquidationDirectDexStub } =
         await runHybridGasFallbackScenario({
           takePolicyOverrides,
-          factoryEvaluations: [createNativeToQuoteGasConversionReject()],
+          directDexEvaluations: [createNativeToQuoteGasConversionReject()],
         });
 
       expect(takeLiquidationDirectDexStub.called).to.equal(false);
-      expect(factoryQuoteStub.calledOnce).to.equal(true);
+      expect(directDexQuoteStub.calledOnce).to.equal(true);
       expect(
         debugStub
           .getCalls()
@@ -2935,10 +2939,10 @@ describe('Discovery Handlers', () => {
     });
   }
 
-  it('does not execute hybrid gas quote fallback when the fallback factory rerun has no takeable route', async () => {
-    const { debugStub, factoryQuoteStub, takeLiquidationDirectDexStub } =
+  it('does not execute hybrid gas quote fallback when the fallback direct DEX rerun has no takeable route', async () => {
+    const { debugStub, directDexQuoteStub, takeLiquidationDirectDexStub } =
       await runHybridGasFallbackScenario({
-        factoryEvaluations: [
+        directDexEvaluations: [
           createNativeToQuoteGasConversionReject(),
           {
             isTakeable: false,
@@ -2950,7 +2954,7 @@ describe('Discovery Handlers', () => {
       });
 
     expect(takeLiquidationDirectDexStub.called).to.equal(false);
-    expect(factoryQuoteStub.callCount).to.equal(2);
+    expect(directDexQuoteStub.callCount).to.equal(2);
     expect(
       debugStub
         .getCalls()
@@ -2975,7 +2979,7 @@ describe('Discovery Handlers', () => {
     },
   ]) {
     it(`does not execute hybrid gas quote fallback when ${field} is configured`, async () => {
-      const { debugStub, factoryQuoteStub, takeLiquidationDirectDexStub } =
+      const { debugStub, directDexQuoteStub, takeLiquidationDirectDexStub } =
         await runHybridGasFallbackScenario({
           takePolicyOverrides: {
             [field]: value,
@@ -2983,7 +2987,7 @@ describe('Discovery Handlers', () => {
         });
 
       expect(takeLiquidationDirectDexStub.called).to.equal(false);
-      expect(factoryQuoteStub.calledOnce).to.equal(true);
+      expect(directDexQuoteStub.calledOnce).to.equal(true);
       expect(
         debugStub
           .getCalls()
@@ -2993,7 +2997,7 @@ describe('Discovery Handlers', () => {
   }
 
   it('does not execute hybrid gas quote fallback when maxGasPriceGwei rejects', async () => {
-    const { factoryQuoteStub, takeLiquidationDirectDexStub } =
+    const { directDexQuoteStub, takeLiquidationDirectDexStub } =
       await runHybridGasFallbackScenario({
         takePolicyOverrides: {
           maxGasPriceGwei: 0.5,
@@ -3001,11 +3005,11 @@ describe('Discovery Handlers', () => {
       });
 
     expect(takeLiquidationDirectDexStub.called).to.equal(false);
-    expect(factoryQuoteStub.calledOnce).to.equal(true);
+    expect(directDexQuoteStub.calledOnce).to.equal(true);
   });
 
   it('does not execute hybrid gas quote fallback when maxGasCostNative rejects', async () => {
-    const { factoryQuoteStub, takeLiquidationDirectDexStub } =
+    const { directDexQuoteStub, takeLiquidationDirectDexStub } =
       await runHybridGasFallbackScenario({
         takePolicyOverrides: {
           maxGasCostNative: 0,
@@ -3013,18 +3017,18 @@ describe('Discovery Handlers', () => {
       });
 
     expect(takeLiquidationDirectDexStub.called).to.equal(false);
-    expect(factoryQuoteStub.calledOnce).to.equal(true);
+    expect(directDexQuoteStub.calledOnce).to.equal(true);
   });
 
-  it('does not execute hybrid gas quote fallback for subsidized factory routes', async () => {
+  it('does not execute hybrid gas quote fallback for subsidized direct DEX routes', async () => {
     const { debugStub, takeLiquidationDirectDexStub } =
       await runHybridGasFallbackScenario({
         targetTakeOverrides: {
           allowSubsidy: true,
         },
-        factoryEvaluations: [
-          createHybridGasFallbackFactoryQuote(),
-          createHybridGasFallbackFactoryQuote({
+        directDexEvaluations: [
+          createHybridGasFallbackDirectDexQuote(),
+          createHybridGasFallbackDirectDexQuote({
             routeProfitability: {
               subsidyAllowed: true,
               expectedSubsidyQuoteRaw: ethers.utils.parseUnits('1', 6),
@@ -3038,12 +3042,12 @@ describe('Discovery Handlers', () => {
       debugStub
         .getCalls()
         .some((call) =>
-          String(call.args[0]).includes('rejected subsidized factory route')
+          String(call.args[0]).includes('rejected subsidized direct DEX route')
         )
     ).to.equal(true);
   });
 
-  it('executes hybrid gas quote fallback when factory route context rejects only native-to-quote gas conversion', async () => {
+  it('executes hybrid gas quote fallback when direct DEX route context rejects only native-to-quote gas conversion', async () => {
     const loggerInfoStub = sinon.stub(logger, 'info');
     const gasQuoteAttempts = [
       {
@@ -3053,12 +3057,12 @@ describe('Discovery Handlers', () => {
         amountIn: '900000000000000',
         feeTiers: [3000, 100, 500, 10000],
         success: false,
-        reason: 'no factory pool at configured fee tiers',
+        reason: 'no direct DEX pool at configured fee tiers',
       },
     ];
-    const { warnStub, factoryQuoteStub, takeLiquidationDirectDexStub } =
+    const { warnStub, directDexQuoteStub, takeLiquidationDirectDexStub } =
       await runHybridGasFallbackScenario({
-        factoryEvaluations: [
+        directDexEvaluations: [
           {
             isTakeable: false,
             externalTakePath: 'direct_dex',
@@ -3069,12 +3073,12 @@ describe('Discovery Handlers', () => {
               gasQuoteAttempts,
             },
           },
-          createHybridGasFallbackFactoryQuote(),
+          createHybridGasFallbackDirectDexQuote(),
         ],
       });
 
     expect(takeLiquidationDirectDexStub.calledOnce).to.equal(true);
-    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(directDexQuoteStub.callCount).to.be.greaterThan(1);
     expect(
       warnStub
         .getCalls()
@@ -3092,25 +3096,25 @@ describe('Discovery Handlers', () => {
     expect(summaryLog).to.include('hybridGasQuoteFallbackSuccesses=1');
   });
 
-  it('preserves configured factory liquidity source allowlists during hybrid gas quote fallback reruns', async () => {
-    const { factoryQuoteStub, takeLiquidationDirectDexStub } =
+  it('preserves configured TakerRouter liquidity source allowlists during hybrid gas quote fallback reruns', async () => {
+    const { directDexQuoteStub, takeLiquidationDirectDexStub } =
       await runHybridGasFallbackScenario({
         takePolicyOverrides: {
           allowedLiquiditySources: [LiquiditySource.UNISWAPV3],
         },
-        factoryEvaluations: [
+        directDexEvaluations: [
           createNativeToQuoteGasConversionReject(),
-          createHybridGasFallbackFactoryQuote(),
+          createHybridGasFallbackDirectDexQuote(),
         ],
       });
 
     expect(takeLiquidationDirectDexStub.calledOnce).to.equal(true);
-    expect(factoryQuoteStub.callCount).to.be.greaterThan(1);
+    expect(directDexQuoteStub.callCount).to.be.greaterThan(1);
     expect(
-      factoryQuoteStub.firstCall.args[7]!.allowedLiquiditySources
+      directDexQuoteStub.firstCall.args[7]!.allowedLiquiditySources
     ).to.deep.equal([LiquiditySource.UNISWAPV3]);
     expect(
-      factoryQuoteStub.secondCall.args[7]!.allowedLiquiditySources
+      directDexQuoteStub.secondCall.args[7]!.allowedLiquiditySources
     ).to.deep.equal([LiquiditySource.UNISWAPV3]);
   });
 
@@ -3203,10 +3207,10 @@ describe('Discovery Handlers', () => {
       .stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator')
       .resolves(true);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
@@ -3287,8 +3291,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -3305,14 +3309,14 @@ describe('Discovery Handlers', () => {
     ).to.be.true;
   });
 
-  it('refuses execution when a factory hybrid quote has no selected factory source', async () => {
+  it('refuses execution when a direct DEX hybrid quote has no selected direct DEX source', async () => {
     const debugStub = sinon.stub(logger, 'debug');
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
     sinon.stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator').resolves(true);
     sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       externalTakePath: 'direct_dex',
       quoteAmount: 125,
@@ -3392,8 +3396,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -3461,8 +3465,8 @@ describe('Discovery Handlers', () => {
         .resolves(true);
       const rpcCache: any = {
         chainId: 1,
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       };
       const transports = createDiscoveryTransports(
         ethers.utils.parseUnits('1', 'gwei')
@@ -3673,14 +3677,14 @@ describe('Discovery Handlers', () => {
     }
   });
 
-  it('does not let an abandoned factory-first probe run approval after timeout', async () => {
+  it('does not let an abandoned direct DEX first probe run approval after timeout', async () => {
     const clock = sinon.useFakeTimers();
     try {
-      const factoryDeferred = createDeferred<any>();
+      const directDexDeferred = createDeferred<any>();
       sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
       sinon
-        .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
-        .returns(factoryDeferred.promise as any);
+        .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
+        .returns(directDexDeferred.promise as any);
       sinon
         .stub(oneInchAggregatorQuoteModule, 'getOneInchAggregatorPathQuoteEvaluation')
         .resolves({
@@ -3688,13 +3692,13 @@ describe('Discovery Handlers', () => {
           reason: '1inch rejected',
         });
       sinon.stub(oneInchAggregatorExecutionModule, 'takeLiquidationOneInchAggregator').resolves(true);
-      sinon.stub(takeFactoryModule, 'takeLiquidationDirectDex').resolves(true);
+      sinon.stub(directDexModule, 'takeLiquidationDirectDex').resolves(true);
 
       const transports = createDiscoveryTransports(
         ethers.utils.parseUnits('1', 'gwei')
       );
       const pool = {
-        name: 'Hybrid Factory Timeout Pool',
+        name: 'Hybrid Direct DEX Timeout Pool',
         poolAddress: '0x7777777777777777777777777777777777784',
         quoteAddress: '0x2222222222222222222222222222222222222222',
         collateralAddress: '0x3333333333333333333333333333333333333333',
@@ -3728,7 +3732,7 @@ describe('Discovery Handlers', () => {
           candidates: [
             {
               poolAddress: pool.poolAddress,
-              borrower: '0xBorrowerHybridFactoryTimeout',
+              borrower: '0xBorrowerHybridDirectDexTimeout',
               kickTime: Date.now(),
               debtRemaining: '1',
               collateralRemaining: '1',
@@ -3755,8 +3759,8 @@ describe('Discovery Handlers', () => {
         transports,
         rpcCache: {
           chainId: 1,
-          factoryQuoteProviders:
-            takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+          directDexQuoteProviders:
+            directDexModule.createDirectDexQuoteProviderRuntimeCache(),
         },
       });
 
@@ -3764,7 +3768,7 @@ describe('Discovery Handlers', () => {
       await handlePromise;
       expect(transports.readRpc.getGasPrice.called).to.be.false;
 
-      factoryDeferred.resolve({
+      directDexDeferred.resolve({
         isTakeable: true,
         externalTakePath: 'direct_dex',
         selectedLiquiditySource: LiquiditySource.UNISWAPV3,
@@ -4623,11 +4627,11 @@ describe('Discovery Handlers', () => {
     expect(takeLiquidationStub.calledOnce).to.be.true;
   });
 
-  it('reuses fresh factory route gas policy during discovered take approval', async () => {
+  it('reuses fresh direct DEX route gas policy during discovered take approval', async () => {
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       quoteAmount: 120,
       quoteAmountRaw: ethers.utils.parseUnits('120', 6),
@@ -4651,7 +4655,7 @@ describe('Discovery Handlers', () => {
       price: ethers.utils.parseEther('100'),
     });
     const pool = {
-      name: 'Fresh Factory Gas Policy Pool',
+      name: 'Fresh Direct DEX Gas Policy Pool',
       poolAddress: '0xfafafafafafafafafafafafafafafafafafafafa',
       quoteAddress: '0x2222222222222222222222222222222222222222',
       collateralAddress: '0x3333333333333333333333333333333333333333',
@@ -4684,7 +4688,7 @@ describe('Discovery Handlers', () => {
         candidates: [
           {
             poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerFreshFactoryGas',
+            borrower: '0xBorrowerFreshDirectDexGas',
             kickTime: Date.now(),
             debtRemaining: '1',
             collateralRemaining: '1',
@@ -4710,8 +4714,8 @@ describe('Discovery Handlers', () => {
         chainId: 8453,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 
@@ -4719,13 +4723,13 @@ describe('Discovery Handlers', () => {
     expect(transports.readRpc.getGasPrice.calledOnce).to.be.true;
   });
 
-  it('rechecks stale L1 factory route gas policy during discovered take approval', async () => {
+  it('rechecks stale L1 direct DEX route gas policy during discovered take approval', async () => {
     const nowMs = 100_000;
     sinon.stub(Date, 'now').returns(nowMs);
     const takeLiquidationDirectDexStub = sinon
-      .stub(takeFactoryModule, 'takeLiquidationDirectDex')
+      .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
-    sinon.stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation').resolves({
+    sinon.stub(directDexModule, 'getDirectDexTakeQuoteEvaluation').resolves({
       isTakeable: true,
       quoteAmount: 120,
       quoteAmountRaw: ethers.utils.parseUnits('120', 6),
@@ -4749,7 +4753,7 @@ describe('Discovery Handlers', () => {
       price: ethers.utils.parseEther('100'),
     });
     const pool = {
-      name: 'Stale L1 Factory Gas Policy Pool',
+      name: 'Stale L1 Direct DEX Gas Policy Pool',
       poolAddress: '0xfafafafafafafafafafafafafafafafafafafafa',
       quoteAddress: '0x2222222222222222222222222222222222222222',
       collateralAddress: '0x3333333333333333333333333333333333333333',
@@ -4782,7 +4786,7 @@ describe('Discovery Handlers', () => {
         candidates: [
           {
             poolAddress: pool.poolAddress,
-            borrower: '0xBorrowerStaleFactoryGas',
+            borrower: '0xBorrowerStaleDirectDexGas',
             kickTime: Date.now(),
             debtRemaining: '1',
             collateralRemaining: '1',
@@ -4808,8 +4812,8 @@ describe('Discovery Handlers', () => {
         chainId: 1,
         gasPrice: ethers.utils.parseUnits('1', 'gwei'),
         gasPriceFetchedAt: nowMs - 6_000,
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     });
 

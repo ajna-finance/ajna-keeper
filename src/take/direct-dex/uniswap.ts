@@ -3,12 +3,12 @@ import { BigNumber, ethers } from 'ethers';
 import {
   DEFAULT_FEE_TIER_BY_SOURCE,
   LiquiditySource,
-  resolveUniswapV3FactoryRouteConfig,
+  resolveUniswapV3DirectDexRouteConfig,
 } from '../../config';
 import { logger } from '../../logging';
 import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
 import {
-  ApprovedUniswapV3FactoryQuoteEvaluation,
+  ApprovedUniswapV3DirectDexQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
@@ -21,29 +21,29 @@ import {
 } from '../../utils';
 import { TakerRouter__factory } from '../../../typechain-types';
 import {
-  FactoryExecutionConfig,
-  FactoryQuoteConfig,
-  FactoryQuoteProviderRuntimeCache,
-  FactoryRouteEvaluationContext,
-  buildFactoryRouteEvaluationContext,
-  buildFactoryQuoteEvaluation,
-  computeFactoryAmountOutMinimum,
-  DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
-  formatFactoryExecutionLog,
-  formatFactoryPriceCheckLog,
-  formatFactoryQuoteRequestLog,
-  formatFactoryTakeSubmissionLog,
+  DirectDexExecutionConfig,
+  DirectDexQuoteConfig,
+  DirectDexQuoteProviderRuntimeCache,
+  DirectDexRouteEvaluationContext,
+  buildDirectDexRouteEvaluationContext,
+  buildDirectDexQuoteEvaluation,
+  computeDirectDexAmountOutMinimum,
+  DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
+  formatDirectDexExecutionLog,
+  formatDirectDexPriceCheckLog,
+  formatDirectDexQuoteRequestLog,
+  formatDirectDexTakeSubmissionLog,
   getSlippageFloorQuoteRaw,
   getUniswapV3QuoteProvider,
   getSwapDeadlineCached,
-} from './shared';
+} from './route-selection';
 import {
   resolveTakeWriteTransport,
   submitTakeTransaction,
 } from '../write-transport';
 import { logTakeExecutionTelemetry } from '../execution-telemetry';
 
-export async function evaluateUniswapV3FactoryQuote({
+export async function evaluateUniswapV3DirectDexQuote({
   pool,
   auctionPriceWad,
   collateral,
@@ -58,22 +58,22 @@ export async function evaluateUniswapV3FactoryQuote({
   auctionPriceWad: BigNumber;
   collateral: BigNumber;
   poolConfig: TakeActionConfig;
-  config: Pick<FactoryQuoteConfig, 'uniswapV3RouterOverrides'>;
+  config: Pick<DirectDexQuoteConfig, 'uniswapV3RouterOverrides'>;
   signer: Signer;
-  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  runtimeCache?: DirectDexQuoteProviderRuntimeCache;
   feeTier?: number;
-  routeContext?: FactoryRouteEvaluationContext;
+  routeContext?: DirectDexRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
-  const routerConfig = resolveUniswapV3FactoryRouteConfig(
+  const routerConfig = resolveUniswapV3DirectDexRouteConfig(
     config.uniswapV3RouterOverrides
   );
   if (!routerConfig) {
     logger.debug(
-      `Factory: Incomplete uniswapV3RouterOverrides configured for pool ${pool.name}`
+      `Direct DEX: Incomplete uniswapV3RouterOverrides configured for pool ${pool.name}`
     );
     return {
       isTakeable: false,
-      reason: 'missing required Uniswap V3 factory route configuration',
+      reason: 'missing required Uniswap V3 direct DEX route configuration',
     };
   }
 
@@ -85,7 +85,7 @@ export async function evaluateUniswapV3FactoryQuote({
     });
     if (!quoteProvider) {
       logger.debug(
-        `Factory: UniswapV3QuoteProvider not available for pool ${pool.name}`
+        `Direct DEX: UniswapV3QuoteProvider not available for pool ${pool.name}`
       );
       return {
         isTakeable: false,
@@ -95,12 +95,12 @@ export async function evaluateUniswapV3FactoryQuote({
 
     const quoterAddress = quoteProvider.getQuoterAddress();
     logger.debug(
-      `Factory: Using QuoterV2 at ${quoterAddress} for pool ${pool.name}`
+      `Direct DEX: Using QuoterV2 at ${quoterAddress} for pool ${pool.name}`
     );
 
     const context =
       routeContext ??
-      (await buildFactoryRouteEvaluationContext({
+      (await buildDirectDexRouteEvaluationContext({
         pool,
         signer,
         auctionPriceWad,
@@ -114,7 +114,7 @@ export async function evaluateUniswapV3FactoryQuote({
       routerConfig.defaultFeeTier ??
       DEFAULT_FEE_TIER_BY_SOURCE[LiquiditySource.UNISWAPV3];
     logger.debug(
-      formatFactoryQuoteRequestLog({
+      formatDirectDexQuoteRequestLog({
         source: LiquiditySource.UNISWAPV3,
         poolName: pool.name,
         collateralAmount: ethers.utils.formatUnits(
@@ -136,13 +136,13 @@ export async function evaluateUniswapV3FactoryQuote({
           outputDecimals: context.quoteTokenDecimals,
         }
       ),
-      DEFAULT_FACTORY_ROUTE_RPC_TIMEOUT_MS,
+      DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
       'Uniswap V3 quote'
     );
 
     if (!quoteResult.success || !quoteResult.dstAmount) {
       logger.debug(
-        `Factory: Failed to get official Uniswap V3 quote for pool ${pool.name}: ${quoteResult.error}`
+        `Direct DEX: Failed to get official Uniswap V3 quote for pool ${pool.name}: ${quoteResult.error}`
       );
       return {
         isTakeable: false,
@@ -159,7 +159,7 @@ export async function evaluateUniswapV3FactoryQuote({
 
     if (collateralAmount <= 0 || quoteAmount <= 0) {
       logger.debug(
-        `Factory: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`
+        `Direct DEX: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`
       );
       return {
         isTakeable: false,
@@ -170,7 +170,7 @@ export async function evaluateUniswapV3FactoryQuote({
     const marketPriceFactor = poolConfig.take.marketPriceFactor;
     if (!marketPriceFactor) {
       logger.debug(
-        `Factory: No marketPriceFactor configured for pool ${pool.name}`
+        `Direct DEX: No marketPriceFactor configured for pool ${pool.name}`
       );
       return {
         isTakeable: false,
@@ -178,7 +178,7 @@ export async function evaluateUniswapV3FactoryQuote({
       };
     }
 
-    const evaluation = await buildFactoryQuoteEvaluation({
+    const evaluation = await buildDirectDexQuoteEvaluation({
       pool,
       auctionPriceWad,
       collateral,
@@ -199,7 +199,7 @@ export async function evaluateUniswapV3FactoryQuote({
     });
 
     logger.debug(
-      formatFactoryPriceCheckLog({
+      formatDirectDexPriceCheckLog({
         source: LiquiditySource.UNISWAPV3,
         poolName: pool.name,
         auctionPrice,
@@ -213,7 +213,7 @@ export async function evaluateUniswapV3FactoryQuote({
     return evaluation;
   } catch (error) {
     logger.error(
-      `Factory: Error getting official Uniswap V3 quote for pool ${pool.name}: ${error}`
+      `Direct DEX: Error getting official Uniswap V3 quote for pool ${pool.name}: ${error}`
     );
     return {
       isTakeable: false,
@@ -222,7 +222,7 @@ export async function evaluateUniswapV3FactoryQuote({
   }
 }
 
-export async function executeUniswapV3FactoryTake({
+export async function executeUniswapV3DirectDexTake({
   pool,
   poolConfig,
   signer,
@@ -234,35 +234,35 @@ export async function executeUniswapV3FactoryTake({
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
-  quoteEvaluation: ApprovedUniswapV3FactoryQuoteEvaluation;
+  quoteEvaluation: ApprovedUniswapV3DirectDexQuoteEvaluation;
   config: Pick<
-    FactoryExecutionConfig,
+    DirectDexExecutionConfig,
     | 'keeperTakerRouter'
     | 'uniswapV3RouterOverrides'
     | 'takeWriteTransport'
     | 'runtimeCache'
-    | 'onFactoryExecutionFailure'
+    | 'onDirectDexExecutionFailure'
   >;
 }): Promise<void> {
   let attemptedSubmission = false;
   try {
     const takeWriteTransport = resolveTakeWriteTransport(signer, config);
-    const factory = TakerRouter__factory.connect(
+    const router = TakerRouter__factory.connect(
       config.keeperTakerRouter!,
       signer
     );
 
-    const routerConfig = resolveUniswapV3FactoryRouteConfig(
+    const routerConfig = resolveUniswapV3DirectDexRouteConfig(
       config.uniswapV3RouterOverrides
     );
     if (!routerConfig) {
       const message =
-        'Factory: complete dex.uniswapV3.router configuration required for UniswapV3 takes';
+        'Direct DEX: complete dex.uniswapV3.router configuration required for UniswapV3 takes';
       logger.error(message);
       throw new Error(message);
     }
     const swapRouterAddress = routerConfig.swapRouter02Address;
-    const routerAmountOutMinimum = await computeFactoryAmountOutMinimum({
+    const routerAmountOutMinimum = await computeDirectDexAmountOutMinimum({
       pool,
       liquidation,
       quoteEvaluation,
@@ -273,7 +273,7 @@ export async function executeUniswapV3FactoryTake({
     });
 
     logger.debug(
-      formatFactoryExecutionLog({
+      formatDirectDexExecutionLog({
         source: LiquiditySource.UNISWAPV3,
         poolName: pool.name,
         collateralWad: liquidation.collateral,
@@ -304,7 +304,7 @@ export async function executeUniswapV3FactoryTake({
     );
 
     logger.debug(
-      formatFactoryTakeSubmissionLog({
+      formatDirectDexTakeSubmissionLog({
         source: LiquiditySource.UNISWAPV3,
         poolAddress: pool.poolAddress,
         borrower: liquidation.borrower,
@@ -324,11 +324,11 @@ export async function executeUniswapV3FactoryTake({
           encodedSwapDetails,
         ] as const;
         const gasLimit = await estimateGasWithBuffer(
-          () => factory.estimateGas.takeWithAtomicSwap(...txArgs),
-          `Factory Uniswap take ${pool.name}/${liquidation.borrower}`,
+          () => router.estimateGas.takeWithAtomicSwap(...txArgs),
+          `Direct DEX Uniswap take ${pool.name}/${liquidation.borrower}`,
           13000
         );
-        const txRequest = await factory.populateTransaction.takeWithAtomicSwap(
+        const txRequest = await router.populateTransaction.takeWithAtomicSwap(
           ...txArgs,
           {
             gasLimit,
@@ -358,14 +358,14 @@ export async function executeUniswapV3FactoryTake({
     });
 
     logger.info(
-      `Factory Uniswap V3 Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
+      `Direct DEX Uniswap V3 Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
     );
   } catch (error) {
     logger.error(
-      `Factory: Failed to Uniswap V3 Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
+      `Direct DEX: Failed to Uniswap V3 Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
       error
     );
-    config.onFactoryExecutionFailure?.({
+    config.onDirectDexExecutionFailure?.({
       preBroadcast:
         !attemptedSubmission && !isNonceConsumedTransactionError(error),
       error: getErrorMessage(error),

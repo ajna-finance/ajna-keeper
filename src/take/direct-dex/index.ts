@@ -17,52 +17,52 @@ import {
   bindExternalTakeQuoteToExecutionResult,
   getExternalTakeExecutionPlanPrimaryEvaluation,
 } from '../external-take/execution-plan';
-import { approveFactoryQuoteForExecution } from '../external-take/quote-approval';
+import { approveDirectDexQuoteForExecution } from '../external-take/quote-approval-rules';
 import {
-  FactoryExecutionConfig,
-  FactoryQuoteConfig,
-  FactoryQuoteProviderRuntimeCache,
-  FactoryRouteCandidate,
-  FactoryRouteSelectionOptions,
-  FactoryTakeParams,
-  applyFactoryRouteProfitabilityPolicy,
-  buildFactoryRouteEvaluationContext,
-  filterFactoryRouteCandidatesByAvailability,
-  formatFactoryRouteCandidate,
-  getFactoryRouteCandidates,
-  orderFactoryRouteCandidates,
-  recordFactoryRouteSuccess,
-  selectBestFactoryRouteEvaluation,
+  DirectDexExecutionConfig,
+  DirectDexQuoteConfig,
+  DirectDexQuoteProviderRuntimeCache,
+  DirectDexRouteCandidate,
+  DirectDexRouteSelectionOptions,
+  DirectDexTakeParams,
+  applyDirectDexRouteProfitabilityPolicy,
+  buildDirectDexRouteEvaluationContext,
+  filterDirectDexRouteCandidatesByAvailability,
+  formatDirectDexRouteCandidate,
+  getDirectDexRouteCandidates,
+  orderDirectDexRouteCandidates,
+  recordDirectDexRouteSuccess,
+  selectBestDirectDexRouteEvaluation,
   throwIfRouteProbeAborted,
-} from './shared';
-import { evaluateCurveFactoryQuote, executeCurveFactoryTake } from './curve';
+} from './route-selection';
+import { evaluateCurveDirectDexQuote, executeCurveDirectDexTake } from './curve';
 import {
-  evaluateUniswapV3FactoryQuote,
-  executeUniswapV3FactoryTake,
+  evaluateUniswapV3DirectDexQuote,
+  executeUniswapV3DirectDexTake,
 } from './uniswap';
 
-const FACTORY_ROUTE_QUOTE_CONCURRENCY = 3;
+const DIRECT_DEX_ROUTE_QUOTE_CONCURRENCY = 3;
 
 export type {
-  FactoryExecutionConfig,
-  FactoryQuoteConfig,
-  FactoryQuoteProviderRuntimeCache,
-  FactoryQuoteProviderRuntimeStats,
-  FactoryRouteProfitabilityContext,
-  FactoryRouteSelectionOptions,
-  FactoryTakeParams,
-} from './shared';
+  DirectDexExecutionConfig,
+  DirectDexQuoteConfig,
+  DirectDexQuoteProviderRuntimeCache,
+  DirectDexQuoteProviderRuntimeStats,
+  DirectDexRouteProfitabilityContext,
+  DirectDexRouteSelectionOptions,
+  DirectDexTakeParams,
+} from './route-selection';
 export {
-  computeFactoryAmountOutMinimum,
-  createFactoryQuoteProviderRuntimeCache,
-  prewarmFactoryRouteAvailability,
-} from './shared';
+  computeDirectDexAmountOutMinimum,
+  createDirectDexQuoteProviderRuntimeCache,
+  prewarmDirectDexRouteAvailability,
+} from './route-selection';
 
-export function createFactoryTakeAdapter(params: {
-  quoteConfig: FactoryQuoteConfig;
-  runtimeCache?: FactoryQuoteProviderRuntimeCache;
-  routeSelection?: FactoryRouteSelectionOptions;
-}): ExternalTakeAdapter<TakeActionConfig, FactoryExecutionConfig> {
+export function createDirectDexTakeAdapter(params: {
+  quoteConfig: DirectDexQuoteConfig;
+  runtimeCache?: DirectDexQuoteProviderRuntimeCache;
+  routeSelection?: DirectDexRouteSelectionOptions;
+}): ExternalTakeAdapter<TakeActionConfig, DirectDexExecutionConfig> {
   return {
     kind: 'direct_dex',
     evaluateExternalTake: async ({
@@ -73,7 +73,7 @@ export function createFactoryTakeAdapter(params: {
       auctionPrice,
       collateral,
     }) => {
-      const quoteEvaluation = await getFactoryTakeQuoteEvaluation(
+      const quoteEvaluation = await getDirectDexTakeQuoteEvaluation(
         pool,
         auctionPrice,
         collateral,
@@ -112,20 +112,20 @@ export function createFactoryTakeAdapter(params: {
   };
 }
 
-export async function getFactoryTakeQuoteEvaluation(
+export async function getDirectDexTakeQuoteEvaluation(
   pool: FungiblePool,
   auctionPriceWad: BigNumber,
   collateral: BigNumber,
   poolConfig: TakeActionConfig,
   config: Pick<
-    FactoryTakeParams['config'],
+    DirectDexTakeParams['config'],
     | 'uniswapV3RouterOverrides'
     | 'curveRouterOverrides'
     | 'tokenAddresses'
   >,
   signer: Signer,
-  runtimeCache?: FactoryQuoteProviderRuntimeCache,
-  routeSelection?: FactoryRouteSelectionOptions
+  runtimeCache?: DirectDexQuoteProviderRuntimeCache,
+  routeSelection?: DirectDexRouteSelectionOptions
 ): Promise<ExternalTakeQuoteEvaluation> {
   if (!poolConfig.take.marketPriceFactor) {
     return {
@@ -136,7 +136,7 @@ export async function getFactoryTakeQuoteEvaluation(
 
   if (!collateral.gt(0)) {
     logger.debug(
-      `Factory: Invalid collateral amount: ${collateral.toString()} for pool ${pool.name}`
+      `Direct DEX: Invalid collateral amount: ${collateral.toString()} for pool ${pool.name}`
     );
     return {
       isTakeable: false,
@@ -151,9 +151,9 @@ export async function getFactoryTakeQuoteEvaluation(
     ) {
       throwIfRouteProbeAborted(
         routeSelection?.routeProbeAbortSignal,
-        'factory route evaluation'
+        'direct DEX route evaluation'
       );
-      const routeContext = await buildFactoryRouteEvaluationContext({
+      const routeContext = await buildDirectDexRouteEvaluationContext({
         pool,
         signer,
         auctionPriceWad,
@@ -163,10 +163,10 @@ export async function getFactoryTakeQuoteEvaluation(
       });
       throwIfRouteProbeAborted(
         routeSelection?.routeProbeAbortSignal,
-        'factory route evaluation context'
+        'direct DEX route evaluation context'
       );
-      const routes = orderFactoryRouteCandidates({
-        routes: getFactoryRouteCandidates({
+      const routes = orderDirectDexRouteCandidates({
+        routes: getDirectDexRouteCandidates({
           defaultLiquiditySource: poolConfig.take.liquiditySource,
           config,
           selection: routeSelection,
@@ -181,10 +181,10 @@ export async function getFactoryTakeQuoteEvaluation(
       const routeRejectionReasons =
         routeProfitabilityContext?.routeRejectionReasonsBySource;
       const evaluations: Array<{
-        route: FactoryRouteCandidate;
+        route: DirectDexRouteCandidate;
         evaluation: ExternalTakeQuoteEvaluation;
       }> = [];
-      const availabilityCandidateRoutes: FactoryRouteCandidate[] = [];
+      const availabilityCandidateRoutes: DirectDexRouteCandidate[] = [];
 
       for (const route of routes) {
         const rejectionReason = routeRejectionReasons?.[route.liquiditySource];
@@ -214,7 +214,7 @@ export async function getFactoryTakeQuoteEvaluation(
       }
 
       const { availableRoutes, unavailableRoutes } =
-        await filterFactoryRouteCandidatesByAvailability({
+        await filterDirectDexRouteCandidatesByAvailability({
           routes: availabilityCandidateRoutes,
           pool,
           signer,
@@ -225,10 +225,10 @@ export async function getFactoryTakeQuoteEvaluation(
         });
       if (unavailableRoutes.length > 0) {
         logger.debug(
-          `Factory: skipped unavailable routes for pool ${pool.name}: ${unavailableRoutes
+          `Direct DEX: skipped unavailable routes for pool ${pool.name}: ${unavailableRoutes
             .map(
               ({ route, reason }) =>
-                `${formatFactoryRouteCandidate(route)}=${reason}`
+                `${formatDirectDexRouteCandidate(route)}=${reason}`
             )
             .join(', ')}`
         );
@@ -236,7 +236,7 @@ export async function getFactoryTakeQuoteEvaluation(
 
       if (
         !routeProfitabilityContext &&
-        routeSelection?.routeProfitabilityContextFactory
+        routeSelection?.routeProfitabilityContextBuilder
       ) {
         const availableSources = Array.from(
           new Set(availableRoutes.map((route) => route.liquiditySource))
@@ -244,16 +244,16 @@ export async function getFactoryTakeQuoteEvaluation(
         if (availableSources.length > 0) {
           throwIfRouteProbeAborted(
             routeSelection?.routeProbeAbortSignal,
-            'factory route profitability context'
+            'direct DEX route profitability context'
           );
           routeProfitabilityContext =
-            await routeSelection.routeProfitabilityContextFactory(
+            await routeSelection.routeProfitabilityContextBuilder(
               availableSources
             );
         }
       }
 
-      const gasRejectedRoutes: FactoryRouteCandidate[] = [];
+      const gasRejectedRoutes: DirectDexRouteCandidate[] = [];
       const gasApprovedRoutes = availableRoutes.filter((route) => {
         const rejectionReason =
           routeProfitabilityContext?.routeRejectionReasonsBySource?.[
@@ -307,35 +307,35 @@ export async function getFactoryTakeQuoteEvaluation(
           : [];
       if (gasRejectedRoutes.length > 0) {
         logger.debug(
-          `Factory: skipped gas-policy-rejected routes for pool ${pool.name}: ${gasRejectedRoutes
+          `Direct DEX: skipped gas-policy-rejected routes for pool ${pool.name}: ${gasRejectedRoutes
             .map(
               (route) =>
-                `${formatFactoryRouteCandidate(route)}=${routeProfitabilityContext?.routeRejectionReasonsBySource?.[route.liquiditySource] ?? 'route gas policy rejected source'}`
+                `${formatDirectDexRouteCandidate(route)}=${routeProfitabilityContext?.routeRejectionReasonsBySource?.[route.liquiditySource] ?? 'route gas policy rejected source'}`
             )
             .join(', ')}`
         );
       }
       if (skippedRoutes.length > 0) {
         logger.debug(
-          `Factory: route quote budget exhausted for pool ${pool.name}; skipped routes=${skippedRoutes
-            .map(formatFactoryRouteCandidate)
+          `Direct DEX: route quote budget exhausted for pool ${pool.name}; skipped routes=${skippedRoutes
+            .map(formatDirectDexRouteCandidate)
             .join(', ')}`
         );
       }
 
-      const evaluateFactoryRoute = async (
-        route: FactoryRouteCandidate
+      const evaluateDirectDexRoute = async (
+        route: DirectDexRouteCandidate
       ): Promise<{
-        route: FactoryRouteCandidate;
+        route: DirectDexRouteCandidate;
         evaluation: ExternalTakeQuoteEvaluation;
       }> => {
         throwIfRouteProbeAborted(
           routeSelection?.routeProbeAbortSignal,
-          `factory quote ${formatFactoryRouteCandidate(route)}`
+          `direct DEX quote ${formatDirectDexRouteCandidate(route)}`
         );
         const rawEvaluation =
           route.liquiditySource === LiquiditySource.UNISWAPV3
-            ? await evaluateUniswapV3FactoryQuote({
+            ? await evaluateUniswapV3DirectDexQuote({
                 pool,
                 auctionPriceWad,
                 collateral,
@@ -347,7 +347,7 @@ export async function getFactoryTakeQuoteEvaluation(
                 routeContext,
               })
             : route.liquiditySource === LiquiditySource.CURVE
-              ? await evaluateCurveFactoryQuote({
+              ? await evaluateCurveDirectDexQuote({
                   pool,
                   auctionPriceWad,
                   collateral,
@@ -362,7 +362,7 @@ export async function getFactoryTakeQuoteEvaluation(
                   reason: `unsupported route source ${route.liquiditySource}`,
                   selectedLiquiditySource: route.liquiditySource,
                 };
-        const evaluation = applyFactoryRouteProfitabilityPolicy({
+        const evaluation = applyDirectDexRouteProfitabilityPolicy({
           evaluation: rawEvaluation,
           liquiditySource: route.liquiditySource,
           context: routeProfitabilityContext,
@@ -372,28 +372,28 @@ export async function getFactoryTakeQuoteEvaluation(
 
       const routeEvaluationResults = await mapWithConcurrencyPreservingOrder(
         routesToEvaluate,
-        FACTORY_ROUTE_QUOTE_CONCURRENCY,
+        DIRECT_DEX_ROUTE_QUOTE_CONCURRENCY,
         async (route) =>
           routeSelection?.routeProbeLimiter
             ? await routeSelection.routeProbeLimiter.run(
-                `factory quote ${formatFactoryRouteCandidate(route)}`,
-                async () => await evaluateFactoryRoute(route),
+                `direct DEX quote ${formatDirectDexRouteCandidate(route)}`,
+                async () => await evaluateDirectDexRoute(route),
                 { signal: routeSelection.routeProbeAbortSignal }
               )
-            : await evaluateFactoryRoute(route)
+            : await evaluateDirectDexRoute(route)
       );
 
       if (routeEvaluationResults.length > 1) {
         logger.debug(
-          `Factory: quoted ${routeEvaluationResults.length} route(s) for pool ${pool.name} with concurrency=${Math.min(
-            FACTORY_ROUTE_QUOTE_CONCURRENCY,
+          `Direct DEX: quoted ${routeEvaluationResults.length} route(s) for pool ${pool.name} with concurrency=${Math.min(
+            DIRECT_DEX_ROUTE_QUOTE_CONCURRENCY,
             routeEvaluationResults.length
           )}`
         );
       }
       evaluations.push(...routeEvaluationResults);
 
-      const selectedRoute = selectBestFactoryRouteEvaluation({
+      const selectedRoute = selectBestDirectDexRouteEvaluation({
         evaluations,
         defaultLiquiditySource: poolConfig.take.liquiditySource,
         config,
@@ -401,7 +401,7 @@ export async function getFactoryTakeQuoteEvaluation(
       if (selectedRoute) {
         const selected = selectedRoute.evaluation;
         logger.debug(
-          `Factory: selected route source=${selected.selectedLiquiditySource} feeTier=${selected.selectedFeeTier ?? 'n/a'} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} requiredOutputFloorRaw=${selected.routeProfitability?.requiredOutputFloorQuoteRaw?.toString() ?? selected.approvedMinOutRaw?.toString() ?? 'n/a'} surplusRaw=${selected.routeProfitability?.surplusOverFloorQuoteRaw?.toString() ?? 'n/a'} for pool ${pool.name}${
+          `Direct DEX: selected route source=${selected.selectedLiquiditySource} feeTier=${selected.selectedFeeTier ?? 'n/a'} expectedNetProfitRaw=${selected.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} requiredOutputFloorRaw=${selected.routeProfitability?.requiredOutputFloorQuoteRaw?.toString() ?? selected.approvedMinOutRaw?.toString() ?? 'n/a'} surplusRaw=${selected.routeProfitability?.surplusOverFloorQuoteRaw?.toString() ?? 'n/a'} for pool ${pool.name}${
             skippedRoutes.length > 0 ? ' (route quote budget limited)' : ''
           }`
         );
@@ -411,15 +411,15 @@ export async function getFactoryTakeQuoteEvaluation(
       const reason = [
         ...evaluations.map(
           ({ route, evaluation }) =>
-            `${formatFactoryRouteCandidate(route)}=${evaluation.reason ?? 'not takeable'}`
+            `${formatDirectDexRouteCandidate(route)}=${evaluation.reason ?? 'not takeable'}`
         ),
         ...unavailableRoutes.map(
           ({ route, reason }) =>
-            `${formatFactoryRouteCandidate(route)}=${reason}`
+            `${formatDirectDexRouteCandidate(route)}=${reason}`
         ),
         ...skippedRoutes.map(
           (route) =>
-            `${formatFactoryRouteCandidate(route)}=skipped by route quote budget`
+            `${formatDirectDexRouteCandidate(route)}=skipped by route quote budget`
         ),
       ].join('; ');
       const gasRejectedEvaluation = evaluations
@@ -431,14 +431,14 @@ export async function getFactoryTakeQuoteEvaluation(
       return {
         isTakeable: false,
         reason: reason
-          ? `no viable factory route: ${reason}`
-          : 'no factory routes configured',
+          ? `no viable direct DEX route: ${reason}`
+          : 'no direct DEX routes configured',
         routeProfitability: gasRejectedEvaluation?.routeProfitability,
       };
     }
 
     logger.debug(
-      `Factory: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`
+      `Direct DEX: Unsupported liquidity source: ${poolConfig.take.liquiditySource}`
     );
     return {
       isTakeable: false,
@@ -446,7 +446,7 @@ export async function getFactoryTakeQuoteEvaluation(
     };
   } catch (error) {
     logger.error(
-      `Factory: Failed to check takeability for pool ${pool.name}: ${error}`
+      `Direct DEX: Failed to check takeability for pool ${pool.name}: ${error}`
     );
     return {
       isTakeable: false,
@@ -455,17 +455,17 @@ export async function getFactoryTakeQuoteEvaluation(
   }
 }
 
-function failFactoryTakeExecution(message: string): false {
+function failDirectDexTakeExecution(message: string): false {
   logger.error(message);
   return false;
 }
 
-function recordExecutedFactoryRouteSuccess(params: {
+function recordExecutedDirectDexRouteSuccess(params: {
   pool: FungiblePool;
   quoteEvaluation: ApprovedDirectDexQuoteEvaluation;
-  runtimeCache?: FactoryQuoteProviderRuntimeCache;
+  runtimeCache?: DirectDexQuoteProviderRuntimeCache;
 }): void {
-  recordFactoryRouteSuccess({
+  recordDirectDexRouteSuccess({
     route: {
       liquiditySource: params.quoteEvaluation.selectedLiquiditySource,
       feeTier: params.quoteEvaluation.selectedFeeTier,
@@ -475,27 +475,27 @@ function recordExecutedFactoryRouteSuccess(params: {
   });
 }
 
-interface FactoryLiquidationExecutionParams {
+interface DirectDexLiquidationExecutionParams {
   pool: FungiblePool;
   poolConfig: TakeActionConfig;
   signer: Signer;
   liquidation: TakeLiquidationPlan;
   config: Pick<
-    FactoryTakeParams['config'],
+    DirectDexTakeParams['config'],
     | 'dryRun'
     | 'keeperTakerRouter'
     | 'uniswapV3RouterOverrides'
     | 'curveRouterOverrides'
     | 'tokenAddresses'
   > & {
-    takeWriteTransport?: FactoryExecutionConfig['takeWriteTransport'];
-    runtimeCache?: FactoryQuoteProviderRuntimeCache;
-    onFactoryExecutionFailure?: FactoryExecutionConfig['onFactoryExecutionFailure'];
+    takeWriteTransport?: DirectDexExecutionConfig['takeWriteTransport'];
+    runtimeCache?: DirectDexQuoteProviderRuntimeCache;
+    onDirectDexExecutionFailure?: DirectDexExecutionConfig['onDirectDexExecutionFailure'];
   };
 }
 
-async function executeSelectedFactoryRoute(
-  params: FactoryLiquidationExecutionParams & {
+async function executeSelectedDirectDexRoute(
+  params: DirectDexLiquidationExecutionParams & {
     quoteEvaluation: ApprovedDirectDexQuoteEvaluation;
   }
 ): Promise<boolean> {
@@ -503,7 +503,7 @@ async function executeSelectedFactoryRoute(
     params;
 
   if (quoteEvaluation.selectedLiquiditySource === LiquiditySource.UNISWAPV3) {
-    await executeUniswapV3FactoryTake({
+    await executeUniswapV3DirectDexTake({
       pool,
       poolConfig,
       signer,
@@ -512,7 +512,7 @@ async function executeSelectedFactoryRoute(
       config,
     });
   } else {
-    await executeCurveFactoryTake({
+    await executeCurveDirectDexTake({
       pool,
       poolConfig,
       signer,
@@ -522,7 +522,7 @@ async function executeSelectedFactoryRoute(
     });
   }
 
-  recordExecutedFactoryRouteSuccess({
+  recordExecutedDirectDexRouteSuccess({
     pool,
     quoteEvaluation,
     runtimeCache: config.runtimeCache,
@@ -531,7 +531,7 @@ async function executeSelectedFactoryRoute(
 }
 
 /**
- * Execute external take using factory pattern
+ * Execute external take through the Direct DEX router
  */
 export async function takeLiquidationDirectDex({
   pool,
@@ -539,7 +539,7 @@ export async function takeLiquidationDirectDex({
   signer,
   liquidation,
   config,
-}: FactoryLiquidationExecutionParams): Promise<boolean> {
+}: DirectDexLiquidationExecutionParams): Promise<boolean> {
   const { borrower } = liquidation;
   const { dryRun, keeperTakerRouter } = config;
 
@@ -547,7 +547,7 @@ export async function takeLiquidationDirectDex({
     getExternalTakeExecutionPlanPrimaryEvaluation(
       liquidation.externalTakeExecutionPlan
     ) ??
-    (await getFactoryTakeQuoteEvaluation(
+    (await getDirectDexTakeQuoteEvaluation(
       pool,
       liquidation.auctionPrice,
       liquidation.collateral,
@@ -557,26 +557,26 @@ export async function takeLiquidationDirectDex({
       config.runtimeCache
     ));
 
-  const approval = approveFactoryQuoteForExecution({
+  const approval = approveDirectDexQuoteForExecution({
     quoteEvaluation: externalTakeQuoteEvaluation,
     poolName: pool.name,
     borrower,
   });
   if (!approval.approved) {
-    return failFactoryTakeExecution(approval.reason);
+    return failDirectDexTakeExecution(approval.reason);
   }
   const approvedQuoteEvaluation = approval.quoteEvaluation;
 
   if (dryRun) {
     logger.info(
-      `DryRun - would Factory Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, selectedSource=${approvedQuoteEvaluation.selectedLiquiditySource}, selectedFeeTier=${approvedQuoteEvaluation.selectedFeeTier ?? 'n/a'}, approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
+      `DryRun - would Direct DEX Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, selectedSource=${approvedQuoteEvaluation.selectedLiquiditySource}, selectedFeeTier=${approvedQuoteEvaluation.selectedFeeTier ?? 'n/a'}, approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
     );
     return true;
   }
 
   if (!keeperTakerRouter) {
-    return failFactoryTakeExecution(
-      'Factory: keeperTakerRouter address not configured'
+    return failDirectDexTakeExecution(
+      'Direct DEX: keeperTakerRouter address not configured'
     );
   }
 
@@ -587,7 +587,7 @@ export async function takeLiquidationDirectDex({
     ` curvePool=${approvedQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
 
   try {
-    return await executeSelectedFactoryRoute({
+    return await executeSelectedDirectDexRoute({
       pool,
       poolConfig,
       signer,
@@ -597,7 +597,7 @@ export async function takeLiquidationDirectDex({
     });
   } catch (error) {
     logger.error(
-      `Factory take execution failed for ${pool.name}/${borrower} ${routeMetadata}`,
+      `Direct DEX take execution failed for ${pool.name}/${borrower} ${routeMetadata}`,
       error
     );
     return false;

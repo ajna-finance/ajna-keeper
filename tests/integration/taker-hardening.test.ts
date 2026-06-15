@@ -338,7 +338,7 @@ describe('Taker hardening regressions', () => {
       ).to.equal(true);
 
       // AUDIT FIX regression (ported from the removed direct-Sushi case): the
-      // factory takers' SwapExecuted was declared but never emitted, leaving
+      // direct DEX takers' SwapExecuted was declared but never emitted, leaving
       // successful takes invisible to per-swap monitoring. UniswapV3 is the
       // surviving direct-DEX taker carrying this emission assertion.
       const swapEvent = receipt.events?.find((e) => e.event === 'SwapExecuted');

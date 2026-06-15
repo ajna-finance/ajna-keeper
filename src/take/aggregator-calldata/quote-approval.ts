@@ -3,7 +3,7 @@ import {
   CalldataAggregatorProviderId,
   getAggregatorProviderIdentity,
 } from '../../config';
-import { deriveApprovedMinOutRaw } from '../direct-dex/shared';
+import { deriveApprovedMinOutRaw } from '../external-take/quote-economics';
 import {
   ApprovedCalldataAggregatorQuoteEvaluation,
   ExternalTakeQuoteEvaluation,

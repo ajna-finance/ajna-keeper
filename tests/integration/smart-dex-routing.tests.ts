@@ -162,7 +162,7 @@ describe('Manual External Take Routing Integration Tests', () => {
 
   describe('Take Settings Integration', () => {
     it('validates Uniswap V3 take settings with factory config', async () => {
-      const factoryConfig = {
+      const directDexConfig = {
         takers: {
           factory: '0x1234567890123456789012345678901234567890',
           contracts: {
@@ -189,7 +189,7 @@ describe('Manual External Take Routing Integration Tests', () => {
             marketPriceFactor: 0.95,
             hpbPriceFactor: 0.98,
           },
-          factoryConfig as any
+          directDexConfig as any
         );
       }).to.not.throw();
     });
@@ -224,7 +224,7 @@ describe('Manual External Take Routing Integration Tests', () => {
       }).to.not.throw();
     });
 
-    it('validates LI.FI take settings with factory taker config in dry run', async () => {
+    it('validates LI.FI take settings with direct DEX taker config in dry run', async () => {
       const lifiConfig = {
         runtime: {
           dryRun: true,

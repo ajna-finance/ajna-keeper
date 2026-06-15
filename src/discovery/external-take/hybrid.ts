@@ -33,8 +33,8 @@ import { cloneExternalTakeQuoteEvaluation } from './evaluation';
 import { refreshAndReapproveDiscoveryExternalTake } from './final-approval';
 import {
   isCalldataAggregatorExternalTakeRoute,
-  isOneInchExternalTakeRoute,
-} from '../../take/external-take/route';
+  resolveExternalTakeRouteIdentity,
+} from '../../take/external-take/route-binding';
 import {
   DiscoveryExternalExecutionConfig,
   ExternalTakeQuoteCircuitOutcome,
@@ -443,15 +443,15 @@ async function buildHybridGasQuoteFallbackEvaluation(
   const fallbackQuote = await params.providerRegistry
     .selectExternalTakeProvider({ selectedPath: 'direct_dex' })
     .quote({
-    pool: params.pool,
-    signer: params.signer,
-    poolConfig: params.poolConfig,
-    price: params.price,
-    auctionPrice: params.auctionPrice,
-    collateral: params.collateral,
-    debtToCover: params.debtToCover,
-    intent: { kind: HYBRID_GAS_QUOTE_FALLBACK_KIND },
-  });
+      pool: params.pool,
+      signer: params.signer,
+      poolConfig: params.poolConfig,
+      price: params.price,
+      auctionPrice: params.auctionPrice,
+      collateral: params.collateral,
+      debtToCover: params.debtToCover,
+      intent: { kind: HYBRID_GAS_QUOTE_FALLBACK_KIND },
+    });
   if (!fallbackQuote.isTakeable) {
     logger.debug(
       `Hybrid gas quote fallback direct_dex quote rejected for pool ${params.pool.name}: ${fallbackQuote.reason ?? 'not takeable'}`
@@ -581,10 +581,7 @@ export async function evaluateHybridExternalTakeForDiscovery(
           evaluation: cloneExternalTakeQuoteEvaluation(evaluation),
         })
       );
-    if (
-      isOneInchExternalTakeRoute(selected) ||
-      isCalldataAggregatorExternalTakeRoute(selected)
-    ) {
+    if (isCalldataAggregatorExternalTakeRoute(selected)) {
       const gasQuoteFallback = await buildGasQuoteFallbackEvaluation();
       if (gasQuoteFallback) {
         fallbackCandidates.push(gasQuoteFallback);
@@ -724,11 +721,12 @@ export async function executeHybridExternalTakeForDiscovery(params: {
       }),
     };
 
+    const routeIdentity = resolveExternalTakeRouteIdentity(approvedEvaluation);
     const provider = params.providerRegistry.selectExternalTakeProvider({
       selectedPath,
       providerId:
-        'providerId' in approvedEvaluation
-          ? approvedEvaluation.providerId
+        routeIdentity?.path === 'calldata_aggregator'
+          ? routeIdentity.providerId
           : undefined,
     });
     const attempt = await provider.execute({

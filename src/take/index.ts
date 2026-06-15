@@ -34,6 +34,8 @@ import { createArbTakeStrategy } from './arb-strategy';
 
 export { createNoExternalTakeAdapter } from './no-external-take-adapter';
 export { createLifiTakeAdapter } from './lifi/adapter';
+export { createOneInchAggregatorTakeAdapter } from './oneinch-aggregator/adapter';
+export { createSushiAggregatorTakeAdapter } from './sushi-aggregator/adapter';
 export type {
   TakeAuctionStatus,
   TakeAuctionStatusReader,

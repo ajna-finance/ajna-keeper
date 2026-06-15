@@ -42,7 +42,7 @@ import { createDiscoveryRuntime, DiscoveryRuntime } from './discovery/runtime';
 import {
   resolveExternalTakeRouteDeploymentPreflight,
   validateExternalTakeRouteDeployments,
-} from './discovery/route-preflight';
+} from './discovery/route-preflight-validation';
 import {
   createSubgraphReader,
   getSubgraphTransportConfig,

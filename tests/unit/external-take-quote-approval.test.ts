@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { BigNumber } from 'ethers';
 import { LiquiditySource } from '../../src/config';
-import { bindExternalTakeRouteForDiscovery } from '../../src/take/external-take/quote-approval';
+import { bindExternalTakeRouteForDiscovery } from '../../src/take/external-take/quote-approval-rules';
 import { ApprovedCalldataAggregatorQuote } from '../../src/take/aggregator-calldata/types';
 
 const oneInchCalldataQuote: ApprovedCalldataAggregatorQuote = {
@@ -74,6 +74,28 @@ describe('external take quote approval', () => {
     expect(boundQuote.selectedLiquiditySource).to.equal(
       LiquiditySource.ONEINCH
     );
+  });
+
+  it('derives calldata aggregator source from validated provider identity', () => {
+    const binding = bindExternalTakeRouteForDiscovery({
+      quoteEvaluation: {
+        isTakeable: true,
+        externalTakePath: 'calldata_aggregator',
+        quoteAmountRaw: BigNumber.from(200),
+        calldataQuote: oneInchCalldataQuote,
+      },
+      poolName: 'Provider Identity Pool',
+      borrower: '0xBorrower',
+    });
+
+    expect(binding.bound).to.equal(true);
+    if (!binding.bound) {
+      return;
+    }
+    expect(binding.quoteEvaluation.selectedLiquiditySource).to.equal(
+      LiquiditySource.ONEINCH
+    );
+    expect(binding.quoteEvaluation.providerId).to.equal('oneinch');
   });
 
   it('rejects retired standalone 1inch path bindings after migration', () => {

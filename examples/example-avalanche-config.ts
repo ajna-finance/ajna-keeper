@@ -50,7 +50,7 @@ const config: KeeperConfig = {
     },
     uniswapV3: {
       router: {
-        swapRouter02Address: '0xbb00FF08d01D300023C629E8fFfFcb65A5a578cE', // Avalanche SwapRouter02 for factory external takes
+        swapRouter02Address: '0xbb00FF08d01D300023C629E8fFfFcb65A5a578cE', // Avalanche SwapRouter02 for direct DEX external takes
         wethAddress: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', // wrapped AVAX as intermediary token
         defaultFeeTier: 3000, // 0.3% as default for this chain
         defaultSlippage: 0.5, // 0.5% as default slippage

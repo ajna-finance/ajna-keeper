@@ -59,8 +59,8 @@ import {
   PriceOriginSource,
   configureAjna,
   readConfigFile,
+  validateAutoDiscoverConfig,
 } from '../../src/config';
-import { validateAutoDiscoverConfig } from '../../src/config/validation';
 import { SECONDS_PER_DAY } from '../../src/constants';
 import {
   assertLifiToolsContainFilters,
@@ -103,7 +103,7 @@ import {
   HybridForkFixture,
   ProductionLifiDexConfig,
   buildForcedDiscoveryPolicy,
-  defaultSourceForHybridPaths,
+  fixtureLiquiditySourceForHybridPaths,
   getHybridLifiApiKey,
   loadHybridForkFixture,
   optionalHybridEnv,
@@ -566,7 +566,9 @@ function buildHybridTakeTarget(params: {
     dryRun: !params.fixture.liveTake,
     take: {
       minCollateral: params.fixture.minCollateral,
-      liquiditySource: defaultSourceForHybridPaths(params.fixture.paths),
+      liquiditySource: fixtureLiquiditySourceForHybridPaths(
+        params.fixture.paths
+      ),
       marketPriceFactor: params.fixture.marketPriceFactor,
     },
     candidates: [
@@ -664,7 +666,7 @@ describe('Hybrid Base-fork discovery loop (oneinch + factory + lifi)', function 
     await constructUnderwaterAuction({ pool, fixture });
 
     // Build the discovery execution config from the reviewed config, but force
-    // the all-three-paths policy and point at the freshly deployed factory.
+    // the all-three-paths policy and point at the freshly deployed router.
     const execBase = getDiscoveryExecutionConfig({
       ...keeperConfig,
       discovery: buildForcedDiscoveryPolicy(fixture),
@@ -698,7 +700,7 @@ describe('Hybrid Base-fork discovery loop (oneinch + factory + lifi)', function 
       const rpcCache = await createDiscoveryRpcCache({
         signer,
         readRpc,
-        includeFactoryQuoteProviders: true,
+        includeDirectDexQuoteProviders: true,
       });
       stats = await handleDiscoveredTakeTarget({
         pool,

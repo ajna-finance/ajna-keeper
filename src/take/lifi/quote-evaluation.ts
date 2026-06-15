@@ -1,16 +1,15 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber, ethers } from 'ethers';
+import { BigNumber } from 'ethers';
 import { LiquiditySource } from '../../config';
 import { ApprovedLifiQuote } from '../../dex/lifi';
 import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
-import { decimaledToWei, getErrorMessage } from '../../utils';
+import { getErrorMessage } from '../../utils';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
-  applyExternalTakeRoutePolicy,
   mergeRoutePolicyIntoEvaluation,
 } from '../external-take/policy';
-import * as factoryShared from '../direct-dex/shared';
+import { buildExternalTakeQuoteEconomics } from '../external-take/quote-economics';
 import { LifiQuoteConfig } from './types';
 import {
   getLifiQuoteFailureMetadata,
@@ -110,53 +109,37 @@ export async function getLifiPathQuoteEvaluation(
     // LI.FI calldata is opaque and cannot be patched with a higher provider
     // min-out. Use the provider's post-fee floor as the economic quote.
     const executableQuoteAmountRaw = approvedQuote.routeMinOutRaw;
-    const collateralAmount = Number(
-      ethers.utils.formatUnits(collateralInTokenDecimals, collateralDecimals)
-    );
-    const quoteAmount = Number(
-      ethers.utils.formatUnits(executableQuoteAmountRaw, quoteDecimals)
-    );
-    const marketPrice = quoteAmount / collateralAmount;
-    const effectiveAuctionPriceWad = auctionPriceWad ?? decimaledToWei(price);
-    const quoteAmountDueRaw = await factoryShared.getQuoteAmountDueRaw(
+    const economics = await buildExternalTakeQuoteEconomics({
       pool,
-      effectiveAuctionPriceWad,
-      collateral
-    );
-    const marketFactorFloorQuoteRaw = factoryShared.ceilDiv(
-      quoteAmountDueRaw.mul(factoryShared.MARKET_FACTOR_SCALE),
-      BigNumber.from(
-        factoryShared.getMarketPriceFactorUnits(
-          poolConfig.take.marketPriceFactor
-        )
-      )
-    );
-    const policy = applyExternalTakeRoutePolicy({
-      configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
-      allowSubsidy: poolConfig.take.allowSubsidy === true,
+      displayAuctionPrice: price,
+      auctionPriceWad,
+      collateralWad: collateral,
+      collateralInTokenDecimals,
+      collateralDecimals,
+      quoteDecimals,
       quoteAmountRaw: executableQuoteAmountRaw,
-      quoteDueRaw: quoteAmountDueRaw,
-      marketFactorFloorQuoteRaw,
       routeMinOutRaw: approvedQuote.routeMinOutRaw,
+      marketPriceFactor: poolConfig.take.marketPriceFactor,
+      allowSubsidy: poolConfig.take.allowSubsidy,
     });
-    const takeablePrice = marketPrice * policy.effectiveMarketPriceFactor;
+    const policy = economics.policy;
 
     logger.info(
-      `LI.FI take check for pool ${pool.name}: marketPrice=${marketPrice.toFixed(6)}, takeablePrice=${takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${collateralAmount}, factor=${poolConfig.take.marketPriceFactor}, lifiMode=${lifiConfig.mode}, topLevelType=${getLifiTopLevelQuoteType(approvedQuote)}, topLevelTool=${getLifiTopLevelQuoteTool(approvedQuote)}, effectiveTool=${approvedQuote.tool}, expectedOutputRaw=${approvedQuote.quoteAmountRaw.toString()}, routeMinOutRaw=${approvedQuote.routeMinOutRaw.toString()}, approvedMinOutRaw=${policy.approvedMinOutRaw.toString()}, target=${approvedQuote.transactionTarget}, transactionTarget=${approvedQuote.transactionRequest.to}, approvalSpender=${approvedQuote.approvalSpender}, selector=${approvedQuote.selector}, rejectionReason=${policy.rejectionReason ?? 'none'} -> ${policy.isEconomicallyExecutable ? 'TAKEABLE' : 'skip'}`
+      `LI.FI take check for pool ${pool.name}: marketPrice=${economics.marketPrice.toFixed(6)}, takeablePrice=${economics.takeablePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, collateral=${economics.collateralAmount}, factor=${poolConfig.take.marketPriceFactor}, lifiMode=${lifiConfig.mode}, topLevelType=${getLifiTopLevelQuoteType(approvedQuote)}, topLevelTool=${getLifiTopLevelQuoteTool(approvedQuote)}, effectiveTool=${approvedQuote.tool}, expectedOutputRaw=${approvedQuote.quoteAmountRaw.toString()}, routeMinOutRaw=${approvedQuote.routeMinOutRaw.toString()}, approvedMinOutRaw=${policy.approvedMinOutRaw.toString()}, target=${approvedQuote.transactionTarget}, transactionTarget=${approvedQuote.transactionRequest.to}, approvalSpender=${approvedQuote.approvalSpender}, selector=${approvedQuote.selector}, rejectionReason=${policy.rejectionReason ?? 'none'} -> ${policy.isEconomicallyExecutable ? 'TAKEABLE' : 'skip'}`
     );
 
     return mergeRoutePolicyIntoEvaluation({
       evaluation: {
         isTakeable: policy.isEconomicallyExecutable,
         externalTakePath: 'calldata_aggregator',
-        marketPrice,
-        takeablePrice,
-        quoteAmount,
+        marketPrice: economics.marketPrice,
+        takeablePrice: economics.takeablePrice,
+        quoteAmount: economics.quoteAmount,
         quoteAmountRaw: executableQuoteAmountRaw,
         selectedLiquiditySource: LiquiditySource.LIFI,
-        collateralAmount,
+        collateralAmount: economics.collateralAmount,
         quotedCollateralWad: collateral,
-        quotedAuctionPriceWad: effectiveAuctionPriceWad,
+        quotedAuctionPriceWad: economics.effectiveAuctionPriceWad,
         calldataQuote: normalizeApprovedLifiQuote(approvedQuote, chainId),
         reason: policy.isEconomicallyExecutable
           ? undefined
@@ -164,9 +147,9 @@ export async function getLifiPathQuoteEvaluation(
             EXTERNAL_TAKE_REJECTION_REASONS.auctionPriceAboveThreshold),
       },
       policy,
-      auctionRepayRequirementQuoteRaw: quoteAmountDueRaw,
+      auctionRepayRequirementQuoteRaw: economics.quoteAmountDueRaw,
       configuredMarketPriceFactor: poolConfig.take.marketPriceFactor,
-      marketFactorFloorQuoteRaw,
+      marketFactorFloorQuoteRaw: economics.marketFactorFloorQuoteRaw,
     });
   } catch (error) {
     const failure = getLifiQuoteFailureMetadata(error);

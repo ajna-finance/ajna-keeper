@@ -38,9 +38,9 @@ const RUN_LIFI_FORK_CANARY =
 
 // Opt-in, NON-PRODUCTION mode: skip the configured-production-deployment
 // registration gate and instead verify real LI.FI calldata execution against the
-// freshly deployed local factory/taker this test already creates. Use this to
+// freshly deployed local router/taker this test already creates. Use this to
 // validate real same-chain calldata key-free WITHOUT a deployed production
-// factory/taker. The strict production gate remains the default.
+// router/taker. The strict production gate remains the default.
 const USE_FRESH_DEPLOYMENT =
   process.env.AJNA_AGENT_LIFI_FORK_CANARY_USE_FRESH_DEPLOYMENT === 'true';
 
@@ -124,11 +124,11 @@ async function requireConfiguredProductionTakerRegistration(params: {
   );
   if (registeredTaker !== params.config.configuredTakerAddress) {
     throw new Error(
-      `LI.FI configured factory registration mismatch: expected ${params.config.configuredTakerAddress}, got ${registeredTaker}`
+      `LI.FI configured TakerRouter registration mismatch: expected ${params.config.configuredTakerAddress}, got ${registeredTaker}`
     );
   }
   if (!(await configuredFactory.hasConfiguredTaker(LiquiditySource.LIFI))) {
-    throw new Error('LI.FI configured factory does not report LIFI as enabled');
+    throw new Error('LI.FI configured TakerRouter does not report LIFI as enabled');
   }
 }
 

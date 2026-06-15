@@ -42,7 +42,7 @@ describe('Take Integration Tests', () => {
     sinon.restore();
   });
 
-  it('routes Uniswap V3 pools through the manual factory take context', async () => {
+  it('routes Uniswap V3 pools through the manual direct DEX take context', async () => {
     const debugSpy = sinon.spy(logger, 'debug');
     const config = {
       dryRun: true,

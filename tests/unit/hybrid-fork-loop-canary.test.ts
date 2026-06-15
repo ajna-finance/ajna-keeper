@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { LifiDexConfig, LiquiditySource } from '../../src/config';
 import {
   buildForcedDiscoveryPolicy,
-  defaultSourceForHybridPaths,
+  fixtureLiquiditySourceForHybridPaths,
   getHybridLifiApiKey,
   loadHybridForkFixture,
   parseHybridPaths,
@@ -75,11 +75,14 @@ describe('Hybrid fork loop harness', () => {
 
   it('selects the default liquidity source from the enabled path set', () => {
     expect(
-      defaultSourceForHybridPaths(['calldata_aggregator', 'direct_dex'])
+      fixtureLiquiditySourceForHybridPaths([
+        'calldata_aggregator',
+        'direct_dex',
+      ])
     ).to.equal(LiquiditySource.UNISWAPV3);
-    expect(defaultSourceForHybridPaths(['calldata_aggregator'])).to.equal(
-      LiquiditySource.LIFI
-    );
+    expect(
+      fixtureLiquiditySourceForHybridPaths(['calldata_aggregator'])
+    ).to.equal(LiquiditySource.LIFI);
   });
 
   it('builds a dry-run Base fork fixture with tunable economics', () => {

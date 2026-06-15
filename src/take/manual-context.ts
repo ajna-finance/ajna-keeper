@@ -5,6 +5,7 @@ import {
   ExternalTakeDeploymentRuntimeConfig,
   LifiDexConfig,
   PoolConfig,
+  SushiAggregatorDexConfig,
   UniswapV3RouterOverrides,
   formatLiquiditySource,
   resolveExternalTakeDeployment,
@@ -13,14 +14,18 @@ import {
 import { RequireFields } from '../utils';
 import { ArbTakeStrategy, createArbTakeStrategy } from './arb-strategy';
 import {
-  createFactoryQuoteProviderRuntimeCache,
-  createFactoryTakeAdapter,
-  FactoryExecutionConfig,
+  createDirectDexQuoteProviderRuntimeCache,
+  createDirectDexTakeAdapter,
+  DirectDexExecutionConfig,
 } from './direct-dex';
 import { ExternalTakeAdapter } from './engine';
 import { createNoExternalTakeAdapter } from './no-external-take-adapter';
 import { createLifiTakeAdapter } from './lifi/adapter';
 import { LifiExecutionConfig } from './lifi/types';
+import { createOneInchAggregatorTakeAdapter } from './oneinch-aggregator/adapter';
+import { OneInchAggregatorExecutionConfig } from './oneinch-aggregator/types';
+import { createSushiAggregatorTakeAdapter } from './sushi-aggregator/adapter';
+import { SushiAggregatorExecutionConfig } from './sushi-aggregator/types';
 import { TakeActionConfig } from './types';
 import { TakeWriteTransportConfig } from './write-transport';
 
@@ -28,15 +33,24 @@ interface ManualTakeCommonContextConfig {
   dryRun?: boolean;
 }
 
-export interface ManualOneInchContextConfig
+interface ManualCalldataAggregatorCommonContextConfig
   extends ManualTakeCommonContextConfig {
+  keeperTakerRouter?: string;
+  chainId?: number;
+}
+
+export interface ManualOneInchContextConfig
+  extends ManualCalldataAggregatorCommonContextConfig {
   connectorTokens?: Array<string>;
+  oneInchAggregatorTaker?: string;
   oneInchDefaultSlippage?: number;
   oneInchRouters?: { [chainId: number]: string };
   oneInchAggregationExecutorAllowlist?: { [chainId: number]: string[] };
+  oneInchRequestAbortSignal?: AbortSignal;
+  oneInchRequestTimeoutMs?: number;
 }
 
-export interface ManualFactoryContextConfig
+export interface ManualDirectDexContextConfig
   extends ManualTakeCommonContextConfig {
   keeperTakerRouter?: string;
   uniswapV3RouterOverrides?: UniswapV3RouterOverrides;
@@ -44,17 +58,26 @@ export interface ManualFactoryContextConfig
   tokenAddresses?: { [tokenSymbol: string]: string };
 }
 
-export interface ManualLifiContextConfig extends ManualTakeCommonContextConfig {
-  keeperTakerRouter?: string;
+export interface ManualLifiContextConfig
+  extends ManualCalldataAggregatorCommonContextConfig {
   lifi?: LifiDexConfig;
   lifiTaker?: string;
+  lifiRequestAbortSignal?: AbortSignal;
+}
+
+export interface ManualSushiAggregatorContextConfig
+  extends ManualCalldataAggregatorCommonContextConfig {
+  sushiAggregator?: SushiAggregatorDexConfig;
+  sushiAggregatorTaker?: string;
+  sushiAggregatorRequestAbortSignal?: AbortSignal;
 }
 
 export interface ManualTakeRuntimeConfig
   extends ExternalTakeDeploymentRuntimeConfig,
     ManualOneInchContextConfig,
-    ManualFactoryContextConfig,
-    ManualLifiContextConfig {}
+    ManualDirectDexContextConfig,
+    ManualLifiContextConfig,
+    ManualSushiAggregatorContextConfig {}
 
 export interface ManualTakeContext<TExecutionConfig> {
   externalTakeAdapter: ExternalTakeAdapter<TakeActionConfig, TExecutionConfig>;
@@ -66,8 +89,10 @@ export interface ManualTakeContext<TExecutionConfig> {
 
 export type ResolvedManualTakeContext =
   | ManualTakeContext<unknown>
-  | ManualTakeContext<FactoryExecutionConfig>
-  | ManualTakeContext<LifiExecutionConfig>;
+  | ManualTakeContext<DirectDexExecutionConfig>
+  | ManualTakeContext<LifiExecutionConfig>
+  | ManualTakeContext<OneInchAggregatorExecutionConfig>
+  | ManualTakeContext<SushiAggregatorExecutionConfig>;
 
 export type ManualTakeDeploymentResolution =
   ExternalTakeDeploymentResolution & {
@@ -195,13 +220,13 @@ function createManualArbOnlyTakeContext(params: {
   };
 }
 
-function createManualFactoryTakeContext(params: {
-  config: ManualFactoryContextConfig;
+function createManualDirectDexTakeContext(params: {
+  config: ManualDirectDexContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
-}): ManualTakeContext<FactoryExecutionConfig> {
-  const quoteProviderCache = createFactoryQuoteProviderRuntimeCache();
+}): ManualTakeContext<DirectDexExecutionConfig> {
+  const quoteProviderCache = createDirectDexQuoteProviderRuntimeCache();
   return {
-    externalTakeAdapter: createFactoryTakeAdapter({
+    externalTakeAdapter: createDirectDexTakeAdapter({
       quoteConfig: {
         uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
         curveRouterOverrides: params.config.curveRouterOverrides,
@@ -210,8 +235,8 @@ function createManualFactoryTakeContext(params: {
       runtimeCache: quoteProviderCache,
     }),
     arbTakeStrategy: createArbTakeStrategy({
-      actionLabel: 'Factory ArbTake',
-      logPrefix: 'Factory: ',
+      actionLabel: 'Direct DEX ArbTake',
+      logPrefix: 'Direct DEX: ',
     }),
     externalExecutionConfig: {
       dryRun: params.config.dryRun,
@@ -222,8 +247,45 @@ function createManualFactoryTakeContext(params: {
       takeWriteTransport: params.takeWriteTransport,
       runtimeCache: quoteProviderCache,
     },
-    logPrefix: 'Factory: ',
+    logPrefix: 'Direct DEX: ',
     foundLogLevel: 'debug',
+  };
+}
+
+function createManualCalldataAggregatorContextBase(params: {
+  config: ManualCalldataAggregatorCommonContextConfig;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+  actionLabel: string;
+  logPrefix: string;
+}): {
+  tokenDecimalsCache: Map<string, number>;
+  arbTakeStrategy: ArbTakeStrategy<TakeActionConfig>;
+  externalExecutionConfigBase: {
+    dryRun?: boolean;
+    keeperTakerRouter?: string;
+    chainId?: number;
+    takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+    tokenDecimalsCache: Map<string, number>;
+  };
+  logPrefix: string;
+  foundLogLevel: 'info';
+} {
+  const tokenDecimalsCache = new Map<string, number>();
+  return {
+    tokenDecimalsCache,
+    arbTakeStrategy: createArbTakeStrategy({
+      actionLabel: params.actionLabel,
+      logPrefix: params.logPrefix,
+    }),
+    externalExecutionConfigBase: {
+      dryRun: params.config.dryRun,
+      keeperTakerRouter: params.config.keeperTakerRouter,
+      chainId: params.config.chainId,
+      takeWriteTransport: params.takeWriteTransport,
+      tokenDecimalsCache,
+    },
+    logPrefix: params.logPrefix,
+    foundLogLevel: 'info',
   };
 }
 
@@ -231,29 +293,147 @@ function createManualLifiTakeContext(params: {
   config: ManualLifiContextConfig;
   takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
 }): ManualTakeContext<LifiExecutionConfig> {
-  const tokenDecimalsCache = new Map<string, number>();
+  const shared = createManualCalldataAggregatorContextBase({
+    config: params.config,
+    takeWriteTransport: params.takeWriteTransport,
+    actionLabel: 'LI.FI ArbTake',
+    logPrefix: 'LI.FI: ',
+  });
   const lifiTaker = params.config.lifiTaker;
   return {
     externalTakeAdapter: createLifiTakeAdapter({
       lifi: params.config.lifi,
       lifiTaker,
-      tokenDecimalsCache,
+      lifiRequestAbortSignal: params.config.lifiRequestAbortSignal,
+      chainId: params.config.chainId,
+      tokenDecimalsCache: shared.tokenDecimalsCache,
     }),
-    arbTakeStrategy: createArbTakeStrategy({
-      actionLabel: 'LI.FI ArbTake',
-      logPrefix: 'LI.FI: ',
-    }),
+    arbTakeStrategy: shared.arbTakeStrategy,
     externalExecutionConfig: {
-      dryRun: params.config.dryRun,
-      keeperTakerRouter: params.config.keeperTakerRouter,
+      ...shared.externalExecutionConfigBase,
       lifi: params.config.lifi,
       lifiTaker,
-      takeWriteTransport: params.takeWriteTransport,
-      tokenDecimalsCache,
+      lifiRequestAbortSignal: params.config.lifiRequestAbortSignal,
     },
-    logPrefix: 'LI.FI: ',
-    foundLogLevel: 'info',
+    logPrefix: shared.logPrefix,
+    foundLogLevel: shared.foundLogLevel,
   };
+}
+
+function createManualOneInchAggregatorTakeContext(params: {
+  config: ManualOneInchContextConfig;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}): ManualTakeContext<OneInchAggregatorExecutionConfig> {
+  const shared = createManualCalldataAggregatorContextBase({
+    config: params.config,
+    takeWriteTransport: params.takeWriteTransport,
+    actionLabel: '1inch Aggregator ArbTake',
+    logPrefix: '1inch: ',
+  });
+  const oneInchAggregatorTaker = params.config.oneInchAggregatorTaker;
+  return {
+    externalTakeAdapter: createOneInchAggregatorTakeAdapter({
+      connectorTokens: params.config.connectorTokens,
+      oneInchAggregatorTaker,
+      oneInchAggregationExecutorAllowlist:
+        params.config.oneInchAggregationExecutorAllowlist,
+      oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
+      oneInchRouters: params.config.oneInchRouters,
+      oneInchRequestAbortSignal: params.config.oneInchRequestAbortSignal,
+      oneInchRequestTimeoutMs: params.config.oneInchRequestTimeoutMs,
+      chainId: params.config.chainId,
+      tokenDecimalsCache: shared.tokenDecimalsCache,
+    }),
+    arbTakeStrategy: shared.arbTakeStrategy,
+    externalExecutionConfig: {
+      ...shared.externalExecutionConfigBase,
+      connectorTokens: params.config.connectorTokens,
+      oneInchAggregatorTaker,
+      oneInchAggregationExecutorAllowlist:
+        params.config.oneInchAggregationExecutorAllowlist,
+      oneInchDefaultSlippage: params.config.oneInchDefaultSlippage,
+      oneInchRouters: params.config.oneInchRouters,
+      oneInchRequestAbortSignal: params.config.oneInchRequestAbortSignal,
+      oneInchRequestTimeoutMs: params.config.oneInchRequestTimeoutMs,
+    },
+    logPrefix: shared.logPrefix,
+    foundLogLevel: shared.foundLogLevel,
+  };
+}
+
+function createManualSushiAggregatorTakeContext(params: {
+  config: ManualSushiAggregatorContextConfig;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}): ManualTakeContext<SushiAggregatorExecutionConfig> {
+  const shared = createManualCalldataAggregatorContextBase({
+    config: params.config,
+    takeWriteTransport: params.takeWriteTransport,
+    actionLabel: 'Sushi Aggregator ArbTake',
+    logPrefix: 'Sushi Aggregator: ',
+  });
+  const sushiAggregatorTaker = params.config.sushiAggregatorTaker;
+  return {
+    externalTakeAdapter: createSushiAggregatorTakeAdapter({
+      sushiAggregator: params.config.sushiAggregator,
+      sushiAggregatorTaker,
+      sushiAggregatorRequestAbortSignal:
+        params.config.sushiAggregatorRequestAbortSignal,
+      chainId: params.config.chainId,
+      tokenDecimalsCache: shared.tokenDecimalsCache,
+    }),
+    arbTakeStrategy: shared.arbTakeStrategy,
+    externalExecutionConfig: {
+      ...shared.externalExecutionConfigBase,
+      sushiAggregator: params.config.sushiAggregator,
+      sushiAggregatorTaker,
+      sushiAggregatorRequestAbortSignal:
+        params.config.sushiAggregatorRequestAbortSignal,
+    },
+    logPrefix: shared.logPrefix,
+    foundLogLevel: shared.foundLogLevel,
+  };
+}
+
+function createManualCalldataAggregatorTakeContext(params: {
+  config: ManualTakeRuntimeConfig;
+  deploymentResolution: Extract<
+    ManualTakeDeploymentResolution,
+    { deploymentType: 'calldata_aggregator' }
+  >;
+  takeWriteTransport?: TakeWriteTransportConfig['takeWriteTransport'];
+}): Extract<
+  ResolvedManualTakeContext,
+  | ManualTakeContext<LifiExecutionConfig>
+  | ManualTakeContext<OneInchAggregatorExecutionConfig>
+  | ManualTakeContext<SushiAggregatorExecutionConfig>
+> {
+  switch (params.deploymentResolution.providerId) {
+    case 'lifi':
+      return createManualLifiTakeContext({
+        config: {
+          ...params.config,
+          lifiTaker: params.deploymentResolution.resolvedTakerAddress,
+        },
+        takeWriteTransport: params.takeWriteTransport,
+      });
+    case 'oneinch':
+      return createManualOneInchAggregatorTakeContext({
+        config: {
+          ...params.config,
+          oneInchAggregatorTaker:
+            params.deploymentResolution.resolvedTakerAddress,
+        },
+        takeWriteTransport: params.takeWriteTransport,
+      });
+    case 'sushi_aggregator':
+      return createManualSushiAggregatorTakeContext({
+        config: {
+          ...params.config,
+          sushiAggregatorTaker: params.deploymentResolution.resolvedTakerAddress,
+        },
+        takeWriteTransport: params.takeWriteTransport,
+      });
+  }
 }
 
 function createManualTakeContext(params: {
@@ -263,16 +443,14 @@ function createManualTakeContext(params: {
 }): ResolvedManualTakeContext {
   switch (params.deploymentResolution.deploymentType) {
     case 'direct_dex':
-      return createManualFactoryTakeContext({
+      return createManualDirectDexTakeContext({
         config: params.config,
         takeWriteTransport: params.takeWriteTransport,
       });
     case 'calldata_aggregator':
-      return createManualLifiTakeContext({
-        config: {
-          ...params.config,
-          lifiTaker: params.deploymentResolution.resolvedTakerAddress,
-        },
+      return createManualCalldataAggregatorTakeContext({
+        config: params.config,
+        deploymentResolution: params.deploymentResolution,
         takeWriteTransport: params.takeWriteTransport,
       });
     default:

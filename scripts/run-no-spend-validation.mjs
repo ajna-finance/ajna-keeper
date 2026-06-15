@@ -324,7 +324,7 @@ function assertFixtureSummary(summary) {
   );
   requireInvariant(
     ['deployed', 'reused'].includes(summary.stages?.deployExternalTake?.mode),
-    'external-take factory/taker deployed or reused'
+    'external-take router/taker deployed or reused'
   );
   requireInvariant(
     ['kicked', 'already_active'].includes(summary.finalKick?.status),
@@ -337,7 +337,7 @@ function assertFixtureSummary(summary) {
   requireInvariant(
     typeof summary.uniswapV3ExternalTake?.deployment?.keeperTakerRouter ===
       'string',
-    'keeper taker factory address recorded'
+    'keeper taker router address recorded'
   );
   requireInvariant(
     typeof summary.uniswapV3ExternalTake?.deployment?.uniswapV3Taker ===
@@ -386,20 +386,20 @@ function assertSuccessfulDryRunReport(report, options) {
       report,
       'dryRunExternalTakes'
     );
-    const dryRunFactoryPathTakes = sumPathCounter(
+    const dryRunDirectDexPathTakes = sumPathCounter(
       report,
       'direct_dex',
       'dryRun'
     );
-    if (dryRunExternalTakes < 1 || dryRunFactoryPathTakes < 1) {
+    if (dryRunExternalTakes < 1 || dryRunDirectDexPathTakes < 1) {
       throw new Error(
-        `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} factoryDryRuns=${dryRunFactoryPathTakes}`
+        `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} directDexDryRuns=${dryRunDirectDexPathTakes}`
       );
     }
   }
   requireInvariant(
     report.routeArtifact?.selectedPath === 'direct_dex',
-    'dry-run routeArtifact selected factory path'
+    'dry-run routeArtifact selected direct_dex path'
   );
   requireInvariant(
     report.routeArtifact?.selectedLiquiditySource === 'UNISWAPV3',
@@ -458,20 +458,20 @@ function assertExecutionReport(report, options) {
       report,
       'executedExternalTakes'
     );
-    const executedFactoryPathTakes = sumPathCounter(
+    const executedDirectDexPathTakes = sumPathCounter(
       report,
       'direct_dex',
       'executed'
     );
-    if (executedExternalTakes < 1 || executedFactoryPathTakes < 1) {
+    if (executedExternalTakes < 1 || executedDirectDexPathTakes < 1) {
       throw new Error(
-        `Execution did not record a factory external take. executedExternalTakes=${executedExternalTakes} factoryExecutions=${executedFactoryPathTakes}`
+        `Execution did not record a direct DEX external take. executedExternalTakes=${executedExternalTakes} directDexExecutions=${executedDirectDexPathTakes}`
       );
     }
   }
   requireInvariant(
     report.routeArtifact?.selectedPath === 'direct_dex',
-    'execution routeArtifact selected factory path'
+    'execution routeArtifact selected direct_dex path'
   );
   requireInvariant(
     report.routeArtifact?.selectedLiquiditySource === 'UNISWAPV3',
@@ -482,7 +482,7 @@ function assertExecutionReport(report, options) {
     options.mode !== 'discovery' ||
       (report.routeArtifact?.counters?.preBroadcastFailures === 0 &&
         report.routeArtifact?.counters?.postSubmissionFailures === 0),
-    'execution records no factory pre-broadcast or post-submission failures'
+    'execution records no direct DEX pre-broadcast or post-submission failures'
   );
   requireInvariant(
     report.receiptArtifact?.transactionHash &&
@@ -542,8 +542,8 @@ function assertConfigArtifact(report) {
     expectedTargetFound: artifact.expectedTargetFound,
     executionConfigReturnedTakerContracts:
       artifact.executionConfigReturnedTakerContracts,
-    manualFactoryResolvedThroughExecutionConfig:
-      artifact.manualFactoryResolvedThroughExecutionConfig,
+    manualDirectDexResolvedThroughExecutionConfig:
+      artifact.manualDirectDexResolvedThroughExecutionConfig,
     wrongDeploymentPoolSkipped: artifact.wrongDeploymentPoolSkipped,
     hydrationCooldownRecorded: artifact.hydrationCooldownRecorded,
     hydrationCooldownPreventedRepeat: artifact.hydrationCooldownPreventedRepeat,

@@ -1,27 +1,30 @@
 import {
   CalldataAggregatorProviderId,
+  DirectDexLiquiditySource,
   ExternalTakePathKind,
+  LiquiditySource,
   getAggregatorProviderIdentity,
   isDirectDexDynamicSource,
 } from '../../config';
 import { logger } from '../../logging';
-import * as takeFactoryModule from '../../take/direct-dex';
+import * as directDexModule from '../../take/direct-dex';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../take/external-take/execution-plan';
+import type { ExternalTakeRouteIdentity } from '../../take/external-take/route-binding';
 import * as lifiExecutionModule from '../../take/lifi/execution';
 import * as sushiAggregatorExecutionModule from '../../take/sushi-aggregator/execution';
 import * as oneInchAggregatorExecutionModule from '../../take/oneinch-aggregator/execution';
 import { ResolvedTakeTarget } from '../targets';
 import {
   createPreBroadcastFailureCapture,
-  createPreSubmitResultCapture,
   DiscoveryExternalExecutionConfig,
+  ExternalTakeExecuteParams,
   ExternalTakeQuoteIntent,
   ExternalTakeRouteProvider,
   withTakeLiquiditySource,
 } from './provider';
 import {
   DirectDexPathQuoteInput,
-  FactoryPathQuoteFn,
+  DirectDexPathQuoteFn,
   getCircuitGuardedQuoteOutcome,
   LifiCircuitOutcome,
   LifiPathQuoteInput,
@@ -57,12 +60,44 @@ function routeProviderKey(params: {
     : params.selectedPath;
 }
 
+function getCalldataAggregatorRouteIdentity(
+  providerId: CalldataAggregatorProviderId
+): Extract<ExternalTakeRouteIdentity, { path: 'calldata_aggregator' }> {
+  const identity = getAggregatorProviderIdentity(providerId);
+  return {
+    path: identity.canonicalPath,
+    providerId: identity.providerId,
+    source: identity.liquiditySource,
+  };
+}
+
+function getDirectDexRouteIdentity(
+  source: LiquiditySource | undefined
+): Extract<ExternalTakeRouteIdentity, { path: 'direct_dex' }> | undefined {
+  return source !== undefined && isDirectDexDynamicSource(source)
+    ? { path: 'direct_dex', source: source as DirectDexLiquiditySource }
+    : undefined;
+}
+
+function createQuoteResultHandler(
+  config: DiscoveryExternalExecutionConfig,
+  route: ExternalTakeRouteIdentity
+) {
+  return (result: { success: boolean; retryable?: boolean; error?: string }) =>
+    config.onExternalTakeQuoteResult?.({ route, result });
+}
+
+function createExecutionFailureHandler(
+  config: DiscoveryExternalExecutionConfig,
+  route: ExternalTakeRouteIdentity
+) {
+  return (result: { preBroadcast: boolean; error?: string }) =>
+    config.onExternalTakeExecutionFailure?.({ route, result });
+}
+
 function getAggregatorQuoteIntentOptions(
   intent: ExternalTakeQuoteIntent
-): Pick<
-  LifiPathQuoteInput,
-  'routeProbeAbortSignal' | 'recordCircuitOutcome'
-> {
+): Pick<LifiPathQuoteInput, 'routeProbeAbortSignal' | 'recordCircuitOutcome'> {
   if (intent.kind !== 'hybrid_probe') {
     return {};
   }
@@ -72,17 +107,113 @@ function getAggregatorQuoteIntentOptions(
   };
 }
 
-function getFactoryQuoteIntentOptions(
+function getDirectDexQuoteIntentOptions(
   intent: ExternalTakeQuoteIntent
 ): Pick<
   DirectDexPathQuoteInput,
-  'routeProbeAbortSignal' | 'factoryGasQuoteFallback'
+  'routeProbeAbortSignal' | 'directDexGasQuoteFallback'
 > {
   if (intent.kind === 'hybrid_probe') {
     return { routeProbeAbortSignal: intent.abortSignal };
   }
   return {
-    factoryGasQuoteFallback: intent.kind === HYBRID_GAS_QUOTE_FALLBACK_KIND,
+    directDexGasQuoteFallback: intent.kind === HYBRID_GAS_QUOTE_FALLBACK_KIND,
+  };
+}
+
+type CalldataAggregatorPathQuoteFn = (
+  quoteParams: LifiPathQuoteInput
+) => ReturnType<LifiPathQuoteFn>;
+
+type CalldataAggregatorExecutionConfig = DiscoveryExternalExecutionConfig;
+
+function createCalldataAggregatorRouteProvider<
+  TExecutionConfig extends CalldataAggregatorExecutionConfig,
+>(params: {
+  providerId: CalldataAggregatorProviderId;
+  quotePath: CalldataAggregatorPathQuoteFn;
+  executeTake: (
+    params: ExternalTakeExecuteParams<ResolvedTakeTarget, TExecutionConfig>
+  ) => Promise<boolean>;
+  decorateExecutionConfig: (params: {
+    config: DiscoveryExternalExecutionConfig;
+    route: Extract<
+      ExternalTakeRouteIdentity,
+      { path: 'calldata_aggregator' }
+    >;
+    executionFailureHandler: ReturnType<
+      typeof createPreBroadcastFailureCapture
+    >['handler'];
+  }) => TExecutionConfig;
+  getQuoteCircuitOutcome?: DiscoveryExternalTakeRouteProvider['getQuoteCircuitOutcome'];
+  recordQuoteCircuitOutcome?: DiscoveryExternalTakeRouteProvider['recordQuoteCircuitOutcome'];
+  getExecutionRefreshCircuitOpenReason?: (
+    config: Pick<DiscoveryExternalExecutionConfig, 'dryRun'>
+  ) => string | undefined;
+}): DiscoveryExternalTakeRouteProvider {
+  const identity = getAggregatorProviderIdentity(params.providerId);
+  return {
+    path: identity.canonicalPath,
+    providerId: identity.providerId,
+    quote: async ({
+      intent,
+      pool,
+      signer,
+      poolConfig,
+      price,
+      auctionPrice,
+      collateral,
+      debtToCover,
+    }) =>
+      params.quotePath({
+        pool,
+        signer,
+        poolConfig,
+        price,
+        auctionPrice,
+        collateral,
+        debtToCover,
+        ...getAggregatorQuoteIntentOptions(intent),
+      }),
+    getQuoteCircuitOutcome: params.getQuoteCircuitOutcome,
+    recordQuoteCircuitOutcome: params.recordQuoteCircuitOutcome,
+    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
+      const route = getCalldataAggregatorRouteIdentity(identity.providerId);
+      const executionFailureCapture = createPreBroadcastFailureCapture(
+        createExecutionFailureHandler(config, route)
+      );
+      const executionConfig = params.decorateExecutionConfig({
+        config,
+        route,
+        executionFailureHandler: executionFailureCapture.handler,
+      });
+      const circuitOpenReason =
+        params.getExecutionRefreshCircuitOpenReason?.(config);
+      if (circuitOpenReason) {
+        logger.warn(
+          `${identity.label} execution refresh circuit is open for ${pool.name}/${liquidation.borrower}; skipping ${identity.label} external take attempt`
+        );
+        executionFailureCapture.handler({
+          preBroadcast: true,
+          error: circuitOpenReason,
+        });
+        return {
+          succeeded: false,
+          preBroadcastFailed: true,
+        };
+      }
+      const succeeded = await params.executeTake({
+        pool,
+        signer,
+        poolConfig,
+        liquidation,
+        config: executionConfig,
+      });
+      return {
+        succeeded,
+        preBroadcastFailed: executionFailureCapture.didFailPreBroadcast(),
+      };
+    },
   };
 }
 
@@ -90,7 +221,7 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
   config: Pick<DiscoveryExecutionConfig, 'lifi'>;
   rpcCache?: DiscoveryRpcCache;
   quoteOneInchAggregatorPath: OneInchAggregatorPathQuoteFn;
-  quoteFactoryPath: FactoryPathQuoteFn;
+  quoteDirectDexPath: DirectDexPathQuoteFn;
   quoteLifiPath: LifiPathQuoteFn;
   quoteSushiAggregatorPath: SushiAggregatorPathQuoteFn;
   recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
@@ -109,165 +240,59 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
     });
   };
 
-  const lifiProvider: DiscoveryExternalTakeRouteProvider = {
-    path: 'calldata_aggregator',
-    providerId: 'lifi',
-    quote: async ({
-      intent,
-      pool,
-      signer,
-      poolConfig,
-      price,
-      auctionPrice,
-      collateral,
-      debtToCover,
-    }) =>
-      params.quoteLifiPath({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-        debtToCover,
-        ...getAggregatorQuoteIntentOptions(intent),
-      }),
-    getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
-    recordQuoteCircuitOutcome: params.recordLifiCircuitOutcome,
-    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
-      const executionFailureCapture = createPreBroadcastFailureCapture(
-        config.onLifiExecutionFailure
-      );
-      const lifiConfig = {
+  const calldataAggregatorProviders: DiscoveryExternalTakeRouteProvider[] = [
+    createCalldataAggregatorRouteProvider({
+      providerId: 'lifi',
+      quotePath: params.quoteLifiPath,
+      getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
+      recordQuoteCircuitOutcome: params.recordLifiCircuitOutcome,
+      decorateExecutionConfig: ({
+        config,
+        route,
+        executionFailureHandler,
+      }) => ({
         ...config,
-        onLifiExecutionFailure: executionFailureCapture.handler,
-      };
-      const circuitOpenReason =
-        getLifiExecutionRefreshCircuitOpenReason(config);
-      if (circuitOpenReason) {
-        logger.warn(
-          `LI.FI execution refresh circuit is open for ${pool.name}/${liquidation.borrower}; skipping LI.FI external take attempt`
-        );
-        lifiConfig.onLifiExecutionFailure?.({
-          preBroadcast: true,
-          error: circuitOpenReason,
-        });
-        return {
-          succeeded: false,
-          preBroadcastFailed: true,
-        };
-      }
-      const succeeded = await lifiExecutionModule.takeLiquidationLifi({
-        pool,
-        signer,
-        poolConfig,
-        liquidation,
-        config: lifiConfig,
-      });
-      return {
-        succeeded,
-        preBroadcastFailed: executionFailureCapture.didFailPreBroadcast(),
-      };
-    },
-  };
-
-  const oneInchAggregatorProvider: DiscoveryExternalTakeRouteProvider = {
-    path: 'calldata_aggregator',
-    providerId: 'oneinch',
-    quote: async ({
-      intent,
-      pool,
-      signer,
-      poolConfig,
-      price,
-      auctionPrice,
-      collateral,
-      debtToCover,
-    }) =>
-      params.quoteOneInchAggregatorPath({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-        debtToCover,
-        ...getAggregatorQuoteIntentOptions(intent),
+        onLifiQuoteResult: createQuoteResultHandler(config, route),
+        onLifiExecutionFailure: executionFailureHandler,
       }),
-    getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
-    recordQuoteCircuitOutcome: params.recordOneInchCircuitOutcome,
-    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
-      const executionFailureCapture = createPreBroadcastFailureCapture(
-        config.onOneInchAggregatorExecutionFailure
-      );
-      const oneInchConfig = {
+      getExecutionRefreshCircuitOpenReason:
+        getLifiExecutionRefreshCircuitOpenReason,
+      executeTake: lifiExecutionModule.takeLiquidationLifi,
+    }),
+    createCalldataAggregatorRouteProvider({
+      providerId: 'oneinch',
+      quotePath: params.quoteOneInchAggregatorPath,
+      getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
+      recordQuoteCircuitOutcome: params.recordOneInchCircuitOutcome,
+      decorateExecutionConfig: ({
+        config,
+        route,
+        executionFailureHandler,
+      }) => ({
         ...config,
-        onOneInchAggregatorExecutionFailure: executionFailureCapture.handler,
-      };
-      const succeeded =
-        await oneInchAggregatorExecutionModule.takeLiquidationOneInchAggregator(
-          {
-            pool,
-            signer,
-            poolConfig,
-            liquidation,
-            config: oneInchConfig,
-          }
-        );
-      return {
-        succeeded,
-        preBroadcastFailed: executionFailureCapture.didFailPreBroadcast(),
-      };
-    },
-  };
-
-  const sushiAggregatorProvider: DiscoveryExternalTakeRouteProvider = {
-    path: 'calldata_aggregator',
-    providerId: 'sushi_aggregator',
-    quote: async ({
-      intent,
-      pool,
-      signer,
-      poolConfig,
-      price,
-      auctionPrice,
-      collateral,
-      debtToCover,
-    }) =>
-      params.quoteSushiAggregatorPath({
-        pool,
-        signer,
-        poolConfig,
-        price,
-        auctionPrice,
-        collateral,
-        debtToCover,
-        ...getAggregatorQuoteIntentOptions(intent),
+        onOneInchAggregatorQuoteResult: createQuoteResultHandler(config, route),
+        onOneInchAggregatorExecutionFailure: executionFailureHandler,
       }),
-    execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
-      const executionFailureCapture = createPreBroadcastFailureCapture(
-        config.onSushiAggregatorExecutionFailure
-      );
-      const sushiConfig = {
+      executeTake:
+        oneInchAggregatorExecutionModule.takeLiquidationOneInchAggregator,
+    }),
+    createCalldataAggregatorRouteProvider({
+      providerId: 'sushi_aggregator',
+      quotePath: params.quoteSushiAggregatorPath,
+      decorateExecutionConfig: ({
+        config,
+        route,
+        executionFailureHandler,
+      }) => ({
         ...config,
-        onSushiAggregatorExecutionFailure: executionFailureCapture.handler,
-      };
-      const succeeded =
-        await sushiAggregatorExecutionModule.takeLiquidationSushiAggregator({
-          pool,
-          signer,
-          poolConfig,
-          liquidation,
-          config: sushiConfig,
-        });
-      return {
-        succeeded,
-        preBroadcastFailed: executionFailureCapture.didFailPreBroadcast(),
-      };
-    },
-  };
+        onSushiAggregatorQuoteResult: createQuoteResultHandler(config, route),
+        onSushiAggregatorExecutionFailure: executionFailureHandler,
+      }),
+      executeTake: sushiAggregatorExecutionModule.takeLiquidationSushiAggregator,
+    }),
+  ];
 
-  const factoryProvider: DiscoveryExternalTakeRouteProvider = {
+  const directDexProvider: DiscoveryExternalTakeRouteProvider = {
     path: 'direct_dex',
     quote: async ({
       intent,
@@ -277,35 +302,36 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       auctionPrice,
       collateral,
     }) =>
-      params.quoteFactoryPath({
+      params.quoteDirectDexPath({
         pool,
         signer,
         poolConfig,
         auctionPrice,
         collateral,
-        ...getFactoryQuoteIntentOptions(intent),
+        ...getDirectDexQuoteIntentOptions(intent),
       }),
     execute: async ({ pool, signer, poolConfig, liquidation, config }) => {
       const selectedSource = getExternalTakeExecutionPlanPrimaryEvaluation(
         liquidation.externalTakeExecutionPlan
       )?.selectedLiquiditySource;
-      const factoryPoolConfig =
+      const directDexPoolConfig =
         selectedSource !== undefined && isDirectDexDynamicSource(selectedSource)
           ? withTakeLiquiditySource(poolConfig, selectedSource)
           : poolConfig;
+      const route = getDirectDexRouteIdentity(selectedSource);
       const executionFailureCapture = createPreBroadcastFailureCapture(
-        config.onFactoryExecutionFailure
+        route ? createExecutionFailureHandler(config, route) : undefined
       );
-      const factoryConfig = {
+      const directDexConfig = {
         ...config,
-        onFactoryExecutionFailure: executionFailureCapture.handler,
+        onDirectDexExecutionFailure: executionFailureCapture.handler,
       };
-      const succeeded = await takeFactoryModule.takeLiquidationDirectDex({
+      const succeeded = await directDexModule.takeLiquidationDirectDex({
         pool,
         signer,
-        poolConfig: factoryPoolConfig,
+        poolConfig: directDexPoolConfig,
         liquidation,
-        config: factoryConfig,
+        config: directDexConfig,
       });
       return {
         succeeded,
@@ -313,37 +339,15 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
       };
     },
   };
-  const lifiIdentity = getAggregatorProviderIdentity('lifi');
-  const sushiAggregatorIdentity =
-    getAggregatorProviderIdentity('sushi_aggregator');
-  const oneInchAggregatorIdentity = getAggregatorProviderIdentity('oneinch');
   const providersByRoute = new Map<string, DiscoveryExternalTakeRouteProvider>([
-    [routeProviderKey({ selectedPath: 'direct_dex' }), factoryProvider],
-    [
+    [routeProviderKey({ selectedPath: 'direct_dex' }), directDexProvider],
+    ...calldataAggregatorProviders.map((provider) => [
       routeProviderKey({
-        selectedPath: lifiIdentity.canonicalPath,
-        providerId: lifiIdentity.providerId,
+        selectedPath: provider.path,
+        providerId: provider.providerId,
       }),
-      lifiProvider,
-    ],
-    [
-      routeProviderKey({ selectedPath: lifiIdentity.canonicalPath }),
-      lifiProvider,
-    ],
-    [
-      routeProviderKey({
-        selectedPath: sushiAggregatorIdentity.canonicalPath,
-        providerId: sushiAggregatorIdentity.providerId,
-      }),
-      sushiAggregatorProvider,
-    ],
-    [
-      routeProviderKey({
-        selectedPath: oneInchAggregatorIdentity.canonicalPath,
-        providerId: oneInchAggregatorIdentity.providerId,
-      }),
-      oneInchAggregatorProvider,
-    ],
+      provider,
+    ] as const),
   ]);
 
   return {

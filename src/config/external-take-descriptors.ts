@@ -20,10 +20,106 @@ export type CalldataAggregatorLiquiditySource =
   | LiquiditySource.SUSHI_AGGREGATOR
   | LiquiditySource.ONEINCH;
 
+export type ExternalTakeLiquiditySource =
+  | DirectDexLiquiditySource
+  | CalldataAggregatorLiquiditySource;
+
+export type ExternalTakePathCategory = 'aggregator' | 'direct_dex';
+
+export interface ExternalTakeSourceIdentity {
+  readonly source: ExternalTakeLiquiditySource;
+  readonly path: ExternalTakePathKind;
+  readonly category: ExternalTakePathCategory;
+  readonly label: string;
+  readonly takerContractKey: ExternalTakeTakerContractKey;
+  readonly providerId?: CalldataAggregatorProviderId;
+  readonly configKey?: string;
+}
+
 /**
- * Canonical declarative identity for calldata-aggregator providers.
- * Provider-local behavior remains in provider modules; this descriptor owns
- * shared route/source/taker/config metadata only.
+ * Canonical declarative identity for external-take route sources.
+ * Provider-local behavior remains in provider modules; this table owns only the
+ * shared source/path/provider/taker/config metadata used by validation,
+ * discovery, and deployment resolution.
+ */
+export const EXTERNAL_TAKE_SOURCE_IDENTITIES = {
+  [LiquiditySource.UNISWAPV3]: {
+    source: LiquiditySource.UNISWAPV3,
+    path: 'direct_dex',
+    category: 'direct_dex',
+    label: 'Uniswap V3',
+    takerContractKey: 'UniswapV3',
+  },
+  [LiquiditySource.CURVE]: {
+    source: LiquiditySource.CURVE,
+    path: 'direct_dex',
+    category: 'direct_dex',
+    label: 'Curve',
+    takerContractKey: 'Curve',
+  },
+  [LiquiditySource.LIFI]: {
+    source: LiquiditySource.LIFI,
+    path: 'calldata_aggregator',
+    category: 'aggregator',
+    label: 'LI.FI',
+    takerContractKey: 'Lifi',
+    providerId: 'lifi',
+    configKey: 'lifi',
+  },
+  [LiquiditySource.SUSHI_AGGREGATOR]: {
+    source: LiquiditySource.SUSHI_AGGREGATOR,
+    path: 'calldata_aggregator',
+    category: 'aggregator',
+    label: 'Sushi Aggregator',
+    takerContractKey: 'SushiAggregator',
+    providerId: 'sushi_aggregator',
+    configKey: 'sushiAggregator',
+  },
+  [LiquiditySource.ONEINCH]: {
+    source: LiquiditySource.ONEINCH,
+    path: 'calldata_aggregator',
+    category: 'aggregator',
+    label: '1inch',
+    takerContractKey: 'OneInchAggregator',
+    providerId: 'oneinch',
+    configKey: 'oneInch',
+  },
+} satisfies Record<ExternalTakeLiquiditySource, ExternalTakeSourceIdentity>;
+
+const EXTERNAL_TAKE_SOURCE_ORDER: readonly ExternalTakeLiquiditySource[] = [
+  LiquiditySource.UNISWAPV3,
+  LiquiditySource.CURVE,
+  LiquiditySource.LIFI,
+  LiquiditySource.SUSHI_AGGREGATOR,
+  LiquiditySource.ONEINCH,
+];
+
+const CALLDATA_AGGREGATOR_PROVIDER_SOURCE_ORDER: readonly CalldataAggregatorLiquiditySource[] =
+  [
+    LiquiditySource.LIFI,
+    LiquiditySource.SUSHI_AGGREGATOR,
+    LiquiditySource.ONEINCH,
+  ];
+
+function isDirectDexIdentitySource(
+  source: ExternalTakeLiquiditySource
+): source is DirectDexLiquiditySource {
+  return EXTERNAL_TAKE_SOURCE_IDENTITIES[source].path === 'direct_dex';
+}
+
+function isAggregatorProviderIdentitySource(
+  identity: ExternalTakeSourceIdentity
+): identity is ExternalTakeSourceIdentity & {
+  source: CalldataAggregatorLiquiditySource;
+  providerId: CalldataAggregatorProviderId;
+  configKey: string;
+  path: 'calldata_aggregator';
+} {
+  return identity.path === 'calldata_aggregator';
+}
+
+/**
+ * Calldata provider view derived from EXTERNAL_TAKE_SOURCE_IDENTITIES.
  */
 export interface AggregatorProviderIdentity {
   readonly providerId: CalldataAggregatorProviderId;
@@ -35,17 +131,10 @@ export interface AggregatorProviderIdentity {
   readonly configKey: string;
 }
 
-export type ExternalTakeLiquiditySource =
-  | DirectDexLiquiditySource
-  | CalldataAggregatorLiquiditySource;
-
-export type ExternalTakePathCategory = 'aggregator' | 'direct_dex';
-
 export interface ExternalTakePathDescriptor {
   readonly path: ExternalTakePathKind;
   readonly category: ExternalTakePathCategory;
   readonly label: string;
-  readonly defaultSource?: LiquiditySource;
   readonly sources: readonly LiquiditySource[];
   readonly requiresRouteDeploymentValidation?: boolean;
   readonly requiresDexGasOverride?: boolean;
@@ -98,8 +187,7 @@ export type ExternalTakeDeploymentResolution =
     };
 
 export const DIRECT_DEX_DYNAMIC_SOURCES: readonly DirectDexLiquiditySource[] = [
-  LiquiditySource.UNISWAPV3,
-  LiquiditySource.CURVE,
+  ...EXTERNAL_TAKE_SOURCE_ORDER.filter(isDirectDexIdentitySource),
 ];
 
 export const SUPPORTED_EXTERNAL_TAKE_PATHS: readonly ExternalTakePathKind[] = [
@@ -112,100 +200,79 @@ export const EXTERNAL_TAKE_PATHS: ReadonlySet<ExternalTakePathKind> = new Set(
 );
 
 export const SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES: readonly ExternalTakeLiquiditySource[] =
-  [
-    ...DIRECT_DEX_DYNAMIC_SOURCES,
-    LiquiditySource.LIFI,
-    LiquiditySource.SUSHI_AGGREGATOR,
-    LiquiditySource.ONEINCH,
-  ];
+  EXTERNAL_TAKE_SOURCE_ORDER;
 
-export const EXTERNAL_TAKE_PATH_DESCRIPTORS = {
+const EXTERNAL_TAKE_PATH_METADATA = {
   direct_dex: {
     path: 'direct_dex',
     category: 'direct_dex',
     label: 'direct DEX',
-    sources: DIRECT_DEX_DYNAMIC_SOURCES,
   },
   calldata_aggregator: {
     path: 'calldata_aggregator',
     category: 'aggregator',
     label: 'calldata aggregator',
-    defaultSource: LiquiditySource.LIFI,
-    sources: [
-      LiquiditySource.LIFI,
-      LiquiditySource.SUSHI_AGGREGATOR,
-      LiquiditySource.ONEINCH,
-    ],
     requiresRouteDeploymentValidation: true,
     requiresDexGasOverride: true,
   },
-} satisfies Record<ExternalTakePathKind, ExternalTakePathDescriptor>;
-
-export const EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS = {
-  [LiquiditySource.ONEINCH]: {
-    source: LiquiditySource.ONEINCH,
-    path: 'calldata_aggregator',
-    label: '1inch',
-    takerContractKey: 'OneInchAggregator',
-  },
-  [LiquiditySource.UNISWAPV3]: {
-    source: LiquiditySource.UNISWAPV3,
-    path: 'direct_dex',
-    label: 'Uniswap V3',
-    takerContractKey: 'UniswapV3',
-  },
-  [LiquiditySource.CURVE]: {
-    source: LiquiditySource.CURVE,
-    path: 'direct_dex',
-    label: 'Curve',
-    takerContractKey: 'Curve',
-  },
-  [LiquiditySource.LIFI]: {
-    source: LiquiditySource.LIFI,
-    path: 'calldata_aggregator',
-    label: 'LI.FI',
-    takerContractKey: 'Lifi',
-  },
-  [LiquiditySource.SUSHI_AGGREGATOR]: {
-    source: LiquiditySource.SUSHI_AGGREGATOR,
-    path: 'calldata_aggregator',
-    label: 'Sushi Aggregator',
-    takerContractKey: 'SushiAggregator',
-  },
 } satisfies Record<
-  ExternalTakeLiquiditySource,
-  ExternalTakeLiquiditySourceDescriptor
+  ExternalTakePathKind,
+  Omit<ExternalTakePathDescriptor, 'sources'>
 >;
 
-export const AGGREGATOR_PROVIDER_IDENTITIES = {
-  lifi: {
-    providerId: 'lifi',
-    canonicalPath: 'calldata_aggregator',
-    executionFamily: 'calldata_aggregator',
-    label: 'LI.FI',
-    liquiditySource: LiquiditySource.LIFI,
-    takerContractKey: 'Lifi',
-    configKey: 'lifi',
+function getSourcesForPath<TPath extends ExternalTakePathKind>(
+  path: TPath
+): Array<
+  TPath extends 'direct_dex'
+    ? DirectDexLiquiditySource
+    : CalldataAggregatorLiquiditySource
+> {
+  return EXTERNAL_TAKE_SOURCE_ORDER.map(
+    (source) => EXTERNAL_TAKE_SOURCE_IDENTITIES[source]
+  )
+    .filter((identity) => identity.path === path)
+    .map((identity) => identity.source) as Array<
+    TPath extends 'direct_dex'
+      ? DirectDexLiquiditySource
+      : CalldataAggregatorLiquiditySource
+  >;
+}
+
+export const EXTERNAL_TAKE_PATH_DESCRIPTORS = {
+  direct_dex: {
+    ...EXTERNAL_TAKE_PATH_METADATA.direct_dex,
+    sources: getSourcesForPath('direct_dex'),
   },
-  sushi_aggregator: {
-    providerId: 'sushi_aggregator',
-    canonicalPath: 'calldata_aggregator',
-    executionFamily: 'calldata_aggregator',
-    label: 'Sushi Aggregator',
-    liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
-    takerContractKey: 'SushiAggregator',
-    configKey: 'sushiAggregator',
+  calldata_aggregator: {
+    ...EXTERNAL_TAKE_PATH_METADATA.calldata_aggregator,
+    sources: getSourcesForPath('calldata_aggregator'),
   },
-  oneinch: {
-    providerId: 'oneinch',
-    canonicalPath: 'calldata_aggregator',
-    executionFamily: 'calldata_aggregator',
-    label: '1inch',
-    liquiditySource: LiquiditySource.ONEINCH,
-    takerContractKey: 'OneInchAggregator',
-    configKey: 'oneInch',
-  },
-} satisfies Record<CalldataAggregatorProviderId, AggregatorProviderIdentity>;
+} satisfies Record<ExternalTakePathKind, ExternalTakePathDescriptor>;
+
+export const EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS =
+  EXTERNAL_TAKE_SOURCE_IDENTITIES satisfies Record<
+    ExternalTakeLiquiditySource,
+    ExternalTakeLiquiditySourceDescriptor
+  >;
+
+export const AGGREGATOR_PROVIDER_IDENTITIES = Object.fromEntries(
+  CALLDATA_AGGREGATOR_PROVIDER_SOURCE_ORDER.map(
+    (source) => EXTERNAL_TAKE_SOURCE_IDENTITIES[source]
+  )
+    .filter(isAggregatorProviderIdentitySource)
+    .map((identity) => [
+      identity.providerId,
+      {
+        providerId: identity.providerId,
+        canonicalPath: 'calldata_aggregator',
+        executionFamily: 'calldata_aggregator',
+        label: identity.label,
+        liquiditySource: identity.source,
+        takerContractKey: identity.takerContractKey,
+        configKey: identity.configKey,
+      } satisfies AggregatorProviderIdentity,
+    ])
+) as Record<CalldataAggregatorProviderId, AggregatorProviderIdentity>;
 
 export const CALLDATA_AGGREGATOR_PROVIDER_IDS: readonly CalldataAggregatorProviderId[] =
   Object.keys(AGGREGATOR_PROVIDER_IDENTITIES) as CalldataAggregatorProviderId[];
@@ -239,12 +306,6 @@ export function getExternalTakePathDescriptors(
   paths: Iterable<ExternalTakePathKind> = SUPPORTED_EXTERNAL_TAKE_PATHS
 ): ExternalTakePathDescriptor[] {
   return Array.from(paths, getExternalTakePathDescriptor);
-}
-
-export function getExternalTakePathDefaultSource(
-  path: ExternalTakePathKind
-): LiquiditySource | undefined {
-  return getExternalTakePathDescriptor(path).defaultSource;
 }
 
 export function isAggregatorExternalTakePath(

@@ -5,11 +5,10 @@ import {
 } from '../../config';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import {
-  isDirectDexExternalTakeRoute,
-  isOneInchExternalTakeRoute,
   resolveExternalTakePathFromEvaluation,
   resolveExternalTakeRouteIdentity,
-} from '../../take/external-take/route';
+} from '../../take/external-take/route-binding';
+import type { ExternalTakeRouteIdentity } from '../../take/external-take/route-binding';
 
 export interface ExternalTakePathCounters {
   approved: number;
@@ -19,12 +18,15 @@ export interface ExternalTakePathCounters {
   postSubmissionFailures: number;
 }
 
+export interface CalldataAggregatorProviderCounters
+  extends ExternalTakePathCounters {
+  quoteFailures: number;
+}
+
 export interface DiscoveredTakeTargetStats {
   candidateCount: number;
   approvedTakeDecisions: number;
   approvedArbTakeDecisions: number;
-  approvedOneInchTakeDecisions: number;
-  approvedFactoryTakeDecisions: number;
   approvedUniswapV3TakeDecisions: number;
   approvedCurveTakeDecisions: number;
   evaluationSkips: number;
@@ -37,23 +39,17 @@ export interface DiscoveredTakeTargetStats {
   // tracked separately so production counters are not inflated by rehearsals.
   executedExternalTakes: number;
   executedArbTakes: number;
-  executedOneInchTakes: number;
-  executedFactoryTakes: number;
   executedUniswapV3Takes: number;
   executedCurveTakes: number;
   dryRunExternalTakes: number;
   dryRunArbTakes: number;
-  dryRunOneInchTakes: number;
-  dryRunFactoryTakes: number;
   dryRunUniswapV3Takes: number;
   dryRunCurveTakes: number;
-  oneInchSwapDataFailures: number;
-  oneInchPreBroadcastFailures: number;
-  oneInchPostSubmissionFailures: number;
-  factoryPreBroadcastFailures: number;
-  factoryPostSubmissionFailures: number;
   externalTakeByPath: Partial<
     Record<ExternalTakePathKind, ExternalTakePathCounters>
+  >;
+  externalTakeByProvider: Partial<
+    Record<CalldataAggregatorProviderId, CalldataAggregatorProviderCounters>
   >;
   hybridFallbackAttempts: number;
   hybridFallbackSuccesses: number;
@@ -62,57 +58,38 @@ export interface DiscoveredTakeTargetStats {
   hotAuctionCandidateRemovals: number;
 }
 
-type ExecutedExternalTakeRouteStats = Pick<
-  DiscoveredTakeTargetStats,
-  | 'executedOneInchTakes'
-  | 'executedFactoryTakes'
-  | 'executedUniswapV3Takes'
-  | 'executedCurveTakes'
->;
-
 export type ExternalTakeRouteStatKey =
-  | 'approvedOneInchTakeDecisions'
-  | 'approvedFactoryTakeDecisions'
   | 'approvedUniswapV3TakeDecisions'
   | 'approvedCurveTakeDecisions'
-  | keyof ExecutedExternalTakeRouteStats
-  | 'dryRunOneInchTakes'
-  | 'dryRunFactoryTakes'
+  | 'executedUniswapV3Takes'
+  | 'executedCurveTakes'
   | 'dryRunUniswapV3Takes'
   | 'dryRunCurveTakes';
 
 export interface ExternalTakeRouteStatKeys {
-  oneInch: ExternalTakeRouteStatKey;
-  factory: ExternalTakeRouteStatKey;
   uniswapV3: ExternalTakeRouteStatKey;
   curve: ExternalTakeRouteStatKey;
 }
 
 export type ExternalTakeRouteCounterStats = Pick<
   DiscoveredTakeTargetStats,
-  ExternalTakeRouteStatKey | 'externalTakeByPath'
+  ExternalTakeRouteStatKey | 'externalTakeByPath' | 'externalTakeByProvider'
 >;
 
 export type ExternalTakePathCounterField = keyof ExternalTakePathCounters;
 
 export const APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys =
   {
-    oneInch: 'approvedOneInchTakeDecisions',
-    factory: 'approvedFactoryTakeDecisions',
     uniswapV3: 'approvedUniswapV3TakeDecisions',
     curve: 'approvedCurveTakeDecisions',
   };
 
 const EXECUTED_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
-  oneInch: 'executedOneInchTakes',
-  factory: 'executedFactoryTakes',
   uniswapV3: 'executedUniswapV3Takes',
   curve: 'executedCurveTakes',
 };
 
 const DRY_RUN_EXTERNAL_TAKE_ROUTE_STAT_KEYS: ExternalTakeRouteStatKeys = {
-  oneInch: 'dryRunOneInchTakes',
-  factory: 'dryRunFactoryTakes',
   uniswapV3: 'dryRunUniswapV3Takes',
   curve: 'dryRunCurveTakes',
 };
@@ -129,6 +106,21 @@ export function getExternalTakePathCounters(
     postSubmissionFailures: 0,
   };
   return stats.externalTakeByPath[path]!;
+}
+
+export function getCalldataAggregatorProviderCounters(
+  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByProvider'>,
+  providerId: CalldataAggregatorProviderId
+): CalldataAggregatorProviderCounters {
+  stats.externalTakeByProvider[providerId] ??= {
+    approved: 0,
+    executed: 0,
+    dryRun: 0,
+    preBroadcastFailures: 0,
+    postSubmissionFailures: 0,
+    quoteFailures: 0,
+  };
+  return stats.externalTakeByProvider[providerId]!;
 }
 
 function incrementExternalTakePathCounter(params: {
@@ -152,39 +144,54 @@ export function getExternalTakePathCounter(params: {
   return params.stats.externalTakeByPath[params.path]?.[params.field] ?? 0;
 }
 
-export function recordExternalTakePathFailureStats(params: {
+export function getCalldataAggregatorProviderCounter(params: {
+  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByProvider'>;
+  providerId: CalldataAggregatorProviderId;
+  field: keyof CalldataAggregatorProviderCounters;
+}): number {
+  return (
+    params.stats.externalTakeByProvider[params.providerId]?.[params.field] ?? 0
+  );
+}
+
+export function recordExternalTakeRouteFailureStats(params: {
   stats: Pick<
     DiscoveredTakeTargetStats,
-    | 'externalTakeByPath'
-    | 'oneInchPreBroadcastFailures'
-    | 'oneInchPostSubmissionFailures'
-    | 'factoryPreBroadcastFailures'
-    | 'factoryPostSubmissionFailures'
+    'externalTakeByPath' | 'externalTakeByProvider'
   >;
-  path: ExternalTakePathKind;
-  providerId?: CalldataAggregatorProviderId;
+  routeIdentity: ExternalTakeRouteIdentity;
   preBroadcast: boolean;
 }): void {
   const field = params.preBroadcast
     ? 'preBroadcastFailures'
     : 'postSubmissionFailures';
-  const pathCounters = getExternalTakePathCounters(params.stats, params.path);
+  const pathCounters = getExternalTakePathCounters(
+    params.stats,
+    params.routeIdentity.path
+  );
   pathCounters[field] += 1;
 
-  if (params.path === 'direct_dex') {
-    if (params.preBroadcast) {
-      params.stats.factoryPreBroadcastFailures += 1;
-    } else {
-      params.stats.factoryPostSubmissionFailures += 1;
-    }
+  if (params.routeIdentity.path === 'calldata_aggregator') {
+    const providerCounters = getCalldataAggregatorProviderCounters(
+      params.stats,
+      params.routeIdentity.providerId
+    );
+    providerCounters[field] += 1;
   }
-  if (params.providerId === 'oneinch') {
-    if (params.preBroadcast) {
-      params.stats.oneInchPreBroadcastFailures += 1;
-    } else {
-      params.stats.oneInchPostSubmissionFailures += 1;
-    }
+}
+
+export function recordCalldataAggregatorProviderQuoteFailureStats(params: {
+  stats: Pick<DiscoveredTakeTargetStats, 'externalTakeByProvider'>;
+  routeIdentity: ExternalTakeRouteIdentity;
+}): void {
+  if (params.routeIdentity.path !== 'calldata_aggregator') {
+    return;
   }
+  const providerCounters = getCalldataAggregatorProviderCounters(
+    params.stats,
+    params.routeIdentity.providerId
+  );
+  providerCounters.quoteFailures += 1;
 }
 
 export function incrementExternalTakeRouteStats(params: {
@@ -202,11 +209,14 @@ export function incrementExternalTakeRouteStats(params: {
       field: params.pathCounter,
     });
   }
-  if (isOneInchExternalTakeRoute(quoteEvaluation)) {
-    stats[keys.oneInch] += 1;
-  }
-  if (isDirectDexExternalTakeRoute(quoteEvaluation)) {
-    stats[keys.factory] += 1;
+  if (routeIdentity?.path === 'calldata_aggregator') {
+    const providerCounters = getCalldataAggregatorProviderCounters(
+      stats,
+      routeIdentity.providerId
+    );
+    if (params.pathCounter !== undefined) {
+      providerCounters[params.pathCounter] += 1;
+    }
   }
 
   switch (routeIdentity?.source) {

@@ -5,7 +5,7 @@ import {
   resolveUniswapV3SeedFeeTiers,
   type UniswapV3FeeTierQuoteCheck,
   type UniswapV3RouterConfig,
-} from '../../scripts/create-liquidatable-ajna-fixture';
+} from '../../scripts/create-liquidatable-ajna-fixture-cli';
 
 const ROUTER_CONFIG: UniswapV3RouterConfig = {
   swapRouter02Address: '0x0000000000000000000000000000000000000002',

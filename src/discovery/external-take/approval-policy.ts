@@ -11,7 +11,7 @@ import { getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { DiscoveryReadTransports } from '../../read-transports';
 import { isSubsidizedExternalTakeQuote } from '../../take/external-take/policy';
-import { bindExternalTakeRouteForDiscovery } from '../../take/external-take/quote-approval';
+import { bindExternalTakeRouteForDiscovery } from '../../take/external-take/quote-approval-rules';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import { TakeWriteTransport } from '../../take/write-transport';
 import { decimaledToWei } from '../../utils';
@@ -67,7 +67,7 @@ function resolveApprovedExternalTakeSource(params: {
 }): {
   approved: boolean;
   selectedLiquiditySource?: LiquiditySource;
-  selectedFactoryLiquiditySource?: LiquiditySource;
+  selectedDirectDexLiquiditySource?: LiquiditySource;
   reason?: string;
 } {
   let selectedLiquiditySource = params.quoteEvaluation.selectedLiquiditySource;
@@ -94,7 +94,7 @@ function resolveApprovedExternalTakeSource(params: {
     selectedLiquiditySource = configuredLiquiditySource;
   }
 
-  const selectedFactoryLiquiditySource =
+  const selectedDirectDexLiquiditySource =
     selectedLiquiditySource !== undefined &&
     isDirectDexDynamicSource(selectedLiquiditySource)
       ? selectedLiquiditySource
@@ -103,7 +103,7 @@ function resolveApprovedExternalTakeSource(params: {
   return {
     approved: true,
     selectedLiquiditySource,
-    selectedFactoryLiquiditySource,
+    selectedDirectDexLiquiditySource,
   };
 }
 
@@ -207,8 +207,8 @@ export async function approveExternalTakeForDiscovery(
       reason: 'external take route approval missing selected liquidity source',
     };
   }
-  const selectedFactoryLiquiditySource =
-    sourceSelection.selectedFactoryLiquiditySource;
+  const selectedDirectDexLiquiditySource =
+    sourceSelection.selectedDirectDexLiquiditySource;
   const executableApproval = bindDiscoveryExecutionRoute({
     quoteEvaluation: candidateQuoteEvaluation,
     selectedLiquiditySource,
@@ -420,7 +420,7 @@ export async function approveExternalTakeForDiscovery(
   const profitabilityApproval = applyDiscoveryApprovalProfitabilityPolicy({
     quoteEvaluation: approvedQuoteEvaluation,
     selectedLiquiditySource,
-    selectedFactoryLiquiditySource,
+    selectedDirectDexLiquiditySource,
     target,
     takePolicy,
     gasPolicy,
@@ -453,7 +453,7 @@ export async function approveExternalTakeForDiscovery(
   ) {
     return {
       approved: false,
-      reason: 'hybrid gas quote fallback rejected subsidized factory route',
+      reason: 'hybrid gas quote fallback rejected subsidized direct DEX route',
       rejectCategory: 'profitFloor',
     };
   }

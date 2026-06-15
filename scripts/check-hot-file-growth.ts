@@ -9,17 +9,23 @@
 //   1. net-growth:     a hot file's final line count exceeds its base count
 //   2. added-lines:    more than MAX_ADDED_LINES gross added lines in a hot
 //                      file, even when net growth is zero or negative
-//   3. total-line-cap: scripts/deploy-factory-system.ts at or above 1000 lines
+//   3. total-line-cap: selected hot files at or above their hard line caps
 //   4. base-ref:       missing or unresolvable --base ref is a failure
+//   5. compatibility-import:
+//                      repo code imports a compatibility-only hot module instead
+//                      of the domain module that owns the logic
 //
 // Usage: npm run check-hot-file-growth -- --base <ref>
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
+import * as path from 'path';
+import ts from 'typescript';
 
 export const HOT_FILES: readonly string[] = [
   'src/config/validation.ts',
   'src/take/external-take/route.ts',
   'src/take/external-take/quote-approval.ts',
+  'src/take/direct-dex/shared.ts',
   'src/discovery/route-preflight.ts',
   'scripts/deploy-factory-system.ts',
   'scripts/run-fixture-keeper-harness.ts',
@@ -30,8 +36,68 @@ export const HOT_FILES: readonly string[] = [
 export const MAX_ADDED_LINES = 10;
 
 export const FINAL_LINE_CAPS: Readonly<Record<string, number>> = {
+  'src/take/direct-dex/shared.ts': 1000,
   'scripts/deploy-factory-system.ts': 1000,
 };
+
+export const OWNERSHIP_FILE_LINE_CAPS: Readonly<Record<string, number>> = {
+  'src/config/validation-rules.ts': 1000,
+  'src/config/auto-discover-validation.ts': 1000,
+  'src/discovery/route-preflight-validation.ts': 1000,
+  'src/take/direct-dex/route-selection.ts': 1000,
+  'src/take/direct-dex/route-amounts.ts': 1000,
+  'src/take/direct-dex/route-profitability.ts': 1000,
+  'src/take/direct-dex/route-types.ts': 500,
+  'src/take/external-take/route-binding.ts': 1000,
+  'src/take/external-take/quote-approval-rules.ts': 1000,
+  'scripts/deploy-factory-system-cli.ts': 1000,
+  'scripts/fixture-keeper-harness-cli.ts': 1000,
+  'scripts/no-spend/harness-report.ts': 1000,
+};
+
+export interface CompatibilityOnlyHotModule {
+  file: string;
+  replacement: string;
+  replacementByImport?: Readonly<Record<string, string>>;
+}
+
+interface ModuleSpecifierRef {
+  moduleSpecifier: string;
+  line: number;
+  importedNames?: readonly string[];
+}
+
+export const COMPATIBILITY_ONLY_HOT_MODULES: readonly CompatibilityOnlyHotModule[] =
+  [
+    {
+      file: 'src/config/validation.ts',
+      replacement:
+        'src/config/validation-rules.ts or src/config/auto-discover-validation.ts',
+      replacementByImport: {
+        validateAutoDiscoverConfig: 'src/config/auto-discover-validation.ts',
+      },
+    },
+    {
+      file: 'src/take/external-take/route.ts',
+      replacement: 'src/take/external-take/route-binding.ts',
+    },
+    {
+      file: 'src/take/external-take/quote-approval.ts',
+      replacement: 'src/take/external-take/quote-approval-rules.ts',
+    },
+    {
+      file: 'src/take/direct-dex/shared.ts',
+      replacement: 'src/take/direct-dex/route-selection.ts',
+    },
+    {
+      file: 'src/discovery/route-preflight.ts',
+      replacement: 'src/discovery/route-preflight-validation.ts',
+    },
+    {
+      file: 'scripts/no-spend/harness-artifacts.ts',
+      replacement: 'scripts/no-spend/harness-report.ts',
+    },
+  ];
 
 export interface HotFileStat {
   file: string;
@@ -43,7 +109,12 @@ export interface HotFileStat {
 
 export interface Violation {
   file: string;
-  rule: 'net-growth' | 'added-lines' | 'total-line-cap';
+  rule:
+    | 'net-growth'
+    | 'added-lines'
+    | 'total-line-cap'
+    | 'ownership-line-cap'
+    | 'compatibility-import';
   detail: string;
 }
 
@@ -80,8 +151,31 @@ export function evaluateHotFileGrowth(stats: HotFileStat[]): Violation[] {
   return violations;
 }
 
-function git(args: string[]): string {
-  return execFileSync('git', args, { encoding: 'utf8' });
+export function evaluateOwnershipFileLineCaps(
+  caps: Readonly<Record<string, number>> = OWNERSHIP_FILE_LINE_CAPS
+): Violation[] {
+  const violations: Violation[] = [];
+  for (const [file, cap] of Object.entries(caps)) {
+    const lineCount = currentFileLineCount(file);
+    if (lineCount >= cap) {
+      violations.push({
+        file,
+        rule: 'ownership-line-cap',
+        detail: `${lineCount} lines reaches the ${cap}-line ownership cap`,
+      });
+    }
+  }
+  return violations;
+}
+
+function git(
+  args: string[],
+  options: { stderr?: 'pipe' | 'ignore' } = {}
+): string {
+  return execFileSync('git', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', options.stderr ?? 'pipe'],
+  });
 }
 
 function countLines(content: string): number {
@@ -94,7 +188,7 @@ function countLines(content: string): number {
 
 function baseFileLineCount(baseRef: string, file: string): number {
   try {
-    return countLines(git(['show', `${baseRef}:${file}`]));
+    return countLines(git(['show', `${baseRef}:${file}`], { stderr: 'ignore' }));
   } catch {
     return 0; // file does not exist at the base ref
   }
@@ -106,6 +200,169 @@ function currentFileLineCount(file: string): number {
   } catch {
     return 0; // file deleted or not present in this repo layout
   }
+}
+
+function stripKnownExtension(file: string): string {
+  return file.replace(/\.(?:cjs|mjs|jsx|js|tsx|ts)$/, '');
+}
+
+function resolveRelativeModulePath(
+  importerFile: string,
+  moduleSpecifier: string
+): string | undefined {
+  if (!moduleSpecifier.startsWith('.')) {
+    return undefined;
+  }
+  return stripKnownExtension(
+    path
+      .normalize(path.join(path.dirname(importerFile), moduleSpecifier))
+      .replace(/\\/g, '/')
+  );
+}
+
+function listRepoCodeFiles(): string[] {
+  return git(['ls-files', '--cached', '--others', '--exclude-standard'])
+    .split('\n')
+    .filter((file) => /\.(?:cjs|mjs|jsx|js|tsx|ts)$/.test(file));
+}
+
+function stringLiteralText(node: ts.Node | undefined): string | undefined {
+  if (
+    node &&
+    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+  ) {
+    return node.text;
+  }
+  return undefined;
+}
+
+function collectNamedSpecifiers(
+  node: ts.ImportDeclaration | ts.ExportDeclaration
+): string[] | undefined {
+  if (ts.isImportDeclaration(node)) {
+    const namedBindings = node.importClause?.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) {
+      return undefined;
+    }
+    return namedBindings.elements.map((element) => element.name.text);
+  }
+
+  const exportClause = node.exportClause;
+  if (!exportClause || !ts.isNamedExports(exportClause)) {
+    return undefined;
+  }
+  return exportClause.elements.map((element) => element.name.text);
+}
+
+function collectModuleSpecifiers(
+  file: string,
+  content: string
+): ModuleSpecifierRef[] {
+  const sourceFile = ts.createSourceFile(
+    file,
+    content,
+    ts.ScriptTarget.Latest,
+    true
+  );
+  const specifiers: ModuleSpecifierRef[] = [];
+
+  const recordSpecifier = (
+    node: ts.Node | undefined,
+    importedNames?: readonly string[]
+  ): void => {
+    const moduleSpecifier = stringLiteralText(node);
+    if (moduleSpecifier === undefined || node === undefined) {
+      return;
+    }
+    const position = sourceFile.getLineAndCharacterOfPosition(
+      node.getStart(sourceFile)
+    );
+    specifiers.push({
+      moduleSpecifier,
+      line: position.line + 1,
+      importedNames,
+    });
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      recordSpecifier(node.moduleSpecifier, collectNamedSpecifiers(node));
+    } else if (ts.isCallExpression(node)) {
+      const firstArgument = node.arguments[0];
+      if (
+        node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === 'require')
+      ) {
+        recordSpecifier(firstArgument);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return specifiers;
+}
+
+function resolveCompatibilityReplacement(
+  compatibilityModule: CompatibilityOnlyHotModule,
+  specifier: ModuleSpecifierRef
+): string {
+  const mappedReplacements = new Set<string>();
+  for (const importedName of specifier.importedNames ?? []) {
+    const replacement = compatibilityModule.replacementByImport?.[importedName];
+    if (replacement === undefined) {
+      return compatibilityModule.replacement;
+    }
+    mappedReplacements.add(replacement);
+  }
+  if (mappedReplacements.size === 1) {
+    return Array.from(mappedReplacements)[0];
+  }
+  return compatibilityModule.replacement;
+}
+
+export function collectCompatibilityImportViolations(): Violation[] {
+  const compatibilityByPath = new Map(
+    COMPATIBILITY_ONLY_HOT_MODULES.map((entry) => [
+      stripKnownExtension(entry.file),
+      entry,
+    ])
+  );
+  const violations: Violation[] = [];
+
+  for (const file of listRepoCodeFiles()) {
+    let content: string;
+    try {
+      content = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const importerPath = stripKnownExtension(file);
+    for (const specifier of collectModuleSpecifiers(file, content)) {
+      const resolvedPath = resolveRelativeModulePath(
+        file,
+        specifier.moduleSpecifier
+      );
+      const compatibilityModule =
+        resolvedPath && compatibilityByPath.get(resolvedPath);
+      if (!compatibilityModule || resolvedPath === importerPath) {
+        continue;
+      }
+      violations.push({
+        file,
+        rule: 'compatibility-import',
+        detail:
+          `line ${specifier.line} imports compatibility shim ` +
+          `${compatibilityModule.file}; import ` +
+          `${resolveCompatibilityReplacement(
+            compatibilityModule,
+            specifier
+          )} directly inside the repo`,
+      });
+    }
+  }
+
+  return violations;
 }
 
 export function collectHotFileStats(baseRef: string): HotFileStat[] {
@@ -163,7 +420,11 @@ function main(): void {
   }
 
   const stats = collectHotFileStats(baseRef);
-  const violations = evaluateHotFileGrowth(stats);
+  const violations = [
+    ...evaluateHotFileGrowth(stats),
+    ...evaluateOwnershipFileLineCaps(),
+    ...collectCompatibilityImportViolations(),
+  ];
 
   if (violations.length > 0) {
     for (const violation of violations) {
@@ -173,8 +434,9 @@ function main(): void {
     }
     console.error(
       `${violations.length} hot-file violation(s) against base ${baseRef}. ` +
-        'Move the logic into a focused helper/provider-neutral module, or ' +
-        'record a packet-closeout exception (file, added lines, reason).'
+        'Move logic into a focused helper/provider-neutral module and import ' +
+        'compatibility shims only from outside repo code; this gate does not ' +
+        'accept inline exceptions.'
     );
     process.exit(1);
   }

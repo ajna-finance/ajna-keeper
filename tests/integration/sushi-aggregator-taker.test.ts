@@ -78,7 +78,7 @@ describe('SushiAggregatorKeeperTaker (Packet 3B)', () => {
         fixture.target.address,
         '0x1234'
       ),
-      // Factory routes by registered source; calling the taker directly with
+      // Direct DEX routes by registered source; calling the taker directly with
       // the wrong source must fail closed.
       ''
     ).catch(() => undefined);

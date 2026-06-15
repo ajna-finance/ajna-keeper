@@ -86,7 +86,7 @@ describe('LI.FI config validation', () => {
     ).to.not.throw();
   });
 
-  it('rejects LI.FI autodiscovery without the canonical factory taker config', () => {
+  it('rejects LI.FI autodiscovery without the canonical direct DEX taker config', () => {
     const missingFactory = baseConfig();
     delete (missingFactory.takers as any).router;
 

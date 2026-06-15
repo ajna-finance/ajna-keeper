@@ -1,16 +1,27 @@
+import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import { CalldataAggregatorProviderId, LiquiditySource } from '../../config';
+import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
 import { NonceTracker } from '../../nonce';
 import { estimateGasWithBuffer } from '../../utils';
 import { logTakeExecutionTelemetry } from '../execution-telemetry';
+import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
 import {
   ApprovedCalldataAggregatorQuoteEvaluation,
+  ExternalTakeQuoteEvaluation,
   RouteProfitabilityBreakdown,
+  TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
-import { TakeWriteTransport, submitTakeTransaction } from '../write-transport';
+import {
+  TakeWriteTransport,
+  TakeWriteTransportConfig,
+  resolveTakeWriteTransport,
+  submitTakeTransaction,
+} from '../write-transport';
+import { approveCalldataAggregatorQuoteForExecution } from './quote-approval';
 import { ApprovedCalldataAggregatorQuote } from './types';
 
 /**
@@ -24,6 +35,67 @@ import { ApprovedCalldataAggregatorQuote } from './types';
 export type AggregatorTakerFactory = ReturnType<
   typeof TakerRouter__factory.connect
 >;
+
+export type CalldataAggregatorQuoteResultNotification = {
+  success: boolean;
+  retryable?: boolean;
+  errorCode?: number | string;
+  error?: string;
+};
+
+export type CalldataAggregatorPreBroadcastRejection = {
+  kind: 'rejected';
+  reason: string;
+  logError?: boolean;
+  quoteResult?: CalldataAggregatorQuoteResultNotification;
+};
+
+export type PreparedCalldataAggregatorExecution =
+  | {
+      kind: 'dry_run';
+      approvedQuoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
+    }
+  | {
+      kind: 'ready';
+      approvedQuoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
+      freshQuote: ApprovedCalldataAggregatorQuote;
+      swapDetails: string;
+      executionCollateralWad: BigNumber;
+      takeWriteTransport: TakeWriteTransport;
+      factory: AggregatorTakerFactory;
+      assertFreshQuoteStillCurrent: () => void;
+    }
+  | CalldataAggregatorPreBroadcastRejection;
+
+type CalldataAggregatorExecutionConfigBase = TakeWriteTransportConfig & {
+  dryRun?: boolean;
+  keeperTakerRouter?: string;
+  tokenDecimalsCache?: Map<string, number>;
+};
+
+export function recordCalldataAggregatorPreBroadcastRejection<TConfig>(params: {
+  config: TConfig;
+  rejection: CalldataAggregatorPreBroadcastRejection;
+  onQuoteResult: (
+    config: TConfig,
+    result: CalldataAggregatorQuoteResultNotification
+  ) => void;
+  onExecutionFailure: (config: TConfig, result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
+}): void {
+  if (params.rejection.logError) {
+    logger.error(params.rejection.reason);
+  }
+  if (params.rejection.quoteResult) {
+    params.onQuoteResult(params.config, params.rejection.quoteResult);
+  }
+  params.onExecutionFailure(params.config, {
+    preBroadcast: true,
+    error: params.rejection.reason,
+  });
+}
 
 /**
  * Encodes the shared on-chain AggregatorSwapDetails tuple consumed by
@@ -124,6 +196,170 @@ export function getAggregatorFreshQuoteFloorError(params: {
   return undefined;
 }
 
+export async function prepareCalldataAggregatorExecution<
+  TConfig extends CalldataAggregatorExecutionConfigBase,
+>(params: {
+  pool: FungiblePool;
+  signer: Signer;
+  poolConfig: TakeActionConfig;
+  liquidation: TakeLiquidationPlan;
+  config: TConfig;
+  providerId: CalldataAggregatorProviderId;
+  label: string;
+  missingRouterReason: string;
+  missingTakerReason: string;
+  collateralRoundsToZeroReason: string;
+  getQuoteEvaluation: (params: {
+    executionCollateralWad: BigNumber;
+  }) => Promise<ExternalTakeQuoteEvaluation>;
+  getTakerAddress: (config: TConfig) => string | undefined;
+  resolveChainId: (config: TConfig, signer: Signer) => Promise<number>;
+  getCollateralTokenDecimals: (params: {
+    signer: Signer;
+    tokenAddress: string;
+    chainId: number;
+    cache?: Map<string, number>;
+    config: TConfig;
+  }) => Promise<number>;
+  requestFreshQuote: (params: {
+    pool: FungiblePool;
+    signer: Signer;
+    config: TConfig;
+    takerAddress: string;
+    chainId: number;
+    collateralInTokenDecimals: BigNumber;
+  }) => Promise<ApprovedCalldataAggregatorQuote>;
+  getMaxQuoteAgeMs: (config: TConfig) => number;
+  onQuoteResult: (
+    config: TConfig,
+    result: CalldataAggregatorQuoteResultNotification
+  ) => void;
+}): Promise<PreparedCalldataAggregatorExecution> {
+  const { pool, signer, poolConfig, liquidation, config } = params;
+  const executionCollateralWad = getDebtConstrainedTakeCollateralWad({
+    collateral: liquidation.collateral,
+    auctionPrice: liquidation.auctionPrice,
+    debtToCover: liquidation.debtToCover,
+  });
+  const quoteEvaluation = await params.getQuoteEvaluation({
+    executionCollateralWad,
+  });
+  const approval = approveCalldataAggregatorQuoteForExecution({
+    quoteEvaluation,
+    providerId: params.providerId,
+    poolName: pool.name,
+    borrower: liquidation.borrower,
+  });
+  if (!approval.approved) {
+    return { kind: 'rejected', reason: approval.reason, logError: true };
+  }
+
+  const contextMismatch = getAggregatorQuoteContextMismatch({
+    quoteEvaluation: approval.quoteEvaluation,
+    liquidation,
+    executionCollateralWad,
+    label: params.label,
+  });
+  if (contextMismatch) {
+    return { kind: 'rejected', reason: contextMismatch };
+  }
+
+  const approvedQuoteEvaluation = approval.quoteEvaluation;
+  if (config.dryRun) {
+    return { kind: 'dry_run', approvedQuoteEvaluation };
+  }
+
+  if (!config.keeperTakerRouter) {
+    throw new Error(params.missingRouterReason);
+  }
+  const takerAddress = params.getTakerAddress(config);
+  if (!takerAddress) {
+    throw new Error(params.missingTakerReason);
+  }
+
+  const chainId = await params.resolveChainId(config, signer);
+  const collateralDecimals = await params.getCollateralTokenDecimals({
+    signer,
+    tokenAddress: pool.collateralAddress,
+    chainId,
+    cache: config.tokenDecimalsCache,
+    config,
+  });
+  const collateralInTokenDecimals = convertWadToTokenDecimals(
+    executionCollateralWad,
+    collateralDecimals
+  );
+  if (collateralInTokenDecimals.isZero()) {
+    return {
+      kind: 'rejected',
+      reason: params.collateralRoundsToZeroReason,
+    };
+  }
+
+  const freshQuote = await params.requestFreshQuote({
+    pool,
+    signer,
+    config,
+    takerAddress,
+    chainId,
+    collateralInTokenDecimals,
+  });
+  const floorError = getAggregatorFreshQuoteFloorError({
+    freshQuote,
+    approvedMinOutRaw: approvedQuoteEvaluation.approvedMinOutRaw,
+    label: params.label,
+  });
+  if (floorError) {
+    return {
+      kind: 'rejected',
+      reason: floorError,
+      quoteResult: { success: false, retryable: false, error: floorError },
+    };
+  }
+
+  const maxQuoteAgeMs = params.getMaxQuoteAgeMs(config);
+  const ageError = getAggregatorQuoteAgeError({
+    quote: freshQuote,
+    maxQuoteAgeMs,
+    label: params.label,
+  });
+  if (ageError) {
+    return {
+      kind: 'rejected',
+      reason: ageError,
+      quoteResult: { success: false, retryable: true, error: ageError },
+    };
+  }
+
+  return {
+    kind: 'ready',
+    approvedQuoteEvaluation,
+    freshQuote,
+    swapDetails: encodeAggregatorSwapDetails({
+      quote: freshQuote,
+      amountOutMinimum: approvedQuoteEvaluation.approvedMinOutRaw,
+    }),
+    executionCollateralWad,
+    takeWriteTransport: resolveTakeWriteTransport(signer, config),
+    factory: TakerRouter__factory.connect(config.keeperTakerRouter, signer),
+    assertFreshQuoteStillCurrent: () => {
+      const error = getAggregatorQuoteAgeError({
+        quote: freshQuote,
+        maxQuoteAgeMs,
+        label: params.label,
+      });
+      if (error) {
+        params.onQuoteResult(config, {
+          success: false,
+          retryable: false,
+          error,
+        });
+        throw new Error(error);
+      }
+    },
+  };
+}
+
 /**
  * Submits a calldata-aggregator take through the configured take write
  * transport: nonce queueing, buffered gas estimation, transaction
@@ -198,4 +434,36 @@ export async function submitCalldataAggregatorTake(params: {
       return receipt;
     }
   );
+}
+
+export async function submitPreparedCalldataAggregatorExecution(params: {
+  pool: FungiblePool;
+  liquidation: TakeLiquidationPlan;
+  prepared: Extract<PreparedCalldataAggregatorExecution, { kind: 'ready' }>;
+  liquiditySource: LiquiditySource;
+  providerId: CalldataAggregatorProviderId;
+  label: string;
+  onQuoteConsumed?: () => void;
+  onSubmissionAccepted: () => void;
+}): Promise<void> {
+  const { pool, liquidation, prepared } = params;
+  await submitCalldataAggregatorTake({
+    factory: prepared.factory,
+    takeWriteTransport: prepared.takeWriteTransport,
+    poolName: pool.name,
+    poolAddress: pool.poolAddress,
+    borrower: liquidation.borrower,
+    auctionPrice: liquidation.auctionPrice,
+    executionCollateralWad: prepared.executionCollateralWad,
+    liquiditySource: params.liquiditySource,
+    providerId: params.providerId,
+    label: params.label,
+    transactionTarget: prepared.freshQuote.transactionTarget,
+    swapDetails: prepared.swapDetails,
+    routeProfitability: prepared.approvedQuoteEvaluation.routeProfitability,
+    approvedMinOutRaw: prepared.approvedQuoteEvaluation.approvedMinOutRaw,
+    assertFreshQuoteStillCurrent: prepared.assertFreshQuoteStillCurrent,
+    onQuoteConsumed: params.onQuoteConsumed,
+    onSubmissionAccepted: params.onSubmissionAccepted,
+  });
 }

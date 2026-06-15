@@ -156,7 +156,7 @@ export function parseHybridPaths(
   return valid;
 }
 
-export function defaultSourceForHybridPaths(
+export function fixtureLiquiditySourceForHybridPaths(
   paths: readonly ConfiguredExternalTakePathKind[]
 ): LiquiditySource {
   if (paths.includes('direct_dex')) {
@@ -271,7 +271,7 @@ export function buildForcedDiscoveryPolicy(
     logSkips: true,
     defaults: {
       take: {
-        liquiditySource: defaultSourceForHybridPaths(paths),
+        liquiditySource: fixtureLiquiditySourceForHybridPaths(paths),
         marketPriceFactor: fixture.marketPriceFactor,
         minCollateral: fixture.minCollateral,
       },

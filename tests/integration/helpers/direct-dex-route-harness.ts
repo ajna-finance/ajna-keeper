@@ -9,11 +9,11 @@ import {
   PriceOriginSource,
 } from '../../../src/config';
 import {
-  createFactoryQuoteProviderRuntimeCache,
-  FactoryExecutionConfig,
+  createDirectDexQuoteProviderRuntimeCache,
+  DirectDexExecutionConfig,
   takeLiquidationDirectDex,
 } from '../../../src/take/direct-dex';
-import { deriveApprovedMinOutRaw } from '../../../src/take/direct-dex/shared';
+import { deriveApprovedMinOutRaw } from '../../../src/take/direct-dex/route-selection';
 import { ApprovedDirectDexQuoteEvaluation } from '../../../src/take/types';
 import { RequireFields } from '../../../src/utils';
 import { setBalance } from '../test-utils';
@@ -57,7 +57,7 @@ export const USDC_APPROVED_MIN_OUT = BigNumber.from('6000000');
 export const DEADLINE = 4_102_444_800;
 export const BORROWER = '0x000000000000000000000000000000000000b0b0';
 
-interface FactoryPoolView {
+interface DirectDexPoolView {
   name: string;
   poolAddress: string;
   collateralAddress: string;
@@ -65,12 +65,12 @@ interface FactoryPoolView {
   contract: MockAtomicSwapPool;
 }
 
-export interface FactoryHarness {
+export interface DirectDexHarness {
   owner: Wallet;
   collateralToken: MockERC20;
   quoteToken: MockERC20;
   pool: MockAtomicSwapPool;
-  factory: TakerRouter;
+  router: TakerRouter;
   uniswapTaker: UniswapV3KeeperTaker;
   curveTaker: CurveKeeperTaker;
   quoteAmountDue: BigNumber;
@@ -80,11 +80,11 @@ function getProvider() {
   return new providers.Web3Provider(network.provider as any);
 }
 
-export async function deployFactoryHarness(options?: {
+export async function deployDirectDexHarness(options?: {
   quoteDecimals?: number;
   quoteTokenScale?: BigNumber;
   quoteAmountDue?: BigNumber;
-}): Promise<FactoryHarness> {
+}): Promise<DirectDexHarness> {
   const quoteDecimals = options?.quoteDecimals ?? 18;
   const quoteTokenScale = options?.quoteTokenScale ?? QUOTE_TOKEN_SCALE;
   const quoteAmountDue = options?.quoteAmountDue ?? QUOTE_AMOUNT_DUE;
@@ -125,46 +125,46 @@ export async function deployFactoryHarness(options?: {
     pool.address
   );
 
-  const factory = await new TakerRouter__factory(owner).deploy(
+  const router = await new TakerRouter__factory(owner).deploy(
     poolDeployer.address
   );
-  await factory.deployed();
+  await router.deployed();
 
   const uniswapTaker = await new UniswapV3KeeperTaker__factory(owner).deploy(
     poolDeployer.address,
-    factory.address
+    router.address
   );
   await uniswapTaker.deployed();
 
   const curveTaker = await new CurveKeeperTaker__factory(owner).deploy(
     poolDeployer.address,
-    factory.address
+    router.address
   );
   await curveTaker.deployed();
 
-  await factory.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address);
-  await factory.setTaker(LiquiditySource.CURVE, curveTaker.address);
+  await router.setTaker(LiquiditySource.UNISWAPV3, uniswapTaker.address);
+  await router.setTaker(LiquiditySource.CURVE, curveTaker.address);
 
   return {
     owner,
     collateralToken,
     quoteToken,
     pool,
-    factory,
+    router,
     uniswapTaker,
     curveTaker,
     quoteAmountDue,
   };
 }
 
-export function buildFactoryPoolView(params: {
+export function buildDirectDexPoolView(params: {
   pool: MockAtomicSwapPool;
   collateralToken: { address: string };
   quoteToken: { address: string };
   name?: string;
-}): FactoryPoolView {
+}): DirectDexPoolView {
   return {
-    name: params.name ?? 'Factory Route Pool',
+    name: params.name ?? 'Direct DEX Route Pool',
     poolAddress: params.pool.address,
     collateralAddress: params.collateralToken.address,
     quoteAddress: params.quoteToken.address,
@@ -172,12 +172,12 @@ export function buildFactoryPoolView(params: {
   };
 }
 
-export function asFungiblePool(poolView: FactoryPoolView): FungiblePool {
+export function asFungiblePool(poolView: DirectDexPoolView): FungiblePool {
   return poolView as unknown as FungiblePool;
 }
 
-export function buildFactoryTakePoolConfig(
-  poolView: FactoryPoolView,
+export function buildDirectDexTakePoolConfig(
+  poolView: DirectDexPoolView,
   source: LiquiditySource
 ): RequireFields<PoolConfig, 'take'> {
   return {
@@ -194,7 +194,7 @@ export function buildFactoryTakePoolConfig(
   };
 }
 
-async function snapshotFactoryState(params: {
+async function snapshotDirectDexState(params: {
   pool: MockAtomicSwapPool;
   collateralToken: MockERC20;
   quoteToken: MockERC20;
@@ -211,14 +211,14 @@ async function snapshotFactoryState(params: {
   };
 }
 
-async function expectFactoryStateUnchanged(
+async function expectDirectDexStateUnchanged(
   params: {
     pool: MockAtomicSwapPool;
     collateralToken: MockERC20;
     quoteToken: MockERC20;
     takerAddress: string;
   },
-  before: Awaited<ReturnType<typeof snapshotFactoryState>>
+  before: Awaited<ReturnType<typeof snapshotDirectDexState>>
 ) {
   expect(
     (await params.quoteToken.balanceOf(params.pool.address)).eq(
@@ -262,7 +262,7 @@ export function buildApprovedDirectDexQuoteEvaluation(params: {
       profitMinOutRaw: params.profitMinOutRaw,
     });
   if (!approvedMinOutRaw) {
-    throw new Error('Test factory quote evaluation missing approved min-out');
+    throw new Error('Test direct DEX quote evaluation missing approved min-out');
   }
 
   const base = {
@@ -277,7 +277,7 @@ export function buildApprovedDirectDexQuoteEvaluation(params: {
   };
   if (params.source === LiquiditySource.UNISWAPV3) {
     if (params.selectedFeeTier === undefined) {
-      throw new Error('Test Uniswap V3 factory quote missing fee tier');
+      throw new Error('Test Uniswap V3 direct DEX quote missing fee tier');
     }
     return {
       ...base,
@@ -287,7 +287,7 @@ export function buildApprovedDirectDexQuoteEvaluation(params: {
   }
   if (params.source === LiquiditySource.CURVE) {
     if (!params.curvePool) {
-      throw new Error('Test Curve factory quote missing curve pool');
+      throw new Error('Test Curve direct DEX quote missing curve pool');
     }
     return {
       ...base,
@@ -295,11 +295,11 @@ export function buildApprovedDirectDexQuoteEvaluation(params: {
       curvePool: params.curvePool,
     };
   }
-  throw new Error(`Unsupported test factory quote source: ${params.source}`);
+  throw new Error(`Unsupported test direct DEX quote source: ${params.source}`);
 }
 
 export async function deployFundedSwapRouter02(
-  harness: FactoryHarness,
+  harness: DirectDexHarness,
   amountOut: BigNumber
 ) {
   const router = await new MockSwapRouter02__factory(harness.owner).deploy(
@@ -317,24 +317,24 @@ interface CurvePoolSelection {
   tokenOutIndex: number;
 }
 
-interface FactoryRouteExecutionFixture {
+interface DirectDexRouteExecutionFixture {
   takerAddress: string;
   configOverrides: Pick<
-    FactoryExecutionConfig,
+    DirectDexExecutionConfig,
     'uniswapV3RouterOverrides' | 'curveRouterOverrides'
   >;
   curvePool?: CurvePoolSelection;
 }
 
-interface FactoryRouteExecutionSetup {
-  harness: FactoryHarness;
+interface DirectDexRouteExecutionSetup {
+  harness: DirectDexHarness;
   routerAmountOut: BigNumber;
   selectedFeeTier?: number;
 }
 
-async function prepareUniswapFactoryRouteExecution(
-  params: FactoryRouteExecutionSetup
-): Promise<FactoryRouteExecutionFixture> {
+async function prepareUniswapDirectDexRouteExecution(
+  params: DirectDexRouteExecutionSetup
+): Promise<DirectDexRouteExecutionFixture> {
   const { harness } = params;
   const router = await deployFundedSwapRouter02(
     harness,
@@ -355,8 +355,8 @@ async function prepareUniswapFactoryRouteExecution(
 }
 
 async function prepareUniswapNonSwapRouterExecution(
-  params: FactoryRouteExecutionSetup
-): Promise<FactoryRouteExecutionFixture> {
+  params: DirectDexRouteExecutionSetup
+): Promise<DirectDexRouteExecutionFixture> {
   const { harness } = params;
   const router = await new MockSwapRouter__factory(harness.owner).deploy(1, 1);
   await router.deployed();
@@ -375,9 +375,9 @@ async function prepareUniswapNonSwapRouterExecution(
   };
 }
 
-async function prepareCurveFactoryRouteExecution(
-  params: FactoryRouteExecutionSetup
-): Promise<FactoryRouteExecutionFixture> {
+async function prepareCurveDirectDexRouteExecution(
+  params: DirectDexRouteExecutionSetup
+): Promise<DirectDexRouteExecutionFixture> {
   const { harness } = params;
   const curvePool = await new MockCurveSwapPool__factory(harness.owner).deploy(
     harness.collateralToken.address,
@@ -400,23 +400,23 @@ async function prepareCurveFactoryRouteExecution(
   };
 }
 
-async function prepareFactoryRouteExecution(params: {
+async function prepareDirectDexRouteExecution(params: {
   source: LiquiditySource;
   routerAmountOut: BigNumber;
   selectedFeeTier?: number;
-  harness: FactoryHarness;
-}): Promise<FactoryRouteExecutionFixture> {
+  harness: DirectDexHarness;
+}): Promise<DirectDexRouteExecutionFixture> {
   switch (params.source) {
     case LiquiditySource.UNISWAPV3:
-      return await prepareUniswapFactoryRouteExecution(params);
+      return await prepareUniswapDirectDexRouteExecution(params);
     case LiquiditySource.CURVE:
-      return await prepareCurveFactoryRouteExecution(params);
+      return await prepareCurveDirectDexRouteExecution(params);
     default:
-      throw new Error(`Unsupported factory route source ${params.source}`);
+      throw new Error(`Unsupported direct DEX route source ${params.source}`);
   }
 }
 
-interface RejectedFactoryExecutionParams {
+interface RejectedDirectDexExecutionParams {
   source: LiquiditySource;
   routerAmountOut: BigNumber;
   routeMinOutRaw: BigNumber;
@@ -427,40 +427,40 @@ interface RejectedFactoryExecutionParams {
   expectedFailureReason?: string | RegExp;
 }
 
-async function expectRejectedFactoryExecutionWithPreparedRoute(
-  params: RejectedFactoryExecutionParams & {
+async function expectRejectedDirectDexExecutionWithPreparedRoute(
+  params: RejectedDirectDexExecutionParams & {
     prepareRoute: (
-      setup: FactoryRouteExecutionSetup
-    ) => Promise<FactoryRouteExecutionFixture>;
+      setup: DirectDexRouteExecutionSetup
+    ) => Promise<DirectDexRouteExecutionFixture>;
   }
 ) {
-  const harness = await deployFactoryHarness();
-  const { owner, collateralToken, quoteToken, pool, factory } = harness;
+  const harness = await deployDirectDexHarness();
+  const { owner, collateralToken, quoteToken, pool, router } = harness;
   const route = await params.prepareRoute({
     harness,
     routerAmountOut: params.routerAmountOut,
     selectedFeeTier: params.selectedFeeTier,
   });
 
-  const config: FactoryExecutionConfig = {
+  const config: DirectDexExecutionConfig = {
     dryRun: false,
-    keeperTakerRouter: factory.address,
-    runtimeCache: createFactoryQuoteProviderRuntimeCache(),
+    keeperTakerRouter: router.address,
+    runtimeCache: createDirectDexQuoteProviderRuntimeCache(),
     ...route.configOverrides,
   };
   const executionFailures: Array<{ preBroadcast: boolean; error?: string }> =
     [];
-  config.onFactoryExecutionFailure = (failure) => {
+  config.onDirectDexExecutionFailure = (failure) => {
     executionFailures.push(failure);
   };
 
-  const poolView = buildFactoryPoolView({
+  const poolView = buildDirectDexPoolView({
     pool,
     collateralToken,
     quoteToken,
-    name: 'Rejected Factory Route Pool',
+    name: 'Rejected Direct DEX Route Pool',
   });
-  const before = await snapshotFactoryState({
+  const before = await snapshotDirectDexState({
     pool,
     collateralToken,
     quoteToken,
@@ -481,7 +481,7 @@ async function expectRejectedFactoryExecutionWithPreparedRoute(
 
   const executed = await takeLiquidationDirectDex({
     pool: asFungiblePool(poolView),
-    poolConfig: buildFactoryTakePoolConfig(poolView, params.source),
+    poolConfig: buildDirectDexTakePoolConfig(poolView, params.source),
     signer: owner,
     liquidation: {
       borrower: BORROWER,
@@ -508,43 +508,43 @@ async function expectRejectedFactoryExecutionWithPreparedRoute(
       expect(failureMessage).to.match(params.expectedFailureReason);
     }
   }
-  await expectFactoryStateUnchanged(
+  await expectDirectDexStateUnchanged(
     { pool, collateralToken, quoteToken, takerAddress: route.takerAddress },
     before
   );
 }
 
-export async function expectFactoryExecutionRejectedWithoutStateMutation(
-  params: RejectedFactoryExecutionParams
+export async function expectDirectDexExecutionRejectedWithoutStateMutation(
+  params: RejectedDirectDexExecutionParams
 ) {
-  await expectRejectedFactoryExecutionWithPreparedRoute({
+  await expectRejectedDirectDexExecutionWithPreparedRoute({
     ...params,
     prepareRoute: async (setup) =>
-      await prepareFactoryRouteExecution({ ...setup, source: params.source }),
+      await prepareDirectDexRouteExecution({ ...setup, source: params.source }),
   });
 }
 
 export async function expectUniswapNonSwapRouterExecutionRejectedWithoutStateMutation(
-  params: Omit<RejectedFactoryExecutionParams, 'source'>
+  params: Omit<RejectedDirectDexExecutionParams, 'source'>
 ) {
-  await expectRejectedFactoryExecutionWithPreparedRoute({
+  await expectRejectedDirectDexExecutionWithPreparedRoute({
     ...params,
     source: LiquiditySource.UNISWAPV3,
     prepareRoute: prepareUniswapNonSwapRouterExecution,
   });
 }
 
-export async function expectSuccessfulFactoryTake(params: {
+export async function expectSuccessfulDirectDexTake(params: {
   source: LiquiditySource;
   poolType?: CurvePoolType;
 }) {
-  const harness = await deployFactoryHarness();
+  const harness = await deployDirectDexHarness();
   const {
     owner,
     collateralToken,
     quoteToken,
     pool,
-    factory,
+    router: takerRouter,
     uniswapTaker,
     curveTaker,
   } = harness;
@@ -591,7 +591,7 @@ export async function expectSuccessfulFactoryTake(params: {
     takerAddress = curveTaker.address;
   }
 
-  const tx = await factory.takeWithAtomicSwap(
+  const tx = await takerRouter.takeWithAtomicSwap(
     pool.address,
     BORROWER,
     AUCTION_PRICE,

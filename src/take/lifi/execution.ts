@@ -429,7 +429,8 @@ export async function takeLiquidationLifi(params: {
   );
   const usesLifiExecutionPath =
     poolConfig.take.liquiditySource === LiquiditySource.LIFI ||
-    suppliedQuoteEvaluation?.externalTakePath === 'calldata_aggregator';
+    suppliedQuoteEvaluation?.providerId === 'lifi' ||
+    suppliedQuoteEvaluation?.calldataQuote?.providerId === 'lifi';
   if (!usesLifiExecutionPath) {
     logger.error(
       `LI.FI liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`

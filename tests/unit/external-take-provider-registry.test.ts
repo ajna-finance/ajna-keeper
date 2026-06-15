@@ -9,7 +9,7 @@ describe('discovery external take provider registry', () => {
     return createDiscoveryExternalTakeProviderRegistry({
       config: {},
       quoteOneInchAggregatorPath: unusedQuote as never,
-      quoteFactoryPath: unusedQuote as never,
+      quoteDirectDexPath: unusedQuote as never,
       quoteLifiPath: unusedQuote as never,
       quoteSushiAggregatorPath: unusedQuote as never,
       recordOneInchCircuitOutcome: () => undefined,
@@ -20,9 +20,6 @@ describe('discovery external take provider registry', () => {
   it('selects providers by canonical path and calldata provider id', () => {
     const registry = createRegistry();
 
-    expect(
-      registry.selectExternalTakeProvider({ selectedPath: 'calldata_aggregator' })
-    ).to.include({ path: 'calldata_aggregator', providerId: 'lifi' });
     expect(
       registry.selectExternalTakeProvider({ selectedPath: 'direct_dex' })
     ).to.include({ path: 'direct_dex' });
@@ -52,6 +49,11 @@ describe('discovery external take provider registry', () => {
   it('fails closed for unsupported path/provider combinations', () => {
     const registry = createRegistry();
 
+    expect(() =>
+      registry.selectExternalTakeProvider({
+        selectedPath: 'calldata_aggregator',
+      })
+    ).to.throw('Unsupported external take route: calldata_aggregator');
     expect(() =>
       registry.selectExternalTakeProvider({
         selectedPath: 'direct_dex',

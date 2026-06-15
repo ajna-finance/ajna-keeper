@@ -50,7 +50,7 @@ const config: KeeperConfig = {
     },
     uniswapV3: {
       router: {
-        swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481', // Base SwapRouter02 for factory external takes
+        swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481', // Base SwapRouter02 for direct DEX external takes
         wethAddress: '0x4200000000000000000000000000000000000006', // WETH on Base
         defaultFeeTier: 3000, // Preferred/default 0.3% fee tier
         candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included

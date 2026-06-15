@@ -169,8 +169,8 @@ describe('shared arbTake helpers', () => {
           signer: {},
         } as any,
       },
-      actionLabel: 'Factory ArbTake',
-      logPrefix: 'Factory: ',
+      actionLabel: 'Direct DEX ArbTake',
+      logPrefix: 'Direct DEX: ',
     });
 
     expect(firstResult).to.equal(true);

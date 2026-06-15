@@ -12,8 +12,8 @@ import {
   resolveExternalTakeDeployment,
 } from '../config';
 import {
-  FactoryQuoteProviderRuntimeCache,
-  FactoryQuoteProviderRuntimeStats,
+  DirectDexQuoteProviderRuntimeCache,
+  DirectDexQuoteProviderRuntimeStats,
 } from '../take/direct-dex';
 import {
   DiscoveryReadTransportConfig,
@@ -152,7 +152,7 @@ export interface DiscoveryRpcCache {
   gasPrice?: BigNumber;
   gasPriceFetchedAt?: number;
   gasPriceInflight?: Promise<BigNumber>;
-  factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
+  directDexQuoteProviders?: DirectDexQuoteProviderRuntimeCache;
   stats?: DiscoveryRpcCacheStats;
   gasQuoteFallbackWarningKeys?: Set<string>;
   gasQuoteConversions?: Map<string, GasQuoteConversionCacheEntry>;
@@ -171,7 +171,7 @@ export interface DiscoveryRpcCacheStats {
   gasQuoteConversionCacheHits?: number;
   gasQuoteConversionCacheMisses?: number;
   routeProbeAbandonedCount?: number;
-  factory?: FactoryQuoteProviderRuntimeStats;
+  directDex?: DirectDexQuoteProviderRuntimeStats;
 }
 
 export interface GasQuoteConversionCacheEntry {

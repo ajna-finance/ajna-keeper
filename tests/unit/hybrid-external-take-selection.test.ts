@@ -70,6 +70,23 @@ describe('hybrid external take selection', () => {
       reason: 'hybrid external take selection missing selected path',
     });
 
+    const missingAggregatorSource = resolveHybridExternalTakeExecutionSelection({
+      resolvedExternalTakePaths: ['calldata_aggregator'],
+      quoteEvaluation: quoteEvaluation({
+        externalTakePath: 'calldata_aggregator',
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+      }),
+    });
+
+    expect(missingAggregatorSource).to.deep.include({
+      approved: false,
+      reason: 'selected path=calldata_aggregator without a concrete source',
+    });
+
     const lifiSourceOnly = resolveHybridExternalTakeExecutionSelection({
       resolvedExternalTakePaths: ['calldata_aggregator'],
       quoteEvaluation: quoteEvaluation({

@@ -6,7 +6,7 @@ import {
   bindExternalTakeRoute,
   formatExternalTakeRouteSelectionFailure,
   resolveExternalTakeRouteIdentity,
-} from '../../take/external-take/route';
+} from '../../take/external-take/route-binding';
 
 function rankExternalTakeQuote(
   evaluation: ExternalTakeQuoteEvaluation
@@ -108,7 +108,6 @@ export function resolveHybridExternalTakeExecutionSelection(params: {
   const route = bindExternalTakeRoute({
     quoteEvaluation: params.quoteEvaluation,
     resolvedExternalTakePaths: params.resolvedExternalTakePaths,
-    inferSourceFromPath: true,
   });
   if (!route.bound) {
     return {

@@ -9,6 +9,7 @@ import {
   HotFileStat,
   MAX_ADDED_LINES,
   evaluateHotFileGrowth,
+  evaluateOwnershipFileLineCaps,
 } from '../../scripts/check-hot-file-growth';
 
 function stat(overrides: Partial<HotFileStat>): HotFileStat {
@@ -93,6 +94,16 @@ describe('hot-file growth evaluation', () => {
       'net-growth',
     ]);
   });
+
+  it('fails ownership modules at their line caps', () => {
+    const violations = evaluateOwnershipFileLineCaps({
+      'src/config/validation-rules.ts': 1,
+    });
+    expect(violations).to.have.length(1);
+    expect(violations[0].file).to.equal('src/config/validation-rules.ts');
+    expect(violations[0].rule).to.equal('ownership-line-cap');
+    expect(violations[0].detail).to.contain('1-line ownership cap');
+  });
 });
 
 describe('hot-file growth checker CLI', function () {
@@ -158,6 +169,21 @@ describe('hot-file growth checker CLI', function () {
     expect(result.output).to.contain('net-growth');
     expect(result.output).to.contain('src/config/validation.ts');
     expect(result.output).to.contain('51');
+  });
+
+  it('fails when repo code imports a compatibility-only hot module', () => {
+    const dir = setupTempRepo();
+    const importer = path.join(dir, 'src', 'run.ts');
+    fs.writeFileSync(
+      importer,
+      "import { validateAutoDiscoverConfig } from './config/validation';\n"
+    );
+
+    const result = run(dir, ['--base', 'HEAD']);
+    expect(result.status).to.equal(1);
+    expect(result.output).to.contain('compatibility-import');
+    expect(result.output).to.contain('src/config/validation.ts');
+    expect(result.output).to.contain('src/config/auto-discover-validation.ts');
   });
 
   it('fails when run without the required base ref', () => {

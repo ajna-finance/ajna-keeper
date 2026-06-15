@@ -408,7 +408,7 @@ describe('Discovery Gas Policy', () => {
     expect(result.gasQuoteAttempts?.[1]).to.deep.include({
       source: LiquiditySource.UNISWAPV3,
       success: false,
-      reason: 'no factory pool at configured fee tiers',
+      reason: 'no direct DEX pool at configured fee tiers',
     });
     expect(result.gasQuoteAttempts?.[1].feeTiers).to.deep.equal([
       3000, 500, 100, 10000,
@@ -1133,7 +1133,7 @@ describe('Discovery Gas Policy', () => {
     expect(result.gasQuoteAttempts?.[0]).to.deep.include({
       source: LiquiditySource.UNISWAPV3,
       success: false,
-      reason: 'factory pool exists but returned no usable gas quote',
+      reason: 'direct DEX pool exists but returned no usable gas quote',
     });
     expect(result.gasQuoteAttempts?.[0].feeTiers).to.deep.equal([
       3000, 100, 500, 10000,

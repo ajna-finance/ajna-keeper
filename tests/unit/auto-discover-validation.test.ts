@@ -116,7 +116,7 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
-  it('accepts hybrid 1inch plus factory autodiscover take paths', () => {
+  it('accepts hybrid 1inch plus direct DEX autodiscover take paths', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
@@ -152,7 +152,7 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
-  it('accepts factory-first hybrid gas quote fallback mode with a native gas cap', () => {
+  it('accepts direct DEX-first hybrid gas quote fallback mode with a native gas cap', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
@@ -178,7 +178,7 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
-  it('accepts factory-first hybrid gas quote fallback mode for LI.FI plus factory routes', () => {
+  it('accepts direct DEX-first hybrid gas quote fallback mode for LI.FI plus direct DEX routes', () => {
     const config = baseConfig();
     const lifiCallTarget = '0x8888888888888888888888888888888888888888';
     config.discovery!.take = {
@@ -245,7 +245,7 @@ describe('auto-discover validation', () => {
     );
   });
 
-  it('rejects factory-first hybrid gas quote fallback mode without maxGasCostNative', () => {
+  it('rejects direct DEX-first hybrid gas quote fallback mode without maxGasCostNative', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
@@ -381,7 +381,7 @@ describe('auto-discover validation', () => {
     );
   });
 
-  it('requires deployment preflight for hybrid oneinch plus factory defaults', () => {
+  it('requires deployment preflight for hybrid oneinch plus direct DEX defaults', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
@@ -404,7 +404,7 @@ describe('auto-discover validation', () => {
     );
   });
 
-  it('requires the factory allowlist to include the default hybrid factory source', () => {
+  it('requires the direct DEX source allowlist to include the default hybrid direct DEX source', () => {
     const config = baseConfig();
     config.discovery!.take = {
       enabled: true,
@@ -901,7 +901,7 @@ describe('auto-discover validation', () => {
     expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
-  it('rejects gas overrides for factory sources outside the explicit allowlist', () => {
+  it('rejects gas overrides for direct DEX sources outside the explicit allowlist', () => {
     const config = baseConfig();
     config.takers!.contracts = {
       UniswapV3: '0x3333333333333333333333333333333333333333',

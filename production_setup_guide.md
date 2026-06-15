@@ -10,7 +10,7 @@ While the main README covers the basic setup process, production deployments ben
 
 - **RPC Provider**: Alchemy or QuickNode (hosted)
 - **Subgraph**: BuiltByMom/Ajna-subgraph deployed on Goldsky (hosted)
-- **External-Take Liquidity**: 1inch single-contract aggregation, LI.FI same-chain aggregation through a factory-registered taker after production canary gates pass, or factory direct-DEX adapters for Uniswap V3 and Curve
+- **External-Take Liquidity**: 1inch single-contract aggregation, LI.FI same-chain aggregation through a factory-registered taker after production canary gates pass, or direct DEX adapters for Uniswap V3 and Curve
 - **Monitoring**: Goldsky subgraph monitoring + custom logging
 
 ## Step 1: RPC Provider Setup
@@ -58,11 +58,11 @@ Important operational details:
 - All `network.readRpcUrls` must point to the same chain as the keeper signer. Wrong-chain read fallbacks are rejected.
 - `network.subgraph.fallbackUrls` are only used when the primary subgraph is unavailable or unhealthy.
 
-## Step 1.5: Factory Route Liquidity Selection (Before Enabling External Takes)
+## Step 1.5: Direct DEX Route Liquidity Selection (Before Enabling External Takes)
 
 ### What the Current Keeper Actually Does
 
-For Uniswap V3 external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route, as a deterministic tie-breaker among otherwise equal routes, and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, the V3 factory source automatically probes standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set; use `candidateFeeTiers: [defaultFeeTier]` for default-tier-only probing.
+For Uniswap V3 external takes, the deployed taker contracts accept the fee tier as call data. The keeper uses `defaultFeeTier` as the preferred/fallback route, as a deterministic tie-breaker among otherwise equal routes, and carries the selected fee tier into execution. When `candidateFeeTiers` is unset, the V3 direct DEX source automatically probes standard `[100, 500, 3000, 10000]` tiers, ordered with the default first. A non-standard `defaultFeeTier` is also kept first, then the standard tiers are probed. Configure `candidateFeeTiers` only when you want an explicit narrower or custom tier set; use `candidateFeeTiers: [defaultFeeTier]` for default-tier-only probing.
 
 ```typescript
 dex: {
@@ -82,10 +82,10 @@ Implications:
 - External takes prefer the configured default, then quote viable candidate tiers
 - Uniswap V3 auto-probes standard tiers when `candidateFeeTiers` is unset; set `candidateFeeTiers: [defaultFeeTier]` to opt out
 - Missing Uniswap pools are skipped before `takeRouteQuoteBudgetPerCandidate` is applied
-- Budget-approved factory routes are quoted with bounded parallelism, then ranked deterministically by expected net profit
-- `allowedLiquiditySources`, when set, is the complete factory route allowlist; include the default source explicitly if it should remain eligible
-- `allowedExternalTakePaths` can compare enabled providers such as `['oneinch', 'factory']`, `['factory', 'lifi']`, or `['factory', 'oneinch', 'lifi']`
-- `factory` means typed direct-DEX adapters only: Uniswap V3 and Curve. LI.FI uses a factory-registered taker, but it remains a separate aggregator path.
+- Budget-approved direct DEX routes are quoted with bounded parallelism, then ranked deterministically by expected net profit
+- `allowedLiquiditySources`, when set, is the complete direct DEX route allowlist; include the default source explicitly if it should remain eligible
+- `allowedExternalTakePaths` can compare enabled top-level paths such as `['direct_dex', 'calldata_aggregator']`; use `allowedCalldataAggregatorProviders` to choose providers such as `oneinch` and `lifi`
+- `direct_dex` means typed direct DEX adapters only: Uniswap V3 and Curve. LI.FI uses a factory-registered taker, but it remains a calldata aggregator provider.
 - Low `takeRouteQuoteBudgetPerCandidate` values reduce quote latency but can skip a more profitable route that was not probed
 - Changing fee-tier policy is a config-and-restart change, not a contract redeploy
 - There is no per-pool external-take fee override in the current config schema
@@ -168,19 +168,19 @@ This makes fee tier selection a runtime route-optimization decision. It is still
 | Chain Type                                                 | 1inch Available? | Uniswap V3? | Curve? | Recommended Approach                        | Deployment Script                  |
 | ---------------------------------------------------------- | ---------------- | ----------- | ------ | ------------------------------------------- | ---------------------------------- |
 | **Major Chains**<br/>(Ethereum, Avalanche, Base, Arbitrum) | ✅ Yes           | ✅ Yes      | ✅ Yes | **1inch Single-Contract Aggregator**        | `scripts/query-1inch.ts`           |
-| **Emerging L2s**<br/>(Hemi, Scroll, etc.)                  | ❌ No            | ✅ Yes      | ✅ Yes | **Factory Direct-DEX Adapters**             | `scripts/deploy-factory-system.ts` |
-| **Stablecoin-Heavy Chains**                                | ❌ No            | ✅ Yes      | ✅ Yes | **Factory Direct-DEX (Uniswap V3 + Curve)** | `scripts/deploy-factory-system.ts` |
-| **Uniswap-only Chains**                                    | ❌ No            | ✅ Yes      | ❌ No  | **Factory Direct-DEX (Uniswap V3 Only)**    | `scripts/deploy-factory-system.ts` |
+| **Emerging L2s**<br/>(Hemi, Scroll, etc.)                  | ❌ No            | ✅ Yes      | ✅ Yes | **Direct DEX Adapters**             | `scripts/deploy-factory-system.ts` |
+| **Stablecoin-Heavy Chains**                                | ❌ No            | ✅ Yes      | ✅ Yes | **Direct DEX (Uniswap V3 + Curve)** | `scripts/deploy-factory-system.ts` |
+| **Uniswap-only Chains**                                    | ❌ No            | ✅ Yes      | ❌ No  | **Direct DEX (Uniswap V3 Only)**    | `scripts/deploy-factory-system.ts` |
 
-The LI.FI integration is an optional same-chain aggregator path for chains and pairs where reviewed LI.FI routes can fill gaps left by direct-DEX adapters. It is not part of the `factory` path in keeper route selection, even though execution is dispatched through `TakerRouter` to a factory-registered `LifiKeeperTaker`. LI.FI production support for a chain/pair remains gated on the required-live route-shape canary and callback-path fork execution canary.
+The LI.FI integration is an optional same-chain aggregator path for chains and pairs where reviewed LI.FI routes can fill gaps left by direct-DEX adapters. It is not a separate top-level keeper route path, even though execution is dispatched through `TakerRouter` to a factory-registered `LifiKeeperTaker`. LI.FI production support for a chain/pair remains gated on the required-live route-shape canary and callback-path fork execution canary.
 
 ### Option A: 1inch Single-Contract Aggregator Deployment
 
 **Best for:** Established chains with 1inch aggregator support
 
-**IMPORTANT:** 1inch contract deployment is required for 1inch external takes only. LP reward swaps that use `PostAuctionDex.ONEINCH` use `dex.oneInch.routers` and the 1inch API directly; they do not require `takers.oneInch`.
+**IMPORTANT:** 1inch contract deployment is required for 1inch external takes only. LP reward swaps that use `PostAuctionDex.ONEINCH` use `dex.oneInch.routers` and the 1inch API directly; they do not require `takers.contracts.OneInchAggregator`.
 
-Atomic 1inch external takes validate decoded swap calldata before submission. Supported payloads must swap pool collateral to pool quote, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured router or decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `dex.oneInch.aggregationExecutorAllowlist` per chain to hard-restrict executors. If a route starts requiring non-zero 1inch flags, route that pool through a factory direct-DEX adapter until the keeper explicitly supports that payload shape.
+Atomic 1inch external takes validate decoded swap calldata before submission. Supported payloads must swap pool collateral to pool quote, send output to the keeper taker, use the requested collateral amount, have positive `minReturnAmount`, and use `flags = 0`. The decoded `srcReceiver` may be either the configured router or decoded aggregation executor. The aggregation executor is decoded from the 1inch API response and is not allowlisted by default; startup warns when 1inch discovered takes are enabled without an allowlist, and every atomic take logs the decoded executor. Use `dex.oneInch.aggregationExecutorAllowlist` per chain to hard-restrict executors. If a route starts requiring non-zero 1inch flags, route that pool through a direct DEX adapter until the keeper explicitly supports that payload shape.
 
 **Prerequisites:**
 
@@ -213,7 +213,10 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
 const config: KeeperConfig = {
   // ADD: Deployed contract address (REQUIRED for 1inch external takes only)
   takers: {
-    oneInch: '0x[deployed-contract-address]',
+    router: '0x[router-address]',
+    contracts: {
+      OneInchAggregator: '0x[deployed-contract-address]',
+    },
   },
 
   // ADD: 1inch router addresses per chain
@@ -260,7 +263,7 @@ const config: KeeperConfig = {
 };
 ```
 
-### Option B: Factory Direct-DEX Adapter Deployment (Uniswap/Curve)
+### Option B: Direct DEX Adapter Deployment (Uniswap/Curve)
 
 **Best for:** Newer chains without aggregator coverage, chains with strong direct Uniswap V3 or Curve liquidity
 
@@ -292,15 +295,15 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 ```typescript
 const config: KeeperConfig = {
-  // ADD: Factory direct-DEX addresses
+  // ADD: Direct DEX addresses
   takers: {
-    factory: '0x[factory-address]',
+    router: '0x[router-address]',
     contracts: {
       UniswapV3: '0x[uniswap-taker-address]',
     },
   },
   dex: {
-    // ADD: Uniswap V3 routing configuration for factory external takes
+    // ADD: Uniswap V3 routing configuration for direct DEX external takes
     uniswapV3: {
       router: {
         swapRouter02Address: '0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160',
@@ -389,7 +392,8 @@ const config: KeeperConfig = {
   },
   discovery: {
     take: {
-      allowedExternalTakePaths: ['factory', 'lifi'],
+      allowedExternalTakePaths: ['direct_dex', 'calldata_aggregator'],
+      allowedCalldataAggregatorProviders: ['lifi'],
       validateRouteDeployments: true,
       dexGasOverrides: {
         [LiquiditySource.LIFI]: '650000',
@@ -456,7 +460,7 @@ yarn ts-node scripts/query-1inch.ts --config your-config.ts --action quote --poo
 # Expected: Quote data returned successfully
 ```
 
-**For Factory Direct-DEX Adapters:**
+**For Direct DEX Adapters:**
 
 ```bash
 # Verify factory deployment
@@ -477,7 +481,7 @@ AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary -- --config y
 AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=your-config.ts npm run lifi-fork-execution-canary
 ```
 
-These LI.FI gates validate route shape, production policy, configured factory registration, and callback-path execution under the reviewed config. They are required before claiming LI.FI production support for a chain/pair; they do not replace normal dry-run rollout and monitoring.
+These LI.FI gates validate route shape, production policy, configured TakerRouter registration, and callback-path execution under the reviewed config. They are required before claiming LI.FI production support for a chain/pair; they do not replace normal dry-run rollout and monitoring.
 
 **Production verification fork tests:**
 
@@ -489,7 +493,7 @@ npm run production-verification:base
 npm run production-verification:live-liquidity:mainnet
 ```
 
-These tests exercise factory route selection, selected fee-tier execution, `marketPriceFactor` thresholding, stale-route rejection, and the pinned mainnet SOL/WETH live-liquidity E2E path.
+These tests exercise direct DEX route selection, selected fee-tier execution, `marketPriceFactor` thresholding, stale-route rejection, and the pinned mainnet SOL/WETH live-liquidity E2E path.
 
 ## Step 3: Subgraph Setup with Goldsky
 
@@ -550,16 +554,16 @@ The recommended approach uses the [BuiltByMom/Ajna-subgraph](https://github.com/
 
 ### Uniswap V3 Routing Addresses
 
-Factory external takes require `swapRouter02Address`, `poolFactoryAddress`, `quoterV2Address`, and `wethAddress`. Universal Router and Permit2 are only needed for Universal Router flows such as LP reward swaps.
+Direct DEX external takes require `swapRouter02Address`, `poolFactoryAddress`, `quoterV2Address`, and `wethAddress`. Universal Router and Permit2 are only needed for Universal Router flows such as LP reward swaps.
 
-Use SwapRouter02 as the swap executor for factory external takes. Do not put the Universal Router address in `swapRouter02Address`.
+Use SwapRouter02 as the swap executor for direct DEX external takes. Do not put the Universal Router address in `swapRouter02Address`.
 
 | Network  | SwapRouter02                                 | Pool Factory                                 | QuoterV2                                     | WETH / Wrapped Native                        | Verified Source                                                                     |
 | -------- | -------------------------------------------- | -------------------------------------------- | -------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------- |
 | Ethereum | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` | `0x1F98431c8aD98523631AE4a59f267346ea31F984` | `0x61fFE014bA17989E743c5F6cB21bF9697530B21e` | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2` | [Uniswap Gov](https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323) |
 | Hemi     | `0x864DDc9B50B9A0dF676d826c9B9EDe9F8913a160` | `0x346239972d1fa486FC4a521031BC81bFB7D6e8a4` | `0xcBa55304013187D49d4012F4d7e4B63a04405cd5` | `0x4200000000000000000000000000000000000006` | [Uniswap Gov](https://gov.uniswap.org/t/official-uniswap-v3-deployments-list/24323) |
 
-Universal Router remains optional for code paths that explicitly use Universal Router and Permit2. It is not required for factory external takes.
+Universal Router remains optional for code paths that explicitly use Universal Router and Permit2. It is not required for direct DEX external takes.
 
 ### 1inch Router Addresses
 
@@ -624,7 +628,7 @@ The keeper is configured with conservative timing to respect rate limits:
 }
 ```
 
-For discovered external takes, use `discovery.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound 1inch latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. The keeper does not add an intra-cycle action delay, so upgrade API tiers, reduce quote budgets, or prefer factory direct-DEX routing when provider limits are too tight for hot liquidation windows.
+For discovered external takes, use `discovery.take.oneInchQuoteTimeoutMs`, `externalTakeProbeTimeoutMs`, `oneInchQuoteFailureThreshold`, and `oneInchQuoteFailureCooldownMs` to bound 1inch latency and back off after repeated retryable failures. Defaults are a 2000ms 1inch request timeout, 2 retryable failures before cooldown, and a 30000ms cooldown. The keeper does not add an intra-cycle action delay, so upgrade API tiers, reduce quote budgets, or prefer direct DEX routing when provider limits are too tight for hot liquidation windows.
 
 ### Auto-Discovery Rollout (V1)
 
@@ -647,24 +651,24 @@ Recommended rollout order:
 1. Keep `dryRunNewPools: true` and inspect discovered skip/action logs first.
 2. Enable discovered `settlement` before discovered external `take` if you want the lower-risk path first.
 3. Prefer `discovery.take.maxGasCostNative` and `discovery.settlement.maxGasCostNative` before quote-denominated gas caps. Native gas caps use the RPC gas price directly and avoid extra native-to-quote conversion fetches.
-4. Use `allowedExternalTakePaths` when you want discovered external takes to compare enabled providers, for example `['oneinch', 'factory']`, `['factory', 'lifi']`, or `['factory', 'oneinch', 'lifi']`. If omitted, autodiscover preserves the single-path behavior from `discovery.defaults.take.liquiditySource`.
+4. Use `allowedExternalTakePaths` when you want discovered external takes to compare enabled top-level paths, for example `['direct_dex', 'calldata_aggregator']`. Use `allowedCalldataAggregatorProviders` to choose calldata aggregator providers such as `oneinch` and `lifi`. If omitted, autodiscover preserves the single-path behavior from `discovery.defaults.take.liquiditySource`.
 5. Prefer `discovery.take.minProfitNative` over `minExpectedProfitQuote` when you want one profit floor across mixed quote tokens. It is a wei-denominated native-token floor, not a USD field.
 6. To approximate a USD target, use `minProfitNative_wei = desired_usd_profit / native_price_usd * 1e18`. Example: a $3 floor at ETH=$3,000 is `0.001 ETH`, or `1000000000000000` wei. Recalibrate periodically because the USD value drifts with native token price.
 7. Only set `discovery.take.minExpectedProfitQuote` after discovered external takes are enabled; it does not apply to arb-only discovered takes. Set it to `0` if you want quote-normalized gas coverage with no extra quote-token profit floor.
 8. Keep `discovery.defaults.take.allowSubsidy` unset or `false` for normal production discovery. The route-derived policy then requires external takes to clear auction repayment plus route gas/profit floors when quote-normalized inputs are configured or available.
 9. Use `allowSubsidy: true` only on manually reviewed defensive pools where spending keeper P&L to repay an auction earlier is acceptable. Subsidized takes still enforce repayment and swap min-out safety, but they may execute below gas/profit floors.
 10. Set `marketPriceFactor` below 1 for normal operation, for example `0.99` to target auctions below roughly 99% of market. Config validation rejects non-positive values and values above 2, which catches common typos like `99` instead of `0.99`; values above 1 weaken market-factor protection and should be intentional.
-11. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the factory route selector. `allowedLiquiditySources` is factory-only, is the complete route allowlist when set, and cannot include `ONEINCH` or `LIFI`. Uniswap V3 auto-probes standard fee tiers when `candidateFeeTiers` is unset; set `candidateFeeTiers` only to narrow/customize that set.
+11. Use `allowedLiquiditySources` and `takeRouteQuoteBudgetPerCandidate` to control the direct DEX route selector. `allowedLiquiditySources` is direct DEX-only, is the complete route allowlist when set, and cannot include `ONEINCH` or `LIFI`. Uniswap V3 auto-probes standard fee tiers when `candidateFeeTiers` is unset; set `candidateFeeTiers` only to narrow/customize that set.
 12. Use `externalTakeProbeTimeoutMs` to bound each hybrid provider probe. When unset, it defaults to `oneInchQuoteTimeoutMs` plus a 1000ms RPC preflight budget, capped at 5000ms so slow aggregator settings do not stall hot loops. Explicit values from 1ms to 10000ms are supported for slow infrastructure, but values above 5000ms directly increase the worst-case time spent on each hot auction candidate.
-13. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'factory_first'` only when reducing aggregator API calls is worth potentially skipping a better aggregator route; it tries factory first and stops once factory is approved without subsidy. Subsidized factory approvals continue probing remaining paths so a self-funding route can still win.
-14. Keep `hybridGasQuoteFailureFallbackMode` unset or `'disabled'` for strict hybrid ranking. Use `'factory_first'` only as an explicit fallback when the factory route is viable but strict hybrid ranking cannot convert native gas into the pool quote token. It requires `maxGasCostNative`, is skipped when `maxGasCostQuote`, `minExpectedProfitQuote`, or `minProfitNative` are configured, and does not execute subsidized factory routes.
-15. Keep `maxConcurrentCandidateEvaluations` unset (default `1`) until you have measured provider latency. Values up to `4` evaluate a same-pool candidate window concurrently, but execution remains serial with fresh final revalidation. If you raise it above `1`, set `maxInFlightRouteProbes` to cap combined aggregator and factory quote/API/RPC pressure across the window; `maxInFlightRouteProbes` defaults to `3` when unset and is capped at `16`. If `maxExecutionsPerPoolPerRun` is above `1`, same-pool candidate evaluation is forced back to sequential mode.
+13. Leave `externalTakeRouteSelectionMode` unset for `maximize_profit`, which probes all enabled paths and ranks by expected net profit. Use `'direct_dex_first'` only when reducing aggregator API calls is worth potentially skipping a better aggregator route; it tries direct DEX first and stops once direct DEX is approved without subsidy. Subsidized direct DEX approvals continue probing remaining paths so a self-funding route can still win.
+14. Keep `hybridGasQuoteFailureFallbackMode` unset or `'disabled'` for strict hybrid ranking. Use `'direct_dex_first'` only as an explicit fallback when the direct DEX route is viable but strict hybrid ranking cannot convert native gas into the pool quote token. It requires `maxGasCostNative`, is skipped when `maxGasCostQuote`, `minExpectedProfitQuote`, or `minProfitNative` are configured, and does not execute subsidized direct DEX routes.
+15. Keep `maxConcurrentCandidateEvaluations` unset (default `1`) until you have measured provider latency. Values up to `4` evaluate a same-pool candidate window concurrently, but execution remains serial with fresh final revalidation. If you raise it above `1`, set `maxInFlightRouteProbes` to cap combined aggregator and direct DEX quote/API/RPC pressure across the window; `maxInFlightRouteProbes` defaults to `3` when unset and is capped at `16`. If `maxExecutionsPerPoolPerRun` is above `1`, same-pool candidate evaluation is forced back to sequential mode.
 16. Keep `maxExecutionsPerPoolPerRun` unset (default `1`) for conservative operation. Set it up to `5` for defensive same-pool liquidation cascades; this keeps executions serialized and refreshes auction state, route approval, and gas policy before every transaction while reusing warm route/provider caches. The cap counts successful borrower/candidate decisions, so a borrower that executes both an external take and follow-up arbTake counts once.
 17. Keep the hot-auction cache enabled for fast take loops. Defaults are conservative; set `discovery.take.hotAuctionCandidateTtlMs` to shorten/extend the window and `maxHotAuctionCandidates` to bound memory. Set the TTL to `0` only if you intentionally want each take loop to depend solely on the latest subgraph response.
 18. Use `discovery.take.externalTakeTransportPolicy: 'require_private_or_relay'` for live production discovered external takes only after `writes.take` is configured for `private_rpc` or `relay`. `prefer_private_or_relay` warns but still allows public fallback.
-19. If `allowedExternalTakePaths` includes both `'factory'` and at least one aggregator path, set `defaultFactoryLiquiditySource` and `validateRouteDeployments: true` so the factory selector has a default source and startup verifies the taker path. LI.FI paths also require `validateRouteDeployments: true`.
+19. If `allowedExternalTakePaths` includes both `direct_dex` and `calldata_aggregator`, set `defaultDirectDexLiquiditySource` and `validateRouteDeployments: true` so the direct DEX selector has a default source and startup verifies the taker path. LI.FI paths also require `validateRouteDeployments: true`.
 20. If you use Curve for discovered takes, include both `dex.curve.poolConfigs` and `network.tokenAddresses`, or config validation will reject startup.
-21. Use `discovery.take.validateRouteDeployments: true` for production startup preflight. It is required for LI.FI and mixed factory/aggregator routing, and recommended for every live factory route.
+21. Use `discovery.take.validateRouteDeployments: true` for production startup preflight. It is required for LI.FI and mixed direct DEX/calldata aggregator routing, and recommended for every live direct DEX route.
 22. Run `npm run oneinch-route-canary` before fallback drills or Base 1inch troubleshooting. It never broadcasts. It loads `.env` and uses `AJNA_AGENT_RPC_URL`, `AJNA_RPC_URL_BASE`, `BASE_RPC_URL`, or `ALCHEMY_API_KEY` for Base RPC. With RPC access, it checks WETH/USDC Uniswap V3 QuoterV2 coverage across configured fee tiers. With 1inch credentials and `AJNA_AGENT_ONEINCH_CANARY_TAKER_ADDRESS`, it also checks CADC/USDC 1inch route availability, WETH/USDC 1inch gas conversion, and CADC/USDC swap-data validation.
 23. Run `AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true npm run lifi-route-canary -- --config your-config.ts` before enabling LI.FI for a production chain. It never broadcasts and fails closed when live LI.FI config/env is missing. If the production config contains more than one LI.FI chain, set `AJNA_AGENT_LIFI_CANARY_CHAIN_ID`; for non-Base chains, set `AJNA_AGENT_LIFI_CANARY_ROUTES_JSON` to reviewed same-chain token-pair routes. A successful required-live no-broadcast route-shape canary is necessary but not sufficient; also run the Base callback-path fork execution canary with `AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=your-config.ts`, or an equivalent reviewed fork canary for non-Base chains, so the fork verifies configured production registration and executes real default-API LI.FI calldata through a local callback harness under the reviewed production config policy.
 
@@ -678,15 +682,15 @@ External take latency and API-cost controls:
 | -------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `runtime.delayBetweenRuns`                         | Operator-configured                               | Sets the global take loop cadence. `10` seconds is reasonable for hot liquidation monitoring.                                                                                                                                                                                                                                                                                                                                                |
 | `discovery.take.takeQuoteBudgetPerRun`             | unset                                             | Caps total discovered take quote work per run.                                                                                                                                                                                                                                                                                                                                                                                               |
-| `discovery.take.takeRouteQuoteBudgetPerCandidate`  | unset                                             | Caps factory route candidates quoted per liquidation. Lower values reduce RPC/API work but can miss a better route.                                                                                                                                                                                                                                                                                                                          |
+| `discovery.take.takeRouteQuoteBudgetPerCandidate`  | unset                                             | Caps direct DEX route candidates quoted per liquidation. Lower values reduce RPC/API work but can miss a better route.                                                                                                                                                                                                                                                                                                                          |
 | `discovery.take.maxConcurrentCandidateEvaluations` | `1`                                               | Evaluates up to 4 same-pool candidates concurrently. Execution is still one decision at a time with final revalidation, so this reduces quote latency without concurrent take submission.                                                                                                                                                                                                                                                    |
 | `discovery.take.maxExecutionsPerPoolPerRun`        | `1`                                               | Allows defensive same-pool cascades to execute more than one borrower in a single discovered take cycle. Counts successful borrower/candidate decisions, not raw transactions; a borrower that executes both an external take and follow-up arbTake counts once. Values above 1 force same-pool candidate evaluation back to sequential mode so stale pre-execution status is not reused after a state-changing take.                        |
-| `discovery.take.maxInFlightRouteProbes`            | `3` when candidate concurrency is above 1         | Caps combined aggregator and factory route quote/API/RPC probes across a parallel candidate window. Raise only after measuring provider latency and rate limits.                                                                                                                                                                                                                                                                             |
-| V3 factory `candidateFeeTiers` unset               | `[defaultFeeTier, 100, 500, 3000, 10000]` deduped | Auto-probes standard Uniswap V3 tiers. Adds up to three extra pool-existence checks per V3 factory candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`. Set `candidateFeeTiers: [defaultFeeTier]` for default-only probing. |
+| `discovery.take.maxInFlightRouteProbes`            | `3` when candidate concurrency is above 1         | Caps combined aggregator and direct DEX route quote/API/RPC probes across a parallel candidate window. Raise only after measuring provider latency and rate limits.                                                                                                                                                                                                                                                                           |
+| V3 direct DEX `candidateFeeTiers` unset            | `[defaultFeeTier, 100, 500, 3000, 10000]` deduped | Auto-probes standard Uniswap V3 tiers. Adds up to three extra pool-existence checks per V3 direct DEX candidate when the default is standard, or four when the default is non-standard. Existing pools may add quote calls when quote budget allows. Quote-denominated gas conversion uses the same tier set independently of `takeRouteQuoteBudgetPerCandidate`. Set `candidateFeeTiers: [defaultFeeTier]` for default-only probing. |
 | `dex.oneInch.defaultSlippage`                      | `1.0`                                             | 1inch external-take min-out slippage percentage. Tighten for stable routes; widen only for reviewed volatile or thin routes.                                                                                                                                                                                                                                                                                                                 |
 | `discovery.take.oneInchQuoteTimeoutMs`             | `2000`                                            | Bounds each discovered 1inch quote and swap-data request.                                                                                                                                                                                                                                                                                                                                                                                    |
 | `discovery.take.externalTakeProbeTimeoutMs`        | `min(oneInchQuoteTimeoutMs + 1000, 5000)`         | Bounds each hybrid path probe. Explicit values may be `1..10000ms`.                                                                                                                                                                                                                                                                                                                                                                          |
-| `discovery.take.hybridGasQuoteFailureFallbackMode` | `'disabled'`                                      | Optional `'factory_first'` fallback for hybrid `maximize_profit` when factory execution is viable but native-to-quote gas conversion is unavailable. Requires `maxGasCostNative`, skips quote-denominated gas/profit policy, and rejects subsidized factory routes.                                                                                                                                                                          |
+| `discovery.take.hybridGasQuoteFailureFallbackMode` | `'disabled'`                                      | Optional `'direct_dex_first'` fallback for hybrid `maximize_profit` when direct DEX execution is viable but native-to-quote gas conversion is unavailable. Requires `maxGasCostNative`, skips quote-denominated gas/profit policy, and rejects subsidized direct DEX routes.                                                                                                                                                                  |
 | `discovery.take.oneInchQuoteFailureThreshold`      | `2`                                               | Retryable 1inch failures before the local circuit opens.                                                                                                                                                                                                                                                                                                                                                                                     |
 | `discovery.take.oneInchQuoteFailureCooldownMs`     | `30000`                                           | Cooldown after the circuit opens, capped at 1 hour.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `discovery.take.hotAuctionCandidateTtlMs`          | `10 minutes`                                      | Keeps already-seen auctions eligible between subgraph refreshes. Set `0` to disable.                                                                                                                                                                                                                                                                                                                                                         |
@@ -696,7 +700,7 @@ External take latency and API-cost controls:
 
 ### Pool Liquidity Verification
 
-For Uniswap V3 factory external takes, the keeper prefers `defaultFeeTier` and can probe candidate routes per take. The V3 factory source automatically checks standard tiers when `candidateFeeTiers` is unset. Missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
+For Uniswap V3 direct DEX external takes, the keeper prefers `defaultFeeTier` and can probe candidate routes per take. The V3 direct DEX source automatically checks standard tiers when `candidateFeeTiers` is unset. Missing pools are skipped before quote budgeting, but viable candidates still add quote latency.
 
 **For Uniswap V3:**
 
@@ -727,9 +731,9 @@ For Uniswap V3 factory external takes, the keeper prefers `defaultFeeTier` and c
 - Apply `takeRouteQuoteBudgetPerCandidate` after unavailable pools are filtered out
 - Quote the remaining budget-approved routes with bounded parallelism
 - Treat `allowedLiquiditySources` as an explicit allowlist, not an additive list
-- Can compare aggregator paths against the factory selector when `allowedExternalTakePaths` includes mixed paths such as `['oneinch', 'factory']`, `['factory', 'lifi']`, or `['factory', 'oneinch', 'lifi']`
+- Can compare calldata aggregator providers against the direct DEX selector when `allowedExternalTakePaths` includes both `direct_dex` and `calldata_aggregator`
 - Bound each hybrid path with `externalTakeProbeTimeoutMs` so one slow provider cannot block another viable path; avoid values above 5000ms unless provider false-negatives are more damaging than slower hot-loop execution
-- Can reduce aggregator API usage with `externalTakeRouteSelectionMode: 'factory_first'` by trying factory before aggregators and continuing past subsidized factory approvals
+- Can reduce aggregator API usage with `externalTakeRouteSelectionMode: 'direct_dex_first'` by trying direct DEX before aggregators and continuing past subsidized direct DEX approvals
 - Cannot be customized per pool in the current config schema
 - Can be changed by updating config and restarting the keeper
 
@@ -1005,9 +1009,9 @@ const config: KeeperConfig = {
   //   },
   // },
 
-  // Factory Direct-DEX Setup
+  // Direct DEX setup
   takers: {
-    factory: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
+    router: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
     contracts: {
       UniswapV3: '0x[DEPLOYED_UNISWAP_TAKER_ADDRESS]',
     },
@@ -1111,9 +1115,9 @@ For live startup behavior:
 const config: KeeperConfig = {
   // ... basic config
 
-  // Factory Direct-DEX Setup with Curve
+  // Direct DEX setup with Curve
   takers: {
-    factory: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
+    router: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
     contracts: {
       Curve: '0x[DEPLOYED_CURVE_TAKER_ADDRESS]',
     },
@@ -1271,11 +1275,11 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 # Cause: Missing required contract addresses
 # Solution: Complete the contract deployment step
 
-# Log: "TakeSettings: takers.oneInch required when liquiditySource is ONEINCH"
-# Solution: Deploy the 1inch single-contract taker or switch to a factory direct-DEX adapter
+# Log: "TakeSettings: takers.contracts.OneInchAggregator required when liquiditySource is ONEINCH"
+# Solution: Deploy the 1inch aggregator taker or switch to a direct DEX adapter
 
 # Log: "dex.uniswapV3.router.swapRouter02Address, poolFactoryAddress, wethAddress, and quoterV2Address required when liquiditySource is UNISWAPV3"
-# Solution: Add complete Uniswap V3 factory-take routing configuration
+# Solution: Add complete Uniswap V3 direct DEX routing configuration
 
 # Log: "AutoDiscoverConfig.take: allowedLiquiditySources currently supports only UNISWAPV3 and CURVE"
 # Cause: A legacy config still lists the removed direct SushiSwap source (id 3)
@@ -1289,7 +1293,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 # Cause: Missing dexProvider enum in rewardAction
 # Solution: Replace old boolean logic with dexProvider: PostAuctionDex.ONEINCH/UNISWAP_V3/CURVE
 
-# Log: "Configuration validation failed for oneinch: Missing takers.oneInch"
+# Log: "Configuration validation failed for oneinch: Missing takers.contracts.OneInchAggregator"
 # Cause: 1inch external takes are enabled without the deployed taker contract
 # Solution: Deploy the 1inch taker contract for external takes, or use 1inch only for LP rewards with dex.oneInch.routers and API credentials
 ```
@@ -1312,7 +1316,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 
 - Free tier: 1 req/sec, 100K/month
 - For hot discovered takes, rely on bounded 1inch request timeouts plus cooldowns instead of intra-cycle sleeps
-- If your API tier cannot handle the required quote rate, reduce quote budgets, use a paid tier, or prefer factory direct-DEX routing for those pools
+- If your API tier cannot handle the required quote rate, reduce quote budgets, use a paid tier, or prefer direct DEX routing for those pools
 - Consider paid tier for faster operation
 
 **Uniswap V3 Gas Optimization:**
@@ -1348,7 +1352,7 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 
 ```bash
 # Successful external take
-"Factory Take successful - poolAddress: 0x..., borrower: 0x..."
+"Direct DEX take successful - poolAddress: 0x..., borrower: 0x..."
 
 # Price comparison (debug level)
 "Price check: pool=usd_t1/usdc_t, auction=0.9950, market=1.0020, takeable=0.9920, profitable=true"
@@ -1485,10 +1489,10 @@ This indicates the auction needs more settlement iterations or has complex debt 
 # Solution: Normal in mixed-pair deployments; consider candidate fee tiers or separate keeper configs if the gap matters operationally
 ```
 
-**Factory Direct-DEX Issues:**
+**Direct DEX Issues:**
 
 ```bash
-# Log: "Factory: Unsupported liquidity source: 3"
+# Log: "Direct DEX: Unsupported liquidity source: 3"
 # Cause: Source id 3 is the removed direct SushiSwap path; it is deprecated and fails closed
 # Solution: Migrate the pool to UNISWAPV3 or CURVE; reach SushiSwap liquidity only through an aggregator path (1inch, or LI.FI exchange filters)
 

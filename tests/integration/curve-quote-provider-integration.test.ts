@@ -178,10 +178,10 @@ describe('Curve Quote Provider', () => {
     }
   });
 
-  it('should provide interface compatible with factory take logic', async () => {
+  it('should provide interface compatible with direct DEX take logic', async () => {
     quoteProvider = new CurveQuoteProvider(mockSigner, validConfig);
 
-    // Test the methods that factory takes would use
+    // Test the methods that direct DEX takes would use
     expect(typeof quoteProvider.isAvailable()).to.equal('boolean');
     expect(Array.isArray(quoteProvider.getConfiguredPools())).to.be.true;
 

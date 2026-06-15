@@ -4,7 +4,7 @@ import { getRevalidatedQuoteContextIssue } from '../../src/take/take-decision-re
 import { getDebtConstrainedTakeCollateralWad } from '../../src/take/take-sizing';
 
 // Live-incident shape: aggregator quotes are denominated in the debt-clamped
-// size, factory quotes in the full collateral.
+// size, direct DEX quotes in the full collateral.
 const COLLATERAL = utils.parseEther('67.350885853762942258');
 const DEBT = utils.parseEther('7.181028045088476234');
 const PRICE = utils.parseEther('0.4646');
@@ -45,7 +45,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     ).to.equal('collateral_mismatch');
   });
 
-  it('accepts factory quotes denominated in the full collateral', () => {
+  it('accepts direct DEX quotes denominated in the full collateral', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
