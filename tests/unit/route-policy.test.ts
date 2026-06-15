@@ -203,7 +203,7 @@ describe('provider enablement matrix with Sushi active (Packet 3B)', () => {
   it('resolves deployment for the appended Sushi source by provider id', () => {
     const {
       resolveExternalTakeDeployment,
-    } = require('../../src/config/external-take-registry');
+    } = require('../../src/config/external-take-descriptors');
     const resolution = resolveExternalTakeDeployment({
       liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
       config: {

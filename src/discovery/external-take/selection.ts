@@ -7,6 +7,7 @@ import {
   formatExternalTakeRouteSelectionFailure,
   resolveExternalTakeRouteIdentity,
 } from '../../take/external-take/route-binding';
+import type { ExternalTakeRouteIdentity } from '../../take/external-take/route-binding';
 
 function rankExternalTakeQuote(
   evaluation: ExternalTakeQuoteEvaluation
@@ -94,7 +95,7 @@ export function selectBestExternalTakeQuoteEvaluation<
 export type HybridExternalTakeExecutionSelection =
   | {
       approved: true;
-      effectiveSelectedPath: ExternalTakePathKind;
+      routeIdentity: ExternalTakeRouteIdentity;
     }
   | {
       approved: false;
@@ -117,6 +118,6 @@ export function resolveHybridExternalTakeExecutionSelection(params: {
   }
   return {
     approved: true,
-    effectiveSelectedPath: route.path,
+    routeIdentity: route.identity,
   };
 }

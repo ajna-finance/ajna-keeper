@@ -388,8 +388,6 @@ async function executeLiveUniswapFixture(fixture: LiveLiquidityFixture) {
   expectApprovedMinOutInvariants(quoteEvaluation);
   const boundQuoteEvaluation = bindExternalTakeRouteForCandidate({
     quoteEvaluation,
-    selectedLiquiditySource: quoteEvaluation.selectedLiquiditySource,
-    configuredLiquiditySource: poolConfig.take.liquiditySource,
     poolName: pool.name,
     borrower: fixture.borrower,
   });

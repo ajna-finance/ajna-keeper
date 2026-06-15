@@ -1,4 +1,3 @@
-import { LiquiditySource } from '../../config';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeEvaluationResult,
@@ -50,8 +49,6 @@ export function replaceExternalTakeExecutionPlanPrimary<TApprovalContext>(params
 
 export function bindExternalTakeQuoteToExecutionResult<TApprovalContext>(params: {
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  selectedLiquiditySource?: LiquiditySource;
-  configuredLiquiditySource?: LiquiditySource;
   poolName: string;
   borrower: string;
   approvalContext?: TApprovalContext;
@@ -66,8 +63,6 @@ export function bindExternalTakeQuoteToExecutionResult<TApprovalContext>(params:
 
   const binding = bindExternalTakeRouteForCandidate({
     quoteEvaluation: params.quoteEvaluation,
-    selectedLiquiditySource: params.selectedLiquiditySource,
-    configuredLiquiditySource: params.configuredLiquiditySource,
     poolName: params.poolName,
     borrower: params.borrower,
   });

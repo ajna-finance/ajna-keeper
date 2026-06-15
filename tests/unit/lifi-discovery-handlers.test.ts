@@ -8,6 +8,7 @@ import type { DiscoveryRpcCache } from '../../src/discovery/handlers';
 import { logger } from '../../src/logging';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../src/take/external-take/execution-plan';
 import * as lifiExecutionModule from '../../src/take/lifi/execution';
+import * as lifiQuoteEvaluationModule from '../../src/take/lifi/quote-evaluation';
 import * as directDexModule from '../../src/take/direct-dex';
 import { createDiscoveryTransports } from '../helpers/discovery';
 import {
@@ -48,22 +49,24 @@ describe('LI.FI discovery handlers', () => {
     const takeLiquidationDirectDexStub = sinon
       .stub(directDexModule, 'takeLiquidationDirectDex')
       .resolves(true);
-    sinon.stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation').resolves({
-      isTakeable: true,
-      externalTakePath: 'calldata_aggregator',
-      selectedLiquiditySource: LiquiditySource.LIFI,
-      quoteAmount: 130,
-      quoteAmountRaw: ethers.utils.parseUnits('130', 6),
-      collateralAmount: 1,
-      marketPrice: 130,
-      takeablePrice: 128.7,
-      approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
-      quotedAuctionPriceWad: ethers.utils.parseEther('100'),
-      quotedCollateralWad: ethers.utils.parseEther('1'),
-      calldataQuote: makeTestCalldataAggregatorQuote({
+    sinon
+      .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        externalTakePath: 'calldata_aggregator',
+        selectedLiquiditySource: LiquiditySource.LIFI,
+        quoteAmount: 130,
         quoteAmountRaw: ethers.utils.parseUnits('130', 6),
-      }),
-    });
+        collateralAmount: 1,
+        marketPrice: 130,
+        takeablePrice: 128.7,
+        approvedMinOutRaw: ethers.utils.parseUnits('100', 6),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+        calldataQuote: makeTestCalldataAggregatorQuote({
+          quoteAmountRaw: ethers.utils.parseUnits('130', 6),
+        }),
+      });
     const directDexQuoteStub = sinon
       .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
       .onFirstCall()
@@ -178,7 +181,7 @@ describe('LI.FI discovery handlers', () => {
 
   it('executes a default LI.FI discovered take path and records LI.FI route stats', async () => {
     const lifiQuoteStub = sinon
-      .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+      .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
       .resolves({
         isTakeable: true,
         externalTakePath: 'calldata_aggregator',
@@ -275,23 +278,25 @@ describe('LI.FI discovery handlers', () => {
 
   it('passes refreshed auction context into a reapproved direct LI.FI take', async () => {
     const refreshedAuctionPrice = ethers.utils.parseEther('99');
-    sinon.stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation').resolves({
-      isTakeable: true,
-      externalTakePath: 'calldata_aggregator',
-      selectedLiquiditySource: LiquiditySource.LIFI,
-      quoteAmount: 125,
-      quoteAmountRaw: ethers.utils.parseUnits('125', 6),
-      routeMinOutRaw: ethers.utils.parseUnits('120', 6),
-      collateralAmount: 1,
-      marketPrice: 125,
-      takeablePrice: 123.75,
-      quotedCollateralWad: ethers.utils.parseEther('1'),
-      quotedAuctionPriceWad: ethers.utils.parseEther('100'),
-      calldataQuote: makeTestCalldataAggregatorQuote({
+    sinon
+      .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        externalTakePath: 'calldata_aggregator',
+        selectedLiquiditySource: LiquiditySource.LIFI,
+        quoteAmount: 125,
         quoteAmountRaw: ethers.utils.parseUnits('125', 6),
         routeMinOutRaw: ethers.utils.parseUnits('120', 6),
-      }),
-    });
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        calldataQuote: makeTestCalldataAggregatorQuote({
+          quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+          routeMinOutRaw: ethers.utils.parseUnits('120', 6),
+        }),
+      });
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
       .resolves(true);
@@ -380,23 +385,25 @@ describe('LI.FI discovery handlers', () => {
     const gasPrice = ethers.utils.parseUnits('1', 'gwei');
     const expectedApprovedMinOutRaw = ethers.utils.parseEther('101.0013');
     sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    sinon.stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation').resolves({
-      isTakeable: true,
-      externalTakePath: 'calldata_aggregator',
-      selectedLiquiditySource: LiquiditySource.LIFI,
-      quoteAmount: 125,
-      quoteAmountRaw: ethers.utils.parseEther('125'),
-      routeMinOutRaw: ethers.utils.parseEther('100'),
-      collateralAmount: 1,
-      marketPrice: 125,
-      takeablePrice: 125,
-      quotedCollateralWad: ethers.utils.parseEther('1'),
-      quotedAuctionPriceWad: ethers.utils.parseEther('100'),
-      calldataQuote: makeTestCalldataAggregatorQuote({
+    sinon
+      .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
+      .resolves({
+        isTakeable: true,
+        externalTakePath: 'calldata_aggregator',
+        selectedLiquiditySource: LiquiditySource.LIFI,
+        quoteAmount: 125,
         quoteAmountRaw: ethers.utils.parseEther('125'),
         routeMinOutRaw: ethers.utils.parseEther('100'),
-      }),
-    });
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 125,
+        quotedCollateralWad: ethers.utils.parseEther('1'),
+        quotedAuctionPriceWad: ethers.utils.parseEther('100'),
+        calldataQuote: makeTestCalldataAggregatorQuote({
+          quoteAmountRaw: ethers.utils.parseEther('125'),
+          routeMinOutRaw: ethers.utils.parseEther('100'),
+        }),
+      });
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
       .resolves(true);
@@ -516,7 +523,7 @@ describe('LI.FI discovery handlers', () => {
 
   it('skips a direct LI.FI discovered take when the execution refresh circuit is open', async () => {
     const lifiQuoteStub = sinon
-      .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+      .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
       .resolves({
         isTakeable: true,
         externalTakePath: 'calldata_aggregator',
@@ -631,7 +638,7 @@ describe('LI.FI discovery handlers', () => {
 
   it('opens the LI.FI route quote circuit without touching the 1inch circuit', async () => {
     const lifiQuoteStub = sinon
-      .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+      .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
       .resolves({
         isTakeable: false,
         externalTakePath: 'calldata_aggregator',

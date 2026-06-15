@@ -18,6 +18,32 @@ function quoteEvaluation(
 }
 
 describe('hybrid external take selection', () => {
+  it('returns the bound route identity used for provider dispatch', () => {
+    const selection = resolveHybridExternalTakeExecutionSelection({
+      resolvedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      quoteEvaluation: quoteEvaluation({
+        externalTakePath: 'calldata_aggregator',
+        providerId: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+      }),
+    });
+
+    expect(selection).to.deep.include({ approved: true });
+    if (!selection.approved) {
+      throw new Error('expected approved route selection');
+    }
+    expect(selection.routeIdentity).to.deep.equal({
+      path: 'calldata_aggregator',
+      providerId: 'oneinch',
+      source: LiquiditySource.ONEINCH,
+    });
+  });
+
   it('rejects disabled hybrid execution paths before dispatch', () => {
     const disabledPath = resolveHybridExternalTakeExecutionSelection({
       resolvedExternalTakePaths: ['direct_dex'],
@@ -100,8 +126,8 @@ describe('hybrid external take selection', () => {
     });
 
     expect(lifiSourceOnly).to.deep.include({
-      approved: true,
-      effectiveSelectedPath: 'calldata_aggregator',
+      approved: false,
+      reason: 'hybrid external take selection missing selected path',
     });
 
     const inconsistentLifiPath = resolveHybridExternalTakeExecutionSelection({

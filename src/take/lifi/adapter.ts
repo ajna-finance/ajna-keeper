@@ -35,7 +35,6 @@ export function createLifiTakeAdapter(
       );
       return bindExternalTakeQuoteToExecutionResult({
         quoteEvaluation,
-        configuredLiquiditySource: poolConfig.take.liquiditySource,
         poolName: pool.name,
         borrower: candidate.borrower,
       });

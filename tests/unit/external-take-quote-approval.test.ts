@@ -3,6 +3,7 @@ import { BigNumber } from 'ethers';
 import { LiquiditySource } from '../../src/config';
 import { bindExternalTakeRouteForDiscovery } from '../../src/take/external-take/quote-approval-rules';
 import { ApprovedCalldataAggregatorQuote } from '../../src/take/aggregator-calldata/types';
+import { bindExternalTakeQuoteToExecutionResult } from '../../src/take/external-take/execution-plan';
 
 const oneInchCalldataQuote: ApprovedCalldataAggregatorQuote = {
   providerId: 'oneinch',
@@ -76,7 +77,29 @@ describe('external take quote approval', () => {
     );
   });
 
-  it('derives calldata aggregator source from validated provider identity', () => {
+  it('rejects conflicting calldata aggregator provider identities', () => {
+    const binding = bindExternalTakeRouteForDiscovery({
+      quoteEvaluation: {
+        isTakeable: true,
+        externalTakePath: 'calldata_aggregator',
+        providerId: 'lifi',
+        quoteAmountRaw: BigNumber.from(200),
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        calldataQuote: oneInchCalldataQuote,
+      },
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      poolName: 'Provider Identity Pool',
+      borrower: '0xBorrower',
+    });
+
+    expect(binding).to.deep.equal({
+      bound: false,
+      reason:
+        'external take route has inconsistent calldata provider identity for Provider Identity Pool/0xBorrower',
+    });
+  });
+
+  it('rejects calldata aggregator routes missing an explicit source', () => {
     const binding = bindExternalTakeRouteForDiscovery({
       quoteEvaluation: {
         isTakeable: true,
@@ -88,14 +111,32 @@ describe('external take quote approval', () => {
       borrower: '0xBorrower',
     });
 
-    expect(binding.bound).to.equal(true);
-    if (!binding.bound) {
-      return;
+    expect(binding).to.deep.equal({
+      bound: false,
+      reason:
+        'external take route path=calldata_aggregator is missing selected liquidity source for Provider Identity Pool/0xBorrower',
+    });
+  });
+
+  it('rejects execution-result routes missing an explicit source', () => {
+    const result = bindExternalTakeQuoteToExecutionResult({
+      quoteEvaluation: {
+        isTakeable: true,
+        externalTakePath: 'calldata_aggregator',
+        quoteAmountRaw: BigNumber.from(200),
+        calldataQuote: oneInchCalldataQuote,
+      },
+      poolName: 'Execution Identity Pool',
+      borrower: '0xBorrower',
+    });
+
+    expect(result.takeable).to.equal(false);
+    if (result.takeable) {
+      throw new Error('expected route binding to reject the quote');
     }
-    expect(binding.quoteEvaluation.selectedLiquiditySource).to.equal(
-      LiquiditySource.ONEINCH
+    expect(result.reason).to.equal(
+      'external take route path=calldata_aggregator is missing selected liquidity source for Execution Identity Pool/0xBorrower'
     );
-    expect(binding.quoteEvaluation.providerId).to.equal('oneinch');
   });
 
   it('rejects retired standalone 1inch path bindings after migration', () => {

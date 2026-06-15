@@ -14,6 +14,7 @@ import type { ResolvedTakeTarget } from '../../../src/discovery/targets';
 import type { HandleDiscoveredTakeTargetParams } from '../../../src/discovery/take-executor';
 import type { DiscoveryReadTransports } from '../../../src/read-transports';
 import * as lifiExecutionModule from '../../../src/take/lifi/execution';
+import * as lifiQuoteEvaluationModule from '../../../src/take/lifi/quote-evaluation';
 import { normalizeApprovedLifiQuote } from '../../../src/take/lifi/quote-service';
 import type { ApprovedCalldataAggregatorQuote } from '../../../src/take/aggregator-calldata/types';
 import * as directDexModule from '../../../src/take/direct-dex';
@@ -179,7 +180,7 @@ export async function runLifiHybridGasFallbackScenario(
     .stub(directDexModule, 'takeLiquidationDirectDex')
     .resolves(true);
   const lifiQuoteStub = sinon
-    .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+    .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
     .resolves({
       isTakeable: false,
       externalTakePath: 'calldata_aggregator',
@@ -302,7 +303,7 @@ export function createHybridLifiFallbackScenario(
   sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
 
   const lifiQuoteStub = sinon
-    .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+    .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
     .resolves({
       isTakeable: true,
       externalTakePath: 'calldata_aggregator',
@@ -347,7 +348,8 @@ export function createHybridLifiFallbackScenario(
       quotedCollateralWad: ethers.utils.parseEther('1'),
       routeProfitability: {
         expectedNetProfitQuoteRaw:
-          options.directDexExpectedNetProfitRaw ?? ethers.utils.parseEther('19'),
+          options.directDexExpectedNetProfitRaw ??
+          ethers.utils.parseEther('19'),
         expectedSubsidyQuoteRaw: BigNumber.from(0),
         subsidyAllowed: false,
         gasPriceWei: gasPrice,

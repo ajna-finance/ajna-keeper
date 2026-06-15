@@ -35,6 +35,14 @@ export type ExternalTakeRouteBindingFailure =
     }
   | {
       bound: false;
+      code: 'provider_mismatch';
+      providerId: CalldataAggregatorProviderId;
+      calldataQuoteProviderId: CalldataAggregatorProviderId;
+      source?: LiquiditySource;
+      path?: ExternalTakePathKind;
+    }
+  | {
+      bound: false;
       code: 'path_source_mismatch';
       path: ExternalTakePathKind;
       source: LiquiditySource;
@@ -116,6 +124,45 @@ export type ExternalTakeRouteBinding<
 
 export { resolveExternalTakePathFromSource };
 
+export type CalldataAggregatorQuoteIdentity = {
+  providerId?: CalldataAggregatorProviderId;
+  source?: CalldataAggregatorLiquiditySource;
+  mismatch?: {
+    providerId: CalldataAggregatorProviderId;
+    calldataQuoteProviderId: CalldataAggregatorProviderId;
+  };
+};
+
+export function resolveCalldataAggregatorQuoteIdentity(
+  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
+): CalldataAggregatorQuoteIdentity {
+  const providerId = quoteEvaluation?.providerId;
+  const calldataQuoteProviderId = quoteEvaluation?.calldataQuote?.providerId;
+  if (
+    providerId !== undefined &&
+    calldataQuoteProviderId !== undefined &&
+    providerId !== calldataQuoteProviderId
+  ) {
+    return {
+      providerId,
+      source: getAggregatorProviderIdentity(providerId).liquiditySource,
+      mismatch: {
+        providerId,
+        calldataQuoteProviderId,
+      },
+    };
+  }
+
+  const resolvedProviderId = providerId ?? calldataQuoteProviderId;
+  return {
+    providerId: resolvedProviderId,
+    source:
+      resolvedProviderId !== undefined
+        ? getAggregatorProviderIdentity(resolvedProviderId).liquiditySource
+        : undefined,
+  };
+}
+
 export function resolveExternalTakeRouteIdentityFromParts(params: {
   path: ExternalTakePathKind;
   source: LiquiditySource;
@@ -178,16 +225,6 @@ function createBoundExternalTakeRouteBinding<
   }
 }
 
-function resolveCalldataAggregatorSourceFromProvider(
-  quoteEvaluation: ExternalTakeQuoteEvaluation | undefined
-): CalldataAggregatorLiquiditySource | undefined {
-  const providerId =
-    quoteEvaluation?.providerId ?? quoteEvaluation?.calldataQuote?.providerId;
-  return providerId
-    ? getAggregatorProviderIdentity(providerId).liquiditySource
-    : undefined;
-}
-
 export function bindExternalTakeRoute<
   TQuoteEvaluation extends ExternalTakeQuoteEvaluation,
 >(params: {
@@ -197,7 +234,7 @@ export function bindExternalTakeRoute<
 }): ExternalTakeRouteBinding<TQuoteEvaluation> {
   const quoteSource = params.quoteEvaluation?.selectedLiquiditySource;
   const selectedSource = params.selectedLiquiditySource;
-  const providerSource = resolveCalldataAggregatorSourceFromProvider(
+  const calldataAggregatorIdentity = resolveCalldataAggregatorQuoteIdentity(
     params.quoteEvaluation
   );
   const selectedPath = params.quoteEvaluation?.externalTakePath;
@@ -224,16 +261,27 @@ export function bindExternalTakeRoute<
     };
   }
 
-  const explicitSource = quoteSource ?? selectedSource ?? providerSource;
+  const explicitSource = quoteSource ?? selectedSource;
+  if (calldataAggregatorIdentity.mismatch !== undefined) {
+    return {
+      bound: false,
+      code: 'provider_mismatch',
+      providerId: calldataAggregatorIdentity.mismatch.providerId,
+      calldataQuoteProviderId:
+        calldataAggregatorIdentity.mismatch.calldataQuoteProviderId,
+      source: explicitSource,
+      path: selectedPath,
+    };
+  }
   if (
-    providerSource !== undefined &&
+    calldataAggregatorIdentity.source !== undefined &&
     explicitSource !== undefined &&
-    providerSource !== explicitSource
+    calldataAggregatorIdentity.source !== explicitSource
   ) {
     return {
       bound: false,
       code: 'source_mismatch',
-      quoteSource: providerSource,
+      quoteSource: calldataAggregatorIdentity.source,
       selectedSource: explicitSource,
       source: explicitSource,
       path: selectedPath,
@@ -264,9 +312,16 @@ export function bindExternalTakeRoute<
     };
   }
 
-  const path = selectedPath ?? sourcePath;
+  if (selectedPath === undefined) {
+    return {
+      bound: false,
+      code: 'missing_path',
+      source: explicitSource,
+    };
+  }
+
+  const path = selectedPath;
   if (
-    path !== undefined &&
     params.resolvedExternalTakePaths !== undefined &&
     !params.resolvedExternalTakePaths.includes(path)
   ) {
@@ -277,14 +332,6 @@ export function bindExternalTakeRoute<
       source: explicitSource,
     };
   }
-  if (path === undefined) {
-    return {
-      bound: false,
-      code: 'missing_path',
-      source: explicitSource,
-    };
-  }
-
   const source = explicitSource;
   const concreteSourcePath = resolveExternalTakePathFromSource(source);
   if (source === undefined || concreteSourcePath !== path) {
@@ -337,6 +384,8 @@ export function getExternalTakeRouteBindingFailureSource(
   switch (failure.code) {
     case 'source_mismatch':
       return failure.selectedSource;
+    case 'provider_mismatch':
+      return failure.source;
     case 'path_source_mismatch':
     case 'unsupported_source':
       return failure.source;
@@ -360,6 +409,8 @@ export function formatExternalTakeRouteBindingFailure(params: {
   switch (failure.code) {
     case 'source_mismatch':
       return `external take route has inconsistent selected source${context}`;
+    case 'provider_mismatch':
+      return `external take route has inconsistent calldata provider identity${context}`;
     case 'path_source_mismatch':
       return (
         params.pathMismatchReason?.({
@@ -384,6 +435,8 @@ export function formatExternalTakeRouteSelectionFailure(
   switch (failure.code) {
     case 'source_mismatch':
       return `selected inconsistent source=${formatLiquiditySource(failure.selectedSource)} quoteSource=${formatLiquiditySource(failure.quoteSource)}`;
+    case 'provider_mismatch':
+      return `selected inconsistent provider=${failure.providerId} calldataQuoteProvider=${failure.calldataQuoteProviderId}`;
     case 'path_source_mismatch':
       return `selected inconsistent path=${failure.path} source=${formatLiquiditySource(failure.source)}`;
     case 'disabled_path':

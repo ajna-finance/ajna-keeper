@@ -1,8 +1,10 @@
 import {
+  ActiveExternalTakeRouteSelectionMode,
   CalldataAggregatorProviderId,
   DirectDexLiquiditySource,
   ExternalTakePathKind,
   LiquiditySource,
+  formatLiquiditySource,
   getAggregatorProviderIdentity,
   isDirectDexDynamicSource,
 } from '../../config';
@@ -10,31 +12,22 @@ import { logger } from '../../logging';
 import * as directDexModule from '../../take/direct-dex';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../take/external-take/execution-plan';
 import type { ExternalTakeRouteIdentity } from '../../take/external-take/route-binding';
-import * as lifiExecutionModule from '../../take/lifi/execution';
-import * as sushiAggregatorExecutionModule from '../../take/sushi-aggregator/execution';
-import * as oneInchAggregatorExecutionModule from '../../take/oneinch-aggregator/execution';
 import { ResolvedTakeTarget } from '../targets';
 import {
   createPreBroadcastFailureCapture,
   DiscoveryExternalExecutionConfig,
   ExternalTakeExecuteParams,
   ExternalTakeQuoteIntent,
+  ExternalTakeQuoteResult,
   ExternalTakeRouteProvider,
   withTakeLiquiditySource,
 } from './provider';
 import {
+  CalldataAggregatorPathQuoteInput,
+  CalldataAggregatorPathQuoteFn,
   DirectDexPathQuoteInput,
   DirectDexPathQuoteFn,
-  getCircuitGuardedQuoteOutcome,
-  LifiCircuitOutcome,
-  LifiPathQuoteInput,
-  LifiPathQuoteFn,
-  OneInchCircuitOutcome,
-  OneInchAggregatorPathQuoteFn,
-  SushiAggregatorPathQuoteFn,
 } from './quotes';
-import { getLifiCircuitOpenReason } from './lifi-circuit';
-import { DiscoveryExecutionConfig, DiscoveryRpcCache } from '../types';
 import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './approval';
 
 export type DiscoveryExternalTakeRouteProvider = ExternalTakeRouteProvider<
@@ -49,6 +42,14 @@ export interface DiscoveryExternalTakeProviderRegistry {
     selectedPath: DiscoveryExternalTakeRouteProvider['path'];
     providerId?: CalldataAggregatorProviderId;
   }): DiscoveryExternalTakeRouteProvider;
+  selectExternalTakeProviderForRoute(
+    route: ExternalTakeRouteIdentity
+  ): DiscoveryExternalTakeRouteProvider;
+  listExternalTakeProbeProviders(params: {
+    externalTakePaths: readonly ExternalTakePathKind[];
+    calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
+    routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+  }): DiscoveryExternalTakeRouteProvider[];
 }
 
 function routeProviderKey(params: {
@@ -58,6 +59,71 @@ function routeProviderKey(params: {
   return params.providerId
     ? `${params.selectedPath}:${params.providerId}`
     : params.selectedPath;
+}
+
+function routeProviderKeyFromRoute(route: ExternalTakeRouteIdentity): string {
+  if (route.path !== 'calldata_aggregator') {
+    return routeProviderKey({ selectedPath: route.path });
+  }
+
+  const identity = getAggregatorProviderIdentity(route.providerId);
+  if (route.source !== identity.liquiditySource) {
+    throw new Error(
+      `Inconsistent external take route identity: ${route.path}/${route.providerId} source=${formatLiquiditySource(route.source)}`
+    );
+  }
+  return routeProviderKey({
+    selectedPath: route.path,
+    providerId: route.providerId,
+  });
+}
+
+function orderExternalTakeProbePaths(params: {
+  externalTakePaths: readonly ExternalTakePathKind[];
+  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+}): ExternalTakePathKind[] {
+  if (params.routeSelectionMode !== 'direct_dex_first') {
+    return [...params.externalTakePaths];
+  }
+  const pathOrder = new Map<ExternalTakePathKind, number>(
+    params.externalTakePaths.map((path, index) => [path, index])
+  );
+  return [...params.externalTakePaths].sort((left, right) => {
+    if (left === right) {
+      return 0;
+    }
+    if (left === 'direct_dex') {
+      return -1;
+    }
+    if (right === 'direct_dex') {
+      return 1;
+    }
+    return (pathOrder.get(left) ?? 0) - (pathOrder.get(right) ?? 0);
+  });
+}
+
+function resolveExternalTakeProbeProviderKeys(params: {
+  externalTakePaths: readonly ExternalTakePathKind[];
+  calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
+  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+}): Array<{ key: string; label: string }> {
+  const providers: Array<{ key: string; label: string }> = [];
+  for (const path of orderExternalTakeProbePaths(params)) {
+    if (path === 'calldata_aggregator') {
+      for (const providerId of params.calldataAggregatorProviders) {
+        providers.push({
+          key: routeProviderKey({ selectedPath: path, providerId }),
+          label: `${path}/${providerId}`,
+        });
+      }
+      continue;
+    }
+    providers.push({
+      key: routeProviderKey({ selectedPath: path }),
+      label: path,
+    });
+  }
+  return providers;
 }
 
 function getCalldataAggregatorRouteIdentity(
@@ -79,12 +145,15 @@ function getDirectDexRouteIdentity(
     : undefined;
 }
 
-function createQuoteResultHandler(
+export function createQuoteResultHandler(
   config: DiscoveryExternalExecutionConfig,
-  route: ExternalTakeRouteIdentity
+  route: ExternalTakeRouteIdentity,
+  recordCircuitOutcome?: (result: ExternalTakeQuoteResult) => void
 ) {
-  return (result: { success: boolean; retryable?: boolean; error?: string }) =>
+  return (result: ExternalTakeQuoteResult) => {
+    recordCircuitOutcome?.(result);
     config.onExternalTakeQuoteResult?.({ route, result });
+  };
 }
 
 function createExecutionFailureHandler(
@@ -97,13 +166,16 @@ function createExecutionFailureHandler(
 
 function getAggregatorQuoteIntentOptions(
   intent: ExternalTakeQuoteIntent
-): Pick<LifiPathQuoteInput, 'routeProbeAbortSignal' | 'recordCircuitOutcome'> {
+): Pick<
+  CalldataAggregatorPathQuoteInput,
+  'routeProbeAbortSignal' | 'quoteCircuitMode'
+> {
   if (intent.kind !== 'hybrid_probe') {
     return {};
   }
   return {
     routeProbeAbortSignal: intent.abortSignal,
-    recordCircuitOutcome: false,
+    quoteCircuitMode: 'observe',
   };
 }
 
@@ -121,15 +193,12 @@ function getDirectDexQuoteIntentOptions(
   };
 }
 
-type CalldataAggregatorPathQuoteFn = (
-  quoteParams: LifiPathQuoteInput
-) => ReturnType<LifiPathQuoteFn>;
+export type CalldataAggregatorExecutionConfig =
+  DiscoveryExternalExecutionConfig;
 
-type CalldataAggregatorExecutionConfig = DiscoveryExternalExecutionConfig;
-
-function createCalldataAggregatorRouteProvider<
+export interface DiscoveryCalldataAggregatorProviderDescriptor<
   TExecutionConfig extends CalldataAggregatorExecutionConfig,
->(params: {
+> {
   providerId: CalldataAggregatorProviderId;
   quotePath: CalldataAggregatorPathQuoteFn;
   executeTake: (
@@ -137,10 +206,7 @@ function createCalldataAggregatorRouteProvider<
   ) => Promise<boolean>;
   decorateExecutionConfig: (params: {
     config: DiscoveryExternalExecutionConfig;
-    route: Extract<
-      ExternalTakeRouteIdentity,
-      { path: 'calldata_aggregator' }
-    >;
+    route: Extract<ExternalTakeRouteIdentity, { path: 'calldata_aggregator' }>;
     executionFailureHandler: ReturnType<
       typeof createPreBroadcastFailureCapture
     >['handler'];
@@ -150,7 +216,13 @@ function createCalldataAggregatorRouteProvider<
   getExecutionRefreshCircuitOpenReason?: (
     config: Pick<DiscoveryExternalExecutionConfig, 'dryRun'>
   ) => string | undefined;
-}): DiscoveryExternalTakeRouteProvider {
+}
+
+export function createCalldataAggregatorRouteProvider<
+  TExecutionConfig extends CalldataAggregatorExecutionConfig,
+>(
+  params: DiscoveryCalldataAggregatorProviderDescriptor<TExecutionConfig>
+): DiscoveryExternalTakeRouteProvider {
   const identity = getAggregatorProviderIdentity(params.providerId);
   return {
     path: identity.canonicalPath,
@@ -218,80 +290,9 @@ function createCalldataAggregatorRouteProvider<
 }
 
 export function createDiscoveryExternalTakeProviderRegistry(params: {
-  config: Pick<DiscoveryExecutionConfig, 'lifi'>;
-  rpcCache?: DiscoveryRpcCache;
-  quoteOneInchAggregatorPath: OneInchAggregatorPathQuoteFn;
   quoteDirectDexPath: DirectDexPathQuoteFn;
-  quoteLifiPath: LifiPathQuoteFn;
-  quoteSushiAggregatorPath: SushiAggregatorPathQuoteFn;
-  recordOneInchCircuitOutcome: (outcome: OneInchCircuitOutcome) => void;
-  recordLifiCircuitOutcome: (outcome: LifiCircuitOutcome) => void;
+  calldataAggregatorProviders: readonly DiscoveryExternalTakeRouteProvider[];
 }): DiscoveryExternalTakeProviderRegistry {
-  const getLifiExecutionRefreshCircuitOpenReason = (
-    executionConfig: Pick<DiscoveryExternalExecutionConfig, 'dryRun'>
-  ): string | undefined => {
-    if (executionConfig.dryRun === true) {
-      return undefined;
-    }
-    return getLifiCircuitOpenReason({
-      rpcCache: params.rpcCache,
-      lifiConfig: params.config.lifi,
-      purpose: 'execution_refresh',
-    });
-  };
-
-  const calldataAggregatorProviders: DiscoveryExternalTakeRouteProvider[] = [
-    createCalldataAggregatorRouteProvider({
-      providerId: 'lifi',
-      quotePath: params.quoteLifiPath,
-      getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
-      recordQuoteCircuitOutcome: params.recordLifiCircuitOutcome,
-      decorateExecutionConfig: ({
-        config,
-        route,
-        executionFailureHandler,
-      }) => ({
-        ...config,
-        onLifiQuoteResult: createQuoteResultHandler(config, route),
-        onLifiExecutionFailure: executionFailureHandler,
-      }),
-      getExecutionRefreshCircuitOpenReason:
-        getLifiExecutionRefreshCircuitOpenReason,
-      executeTake: lifiExecutionModule.takeLiquidationLifi,
-    }),
-    createCalldataAggregatorRouteProvider({
-      providerId: 'oneinch',
-      quotePath: params.quoteOneInchAggregatorPath,
-      getQuoteCircuitOutcome: getCircuitGuardedQuoteOutcome,
-      recordQuoteCircuitOutcome: params.recordOneInchCircuitOutcome,
-      decorateExecutionConfig: ({
-        config,
-        route,
-        executionFailureHandler,
-      }) => ({
-        ...config,
-        onOneInchAggregatorQuoteResult: createQuoteResultHandler(config, route),
-        onOneInchAggregatorExecutionFailure: executionFailureHandler,
-      }),
-      executeTake:
-        oneInchAggregatorExecutionModule.takeLiquidationOneInchAggregator,
-    }),
-    createCalldataAggregatorRouteProvider({
-      providerId: 'sushi_aggregator',
-      quotePath: params.quoteSushiAggregatorPath,
-      decorateExecutionConfig: ({
-        config,
-        route,
-        executionFailureHandler,
-      }) => ({
-        ...config,
-        onSushiAggregatorQuoteResult: createQuoteResultHandler(config, route),
-        onSushiAggregatorExecutionFailure: executionFailureHandler,
-      }),
-      executeTake: sushiAggregatorExecutionModule.takeLiquidationSushiAggregator,
-    }),
-  ];
-
   const directDexProvider: DiscoveryExternalTakeRouteProvider = {
     path: 'direct_dex',
     quote: async ({
@@ -341,27 +342,45 @@ export function createDiscoveryExternalTakeProviderRegistry(params: {
   };
   const providersByRoute = new Map<string, DiscoveryExternalTakeRouteProvider>([
     [routeProviderKey({ selectedPath: 'direct_dex' }), directDexProvider],
-    ...calldataAggregatorProviders.map((provider) => [
-      routeProviderKey({
-        selectedPath: provider.path,
-        providerId: provider.providerId,
-      }),
-      provider,
-    ] as const),
+    ...params.calldataAggregatorProviders.map(
+      (provider) =>
+        [
+          routeProviderKey({
+            selectedPath: provider.path,
+            providerId: provider.providerId,
+          }),
+          provider,
+        ] as const
+    ),
   ]);
+  const selectByRouteKey = (
+    key: string,
+    label: string
+  ): DiscoveryExternalTakeRouteProvider => {
+    const provider = providersByRoute.get(key);
+    if (provider === undefined) {
+      throw new Error(`Unsupported external take route: ${label}`);
+    }
+    return provider;
+  };
 
   return {
     selectExternalTakeProvider: ({ selectedPath, providerId }) => {
-      const provider = providersByRoute.get(
-        routeProviderKey({ selectedPath, providerId })
+      return selectByRouteKey(
+        routeProviderKey({ selectedPath, providerId }),
+        `${selectedPath}${providerId ? `/${providerId}` : ''}`
       );
-      if (provider === undefined) {
-        throw new Error(
-          `Unsupported external take route: ${selectedPath}` +
-            (providerId ? `/${providerId}` : '')
-        );
-      }
-      return provider;
     },
+    selectExternalTakeProviderForRoute: (route) =>
+      selectByRouteKey(
+        routeProviderKeyFromRoute(route),
+        route.path === 'calldata_aggregator'
+          ? `${route.path}/${route.providerId}`
+          : route.path
+      ),
+    listExternalTakeProbeProviders: (probeParams) =>
+      resolveExternalTakeProbeProviderKeys(probeParams).map(({ key, label }) =>
+        selectByRouteKey(key, label)
+      ),
   };
 }

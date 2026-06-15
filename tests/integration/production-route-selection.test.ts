@@ -426,8 +426,6 @@ describe('Production route selection fork verification', function () {
     ).to.be.true;
     const boundInRangeEvaluation = bindExternalTakeRouteForCandidate({
       quoteEvaluation: inRangeEvaluation,
-      selectedLiquiditySource: inRangeEvaluation.selectedLiquiditySource,
-      configuredLiquiditySource: poolConfig.take.liquiditySource,
       poolName: poolView.name,
       borrower: BORROWER,
     });

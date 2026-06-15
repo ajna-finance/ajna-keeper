@@ -282,7 +282,7 @@ export async function getCurveQuoteProvider(params: {
     },
     createProvider: () =>
       new CurveQuoteProvider(params.signer, {
-        poolConfigs: poolConfigs as any,
+        poolConfigs,
         defaultSlippage: routerConfig.defaultSlippage ?? 1.0,
         wethAddress,
         tokenAddresses: params.tokenAddresses ?? {},

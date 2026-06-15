@@ -1,14 +1,12 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import { LiquiditySource } from '../../config';
-import { logger } from '../../logging';
-import { isNonceConsumedTransactionError } from '../../nonce';
 import { getErrorMessage, weiToDecimaled } from '../../utils';
 import {
   CalldataAggregatorPreBroadcastRejection,
   prepareCalldataAggregatorExecution,
   recordCalldataAggregatorPreBroadcastRejection,
-  submitPreparedCalldataAggregatorExecution,
+  takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../external-take/execution-plan';
@@ -84,7 +82,8 @@ async function prepareOneInchAggregatorExecution(params: {
     config,
     providerId: 'oneinch',
     label: ONEINCH_LABEL,
-    missingRouterReason: '1inch aggregator execution requires keeperTakerRouter',
+    missingRouterReason:
+      '1inch aggregator execution requires keeperTakerRouter',
     missingTakerReason:
       '1inch aggregator execution requires oneInchAggregatorTaker',
     collateralRoundsToZeroReason:
@@ -104,12 +103,7 @@ async function prepareOneInchAggregatorExecution(params: {
       )),
     getTakerAddress: (config) => config.oneInchAggregatorTaker,
     resolveChainId: resolveOneInchAggregatorChainId,
-    getCollateralTokenDecimals: ({
-      signer,
-      tokenAddress,
-      chainId,
-      cache,
-    }) =>
+    getCollateralTokenDecimals: ({ signer, tokenAddress, chainId, cache }) =>
       getOneInchAggregatorTokenDecimals({
         signer,
         tokenAddress,
@@ -130,66 +124,16 @@ export async function takeLiquidationOneInchAggregator(params: {
   liquidation: TakeLiquidationPlan;
   config: OneInchAggregatorExecutionConfig;
 }): Promise<boolean> {
-  const { pool, signer, poolConfig, liquidation, config } = params;
-  const { borrower } = liquidation;
-  const suppliedQuoteEvaluation = getExternalTakeExecutionPlanPrimaryEvaluation(
-    liquidation.externalTakeExecutionPlan
-  );
-  const usesOneInchAggregatorPath =
-    poolConfig.take.liquiditySource === LiquiditySource.ONEINCH ||
-    suppliedQuoteEvaluation?.providerId === 'oneinch' ||
-    suppliedQuoteEvaluation?.calldataQuote?.providerId === 'oneinch';
-  if (!usesOneInchAggregatorPath) {
-    logger.error(
-      `1inch aggregator liquidity source not configured. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
-    );
-    return false;
-  }
-
-  let attemptedSubmission = false;
-  try {
-    const prepared = await prepareOneInchAggregatorExecution({
-      pool,
-      signer,
-      poolConfig,
-      liquidation,
-      config,
-    });
-    if (prepared.kind === 'rejected') {
-      recordPreparedOneInchAggregatorRejection(config, prepared);
-      return false;
-    }
-    if (prepared.kind === 'dry_run') {
-      logger.info(
-        `DryRun - would 1inch Aggregator Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, approvedMinOutRaw=${prepared.approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
-      );
-      return true;
-    }
-
-    await submitPreparedCalldataAggregatorExecution({
-      pool,
-      liquidation,
-      prepared,
-      liquiditySource: LiquiditySource.ONEINCH,
-      providerId: 'oneinch',
-      label: ONEINCH_LABEL,
-      onQuoteConsumed: () =>
-        config.onOneInchAggregatorQuoteResult?.({ success: true }),
-      onSubmissionAccepted: () => {
-        attemptedSubmission = true;
-      },
-    });
-    return true;
-  } catch (error) {
-    config.onOneInchAggregatorExecutionFailure?.({
-      preBroadcast:
-        !attemptedSubmission && !isNonceConsumedTransactionError(error),
-      error: getErrorMessage(error),
-    });
-    logger.error(
-      `Failed 1inch Aggregator Take. pool: ${pool.name}, borrower: ${borrower}`,
-      error
-    );
-    return false;
-  }
+  return await takeLiquidationCalldataAggregatorProvider({
+    ...params,
+    providerId: 'oneinch',
+    liquiditySource: LiquiditySource.ONEINCH,
+    label: ONEINCH_LABEL,
+    prepareExecution: prepareOneInchAggregatorExecution,
+    recordPreparedRejection: recordPreparedOneInchAggregatorRejection,
+    onQuoteConsumed: (config) =>
+      config.onOneInchAggregatorQuoteResult?.({ success: true }),
+    onExecutionFailure: (config, result) =>
+      config.onOneInchAggregatorExecutionFailure?.(result),
+  });
 }

@@ -63,6 +63,7 @@ describe('LI.FI execution', () => {
         externalTakeExecutionPlan: malformedSingleExternalTakeExecutionPlan({
           isTakeable: false,
           externalTakePath: 'calldata_aggregator',
+          providerId: 'lifi',
           selectedLiquiditySource: LiquiditySource.LIFI,
           reason: 'LI.FI fresh quote min output below execution floor',
         }),

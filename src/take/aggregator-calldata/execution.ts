@@ -1,11 +1,15 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
-import { CalldataAggregatorProviderId, LiquiditySource } from '../../config';
+import {
+  CalldataAggregatorProviderId,
+  LiquiditySource,
+  getAggregatorProviderIdentity,
+} from '../../config';
 import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
-import { NonceTracker } from '../../nonce';
-import { estimateGasWithBuffer } from '../../utils';
+import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
+import { estimateGasWithBuffer, getErrorMessage } from '../../utils';
 import { logTakeExecutionTelemetry } from '../execution-telemetry';
 import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
 import {
@@ -15,6 +19,8 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
+import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../external-take/execution-plan';
+import { resolveCalldataAggregatorQuoteIdentity } from '../external-take/route-binding';
 import {
   TakeWriteTransport,
   TakeWriteTransportConfig,
@@ -73,6 +79,16 @@ type CalldataAggregatorExecutionConfigBase = TakeWriteTransportConfig & {
   tokenDecimalsCache?: Map<string, number>;
 };
 
+export type CalldataAggregatorProviderExecutionParams<
+  TConfig extends CalldataAggregatorExecutionConfigBase,
+> = {
+  pool: FungiblePool;
+  signer: Signer;
+  poolConfig: TakeActionConfig;
+  liquidation: TakeLiquidationPlan;
+  config: TConfig;
+};
+
 export function recordCalldataAggregatorPreBroadcastRejection<TConfig>(params: {
   config: TConfig;
   rejection: CalldataAggregatorPreBroadcastRejection;
@@ -80,10 +96,13 @@ export function recordCalldataAggregatorPreBroadcastRejection<TConfig>(params: {
     config: TConfig,
     result: CalldataAggregatorQuoteResultNotification
   ) => void;
-  onExecutionFailure: (config: TConfig, result: {
-    preBroadcast: boolean;
-    error?: string;
-  }) => void;
+  onExecutionFailure: (
+    config: TConfig,
+    result: {
+      preBroadcast: boolean;
+      error?: string;
+    }
+  ) => void;
 }): void {
   if (params.rejection.logError) {
     logger.error(params.rejection.reason);
@@ -194,6 +213,28 @@ export function getAggregatorFreshQuoteFloorError(params: {
     return `${params.label} fresh quote min output below execution floor`;
   }
   return undefined;
+}
+
+export function isCalldataAggregatorExecutionPathSelected(params: {
+  poolConfig: Pick<TakeActionConfig, 'take'>;
+  liquidation: Pick<TakeLiquidationPlan, 'externalTakeExecutionPlan'>;
+  providerId: CalldataAggregatorProviderId;
+}): boolean {
+  const identity = getAggregatorProviderIdentity(params.providerId);
+  const suppliedQuoteEvaluation = getExternalTakeExecutionPlanPrimaryEvaluation(
+    params.liquidation.externalTakeExecutionPlan
+  );
+  if (suppliedQuoteEvaluation === undefined) {
+    return params.poolConfig.take.liquiditySource === identity.liquiditySource;
+  }
+
+  const suppliedQuoteIdentity = resolveCalldataAggregatorQuoteIdentity(
+    suppliedQuoteEvaluation
+  );
+  return (
+    suppliedQuoteIdentity.mismatch === undefined &&
+    suppliedQuoteIdentity.providerId === params.providerId
+  );
 }
 
 export async function prepareCalldataAggregatorExecution<
@@ -466,4 +507,81 @@ export async function submitPreparedCalldataAggregatorExecution(params: {
     onQuoteConsumed: params.onQuoteConsumed,
     onSubmissionAccepted: params.onSubmissionAccepted,
   });
+}
+
+export async function takeLiquidationCalldataAggregatorProvider<
+  TConfig extends CalldataAggregatorExecutionConfigBase,
+>(
+  params: CalldataAggregatorProviderExecutionParams<TConfig> & {
+    providerId: CalldataAggregatorProviderId;
+    liquiditySource: LiquiditySource;
+    label: string;
+    prepareExecution: (
+      params: CalldataAggregatorProviderExecutionParams<TConfig>
+    ) => Promise<PreparedCalldataAggregatorExecution>;
+    recordPreparedRejection: (
+      config: TConfig,
+      rejection: CalldataAggregatorPreBroadcastRejection
+    ) => void;
+    onQuoteConsumed: (config: TConfig) => void;
+    onExecutionFailure: (
+      config: TConfig,
+      result: { preBroadcast: boolean; error?: string }
+    ) => void;
+  }
+): Promise<boolean> {
+  const { pool, liquidation, config } = params;
+  const { borrower } = liquidation;
+  if (
+    !isCalldataAggregatorExecutionPathSelected({
+      poolConfig: params.poolConfig,
+      liquidation,
+      providerId: params.providerId,
+    })
+  ) {
+    logger.error(
+      `${params.label} liquidity source not selected. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
+    );
+    return false;
+  }
+
+  let attemptedSubmission = false;
+  try {
+    const prepared = await params.prepareExecution(params);
+    if (prepared.kind === 'rejected') {
+      params.recordPreparedRejection(config, prepared);
+      return false;
+    }
+    if (prepared.kind === 'dry_run') {
+      logger.info(
+        `DryRun - would ${params.label} Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, approvedMinOutRaw=${prepared.approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
+      );
+      return true;
+    }
+
+    await submitPreparedCalldataAggregatorExecution({
+      pool,
+      liquidation,
+      prepared,
+      liquiditySource: params.liquiditySource,
+      providerId: params.providerId,
+      label: params.label,
+      onQuoteConsumed: () => params.onQuoteConsumed(config),
+      onSubmissionAccepted: () => {
+        attemptedSubmission = true;
+      },
+    });
+    return true;
+  } catch (error) {
+    params.onExecutionFailure(config, {
+      preBroadcast:
+        !attemptedSubmission && !isNonceConsumedTransactionError(error),
+      error: getErrorMessage(error),
+    });
+    logger.error(
+      `Failed ${params.label} Take. pool: ${pool.name}, borrower: ${borrower}`,
+      error
+    );
+    return false;
+  }
 }

@@ -8,7 +8,7 @@ import {
   bindExternalTakeRoute,
   formatExternalTakeRouteBindingFailure,
 } from './route-binding';
-import { deriveApprovedMinOutRaw } from './quote-economics';
+import { deriveRouteExecutionFloorRaw } from './quote-economics';
 import {
   ApprovedExternalTakeQuoteEvaluation,
   ApprovedDirectDexQuoteEvaluation,
@@ -73,19 +73,6 @@ function resolveExternalTakeRouteBinding(params: {
     bound: true,
     route,
   };
-}
-
-function deriveRouteExecutionFloorRaw(
-  quoteEvaluation: ExternalTakeQuoteEvaluation
-): ExternalTakeQuoteEvaluation['routeExecutionFloorRaw'] {
-  return (
-    quoteEvaluation.routeExecutionFloorRaw ??
-    deriveApprovedMinOutRaw({
-      routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
-      profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
-      fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-    })
-  );
 }
 
 type DirectDexRouteBase = ExternalTakeQuoteEvaluation & {
@@ -392,17 +379,11 @@ export function bindExternalTakeRouteForDiscovery(params: {
 
 export function bindExternalTakeRouteForCandidate(params: {
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-  selectedLiquiditySource?: LiquiditySource;
-  configuredLiquiditySource?: LiquiditySource;
   poolName: string;
   borrower: string;
 }): ExternalTakeRouteBindingResult<BoundExternalTakeRouteEvaluation> {
   return bindExternalTakeRouteForDiscovery({
     quoteEvaluation: params.quoteEvaluation,
-    selectedLiquiditySource:
-      params.quoteEvaluation.selectedLiquiditySource ??
-      params.selectedLiquiditySource ??
-      params.configuredLiquiditySource,
     poolName: params.poolName,
     borrower: params.borrower,
   });

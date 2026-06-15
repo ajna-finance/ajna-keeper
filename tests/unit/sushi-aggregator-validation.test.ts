@@ -20,6 +20,7 @@ import {
   SUSHI_AGGREGATOR_SCOPED_SELECTOR_ALLOWLIST,
 } from '../../src/dex/sushi-aggregator/scope';
 import { validateSushiAggregatorQuote } from '../../src/dex/sushi-aggregator/validate-route';
+import { resolveSushiAggregatorChainId } from '../../src/take/sushi-aggregator/quote-service';
 
 const FIXTURE_PATH = path.join(
   __dirname,
@@ -217,6 +218,23 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
     expect(() => validateFixture({ response, takerAddress: TAKER })).to.throw(
       'not Success'
     );
+  });
+});
+
+describe('Sushi aggregator quote service', () => {
+  it('rejects a configured chainId that does not match the signer chain', async () => {
+    const signer = {
+      getChainId: async () => BASE_CHAIN_ID,
+    } as any;
+
+    try {
+      await resolveSushiAggregatorChainId({ chainId: 1 }, signer);
+      throw new Error('expected chain mismatch');
+    } catch (error) {
+      expect((error as Error).message).to.equal(
+        'configured Sushi Aggregator chainId 1 does not match signer chainId 8453'
+      );
+    }
   });
 });
 

@@ -3,7 +3,7 @@ import {
   CalldataAggregatorProviderId,
   getAggregatorProviderIdentity,
 } from '../../config';
-import { deriveApprovedMinOutRaw } from '../external-take/quote-economics';
+import { deriveRouteExecutionFloorRaw } from '../external-take/quote-economics';
 import {
   ApprovedCalldataAggregatorQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
@@ -15,19 +15,6 @@ export type CalldataAggregatorQuoteApprovalResult =
       quoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
     }
   | { approved: false; reason: string };
-
-function deriveRouteExecutionFloorRaw(
-  quoteEvaluation: ExternalTakeQuoteEvaluation
-): ExternalTakeQuoteEvaluation['routeExecutionFloorRaw'] {
-  return (
-    quoteEvaluation.routeExecutionFloorRaw ??
-    deriveApprovedMinOutRaw({
-      routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
-      profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
-      fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-    })
-  );
-}
 
 /**
  * The single calldata-aggregator execution approval helper (Packet 2B).

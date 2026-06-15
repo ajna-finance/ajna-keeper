@@ -20,23 +20,14 @@ import {
   resolveDiscoveryExternalTakeApprovalMode,
 } from './external-take/approval';
 import { createExternalTakeAdapterForDiscovery } from './external-take/discovery-adapter';
+import { createDiscoveryCalldataAggregatorRouteProviders } from './external-take/calldata-aggregator-providers';
 import { createDiscoveryExternalTakeProviderRegistry } from './external-take/providers';
 import {
   AutoDiscoverTakePolicyRuntime,
   DiscoveryDirectDexQuoteConfig,
   DiscoveryDirectDexRouteProfitabilityContextBuilder,
   DirectDexPathQuoteFn,
-  LifiCircuitOutcome,
-  LifiPathQuoteFn,
-  OneInchAggregatorPathQuoteFn,
-  OneInchCircuitOutcome,
-  SushiAggregatorPathQuoteFn,
   quoteDirectDexPathForDiscovery,
-  quoteOneInchAggregatorPathForDiscovery,
-  quoteLifiPathForDiscovery,
-  quoteSushiAggregatorPathForDiscovery,
-  recordLifiCircuitOutcomeForDiscovery,
-  recordOneInchCircuitOutcomeForDiscovery,
 } from './external-take/quotes';
 import {
   DiscoveredTakeTargetStats,
@@ -45,12 +36,7 @@ import {
 } from './external-take/stats';
 import type { ExternalTakeRouteIdentity } from '../take/external-take/route-binding';
 import { getOneInchQuoteTimeoutMs } from './external-take/one-inch-circuit';
-import {
-  DiscoveryExecutionConfig,
-  DiscoveryRpcCache,
-  LifiCircuitPurpose,
-  OneInchQuoteCircuitPurpose,
-} from './types';
+import { DiscoveryExecutionConfig, DiscoveryRpcCache } from './types';
 import { ResolvedTakeTarget } from './targets';
 import { approveExternalTakeForDiscovery } from './external-take/approval-policy';
 
@@ -161,73 +147,19 @@ export function createDiscoveredTakeTargetRuntime(params: {
       buildDirectDexRouteProfitabilityContext:
         params.buildDirectDexRouteProfitabilityContext,
     });
-  const quoteOneInchAggregatorPath: OneInchAggregatorPathQuoteFn = (
-    quoteParams
-  ) =>
-    quoteOneInchAggregatorPathForDiscovery({
-      ...quoteParams,
+  const calldataAggregatorProviders =
+    createDiscoveryCalldataAggregatorRouteProviders({
       config: params.config,
       rpcCache: params.rpcCache,
       takePolicy: params.takePolicy,
-      recordCircuitOutcome: quoteParams.recordCircuitOutcome,
       routeProbeLimiter: params.routeProbeLimiter,
       probeTimeoutMs: params.externalTakeProbeTimeoutMs,
       getTokenDecimalsCache: getDiscoveryTokenDecimalsCache,
     });
-  const quoteLifiPath: LifiPathQuoteFn = (quoteParams) =>
-    quoteLifiPathForDiscovery({
-      ...quoteParams,
-      config: params.config,
-      rpcCache: params.rpcCache,
-      takePolicy: params.takePolicy,
-      recordCircuitOutcome: quoteParams.recordCircuitOutcome,
-      routeProbeLimiter: params.routeProbeLimiter,
-      probeTimeoutMs: params.externalTakeProbeTimeoutMs,
-      getTokenDecimalsCache: getDiscoveryTokenDecimalsCache,
-    });
-  const quoteSushiAggregatorPath: SushiAggregatorPathQuoteFn = (quoteParams) =>
-    quoteSushiAggregatorPathForDiscovery({
-      ...quoteParams,
-      config: params.config,
-      rpcCache: params.rpcCache,
-      takePolicy: params.takePolicy,
-      recordCircuitOutcome: quoteParams.recordCircuitOutcome,
-      routeProbeLimiter: params.routeProbeLimiter,
-      probeTimeoutMs: params.externalTakeProbeTimeoutMs,
-      getTokenDecimalsCache: getDiscoveryTokenDecimalsCache,
-    });
-  const recordOneInchCircuitOutcome = (
-    outcome: OneInchCircuitOutcome,
-    purpose?: OneInchQuoteCircuitPurpose
-  ): void => {
-    recordOneInchCircuitOutcomeForDiscovery({
-      rpcCache: params.rpcCache,
-      takePolicy: params.takePolicy,
-      outcome,
-      purpose,
-    });
-  };
-  const recordLifiCircuitOutcome = (
-    outcome: LifiCircuitOutcome,
-    purpose?: LifiCircuitPurpose
-  ): void => {
-    recordLifiCircuitOutcomeForDiscovery({
-      rpcCache: params.rpcCache,
-      config: params.config,
-      outcome,
-      purpose,
-    });
-  };
   const externalTakeProviderRegistry =
     createDiscoveryExternalTakeProviderRegistry({
-      config: params.config,
-      rpcCache: params.rpcCache,
-      quoteOneInchAggregatorPath,
       quoteDirectDexPath,
-      quoteLifiPath,
-      quoteSushiAggregatorPath,
-      recordOneInchCircuitOutcome,
-      recordLifiCircuitOutcome,
+      calldataAggregatorProviders,
     });
   let externalTakeAttemptedSubmission = false;
   const recordExternalTakeExecutionFailure = (event: {
@@ -261,33 +193,6 @@ export function createDiscoveredTakeTargetRuntime(params: {
       });
     }
 
-    if (
-      route.path === 'calldata_aggregator' &&
-      route.source === LiquiditySource.ONEINCH
-    ) {
-      if (result.success) {
-        recordOneInchCircuitOutcome('success', 'swap_data');
-        return;
-      }
-      if (result.retryable !== false) {
-        recordOneInchCircuitOutcome('failure', 'swap_data');
-      }
-    }
-
-    if (
-      route.path === 'calldata_aggregator' &&
-      route.source === LiquiditySource.LIFI
-    ) {
-      recordLifiCircuitOutcome(
-        result.success
-          ? 'success'
-          : result.retryable === true
-            ? 'failure'
-            : 'neutral',
-        'execution_refresh'
-      );
-    }
-
     if (!result.success) {
       logger.debug(
         `${formatExternalTakeRouteLabel(route)} execution quote refresh failed: ${result.error ?? result.errorCode ?? 'unknown error'}`
@@ -318,6 +223,8 @@ export function createDiscoveredTakeTargetRuntime(params: {
     oneInchAggregatorTaker: params.config.oneInchAggregatorTaker,
     lifi: params.config.lifi,
     lifiTaker: params.config.lifiTaker,
+    sushiAggregator: params.config.sushiAggregator,
+    sushiAggregatorTaker: params.config.sushiAggregatorTaker,
     uniswapV3RouterOverrides: params.config.uniswapV3RouterOverrides,
     curveRouterOverrides: params.config.curveRouterOverrides,
     tokenAddresses: params.config.tokenAddresses,

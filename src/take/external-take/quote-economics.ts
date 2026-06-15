@@ -7,6 +7,7 @@ import {
   applyExternalTakeRoutePolicy,
   ExternalTakeRoutePolicyResult,
 } from './policy';
+import type { ExternalTakeQuoteEvaluation } from '../types';
 
 export function ceilWmul(x: BigNumber, y: BigNumber): BigNumber {
   return x.mul(y).add(WAD.sub(1)).div(WAD);
@@ -28,6 +29,25 @@ export function deriveApprovedMinOutRaw(params: {
     return maxBigNumber(...splitFloors);
   }
   return params.fallbackMinOutRaw;
+}
+
+export function deriveRouteExecutionFloorRaw(
+  quoteEvaluation: Pick<
+    ExternalTakeQuoteEvaluation,
+    | 'routeExecutionFloorRaw'
+    | 'routeMinOutRaw'
+    | 'profitMinOutRaw'
+    | 'approvedMinOutRaw'
+  >
+): ExternalTakeQuoteEvaluation['routeExecutionFloorRaw'] {
+  return (
+    quoteEvaluation.routeExecutionFloorRaw ??
+    deriveApprovedMinOutRaw({
+      routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
+      profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
+      fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
+    })
+  );
 }
 
 export function getMarketPriceFactorUnits(marketPriceFactor: number): number {

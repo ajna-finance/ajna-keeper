@@ -62,36 +62,26 @@ function requiresHybridNetProfitRanking(
 }
 
 function resolveApprovedExternalTakeSource(params: {
-  target: ResolvedTakeTarget;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-}): {
-  approved: boolean;
-  selectedLiquiditySource?: LiquiditySource;
-  selectedDirectDexLiquiditySource?: LiquiditySource;
-  reason?: string;
-} {
-  let selectedLiquiditySource = params.quoteEvaluation.selectedLiquiditySource;
-  if (
-    params.quoteEvaluation.externalTakePath === 'direct_dex' &&
-    selectedLiquiditySource === undefined
-  ) {
+}):
+  | {
+      approved: true;
+      selectedLiquiditySource: LiquiditySource;
+      selectedDirectDexLiquiditySource?: LiquiditySource;
+    }
+  | {
+      approved: false;
+      reason: string;
+    } {
+  const selectedLiquiditySource = params.quoteEvaluation.selectedLiquiditySource;
+  if (selectedLiquiditySource === undefined) {
     return {
       approved: false,
-      reason: 'selected direct_dex path without a concrete direct DEX source',
+      reason:
+        params.quoteEvaluation.externalTakePath === 'direct_dex'
+          ? 'selected direct_dex path without a concrete direct DEX source'
+          : 'external take route approval missing selected liquidity source',
     };
-  }
-  if (selectedLiquiditySource === undefined) {
-    const configuredLiquiditySource = params.target.take.liquiditySource;
-    if (
-      configuredLiquiditySource !== LiquiditySource.ONEINCH &&
-      isDirectDexDynamicSource(configuredLiquiditySource)
-    ) {
-      return {
-        approved: false,
-        reason: 'direct_dex route approval missing selected liquidity source',
-      };
-    }
-    selectedLiquiditySource = configuredLiquiditySource;
   }
 
   const selectedDirectDexLiquiditySource =
@@ -191,7 +181,6 @@ export async function approveExternalTakeForDiscovery(
   }
 
   const sourceSelection = resolveApprovedExternalTakeSource({
-    target,
     quoteEvaluation: candidateQuoteEvaluation,
   });
   if (!sourceSelection.approved) {
@@ -201,12 +190,6 @@ export async function approveExternalTakeForDiscovery(
     };
   }
   const selectedLiquiditySource = sourceSelection.selectedLiquiditySource;
-  if (selectedLiquiditySource === undefined) {
-    return {
-      approved: false,
-      reason: 'external take route approval missing selected liquidity source',
-    };
-  }
   const selectedDirectDexLiquiditySource =
     sourceSelection.selectedDirectDexLiquiditySource;
   const executableApproval = bindDiscoveryExecutionRoute({

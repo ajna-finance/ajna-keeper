@@ -85,7 +85,6 @@ export function createDirectDexTakeAdapter(params: {
       );
       return bindExternalTakeQuoteToExecutionResult({
         quoteEvaluation,
-        configuredLiquiditySource: poolConfig.take.liquiditySource,
         poolName: pool.name,
         borrower: candidate.borrower,
       });

@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { BigNumber, utils } from 'ethers';
-import { isAggregatorExternalTakePath } from '../../src/config/external-take-registry';
+import { isAggregatorExternalTakePath } from '../../src/config/external-take-descriptors';
 import {
   getDebtConstrainedTakeCollateralWad,
   getExpectedQuotedCollateralWad,

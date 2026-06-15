@@ -63,7 +63,7 @@ describe('external-take boundary checker', () => {
       },
     ]);
     expect(violations.map((violation) => violation.rule)).to.deep.equal([
-      'retired-direct DEX-first',
+      'retired-factory-first',
       'retired-default-factory-source',
       'retired-takers-factory',
       'retired-keeper-taker-factory',
@@ -71,7 +71,6 @@ describe('external-take boundary checker', () => {
       'retired-factory-symbol',
       'retired-factory-symbol',
       'retired-factory-symbol',
-      'retired-direct-dex-factory-log',
       'retired-factory-symbol',
     ]);
   });
@@ -94,10 +93,7 @@ describe('external-take boundary checker', () => {
     ]);
     expect(violations.map((violation) => violation.rule)).to.deep.equal([
       'retired-direct-dex-operator-label',
-      'retired-direct-dex-operator-label',
-      'retired-direct-dex-operator-label',
       'retired-path-oneinch',
-      'retired-direct-dex-operator-label',
     ]);
   });
 
@@ -141,7 +137,6 @@ describe('external-take boundary checker', () => {
     expect(violations.map((violation) => violation.rule)).to.deep.equal([
       'retired-path-oneinch',
       'retired-path-factory',
-      'retired-direct DEX-first',
     ]);
   });
 

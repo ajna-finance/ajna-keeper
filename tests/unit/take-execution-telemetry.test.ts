@@ -40,7 +40,7 @@ describe('take execution telemetry', () => {
     expect(debugStub.calledOnce).to.be.true;
     const message = String(debugStub.firstCall.args[0]);
     expect(message).to.include(`version=${TAKE_EXECUTION_TELEMETRY_VERSION}`);
-    expect(message).to.include('path=factory');
+    expect(message).to.include('path=direct_dex');
     expect(message).to.include('source=UNISWAPV3');
     expect(message).to.include('borrowerHash=0x');
     expect(message).to.not.include(
