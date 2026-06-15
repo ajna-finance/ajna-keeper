@@ -148,9 +148,7 @@ export async function submitDirectDexTake(params: {
   swapTarget: string;
   encodedSwapDetails: string;
   estimateGasLabel: string;
-  telemetryExtra:
-    | { selectedFeeTier?: number }
-    | { curvePoolAddress?: string };
+  telemetryExtra: { selectedFeeTier?: number; curvePoolAddress?: string };
   routeProfitability: ExternalTakeQuoteEvaluation['routeProfitability'];
   approvedMinOutRaw: BigNumber;
   successVerb: string;

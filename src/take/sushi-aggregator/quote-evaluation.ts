@@ -5,7 +5,6 @@ import { evaluateCalldataAggregatorPathQuote } from '../aggregator-calldata/quot
 import { SushiAggregatorQuoteConfig } from './types';
 import {
   getSushiAggregatorQuoteFailureMetadata,
-  getSushiAggregatorTokenDecimals,
   requestValidatedSushiAggregatorQuote,
   requireSushiAggregatorConfig,
   resolveSushiAggregatorChainId,
@@ -40,7 +39,6 @@ export async function getSushiAggregatorPathQuoteEvaluation(
       requireSushiAggregatorConfig(quoteConfig.sushiAggregator),
     getTakerAddress: (quoteConfig) => quoteConfig.sushiAggregatorTaker,
     resolveChainId: resolveSushiAggregatorChainId,
-    getTokenDecimals: getSushiAggregatorTokenDecimals,
     requestValidatedQuote: async ({
       pool: quotePool,
       config: quoteConfig,

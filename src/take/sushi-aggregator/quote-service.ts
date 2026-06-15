@@ -15,10 +15,7 @@ import {
   validateSushiAggregatorQuote,
 } from '../../dex/sushi-aggregator/validate-route';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
-import {
-  getCachedTokenDecimals,
-  resolveExternalTakeChainId,
-} from '../external-take/chain';
+import { resolveExternalTakeChainId } from '../external-take/chain';
 import { SushiAggregatorQuoteConfig } from './types';
 
 export function requireSushiAggregatorConfig(
@@ -37,15 +34,6 @@ export async function resolveSushiAggregatorChainId(
   signer: Signer
 ): Promise<number> {
   return resolveExternalTakeChainId(config, signer, 'Sushi Aggregator');
-}
-
-export async function getSushiAggregatorTokenDecimals(params: {
-  signer: Signer;
-  tokenAddress: string;
-  chainId?: number;
-  cache?: Map<string, number>;
-}): Promise<number> {
-  return getCachedTokenDecimals(params);
 }
 
 export interface SushiAggregatorQuoteFailureMetadata {

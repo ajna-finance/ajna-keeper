@@ -8,7 +8,6 @@ export {
 export {
   getLifiApiKey,
   getLifiQuoteFailureMetadata,
-  getLifiTokenDecimals,
   requestValidatedLifiQuote,
   requireProductionLifiConfig,
   resolveLifiChainId,

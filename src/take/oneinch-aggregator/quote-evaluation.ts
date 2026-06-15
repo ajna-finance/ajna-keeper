@@ -6,7 +6,6 @@ import { evaluateCalldataAggregatorPathQuote } from '../aggregator-calldata/quot
 import { OneInchAggregatorQuoteConfig } from './types';
 import {
   getOneInchAggregatorQuoteFailureMetadata,
-  getOneInchAggregatorTokenDecimals,
   requestValidatedOneInchAggregatorQuote,
   resolveOneInchAggregatorChainId,
 } from './quote-service';
@@ -36,7 +35,6 @@ export async function getOneInchAggregatorPathQuoteEvaluation(
     auctionPriceWad,
     getTakerAddress: (quoteConfig) => quoteConfig.oneInchAggregatorTaker,
     resolveChainId: resolveOneInchAggregatorChainId,
-    getTokenDecimals: getOneInchAggregatorTokenDecimals,
     requestValidatedQuote: async ({
       pool: quotePool,
       signer: quoteSigner,

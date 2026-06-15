@@ -7,6 +7,7 @@ import {
 import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
 import { getErrorMessage } from '../../utils';
+import { getCachedTokenDecimals } from '../external-take/chain';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   ExternalTakeRoutePolicyResult,
@@ -18,13 +19,6 @@ import {
 } from '../external-take/quote-economics';
 import { ExternalTakeQuoteEvaluation, TakeActionConfig } from '../types';
 import { ApprovedCalldataAggregatorQuote } from './types';
-
-interface TokenDecimalsParams {
-  signer: Signer;
-  tokenAddress: string;
-  chainId?: number;
-  cache?: Map<string, number>;
-}
 
 interface CalldataAggregatorProviderQuote {
   quoteAmountRaw: BigNumber;
@@ -79,7 +73,6 @@ export interface CalldataAggregatorPathQuoteEvaluationParams<
     preparedConfig: TPreparedConfig
   ) => string | undefined;
   resolveChainId: (config: Partial<TConfig>, signer: Signer) => Promise<number>;
-  getTokenDecimals: (params: TokenDecimalsParams) => Promise<number>;
   requestValidatedQuote: (params: {
     pool: FungiblePool;
     signer: Signer;
@@ -141,7 +134,7 @@ export async function evaluateCalldataAggregatorPathQuote<
     }
 
     const chainId = await params.resolveChainId(params.config, params.signer);
-    const collateralDecimals = await params.getTokenDecimals({
+    const collateralDecimals = await getCachedTokenDecimals({
       signer: params.signer,
       tokenAddress: params.pool.collateralAddress,
       chainId,
@@ -177,7 +170,7 @@ export async function evaluateCalldataAggregatorPathQuote<
       );
     }
 
-    const quoteDecimals = await params.getTokenDecimals({
+    const quoteDecimals = await getCachedTokenDecimals({
       signer: params.signer,
       tokenAddress: params.pool.quoteAddress,
       chainId,

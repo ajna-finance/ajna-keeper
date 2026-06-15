@@ -7,10 +7,7 @@ import {
   validateLifiQuote,
 } from '../../dex/lifi';
 import { normalizeLifiProductionPolicy } from '../../dex/lifi/chain-policy';
-import {
-  getCachedTokenDecimals,
-  resolveExternalTakeChainId,
-} from '../external-take/chain';
+import { resolveExternalTakeChainId } from '../external-take/chain';
 import { LifiQuoteConfig } from './types';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
 
@@ -29,15 +26,6 @@ export function getLifiQuoteFailureMetadata(error: unknown): {
     retryable: typed.retryable ?? false,
     code: typed.status ?? 'exception',
   };
-}
-
-export async function getLifiTokenDecimals(params: {
-  signer: Signer;
-  tokenAddress: string;
-  chainId?: number;
-  cache?: Map<string, number>;
-}): Promise<number> {
-  return getCachedTokenDecimals(params);
 }
 
 export async function resolveLifiChainId(

@@ -6,7 +6,6 @@ import { evaluateCalldataAggregatorPathQuote } from '../aggregator-calldata/quot
 import { LifiQuoteConfig } from './types';
 import {
   getLifiQuoteFailureMetadata,
-  getLifiTokenDecimals,
   normalizeApprovedLifiQuote,
   requestValidatedLifiQuote,
   requireProductionLifiConfig,
@@ -56,7 +55,6 @@ export async function getLifiPathQuoteEvaluation(
       requireProductionLifiConfig(quoteConfig.lifi),
     getTakerAddress: (quoteConfig) => quoteConfig.lifiTaker,
     resolveChainId: resolveLifiChainId,
-    getTokenDecimals: getLifiTokenDecimals,
     requestValidatedQuote: async ({
       pool: quotePool,
       config: quoteConfig,

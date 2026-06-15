@@ -5,10 +5,7 @@ import {
   convertSwapApiResponseToDetails,
   validateOneInchSwapDetailsForAtomicTake,
 } from '../../dex/one-inch';
-import {
-  getCachedTokenDecimals,
-  resolveExternalTakeChainId,
-} from '../external-take/chain';
+import { resolveExternalTakeChainId } from '../external-take/chain';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
 import { OneInchAggregatorQuoteConfig } from './types';
 
@@ -51,15 +48,6 @@ export async function resolveOneInchAggregatorChainId(
   signer: Signer
 ): Promise<number> {
   return resolveExternalTakeChainId(config, signer, ONEINCH_LABEL);
-}
-
-export async function getOneInchAggregatorTokenDecimals(params: {
-  signer: Signer;
-  tokenAddress: string;
-  chainId?: number;
-  cache?: Map<string, number>;
-}): Promise<number> {
-  return getCachedTokenDecimals(params);
 }
 
 function getOneInchAggregatorRequestOptions(
