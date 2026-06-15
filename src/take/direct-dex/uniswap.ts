@@ -6,19 +6,14 @@ import {
   resolveUniswapV3DirectDexRouteConfig,
 } from '../../config';
 import { logger } from '../../logging';
-import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
 import {
   ApprovedUniswapV3DirectDexQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
-import {
-  estimateGasWithBuffer,
-  getErrorMessage,
-  weiToDecimaled,
-  withTimeout,
-} from '../../utils';
+import { getErrorMessage, withTimeout } from '../../utils';
+import { isNonceConsumedTransactionError } from '../../nonce';
 import { TakerRouter__factory } from '../../../typechain-types';
 import {
   DirectDexExecutionConfig,
@@ -26,22 +21,18 @@ import {
   DirectDexQuoteProviderRuntimeCache,
   DirectDexRouteEvaluationContext,
   buildDirectDexRouteEvaluationContext,
-  buildDirectDexQuoteEvaluation,
   computeDirectDexAmountOutMinimum,
   DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
   formatDirectDexExecutionLog,
-  formatDirectDexPriceCheckLog,
   formatDirectDexQuoteRequestLog,
-  formatDirectDexTakeSubmissionLog,
-  getSlippageFloorQuoteRaw,
   getUniswapV3QuoteProvider,
   getSwapDeadlineCached,
 } from './route-selection';
+import { resolveTakeWriteTransport } from '../write-transport';
 import {
-  resolveTakeWriteTransport,
-  submitTakeTransaction,
-} from '../write-transport';
-import { logTakeExecutionTelemetry } from '../execution-telemetry';
+  finalizeDirectDexQuoteEvaluation,
+  submitDirectDexTake,
+} from './provider-engine';
 
 export async function evaluateUniswapV3DirectDexQuote({
   pool,
@@ -152,63 +143,22 @@ export async function evaluateUniswapV3DirectDexQuote({
 
     const quoteAmountRaw = BigNumber.from(quoteResult.dstAmount);
     const collateralAmount = context.collateralAmount;
-    const quoteAmount = Number(
-      ethers.utils.formatUnits(quoteAmountRaw, context.quoteTokenDecimals)
-    );
-    const auctionPrice = Number(weiToDecimaled(auctionPriceWad));
 
-    if (collateralAmount <= 0 || quoteAmount <= 0) {
-      logger.debug(
-        `Direct DEX: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`
-      );
-      return {
-        isTakeable: false,
-        reason: 'invalid Uniswap V3 quote amounts',
-      };
-    }
-
-    const marketPriceFactor = poolConfig.take.marketPriceFactor;
-    if (!marketPriceFactor) {
-      logger.debug(
-        `Direct DEX: No marketPriceFactor configured for pool ${pool.name}`
-      );
-      return {
-        isTakeable: false,
-        reason: 'marketPriceFactor is not configured',
-      };
-    }
-
-    const evaluation = await buildDirectDexQuoteEvaluation({
+    const evaluation = await finalizeDirectDexQuoteEvaluation({
       pool,
       auctionPriceWad,
       collateral,
-      marketPriceFactor,
+      poolConfig,
+      marketPriceFactor: poolConfig.take.marketPriceFactor,
+      context,
       quoteAmountRaw,
-      quoteAmount,
       collateralAmount,
-      selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+      source: LiquiditySource.UNISWAPV3,
+      slippageSource: routerConfig.defaultSlippage,
+      invalidAmountsReason: 'invalid Uniswap V3 quote amounts',
+      failureReason: 'quoted output below required Uniswap V3 profitability floor',
       selectedFeeTier,
-      existingSlippageFloorQuoteRaw: getSlippageFloorQuoteRaw(
-        quoteAmountRaw,
-        routerConfig.defaultSlippage
-      ),
-      allowSubsidy: poolConfig.take.allowSubsidy === true,
-      routeContext: context,
-      failureReason:
-        'quoted output below required Uniswap V3 profitability floor',
     });
-
-    logger.debug(
-      formatDirectDexPriceCheckLog({
-        source: LiquiditySource.UNISWAPV3,
-        poolName: pool.name,
-        auctionPrice,
-        marketPrice: evaluation.marketPrice,
-        takeablePrice: evaluation.takeablePrice,
-        feeTier: selectedFeeTier,
-        profitable: evaluation.isTakeable,
-      })
-    );
 
     return evaluation;
   } catch (error) {
@@ -303,63 +253,24 @@ export async function executeUniswapV3DirectDexTake({
       ]
     );
 
-    logger.debug(
-      formatDirectDexTakeSubmissionLog({
-        source: LiquiditySource.UNISWAPV3,
-        poolAddress: pool.poolAddress,
-        borrower: liquidation.borrower,
-      })
-    );
-
-    const receipt = await NonceTracker.queueTransaction(
-      takeWriteTransport.signer,
-      async (nonce: number) => {
-        const txArgs = [
-          pool.poolAddress,
-          liquidation.borrower,
-          liquidation.auctionPrice,
-          liquidation.collateral,
-          Number(LiquiditySource.UNISWAPV3),
-          swapDetails.swapRouter,
-          encodedSwapDetails,
-        ] as const;
-        const gasLimit = await estimateGasWithBuffer(
-          () => router.estimateGas.takeWithAtomicSwap(...txArgs),
-          `Direct DEX Uniswap take ${pool.name}/${liquidation.borrower}`,
-          13000
-        );
-        const txRequest = await router.populateTransaction.takeWithAtomicSwap(
-          ...txArgs,
-          {
-            gasLimit,
-            nonce: nonce.toString(),
-          }
-        );
-        return await submitTakeTransaction(
-          takeWriteTransport,
-          txRequest,
-          () => {
-            attemptedSubmission = true;
-          }
-        );
-      }
-    );
-    logTakeExecutionTelemetry({
-      path: 'direct_dex',
+    await submitDirectDexTake({
+      pool,
+      signer,
+      liquidation,
+      router,
+      takeWriteTransport,
       source: LiquiditySource.UNISWAPV3,
-      poolName: pool.name,
-      poolAddress: pool.poolAddress,
-      borrower: liquidation.borrower,
-      receipt,
+      swapTarget: swapDetails.swapRouter,
+      encodedSwapDetails,
+      estimateGasLabel: `Direct DEX Uniswap take ${pool.name}/${liquidation.borrower}`,
+      telemetryExtra: { selectedFeeTier: quoteEvaluation.selectedFeeTier },
       routeProfitability: quoteEvaluation.routeProfitability,
       approvedMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-      selectedFeeTier: quoteEvaluation.selectedFeeTier,
-      takeWriteTransport,
+      successVerb: 'Uniswap V3',
+      onAttempted: () => {
+        attemptedSubmission = true;
+      },
     });
-
-    logger.info(
-      `Direct DEX Uniswap V3 Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
-    );
   } catch (error) {
     logger.error(
       `Direct DEX: Failed to Uniswap V3 Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,

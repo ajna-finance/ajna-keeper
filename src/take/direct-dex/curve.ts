@@ -2,19 +2,14 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import { CurvePoolType, LiquiditySource } from '../../config';
 import { logger } from '../../logging';
-import { isNonceConsumedTransactionError, NonceTracker } from '../../nonce';
 import {
   ApprovedCurveDirectDexQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../types';
-import {
-  estimateGasWithBuffer,
-  getErrorMessage,
-  weiToDecimaled,
-  withTimeout,
-} from '../../utils';
+import { getErrorMessage, withTimeout } from '../../utils';
+import { isNonceConsumedTransactionError } from '../../nonce';
 import { TakerRouter__factory } from '../../../typechain-types';
 import {
   DirectDexExecutionConfig,
@@ -22,22 +17,18 @@ import {
   DirectDexQuoteProviderRuntimeCache,
   DirectDexRouteEvaluationContext,
   buildDirectDexRouteEvaluationContext,
-  buildDirectDexQuoteEvaluation,
   computeDirectDexAmountOutMinimum,
   DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
   formatDirectDexExecutionLog,
-  formatDirectDexPriceCheckLog,
   formatDirectDexQuoteRequestLog,
-  formatDirectDexTakeSubmissionLog,
   getCurveQuoteProvider,
-  getSlippageFloorQuoteRaw,
   getSwapDeadlineCached,
 } from './route-selection';
+import { resolveTakeWriteTransport } from '../write-transport';
 import {
-  resolveTakeWriteTransport,
-  submitTakeTransaction,
-} from '../write-transport';
-import { logTakeExecutionTelemetry } from '../execution-telemetry';
+  finalizeDirectDexQuoteEvaluation,
+  submitDirectDexTake,
+} from './provider-engine';
 
 export async function evaluateCurveDirectDexQuote({
   pool,
@@ -145,60 +136,21 @@ export async function evaluateCurveDirectDexQuote({
 
     const collateralAmount = context.collateralAmount;
     const quoteAmountRaw = quoteResult.dstAmount;
-    const quoteAmount = Number(
-      ethers.utils.formatUnits(quoteAmountRaw, context.quoteTokenDecimals)
-    );
-    const auctionPrice = Number(weiToDecimaled(auctionPriceWad));
 
-    if (collateralAmount <= 0 || quoteAmount <= 0) {
-      logger.debug(
-        `Direct DEX: Invalid amounts - collateral: ${collateralAmount}, quote: ${quoteAmount} for pool ${pool.name}`
-      );
-      return {
-        isTakeable: false,
-        reason: 'invalid Curve quote amounts',
-      };
-    }
-
-    const marketPriceFactor = poolConfig.take.marketPriceFactor;
-    if (!marketPriceFactor) {
-      logger.debug(
-        `Direct DEX: No marketPriceFactor configured for pool ${pool.name}`
-      );
-      return {
-        isTakeable: false,
-        reason: 'marketPriceFactor is not configured',
-      };
-    }
-
-    const evaluation = await buildDirectDexQuoteEvaluation({
+    const evaluation = await finalizeDirectDexQuoteEvaluation({
       pool,
       auctionPriceWad,
       collateral,
-      marketPriceFactor,
+      poolConfig,
+      marketPriceFactor: poolConfig.take.marketPriceFactor,
+      context,
       quoteAmountRaw,
-      quoteAmount,
       collateralAmount,
-      selectedLiquiditySource: LiquiditySource.CURVE,
-      existingSlippageFloorQuoteRaw: getSlippageFloorQuoteRaw(
-        quoteAmountRaw,
-        curveConfig.defaultSlippage
-      ),
-      allowSubsidy: poolConfig.take.allowSubsidy === true,
-      routeContext: context,
+      source: LiquiditySource.CURVE,
+      slippageSource: curveConfig.defaultSlippage,
+      invalidAmountsReason: 'invalid Curve quote amounts',
       failureReason: 'quoted output below required Curve profitability floor',
     });
-
-    logger.debug(
-      formatDirectDexPriceCheckLog({
-        source: LiquiditySource.CURVE,
-        poolName: pool.name,
-        auctionPrice,
-        marketPrice: evaluation.marketPrice,
-        takeablePrice: evaluation.takeablePrice,
-        profitable: evaluation.isTakeable,
-      })
-    );
 
     return {
       ...evaluation,
@@ -247,7 +199,8 @@ export async function executeCurveDirectDexTake({
     );
 
     if (!config.curveRouterOverrides) {
-      const message = 'Direct DEX: curveRouterOverrides required for Curve takes';
+      const message =
+        'Direct DEX: curveRouterOverrides required for Curve takes';
       logger.error(message);
       throw new Error(message);
     }
@@ -294,71 +247,25 @@ export async function executeCurveDirectDexTake({
       ]
     );
 
-    logger.debug(
-      formatDirectDexTakeSubmissionLog({
-        source: LiquiditySource.CURVE,
-        poolAddress: pool.poolAddress,
-        borrower: liquidation.borrower,
-      })
-    );
-
-    const executionDelayMs = config.curveRouterOverrides.executionDelayMs ?? 0;
-    if (executionDelayMs > 0) {
-      logger.debug(
-        `Adding ${executionDelayMs}ms Curve execution delay before direct DEX take`
-      );
-      await new Promise((resolve) => setTimeout(resolve, executionDelayMs));
-    }
-
-    const receipt = await NonceTracker.queueTransaction(
-      takeWriteTransport.signer,
-      async (nonce: number) => {
-        const txArgs = [
-          pool.poolAddress,
-          liquidation.borrower,
-          liquidation.auctionPrice,
-          liquidation.collateral,
-          Number(LiquiditySource.CURVE),
-          resolvedCurvePool.address,
-          encodedSwapDetails,
-        ] as const;
-        const gasLimit = await estimateGasWithBuffer(
-          () => router.estimateGas.takeWithAtomicSwap(...txArgs),
-          `Direct DEX Curve take ${pool.name}/${liquidation.borrower}`,
-          13000
-        );
-        const txRequest = await router.populateTransaction.takeWithAtomicSwap(
-          ...txArgs,
-          {
-            gasLimit,
-            nonce: nonce.toString(),
-          }
-        );
-        return await submitTakeTransaction(
-          takeWriteTransport,
-          txRequest,
-          () => {
-            attemptedSubmission = true;
-          }
-        );
-      }
-    );
-    logTakeExecutionTelemetry({
-      path: 'direct_dex',
+    await submitDirectDexTake({
+      pool,
+      signer,
+      liquidation,
+      router,
+      takeWriteTransport,
       source: LiquiditySource.CURVE,
-      poolName: pool.name,
-      poolAddress: pool.poolAddress,
-      borrower: liquidation.borrower,
-      receipt,
+      swapTarget: resolvedCurvePool.address,
+      encodedSwapDetails,
+      estimateGasLabel: `Direct DEX Curve take ${pool.name}/${liquidation.borrower}`,
+      telemetryExtra: { curvePoolAddress: resolvedCurvePool.address },
       routeProfitability: quoteEvaluation.routeProfitability,
       approvedMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-      curvePoolAddress: resolvedCurvePool.address,
-      takeWriteTransport,
+      successVerb: 'Curve',
+      onAttempted: () => {
+        attemptedSubmission = true;
+      },
+      executionDelayMs: config.curveRouterOverrides.executionDelayMs ?? 0,
     });
-
-    logger.info(
-      `Direct DEX Curve Take successful - poolAddress: ${pool.poolAddress}, borrower: ${liquidation.borrower}`
-    );
   } catch (error) {
     logger.error(
       `Direct DEX: Failed to Curve Take. pool: ${pool.name}, borrower: ${liquidation.borrower}`,
