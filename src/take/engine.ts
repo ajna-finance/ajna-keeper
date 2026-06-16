@@ -948,7 +948,7 @@ export function formatTakeStrategyLog(
     strategyKind === 'direct_dex'
       ? 'direct DEX take'
       : strategyKind === 'calldata_aggregator'
-        ? 'LI.FI take'
+        ? 'aggregator take'
         : 'take';
   if (approvedTake && approvedArbTake) {
     return `${takeLabel} and arbTake`;
