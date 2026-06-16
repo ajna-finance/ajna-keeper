@@ -156,7 +156,10 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
               recordOneInchCircuitOutcome('success', 'swap_data');
               return;
             }
-            if (result.retryable !== false) {
+            // Only an explicitly-retryable failure trips the circuit; an
+            // ambiguous/undefined retryable is neutral (matches LI.FI's mapping
+            // above so the two providers' circuit behavior stays symmetric).
+            if (result.retryable === true) {
               recordOneInchCircuitOutcome('failure', 'swap_data');
             }
           }
