@@ -58,6 +58,9 @@ interface HandleTakeParams {
 
 interface ResolvedHandleTakeParams extends Omit<HandleTakeParams, 'config'> {
   config: HandleTakeConfig;
+  // ManualTakeContext<T> is invariant in T (executeExternalTake takes config: T),
+  // so the resolved heterogeneous union cannot be held as ManualTakeContext<unknown>;
+  // `any` bridges the runtime-dispatched context here intentionally.
   context: ManualTakeContext<any>;
 }
 

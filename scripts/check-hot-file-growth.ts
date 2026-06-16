@@ -25,7 +25,6 @@ export const HOT_FILES: readonly string[] = [
   'src/config/validation.ts',
   'src/take/external-take/route.ts',
   'src/take/external-take/quote-approval.ts',
-  'src/take/direct-dex/shared.ts',
   'src/discovery/route-preflight.ts',
   'scripts/deploy-factory-system.ts',
   'scripts/run-fixture-keeper-harness.ts',
@@ -36,7 +35,6 @@ export const HOT_FILES: readonly string[] = [
 export const MAX_ADDED_LINES = 10;
 
 export const FINAL_LINE_CAPS: Readonly<Record<string, number>> = {
-  'src/take/direct-dex/shared.ts': 1000,
   'scripts/deploy-factory-system.ts': 1000,
 };
 
@@ -84,10 +82,6 @@ export const COMPATIBILITY_ONLY_HOT_MODULES: readonly CompatibilityOnlyHotModule
     {
       file: 'src/take/external-take/quote-approval.ts',
       replacement: 'src/take/external-take/quote-approval-rules.ts',
-    },
-    {
-      file: 'src/take/direct-dex/shared.ts',
-      replacement: 'src/take/direct-dex/route-selection.ts',
     },
     {
       file: 'src/discovery/route-preflight.ts',

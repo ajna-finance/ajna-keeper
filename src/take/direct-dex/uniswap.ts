@@ -20,7 +20,6 @@ import {
   DirectDexQuoteConfig,
   DirectDexQuoteProviderRuntimeCache,
   DirectDexRouteEvaluationContext,
-  buildDirectDexRouteEvaluationContext,
   computeDirectDexAmountOutMinimum,
   DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
   formatDirectDexExecutionLog,
@@ -53,7 +52,7 @@ export async function evaluateUniswapV3DirectDexQuote({
   signer: Signer;
   runtimeCache?: DirectDexQuoteProviderRuntimeCache;
   feeTier?: number;
-  routeContext?: DirectDexRouteEvaluationContext;
+  routeContext: DirectDexRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
   const routerConfig = resolveUniswapV3DirectDexRouteConfig(
     config.uniswapV3RouterOverrides
@@ -89,16 +88,7 @@ export async function evaluateUniswapV3DirectDexQuote({
       `Direct DEX: Using QuoterV2 at ${quoterAddress} for pool ${pool.name}`
     );
 
-    const context =
-      routeContext ??
-      (await buildDirectDexRouteEvaluationContext({
-        pool,
-        signer,
-        auctionPriceWad,
-        collateral,
-        marketPriceFactor: poolConfig.take.marketPriceFactor!,
-        runtimeCache,
-      }));
+    const context = routeContext;
 
     const selectedFeeTier =
       feeTier ??

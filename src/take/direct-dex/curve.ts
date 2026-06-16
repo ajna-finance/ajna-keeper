@@ -16,7 +16,6 @@ import {
   DirectDexQuoteConfig,
   DirectDexQuoteProviderRuntimeCache,
   DirectDexRouteEvaluationContext,
-  buildDirectDexRouteEvaluationContext,
   computeDirectDexAmountOutMinimum,
   DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
   formatDirectDexExecutionLog,
@@ -47,7 +46,7 @@ export async function evaluateCurveDirectDexQuote({
   config: Pick<DirectDexQuoteConfig, 'curveRouterOverrides' | 'tokenAddresses'>;
   signer: Signer;
   runtimeCache?: DirectDexQuoteProviderRuntimeCache;
-  routeContext?: DirectDexRouteEvaluationContext;
+  routeContext: DirectDexRouteEvaluationContext;
 }): Promise<ExternalTakeQuoteEvaluation> {
   if (!config.curveRouterOverrides) {
     logger.debug(
@@ -88,16 +87,7 @@ export async function evaluateCurveDirectDexQuote({
       };
     }
 
-    const context =
-      routeContext ??
-      (await buildDirectDexRouteEvaluationContext({
-        pool,
-        signer,
-        auctionPriceWad,
-        collateral,
-        marketPriceFactor: poolConfig.take.marketPriceFactor!,
-        runtimeCache,
-      }));
+    const context = routeContext;
 
     logger.debug(
       formatDirectDexQuoteRequestLog({

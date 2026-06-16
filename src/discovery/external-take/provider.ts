@@ -151,27 +151,6 @@ export function createPreBroadcastFailureCapture(
   };
 }
 
-export function createPreSubmitResultCapture<T extends { success: boolean }>(
-  original?: (result: T) => void
-): {
-  handler(result: T): void;
-  didRejectBeforeSubmit(): boolean;
-} {
-  let preSubmitRejected = false;
-  let preSubmitSucceeded = false;
-  return {
-    handler: (result) => {
-      original?.(result);
-      if (result.success) {
-        preSubmitSucceeded = true;
-      } else {
-        preSubmitRejected = true;
-      }
-    },
-    didRejectBeforeSubmit: () => preSubmitRejected && !preSubmitSucceeded,
-  };
-}
-
 export function withTakeLiquiditySource<T extends TakeActionConfig>(
   target: T,
   liquiditySource: LiquiditySource
