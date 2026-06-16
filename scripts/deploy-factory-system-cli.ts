@@ -615,7 +615,9 @@ function generateConfigUpdate(
     console.log('takers: {');
   }
   if (addresses.factory) {
-    console.log(`  factory: '${addresses.factory}',`);
+    // The deployed TakerRouter address; the runtime config field is takers.router
+    // (keeperTakerRouter is sourced from config.takers.router, not .factory).
+    console.log(`  router: '${addresses.factory}',`);
   }
 
   if (
