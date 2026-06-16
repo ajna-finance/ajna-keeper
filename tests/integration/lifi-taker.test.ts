@@ -200,12 +200,27 @@ describe('LifiKeeperTaker', () => {
     expect(configured.takers).to.include(result.taker.address);
   });
 
-  it('reverts before callback execution when source collateral is already present', async () => {
+  it('sweeps a forced source-token donation instead of letting it grief the take', async () => {
     const result = await executeTake({});
+    const ownerCollateralBefore = await result.collateral.balanceOf(
+      result.owner.address
+    );
+    // An attacker can transfer dust of the collateral token directly to the
+    // taker. A balanceOf-based exact-fill check would revert every take for that
+    // collateral (cheap permanent griefing); the take must instead trust the
+    // pool's reported callback collateral, succeed, and sweep the dust to owner.
     await result.collateral.mint(result.taker.address, 1);
 
-    await expectRevertWith(result.send(), 'StaleSourceBalance');
-    expect((await result.pool.takeCount()).eq(0)).to.be.true;
+    await result.send();
+
+    expect((await result.pool.takeCount()).eq(1)).to.be.true;
+    expect((await result.collateral.balanceOf(result.taker.address)).eq(0)).to.be
+      .true;
+    expect(
+      (await result.collateral.balanceOf(result.owner.address))
+        .sub(ownerCollateralBefore)
+        .eq(1)
+    ).to.be.true;
   });
 
   it('reverts when LI.FI underdelivers below the approved floor', async () => {

@@ -18,10 +18,12 @@ import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 ///        allowlists (storage, setters, getters, enforcement)
 ///      - the active-callback binding (pool + calldata hash) set and cleared
 ///        around pool.take
-///      - the exact pre-call source-balance check: calldata aggregators use
-///        provider calldata sized off-chain and cannot be re-sized on-chain, so
-///        off-chain sizing debt-clamps the take and this layer rejects any
-///        mismatch before calling the aggregator. Do not port the factory
+///      - the exact-fill check against the pool's reported callback collateral:
+///        calldata aggregators use provider calldata sized off-chain and cannot
+///        be re-sized on-chain, so off-chain sizing debt-clamps the take and this
+///        layer rejects any mismatch before calling the aggregator. It compares
+///        the validated pool's collateral argument (not this taker's balance, so
+///        a forced donation cannot grief the take). Do not port the factory
 ///        takers' partial-fill pro-rating into this layer.
 ///      - the post-call residue policy: source-token residue returned by an
 ///        aggregator is allowed and swept by the standard settlement path.
@@ -85,7 +87,6 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
     error CallTargetHasNoCode();
     error ApprovalSpenderNotAllowed();
     error SelectorNotAllowed();
-    error StaleSourceBalance();
     error UnexpectedSourceBalance();
     error UnexpectedCallback();
 
@@ -129,9 +130,6 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
 
         AggregatorSwapDetails memory details = abi.decode(swapDetails, (AggregatorSwapDetails));
         _validateSwapDetails(pool, swapRouter, details);
-        if (IERC20(details.srcToken).balanceOf(address(this)) != 0) {
-            revert StaleSourceBalance();
-        }
         if (_activeCallbackPool != address(0)) {
             revert UnexpectedCallback();
         }
@@ -152,7 +150,7 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
 
     /// @notice Called by the Ajna pool after it sends callback collateral to this taker.
     function atomicSwapCallback(
-        uint256,
+        uint256 collateral,
         uint256 quoteAmountDue,
         bytes calldata data
     ) external override nonReentrant {
@@ -164,7 +162,7 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
 
         (AggregatorSwapDetails memory details, address swapRouter) = abi.decode(data, (AggregatorSwapDetails, address));
         _validateSwapDetails(pool, swapRouter, details);
-        _executeAggregatorCall(pool, quoteAmountDue, swapRouter, details);
+        _executeAggregatorCall(pool, collateral, quoteAmountDue, swapRouter, details);
     }
 
     function setCallTarget(address target, bool allowed) external onlyOwner {
@@ -265,14 +263,20 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
 
     function _executeAggregatorCall(
         IERC20Pool pool,
+        uint256 collateral,
         uint256 quoteAmountDue,
         address swapRouter,
         AggregatorSwapDetails memory details
     ) private {
         IERC20 srcToken = IERC20(details.srcToken);
         IERC20 dstToken = IERC20(details.dstToken);
-        uint256 sourceBalanceBefore = srcToken.balanceOf(address(this));
-        if (sourceBalanceBefore != details.amountInTokenUnits) {
+        // Trust the validated pool's reported callback collateral rather than
+        // this taker's own token balance: an attacker can force a non-zero
+        // balance by donating 1 wei of srcToken, so a balanceOf-based exact-fill
+        // check would let them grief every take. The approval below is sized to
+        // amountInTokenUnits, so any donated dust is never spent and is swept by
+        // _settleAfterTake. (Matches CurveKeeperTaker / UniswapV3KeeperTaker.)
+        if (collateral != details.amountInTokenUnits) {
             revert UnexpectedSourceBalance();
         }
 
