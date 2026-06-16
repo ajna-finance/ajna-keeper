@@ -571,7 +571,7 @@ describe('LI.FI config validation', () => {
     };
 
     expect(() => validateAutoDiscoverConfig(config, chainId)).to.throw(
-      'KeeperConfig.dex.lifi.selectorAllowlist.1 must include selectors for every configured LI.FI call target'
+      'KeeperConfig.dex.lifi.selectorAllowlist.1 must include selectors for every configured call target'
     );
   });
 

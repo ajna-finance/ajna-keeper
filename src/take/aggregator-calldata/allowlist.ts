@@ -141,7 +141,7 @@ export function normalizeTakerSelectorAllowlist(
     for (const callTarget of Array.from(callTargetAllowlist)) {
       if (!normalized.has(callTarget)) {
         throw new Error(
-          `${label} must include selectors for every configured LI.FI call target`
+          `${label} must include selectors for every configured call target`
         );
       }
     }

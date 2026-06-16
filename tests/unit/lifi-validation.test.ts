@@ -565,7 +565,7 @@ describe('LI.FI quote validation', () => {
         }
       )
     ).to.throw(
-      'LI.FI selector allowlist must include selectors for every configured LI.FI call target'
+      'LI.FI selector allowlist must include selectors for every configured call target'
     );
 
     expect(() =>
@@ -600,7 +600,7 @@ describe('LI.FI quote validation', () => {
         },
       })
     ).to.throw(
-      'LI.FI selector allowlist must include selectors for every configured LI.FI call target'
+      'LI.FI selector allowlist must include selectors for every configured call target'
     );
 
     expect(() =>

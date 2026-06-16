@@ -77,4 +77,36 @@ describe('Sushi aggregator deployment script support', () => {
       getSushiAggregatorProductionAllowlists(keeperConfig({}), BASE_CHAIN_ID)
     ).to.throw('dex.sushiAggregator config is required');
   });
+
+  it('fails closed when a selector targets an address not in the call-target allowlist', () => {
+    const otherTarget = '0x9999999999999999999999999999999999999999';
+    expect(() =>
+      getSushiAggregatorProductionAllowlists(
+        sushiConfig({
+          selectorAllowlist: {
+            [BASE_CHAIN_ID]: { [otherTarget]: [SELECTOR] },
+          },
+        }),
+        BASE_CHAIN_ID
+      )
+    ).to.throw('is not present in callTargetAllowlist');
+  });
+
+  it('fails closed when a configured call target has no selector coverage', () => {
+    const secondTarget = '0x8888888888888888888888888888888888888888';
+    expect(() =>
+      getSushiAggregatorProductionAllowlists(
+        sushiConfig({
+          callTargetAllowlist: {
+            [BASE_CHAIN_ID]: [CALL_TARGET, secondTarget],
+          },
+          // Only CALL_TARGET has selectors; secondTarget is uncovered.
+          selectorAllowlist: {
+            [BASE_CHAIN_ID]: { [CALL_TARGET]: [SELECTOR] },
+          },
+        }),
+        BASE_CHAIN_ID
+      )
+    ).to.throw('must include selectors for every configured call target');
+  });
 });
