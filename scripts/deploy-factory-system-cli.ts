@@ -16,6 +16,12 @@ import {
   registerLifiTakerInFactory,
   validateDetectedChainLifiProductionConfig,
 } from './deployment/lifi-factory-deployment';
+import {
+  configureSushiAggregatorAllowlists,
+  deploySushiAggregatorKeeperTaker,
+  hasSushiAggregatorConfig,
+  registerSushiAggregatorTakerInFactory,
+} from './deployment/sushi-aggregator-deployment';
 
 /**
  * Universal Factory System Deployment Script
@@ -38,6 +44,7 @@ interface DeploymentAddresses {
   uniswapTaker?: string;
   curveTaker?: string;
   lifiTaker?: string;
+  sushiAggregatorTaker?: string;
   // Future: uniswapV4, pancakeswap, balancer, izumi, etc.
 }
 
@@ -117,6 +124,21 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
   // Check required Ajna addresses
   if (!config.ajna?.erc20PoolFactory) {
     throw new Error('Missing ajna.erc20PoolFactory in config');
+  }
+
+  // 1inch is not auto-provisioned by this script: unlike LI.FI/Sushi there is no
+  // on-chain allowlist-derivation for the 1inch taker, so it cannot be safely
+  // deployed+allowlisted+registered here. Fail BEFORE any deployment rather than
+  // silently leaving LiquiditySource.ONEINCH mapped to no taker (a runtime
+  // TakerNotSet liveness gap) or partially deploying then aborting.
+  if (config.dex?.oneInch) {
+    throw new Error(
+      'dex.oneInch is configured but this script does not provision the ' +
+        'OneInchAggregatorKeeperTaker (no automated allowlist derivation for ' +
+        '1inch yet). Deploy + allowlist + setTaker(LiquiditySource.ONEINCH, ...) ' +
+        'the 1inch taker via a reviewed manual step before enabling provider ' +
+        'oneinch, or remove dex.oneInch to deploy the rest of the system.'
+    );
   }
 
   // Check if contract artifacts exist
@@ -623,7 +645,8 @@ function generateConfigUpdate(
   if (
     addresses.uniswapTaker ||
     addresses.curveTaker ||
-    addresses.lifiTaker
+    addresses.lifiTaker ||
+    addresses.sushiAggregatorTaker
   ) {
     console.log('  contracts: {');
     if (addresses.uniswapTaker) {
@@ -634,6 +657,9 @@ function generateConfigUpdate(
     }
     if (addresses.lifiTaker) {
       console.log(`    Lifi: '${addresses.lifiTaker}',`);
+    }
+    if (addresses.sushiAggregatorTaker) {
+      console.log(`    SushiAggregator: '${addresses.sushiAggregatorTaker}',`);
     }
     console.log('  },');
   }
@@ -659,6 +685,11 @@ function generateConfigUpdate(
   }
   if (addresses.lifiTaker) {
     console.log(`🔁 LifiKeeperTaker: ${addresses.lifiTaker}`);
+  }
+  if (addresses.sushiAggregatorTaker) {
+    console.log(
+      `🍣 SushiAggregatorKeeperTaker: ${addresses.sushiAggregatorTaker}`
+    );
   }
 
   console.log('\n🚀 Next Steps:');
@@ -805,6 +836,19 @@ async function main() {
       // ADD DELAY AFTER LI.FI DEPLOYMENT
       await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
     }
+
+    // Deploy Sushi aggregator taker when dex.sushiAggregator is configured.
+    if (hasSushiAggregatorConfig(config)) {
+      addresses.sushiAggregatorTaker = await deploySushiAggregatorKeeperTaker(
+        deployer,
+        config.ajna.erc20PoolFactory,
+        addresses.factory,
+        chainInfo.chainId,
+        getGasConfig
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
+    }
+
     // ADD DELAY BEFORE CONFIGURATION
     console.log('\n⏳ Waiting before configuration...');
     await new Promise((resolve) => setTimeout(resolve, 3000)); // 3 second delay
@@ -827,6 +871,21 @@ async function main() {
         chainInfo.chainId
       );
       await registerLifiTakerInFactory(deployer, addresses.factory, addresses);
+    }
+    if (addresses.sushiAggregatorTaker) {
+      // Same ordering invariant as LI.FI: apply + exactly verify allowlists
+      // before the router maps SUSHI_AGGREGATOR to the taker.
+      await configureSushiAggregatorAllowlists(
+        deployer,
+        addresses.sushiAggregatorTaker,
+        config,
+        chainInfo.chainId
+      );
+      await registerSushiAggregatorTakerInFactory(
+        deployer,
+        addresses.factory,
+        addresses
+      );
     }
 
     // Step 8: Verify everything works
