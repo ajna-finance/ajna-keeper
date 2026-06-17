@@ -10,7 +10,7 @@ import {
 } from '../../src/take/direct-dex';
 import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval-rules';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
-import { createDirectDexQuoteProviderRuntimeCache } from '../../src/take/direct-dex/route-selection';
+import { createDirectDexQuoteProviderRuntimeCache } from '../../src/take/direct-dex/runtime-cache';
 import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 import { getProvider, resetHardhat } from './test-utils';
 import {

@@ -5,7 +5,7 @@
 // hot files must run this against their declared base ref; overrides happen
 // only through packet-closeout justification, never by editing the rules.
 //
-// Rules (docs/calldata-aggregator-followup-plan.md):
+// Rules (enforced directly by this checker):
 //   1. net-growth:     a hot file's final line count exceeds its base count
 //   2. added-lines:    more than MAX_ADDED_LINES gross added lines in a hot
 //                      file, even when net growth is zero or negative
@@ -23,12 +23,8 @@ import ts from 'typescript';
 
 export const HOT_FILES: readonly string[] = [
   'src/config/validation.ts',
-  'src/take/external-take/route.ts',
-  'src/take/external-take/quote-approval.ts',
-  'src/discovery/route-preflight.ts',
   'scripts/deploy-factory-system.ts',
   'scripts/run-fixture-keeper-harness.ts',
-  'scripts/no-spend/harness-artifacts.ts',
   'scripts/create-liquidatable-ajna-fixture.ts',
 ];
 
@@ -42,7 +38,6 @@ export const OWNERSHIP_FILE_LINE_CAPS: Readonly<Record<string, number>> = {
   'src/config/validation-rules.ts': 1000,
   'src/config/auto-discover-validation.ts': 1000,
   'src/discovery/route-preflight-validation.ts': 1000,
-  'src/take/direct-dex/route-selection.ts': 1000,
   'src/take/direct-dex/route-amounts.ts': 1000,
   'src/take/direct-dex/route-profitability.ts': 1000,
   'src/take/direct-dex/route-types.ts': 500,
@@ -74,22 +69,6 @@ export const COMPATIBILITY_ONLY_HOT_MODULES: readonly CompatibilityOnlyHotModule
       replacementByImport: {
         validateAutoDiscoverConfig: 'src/config/auto-discover-validation.ts',
       },
-    },
-    {
-      file: 'src/take/external-take/route.ts',
-      replacement: 'src/take/external-take/route-binding.ts',
-    },
-    {
-      file: 'src/take/external-take/quote-approval.ts',
-      replacement: 'src/take/external-take/quote-approval-rules.ts',
-    },
-    {
-      file: 'src/discovery/route-preflight.ts',
-      replacement: 'src/discovery/route-preflight-validation.ts',
-    },
-    {
-      file: 'scripts/no-spend/harness-artifacts.ts',
-      replacement: 'scripts/no-spend/harness-report.ts',
     },
   ];
 

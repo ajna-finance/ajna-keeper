@@ -38,8 +38,6 @@ export interface CalldataAggregatorRouteSummary {
   topLevelTool?: string;
   /** Normalized included fee/cost rows needed for comparison. */
   feeCosts: CalldataAggregatorFeeCost[];
-  /** Provider warnings as stable strings, if any. */
-  warnings?: string[];
 }
 
 export interface ApprovedCalldataAggregatorQuote {

@@ -10,8 +10,8 @@ import * as erc20 from '../../src/erc20';
 import {
   DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
   getCachedDirectDexTokenDecimals,
-  getCurveQuoteProvider,
-} from '../../src/take/direct-dex/route-selection';
+} from '../../src/take/direct-dex/route-amounts';
+import { getCurveQuoteProvider } from '../../src/take/direct-dex/providers';
 
 const TEST_UNISWAP_SWAP_ROUTER_02_ADDRESS =
   '0x3333333333333333333333333333333333333333';

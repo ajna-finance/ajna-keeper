@@ -22,10 +22,8 @@ import {
   takeLiquidationDirectDex,
 } from '../../src/take/direct-dex';
 import { bindExternalTakeRouteForCandidate } from '../../src/take/external-take/quote-approval-rules';
-import {
-  filterDirectDexRouteCandidatesByAvailability,
-  getDirectDexRouteCandidates,
-} from '../../src/take/direct-dex/route-selection';
+import { filterDirectDexRouteCandidatesByAvailability } from '../../src/take/direct-dex/availability';
+import { getDirectDexRouteCandidates } from '../../src/take/direct-dex/route-candidates';
 import { EXTERNAL_TAKE_REJECTION_REASONS } from '../../src/take/external-take/policy';
 import {
   BoundExternalTakeRouteEvaluation,

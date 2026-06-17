@@ -1,7 +1,5 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { LiquiditySource } from '../../config';
 import {
-  makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
@@ -14,7 +12,6 @@ import {
 } from './quote-service';
 import { OneInchAggregatorExecutionConfig } from './types';
 
-const ONEINCH_LABEL = '1inch';
 const DEFAULT_ONEINCH_AGGREGATOR_MAX_QUOTE_AGE_MS = 30_000;
 
 async function prepareOneInchAggregatorExecution(params: {
@@ -32,7 +29,6 @@ async function prepareOneInchAggregatorExecution(params: {
     liquidation,
     config,
     providerId: 'oneinch',
-    label: ONEINCH_LABEL,
     missingRouterReason:
       '1inch aggregator execution requires keeperTakerRouter',
     missingTakerReason:
@@ -60,8 +56,6 @@ async function prepareOneInchAggregatorExecution(params: {
       }),
     getFailureMetadata: getOneInchAggregatorQuoteFailureMetadata,
     getMaxQuoteAgeMs: () => DEFAULT_ONEINCH_AGGREGATOR_MAX_QUOTE_AGE_MS,
-    onQuoteResult: (config, result) =>
-      config.onOneInchAggregatorQuoteResult?.(result),
   });
 }
 
@@ -75,20 +69,6 @@ export async function takeLiquidationOneInchAggregator(params: {
   return await takeLiquidationCalldataAggregatorProvider({
     ...params,
     providerId: 'oneinch',
-    liquiditySource: LiquiditySource.ONEINCH,
-    label: ONEINCH_LABEL,
     prepareExecution: prepareOneInchAggregatorExecution,
-    recordPreparedRejection:
-      makeCalldataAggregatorProviderRejectionRecorder<OneInchAggregatorExecutionConfig>(
-        {
-          onQuoteResult: (c, r) => c.onOneInchAggregatorQuoteResult?.(r),
-          onExecutionFailure: (c, r) =>
-            c.onOneInchAggregatorExecutionFailure?.(r),
-        }
-      ),
-    onQuoteConsumed: (config) =>
-      config.onOneInchAggregatorQuoteResult?.({ success: true }),
-    onExecutionFailure: (config, result) =>
-      config.onOneInchAggregatorExecutionFailure?.(result),
   });
 }

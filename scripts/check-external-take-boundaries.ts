@@ -97,7 +97,6 @@ function allowFactoryLogOutsideDirectDexRuntime(params: {
   return !(
     normalized.startsWith('src/take/direct-dex/') ||
     normalized === 'src/take/manual-context.ts' ||
-    normalized === 'src/take/external-take/quote-approval.ts' ||
     normalized === 'docs/fixtures/live-base-liquidation-fixture.md' ||
     normalized === 'README.md' ||
     normalized === 'production_setup_guide.md'

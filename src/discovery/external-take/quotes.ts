@@ -2,8 +2,10 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import {
   CalldataAggregatorLiquiditySource,
+  CalldataAggregatorProviderId,
   LiquiditySource,
   formatLiquiditySource,
+  getAggregatorProviderIdentity,
   getAutoDiscoverTakePolicy,
   resolveCalldataAggregatorProviderForSource,
 } from '../../config';
@@ -41,9 +43,6 @@ import {
 export type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy
 >;
-export type OneInchCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
-export type LifiCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
-
 export interface DirectDexPathQuoteInput extends AuctionTakeFacts {
   pool: FungiblePool;
   signer: Signer;
@@ -58,32 +57,12 @@ export interface CalldataAggregatorPathQuoteInput
   quoteCircuitMode?: 'record' | 'observe';
 }
 
-export interface OneInchAggregatorPathQuoteInput
-  extends CalldataAggregatorPathQuoteInput {}
-
-export interface LifiPathQuoteInput extends CalldataAggregatorPathQuoteInput {}
-
-export interface SushiAggregatorPathQuoteInput
-  extends CalldataAggregatorPathQuoteInput {}
-
 export type DirectDexPathQuoteFn = (
   quoteParams: DirectDexPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
 export type CalldataAggregatorPathQuoteFn = (
   quoteParams: CalldataAggregatorPathQuoteInput
-) => Promise<ExternalTakeQuoteEvaluation>;
-
-export type OneInchAggregatorPathQuoteFn = (
-  quoteParams: OneInchAggregatorPathQuoteInput
-) => Promise<ExternalTakeQuoteEvaluation>;
-
-export type LifiPathQuoteFn = (
-  quoteParams: LifiPathQuoteInput
-) => Promise<ExternalTakeQuoteEvaluation>;
-
-export type SushiAggregatorPathQuoteFn = (
-  quoteParams: SushiAggregatorPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
 export type DiscoveryDirectDexQuoteConfig = {
@@ -151,7 +130,7 @@ async function withCombinedAbortSignal<T>(
 export function recordOneInchCircuitOutcomeForDiscovery(params: {
   rpcCache?: DiscoveryRpcCache;
   takePolicy: AutoDiscoverTakePolicyRuntime;
-  outcome: OneInchCircuitOutcome;
+  outcome: ExternalTakeQuoteCircuitOutcome;
   purpose?: OneInchQuoteCircuitPurpose;
 }): void {
   if (params.outcome === 'neutral') {
@@ -171,7 +150,7 @@ export function recordOneInchCircuitOutcomeForDiscovery(params: {
 export function recordLifiCircuitOutcomeForDiscovery(params: {
   rpcCache?: DiscoveryRpcCache;
   config?: DiscoveryExecutionConfig;
-  outcome: LifiCircuitOutcome;
+  outcome: ExternalTakeQuoteCircuitOutcome;
   purpose?: LifiCircuitPurpose;
 }): void {
   if (params.outcome === 'neutral') {
@@ -349,8 +328,7 @@ export async function quoteCalldataAggregatorPathForDiscovery<
 >(
   params: TParams,
   descriptor: {
-    label: string;
-    selectedLiquiditySource: CalldataAggregatorLiquiditySource;
+    providerId: CalldataAggregatorProviderId;
     abortErrorMessage: string;
     timeoutLabel: string;
     circuitFactory: (params: TParams) => QuoteCircuitPolicy;
@@ -361,13 +339,14 @@ export async function quoteCalldataAggregatorPathForDiscovery<
     ) => Promise<ExternalTakeQuoteEvaluation>;
   }
 ): Promise<ExternalTakeQuoteEvaluation> {
+  const identity = getAggregatorProviderIdentity(descriptor.providerId);
   const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
   const circuit = descriptor.circuitFactory(params);
   return quoteCircuitGuardedPath({
     poolName: params.pool.name,
-    label: descriptor.label,
+    label: identity.label,
     externalTakePath: 'calldata_aggregator',
-    selectedLiquiditySource: descriptor.selectedLiquiditySource,
+    selectedLiquiditySource: identity.source,
     auctionPrice: params.auctionPrice,
     collateral: quoteCollateralWad,
     circuit,

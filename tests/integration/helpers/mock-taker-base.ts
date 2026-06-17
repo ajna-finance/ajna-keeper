@@ -1,14 +1,19 @@
 import { expect } from 'chai';
-import { BigNumber, Wallet, constants, providers, utils } from 'ethers';
+import { BigNumber, Signer, Wallet, constants, providers, utils } from 'ethers';
 import { network } from 'hardhat';
+import { LiquiditySource } from '../../../src/config';
+import { AGGREGATOR_SWAP_DETAILS_TUPLE_ABI } from '../../../src/take/aggregator-calldata/execution';
+import type { BaseAggregatorCalldataTaker } from '../../../typechain-types';
 import {
   CurveKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../../typechain-types/factories/contracts/takers';
+import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import {
   MockAtomicSwapPool__factory,
   MockCurveSwapPool__factory,
   MockERC20__factory,
+  MockLifiSwapTarget__factory,
   MockMinOutBypassSwap__factory,
   MockPoolDeployer__factory,
   MockSwapRouter02__factory,
@@ -154,6 +159,144 @@ export async function deployCurveTaker(
   );
   await taker.deployed();
   return taker;
+}
+
+/** Standard borrower address shared by the aggregator-taker take fixtures. */
+export const AGGREGATOR_TAKE_BORROWER = utils.getAddress(
+  '0x00000000000000000000000000000000000000b0'
+);
+
+type AggregatorTakerFactory<T extends BaseAggregatorCalldataTaker> = new (
+  signer: Signer
+) => { deploy(poolDeployer: string, router: string): Promise<T> };
+
+/**
+ * Deploys a calldata-aggregator taker (1inch/Sushi/LI.FI shape) behind a fresh
+ * TakerRouter, registers it at `source`, and allowlists a MockLifiSwapTarget for
+ * `mockSwap`. The taker type is inferred from the passed `__factory`, so callers
+ * keep full provider-specific typing on the returned `taker`.
+ */
+export async function deployAggregatorTaker<
+  T extends BaseAggregatorCalldataTaker,
+>(
+  base: MockTakerBase,
+  params: { Factory: AggregatorTakerFactory<T>; source: LiquiditySource }
+) {
+  const { owner, poolDeployer, pool, collateralToken, quoteToken } = base;
+
+  const factory = await new TakerRouter__factory(owner).deploy(
+    poolDeployer.address
+  );
+  await factory.deployed();
+
+  const taker = await new params.Factory(owner).deploy(
+    poolDeployer.address,
+    factory.address
+  );
+  await taker.deployed();
+
+  const target = await new MockLifiSwapTarget__factory(owner).deploy();
+  await target.deployed();
+
+  await factory.setTaker(params.source, taker.address);
+  const selector = target.interface.getSighash('mockSwap');
+  await taker.setCallTarget(target.address, true);
+  await taker.setApprovalSpender(target.address, true);
+  await taker.setCallSelector(target.address, selector, true);
+
+  return {
+    owner,
+    collateral: collateralToken,
+    quote: quoteToken,
+    pool,
+    poolDeployer,
+    factory,
+    taker,
+    target,
+  };
+}
+
+/**
+ * Deploys an aggregator-taker fixture and stages a single mockSwap take through
+ * TakerRouter: collateral in the pool, output quote in the target, the amount due
+ * pre-funded+approved on the owner, and an encoded details/callData pair. Returns
+ * the fixture plus a `send()` that fires the take, so each test asserts deltas
+ * instead of re-staging the swap. `detailsAmountIn` defaults to `amountIn`; set it
+ * higher to model stale (drifted) quoted calldata.
+ */
+export async function executeAggregatorTake<
+  T extends BaseAggregatorCalldataTaker,
+>(params: {
+  Factory: AggregatorTakerFactory<T>;
+  source: LiquiditySource;
+  amountIn?: BigNumber;
+  detailsAmountIn?: BigNumber;
+  outputAmount?: BigNumber;
+  quoteAmountDue?: BigNumber;
+  amountOutMinimum?: BigNumber;
+}) {
+  const base = await deployMockTakerBase();
+  const fixture = await deployAggregatorTaker(base, {
+    Factory: params.Factory,
+    source: params.source,
+  });
+  const amountIn = params.amountIn ?? utils.parseEther('1');
+  const detailsAmountIn = params.detailsAmountIn ?? amountIn;
+  const outputAmount = params.outputAmount ?? utils.parseEther('1.25');
+  const quoteAmountDue = params.quoteAmountDue ?? utils.parseEther('1');
+  const amountOutMinimum = params.amountOutMinimum ?? utils.parseEther('1.1');
+
+  await fixture.collateral.mint(fixture.pool.address, amountIn);
+  await fixture.quote.mint(fixture.target.address, outputAmount);
+  await fixture.quote.mint(fixture.owner.address, quoteAmountDue);
+  await fixture.quote
+    .connect(fixture.owner)
+    .approve(fixture.pool.address, constants.MaxUint256);
+  await fixture.pool.setQuoteAmountDue(quoteAmountDue);
+
+  const callData = fixture.target.interface.encodeFunctionData('mockSwap', [
+    fixture.collateral.address,
+    fixture.quote.address,
+    fixture.taker.address,
+    detailsAmountIn,
+    outputAmount,
+  ]);
+  const details = utils.defaultAbiCoder.encode(
+    [AGGREGATOR_SWAP_DETAILS_TUPLE_ABI],
+    [
+      {
+        approvalSpender: fixture.target.address,
+        srcToken: fixture.collateral.address,
+        dstToken: fixture.quote.address,
+        dstReceiver: fixture.taker.address,
+        amountInTokenUnits: detailsAmountIn,
+        amountOutMinimum,
+        callData,
+      },
+    ]
+  );
+
+  const send = () =>
+    fixture.factory.takeWithAtomicSwap(
+      fixture.pool.address,
+      AGGREGATOR_TAKE_BORROWER,
+      constants.WeiPerEther,
+      amountIn,
+      params.source,
+      fixture.target.address,
+      details
+    );
+
+  return {
+    ...fixture,
+    amountIn,
+    detailsAmountIn,
+    outputAmount,
+    quoteAmountDue,
+    amountOutMinimum,
+    details,
+    send,
+  };
 }
 
 export async function deployFundedSwapRouter02(

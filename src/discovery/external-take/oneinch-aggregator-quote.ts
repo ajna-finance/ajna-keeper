@@ -1,4 +1,3 @@
-import { LiquiditySource } from '../../config';
 import { getOneInchAggregatorPathQuoteEvaluation } from '../../take/oneinch-aggregator/quote-evaluation';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import { AsyncOperationLimiter } from '../../utils';
@@ -10,7 +9,7 @@ import {
 import {
   AutoDiscoverTakePolicyRuntime,
   DiscoveryTokenDecimalsCacheResolver,
-  OneInchAggregatorPathQuoteInput,
+  CalldataAggregatorPathQuoteInput,
   QuoteCircuitPolicy,
   quoteCalldataAggregatorPathForDiscovery,
   recordOneInchCircuitOutcomeForDiscovery,
@@ -24,11 +23,10 @@ export async function quoteOneInchAggregatorPathForDiscovery(
     routeProbeLimiter?: AsyncOperationLimiter;
     probeTimeoutMs: number;
     getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
-  } & OneInchAggregatorPathQuoteInput
+  } & CalldataAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteCalldataAggregatorPathForDiscovery(params, {
-    label: '1inch',
-    selectedLiquiditySource: LiquiditySource.ONEINCH,
+    providerId: 'oneinch',
     abortErrorMessage: '1inch aggregator external take quote aborted',
     timeoutLabel: '1inch aggregator external take quote',
     circuitFactory: (params): QuoteCircuitPolicy => {

@@ -5,7 +5,7 @@ import {
   KeeperConfig,
   LiquiditySource,
   ResolvedExternalTakePolicy,
-  UNISWAP_V3_DIRECT_DEX_ROUTE_CONTRACT_ADDRESS_FIELDS,
+  UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS,
   formatLiquiditySource,
   getAggregatorProviderIdentity,
   getAutoDiscoverTakePolicy,
@@ -16,13 +16,12 @@ import {
   resolveExternalTakePolicy,
   resolveExternalTakePathFromSource,
 } from '../config';
-import {
-  LIFI_TAKER_ALLOWLIST_ABI,
-  compareLifiTakerAllowlistPolicy,
-  createLifiTakerAllowlistReader,
-  readLifiTakerAllowlistSnapshot,
-} from '../dex/lifi';
+import { reconcileTakerAllowlistSnapshot } from '../take/aggregator-calldata/allowlist';
 import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
+import {
+  hasOneInchAggregatorAllowlistPolicy,
+  normalizeOneInchChainPolicy,
+} from '../config/oneinch-aggregator-policy';
 import { validateSushiAggregatorAllowlistPreflight } from '../dex/sushi-aggregator/preflight';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
@@ -404,39 +403,76 @@ async function validateLifiAllowlistPreflight(params: {
     });
   }
 
-  try {
-    const taker = new ethers.Contract(
-      params.takerAddress,
-      LIFI_TAKER_ALLOWLIST_ABI,
-      params.provider
-    );
-    const actual = await readLifiTakerAllowlistSnapshot({
-      reader: createLifiTakerAllowlistReader(taker),
-      selectorTargets: [
-        ...expectedTargets,
-        ...Object.keys(policy.selectorAllowlist),
-      ],
-      labelPrefix: 'LI.FI taker',
-      read: async ({ label, operation }) => {
-        const { value, error } = await retryRpcRead(operation);
-        if (value === undefined) {
-          throw new Error(
-            `${label} could not be read after retries: ${getErrorMessage(error)}`
-          );
-        }
-        return value;
-      },
-    });
-    params.errors.push(
-      ...compareLifiTakerAllowlistPolicy({
-        expected: policy,
-        actual,
-        mode: 'exact',
-      })
-    );
-  } catch (error) {
-    params.errors.push(getErrorMessage(error));
+  // LI.FI reads selectors for its call targets AND any extra selectorAllowlist
+  // keys, and retries only on classified-retryable RPC read errors.
+  await reconcileTakerAllowlistSnapshot({
+    provider: params.provider,
+    takerAddress: params.takerAddress,
+    policy,
+    selectorTargets: [
+      ...expectedTargets,
+      ...Object.keys(policy.selectorAllowlist),
+    ],
+    labelPrefix: 'LI.FI taker',
+    read: async ({ label, operation }) => {
+      const { value, error } = await retryRpcRead(operation);
+      if (value === undefined) {
+        throw new Error(
+          `${label} could not be read after retries: ${getErrorMessage(error)}`
+        );
+      }
+      return value;
+    },
+    errors: params.errors,
+  });
+}
+
+async function validateOneInchAggregatorAllowlistPreflight(params: {
+  config: KeeperConfig;
+  provider: providers.Provider;
+  chainId: number;
+  takerAddress: string | undefined;
+  errors: string[];
+}): Promise<void> {
+  const oneInch = params.config.dex?.oneInch;
+  if (!hasOneInchAggregatorAllowlistPolicy(oneInch) || !params.takerAddress) {
+    return;
   }
+  let policy;
+  try {
+    policy = normalizeOneInchChainPolicy({
+      config: oneInch!,
+      fieldName: 'dex.oneInch',
+      chainId: params.chainId,
+    });
+  } catch (error) {
+    params.errors.push(
+      `1inch production policy for chain ${params.chainId} is invalid: ${getErrorMessage(error)}`
+    );
+    return;
+  }
+  // Mirrors LI.FI: read selectors for the call targets AND any extra
+  // selectorAllowlist keys, retrying only on classified-retryable RPC errors.
+  await reconcileTakerAllowlistSnapshot({
+    provider: params.provider,
+    takerAddress: params.takerAddress,
+    policy,
+    selectorTargets: [
+      ...policy.callTargets,
+      ...Object.keys(policy.selectorAllowlist),
+    ],
+    labelPrefix: '1inch taker',
+    read: async ({ label, operation }) => {
+      const { value, error } = await retryRpcRead(operation);
+      if (value === undefined) {
+        throw new Error(
+          `${label} could not be read after retries: ${getErrorMessage(error)}`
+        );
+      }
+      return value;
+    },
+    errors: params.errors,
+  });
 }
 
 function createRouterRegisteredPreflightDescriptor(params: {
@@ -462,17 +498,33 @@ function createRouterRegisteredPreflightDescriptor(params: {
 
 const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
   [LiquiditySource.ONEINCH]: createRouterRegisteredPreflightDescriptor({
+    takerLabel: () => '1inch taker',
     getContractCodeRequirements: ({ config, chainId }) => [
       {
         label: `1inch router for chain ${chainId}`,
         address: config.dex?.oneInch?.routers?.[chainId],
       },
     ],
+    validateAdditional: async ({
+      config,
+      provider,
+      chainId,
+      takerAddress,
+      errors,
+    }) => {
+      await validateOneInchAggregatorAllowlistPreflight({
+        config,
+        provider,
+        chainId,
+        takerAddress,
+        errors,
+      });
+    },
   }),
   [LiquiditySource.UNISWAPV3]: createRouterRegisteredPreflightDescriptor({
     getContractCodeRequirements: ({ config }) => {
       const routerConfig = config.dex?.uniswapV3?.router;
-      return UNISWAP_V3_DIRECT_DEX_ROUTE_CONTRACT_ADDRESS_FIELDS.map((field) => ({
+      return UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS.map((field) => ({
         label: `Uniswap V3 ${field}`,
         address: routerConfig?.[field],
       }));

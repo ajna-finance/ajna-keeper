@@ -37,8 +37,8 @@ describe('discovery external take route binding', () => {
       chainId: 8453,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       gasPriceFetchedAt: Date.now(),
-      oneInchQuoteCircuit: {
-        failures: 1,
+      providerCircuits: {
+        oneinch: { route_quote: { failures: 1 } },
       },
     };
     const pool = {
@@ -103,7 +103,9 @@ describe('discovery external take route binding', () => {
     });
 
     expect(oneInchQuoteStub.calledOnce).to.be.true;
-    expect(rpcCache.oneInchQuoteCircuit.failures).to.equal(1);
+    expect(
+      rpcCache.providerCircuits.oneinch.route_quote.failures
+    ).to.equal(1);
   });
 
   it('refuses execution when a hybrid quote resolves to an inconsistent path and source', async () => {

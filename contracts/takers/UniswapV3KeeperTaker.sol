@@ -5,13 +5,13 @@ import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
 import { ISwapRouter02 } from "../interfaces/ISwapRouter02.sol";
-import { RouterAuthorizedTakerBase } from "../base/KeeperTakerBase.sol";
+import { KeeperTakerBase } from "../base/KeeperTakerBase.sol";
 import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 
 /// @notice Uniswap V3 implementation for Ajna keeper takes using direct SwapRouter02 execution.
 /// @dev Shared wiring, helpers, errors, and the SwapExecuted event live in
-///      RouterAuthorizedTakerBase / KeeperTakerBase.
-contract UniswapV3KeeperTaker is RouterAuthorizedTakerBase {
+///      KeeperTakerBase.
+contract UniswapV3KeeperTaker is KeeperTakerBase {
     /// @notice Direct Uniswap V3 swap configuration encoded by the keeper.
     struct UniswapV3SwapDetails {
         address swapRouter;
@@ -26,7 +26,7 @@ contract UniswapV3KeeperTaker is RouterAuthorizedTakerBase {
     ///        May be zero to deploy the taker in standalone (owner-only) mode; the
     ///        keeper router refuses to register a taker whose router does not match.
     constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
-        RouterAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
+        KeeperTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
     {}
 
     /// @inheritdoc IAjnaKeeperTaker

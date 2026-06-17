@@ -15,6 +15,7 @@ import {
   requireOptionalPositive,
   requireOptionalIntegerRange,
 } from './numeric-validation';
+import { getErrorMessage } from '../utils';
 export {
   getConfiguredLifiCompletePolicyChainIds,
   normalizeLifiCanaryChainPolicy,
@@ -35,10 +36,6 @@ export const LIFI_POLICY_BOUNDS = {
   maxPriceImpact: 0.5,
   ...LIFI_CHAIN_POLICY_BOUNDS,
 };
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function assertValidLifiDexConfig(params: {
   config: LifiDexConfig | undefined;

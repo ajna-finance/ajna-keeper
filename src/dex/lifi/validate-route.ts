@@ -1,6 +1,6 @@
 import { BigNumber, ethers } from 'ethers';
 import { validateLifiFeeCosts } from './fee-policy';
-import { normalizeLifiAddressAllowlistSet } from './address-allowlist';
+import { normalizeTakerAddressAllowlistSet } from '../../take/aggregator-calldata/allowlist';
 import {
   ApprovedLifiQuote,
   DEFAULT_LIFI_FEE_COST_POLICY,
@@ -10,7 +10,7 @@ import {
   LifiTransactionRequest,
 } from './schema';
 import type { LifiExchangePolicy } from './exchange-policy';
-import { normalizeLifiSelectorAllowlist } from './selector-allowlist';
+import { normalizeTakerSelectorAllowlist } from '../../take/aggregator-calldata/allowlist';
 import {
   normalizeLifiAllowedToolSet,
   normalizeLifiRouteShape,
@@ -115,19 +115,20 @@ export function validateLifiQuote(
       : [],
     { requireNonEmpty: exchangePolicy.kind === 'concrete_allowlist' }
   );
-  const callTargets = normalizeLifiAddressAllowlistSet(
+  const callTargets = normalizeTakerAddressAllowlistSet(
     params.callTargetAllowlist,
     'LI.FI callTargetAllowlist'
   );
-  const approvalSpenders = normalizeLifiAddressAllowlistSet(
+  const approvalSpenders = normalizeTakerAddressAllowlistSet(
     params.approvalSpenderAllowlist,
     'LI.FI approvalSpenderAllowlist'
   );
-  const selectorsByTarget = normalizeLifiSelectorAllowlist(
+  const selectorsByTarget = normalizeTakerSelectorAllowlist(
     params.selectorAllowlist,
     params.selectorAllowlist === undefined
-      ? {}
+      ? { label: 'LI.FI selector allowlist' }
       : {
+          label: 'LI.FI selector allowlist',
           requireNonEmpty: true,
           callTargetAllowlist: params.callTargetAllowlist,
           requireCallTargetCoverage: true,

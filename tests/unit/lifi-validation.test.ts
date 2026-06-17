@@ -17,10 +17,8 @@ import {
   transactionRequest,
   validate,
 } from './helpers/lifi-validation-fixtures';
-import {
-  normalizeLifiSelectorAllowlistRecord,
-  validateLifiQuote,
-} from '../../src/dex/lifi';
+import { normalizeTakerSelectorAllowlistRecord } from '../../src/take/aggregator-calldata/allowlist';
+import { validateLifiQuote } from '../../src/dex/lifi';
 import currentSameChainFeeCollectionFixture from '../../src/dex/lifi/fixtures/current-same-chain-fee-collection.json';
 
 describe('LI.FI quote validation', () => {
@@ -554,7 +552,7 @@ describe('LI.FI quote validation', () => {
   it('rejects selector policies that do not exactly cover call targets', () => {
     const otherTarget = '0x6666666666666666666666666666666666666666';
     expect(() =>
-      normalizeLifiSelectorAllowlistRecord(
+      normalizeTakerSelectorAllowlistRecord(
         {
           [target]: [selector],
         },
@@ -565,11 +563,11 @@ describe('LI.FI quote validation', () => {
         }
       )
     ).to.throw(
-      'LI.FI selector allowlist must include selectors for every configured call target'
+      'aggregator selector allowlist must include selectors for every configured call target'
     );
 
     expect(() =>
-      normalizeLifiSelectorAllowlistRecord(
+      normalizeTakerSelectorAllowlistRecord(
         {
           [target]: [selector],
           [otherTarget]: [selector],
@@ -581,7 +579,7 @@ describe('LI.FI quote validation', () => {
         }
       )
     ).to.throw(
-      `LI.FI selector allowlist.${otherTarget} is not present in callTargetAllowlist`
+      `aggregator selector allowlist.${otherTarget} is not present in callTargetAllowlist`
     );
 
     expect(() =>

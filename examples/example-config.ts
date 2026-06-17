@@ -60,6 +60,20 @@ const config: KeeperConfig = {
       },
     },
   },
+  // External-take taker contracts. Required whenever a pool's `take` sets a
+  // `liquiditySource` (ONEINCH / UNISWAPV3 / CURVE / LIFI / SUSHI_AGGREGATOR):
+  // deploy the keeper router + per-provider takers (see production_setup_guide.md)
+  // and fill these in. The two pools below that enable external takes (ONEINCH,
+  // CURVE) reference OneInchAggregator and Curve here.
+  takers: {
+    router: '0xYourTakerRouterAddress',
+    contracts: {
+      UniswapV3: '0xYourUniswapV3Taker',
+      Curve: '0xYourCurveTaker',
+      OneInchAggregator: '0xYourOneInchAggregatorTaker',
+      Lifi: '0xYourLifiTaker',
+    },
+  },
   pricing: {
     coinGeckoApiKey: process.env.COINGECKO_API_KEY,
   },

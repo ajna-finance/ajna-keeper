@@ -6,14 +6,14 @@ import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
-import { RouterAuthorizedTakerBase } from "../base/KeeperTakerBase.sol";
+import { KeeperTakerBase } from "../base/KeeperTakerBase.sol";
 import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 
 /// @notice Curve DEX implementation for Ajna keeper takes using Curve pools
 /// @dev Follows the SushiSwap pattern for decimal handling and pre-calculated minimums.
 ///      Shared wiring, helpers, errors, and the SwapExecuted event live in
-///      RouterAuthorizedTakerBase / KeeperTakerBase.
-contract CurveKeeperTaker is RouterAuthorizedTakerBase {
+///      KeeperTakerBase.
+contract CurveKeeperTaker is KeeperTakerBase {
     /// @notice Configuration for Curve swaps with pre-calculated minimum and pre-discovered indices
     struct CurveSwapDetails {
         address poolAddress;        // Curve pool contract address (from config)
@@ -38,7 +38,7 @@ contract CurveKeeperTaker is RouterAuthorizedTakerBase {
     ///        May be zero to deploy the taker in standalone (owner-only) mode; the
     ///        keeper router refuses to register a taker whose router does not match.
     constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
-        RouterAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
+        KeeperTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
     {}
 
     /// @inheritdoc IAjnaKeeperTaker

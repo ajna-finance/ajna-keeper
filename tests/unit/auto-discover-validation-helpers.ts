@@ -59,6 +59,7 @@ export const baseAutoDiscoverConfig = (): KeeperConfig => ({
 export const configureOneInchAggregatorTake = (
   config: KeeperConfig
 ): void => {
+  const callTarget = '0x6666666666666666666666666666666666666666';
   config.takers = {
     ...config.takers,
     router:
@@ -66,6 +67,23 @@ export const configureOneInchAggregatorTake = (
     contracts: {
       ...config.takers?.contracts,
       OneInchAggregator: '0x1234567890123456789012345678901234567890',
+    },
+  };
+  config.dex = {
+    ...config.dex,
+    oneInch: {
+      ...config.dex?.oneInch,
+      callTargetAllowlist: {
+        1: [callTarget],
+      },
+      approvalSpenderAllowlist: {
+        1: ['0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
+      },
+      selectorAllowlist: {
+        1: {
+          [callTarget]: ['0x12345678'],
+        },
+      },
     },
   };
 };

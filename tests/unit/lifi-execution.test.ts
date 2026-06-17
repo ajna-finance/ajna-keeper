@@ -1,3 +1,4 @@
+import { AGGREGATOR_SWAP_DETAILS_TUPLE_ABI } from '../../src/take/aggregator-calldata/execution';
 import { expect } from 'chai';
 import sinon from 'sinon';
 import axios from 'axios';
@@ -19,7 +20,7 @@ import { malformedSingleExternalTakeExecutionPlan } from '../helpers/external-ta
 
 describe('LI.FI execution', () => {
   const LIFI_DETAILS_ABI =
-    'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)';
+    AGGREGATOR_SWAP_DETAILS_TUPLE_ABI;
 
   afterEach(() => {
     NonceTracker.clearNonces();
@@ -44,7 +45,7 @@ describe('LI.FI execution', () => {
   });
 
   it('reports policy rejection as a pre-broadcast failure for hybrid fallback', async () => {
-    const onLifiExecutionFailure = sinon.spy();
+    const onCalldataAggregatorExecutionFailure = sinon.spy();
     const succeeded = await takeLiquidationLifi({
       pool: {
         name: 'LI.FI Reject Pool',
@@ -69,13 +70,13 @@ describe('LI.FI execution', () => {
         }),
       } as any,
       config: {
-        onLifiExecutionFailure,
+        onCalldataAggregatorExecutionFailure,
       } as any,
     });
 
     expect(succeeded).to.equal(false);
-    expect(onLifiExecutionFailure.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onCalldataAggregatorExecutionFailure.calledOnce).to.equal(true);
+    expect(onCalldataAggregatorExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: true,
       error:
         'LI.FI quote no longer satisfies execution policy for LI.FI Reject Pool/0x2222222222222222222222222222222222222222: LI.FI fresh quote min output below execution floor',
@@ -302,7 +303,7 @@ describe('LI.FI execution', () => {
   });
 
   it('rejects approved LI.FI quote context that no longer matches current liquidation', async () => {
-    const onLifiExecutionFailure = sinon.spy();
+    const onCalldataAggregatorExecutionFailure = sinon.spy();
     const axiosGet = sinon.stub(axios, 'get');
     const quoteAmountRaw = ethers.utils.parseUnits('2000', 6);
     const routeMinOutRaw = ethers.utils.parseUnits('1900', 6);
@@ -339,14 +340,14 @@ describe('LI.FI execution', () => {
         }),
       } as any,
       config: {
-        onLifiExecutionFailure,
+        onCalldataAggregatorExecutionFailure,
       } as any,
     });
 
     expect(succeeded).to.equal(false);
     expect(axiosGet.called).to.equal(false);
-    expect(onLifiExecutionFailure.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onCalldataAggregatorExecutionFailure.calledOnce).to.equal(true);
+    expect(onCalldataAggregatorExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: true,
       error:
         'LI.FI approved quote collateral does not match current liquidation collateral',
@@ -395,8 +396,8 @@ describe('LI.FI execution', () => {
       },
     } as any);
     const submitTransaction = sinon.stub();
-    const onLifiQuoteResult = sinon.spy();
-    const onLifiExecutionFailure = sinon.spy();
+    const onCalldataAggregatorQuoteResult = sinon.spy();
+    const onCalldataAggregatorExecutionFailure = sinon.spy();
     const txSigner = {
       getAddress: sinon
         .stub()
@@ -455,8 +456,8 @@ describe('LI.FI execution', () => {
           signer: txSigner,
           submitTransaction,
         },
-        onLifiQuoteResult,
-        onLifiExecutionFailure,
+        onCalldataAggregatorQuoteResult,
+        onCalldataAggregatorExecutionFailure,
       } as any,
     });
 
@@ -469,7 +470,7 @@ describe('LI.FI execution', () => {
     // so it must be recorded as non-retryable (neutral) and must not open the
     // execution_refresh circuit.
     expect(
-      onLifiQuoteResult
+      onCalldataAggregatorQuoteResult
         .getCalls()
         .some(
           (call) =>
@@ -479,15 +480,15 @@ describe('LI.FI execution', () => {
         )
     ).to.equal(true);
     expect(
-      onLifiQuoteResult
+      onCalldataAggregatorQuoteResult
         .getCalls()
         .every((call) => call.args[0].retryable !== true)
     ).to.equal(true);
     expect(
-      onLifiQuoteResult.getCalls().some((call) => call.args[0].success === true)
+      onCalldataAggregatorQuoteResult.getCalls().some((call) => call.args[0].success === true)
     ).to.equal(false);
-    expect(onLifiExecutionFailure.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onCalldataAggregatorExecutionFailure.calledOnce).to.equal(true);
+    expect(onCalldataAggregatorExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: true,
       error: 'LI.FI fresh quote exceeded maxQuoteAgeMs',
     });
@@ -532,7 +533,7 @@ describe('LI.FI execution', () => {
       },
     } as any);
     const submitTransaction = sinon.stub();
-    const onLifiExecutionFailure = sinon.spy();
+    const onCalldataAggregatorExecutionFailure = sinon.spy();
     const txSigner = {
       getAddress: sinon
         .stub()
@@ -590,7 +591,7 @@ describe('LI.FI execution', () => {
           signer: txSigner,
           submitTransaction,
         },
-        onLifiExecutionFailure,
+        onCalldataAggregatorExecutionFailure,
       } as any,
     });
 
@@ -598,8 +599,8 @@ describe('LI.FI execution', () => {
     expect(estimateGas.calledOnce).to.equal(true);
     expect(populateTransaction.called).to.equal(false);
     expect(submitTransaction.called).to.equal(false);
-    expect(onLifiExecutionFailure.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onCalldataAggregatorExecutionFailure.calledOnce).to.equal(true);
+    expect(onCalldataAggregatorExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: true,
       error: 'gas estimation failed',
     });
@@ -609,11 +610,11 @@ describe('LI.FI execution', () => {
     const submitTransaction = sinon
       .stub()
       .rejects(new Error('local send rejected'));
-    const onLifiExecutionFailure = sinon.spy();
+    const onCalldataAggregatorExecutionFailure = sinon.spy();
 
     const result = await runLifiSubmissionBoundaryScenario({
       submitTransaction,
-      onLifiExecutionFailure,
+      onCalldataAggregatorExecutionFailure,
       pendingNonceAfterFailure: 0,
     });
 
@@ -621,8 +622,8 @@ describe('LI.FI execution', () => {
     expect(result.estimateGas.calledOnce).to.equal(true);
     expect(result.populateTransaction.calledOnce).to.equal(true);
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onCalldataAggregatorExecutionFailure.calledOnce).to.equal(true);
+    expect(onCalldataAggregatorExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: true,
       error: 'local send rejected',
     });
@@ -636,18 +637,18 @@ describe('LI.FI execution', () => {
         throw new Error('receipt wait failed');
       },
     });
-    const onLifiExecutionFailure = sinon.spy();
+    const onCalldataAggregatorExecutionFailure = sinon.spy();
 
     const result = await runLifiSubmissionBoundaryScenario({
       submitTransaction,
-      onLifiExecutionFailure,
+      onCalldataAggregatorExecutionFailure,
       pendingNonceAfterFailure: 1,
     });
 
     expect(result.succeeded).to.equal(false);
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onCalldataAggregatorExecutionFailure.calledOnce).to.equal(true);
+    expect(onCalldataAggregatorExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: false,
       error: 'receipt wait failed',
     });
@@ -663,18 +664,18 @@ describe('LI.FI execution', () => {
         }
       )
     );
-    const onLifiExecutionFailure = sinon.spy();
+    const onCalldataAggregatorExecutionFailure = sinon.spy();
 
     const result = await runLifiSubmissionBoundaryScenario({
       submitTransaction,
-      onLifiExecutionFailure,
+      onCalldataAggregatorExecutionFailure,
       pendingNonceAfterFailure: 1,
     });
 
     expect(result.succeeded).to.equal(false);
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.calledOnce).to.equal(true);
-    expect(onLifiExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onCalldataAggregatorExecutionFailure.calledOnce).to.equal(true);
+    expect(onCalldataAggregatorExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: false,
       error: 'relay accepted LI.FI take before timeout',
     });

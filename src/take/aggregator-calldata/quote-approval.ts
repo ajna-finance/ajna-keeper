@@ -1,4 +1,4 @@
-import { LiquiditySource } from '../../config';
+import { BigNumber } from 'ethers';
 import {
   CalldataAggregatorProviderId,
   getAggregatorProviderIdentity,
@@ -8,6 +8,23 @@ import {
   ApprovedCalldataAggregatorQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
 } from '../types';
+
+/**
+ * True only when `txValue` represents a genuinely non-zero native value.
+ * Calldata-aggregator execution is ERC20-input-only (the on-chain
+ * AggregatorSwapDetails tuple has no value field), so missing / empty / "0"
+ * are all treated as zero; an unparseable value fails closed.
+ */
+function hasNonZeroNativeValue(txValue: string | undefined): boolean {
+  if (txValue === undefined || txValue === null || txValue === '') {
+    return false;
+  }
+  try {
+    return !BigNumber.from(txValue).isZero();
+  } catch {
+    return true;
+  }
+}
 
 export type CalldataAggregatorQuoteApprovalResult =
   | {
@@ -68,6 +85,16 @@ export function approveCalldataAggregatorQuoteForExecution(params: {
     return {
       approved: false,
       reason: `${label} execution received a quote from provider ${quoteEvaluation.calldataQuote.providerId} for ${context}`,
+    };
+  }
+  // Calldata-aggregator execution is ERC20-input-only by construction; the
+  // on-chain AggregatorSwapDetails tuple has no native-value field, so a
+  // non-zero txValue would be silently dropped. Fail closed instead (brings
+  // every provider to the guard Sushi already enforces in validate-route).
+  if (hasNonZeroNativeValue(quoteEvaluation.calldataQuote.txValue)) {
+    return {
+      approved: false,
+      reason: `${label} execution requires a zero native value but got txValue=${quoteEvaluation.calldataQuote.txValue} for ${context}`,
     };
   }
   const approvedMinOutRaw = deriveRouteExecutionFloorRaw(quoteEvaluation);

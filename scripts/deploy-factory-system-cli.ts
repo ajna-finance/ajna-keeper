@@ -2,26 +2,22 @@ import { ethers } from 'ethers';
 import { readFileSync } from 'fs';
 import * as path from 'path';
 import { password } from '@inquirer/prompts';
+import { getManualPools, readConfigFile, KeeperConfig } from '../src/config';
 import {
-  getManualPools,
-  readConfigFile,
-  KeeperConfig,
-  LiquiditySource,
-} from '../src/config';
-import {
-  configureLifiAllowlists,
-  deployLifiKeeperTaker,
   getLifiProductionDeploymentGateMessages,
   hasProductionLifiConfig,
-  registerLifiTakerInFactory,
   validateDetectedChainLifiProductionConfig,
 } from './deployment/lifi-factory-deployment';
+import { hasOneInchAggregatorAllowlistPolicy } from '../src/config/oneinch-aggregator-policy';
 import {
-  configureSushiAggregatorAllowlists,
-  deploySushiAggregatorKeeperTaker,
-  hasSushiAggregatorConfig,
-  registerSushiAggregatorTakerInFactory,
-} from './deployment/sushi-aggregator-deployment';
+  DEPLOY_DESCRIPTORS,
+  deployTaker,
+  reconcileTakerAllowlists,
+  registerTakerInRouter,
+  verifyTakerRegistration,
+  type AggregatorDeployDescriptor,
+  type DeploymentAddressKey,
+} from './deployment/deploy-registry';
 
 /**
  * Universal Factory System Deployment Script
@@ -39,14 +35,11 @@ import {
  * - Manual gas limits for problematic networks
  */
 
-interface DeploymentAddresses {
-  factory?: string;
-  uniswapTaker?: string;
-  curveTaker?: string;
-  lifiTaker?: string;
-  sushiAggregatorTaker?: string;
-  // Future: uniswapV4, pancakeswap, balancer, izumi, etc.
-}
+// Derived from the deploy registry's DeploymentAddressKey union so the two
+// cannot drift: adding a taker to the registry automatically widens this.
+export type DeploymentAddresses = { factory?: string } & Partial<
+  Record<DeploymentAddressKey, string>
+>;
 
 // Gas configuration for different networks
 const GAS_CONFIGS: {
@@ -118,7 +111,7 @@ function getGasConfig(chainId: number) {
   return config;
 }
 
-async function validateConfig(config: KeeperConfig): Promise<void> {
+export async function validateConfig(config: KeeperConfig): Promise<void> {
   console.log('Validating configuration...');
 
   // Check required Ajna addresses
@@ -126,18 +119,19 @@ async function validateConfig(config: KeeperConfig): Promise<void> {
     throw new Error('Missing ajna.erc20PoolFactory in config');
   }
 
-  // 1inch is not auto-provisioned by this script: unlike LI.FI/Sushi there is no
-  // on-chain allowlist-derivation for the 1inch taker, so it cannot be safely
-  // deployed+allowlisted+registered here. Fail BEFORE any deployment rather than
-  // silently leaving LiquiditySource.ONEINCH mapped to no taker (a runtime
-  // TakerNotSet liveness gap) or partially deploying then aborting.
-  if (config.dex?.oneInch) {
+  // 1inch is provisioned by the deploy loop only when dex.oneInch carries a
+  // production allowlist policy (callTargetAllowlist/approvalSpenderAllowlist/
+  // selectorAllowlist), which the loop reconciles + verifies on-chain like
+  // LI.FI/Sushi. A dex.oneInch present WITHOUT that policy is quote/discovery-
+  // only: fail BEFORE any deployment rather than silently leaving
+  // LiquiditySource.ONEINCH mapped to no taker (a runtime TakerNotSet gap).
+  if (config.dex?.oneInch && !hasOneInchAggregatorAllowlistPolicy(config.dex.oneInch)) {
     throw new Error(
-      'dex.oneInch is configured but this script does not provision the ' +
-        'OneInchAggregatorKeeperTaker (no automated allowlist derivation for ' +
-        '1inch yet). Deploy + allowlist + setTaker(LiquiditySource.ONEINCH, ...) ' +
-        'the 1inch taker via a reviewed manual step before enabling provider ' +
-        'oneinch, or remove dex.oneInch to deploy the rest of the system.'
+      'dex.oneInch is configured without an aggregator allowlist policy. Add ' +
+        'callTargetAllowlist/approvalSpenderAllowlist/selectorAllowlist to ' +
+        'provision the OneInchAggregatorKeeperTaker (it is deployed, allowlist-' +
+        'reconciled, and registered automatically), or remove dex.oneInch to ' +
+        'deploy the rest of the system.'
     );
   }
 
@@ -330,108 +324,7 @@ async function deployFactory(
   }
 }
 
-async function deployUniswapTaker(
-  deployer: ethers.Wallet,
-  ajnaPoolFactory: string,
-  factoryAddress: string,
-  chainId: number
-): Promise<string> {
-  console.log('\n📦 Step 2: Deploying UniswapV3KeeperTaker...');
-
-  const takerArtifact = require(
-    path.join(
-      __dirname,
-      '..',
-      'artifacts',
-      'contracts',
-      'takers',
-      'UniswapV3KeeperTaker.sol',
-      'UniswapV3KeeperTaker.json'
-    )
-  );
-  const UniswapV3KeeperTaker = new ethers.ContractFactory(
-    takerArtifact.abi,
-    takerArtifact.bytecode,
-    deployer
-  );
-
-  // Get gas configuration
-  const gasConfig = getGasConfig(chainId);
-  const deployOptions: any = {
-    gasLimit: gasConfig.gasLimit,
-  };
-
-  if (gasConfig.gasPrice) {
-    deployOptions.gasPrice = gasConfig.gasPrice;
-  }
-
-  // Correct deployment order with factory authorization
-  const taker = await UniswapV3KeeperTaker.deploy(
-    ajnaPoolFactory, // Ajna pool factory
-    factoryAddress, // Authorized factory (CRITICAL FIX)
-    deployOptions
-  );
-  console.log(
-    '✅ UniswapV3 taker deployment tx:',
-    taker.deployTransaction.hash
-  );
-
-  await taker.deployed();
-  console.log('🎉 UniswapV3KeeperTaker deployed to:', taker.address);
-
-  return taker.address;
-}
-
-async function deployCurveKeeperTaker(
-  deployer: ethers.Wallet,
-  ajnaPoolFactory: string,
-  factoryAddress: string,
-  chainId: number
-): Promise<string> {
-  console.log('\n📦 Step 2c: Deploying CurveKeeperTaker...');
-
-  const takerArtifactPath = path.join(
-    __dirname,
-    '..',
-    'artifacts',
-    'contracts',
-    'takers',
-    'CurveKeeperTaker.sol',
-    'CurveKeeperTaker.json'
-  );
-  const takerArtifact = require(takerArtifactPath);
-
-  const CurveKeeperTaker = new ethers.ContractFactory(
-    takerArtifact.abi,
-    takerArtifact.bytecode,
-    deployer
-  );
-
-  // Get gas configuration
-  const gasConfig = getGasConfig(chainId);
-  const deployOptions: any = {
-    gasLimit: gasConfig.gasLimit,
-  };
-
-  if (gasConfig.gasPrice) {
-    deployOptions.gasPrice = gasConfig.gasPrice;
-  }
-
-  // Deploy with factory authorization
-  const taker = await CurveKeeperTaker.deploy(
-    ajnaPoolFactory, // Ajna pool factory
-    factoryAddress, // Authorized factory
-    deployOptions
-  );
-
-  console.log('✅ Curve taker deployment tx:', taker.deployTransaction.hash);
-  await taker.deployed();
-  console.log('🎉 CurveKeeperTaker deployed to:', taker.address);
-
-  return taker.address;
-}
-
-async function configureFactory(
+export async function configureFactory(
   deployer: ethers.Wallet,
   factoryAddress: string,
   addresses: DeploymentAddresses
@@ -455,35 +348,33 @@ async function configureFactory(
     deployer
   );
 
-  // Register UniswapV3 taker (LiquiditySource.UNISWAPV3 = 2)
-  if (addresses.uniswapTaker) {
-    const setUniTakerTx = await factory.setTaker(2, addresses.uniswapTaker);
-    console.log('✅ UniswapV3 configuration tx:', setUniTakerTx.hash);
-    await setUniTakerTx.wait();
-    console.log('🎉 Factory configured with UniswapV3 taker');
+  // Register the direct-DEX takers by iterating their descriptors — no magic
+  // source ids, no hand-unrolled per-DEX branch. Each registers at its
+  // canonical descriptor.source (UNISWAPV3=2, CURVE=4) with no allowlist step.
+  for (const descriptor of DEPLOY_DESCRIPTORS) {
+    if (descriptor.category !== 'direct_dex') {
+      continue;
+    }
+    const takerAddress = addresses[descriptor.addressKey];
+    if (!takerAddress) {
+      continue;
+    }
+    const setTakerTx = await factory.setTaker(descriptor.source, takerAddress);
+    console.log(`✅ ${descriptor.label} configuration tx:`, setTakerTx.hash);
+    await setTakerTx.wait();
+    console.log(`🎉 Factory configured with ${descriptor.label} taker`);
   }
 
-  // Register Curve taker (LiquiditySource.CURVE = 4)
-  if (addresses.curveTaker) {
-    const setCurveTakerTx = await factory.setTaker(
-      LiquiditySource.CURVE,
-      addresses.curveTaker
-    );
-    console.log('✅ Curve configuration tx:', setCurveTakerTx.hash);
-    await setCurveTakerTx.wait();
-    console.log('🎉 Factory configured with Curve taker');
-  }
-
-  // LI.FI taker registration is intentionally NOT done here. It is registered
-  // by registerLifiTakerInFactory only AFTER configureLifiAllowlists has
-  // applied and exactly verified the call-target/approval-spender/selector
-  // allowlists, so the factory never maps LiquiditySource.LIFI to a taker whose
+  // Aggregator taker registration is intentionally NOT done here. The deploy
+  // loop registers each aggregator taker only AFTER reconcileTakerAllowlists has
+  // applied and exactly verified its call-target/approval-spender/selector
+  // allowlists, so the router never maps an aggregator source to a taker whose
   // on-chain allowlists are incomplete or unverified.
   // ADD DELAY AFTER CONFIGURATION
   await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay
 }
 
-async function verifyDeployment(
+export async function verifyDeployment(
   deployer: ethers.Wallet,
   addresses: DeploymentAddresses
 ): Promise<void> {
@@ -493,131 +384,28 @@ async function verifyDeployment(
     throw new Error('Factory address is missing from deployment');
   }
 
-  const factoryArtifact = require(
-    path.join(
-      __dirname,
-      '..',
-      'artifacts',
-      'contracts',
-      'factories',
-      'TakerRouter.sol',
-      'TakerRouter.json'
-    )
-  );
-  const factory = new ethers.Contract(
-    addresses.factory,
-    factoryArtifact.abi,
-    deployer
-  );
-
-  // Verify factory configuration
-  const hasUniswapTaker = await factory.hasConfiguredTaker(2);
-  const registeredTaker = await factory.takerContracts(2);
-  const factoryOwner = await factory.owner();
-
-  console.log('📋 Verification Results:');
-  console.log(`- Factory Owner: ${factoryOwner}`);
-  console.log(`- Expected Owner: ${deployer.address}`);
-  console.log(`- UniswapV3 Configured: ${hasUniswapTaker}`);
-  console.log(`- Registered Taker: ${registeredTaker}`);
-  console.log(`- Expected Taker: ${addresses.uniswapTaker}`);
-
-  // Verify taker authorization
-  if (addresses.uniswapTaker) {
-    const takerArtifact = require(
-      path.join(
-        __dirname,
-        '..',
-        'artifacts',
-        'contracts',
-        'takers',
-        'UniswapV3KeeperTaker.sol',
-        'UniswapV3KeeperTaker.json'
-      )
-    );
-    const taker = new ethers.Contract(
-      addresses.uniswapTaker,
-      takerArtifact.abi,
-      deployer
-    );
-
-    const takerOwner = await taker.owner();
-    const authorizedRouter = await taker.authorizedRouter();
-
-    console.log(`- Taker Owner: ${takerOwner}`);
-    console.log(`- Authorized Router: ${authorizedRouter}`);
-    console.log(`- Expected Router: ${addresses.factory}`);
-
-    // Validation checks
-    if (!hasUniswapTaker || registeredTaker !== addresses.uniswapTaker) {
-      throw new Error('❌ Factory configuration verification failed');
+  // Verify every deployed taker through the shared registry check: router
+  // configuration (hasConfiguredTaker + registered address), taker -> router
+  // authorization, and owner. This gives Sushi (the B-S1 gap) and Curve the
+  // same post-registration verification LI.FI and Uniswap already had, instead
+  // of the former hand-unrolled Uniswap+LI.FI-only branches.
+  for (const descriptor of DEPLOY_DESCRIPTORS) {
+    const takerAddress = addresses[descriptor.addressKey];
+    if (!takerAddress) {
+      continue;
     }
-
-    if (authorizedRouter !== addresses.factory) {
-      throw new Error('❌ Taker authorization verification failed');
-    }
-
-    if (takerOwner !== deployer.address || factoryOwner !== deployer.address) {
-      throw new Error('❌ Owner verification failed');
-    }
-  }
-
-  if (addresses.lifiTaker) {
-    const hasLifiTaker = await factory.hasConfiguredTaker(LiquiditySource.LIFI);
-    const registeredLifiTaker = await factory.takerContracts(
-      LiquiditySource.LIFI
-    );
-    console.log(`- LI.FI Configured: ${hasLifiTaker}`);
-    console.log(`- Registered LI.FI Taker: ${registeredLifiTaker}`);
-    console.log(`- Expected LI.FI Taker: ${addresses.lifiTaker}`);
-
-    const takerArtifact = require(
-      path.join(
-        __dirname,
-        '..',
-        'artifacts',
-        'contracts',
-        'takers',
-        'LifiKeeperTaker.sol',
-        'LifiKeeperTaker.json'
-      )
-    );
-    const taker = new ethers.Contract(
-      addresses.lifiTaker,
-      takerArtifact.abi,
-      deployer
-    );
-
-    const takerOwner = await taker.owner();
-    const authorizedRouter = await taker.authorizedRouter();
-
-    console.log(`- LI.FI Taker Owner: ${takerOwner}`);
-    console.log(`- LI.FI Authorized Router: ${authorizedRouter}`);
-    console.log(`- Expected Router: ${addresses.factory}`);
-
-    if (
-      !hasLifiTaker ||
-      registeredLifiTaker.toLowerCase() !== addresses.lifiTaker.toLowerCase()
-    ) {
-      throw new Error('❌ LI.FI factory configuration verification failed');
-    }
-
-    if (authorizedRouter.toLowerCase() !== addresses.factory.toLowerCase()) {
-      throw new Error('❌ LI.FI taker authorization verification failed');
-    }
-
-    if (
-      takerOwner.toLowerCase() !== deployer.address.toLowerCase() ||
-      factoryOwner.toLowerCase() !== deployer.address.toLowerCase()
-    ) {
-      throw new Error('❌ LI.FI owner verification failed');
-    }
+    await verifyTakerRegistration({
+      descriptor,
+      deployer,
+      factoryAddress: addresses.factory,
+      takerAddress,
+    });
   }
 
   console.log('✅ All verification checks passed');
 }
 
-function generateConfigUpdate(
+export function generateConfigUpdate(
   addresses: DeploymentAddresses,
   configPath: string,
   chainName: string
@@ -628,12 +416,18 @@ function generateConfigUpdate(
   console.log('\n```typescript');
   console.log('// ADD/UPDATE these lines in your config:');
 
-  if (
+  // Emit the takers: { ... } wrapper whenever ANY taker (or the router) is
+  // present, including Sushi/1inch — a Sushi-only or 1inch-only deploy must not
+  // print the contracts block without its enclosing takers: { }.
+  const hasTakerConfigBlock = Boolean(
     addresses.factory ||
-    addresses.uniswapTaker ||
-    addresses.curveTaker ||
-    addresses.lifiTaker
-  ) {
+      addresses.uniswapTaker ||
+      addresses.curveTaker ||
+      addresses.lifiTaker ||
+      addresses.sushiAggregatorTaker ||
+      addresses.oneInchAggregatorTaker
+  );
+  if (hasTakerConfigBlock) {
     console.log('takers: {');
   }
   if (addresses.factory) {
@@ -646,7 +440,8 @@ function generateConfigUpdate(
     addresses.uniswapTaker ||
     addresses.curveTaker ||
     addresses.lifiTaker ||
-    addresses.sushiAggregatorTaker
+    addresses.sushiAggregatorTaker ||
+    addresses.oneInchAggregatorTaker
   ) {
     console.log('  contracts: {');
     if (addresses.uniswapTaker) {
@@ -661,14 +456,14 @@ function generateConfigUpdate(
     if (addresses.sushiAggregatorTaker) {
       console.log(`    SushiAggregator: '${addresses.sushiAggregatorTaker}',`);
     }
+    if (addresses.oneInchAggregatorTaker) {
+      console.log(
+        `    OneInchAggregator: '${addresses.oneInchAggregatorTaker}',`
+      );
+    }
     console.log('  },');
   }
-  if (
-    addresses.factory ||
-    addresses.uniswapTaker ||
-    addresses.curveTaker ||
-    addresses.lifiTaker
-  ) {
+  if (hasTakerConfigBlock) {
     console.log('},');
   }
   console.log('```');
@@ -689,6 +484,11 @@ function generateConfigUpdate(
   if (addresses.sushiAggregatorTaker) {
     console.log(
       `🍣 SushiAggregatorKeeperTaker: ${addresses.sushiAggregatorTaker}`
+    );
+  }
+  if (addresses.oneInchAggregatorTaker) {
+    console.log(
+      `🟦 OneInchAggregatorKeeperTaker: ${addresses.oneInchAggregatorTaker}`
     );
   }
 
@@ -798,54 +598,27 @@ async function main() {
     // ADD DELAY AFTER FACTORY DEPLOYMENT
     await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
 
-    // Deploy Uniswap V3 taker if factory SwapRouter02 routing is configured
-    if (config.dex?.uniswapV3?.router) {
-      addresses.uniswapTaker = await deployUniswapTaker(
-        deployer,
-        config.ajna.erc20PoolFactory,
-        addresses.factory, // Pass factory address for authorization
-        chainInfo.chainId
+    // Descriptor-driven deploy loop (plan M-A): deploy every configured taker
+    // in the canonical registry order, storing each at its address key. The
+    // per-provider gating (uniswap router present, curve config present, LI.FI
+    // production-only, sushi config present) lives in each descriptor's
+    // isConfigured predicate.
+    const deployContext = {
+      deployer,
+      ajnaPoolFactory: config.ajna.erc20PoolFactory,
+      factoryAddress: addresses.factory,
+      chainId: chainInfo.chainId,
+      getGasConfig,
+    };
+    for (const descriptor of DEPLOY_DESCRIPTORS) {
+      if (!descriptor.isConfigured(config)) {
+        continue;
+      }
+      addresses[descriptor.addressKey] = await deployTaker(
+        descriptor,
+        deployContext
       );
-      // ADD DELAY AFTER UNISWAP DEPLOYMENT
-      await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
-    }
-
-
-    // Deploy curve taker if configured
-    if (config.dex?.curve) {
-      addresses.curveTaker = await deployCurveKeeperTaker(
-        deployer,
-        config.ajna.erc20PoolFactory,
-        addresses.factory,
-        chainInfo.chainId
-      );
-      // ADD DELAY AFTER CURVE DEPLOYMENT
-      await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
-    }
-
-    // Deploy LI.FI taker only for production configs. Canary configs are
-    // for route-shape discovery and fork validation, not live registration.
-    if (hasProductionLifiConfig(config)) {
-      addresses.lifiTaker = await deployLifiKeeperTaker(
-        deployer,
-        config.ajna.erc20PoolFactory,
-        addresses.factory,
-        chainInfo.chainId,
-        getGasConfig
-      );
-      // ADD DELAY AFTER LI.FI DEPLOYMENT
-      await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
-    }
-
-    // Deploy Sushi aggregator taker when dex.sushiAggregator is configured.
-    if (hasSushiAggregatorConfig(config)) {
-      addresses.sushiAggregatorTaker = await deploySushiAggregatorKeeperTaker(
-        deployer,
-        config.ajna.erc20PoolFactory,
-        addresses.factory,
-        chainInfo.chainId,
-        getGasConfig
-      );
+      // ADD DELAY AFTER TAKER DEPLOYMENT
       await new Promise((resolve) => setTimeout(resolve, 2000)); // 2 second delay
     }
 
@@ -853,39 +626,40 @@ async function main() {
     console.log('\n⏳ Waiting before configuration...');
     await new Promise((resolve) => setTimeout(resolve, 3000)); // 3 second delay
 
-    // Step 7: Configure factory
+    // Step 7: Configure factory. Direct-DEX takers register together (no
+    // allowlists). Each aggregator taker then has its reviewed allowlists
+    // reconciled + exactly verified BEFORE it is registered, so the router never
+    // maps a source to a taker whose on-chain allowlists are incomplete or
+    // unverified — the same ordering invariant the per-provider register*
+    // helpers enforced, now driven by the descriptor loop.
     if (!addresses.factory) {
       throw new Error('Missing factory address for configuration');
     }
     await configureFactory(deployer, addresses.factory, addresses);
-    if (addresses.lifiTaker) {
-      // Configure + exactly verify the LI.FI taker allowlists FIRST, then
-      // register the taker in the factory. This keeps factory enablement
-      // strictly downstream of verified config/on-chain agreement: a failure
-      // while applying or reconciling allowlists aborts before the factory ever
-      // maps LiquiditySource.LIFI to a misconfigured taker.
-      await configureLifiAllowlists(
+    for (const descriptor of DEPLOY_DESCRIPTORS) {
+      if (descriptor.category !== 'aggregator') {
+        continue;
+      }
+      const aggregator: AggregatorDeployDescriptor = descriptor;
+      const takerAddress = addresses[aggregator.addressKey];
+      if (!takerAddress) {
+        continue;
+      }
+      const desired = aggregator.normalizeChainPolicy(config, chainInfo.chainId);
+      if (desired) {
+        await reconcileTakerAllowlists({
+          deployer,
+          takerAddress,
+          desired,
+          labelPrefix: aggregator.allowlistLabelPrefix,
+        });
+      }
+      await registerTakerInRouter({
+        descriptor: aggregator,
         deployer,
-        addresses.lifiTaker,
-        config,
-        chainInfo.chainId
-      );
-      await registerLifiTakerInFactory(deployer, addresses.factory, addresses);
-    }
-    if (addresses.sushiAggregatorTaker) {
-      // Same ordering invariant as LI.FI: apply + exactly verify allowlists
-      // before the router maps SUSHI_AGGREGATOR to the taker.
-      await configureSushiAggregatorAllowlists(
-        deployer,
-        addresses.sushiAggregatorTaker,
-        config,
-        chainInfo.chainId
-      );
-      await registerSushiAggregatorTakerInFactory(
-        deployer,
-        addresses.factory,
-        addresses
-      );
+        factoryAddress: addresses.factory,
+        takerAddress,
+      });
     }
 
     // Step 8: Verify everything works

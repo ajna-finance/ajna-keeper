@@ -1,3 +1,4 @@
+import { AGGREGATOR_SWAP_DETAILS_TUPLE_ABI } from '../../src/take/aggregator-calldata/execution';
 // Tier-2 full-loop Base-fork keeper harness.
 //
 // This is the ONLY test that drives the real keeper discovery loop
@@ -268,7 +269,7 @@ async function deployHybridFactorySystem(signer: Wallet) {
 
 // Configure the freshly deployed LI.FI taker's on-chain allowlists from the
 // reviewed production config (mirrors lifi-fork-execution-canary.test.ts).
-async function configureLifiTakerAllowlists(
+async function configureTakerAllowlists(
   taker: Contract,
   lifi: ProductionLifiDexConfig
 ): Promise<void> {
@@ -308,7 +309,7 @@ function encodeLifiSwapDetails(params: {
 }): string {
   return utils.defaultAbiCoder.encode(
     [
-      'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)',
+      AGGREGATOR_SWAP_DETAILS_TUPLE_ABI,
     ],
     [params]
   );
@@ -381,7 +382,7 @@ async function runLifiCallbackExecutionProof(params: {
     LifiKeeperTaker__factory.abi,
     params.owner
   );
-  await configureLifiTakerAllowlists(takerContract, params.lifi);
+  await configureTakerAllowlists(takerContract, params.lifi);
 
   const apiKey = getHybridLifiApiKey(params.lifi);
   const toolsResponse = await fetchLifiTools({
@@ -658,7 +659,7 @@ describe('Hybrid Base-fork discovery loop (oneinch + factory + lifi)', function 
 
     const { factory, oneInchTaker, uniswapTaker, curveTaker, lifiTaker } =
       await deployHybridFactorySystem(signer);
-    await configureLifiTakerAllowlists(
+    await configureTakerAllowlists(
       new Contract(lifiTaker.address, LifiKeeperTaker__factory.abi, signer),
       lifi
     );

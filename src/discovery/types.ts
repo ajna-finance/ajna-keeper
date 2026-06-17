@@ -107,17 +107,13 @@ export function getDiscoveryExecutionTransportConfig(
   };
 }
 
-export interface OneInchQuoteCircuitState {
-  failures: number;
-  cooldownUntilMs?: number;
-  lastOpenLogAtMs?: number;
-}
-
 export type OneInchQuoteCircuitPurpose =
   | 'route_quote'
   | 'swap_data'
   | 'gas_conversion';
 
+// Provider-neutral circuit-breaker state. Every provider's discovery quote
+// circuit (LI.FI, 1inch) stores this shape under providerCircuits.<path>.
 export interface ExternalProviderCircuitState {
   failures: number;
   cooldownUntilMs?: number;
@@ -126,12 +122,6 @@ export interface ExternalProviderCircuitState {
 
 export type ExternalProviderCircuitPath = 'oneinch' | 'lifi';
 export type LifiCircuitPurpose = 'route_quote' | 'execution_refresh';
-
-// Union of every provider's circuit purposes, used by ExternalTakeRouteProvider
-// metadata so a provider can declare which circuits it participates in.
-export type ExternalTakeCircuitPurpose =
-  | OneInchQuoteCircuitPurpose
-  | LifiCircuitPurpose;
 
 export type ExternalProviderCircuitPurposeByPath = {
   oneinch: OneInchQuoteCircuitPurpose;
@@ -156,10 +146,6 @@ export interface DiscoveryRpcCache {
   stats?: DiscoveryRpcCacheStats;
   gasQuoteFallbackWarningKeys?: Set<string>;
   gasQuoteConversions?: Map<string, GasQuoteConversionCacheEntry>;
-  oneInchQuoteCircuits?: Partial<
-    Record<OneInchQuoteCircuitPurpose, OneInchQuoteCircuitState>
-  >;
-  oneInchQuoteCircuit?: OneInchQuoteCircuitState;
   providerCircuits?: ExternalProviderCircuits;
 }
 

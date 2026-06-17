@@ -6,6 +6,7 @@ import { ethers, BigNumber, Signer } from 'ethers';
 import { logger } from '../../logging';
 import { getDecimalsErc20 } from '../../erc20';
 import { CurvePoolType } from '../../config';
+import { pruneMapToMaxSize } from '../../utils';
 
 // StableSwap ABI (int128 indices) - from working test scripts
 const STABLESWAP_ABI = [
@@ -334,15 +335,10 @@ export class CurveQuoteProvider {
           ? CURVE_POOL_SELECTION_CACHE_TTL_MS
           : CURVE_POOL_SELECTION_NEGATIVE_CACHE_TTL_MS),
     });
-    while (
-      this.poolSelectionCache.size > MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES
-    ) {
-      const oldestKey = this.poolSelectionCache.keys().next().value;
-      if (oldestKey === undefined) {
-        return;
-      }
-      this.poolSelectionCache.delete(oldestKey);
-    }
+    pruneMapToMaxSize(
+      this.poolSelectionCache,
+      MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES
+    );
   }
 
   /**

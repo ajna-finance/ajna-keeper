@@ -90,7 +90,7 @@ export function stubLifiQuoteResponse(params: ValidLifiQuoteResponseParams) {
 
 export async function runLifiSubmissionBoundaryScenario(params: {
   submitTransaction: sinon.SinonStub;
-  onLifiExecutionFailure: sinon.SinonSpy;
+  onCalldataAggregatorExecutionFailure: sinon.SinonSpy;
   pendingNonceAfterFailure?: number;
 }) {
   const chainId = 8453;
@@ -190,7 +190,7 @@ export async function runLifiSubmissionBoundaryScenario(params: {
         signer: txSigner,
         submitTransaction: params.submitTransaction,
       },
-      onLifiExecutionFailure: params.onLifiExecutionFailure,
+      onCalldataAggregatorExecutionFailure: params.onCalldataAggregatorExecutionFailure,
     } as any,
   });
 

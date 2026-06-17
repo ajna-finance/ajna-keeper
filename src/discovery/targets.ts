@@ -24,6 +24,7 @@ import {
   getAddressInsensitiveMapValue,
   getErrorMessage,
   overrideMulticall,
+  pruneMapToMaxSize,
   RequireFields,
 } from '../utils';
 import {
@@ -291,13 +292,7 @@ export class HotAuctionCandidateCache {
   }
 
   private pruneToMax(): void {
-    while (this.entries.size > this.maxCandidates) {
-      const oldestKey = this.entries.keys().next().value;
-      if (oldestKey === undefined) {
-        return;
-      }
-      this.entries.delete(oldestKey);
-    }
+    pruneMapToMaxSize(this.entries, this.maxCandidates);
   }
 }
 

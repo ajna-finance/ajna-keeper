@@ -21,21 +21,23 @@ import { approveDirectDexQuoteForExecution } from '../external-take/quote-approv
 import {
   DirectDexExecutionConfig,
   DirectDexQuoteConfig,
-  DirectDexQuoteProviderRuntimeCache,
   DirectDexRouteCandidate,
   DirectDexRouteProfitabilityContext,
   DirectDexRouteSelectionOptions,
   DirectDexTakeParams,
-  applyDirectDexRouteProfitabilityPolicy,
-  buildDirectDexRouteEvaluationContext,
-  filterDirectDexRouteCandidatesByAvailability,
+} from './route-types';
+import { DirectDexQuoteProviderRuntimeCache } from './runtime-cache';
+import { buildDirectDexRouteEvaluationContext } from './route-amounts';
+import { applyDirectDexRouteProfitabilityPolicy } from './route-profitability';
+import { filterDirectDexRouteCandidatesByAvailability } from './availability';
+import {
   formatDirectDexRouteCandidate,
   getDirectDexRouteCandidates,
   orderDirectDexRouteCandidates,
   recordDirectDexRouteSuccess,
-  selectBestDirectDexRouteEvaluation,
-  throwIfRouteProbeAborted,
-} from './route-selection';
+} from './route-candidates';
+import { selectBestDirectDexRouteEvaluation } from './route-ranking';
+import { throwIfRouteProbeAborted } from './providers';
 import { evaluateCurveDirectDexQuote, executeCurveDirectDexTake } from './curve';
 import {
   evaluateUniswapV3DirectDexQuote,
@@ -53,17 +55,17 @@ interface DirectDexRouteEvaluationEntry {
 export type {
   DirectDexExecutionConfig,
   DirectDexQuoteConfig,
-  DirectDexQuoteProviderRuntimeCache,
-  DirectDexQuoteProviderRuntimeStats,
   DirectDexRouteProfitabilityContext,
   DirectDexRouteSelectionOptions,
   DirectDexTakeParams,
-} from './route-selection';
-export {
-  computeDirectDexAmountOutMinimum,
-  createDirectDexQuoteProviderRuntimeCache,
-  prewarmDirectDexRouteAvailability,
-} from './route-selection';
+} from './route-types';
+export type {
+  DirectDexQuoteProviderRuntimeCache,
+  DirectDexQuoteProviderRuntimeStats,
+} from './runtime-cache';
+export { computeDirectDexAmountOutMinimum } from './route-amounts';
+export { createDirectDexQuoteProviderRuntimeCache } from './runtime-cache';
+export { prewarmDirectDexRouteAvailability } from './availability';
 
 export function createDirectDexTakeAdapter(params: {
   quoteConfig: DirectDexQuoteConfig;
@@ -658,12 +660,6 @@ export async function takeLiquidationDirectDex({
     );
   }
 
-  const routeMetadata =
-    `source=${formatLiquiditySource(approvedQuoteEvaluation.selectedLiquiditySource)}` +
-    ` feeTier=${approvedQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
-    ` approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}` +
-    ` curvePool=${approvedQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
-
   try {
     return await executeSelectedDirectDexRoute({
       pool,
@@ -674,6 +670,11 @@ export async function takeLiquidationDirectDex({
       quoteEvaluation: approvedQuoteEvaluation,
     });
   } catch (error) {
+    const routeMetadata =
+      `source=${formatLiquiditySource(approvedQuoteEvaluation.selectedLiquiditySource)}` +
+      ` feeTier=${approvedQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
+      ` approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}` +
+      ` curvePool=${approvedQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
     logger.error(
       `Direct DEX take execution failed for ${pool.name}/${borrower} ${routeMetadata}`,
       error

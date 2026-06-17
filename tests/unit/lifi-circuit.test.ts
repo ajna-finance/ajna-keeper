@@ -9,8 +9,8 @@ import { DiscoveryRpcCache } from '../../src/discovery/types';
 describe('LI.FI quote circuit', () => {
   it('opens only the LI.FI provider circuit after retryable failures', () => {
     const rpcCache: DiscoveryRpcCache = {
-      oneInchQuoteCircuit: {
-        failures: 1,
+      providerCircuits: {
+        oneinch: { route_quote: { failures: 1 } },
       },
     };
     const lifiConfig = {
@@ -58,7 +58,9 @@ describe('LI.FI quote circuit', () => {
       })
     ).to.include('LI.FI quote circuit open for purpose=route_quote');
     expect(rpcCache.providerCircuits?.lifi?.route_quote?.failures).to.equal(2);
-    expect(rpcCache.oneInchQuoteCircuit?.failures).to.equal(1);
+    expect(
+      rpcCache.providerCircuits?.oneinch?.route_quote?.failures
+    ).to.equal(1);
   });
 
   it('keeps route quote and execution refresh circuits independent', () => {

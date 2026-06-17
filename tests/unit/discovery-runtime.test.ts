@@ -635,8 +635,12 @@ describe('Run Loop Discovery Integration', () => {
       discoverySnapshotState: {},
     });
     await runtime.runTakeCycle();
-    observedRpcCaches[0].oneInchQuoteCircuit.failures = 2;
-    observedRpcCaches[0].oneInchQuoteCircuit.cooldownUntilMs = 999;
+    observedRpcCaches[0].providerCircuits.oneinch = {
+      route_quote: {
+        failures: 2,
+        cooldownUntilMs: 999,
+      },
+    };
     observedRpcCaches[0].providerCircuits.lifi = {
       route_quote: {
         failures: 3,
@@ -651,16 +655,12 @@ describe('Run Loop Discovery Integration', () => {
     expect(observedRpcCaches[0]).to.not.equal(observedRpcCaches[1]);
     expect(observedRpcCaches[0].gasPrice.toString()).to.equal('123');
     expect(observedRpcCaches[1].gasPrice.toString()).to.equal('456');
-    expect(observedRpcCaches[1].oneInchQuoteCircuit).to.equal(
-      observedRpcCaches[0].oneInchQuoteCircuit
-    );
-    expect(observedRpcCaches[1].oneInchQuoteCircuit.failures).to.equal(2);
     expect(observedRpcCaches[1].providerCircuits).to.equal(
       observedRpcCaches[0].providerCircuits
     );
-    expect(observedRpcCaches[1].providerCircuits.oneinch.route_quote).to.equal(
-      observedRpcCaches[1].oneInchQuoteCircuit
-    );
+    expect(
+      observedRpcCaches[1].providerCircuits.oneinch.route_quote.failures
+    ).to.equal(2);
     expect(
       observedRpcCaches[1].providerCircuits.lifi.route_quote.failures
     ).to.equal(3);

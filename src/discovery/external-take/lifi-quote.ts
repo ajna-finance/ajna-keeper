@@ -1,4 +1,3 @@
-import { LiquiditySource } from '../../config';
 import { getLifiPathQuoteEvaluation } from '../../take/lifi/quote-evaluation';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import { AsyncOperationLimiter } from '../../utils';
@@ -7,7 +6,7 @@ import { getLifiCircuitOpenReason } from './lifi-circuit';
 import {
   AutoDiscoverTakePolicyRuntime,
   DiscoveryTokenDecimalsCacheResolver,
-  LifiPathQuoteInput,
+  CalldataAggregatorPathQuoteInput,
   QuoteCircuitPolicy,
   quoteCalldataAggregatorPathForDiscovery,
   recordLifiCircuitOutcomeForDiscovery,
@@ -21,11 +20,10 @@ export async function quoteLifiPathForDiscovery(
     routeProbeLimiter?: AsyncOperationLimiter;
     probeTimeoutMs: number;
     getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
-  } & LifiPathQuoteInput
+  } & CalldataAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteCalldataAggregatorPathForDiscovery(params, {
-    label: 'LI.FI',
-    selectedLiquiditySource: LiquiditySource.LIFI,
+    providerId: 'lifi',
     abortErrorMessage: 'LI.FI external take quote aborted',
     timeoutLabel: 'LI.FI external take quote',
     circuitFactory: (params): QuoteCircuitPolicy => {

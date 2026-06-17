@@ -7,16 +7,15 @@ import * as takeDirectDex from '../../src/take/direct-dex';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
 import * as erc20 from '../../src/erc20';
+import { ceilDiv, getMarketPriceFactorUnits } from '../../src/take/direct-dex/route-amounts';
+import { applyDirectDexRouteProfitabilityPolicy } from '../../src/take/direct-dex/route-profitability';
+import { filterDirectDexRouteCandidatesByAvailability } from '../../src/take/direct-dex/availability';
 import {
-  applyDirectDexRouteProfitabilityPolicy,
-  ceilDiv,
-  filterDirectDexRouteCandidatesByAvailability,
   getDirectDexRouteCandidates,
-  getMarketPriceFactorUnits,
   recordDirectDexRouteSuccess,
-  selectBestDirectDexRouteEvaluation,
-  MARKET_FACTOR_SCALE,
-} from '../../src/take/direct-dex/route-selection';
+} from '../../src/take/direct-dex/route-candidates';
+import { selectBestDirectDexRouteEvaluation } from '../../src/take/direct-dex/route-ranking';
+import { MARKET_FACTOR_SCALE } from '../../src/constants';
 import { RouteProbeLimiter } from '../../src/utils';
 
 const TEST_UNISWAP_SWAP_ROUTER_02_ADDRESS =

@@ -3,7 +3,6 @@ import { BigNumber, ethers } from 'ethers';
 import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import {
   CalldataAggregatorProviderId,
-  LiquiditySource,
   getAggregatorProviderIdentity,
 } from '../../config';
 import { convertWadToTokenDecimals } from '../../erc20';
@@ -78,10 +77,21 @@ export type PreparedCalldataAggregatorExecution =
     }
   | CalldataAggregatorPreBroadcastRejection;
 
-type CalldataAggregatorExecutionConfigBase = TakeWriteTransportConfig & {
+export type CalldataAggregatorExecutionConfigBase = TakeWriteTransportConfig & {
   dryRun?: boolean;
   keeperTakerRouter?: string;
   tokenDecimalsCache?: Map<string, number>;
+  // Provider-neutral discovery/execution notification hooks. Every
+  // calldata-aggregator provider shares this single pair; the discovery layer
+  // (calldata-aggregator-providers.ts) populates them and the shared execution
+  // core invokes them directly — there are no per-provider callback names.
+  onCalldataAggregatorQuoteResult?: (
+    result: CalldataAggregatorQuoteResultNotification
+  ) => void;
+  onCalldataAggregatorExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
 };
 
 export type CalldataAggregatorProviderExecutionParams<
@@ -94,59 +104,40 @@ export type CalldataAggregatorProviderExecutionParams<
   config: TConfig;
 };
 
-export function recordCalldataAggregatorPreBroadcastRejection<TConfig>(params: {
+/**
+ * The 7-positional-arg path-quote evaluation contract every calldata-aggregator
+ * provider implements (getLifiPathQuoteEvaluation et al.). Threading one named
+ * type through the take adapter descriptor and the prepare-execution param
+ * removes the positional-arg drift between those surfaces.
+ */
+export type CalldataAggregatorPathQuoteEvaluator<TConfig> = (
+  pool: FungiblePool,
+  price: number,
+  collateralWad: BigNumber,
+  poolConfig: TakeActionConfig,
+  quoteConfig: TConfig,
+  signer: Signer,
+  auctionPrice?: BigNumber
+) => Promise<ExternalTakeQuoteEvaluation>;
+
+export function recordCalldataAggregatorPreBroadcastRejection<
+  TConfig extends CalldataAggregatorExecutionConfigBase,
+>(params: {
   config: TConfig;
   rejection: CalldataAggregatorPreBroadcastRejection;
-  onQuoteResult: (
-    config: TConfig,
-    result: CalldataAggregatorQuoteResultNotification
-  ) => void;
-  onExecutionFailure: (
-    config: TConfig,
-    result: {
-      preBroadcast: boolean;
-      error?: string;
-    }
-  ) => void;
 }): void {
   if (params.rejection.logError) {
     logger.error(params.rejection.reason);
   }
   if (params.rejection.quoteResult) {
-    params.onQuoteResult(params.config, params.rejection.quoteResult);
+    params.config.onCalldataAggregatorQuoteResult?.(
+      params.rejection.quoteResult
+    );
   }
-  params.onExecutionFailure(params.config, {
+  params.config.onCalldataAggregatorExecutionFailure?.({
     preBroadcast: true,
     error: params.rejection.reason,
   });
-}
-
-/**
- * Builds a provider-labeled pre-broadcast rejection recorder from the
- * provider's quote-result / execution-failure callback selectors. The shared
- * recorder body lives in recordCalldataAggregatorPreBroadcastRejection; this
- * factory only binds the per-provider callback field names.
- */
-export function makeCalldataAggregatorProviderRejectionRecorder<TConfig>(selectors: {
-  onQuoteResult: (
-    config: TConfig,
-    result: CalldataAggregatorQuoteResultNotification
-  ) => void;
-  onExecutionFailure: (
-    config: TConfig,
-    result: { preBroadcast: boolean; error?: string }
-  ) => void;
-}): (
-  config: TConfig,
-  rejection: CalldataAggregatorPreBroadcastRejection
-) => void {
-  return (config, rejection) =>
-    recordCalldataAggregatorPreBroadcastRejection({
-      config,
-      rejection,
-      onQuoteResult: selectors.onQuoteResult,
-      onExecutionFailure: selectors.onExecutionFailure,
-    });
 }
 
 /**
@@ -154,6 +145,14 @@ export function makeCalldataAggregatorProviderRejectionRecorder<TConfig>(selecto
  * BaseAggregatorCalldataTaker. The amountOutMinimum is the keeper's approved
  * execution floor, not the provider's route minimum.
  */
+/**
+ * Canonical on-chain AggregatorSwapDetails tuple ABI — the single source of
+ * truth every calldata-aggregator taker decodes. Encoders and decode-side test
+ * assertions must reference this instead of re-typing the literal.
+ */
+export const AGGREGATOR_SWAP_DETAILS_TUPLE_ABI =
+  'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)';
+
 export function encodeAggregatorSwapDetails(params: {
   quote: Pick<
     ApprovedCalldataAggregatorQuote,
@@ -167,9 +166,7 @@ export function encodeAggregatorSwapDetails(params: {
   amountOutMinimum: BigNumber;
 }): string {
   return ethers.utils.defaultAbiCoder.encode(
-    [
-      'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)',
-    ],
+    [AGGREGATOR_SWAP_DETAILS_TUPLE_ABI],
     [
       {
         approvalSpender: params.quote.approvalSpender,
@@ -279,19 +276,10 @@ export async function prepareCalldataAggregatorExecution<
   liquidation: TakeLiquidationPlan;
   config: TConfig;
   providerId: CalldataAggregatorProviderId;
-  label: string;
   missingRouterReason: string;
   missingTakerReason: string;
   collateralRoundsToZeroReason: string;
-  getPathQuoteEvaluation: (
-    pool: FungiblePool,
-    price: number,
-    collateralWad: BigNumber,
-    poolConfig: TakeActionConfig,
-    quoteConfig: TConfig,
-    signer: Signer,
-    auctionPrice?: BigNumber
-  ) => Promise<ExternalTakeQuoteEvaluation>;
+  getPathQuoteEvaluation: CalldataAggregatorPathQuoteEvaluator<TConfig>;
   getTakerAddress: (config: TConfig) => string | undefined;
   resolveChainId: (config: TConfig, signer: Signer) => Promise<number>;
   requestValidatedQuote: (params: {
@@ -307,12 +295,9 @@ export async function prepareCalldataAggregatorExecution<
     code?: number | string;
   };
   getMaxQuoteAgeMs: (config: TConfig) => number;
-  onQuoteResult: (
-    config: TConfig,
-    result: CalldataAggregatorQuoteResultNotification
-  ) => void;
 }): Promise<PreparedCalldataAggregatorExecution> {
   const { pool, signer, poolConfig, liquidation, config } = params;
+  const { label } = getAggregatorProviderIdentity(params.providerId);
   const executionCollateralWad = getDebtConstrainedTakeCollateralWad({
     collateral: liquidation.collateral,
     auctionPrice: liquidation.auctionPrice,
@@ -345,7 +330,7 @@ export async function prepareCalldataAggregatorExecution<
     quoteEvaluation: approval.quoteEvaluation,
     liquidation,
     executionCollateralWad,
-    label: params.label,
+    label,
   });
   if (contextMismatch) {
     return { kind: 'rejected', reason: contextMismatch };
@@ -394,7 +379,7 @@ export async function prepareCalldataAggregatorExecution<
     });
   } catch (error) {
     const failure = params.getFailureMetadata(error);
-    params.onQuoteResult(config, {
+    config.onCalldataAggregatorQuoteResult?.({
       success: false,
       retryable: failure.retryable,
       errorCode: failure.code,
@@ -405,7 +390,7 @@ export async function prepareCalldataAggregatorExecution<
   const floorError = getAggregatorFreshQuoteFloorError({
     freshQuote,
     approvedMinOutRaw: approvedQuoteEvaluation.approvedMinOutRaw,
-    label: params.label,
+    label,
   });
   if (floorError) {
     return {
@@ -419,7 +404,7 @@ export async function prepareCalldataAggregatorExecution<
   const ageError = getAggregatorQuoteAgeError({
     quote: freshQuote,
     maxQuoteAgeMs,
-    label: params.label,
+    label,
   });
   if (ageError) {
     return {
@@ -444,10 +429,10 @@ export async function prepareCalldataAggregatorExecution<
       const error = getAggregatorQuoteAgeError({
         quote: freshQuote,
         maxQuoteAgeMs,
-        label: params.label,
+        label,
       });
       if (error) {
-        params.onQuoteResult(config, {
+        config.onCalldataAggregatorQuoteResult?.({
           success: false,
           retryable: false,
           error,
@@ -472,9 +457,7 @@ export async function submitCalldataAggregatorTake(params: {
   borrower: string;
   auctionPrice: BigNumber;
   executionCollateralWad: BigNumber;
-  liquiditySource: LiquiditySource;
   providerId: CalldataAggregatorProviderId;
-  label: string;
   transactionTarget: string;
   swapDetails: string;
   routeProfitability?: RouteProfitabilityBreakdown;
@@ -483,6 +466,9 @@ export async function submitCalldataAggregatorTake(params: {
   onQuoteConsumed?: () => void;
   onSubmissionAccepted: () => void;
 }): Promise<void> {
+  const { source: liquiditySource, label } = getAggregatorProviderIdentity(
+    params.providerId
+  );
   await NonceTracker.queueTransaction(
     params.takeWriteTransport.signer,
     async (nonce: number) => {
@@ -492,13 +478,13 @@ export async function submitCalldataAggregatorTake(params: {
         params.borrower,
         params.auctionPrice,
         params.executionCollateralWad,
-        Number(params.liquiditySource),
+        Number(liquiditySource),
         params.transactionTarget,
         params.swapDetails,
       ] as const;
       const gasLimit = await estimateGasWithBuffer(
         () => params.factory.estimateGas.takeWithAtomicSwap(...txArgs),
-        `${params.label} Take ${params.poolName}/${params.borrower}`,
+        `${label} Take ${params.poolName}/${params.borrower}`,
         13000
       );
       params.assertFreshQuoteStillCurrent();
@@ -517,7 +503,7 @@ export async function submitCalldataAggregatorTake(params: {
       logTakeExecutionTelemetry({
         path: 'calldata_aggregator',
         providerId: params.providerId,
-        source: params.liquiditySource,
+        source: liquiditySource,
         poolName: params.poolName,
         poolAddress: params.poolAddress,
         borrower: params.borrower,
@@ -527,7 +513,7 @@ export async function submitCalldataAggregatorTake(params: {
         takeWriteTransport: params.takeWriteTransport,
       });
       logger.info(
-        `${params.label} Take successful - pool: ${params.poolName}, borrower: ${params.borrower} | tx: ${receipt.transactionHash}`
+        `${label} Take successful - pool: ${params.poolName}, borrower: ${params.borrower} | tx: ${receipt.transactionHash}`
       );
       return receipt;
     }
@@ -538,9 +524,7 @@ export async function submitPreparedCalldataAggregatorExecution(params: {
   pool: FungiblePool;
   liquidation: TakeLiquidationPlan;
   prepared: Extract<PreparedCalldataAggregatorExecution, { kind: 'ready' }>;
-  liquiditySource: LiquiditySource;
   providerId: CalldataAggregatorProviderId;
-  label: string;
   onQuoteConsumed?: () => void;
   onSubmissionAccepted: () => void;
 }): Promise<void> {
@@ -553,9 +537,7 @@ export async function submitPreparedCalldataAggregatorExecution(params: {
     borrower: liquidation.borrower,
     auctionPrice: liquidation.auctionPrice,
     executionCollateralWad: prepared.executionCollateralWad,
-    liquiditySource: params.liquiditySource,
     providerId: params.providerId,
-    label: params.label,
     transactionTarget: prepared.freshQuote.transactionTarget,
     swapDetails: prepared.swapDetails,
     routeProfitability: prepared.approvedQuoteEvaluation.routeProfitability,
@@ -571,23 +553,13 @@ export async function takeLiquidationCalldataAggregatorProvider<
 >(
   params: CalldataAggregatorProviderExecutionParams<TConfig> & {
     providerId: CalldataAggregatorProviderId;
-    liquiditySource: LiquiditySource;
-    label: string;
     prepareExecution: (
       params: CalldataAggregatorProviderExecutionParams<TConfig>
     ) => Promise<PreparedCalldataAggregatorExecution>;
-    recordPreparedRejection: (
-      config: TConfig,
-      rejection: CalldataAggregatorPreBroadcastRejection
-    ) => void;
-    onQuoteConsumed: (config: TConfig) => void;
-    onExecutionFailure: (
-      config: TConfig,
-      result: { preBroadcast: boolean; error?: string }
-    ) => void;
   }
 ): Promise<boolean> {
   const { pool, liquidation, config } = params;
+  const { label } = getAggregatorProviderIdentity(params.providerId);
   const { borrower } = liquidation;
   if (
     !isCalldataAggregatorExecutionPathSelected({
@@ -597,7 +569,7 @@ export async function takeLiquidationCalldataAggregatorProvider<
     })
   ) {
     logger.error(
-      `${params.label} liquidity source not selected. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
+      `${label} liquidity source not selected. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
     );
     return false;
   }
@@ -606,12 +578,15 @@ export async function takeLiquidationCalldataAggregatorProvider<
   try {
     const prepared = await params.prepareExecution(params);
     if (prepared.kind === 'rejected') {
-      params.recordPreparedRejection(config, prepared);
+      recordCalldataAggregatorPreBroadcastRejection({
+        config,
+        rejection: prepared,
+      });
       return false;
     }
     if (prepared.kind === 'dry_run') {
       logger.info(
-        `DryRun - would ${params.label} Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, approvedMinOutRaw=${prepared.approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
+        `DryRun - would ${label} Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, approvedMinOutRaw=${prepared.approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
       );
       return true;
     }
@@ -620,23 +595,22 @@ export async function takeLiquidationCalldataAggregatorProvider<
       pool,
       liquidation,
       prepared,
-      liquiditySource: params.liquiditySource,
       providerId: params.providerId,
-      label: params.label,
-      onQuoteConsumed: () => params.onQuoteConsumed(config),
+      onQuoteConsumed: () =>
+        config.onCalldataAggregatorQuoteResult?.({ success: true }),
       onSubmissionAccepted: () => {
         attemptedSubmission = true;
       },
     });
     return true;
   } catch (error) {
-    params.onExecutionFailure(config, {
+    config.onCalldataAggregatorExecutionFailure?.({
       preBroadcast:
         !attemptedSubmission && !isNonceConsumedTransactionError(error),
       error: getErrorMessage(error),
     });
     logger.error(
-      `Failed ${params.label} Take. pool: ${pool.name}, borrower: ${borrower}`,
+      `Failed ${label} Take. pool: ${pool.name}, borrower: ${borrower}`,
       error
     );
     return false;

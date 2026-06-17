@@ -10,7 +10,8 @@ import { executeUniswapV3DirectDexTake } from '../../src/take/direct-dex/uniswap
 import { executeCurveDirectDexTake } from '../../src/take/direct-dex/curve';
 import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
 import { CurvePoolType } from '../../src/config';
-import * as shared from '../../src/take/direct-dex/route-selection';
+import * as shared from '../../src/take/direct-dex/route-amounts';
+import type { DirectDexQuoteProviderRuntimeCache } from '../../src/take/direct-dex/runtime-cache';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
@@ -314,7 +315,7 @@ describe('take write submission', () => {
   });
 
   it('keys direct DEX token decimal cache by chain id', async () => {
-    const runtimeCache: shared.DirectDexQuoteProviderRuntimeCache = {
+    const runtimeCache: DirectDexQuoteProviderRuntimeCache = {
       chainId: 1,
     };
     const tokenAddress = '0x0000000000000000000000000000000000000002';

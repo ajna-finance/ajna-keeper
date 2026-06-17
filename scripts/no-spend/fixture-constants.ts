@@ -11,8 +11,9 @@ export const BASE_AJNA_CONFIG = {
   lenderHelper: '',
 };
 
-export const BASE_ONEINCH_ROUTER =
-  '0x1111111254EEB25477B68fb85Ed929f73A960582';
+// Canonical home is src/dex/oneinch-aggregator/route-canary-env.ts; re-exported
+// here so no-spend scripts keep a single import surface (scripts -> src).
+export { BASE_ONEINCH_ROUTER } from '../../src/dex/oneinch-aggregator/route-canary-env';
 
 // Sentinel URL for harness mode. If anything bypasses the fixture subgraph
 // override, the .invalid TLD fails loudly instead of hitting a live subgraph.

@@ -18,15 +18,11 @@ import {
 import {
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
-  isDirectDexDynamicSource,
 } from './route-policy';
 import {
   formatSupportedExternalTakeLiquiditySources,
-  formatSupportedExternalTakePaths,
   getExternalTakeTakerContractKeyForSource,
-  getExternalTakePathDescriptor,
   isExternalTakeLiquiditySource,
-  resolveExternalTakePathFromSource,
 } from './external-take-descriptors';
 import type { ExternalTakeLiquiditySource } from './external-take-descriptors';
 import {
@@ -42,6 +38,7 @@ import { logger } from '../logging';
 import { ethers } from 'ethers';
 import { MARKET_FACTOR_SCALE } from '../constants';
 import { LIFI_POLICY_BOUNDS, assertValidLifiDexConfig } from './lifi-policy';
+import { assertValidOneInchAggregatorDexConfig } from './oneinch-aggregator-policy';
 import { validateSushiAggregatorDexRequirements } from './sushi-aggregator-policy';
 import {
   isFiniteNumber,
@@ -453,6 +450,15 @@ function validateOneInchTakeSource({
       `TakeSettings: dex.oneInch.routers missing router for chain ${chainId}`
     );
   }
+  // Live (non-dry-run) 1inch external takes execute through the
+  // OneInchAggregatorKeeperTaker, which enforces on-chain allowlists; require a
+  // complete reviewed allowlist policy (mirrors LI.FI/Sushi production gating).
+  assertValidOneInchAggregatorDexConfig({
+    config: keeperConfig.dex?.oneInch,
+    fieldName: 'KeeperConfig.dex.oneInch',
+    chainId,
+    requireProduction: keeperConfig.runtime?.dryRun !== true,
+  });
 }
 
 function validateUniswapV3TakeSource({

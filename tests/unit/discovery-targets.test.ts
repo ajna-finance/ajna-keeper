@@ -767,6 +767,17 @@ describe('Discovery Target Resolution', () => {
           routers: {
             1: '0x1111111111111111111111111111111111111111',
           },
+          callTargetAllowlist: {
+            1: ['0x6666666666666666666666666666666666666666'],
+          },
+          approvalSpenderAllowlist: {
+            1: ['0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
+          },
+          selectorAllowlist: {
+            1: {
+              '0x6666666666666666666666666666666666666666': ['0x12345678'],
+            },
+          },
         },
       },
       discovery: {

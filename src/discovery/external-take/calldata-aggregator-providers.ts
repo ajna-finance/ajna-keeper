@@ -22,16 +22,13 @@ import {
 } from './providers';
 import {
   AutoDiscoverTakePolicyRuntime,
+  CalldataAggregatorPathQuoteFn,
   DiscoveryTokenDecimalsCacheResolver,
   getCircuitGuardedQuoteOutcome,
-  LifiCircuitOutcome,
-  LifiPathQuoteFn,
-  OneInchAggregatorPathQuoteFn,
-  OneInchCircuitOutcome,
   recordLifiCircuitOutcomeForDiscovery,
   recordOneInchCircuitOutcomeForDiscovery,
-  SushiAggregatorPathQuoteFn,
 } from './quotes';
+import { ExternalTakeQuoteCircuitOutcome } from './provider';
 import { quoteSushiAggregatorPathForDiscovery } from './sushi-aggregator-quote';
 
 export function createDiscoveryCalldataAggregatorRouteProviders(params: {
@@ -42,7 +39,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
   probeTimeoutMs: number;
   getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
 }): DiscoveryExternalTakeRouteProvider[] {
-  const quoteLifiPath: LifiPathQuoteFn = (quoteParams) =>
+  const quoteLifiPath: CalldataAggregatorPathQuoteFn = (quoteParams) =>
     quoteLifiPathForDiscovery({
       ...quoteParams,
       config: params.config,
@@ -52,7 +49,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
       probeTimeoutMs: params.probeTimeoutMs,
       getTokenDecimalsCache: params.getTokenDecimalsCache,
     });
-  const quoteOneInchAggregatorPath: OneInchAggregatorPathQuoteFn = (
+  const quoteOneInchAggregatorPath: CalldataAggregatorPathQuoteFn = (
     quoteParams
   ) =>
     quoteOneInchAggregatorPathForDiscovery({
@@ -64,7 +61,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
       probeTimeoutMs: params.probeTimeoutMs,
       getTokenDecimalsCache: params.getTokenDecimalsCache,
     });
-  const quoteSushiAggregatorPath: SushiAggregatorPathQuoteFn = (quoteParams) =>
+  const quoteSushiAggregatorPath: CalldataAggregatorPathQuoteFn = (quoteParams) =>
     quoteSushiAggregatorPathForDiscovery({
       ...quoteParams,
       config: params.config,
@@ -75,7 +72,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
       getTokenDecimalsCache: params.getTokenDecimalsCache,
     });
   const recordOneInchCircuitOutcome = (
-    outcome: OneInchCircuitOutcome,
+    outcome: ExternalTakeQuoteCircuitOutcome,
     purpose?: OneInchQuoteCircuitPurpose
   ): void => {
     recordOneInchCircuitOutcomeForDiscovery({
@@ -86,7 +83,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
     });
   };
   const recordLifiCircuitOutcome = (
-    outcome: LifiCircuitOutcome,
+    outcome: ExternalTakeQuoteCircuitOutcome,
     purpose?: LifiCircuitPurpose
   ): void => {
     recordLifiCircuitOutcomeForDiscovery({
@@ -121,7 +118,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
         executionFailureHandler,
       }) => ({
         ...config,
-        onLifiQuoteResult: createQuoteResultHandler(config, route, (result) =>
+        onCalldataAggregatorQuoteResult: createQuoteResultHandler(config, route, (result) =>
           recordLifiCircuitOutcome(
             result.success
               ? 'success'
@@ -131,7 +128,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
             'execution_refresh'
           )
         ),
-        onLifiExecutionFailure: executionFailureHandler,
+        onCalldataAggregatorExecutionFailure: executionFailureHandler,
       }),
       getExecutionRefreshCircuitOpenReason:
         getLifiExecutionRefreshCircuitOpenReason,
@@ -148,7 +145,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
         executionFailureHandler,
       }) => ({
         ...config,
-        onOneInchAggregatorQuoteResult: createQuoteResultHandler(
+        onCalldataAggregatorQuoteResult: createQuoteResultHandler(
           config,
           route,
           (result) => {
@@ -164,7 +161,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
             }
           }
         ),
-        onOneInchAggregatorExecutionFailure: executionFailureHandler,
+        onCalldataAggregatorExecutionFailure: executionFailureHandler,
       }),
       executeTake:
         oneInchAggregatorExecutionModule.takeLiquidationOneInchAggregator,
@@ -178,8 +175,8 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
         executionFailureHandler,
       }) => ({
         ...config,
-        onSushiAggregatorQuoteResult: createQuoteResultHandler(config, route),
-        onSushiAggregatorExecutionFailure: executionFailureHandler,
+        onCalldataAggregatorQuoteResult: createQuoteResultHandler(config, route),
+        onCalldataAggregatorExecutionFailure: executionFailureHandler,
       }),
       executeTake:
         sushiAggregatorExecutionModule.takeLiquidationSushiAggregator,

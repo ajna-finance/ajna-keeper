@@ -2,8 +2,8 @@ import { AutoDiscoverTakePolicy } from '../../config';
 import { logger } from '../../logging';
 import {
   DiscoveryRpcCache,
+  ExternalProviderCircuitState,
   OneInchQuoteCircuitPurpose,
-  OneInchQuoteCircuitState,
 } from '../types';
 
 export const DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS = 2_000;
@@ -53,67 +53,18 @@ function getOneInchQuoteFailureThreshold(
 function getOneInchCircuitState(
   rpcCache?: DiscoveryRpcCache,
   purpose: OneInchQuoteCircuitPurpose = 'route_quote'
-): OneInchQuoteCircuitState {
+): ExternalProviderCircuitState {
   if (!rpcCache) {
     return { failures: 0 };
   }
-  const providerState = rpcCache.providerCircuits?.oneinch?.[purpose];
-  if (purpose === 'route_quote') {
-    rpcCache.oneInchQuoteCircuits ??= {};
-    const state = rpcCache.oneInchQuoteCircuit ??
-      rpcCache.oneInchQuoteCircuits.route_quote ??
-      providerState ?? { failures: 0 };
-    rpcCache.oneInchQuoteCircuit = state;
-    rpcCache.oneInchQuoteCircuits.route_quote = state;
-    return linkOneInchProviderCircuitState(rpcCache, purpose, state);
-  }
-  rpcCache.oneInchQuoteCircuits ??= {};
-  const state = rpcCache.oneInchQuoteCircuits[purpose] ??
-    providerState ?? { failures: 0 };
-  rpcCache.oneInchQuoteCircuits[purpose] = state;
-  return linkOneInchProviderCircuitState(rpcCache, purpose, state);
-}
-
-function linkOneInchProviderCircuitState(
-  rpcCache: DiscoveryRpcCache,
-  purpose: OneInchQuoteCircuitPurpose,
-  state: OneInchQuoteCircuitState
-): OneInchQuoteCircuitState {
-  rpcCache.oneInchQuoteCircuits ??= {};
-  if (purpose === 'route_quote') {
-    rpcCache.oneInchQuoteCircuit = state;
-    rpcCache.oneInchQuoteCircuits.route_quote = state;
-  } else {
-    rpcCache.oneInchQuoteCircuits[purpose] = state;
-  }
   rpcCache.providerCircuits ??= {};
   rpcCache.providerCircuits.oneinch ??= {};
-  rpcCache.providerCircuits.oneinch[purpose] = state;
-  return state;
-}
-
-function getExistingOneInchCircuitState(
-  rpcCache: DiscoveryRpcCache | undefined,
-  purpose: OneInchQuoteCircuitPurpose
-): OneInchQuoteCircuitState | undefined {
-  if (!rpcCache) {
-    return undefined;
-  }
-  if (purpose === 'route_quote') {
-    return (
-      rpcCache.oneInchQuoteCircuit ??
-      rpcCache.oneInchQuoteCircuits?.route_quote ??
-      rpcCache.providerCircuits?.oneinch?.route_quote
-    );
-  }
-  return (
-    rpcCache.oneInchQuoteCircuits?.[purpose] ??
-    rpcCache.providerCircuits?.oneinch?.[purpose]
-  );
+  rpcCache.providerCircuits.oneinch[purpose] ??= { failures: 0 };
+  return rpcCache.providerCircuits.oneinch[purpose]!;
 }
 
 function resetExpiredOneInchCircuit(
-  state: OneInchQuoteCircuitState,
+  state: ExternalProviderCircuitState,
   nowMs: number
 ): void {
   if (state.cooldownUntilMs !== undefined && state.cooldownUntilMs <= nowMs) {
@@ -152,11 +103,10 @@ export function recordOneInchQuoteSuccess(
   rpcCache?: DiscoveryRpcCache,
   purpose: OneInchQuoteCircuitPurpose = 'route_quote'
 ): void {
-  const state = getExistingOneInchCircuitState(rpcCache, purpose);
-  if (!rpcCache || !state) {
+  const state = rpcCache?.providerCircuits?.oneinch?.[purpose];
+  if (!state) {
     return;
   }
-  linkOneInchProviderCircuitState(rpcCache, purpose, state);
   state.failures = 0;
   state.cooldownUntilMs = undefined;
   state.lastOpenLogAtMs = undefined;

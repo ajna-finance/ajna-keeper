@@ -29,26 +29,22 @@ export type ExternalTakePathCategory = 'aggregator' | 'direct_dex';
 interface ExternalTakeSourceIdentityBase<
   TSource extends ExternalTakeLiquiditySource,
   TPath extends ExternalTakePathKind,
-  TCategory extends ExternalTakePathCategory,
 > {
   readonly source: TSource;
   readonly path: TPath;
-  readonly category: TCategory;
   readonly label: string;
   readonly takerContractKey: ExternalTakeTakerContractKey;
 }
 
 export type DirectDexSourceIdentity = ExternalTakeSourceIdentityBase<
   DirectDexLiquiditySource,
-  'direct_dex',
   'direct_dex'
 >;
 
 export interface CalldataAggregatorSourceIdentity
   extends ExternalTakeSourceIdentityBase<
     CalldataAggregatorLiquiditySource,
-    'calldata_aggregator',
-    'aggregator'
+    'calldata_aggregator'
   > {
   readonly providerId: CalldataAggregatorProviderId;
 }
@@ -67,21 +63,18 @@ export const EXTERNAL_TAKE_SOURCE_IDENTITIES = {
   [LiquiditySource.UNISWAPV3]: {
     source: LiquiditySource.UNISWAPV3,
     path: 'direct_dex',
-    category: 'direct_dex',
     label: 'Uniswap V3',
     takerContractKey: 'UniswapV3',
   },
   [LiquiditySource.CURVE]: {
     source: LiquiditySource.CURVE,
     path: 'direct_dex',
-    category: 'direct_dex',
     label: 'Curve',
     takerContractKey: 'Curve',
   },
   [LiquiditySource.LIFI]: {
     source: LiquiditySource.LIFI,
     path: 'calldata_aggregator',
-    category: 'aggregator',
     label: 'LI.FI',
     takerContractKey: 'Lifi',
     providerId: 'lifi',
@@ -89,7 +82,6 @@ export const EXTERNAL_TAKE_SOURCE_IDENTITIES = {
   [LiquiditySource.SUSHI_AGGREGATOR]: {
     source: LiquiditySource.SUSHI_AGGREGATOR,
     path: 'calldata_aggregator',
-    category: 'aggregator',
     label: 'Sushi Aggregator',
     takerContractKey: 'SushiAggregator',
     providerId: 'sushi_aggregator',
@@ -97,7 +89,6 @@ export const EXTERNAL_TAKE_SOURCE_IDENTITIES = {
   [LiquiditySource.ONEINCH]: {
     source: LiquiditySource.ONEINCH,
     path: 'calldata_aggregator',
-    category: 'aggregator',
     label: '1inch',
     takerContractKey: 'OneInchAggregator',
     providerId: 'oneinch',
@@ -124,13 +115,28 @@ type ExactCalldataAggregatorProviderIds =
 const _EXACT_CALLDATA_AGGREGATOR_PROVIDER_IDS: ExactCalldataAggregatorProviderIds =
   true;
 
-const EXTERNAL_TAKE_SOURCE_ORDER: readonly ExternalTakeLiquiditySource[] = [
+// Explicit operator-facing order (do NOT derive from the identities map: its
+// numeric-enum keys would iterate ascending and silently reorder this list,
+// which feeds the "liquiditySource must be …" validation message). The guard
+// below enforces exhaustiveness at compile time without touching the order.
+const EXTERNAL_TAKE_SOURCE_ORDER = [
   LiquiditySource.UNISWAPV3,
   LiquiditySource.CURVE,
   LiquiditySource.LIFI,
   LiquiditySource.SUSHI_AGGREGATOR,
   LiquiditySource.ONEINCH,
-];
+] as const satisfies readonly ExternalTakeLiquiditySource[];
+
+// Compile-time exhaustiveness: every external-take source must appear above.
+type _MissingFromSourceOrder = Exclude<
+  ExternalTakeLiquiditySource,
+  (typeof EXTERNAL_TAKE_SOURCE_ORDER)[number]
+>;
+const _EXTERNAL_TAKE_SOURCE_ORDER_EXHAUSTIVE: [
+  _MissingFromSourceOrder,
+] extends [never]
+  ? true
+  : never = true;
 
 function isDirectDexIdentitySource(
   source: ExternalTakeLiquiditySource

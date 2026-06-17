@@ -1,4 +1,4 @@
-import { normalizeLifiAddressAllowlist } from './address-allowlist';
+import { normalizeTakerAddressAllowlist } from '../../take/aggregator-calldata/allowlist';
 import {
   getConcreteProductionLifiPolicyError,
   type LifiExchangeFilterConfig,
@@ -8,7 +8,7 @@ import {
   type LifiExchangePolicy,
   type LifiProductionExchangePolicyConfig,
 } from './exchange-policy';
-import { normalizeLifiSelectorAllowlistRecord } from './selector-allowlist';
+import { normalizeTakerSelectorAllowlistRecord } from '../../take/aggregator-calldata/allowlist';
 
 export const LIFI_CHAIN_POLICY_BOUNDS = {
   maxAllowlistEntries: 128,
@@ -110,7 +110,7 @@ function normalizeAddressPolicyByChain(params: {
     }
     normalized.set(
       chainId,
-      normalizeLifiAddressAllowlist(addresses, {
+      normalizeTakerAddressAllowlist(addresses, {
         label: `${params.fieldName}.${chainId}`,
         requireNonEmpty: true,
       })
@@ -143,7 +143,7 @@ function normalizeSelectorPolicyByChain(params: {
       );
     }
     const callTargets = params.callTargetsByChain?.get(chainId);
-    const normalizedSelectors = normalizeLifiSelectorAllowlistRecord(
+    const normalizedSelectors = normalizeTakerSelectorAllowlistRecord(
       selectorsByTarget,
       {
         label: `${params.fieldName}.${chainId}`,
@@ -334,18 +334,18 @@ export function normalizeLifiCanaryChainPolicy(params: {
   selectorAllowlist: Record<string, readonly string[]>;
   fieldName: string;
 }): NormalizedLifiAllowlistPolicy {
-  const callTargets = normalizeLifiAddressAllowlist(params.callTargets, {
+  const callTargets = normalizeTakerAddressAllowlist(params.callTargets, {
     label: `${params.fieldName}.callTargetAllowlist`,
     requireNonEmpty: true,
   });
-  const approvalSpenders = normalizeLifiAddressAllowlist(
+  const approvalSpenders = normalizeTakerAddressAllowlist(
     params.approvalSpenders,
     {
       label: `${params.fieldName}.approvalSpenderAllowlist`,
       requireNonEmpty: true,
     }
   );
-  const selectorAllowlist = normalizeLifiSelectorAllowlistRecord(
+  const selectorAllowlist = normalizeTakerSelectorAllowlistRecord(
     params.selectorAllowlist,
     {
       label: `${params.fieldName}.selectorAllowlist`,

@@ -16,9 +16,8 @@ describe('1inch quote circuit', () => {
 
   it('resets expired cooldown state before recording a new failure', () => {
     const cache = {
-      oneInchQuoteCircuit: {
-        failures: 2,
-        cooldownUntilMs: 1_000,
+      providerCircuits: {
+        oneinch: { route_quote: { failures: 2, cooldownUntilMs: 1_000 } },
       },
     } as DiscoveryRpcCache;
 
@@ -31,19 +30,15 @@ describe('1inch quote circuit', () => {
       nowMs: 2_000,
     });
 
-    expect(cache.oneInchQuoteCircuit?.failures).to.equal(1);
-    expect(cache.oneInchQuoteCircuit?.cooldownUntilMs).to.be.undefined;
-    expect(cache.providerCircuits?.oneinch?.route_quote).to.equal(
-      cache.oneInchQuoteCircuit
-    );
+    expect(cache.providerCircuits?.oneinch?.route_quote?.failures).to.equal(1);
+    expect(cache.providerCircuits?.oneinch?.route_quote?.cooldownUntilMs).to.be
+      .undefined;
   });
 
   it('clamps excessive cooldowns and emits bounded open-heartbeat logs', () => {
     const infoStub = sinon.stub(logger, 'info');
     const cache = {
-      oneInchQuoteCircuit: {
-        failures: 0,
-      },
+      providerCircuits: { oneinch: { route_quote: { failures: 0 } } },
     } as DiscoveryRpcCache;
 
     recordOneInchQuoteFailure({
@@ -56,11 +51,8 @@ describe('1inch quote circuit', () => {
       nowMs: 10_000,
     });
 
-    expect(cache.oneInchQuoteCircuit?.cooldownUntilMs).to.equal(
+    expect(cache.providerCircuits?.oneinch?.route_quote?.cooldownUntilMs).to.equal(
       10_000 + MAX_ONEINCH_QUOTE_FAILURE_COOLDOWN_MS
-    );
-    expect(cache.providerCircuits?.oneinch?.route_quote).to.equal(
-      cache.oneInchQuoteCircuit
     );
     expect(
       getOneInchCircuitOpenReason({
@@ -82,9 +74,7 @@ describe('1inch quote circuit', () => {
   it('re-arms heartbeat logging after cooldown expiry and retrip', () => {
     const infoStub = sinon.stub(logger, 'info');
     const cache = {
-      oneInchQuoteCircuit: {
-        failures: 0,
-      },
+      providerCircuits: { oneinch: { route_quote: { failures: 0 } } },
     } as DiscoveryRpcCache;
     const policy = {
       oneInchQuoteFailureThreshold: 1,
@@ -125,9 +115,6 @@ describe('1inch quote circuit', () => {
       takePolicy: policy,
       nowMs: 11_002,
     });
-    expect(cache.providerCircuits?.oneinch?.route_quote).to.equal(
-      cache.oneInchQuoteCircuit
-    );
     expect(
       getOneInchCircuitOpenReason({
         rpcCache: cache,
@@ -168,37 +155,36 @@ describe('1inch quote circuit', () => {
         nowMs: 10_001,
       })
     ).to.be.undefined;
-    expect(cache.providerCircuits?.oneinch?.gas_conversion).to.equal(
-      cache.oneInchQuoteCircuits?.gas_conversion
-    );
-    expect(cache.providerCircuits?.oneinch?.route_quote).to.equal(
-      cache.oneInchQuoteCircuit
-    );
+    // The tripped gas_conversion circuit must not bleed into the route_quote
+    // circuit; each purpose is an independent providerCircuits entry. (Querying
+    // the route_quote open reason above lazily created its state, but it is
+    // untripped — no cooldown — and a distinct object.)
+    expect(
+      cache.providerCircuits?.oneinch?.gas_conversion?.cooldownUntilMs
+    ).to.be.a('number');
+    expect(
+      cache.providerCircuits?.oneinch?.route_quote?.cooldownUntilMs
+    ).to.be.undefined;
     expect(cache.providerCircuits?.oneinch?.gas_conversion).to.not.equal(
       cache.providerCircuits?.oneinch?.route_quote
     );
   });
 
-  it('clears provider-keyed route state while restoring legacy aliases', () => {
-    const providerRouteState = {
-      failures: 2,
-      cooldownUntilMs: 5_000,
-      lastOpenLogAtMs: 1_000,
-    };
+  it('clears provider-keyed route state on success', () => {
     const cache = {
       providerCircuits: {
         oneinch: {
-          route_quote: providerRouteState,
+          route_quote: {
+            failures: 2,
+            cooldownUntilMs: 5_000,
+            lastOpenLogAtMs: 1_000,
+          },
         },
       },
     } as DiscoveryRpcCache;
 
     recordOneInchQuoteSuccess(cache);
 
-    expect(cache.oneInchQuoteCircuit).to.equal(providerRouteState);
-    expect(cache.oneInchQuoteCircuits?.route_quote).to.equal(
-      providerRouteState
-    );
     expect(cache.providerCircuits?.oneinch?.route_quote?.failures).to.equal(0);
     expect(cache.providerCircuits?.oneinch?.route_quote?.cooldownUntilMs).to.be
       .undefined;

@@ -372,30 +372,6 @@ export function resolveExternalTakeRouteIdentity(
   return route.identity;
 }
 
-export function getExternalTakeRouteBindingFailurePath(
-  failure: ExternalTakeRouteBindingFailure
-): ExternalTakePathKind | undefined {
-  return 'path' in failure ? failure.path : undefined;
-}
-
-export function getExternalTakeRouteBindingFailureSource(
-  failure: ExternalTakeRouteBindingFailure
-): LiquiditySource | undefined {
-  switch (failure.code) {
-    case 'source_mismatch':
-      return failure.selectedSource;
-    case 'provider_mismatch':
-      return failure.source;
-    case 'path_source_mismatch':
-    case 'unsupported_source':
-      return failure.source;
-    case 'disabled_path':
-    case 'missing_path':
-    case 'missing_source':
-      return failure.source;
-  }
-}
-
 export function formatExternalTakeRouteBindingFailure(params: {
   failure: ExternalTakeRouteBindingFailure;
   context?: string;

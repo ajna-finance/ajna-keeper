@@ -2,15 +2,15 @@
 // deployments and preflight (SushiSwap aggregator roadmap, Packet 2B).
 // Canonical home of the allowlist ABI fragments, on-chain snapshot reads,
 // snapshot normalization, reconciliation-plan construction, and
-// contains/exact assertion helpers promoted out of src/dex/lifi (which
-// keeps compatibility re-exports). Every calldata-aggregator provider
-// keeps its own isolated per-deployment allowlists. The helper MECHANICS
-// are provider-neutral (no provider branching in the logic), but their
-// fallback diagnostic labels default to the LI.FI provider for backward
-// compatibility; non-LI.FI providers (e.g. Sushi) override them via the
-// `label`/`labelPrefix` params (e.g. src/dex/sushi-aggregator/preflight.ts
-// passes 'Sushi aggregator taker').
-import { ethers } from 'ethers';
+// contains/exact assertion helpers promoted out of src/dex/lifi. Every
+// calldata-aggregator provider keeps its own isolated per-deployment
+// allowlists. The helper MECHANICS and their fallback diagnostic labels
+// are provider-neutral (no provider branching, neutral 'aggregator ...'
+// defaults); every provider threads its own diagnostic label through the
+// `label`/`labelPrefix` params (e.g. LI.FI passes 'LI.FI selector
+// allowlist'/'LI.FI taker', Sushi passes 'Sushi aggregator taker').
+import { ethers, providers } from 'ethers';
+import { getErrorMessage } from '../../utils';
 
 // Neutral expected-policy shape consumed by the assertion/reconciliation
 // helpers. Provider chain-policy types (e.g. the LI.FI production chain
@@ -86,7 +86,7 @@ export function normalizeTakerSelectorAllowlist(
     requireCallTargetCoverage?: boolean;
   } = {}
 ): Map<string, Set<string>> {
-  const label = params.label ?? 'LI.FI selector allowlist';
+  const label = params.label ?? 'aggregator selector allowlist';
   const callTargetAllowlist = params.callTargetAllowlist
     ? new Set(
         normalizeTakerAddressAllowlist(params.callTargetAllowlist, {
@@ -165,6 +165,98 @@ export function normalizeTakerSelectorAllowlistRecord(
     record[target] = Array.from(selectors);
   }
   return record;
+}
+
+export interface NormalizedAggregatorChainPolicy
+  extends NormalizedTakerAllowlistPolicy {
+  chainId: number;
+}
+
+// The per-chain production allowlist policy shape every calldata-aggregator
+// provider config (LI.FI / Sushi / 1inch) exposes identically.
+type AggregatorAllowlistPolicyConfig = {
+  callTargetAllowlist?: { [chainId: number]: readonly string[] };
+  approvalSpenderAllowlist?: { [chainId: number]: readonly string[] };
+  selectorAllowlist?: {
+    [chainId: number]: { [target: string]: readonly string[] };
+  };
+};
+
+/**
+ * Canonical per-chain normalizer for a calldata-aggregator production allowlist
+ * policy. Sushi and 1inch share this verbatim (only their config type and
+ * diagnostic field name differ). Fail-closed: every list must be non-empty and
+ * every selector target must be an allowlisted call target with full coverage.
+ */
+export function normalizeAggregatorChainPolicy(params: {
+  config: AggregatorAllowlistPolicyConfig;
+  fieldName: string;
+  chainId: number;
+}): NormalizedAggregatorChainPolicy {
+  const { config, fieldName, chainId } = params;
+  const callTargets = normalizeTakerAddressAllowlist(
+    config.callTargetAllowlist?.[chainId],
+    {
+      label: `${fieldName}.callTargetAllowlist[${chainId}]`,
+      requireNonEmpty: true,
+    }
+  );
+  const approvalSpenders = normalizeTakerAddressAllowlist(
+    config.approvalSpenderAllowlist?.[chainId],
+    {
+      label: `${fieldName}.approvalSpenderAllowlist[${chainId}]`,
+      requireNonEmpty: true,
+    }
+  );
+  const selectorAllowlist = normalizeTakerSelectorAllowlistRecord(
+    config.selectorAllowlist?.[chainId],
+    {
+      label: `${fieldName}.selectorAllowlist[${chainId}]`,
+      requireNonEmpty: true,
+      callTargetAllowlist: callTargets,
+      requireCallTargetCoverage: true,
+    }
+  );
+  return { chainId, callTargets, approvalSpenders, selectorAllowlist };
+}
+
+/**
+ * Fail-closed validation that every chain present in ANY of the three allowlist
+ * records (plus an optional active chainId) has a complete, covering policy.
+ * Shared by the Sushi/1inch production validators so a spender-only or
+ * selector-only chain cannot slip through unvalidated.
+ */
+export function assertValidAggregatorAllowlistPolicyChains(params: {
+  config: AggregatorAllowlistPolicyConfig;
+  fieldName: string;
+  chainId?: number;
+}): void {
+  const { config, fieldName, chainId } = params;
+  const chainIds = new Set<number>();
+  for (const list of [
+    config.callTargetAllowlist,
+    config.approvalSpenderAllowlist,
+    config.selectorAllowlist,
+  ]) {
+    for (const key of Object.keys(list ?? {})) {
+      chainIds.add(Number(key));
+    }
+  }
+  if (chainId !== undefined) {
+    chainIds.add(chainId);
+  }
+  // Fail closed: a present-but-empty policy (e.g. callTargetAllowlist: {}) must
+  // not pass as a "configured" production allowlist. Without an active chainId
+  // there would otherwise be no chain to normalize and the empty policy would
+  // slip through.
+  if (chainIds.size === 0) {
+    throw new Error(
+      `${fieldName} allowlist policy must configure at least one chain`
+    );
+  }
+  for (const id of Array.from(chainIds)) {
+    normalizeAggregatorChainPolicy({ config, fieldName, chainId: id });
+  }
 }
 
 
@@ -327,7 +419,7 @@ export function normalizeTakerAllowlistSnapshot(params: {
   selectorTargets?: readonly string[];
   labelPrefix?: string;
 }): TakerAllowlistSnapshot {
-  const labelPrefix = params.labelPrefix ?? 'LI.FI taker';
+  const labelPrefix = params.labelPrefix ?? 'aggregator taker';
   const callTargets = normalizeAddressList(
     params.callTargets,
     `${labelPrefix} call target allowlist`
@@ -365,7 +457,7 @@ export async function readTakerAllowlistSnapshot(params: {
   labelPrefix?: string;
   read?: TakerAllowlistRead;
 }): Promise<TakerAllowlistSnapshot> {
-  const labelPrefix = params.labelPrefix ?? 'LI.FI taker';
+  const labelPrefix = params.labelPrefix ?? 'aggregator taker';
   const read =
     params.read ??
     (async <T>(readParams: { operation: () => Promise<T> }): Promise<T> =>
@@ -424,7 +516,7 @@ export function compareTakerAllowlistPolicy(params: {
   mode: TakerAllowlistCompareMode;
   labelPrefix?: string;
 }): string[] {
-  const labelPrefix = params.labelPrefix ?? 'LI.FI taker';
+  const labelPrefix = params.labelPrefix ?? 'aggregator taker';
   const errors: string[] = [];
   const callTargetMismatch = getSetMismatch({
     label: `${labelPrefix} call target allowlist`,
@@ -470,6 +562,50 @@ export function compareTakerAllowlistPolicy(params: {
   }
 
   return errors;
+}
+
+/**
+ * Shared calldata-aggregator preflight reconciliation core. Reads the deployed
+ * taker's on-chain allowlist snapshot (using the caller's selectorTargets and
+ * retry strategy) and pushes any exact-match divergence from the expected
+ * normalized chain policy onto `errors`. Every aggregator provider's preflight
+ * (LI.FI, Sushi, and the future 1inch row) reuses this; the provider-specific
+ * gating, compilation guard, contract-code checks, selectorTargets builder, and
+ * retry strategy deliberately stay in each provider's validator so their
+ * fail-closed asymmetries remain explicit rather than hidden behind hooks.
+ */
+export async function reconcileTakerAllowlistSnapshot(params: {
+  provider: providers.Provider;
+  takerAddress: string;
+  policy: NormalizedTakerAllowlistPolicy;
+  selectorTargets: readonly string[];
+  labelPrefix: string;
+  read: TakerAllowlistRead;
+  errors: string[];
+}): Promise<void> {
+  try {
+    const taker = new ethers.Contract(
+      params.takerAddress,
+      AGGREGATOR_TAKER_ALLOWLIST_ABI,
+      params.provider
+    );
+    const actual = await readTakerAllowlistSnapshot({
+      reader: createTakerAllowlistReader(taker),
+      selectorTargets: params.selectorTargets,
+      labelPrefix: params.labelPrefix,
+      read: params.read,
+    });
+    params.errors.push(
+      ...compareTakerAllowlistPolicy({
+        expected: params.policy,
+        actual,
+        mode: 'exact',
+        labelPrefix: params.labelPrefix,
+      })
+    );
+  } catch (error) {
+    params.errors.push(getErrorMessage(error));
+  }
 }
 
 export function assertTakerAllowlistPolicy(params: {

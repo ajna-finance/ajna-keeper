@@ -56,6 +56,14 @@ export function normalizeLifiApiBaseUrl(
   return `${parsed.protocol}//${parsed.host}${pathname}`;
 }
 
+/**
+ * Provider-neutral alias: the URL-shape policy (http(s) only, no credentials /
+ * query / fragment, HTTPS in production) is identical for every external-take
+ * aggregator (LI.FI, Sushi, 1inch). Shared so each provider validates its
+ * apiBaseUrl the same way instead of one provider silently skipping the check.
+ */
+export const normalizeAggregatorApiBaseUrl = normalizeLifiApiBaseUrl;
+
 function normalizeApiBaseUrlForGate(value: string): string {
   return normalizeLifiApiBaseUrl(value, 'LI.FI API base URL');
 }
