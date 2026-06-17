@@ -374,27 +374,37 @@ execution order").
   (`validateLifiAllowlistPreflight`, the LI.FI twin) and `src/dex/sushi-aggregator/preflight.ts:53-141`
   (the Sushi twin + its `validateSushiAggregatorTakerRouterSupport` companion).
   `route-preflight-validation.ts:495-532` is only the descriptor-table wiring that calls both.
-- **Problem:** The two validators share a core (contract-code checks for targets/spenders +
-  snapshot reconciliation via `AGGREGATOR_TAKER_ALLOWLIST_ABI`) but are **not** mere
-  normalizer+label twins — they differ in two fail-closed-relevant ways:
-  1. **Sushi has an extra fail-closed guard the LI.FI twin lacks:**
-     `validateSushiAggregatorTakerRouterSupport` (`preflight.ts:53-86`) asserts via
-     `getConfiguredTakers()` that the on-chain `TakerRouter` was compiled **with** the
-     `SUSHI_AGGREGATOR` source id (rejecting a stale factory whose enumeration stops short).
-     A naive collapse would either drop this guard or silently extend it to LI.FI.
+- **Problem:** The two validators share **only** the snapshot reconciliation core
+  (normalize → `readTakerAllowlistSnapshot` → `compareTakerAllowlistPolicy` over
+  `AGGREGATOR_TAKER_ALLOWLIST_ABI`). They are **not** mere normalizer+label twins — they differ in
+  **three** fail-closed-relevant ways, each of which a naive collapse would silently regress:
+  1. **Sushi-only compilation guard:** `validateSushiAggregatorTakerRouterSupport`
+     (`preflight.ts:53-86`) asserts via `getConfiguredTakers()` that the on-chain `TakerRouter` was
+     compiled **with** the `SUSHI_AGGREGATOR` source id (rejecting a stale factory). LI.FI has no
+     equivalent.
   2. **`selectorTargets` differ:** LI.FI reads `[...callTargets, ...Object.keys(selectorAllowlist)]`
-     (`route-preflight-validation.ts:415-418`); Sushi reads only `policy.callTargets`
-     (`preflight.ts:126`).
-- **Remedy:** Collapse the shared core to one `validateAggregatorAllowlistPreflight`, but keep
-  **per-provider hooks** off the descriptor: a `normalizeChainPolicy`, a `selectorTargets`
-  builder, and an optional `preStep` (the source-id compilation guard). Consciously decide
-  whether the compilation guard should apply to all providers (it arguably should — make it a
-  shared step keyed by descriptor source) rather than dropping it. Then Wave 3's 1inch preflight
-  is a descriptor row. (Depends on **M-B** for the neutral primitives and **N2** for labels.)
-- **Effort:** M. **Risk:** medium-high (fail-closed preflight — preserve the 'contains'→'exact'
-  reconciliation, the contract-code checks, AND the Sushi compilation guard; do not silently
-  change LI.FI's behavior). **Verify:** preflight unit + fork-reconciliation tests, with explicit
-  coverage of the stale-factory rejection for every aggregator source.
+     (`route-preflight-validation.ts:415-418`); Sushi reads only `policy.callTargets` (`preflight.ts:126`).
+  3. **LI.FI-only target/spender contract-code checks (pass 4):** `validateLifiAllowlistPreflight`
+     loops `requireContractCode` over **both** `expectedTargets` and `expectedSpenders`
+     (`route-preflight-validation.ts:390-405`); the Sushi validator does **no** `getCode` on its
+     targets/spenders (`preflight.ts:113-140`). Both descriptor rows set
+     `getContractCodeRequirements: () => []`, and the shared runner only code-checks the taker
+     **address**, not targets/spenders. So this is NOT shared. A collapse that runs the loop in the
+     core silently **extends** `eth_getCode` checks to Sushi (new RPC + fail-closed surface; the
+     Sushi preflight test stub has no `getCode`); one that omits it silently **drops** LI.FI's
+     bytecode check (covered by `route-preflight.test.ts:631-672`).
+- **Remedy:** Collapse only the reconciliation core; keep **four** per-provider hooks off the
+  descriptor: `normalizeChainPolicy`, a `selectorTargets` builder, an optional `preStep` (the
+  compilation guard), and a `contractCodeTargets` builder / per-source flag (whether to `getCode`
+  targets+spenders). For each of the three asymmetries make the **apply-to-all-vs-keep-as-is
+  decision explicit** (e.g. the compilation guard and the contract-code checks arguably *should*
+  extend to all providers — but that is a conscious, tested behavior change, not an incidental one).
+  Then Wave 3's 1inch preflight is a descriptor row. (Depends on **M-B** / **N2**.)
+- **Effort:** M. **Risk:** medium-high (fail-closed preflight — preserve 'contains'→'exact'
+  reconciliation; do **not** silently extend-or-drop any of the three asymmetric checks).
+- **Verify:** preflight unit + fork-reconciliation tests, with **per-source** coverage of (a) the
+  stale-factory rejection and (b) the no-bytecode target/spender rejection. **The Sushi preflight
+  test stub must gain a `getCode` stub** if Sushi is brought into the contract-code check.
 
 ### M-G — Unify the circuit-breaker mechanics; kill the 1inch dual-bookkeeping *(new)*
 - **Location:** `src/discovery/external-take/lifi-circuit.ts` (~116 lines),
