@@ -7,7 +7,7 @@ import { getLifiCircuitOpenReason } from './lifi-circuit';
 import {
   AutoDiscoverTakePolicyRuntime,
   DiscoveryTokenDecimalsCacheResolver,
-  LifiPathQuoteInput,
+  CalldataAggregatorPathQuoteInput,
   QuoteCircuitPolicy,
   quoteCalldataAggregatorPathForDiscovery,
   recordLifiCircuitOutcomeForDiscovery,
@@ -21,7 +21,7 @@ export async function quoteLifiPathForDiscovery(
     routeProbeLimiter?: AsyncOperationLimiter;
     probeTimeoutMs: number;
     getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
-  } & LifiPathQuoteInput
+  } & CalldataAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteCalldataAggregatorPathForDiscovery(params, {
     label: 'LI.FI',

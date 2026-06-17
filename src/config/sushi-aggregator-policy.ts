@@ -3,6 +3,7 @@ import {
   normalizeTakerAddressAllowlist,
   normalizeTakerSelectorAllowlistRecord,
 } from '../take/aggregator-calldata/allowlist';
+import { normalizeAggregatorApiBaseUrl } from '../dex/lifi/api-policy';
 
 /**
  * Sushi aggregator provider policy (Packet 3B). Focused provider module so
@@ -84,6 +85,13 @@ export function assertValidSushiAggregatorDexConfig(params: {
   }
   if (config.mode !== 'production') {
     throw new Error(`${fieldName}.mode must be 'production'`);
+  }
+  if (config.apiBaseUrl !== undefined) {
+    // Sushi is production-only; require the same fail-closed URL shape LI.FI
+    // already enforces (http(s) only, no credentials/query/fragment, HTTPS).
+    normalizeAggregatorApiBaseUrl(config.apiBaseUrl, `${fieldName}.apiBaseUrl`, {
+      requireHttps: true,
+    });
   }
   if (
     config.quoteTimeoutMs !== undefined &&

@@ -41,9 +41,6 @@ import {
 export type AutoDiscoverTakePolicyRuntime = ReturnType<
   typeof getAutoDiscoverTakePolicy
 >;
-export type OneInchCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
-export type LifiCircuitOutcome = ExternalTakeQuoteCircuitOutcome;
-
 export interface DirectDexPathQuoteInput extends AuctionTakeFacts {
   pool: FungiblePool;
   signer: Signer;
@@ -58,32 +55,12 @@ export interface CalldataAggregatorPathQuoteInput
   quoteCircuitMode?: 'record' | 'observe';
 }
 
-export interface OneInchAggregatorPathQuoteInput
-  extends CalldataAggregatorPathQuoteInput {}
-
-export interface LifiPathQuoteInput extends CalldataAggregatorPathQuoteInput {}
-
-export interface SushiAggregatorPathQuoteInput
-  extends CalldataAggregatorPathQuoteInput {}
-
 export type DirectDexPathQuoteFn = (
   quoteParams: DirectDexPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
 export type CalldataAggregatorPathQuoteFn = (
   quoteParams: CalldataAggregatorPathQuoteInput
-) => Promise<ExternalTakeQuoteEvaluation>;
-
-export type OneInchAggregatorPathQuoteFn = (
-  quoteParams: OneInchAggregatorPathQuoteInput
-) => Promise<ExternalTakeQuoteEvaluation>;
-
-export type LifiPathQuoteFn = (
-  quoteParams: LifiPathQuoteInput
-) => Promise<ExternalTakeQuoteEvaluation>;
-
-export type SushiAggregatorPathQuoteFn = (
-  quoteParams: SushiAggregatorPathQuoteInput
 ) => Promise<ExternalTakeQuoteEvaluation>;
 
 export type DiscoveryDirectDexQuoteConfig = {
@@ -151,7 +128,7 @@ async function withCombinedAbortSignal<T>(
 export function recordOneInchCircuitOutcomeForDiscovery(params: {
   rpcCache?: DiscoveryRpcCache;
   takePolicy: AutoDiscoverTakePolicyRuntime;
-  outcome: OneInchCircuitOutcome;
+  outcome: ExternalTakeQuoteCircuitOutcome;
   purpose?: OneInchQuoteCircuitPurpose;
 }): void {
   if (params.outcome === 'neutral') {
@@ -171,7 +148,7 @@ export function recordOneInchCircuitOutcomeForDiscovery(params: {
 export function recordLifiCircuitOutcomeForDiscovery(params: {
   rpcCache?: DiscoveryRpcCache;
   config?: DiscoveryExecutionConfig;
-  outcome: LifiCircuitOutcome;
+  outcome: ExternalTakeQuoteCircuitOutcome;
   purpose?: LifiCircuitPurpose;
 }): void {
   if (params.outcome === 'neutral') {

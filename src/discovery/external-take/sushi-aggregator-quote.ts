@@ -7,7 +7,7 @@ import {
   AutoDiscoverTakePolicyRuntime,
   DiscoveryTokenDecimalsCacheResolver,
   quoteCalldataAggregatorPathForDiscovery,
-  SushiAggregatorPathQuoteInput,
+  CalldataAggregatorPathQuoteInput,
 } from './quotes';
 
 export async function quoteSushiAggregatorPathForDiscovery(
@@ -18,7 +18,7 @@ export async function quoteSushiAggregatorPathForDiscovery(
     routeProbeLimiter?: AsyncOperationLimiter;
     probeTimeoutMs: number;
     getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
-  } & SushiAggregatorPathQuoteInput
+  } & CalldataAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteCalldataAggregatorPathForDiscovery(params, {
     label: 'Sushi Aggregator',

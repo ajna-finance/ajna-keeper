@@ -10,7 +10,7 @@ import {
 import {
   AutoDiscoverTakePolicyRuntime,
   DiscoveryTokenDecimalsCacheResolver,
-  OneInchAggregatorPathQuoteInput,
+  CalldataAggregatorPathQuoteInput,
   QuoteCircuitPolicy,
   quoteCalldataAggregatorPathForDiscovery,
   recordOneInchCircuitOutcomeForDiscovery,
@@ -24,7 +24,7 @@ export async function quoteOneInchAggregatorPathForDiscovery(
     routeProbeLimiter?: AsyncOperationLimiter;
     probeTimeoutMs: number;
     getTokenDecimalsCache: DiscoveryTokenDecimalsCacheResolver;
-  } & OneInchAggregatorPathQuoteInput
+  } & CalldataAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteCalldataAggregatorPathForDiscovery(params, {
     label: '1inch',
