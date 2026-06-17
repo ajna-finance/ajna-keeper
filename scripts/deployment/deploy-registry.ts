@@ -61,8 +61,7 @@ interface DeployDescriptorBase {
   readonly takerArtifact: TakerArtifact;
   // Step label printed by the deploy phase (preserves the original CLI strings).
   readonly deployStepLabel: string;
-  // Operator-facing summary line in generateConfigUpdate ("<icon> <name>: addr").
-  readonly summaryIcon: string;
+  // Contract name printed by the deploy phase success log.
   readonly summaryContractName: string;
 }
 
@@ -345,7 +344,6 @@ function deployDescriptorFor(params: {
   addressKey: DeploymentAddressKey;
   takerArtifact: TakerArtifact;
   deployStepLabel: string;
-  summaryIcon: string;
   summaryContractName: string;
 }) {
   const identity = getExternalTakeLiquiditySourceDescriptor(
@@ -359,7 +357,6 @@ function deployDescriptorFor(params: {
     addressKey: params.addressKey,
     takerArtifact: params.takerArtifact,
     deployStepLabel: params.deployStepLabel,
-    summaryIcon: params.summaryIcon,
     summaryContractName: params.summaryContractName,
   };
 }
@@ -380,7 +377,6 @@ export const DEPLOY_DESCRIPTORS: readonly DeployDescriptor[] = [
         artifactName: 'UniswapV3KeeperTaker.json',
       },
       deployStepLabel: 'Step 2: Deploying UniswapV3KeeperTaker...',
-      summaryIcon: '🦄',
       summaryContractName: 'UniswapV3KeeperTaker',
     }),
     category: 'direct_dex',
@@ -395,7 +391,6 @@ export const DEPLOY_DESCRIPTORS: readonly DeployDescriptor[] = [
         artifactName: 'CurveKeeperTaker.json',
       },
       deployStepLabel: 'Step 2c: Deploying CurveKeeperTaker...',
-      summaryIcon: '🌊',
       summaryContractName: 'CurveKeeperTaker',
     }),
     category: 'direct_dex',
@@ -410,7 +405,6 @@ export const DEPLOY_DESCRIPTORS: readonly DeployDescriptor[] = [
         artifactName: 'LifiKeeperTaker.json',
       },
       deployStepLabel: 'Step 2d: Deploying LifiKeeperTaker...',
-      summaryIcon: '🔁',
       summaryContractName: 'LifiKeeperTaker',
     }),
     category: 'aggregator',
@@ -439,7 +433,6 @@ export const DEPLOY_DESCRIPTORS: readonly DeployDescriptor[] = [
         artifactName: 'SushiAggregatorKeeperTaker.json',
       },
       deployStepLabel: 'Deploying SushiAggregatorKeeperTaker...',
-      summaryIcon: '🍣',
       summaryContractName: 'SushiAggregatorKeeperTaker',
     }),
     category: 'aggregator',
@@ -468,7 +461,6 @@ export const DEPLOY_DESCRIPTORS: readonly DeployDescriptor[] = [
         artifactName: 'OneInchAggregatorKeeperTaker.json',
       },
       deployStepLabel: 'Deploying OneInchAggregatorKeeperTaker...',
-      summaryIcon: '🟦',
       summaryContractName: 'OneInchAggregatorKeeperTaker',
     }),
     category: 'aggregator',
