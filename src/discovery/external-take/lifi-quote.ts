@@ -1,4 +1,3 @@
-import { LiquiditySource } from '../../config';
 import { getLifiPathQuoteEvaluation } from '../../take/lifi/quote-evaluation';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import { AsyncOperationLimiter } from '../../utils';
@@ -24,8 +23,7 @@ export async function quoteLifiPathForDiscovery(
   } & CalldataAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteCalldataAggregatorPathForDiscovery(params, {
-    label: 'LI.FI',
-    selectedLiquiditySource: LiquiditySource.LIFI,
+    providerId: 'lifi',
     abortErrorMessage: 'LI.FI external take quote aborted',
     timeoutLabel: 'LI.FI external take quote',
     circuitFactory: (params): QuoteCircuitPolicy => {

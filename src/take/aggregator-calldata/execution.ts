@@ -3,7 +3,6 @@ import { BigNumber, ethers } from 'ethers';
 import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import {
   CalldataAggregatorProviderId,
-  LiquiditySource,
   getAggregatorProviderIdentity,
 } from '../../config';
 import { convertWadToTokenDecimals } from '../../erc20';
@@ -285,7 +284,6 @@ export async function prepareCalldataAggregatorExecution<
   liquidation: TakeLiquidationPlan;
   config: TConfig;
   providerId: CalldataAggregatorProviderId;
-  label: string;
   missingRouterReason: string;
   missingTakerReason: string;
   collateralRoundsToZeroReason: string;
@@ -319,6 +317,7 @@ export async function prepareCalldataAggregatorExecution<
   ) => void;
 }): Promise<PreparedCalldataAggregatorExecution> {
   const { pool, signer, poolConfig, liquidation, config } = params;
+  const { label } = getAggregatorProviderIdentity(params.providerId);
   const executionCollateralWad = getDebtConstrainedTakeCollateralWad({
     collateral: liquidation.collateral,
     auctionPrice: liquidation.auctionPrice,
@@ -351,7 +350,7 @@ export async function prepareCalldataAggregatorExecution<
     quoteEvaluation: approval.quoteEvaluation,
     liquidation,
     executionCollateralWad,
-    label: params.label,
+    label,
   });
   if (contextMismatch) {
     return { kind: 'rejected', reason: contextMismatch };
@@ -411,7 +410,7 @@ export async function prepareCalldataAggregatorExecution<
   const floorError = getAggregatorFreshQuoteFloorError({
     freshQuote,
     approvedMinOutRaw: approvedQuoteEvaluation.approvedMinOutRaw,
-    label: params.label,
+    label,
   });
   if (floorError) {
     return {
@@ -425,7 +424,7 @@ export async function prepareCalldataAggregatorExecution<
   const ageError = getAggregatorQuoteAgeError({
     quote: freshQuote,
     maxQuoteAgeMs,
-    label: params.label,
+    label,
   });
   if (ageError) {
     return {
@@ -450,7 +449,7 @@ export async function prepareCalldataAggregatorExecution<
       const error = getAggregatorQuoteAgeError({
         quote: freshQuote,
         maxQuoteAgeMs,
-        label: params.label,
+        label,
       });
       if (error) {
         params.onQuoteResult(config, {
@@ -478,9 +477,7 @@ export async function submitCalldataAggregatorTake(params: {
   borrower: string;
   auctionPrice: BigNumber;
   executionCollateralWad: BigNumber;
-  liquiditySource: LiquiditySource;
   providerId: CalldataAggregatorProviderId;
-  label: string;
   transactionTarget: string;
   swapDetails: string;
   routeProfitability?: RouteProfitabilityBreakdown;
@@ -489,6 +486,9 @@ export async function submitCalldataAggregatorTake(params: {
   onQuoteConsumed?: () => void;
   onSubmissionAccepted: () => void;
 }): Promise<void> {
+  const { source: liquiditySource, label } = getAggregatorProviderIdentity(
+    params.providerId
+  );
   await NonceTracker.queueTransaction(
     params.takeWriteTransport.signer,
     async (nonce: number) => {
@@ -498,13 +498,13 @@ export async function submitCalldataAggregatorTake(params: {
         params.borrower,
         params.auctionPrice,
         params.executionCollateralWad,
-        Number(params.liquiditySource),
+        Number(liquiditySource),
         params.transactionTarget,
         params.swapDetails,
       ] as const;
       const gasLimit = await estimateGasWithBuffer(
         () => params.factory.estimateGas.takeWithAtomicSwap(...txArgs),
-        `${params.label} Take ${params.poolName}/${params.borrower}`,
+        `${label} Take ${params.poolName}/${params.borrower}`,
         13000
       );
       params.assertFreshQuoteStillCurrent();
@@ -523,7 +523,7 @@ export async function submitCalldataAggregatorTake(params: {
       logTakeExecutionTelemetry({
         path: 'calldata_aggregator',
         providerId: params.providerId,
-        source: params.liquiditySource,
+        source: liquiditySource,
         poolName: params.poolName,
         poolAddress: params.poolAddress,
         borrower: params.borrower,
@@ -533,7 +533,7 @@ export async function submitCalldataAggregatorTake(params: {
         takeWriteTransport: params.takeWriteTransport,
       });
       logger.info(
-        `${params.label} Take successful - pool: ${params.poolName}, borrower: ${params.borrower} | tx: ${receipt.transactionHash}`
+        `${label} Take successful - pool: ${params.poolName}, borrower: ${params.borrower} | tx: ${receipt.transactionHash}`
       );
       return receipt;
     }
@@ -544,9 +544,7 @@ export async function submitPreparedCalldataAggregatorExecution(params: {
   pool: FungiblePool;
   liquidation: TakeLiquidationPlan;
   prepared: Extract<PreparedCalldataAggregatorExecution, { kind: 'ready' }>;
-  liquiditySource: LiquiditySource;
   providerId: CalldataAggregatorProviderId;
-  label: string;
   onQuoteConsumed?: () => void;
   onSubmissionAccepted: () => void;
 }): Promise<void> {
@@ -559,9 +557,7 @@ export async function submitPreparedCalldataAggregatorExecution(params: {
     borrower: liquidation.borrower,
     auctionPrice: liquidation.auctionPrice,
     executionCollateralWad: prepared.executionCollateralWad,
-    liquiditySource: params.liquiditySource,
     providerId: params.providerId,
-    label: params.label,
     transactionTarget: prepared.freshQuote.transactionTarget,
     swapDetails: prepared.swapDetails,
     routeProfitability: prepared.approvedQuoteEvaluation.routeProfitability,
@@ -577,8 +573,6 @@ export async function takeLiquidationCalldataAggregatorProvider<
 >(
   params: CalldataAggregatorProviderExecutionParams<TConfig> & {
     providerId: CalldataAggregatorProviderId;
-    liquiditySource: LiquiditySource;
-    label: string;
     prepareExecution: (
       params: CalldataAggregatorProviderExecutionParams<TConfig>
     ) => Promise<PreparedCalldataAggregatorExecution>;
@@ -594,6 +588,7 @@ export async function takeLiquidationCalldataAggregatorProvider<
   }
 ): Promise<boolean> {
   const { pool, liquidation, config } = params;
+  const { label } = getAggregatorProviderIdentity(params.providerId);
   const { borrower } = liquidation;
   if (
     !isCalldataAggregatorExecutionPathSelected({
@@ -603,7 +598,7 @@ export async function takeLiquidationCalldataAggregatorProvider<
     })
   ) {
     logger.error(
-      `${params.label} liquidity source not selected. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
+      `${label} liquidity source not selected. Skipping liquidation of poolAddress: ${pool.poolAddress}, borrower: ${borrower}.`
     );
     return false;
   }
@@ -617,7 +612,7 @@ export async function takeLiquidationCalldataAggregatorProvider<
     }
     if (prepared.kind === 'dry_run') {
       logger.info(
-        `DryRun - would ${params.label} Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, approvedMinOutRaw=${prepared.approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
+        `DryRun - would ${label} Take - poolAddress: ${pool.poolAddress}, borrower: ${borrower}, approvedMinOutRaw=${prepared.approvedQuoteEvaluation.approvedMinOutRaw.toString()}`
       );
       return true;
     }
@@ -626,9 +621,7 @@ export async function takeLiquidationCalldataAggregatorProvider<
       pool,
       liquidation,
       prepared,
-      liquiditySource: params.liquiditySource,
       providerId: params.providerId,
-      label: params.label,
       onQuoteConsumed: () => params.onQuoteConsumed(config),
       onSubmissionAccepted: () => {
         attemptedSubmission = true;
@@ -642,7 +635,7 @@ export async function takeLiquidationCalldataAggregatorProvider<
       error: getErrorMessage(error),
     });
     logger.error(
-      `Failed ${params.label} Take. pool: ${pool.name}, borrower: ${borrower}`,
+      `Failed ${label} Take. pool: ${pool.name}, borrower: ${borrower}`,
       error
     );
     return false;

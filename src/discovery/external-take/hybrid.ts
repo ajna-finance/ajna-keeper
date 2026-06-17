@@ -5,6 +5,8 @@ import {
   ExternalTakePathKind,
   HybridGasQuoteFallbackPolicyResolution,
   formatLiquiditySource,
+  getAggregatorProviderIdentity,
+  isCalldataAggregatorProviderId,
 } from '../../config';
 import { logger } from '../../logging';
 import { isSubsidizedExternalTakeQuote } from '../../take/external-take/policy';
@@ -55,16 +57,10 @@ import { ResolvedTakeTarget } from '../targets';
 function formatProviderWarnLabel(
   provider: DiscoveryExternalTakeRouteProvider
 ): string {
-  switch (provider.providerId) {
-    case 'oneinch':
-      return '1inch';
-    case 'lifi':
-      return 'LI.FI';
-    case 'sushi_aggregator':
-      return 'Sushi aggregator';
-    default:
-      return provider.path === 'direct_dex' ? 'direct DEX' : provider.path;
+  if (isCalldataAggregatorProviderId(provider.providerId)) {
+    return getAggregatorProviderIdentity(provider.providerId).label;
   }
+  return provider.path === 'direct_dex' ? 'direct DEX' : provider.path;
 }
 
 export interface HybridExternalTakeStats {

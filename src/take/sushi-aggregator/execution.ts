@@ -1,5 +1,4 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { LiquiditySource } from '../../config';
 import { DEFAULT_SUSHI_AGGREGATOR_MAX_QUOTE_AGE_MS } from '../../config/sushi-aggregator-policy';
 import {
   makeCalldataAggregatorProviderRejectionRecorder,
@@ -15,8 +14,6 @@ import {
   resolveSushiAggregatorChainId,
 } from './quote-service';
 import { TakeActionConfig, TakeLiquidationPlan } from '../types';
-
-const SUSHI_LABEL = 'Sushi Aggregator';
 
 function getSushiMaxQuoteAgeMs(config: SushiAggregatorExecutionConfig): number {
   return (
@@ -40,7 +37,6 @@ async function prepareSushiAggregatorExecution(params: {
     liquidation,
     config,
     providerId: 'sushi_aggregator',
-    label: SUSHI_LABEL,
     missingRouterReason:
       'Sushi aggregator execution requires keeperTakerRouter',
     missingTakerReason:
@@ -84,8 +80,6 @@ export async function takeLiquidationSushiAggregator(params: {
   return await takeLiquidationCalldataAggregatorProvider({
     ...params,
     providerId: 'sushi_aggregator',
-    liquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
-    label: SUSHI_LABEL,
     prepareExecution: prepareSushiAggregatorExecution,
     recordPreparedRejection:
       makeCalldataAggregatorProviderRejectionRecorder<SushiAggregatorExecutionConfig>(

@@ -1,4 +1,3 @@
-import { LiquiditySource } from '../../config';
 import { getSushiAggregatorPathQuoteEvaluation } from '../../take/sushi-aggregator/quote-evaluation';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import { AsyncOperationLimiter } from '../../utils';
@@ -21,8 +20,7 @@ export async function quoteSushiAggregatorPathForDiscovery(
   } & CalldataAggregatorPathQuoteInput
 ): Promise<ExternalTakeQuoteEvaluation> {
   return quoteCalldataAggregatorPathForDiscovery(params, {
-    label: 'Sushi Aggregator',
-    selectedLiquiditySource: LiquiditySource.SUSHI_AGGREGATOR,
+    providerId: 'sushi_aggregator',
     abortErrorMessage: 'Sushi aggregator external take quote aborted',
     timeoutLabel: 'Sushi aggregator external take quote',
     circuitFactory: () => ({ kind: 'none' }),

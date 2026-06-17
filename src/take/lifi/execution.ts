@@ -1,5 +1,5 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { LifiDexConfig, LiquiditySource } from '../../config';
+import { LifiDexConfig } from '../../config';
 import type { ExternalTakeTakerContractKey } from '../../config';
 import { DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../../dex/lifi';
 import {
@@ -17,8 +17,6 @@ import {
   resolveLifiChainId,
 } from './quote-service';
 import { TakeActionConfig, TakeLiquidationPlan } from '../types';
-
-const LIFI_LABEL = 'LI.FI';
 
 function getLifiTakerAddress(
   takerContracts:
@@ -64,7 +62,6 @@ async function prepareLifiExecution(params: {
     liquidation,
     config,
     providerId: 'lifi',
-    label: LIFI_LABEL,
     missingRouterReason: 'LI.FI execution requires keeperTakerRouter',
     missingTakerReason: 'LI.FI execution requires lifiTaker',
     collateralRoundsToZeroReason:
@@ -108,8 +105,6 @@ export async function takeLiquidationLifi(params: {
   return await takeLiquidationCalldataAggregatorProvider({
     ...params,
     providerId: 'lifi',
-    liquiditySource: LiquiditySource.LIFI,
-    label: LIFI_LABEL,
     prepareExecution: prepareLifiExecution,
     recordPreparedRejection:
       makeCalldataAggregatorProviderRejectionRecorder<LifiExecutionConfig>({

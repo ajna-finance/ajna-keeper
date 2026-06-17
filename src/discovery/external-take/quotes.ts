@@ -2,8 +2,10 @@ import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import {
   CalldataAggregatorLiquiditySource,
+  CalldataAggregatorProviderId,
   LiquiditySource,
   formatLiquiditySource,
+  getAggregatorProviderIdentity,
   getAutoDiscoverTakePolicy,
   resolveCalldataAggregatorProviderForSource,
 } from '../../config';
@@ -326,8 +328,7 @@ export async function quoteCalldataAggregatorPathForDiscovery<
 >(
   params: TParams,
   descriptor: {
-    label: string;
-    selectedLiquiditySource: CalldataAggregatorLiquiditySource;
+    providerId: CalldataAggregatorProviderId;
     abortErrorMessage: string;
     timeoutLabel: string;
     circuitFactory: (params: TParams) => QuoteCircuitPolicy;
@@ -338,13 +339,14 @@ export async function quoteCalldataAggregatorPathForDiscovery<
     ) => Promise<ExternalTakeQuoteEvaluation>;
   }
 ): Promise<ExternalTakeQuoteEvaluation> {
+  const identity = getAggregatorProviderIdentity(descriptor.providerId);
   const quoteCollateralWad = getDebtConstrainedTakeCollateralWad(params);
   const circuit = descriptor.circuitFactory(params);
   return quoteCircuitGuardedPath({
     poolName: params.pool.name,
-    label: descriptor.label,
+    label: identity.label,
     externalTakePath: 'calldata_aggregator',
-    selectedLiquiditySource: descriptor.selectedLiquiditySource,
+    selectedLiquiditySource: identity.source,
     auctionPrice: params.auctionPrice,
     collateral: quoteCollateralWad,
     circuit,
