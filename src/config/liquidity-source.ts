@@ -63,14 +63,6 @@ export const UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS = [
 export type UniswapV3DirectDexRouteAddressField =
   (typeof UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS)[number];
 
-export const UNISWAP_V3_DIRECT_DEX_ROUTE_CONTRACT_ADDRESS_FIELDS: readonly UniswapV3DirectDexRouteAddressField[] =
-  [
-    'swapRouter02Address',
-    'poolFactoryAddress',
-    'quoterV2Address',
-    'wethAddress',
-  ];
-
 export interface ResolvedUniswapV3DirectDexQuoteConfig {
   poolFactoryAddress: string;
   quoterV2Address: string;

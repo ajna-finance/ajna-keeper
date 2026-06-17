@@ -38,7 +38,12 @@ import {
   recordOneInchQuoteFailure,
   recordOneInchQuoteSuccess,
 } from './external-take/one-inch-circuit';
-import { ceilDivBigNumber, getErrorMessage, withTimeout } from '../utils';
+import {
+  ceilDivBigNumber,
+  getErrorMessage,
+  pruneMapToMaxSize,
+  withTimeout,
+} from '../utils';
 import { BASIS_POINTS_DENOMINATOR_BN } from '../constants';
 
 export interface GasPolicyResult {
@@ -539,13 +544,7 @@ function pruneGasQuoteConversionCache(
       cache.delete(key);
     }
   }
-  while (cache.size > MAX_GAS_QUOTE_CONVERSION_CACHE_ENTRIES) {
-    const oldestKey = cache.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    cache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(cache, MAX_GAS_QUOTE_CONVERSION_CACHE_ENTRIES);
 }
 
 function getGasQuoteConversionCacheTtlMs(params: {

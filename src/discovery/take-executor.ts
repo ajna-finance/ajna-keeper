@@ -155,16 +155,6 @@ function createDiscoveryRouteProbeLimiter(params: {
   });
 }
 
-function getDiscoveryTokenDecimalsCache(
-  rpcCache?: DiscoveryRpcCache
-): Map<string, number> | undefined {
-  if (!rpcCache?.directDexQuoteProviders) {
-    return undefined;
-  }
-  rpcCache.directDexQuoteProviders.tokenDecimals ??= new Map();
-  return rpcCache.directDexQuoteProviders.tokenDecimals;
-}
-
 async function buildDirectDexRouteProfitabilityContext(params: {
   pool: FungiblePool;
   signer: Signer;

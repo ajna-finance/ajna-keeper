@@ -4,6 +4,7 @@ import Erc20Abi from './abis/erc20.abi.json';
 import { NonceTracker } from './nonce';
 import { TransactionResponse } from '@ethersproject/abstract-provider';
 import { logger } from './logging';
+import { pruneMapToMaxSize } from './utils';
 
 // Process-wide decimals cache. Include chainId when available so multi-chain
 // keepers do not reuse same-address token metadata across networks.
@@ -89,13 +90,7 @@ function getDecimalsCacheKey(params: {
 }
 
 function pruneCachedDecimals(): void {
-  while (cachedDecimals.size > MAX_CACHED_DECIMAL_ENTRIES) {
-    const oldestKey = cachedDecimals.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    cachedDecimals.delete(oldestKey);
-  }
+  pruneMapToMaxSize(cachedDecimals, MAX_CACHED_DECIMAL_ENTRIES);
 }
 
 export function clearErc20DecimalCache(): void {

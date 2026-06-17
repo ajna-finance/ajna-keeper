@@ -1,5 +1,6 @@
 import { Signer } from '@ajna-finance/sdk';
 import { getDecimalsErc20 } from '../../erc20';
+import { pruneMapToMaxSize } from '../../utils';
 
 /**
  * Shared chain-verification and token-decimals helpers for external-take
@@ -32,13 +33,7 @@ export async function getCachedTokenDecimals(params: {
     params.cache.set(cacheKey, decimals);
     const maxEntries =
       params.maxEntries ?? DEFAULT_EXTERNAL_TAKE_TOKEN_DECIMAL_CACHE_ENTRIES;
-    while (params.cache.size > maxEntries) {
-      const oldestKey = params.cache.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      params.cache.delete(oldestKey);
-    }
+    pruneMapToMaxSize(params.cache, maxEntries);
   }
   return decimals;
 }

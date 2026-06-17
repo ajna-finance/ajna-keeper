@@ -1,0 +1,123 @@
+{
+  "reviewers": [
+    "codex",
+    "claude",
+    "gemini"
+  ],
+  "first_pass": {
+    "codex": [
+      {
+        "sandbox": "read-only",
+        "command": [
+          "/home/mike/.nvm/versions/node/v20.18.0/bin/codex",
+          "--ask-for-approval",
+          "never",
+          "exec",
+          "-C",
+          "/home/mike/Projects-2026/ajna-keeper",
+          "--sandbox",
+          "read-only",
+          "-c",
+          "model_reasoning_effort=\"xhigh\"",
+          "--ephemeral",
+          "--output-last-message",
+          "/home/mike/Projects-2026/ajna-keeper/.ajna-audit/round6-crossreview/codex-first-pass.read_only.md",
+          "-"
+        ]
+      },
+      {
+        "sandbox": "workspace-write",
+        "command": [
+          "/home/mike/.nvm/versions/node/v20.18.0/bin/codex",
+          "--ask-for-approval",
+          "never",
+          "exec",
+          "-C",
+          "/home/mike/Projects-2026/ajna-keeper",
+          "--sandbox",
+          "workspace-write",
+          "-c",
+          "model_reasoning_effort=\"xhigh\"",
+          "--ephemeral",
+          "--output-last-message",
+          "/home/mike/Projects-2026/ajna-keeper/.ajna-audit/round6-crossreview/codex-first-pass.workspace_write.md",
+          "-"
+        ]
+      }
+    ],
+    "claude": [
+      "/home/mike/.local/bin/claude",
+      "-p",
+      "--no-session-persistence",
+      "--permission-mode",
+      "dontAsk",
+      "--effort",
+      "max",
+      "--output-format",
+      "text",
+      "--model",
+      "claude-opus-4-8"
+    ],
+    "gemini": [
+      "/home/mike/.nvm/versions/node/v20.18.0/bin/gemini",
+      "-p",
+      "-",
+      "--approval-mode",
+      "plan",
+      "--output-format",
+      "text",
+      "--skip-trust",
+      "--include-directories",
+      "/home/mike/.claude/skills/ajna-audit",
+      "--model",
+      "pro"
+    ]
+  },
+  "compare": [
+    {
+      "sandbox": "read-only",
+      "command": [
+        "/home/mike/.nvm/versions/node/v20.18.0/bin/codex",
+        "--ask-for-approval",
+        "never",
+        "exec",
+        "-C",
+        "/home/mike/Projects-2026/ajna-keeper",
+        "--sandbox",
+        "read-only",
+        "-c",
+        "model_reasoning_effort=\"xhigh\"",
+        "--ephemeral",
+        "--output-last-message",
+        "/home/mike/Projects-2026/ajna-keeper/.ajna-audit/round6-crossreview/comparison.read_only.md",
+        "-"
+      ]
+    },
+    {
+      "sandbox": "workspace-write",
+      "command": [
+        "/home/mike/.nvm/versions/node/v20.18.0/bin/codex",
+        "--ask-for-approval",
+        "never",
+        "exec",
+        "-C",
+        "/home/mike/Projects-2026/ajna-keeper",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "model_reasoning_effort=\"xhigh\"",
+        "--ephemeral",
+        "--output-last-message",
+        "/home/mike/Projects-2026/ajna-keeper/.ajna-audit/round6-crossreview/comparison.workspace_write.md",
+        "-"
+      ]
+    }
+  ],
+  "codex_exec_compat": {
+    "top_level_ask_for_approval_flag": true,
+    "exec_ask_for_approval_flag": false,
+    "sandbox_flag": true,
+    "ephemeral_flag": true,
+    "output_last_message_flag": true
+  }
+}

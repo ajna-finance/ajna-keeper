@@ -1,0 +1,33 @@
+{
+  "status": "completed",
+  "preflight_status": "passed",
+  "preflight": "/home/mike/Projects-2026/ajna-keeper/.ajna-audit/round5-claude-rerun/preflight.json",
+  "reviewers": [
+    "claude"
+  ],
+  "results": [
+    {
+      "name": "claude",
+      "command": [
+        "/home/mike/.local/bin/claude",
+        "-p",
+        "--no-session-persistence",
+        "--permission-mode",
+        "dontAsk",
+        "--effort",
+        "max",
+        "--output-format",
+        "text",
+        "--model",
+        "claude-opus-4-8"
+      ],
+      "returncode": 0,
+      "timed_out": false,
+      "elapsed_seconds": 1065.743,
+      "stdout_log": "/home/mike/Projects-2026/ajna-keeper/.ajna-audit/round5-claude-rerun/claude-first-pass.stdout.log",
+      "stderr_log": "/home/mike/Projects-2026/ajna-keeper/.ajna-audit/round5-claude-rerun/claude-first-pass.stderr.log",
+      "report_path": "/home/mike/Projects-2026/ajna-keeper/.ajna-audit/round5-claude-rerun/claude-first-pass.md"
+    }
+  ],
+  "comparison": null
+}

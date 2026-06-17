@@ -97,8 +97,3 @@ export function normalizeProductionLifiExchangePolicy(params: {
   };
 }
 
-export function isReviewedBroadLifiExchangePolicy(
-  policy: LifiExchangePolicy
-): policy is ReviewedBroadLifiExchangePolicy {
-  return policy.kind === 'reviewed_broad';
-}

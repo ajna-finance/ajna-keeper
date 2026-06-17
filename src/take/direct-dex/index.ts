@@ -658,12 +658,6 @@ export async function takeLiquidationDirectDex({
     );
   }
 
-  const routeMetadata =
-    `source=${formatLiquiditySource(approvedQuoteEvaluation.selectedLiquiditySource)}` +
-    ` feeTier=${approvedQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
-    ` approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}` +
-    ` curvePool=${approvedQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
-
   try {
     return await executeSelectedDirectDexRoute({
       pool,
@@ -674,6 +668,11 @@ export async function takeLiquidationDirectDex({
       quoteEvaluation: approvedQuoteEvaluation,
     });
   } catch (error) {
+    const routeMetadata =
+      `source=${formatLiquiditySource(approvedQuoteEvaluation.selectedLiquiditySource)}` +
+      ` feeTier=${approvedQuoteEvaluation.selectedFeeTier ?? 'n/a'}` +
+      ` approvedMinOutRaw=${approvedQuoteEvaluation.approvedMinOutRaw.toString()}` +
+      ` curvePool=${approvedQuoteEvaluation.curvePool?.address ?? 'n/a'}`;
     logger.error(
       `Direct DEX take execution failed for ${pool.name}/${borrower} ${routeMetadata}`,
       error

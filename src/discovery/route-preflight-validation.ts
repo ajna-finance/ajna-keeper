@@ -5,7 +5,7 @@ import {
   KeeperConfig,
   LiquiditySource,
   ResolvedExternalTakePolicy,
-  UNISWAP_V3_DIRECT_DEX_ROUTE_CONTRACT_ADDRESS_FIELDS,
+  UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS,
   formatLiquiditySource,
   getAggregatorProviderIdentity,
   getAutoDiscoverTakePolicy,
@@ -472,7 +472,7 @@ const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
   [LiquiditySource.UNISWAPV3]: createRouterRegisteredPreflightDescriptor({
     getContractCodeRequirements: ({ config }) => {
       const routerConfig = config.dex?.uniswapV3?.router;
-      return UNISWAP_V3_DIRECT_DEX_ROUTE_CONTRACT_ADDRESS_FIELDS.map((field) => ({
+      return UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS.map((field) => ({
         label: `Uniswap V3 ${field}`,
         address: routerConfig?.[field],
       }));

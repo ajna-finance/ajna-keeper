@@ -18,15 +18,11 @@ import {
 import {
   EXTERNAL_TAKE_ROUTE_SELECTION_MODES,
   HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES,
-  isDirectDexDynamicSource,
 } from './route-policy';
 import {
   formatSupportedExternalTakeLiquiditySources,
-  formatSupportedExternalTakePaths,
   getExternalTakeTakerContractKeyForSource,
-  getExternalTakePathDescriptor,
   isExternalTakeLiquiditySource,
-  resolveExternalTakePathFromSource,
 } from './external-take-descriptors';
 import type { ExternalTakeLiquiditySource } from './external-take-descriptors';
 import {

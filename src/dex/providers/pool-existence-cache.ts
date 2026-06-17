@@ -1,3 +1,5 @@
+import { pruneMapToMaxSize } from '../../utils';
+
 const DEFAULT_MAX_POOL_EXISTENCE_CACHE_ENTRIES = 1024;
 export const POOL_EXISTS_CACHE_TTL_MS = 5 * 60 * 1000;
 export const UNINITIALIZED_POOL_CACHE_TTL_MS = 30 * 1000;
@@ -86,12 +88,6 @@ export class PoolExistenceCache {
   }
 
   private prune(): void {
-    while (this.entries.size > this.maxEntries) {
-      const oldestKey = this.entries.keys().next().value;
-      if (oldestKey === undefined) {
-        return;
-      }
-      this.entries.delete(oldestKey);
-    }
+    pruneMapToMaxSize(this.entries, this.maxEntries);
   }
 }

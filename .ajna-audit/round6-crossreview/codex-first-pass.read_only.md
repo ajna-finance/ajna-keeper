@@ -1,0 +1,31 @@
+**Findings**
+
+**AK-ADV-01: Sushi selector policy can register a source that no quote can use**
+- Severity: Medium
+- Confidence: High
+- File: [src/config/sushi-aggregator-policy.ts](/home/mike/Projects-2026/ajna-keeper/src/config/sushi-aggregator-policy.ts:58)
+- Property: deployment allowlist completeness; a registered taker source should be executable only after its target, spender, and selector policy is complete and internally consistent.
+- Impact: an operator can deploy and register `SUSHI_AGGREGATOR` with a call target that lacks selector coverage, causing live Sushi takes to fail or be skipped. No direct fund theft found, but this can silently remove a liquidation route and miss keeper revenue / liquidation opportunities.
+- Source evidence: Sushi normalizes selectors without binding selector keys to `callTargets` or requiring selector coverage. LI.FI does pass `callTargetAllowlist` and `requireCallTargetCoverage`; Sushi does not. The deployment module then exact-verifies the derived, internally inconsistent policy before registering the taker.
+- Minimal failure sequence: configure `callTargetAllowlist[chain]=[A]`, `approvalSpenderAllowlist[chain]=[A]`, and `selectorAllowlist[chain]={B:[selector]}` or omit selectors for `A`; deploy runs allowlist reconciliation and registers Sushi; runtime Sushi quote validation rejects target `A`, or on-chain `_validateSwapDetails` rejects `SelectorNotAllowed`.
+- Required test/proof: add Sushi policy tests for selector target not in call-target allowlist and missing selector coverage; update Sushi normalization to pass `callTargetAllowlist: callTargets` and `requireCallTargetCoverage: true`; add a deployment-script test proving invalid Sushi config fails before registration.
+- Residual risk: selector allowlisting still only constrains the top-level aggregator call; reviewed Sushi route decoding remains the guard for calldata semantics.
+
+**AK-ADV-02: 1inch route preflight does not verify aggregator taker allowlists**
+- Severity: Medium
+- Confidence: Medium-High
+- File: [src/discovery/route-preflight-validation.ts](/home/mike/Projects-2026/ajna-keeper/src/discovery/route-preflight-validation.ts:463)
+- Property: deployment/config fail-closedness; a configured router mapping should not pass preflight when the taker is empty or under-allowlisted.
+- Impact: an operator can manually register `OneInchAggregatorKeeperTaker` with missing target, spender, or selector allowlists. Runtime preflight passes code and router checks, but actual take execution reverts during gas estimation or submission. Funds are not directly at risk, but the configured 1inch route is nonfunctional and can cause missed liquidations.
+- Source evidence: the 1inch descriptor only checks configured router code. LI.FI and Sushi descriptors have extra on-chain allowlist reconciliation; 1inch does not. The taker still enforces `CallTargetNotAllowed`, `ApprovalSpenderNotAllowed`, and `SelectorNotAllowed` in [BaseAggregatorCalldataTaker.sol](/home/mike/Projects-2026/ajna-keeper/contracts/base/BaseAggregatorCalldataTaker.sol:337).
+- Minimal failure sequence: deploy/register `OneInchAggregatorKeeperTaker` without `setCallTarget`, `setApprovalSpender`, or `setCallSelector`; configure ONEINCH route and enable route deployment validation; preflight passes; a valid 1inch quote reaches `takeWithAtomicSwap`; estimate/tx reverts on the taker allowlist.
+- Required test/proof: add 1inch preflight tests for empty/partial taker allowlists; either introduce an explicit 1inch taker allowlist policy or derive expected target/spender/selector from configured 1inch routers and verify it with the same snapshot/compare helpers used by LI.FI/Sushi.
+- Residual risk: 1inch’s nested executor calldata remains opaque; top-level allowlist verification must be paired with the existing decoded swap-detail checks and executor allowlist where configured.
+
+**Reviewed Clean Surfaces**
+
+No fund-loss issue found in the on-chain callback repayment path. The aggregator taker binds the active callback to pool and calldata hash, rejects reentrant callbacks, compares the pool callback `collateral` argument to `amountInTokenUnits`, and requires quote received to cover `max(amountOutMinimum, quoteAmountDueCeiling)`. The collateral exact-fill check is donation-immune because it no longer depends on `balanceOf`, and it still rejects partial fills for aggregator calldata.
+
+I also checked token-scale rounding, USDT-style approval reset handling, forced collateral donation behavior, allowlist target/spender/selector/code checks, and router access control. Existing tests cover forced donations, amount drift, active-callback mismatch, reentrancy, no-code/selector/spender allowlist rejects, approval reset, and non-18-decimal quote ceiling on direct takers.
+
+I did not run tests in this child review; this was a read-only first-pass source/diff/test inspection.

@@ -331,33 +331,6 @@ export function approveDirectDexQuoteForExecution(params: {
   });
 }
 
-export function approveExternalTakeQuoteForExecution(params: {
-  quoteEvaluation: ExternalTakeQuoteEvaluation;
-  selectedLiquiditySource?: LiquiditySource;
-  poolName: string;
-  borrower: string;
-}): ExternalTakeQuoteApprovalResult<ApprovedExternalTakeQuoteEvaluation> {
-  const route = resolveExternalTakeRouteBinding(params);
-  if (!route.bound) {
-    return {
-      approved: false,
-      reason: route.reason,
-    };
-  }
-
-  if (route.route.identity.path === 'calldata_aggregator') {
-    return approveCalldataAggregatorQuoteForExecution({
-      ...params,
-      providerId: route.route.identity.providerId,
-      quoteEvaluation: route.route.quoteEvaluation,
-    });
-  }
-  return approveDirectDexQuoteForExecution({
-    ...params,
-    quoteEvaluation: route.route.quoteEvaluation,
-  });
-}
-
 export function bindExternalTakeRouteForDiscovery(params: {
   quoteEvaluation: ExternalTakeQuoteEvaluation;
   selectedLiquiditySource?: LiquiditySource;
