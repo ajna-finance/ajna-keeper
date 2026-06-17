@@ -4,7 +4,9 @@ import {
   CurveKeeperTaker__factory,
 } from '../../typechain-types/factories/contracts/takers';
 import {
+  MockAllowanceCheckingPool__factory,
   MockAtomicSwapPool__factory,
+  MockCurveSwapPool__factory,
   MockCurveTricryptoPool__factory,
   MockERC20__factory,
   MockPoolDeployer__factory,
@@ -621,6 +623,329 @@ describe('Taker hardening regressions', () => {
       expect(
         (await quoteToken.balanceOf(owner.address)).eq(
           routerOutput.sub(due).mul(2)
+        )
+      ).to.equal(true);
+    });
+  });
+
+  describe('UniswapV3KeeperTaker front-door validation', () => {
+    // The four takeWithAtomicSwap require()s (Router mismatch / Invalid target /
+    // Expired deadline / Invalid minimum amount) gate every direct-DEX take
+    // BEFORE any quote allowance is granted. The monolithic-taker suite that
+    // exercised these reverts was removed with the factory; these pin them
+    // against the surviving thin taker and assert no allowance leaks on reject.
+    it('rejects when the router argument differs from the encoded swapRouter', async () => {
+      const base = await deployMockTakerBase();
+      const taker = await deployUniswapTaker(base);
+      const router = await deployFundedSwapRouter02(base, DUE_FULL);
+      const otherRouter = await deployFundedSwapRouter02(base, DUE_FULL);
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          otherRouter.address,
+          encodeUniswapDetails({
+            routerAddress: router.address,
+            targetToken: base.quoteToken.address,
+            amountOutMinimum: DUE_FULL,
+          })
+        ),
+        'Router mismatch'
+      );
+
+      expect((await base.pool.takeCount()).eq(0)).to.equal(true);
+      expect(
+        (await base.quoteToken.allowance(taker.address, base.pool.address)).eq(0)
+      ).to.equal(true);
+    });
+
+    it('rejects when the target token is not the pool quote', async () => {
+      const base = await deployMockTakerBase();
+      const taker = await deployUniswapTaker(base);
+      const router = await deployFundedSwapRouter02(base, DUE_FULL);
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          router.address,
+          encodeUniswapDetails({
+            routerAddress: router.address,
+            targetToken: base.collateralToken.address,
+            amountOutMinimum: DUE_FULL,
+          })
+        ),
+        'Invalid target'
+      );
+
+      expect((await base.pool.takeCount()).eq(0)).to.equal(true);
+      expect(
+        (await base.quoteToken.allowance(taker.address, base.pool.address)).eq(0)
+      ).to.equal(true);
+    });
+
+    it('rejects when the deadline is expired', async () => {
+      const base = await deployMockTakerBase();
+      const taker = await deployUniswapTaker(base);
+      const router = await deployFundedSwapRouter02(base, DUE_FULL);
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          router.address,
+          encodeUniswapDetails({
+            routerAddress: router.address,
+            targetToken: base.quoteToken.address,
+            amountOutMinimum: DUE_FULL,
+            deadline: 1,
+          })
+        ),
+        'Expired deadline'
+      );
+
+      expect((await base.pool.takeCount()).eq(0)).to.equal(true);
+      expect(
+        (await base.quoteToken.allowance(taker.address, base.pool.address)).eq(0)
+      ).to.equal(true);
+    });
+
+    it('rejects when amountOutMinimum is zero', async () => {
+      const base = await deployMockTakerBase();
+      const taker = await deployUniswapTaker(base);
+      const router = await deployFundedSwapRouter02(base, DUE_FULL);
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          router.address,
+          encodeUniswapDetails({
+            routerAddress: router.address,
+            targetToken: base.quoteToken.address,
+            amountOutMinimum: 0,
+          })
+        ),
+        'Invalid minimum amount'
+      );
+
+      expect((await base.pool.takeCount()).eq(0)).to.equal(true);
+      expect(
+        (await base.quoteToken.allowance(taker.address, base.pool.address)).eq(0)
+      ).to.equal(true);
+    });
+  });
+
+  describe('balance-delta donation immunity', () => {
+    // Takers must measure the quote they RECEIVE as a balance delta, never the
+    // absolute balanceOf — otherwise quote already sitting in the taker (a forced
+    // donation) could mask a swap that delivered nothing. Each pre-funds the taker
+    // with the full amount due and runs a zero/forged-delivery swap: an
+    // absolute-balance taker would settle, the delta guard rejects.
+    it('rejects a uniswap take that delivers nothing despite a pre-funded taker', async () => {
+      const base = await deployMockTakerBase();
+      const taker = await deployUniswapTaker(base);
+      await base.pool.setQuoteAmountDue(DUE_FULL);
+      await base.collateralToken.mint(base.pool.address, MAX_AMOUNT);
+      // The forced donation the attacker controls: exactly the amount due.
+      await base.quoteToken.mint(taker.address, DUE_FULL);
+      // actualAmountOut = 0: delivers no quote while reporting a nonzero value.
+      const router = await deployMinOutBypassSwap(
+        base,
+        constants.Zero,
+        BigNumber.from(1)
+      );
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          router.address,
+          encodeUniswapDetails({
+            routerAddress: router.address,
+            targetToken: base.quoteToken.address,
+            amountOutMinimum: 1,
+          })
+        ),
+        'InsufficientQuoteReceived'
+      );
+    });
+
+    it('rejects a curve take whose pool forges a return value but transfers nothing despite a pre-funded taker', async () => {
+      const base = await deployMockTakerBase();
+      const taker = await deployCurveTaker(base);
+      await base.pool.setQuoteAmountDue(DUE_FULL);
+      await base.collateralToken.mint(base.pool.address, MAX_AMOUNT);
+      await base.quoteToken.mint(taker.address, DUE_FULL);
+      // Returns a forged nonzero amountOut but, with tokenOut left unset, transfers
+      // no quote. deployFundedCurvePool would call setTokenOut; deploy raw instead.
+      const forgedPool = await new MockCurveSwapPool__factory(base.owner).deploy(
+        base.collateralToken.address,
+        DUE_FULL
+      );
+      await forgedPool.deployed();
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          base.pool.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_CURVE,
+          forgedPool.address,
+          encodeCurveKeeperDetails(forgedPool.address, BigNumber.from(1))
+        ),
+        'InsufficientQuoteReceived'
+      );
+    });
+  });
+
+  describe('quote approval rounding and pool registration', () => {
+    // _approveQuoteForTake grants ceil(ceilWmul(maxAmount, auctionPrice) / scale) so
+    // a non-evenly-divisible quote scale still covers the pool's ceil-rounded pull;
+    // _validatePool gates that approval entirely on an unregistered pool. The
+    // MockAllowanceCheckingPool (pulls EXACTLY the ceil, reverts on a 1-wei
+    // shortfall) and the InvalidPool reject were both orphaned when the monolith
+    // suite was removed.
+    it('grants the ceil-rounded quote allowance for a non-18-decimal quote token', async () => {
+      const owner = Wallet.createRandom().connect(getProvider());
+      await fundSigner(owner.address);
+
+      const collateralToken = await new MockERC20__factory(owner).deploy(
+        'Mock Collateral',
+        'MCOLL',
+        18
+      );
+      await collateralToken.deployed();
+      const quoteToken = await new MockERC20__factory(owner).deploy(
+        'Mock Quote',
+        'MQUOTE',
+        6
+      );
+      await quoteToken.deployed();
+
+      const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
+      await poolDeployer.deployed();
+
+      const maxAmount = utils.parseEther('1');
+      // +1 wei forces ceilWmul to round up, so ceil(due/scale) exceeds floor by one.
+      const auctionPrice = utils.parseEther('1').add(1);
+      const quoteTokenScale = BigNumber.from(10).pow(12);
+
+      const pool = await new MockAllowanceCheckingPool__factory(owner).deploy(
+        collateralToken.address,
+        quoteToken.address,
+        quoteTokenScale,
+        auctionPrice
+      );
+      await pool.deployed();
+      await poolDeployer.setDeployedPool(
+        ERC20_NON_SUBSET_HASH,
+        collateralToken.address,
+        quoteToken.address,
+        pool.address
+      );
+
+      const taker = await new UniswapV3KeeperTaker__factory(owner).deploy(
+        poolDeployer.address,
+        ZERO_FACTORY
+      );
+      await taker.deployed();
+
+      const quoteDueWad = maxAmount
+        .mul(auctionPrice)
+        .add(utils.parseEther('1'))
+        .sub(1)
+        .div(utils.parseEther('1'));
+      const ceilApproval = quoteDueWad
+        .add(quoteTokenScale)
+        .sub(1)
+        .div(quoteTokenScale);
+      const floorApproval = quoteDueWad.div(quoteTokenScale);
+      expect(
+        ceilApproval.sub(floorApproval).eq(1),
+        'scale must force a 1-wei ceil bump'
+      ).to.equal(true);
+
+      // Fund the taker with the ceil amount plus slack; the pool pulls exactly the
+      // ceil and reverts on a floor-rounded grant.
+      await quoteToken.mint(taker.address, ceilApproval.add(5));
+
+      const router = await new MockSwapRouter02__factory(owner).deploy(
+        BigNumber.from(0)
+      );
+      await router.deployed();
+
+      await taker.takeWithAtomicSwap(
+        pool.address,
+        owner.address,
+        auctionPrice,
+        maxAmount,
+        SOURCE_UNISWAP_V3,
+        router.address,
+        encodeUniswapDetails({
+          routerAddress: router.address,
+          targetToken: quoteToken.address,
+          amountOutMinimum: 1,
+        })
+      );
+
+      expect((await quoteToken.balanceOf(pool.address)).eq(ceilApproval)).to.equal(
+        true
+      );
+    });
+
+    it('reverts InvalidPool before granting any allowance for an unregistered pool', async () => {
+      const base = await deployMockTakerBase();
+      const taker = await deployUniswapTaker(base);
+      const router = await deployFundedSwapRouter02(base, DUE_FULL);
+
+      // A correctly-constructed pool that was never registered in the deployer.
+      const unregistered = await new MockAtomicSwapPool__factory(
+        base.owner
+      ).deploy(
+        base.collateralToken.address,
+        base.quoteToken.address,
+        BigNumber.from(1)
+      );
+      await unregistered.deployed();
+
+      await expectRevertContaining(
+        taker.takeWithAtomicSwap(
+          unregistered.address,
+          base.owner.address,
+          AUCTION_PRICE,
+          MAX_AMOUNT,
+          SOURCE_UNISWAP_V3,
+          router.address,
+          encodeUniswapDetails({
+            routerAddress: router.address,
+            targetToken: base.quoteToken.address,
+            amountOutMinimum: DUE_FULL,
+          })
+        ),
+        'InvalidPool'
+      );
+
+      expect(
+        (await base.quoteToken.allowance(taker.address, unregistered.address)).eq(
+          0
         )
       ).to.equal(true);
     });

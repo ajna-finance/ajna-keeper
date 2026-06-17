@@ -178,4 +178,141 @@ describe('OneInchAggregatorKeeperTaker (Packet 5)', () => {
       'UnexpectedSourceBalance'
     );
   });
+
+  it('nets positive quote-token profit to the owner and reduces auction collateral', async () => {
+    const fixture = await deployOneInchAggregatorFixture();
+    const amountIn = utils.parseEther('1');
+    const outputAmount = utils.parseEther('1.25');
+    const quoteAmountDue = utils.parseEther('1');
+
+    await fixture.collateral.mint(fixture.pool.address, amountIn);
+    await fixture.quote.mint(fixture.target.address, outputAmount);
+    await fixture.quote.mint(fixture.owner.address, quoteAmountDue);
+    await fixture.quote
+      .connect(fixture.owner)
+      .approve(fixture.pool.address, constants.MaxUint256);
+    await fixture.pool.setQuoteAmountDue(quoteAmountDue);
+
+    const callData = fixture.target.interface.encodeFunctionData('mockSwap', [
+      fixture.collateral.address,
+      fixture.quote.address,
+      fixture.taker.address,
+      amountIn,
+      outputAmount,
+    ]);
+    const details = utils.defaultAbiCoder.encode(
+      [DETAILS_ABI],
+      [
+        {
+          approvalSpender: fixture.target.address,
+          srcToken: fixture.collateral.address,
+          dstToken: fixture.quote.address,
+          dstReceiver: fixture.taker.address,
+          amountInTokenUnits: amountIn,
+          amountOutMinimum: utils.parseEther('1.1'),
+          callData,
+        },
+      ]
+    );
+
+    const ownerQuoteBefore = await fixture.quote.balanceOf(
+      fixture.owner.address
+    );
+
+    await fixture.factory.takeWithAtomicSwap(
+      fixture.pool.address,
+      BORROWER,
+      constants.WeiPerEther,
+      amountIn,
+      LiquiditySource.ONEINCH,
+      fixture.target.address,
+      details
+    );
+
+    // The pool was repaid the amount due; _settleAfterTake swept the remaining
+    // (outputAmount - quoteAmountDue) surplus to the taker's owner.
+    const ownerQuoteAfter = await fixture.quote.balanceOf(fixture.owner.address);
+    expect(
+      ownerQuoteAfter
+        .sub(ownerQuoteBefore)
+        .eq(outputAmount.sub(quoteAmountDue))
+    ).to.equal(true);
+    // The auction collateral was consumed by the swap input.
+    expect((await fixture.pool.lastCollateralTaken()).eq(amountIn)).to.equal(
+      true
+    );
+  });
+
+  it('settles the ONEINCH external take cleanly: owner earns the surplus, pool repaid exactly the due, taker fully swept', async () => {
+    // take-external coverage: the surviving production path (LiquiditySource.ONEINCH
+    // -> calldata_aggregator) must earn quote end-to-end and leave no residue in the
+    // taker. Distinct from the profit/collateral case above: this pins the
+    // settlement completeness invariant.
+    const fixture = await deployOneInchAggregatorFixture();
+    const amountIn = utils.parseEther('2');
+    const outputAmount = utils.parseEther('2.6');
+    const quoteAmountDue = utils.parseEther('2');
+
+    await fixture.collateral.mint(fixture.pool.address, amountIn);
+    await fixture.quote.mint(fixture.target.address, outputAmount);
+    await fixture.quote.mint(fixture.owner.address, quoteAmountDue);
+    await fixture.quote
+      .connect(fixture.owner)
+      .approve(fixture.pool.address, constants.MaxUint256);
+    await fixture.pool.setQuoteAmountDue(quoteAmountDue);
+
+    const callData = fixture.target.interface.encodeFunctionData('mockSwap', [
+      fixture.collateral.address,
+      fixture.quote.address,
+      fixture.taker.address,
+      amountIn,
+      outputAmount,
+    ]);
+    const details = utils.defaultAbiCoder.encode(
+      [DETAILS_ABI],
+      [
+        {
+          approvalSpender: fixture.target.address,
+          srcToken: fixture.collateral.address,
+          dstToken: fixture.quote.address,
+          dstReceiver: fixture.taker.address,
+          amountInTokenUnits: amountIn,
+          amountOutMinimum: utils.parseEther('2.3'),
+          callData,
+        },
+      ]
+    );
+
+    const ownerQuoteBefore = await fixture.quote.balanceOf(
+      fixture.owner.address
+    );
+
+    await fixture.factory.takeWithAtomicSwap(
+      fixture.pool.address,
+      BORROWER,
+      constants.WeiPerEther,
+      amountIn,
+      LiquiditySource.ONEINCH,
+      fixture.target.address,
+      details
+    );
+
+    // Owner earned the full swap surplus...
+    expect(
+      (await fixture.quote.balanceOf(fixture.owner.address))
+        .sub(ownerQuoteBefore)
+        .eq(outputAmount.sub(quoteAmountDue))
+    ).to.equal(true);
+    // ...the pool was repaid exactly the amount due...
+    expect(
+      (await fixture.quote.balanceOf(fixture.pool.address)).eq(quoteAmountDue)
+    ).to.equal(true);
+    // ...and the taker retains no residual quote or collateral.
+    expect(
+      (await fixture.quote.balanceOf(fixture.taker.address)).eq(0)
+    ).to.equal(true);
+    expect(
+      (await fixture.collateral.balanceOf(fixture.taker.address)).eq(0)
+    ).to.equal(true);
+  });
 });

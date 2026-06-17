@@ -6,6 +6,7 @@ import * as oneInch from '../../src/dex/one-inch';
 import {
   getOneInchAggregatorQuoteFailureMetadata,
   requestValidatedOneInchAggregatorQuote,
+  resolveOneInchAggregatorChainId,
 } from '../../src/take/oneinch-aggregator/quote-service';
 
 const chainId = 8453;
@@ -160,5 +161,55 @@ describe('1inch aggregator quote service', () => {
         code: 'route_validation',
       });
     }
+  });
+
+  it('caches the configured chain-id verification per signer across evaluations', async () => {
+    // resolveOneInchAggregatorChainId verifies the signer chain id matches the
+    // configured one, memoized per signer (assertConfiguredChainIdMatchesSigner's
+    // WeakMap), so repeated quote evaluations do not re-issue eth_chainId.
+    const getChainId = sinon.stub().resolves(chainId);
+    const memoSigner = { getChainId, provider: {} } as any;
+    const config = { chainId };
+
+    await resolveOneInchAggregatorChainId(config, memoSigner);
+    await resolveOneInchAggregatorChainId(config, memoSigner);
+
+    expect(getChainId.calledOnce).to.equal(true);
+  });
+
+  it('forwards the configured abort signal to the 1inch swap request', async () => {
+    const controller = new AbortController();
+    const swapDataStub = sinon
+      .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
+      .resolves({
+        success: true,
+        data: {
+          to: router,
+          data: callData,
+          value: '0',
+        },
+        dstAmount: dstAmount.toString(),
+      });
+    stubDecodedSwap();
+
+    await requestValidatedOneInchAggregatorQuote({
+      pool,
+      signer,
+      config: {
+        oneInchRouters: { [chainId]: router },
+        oneInchRequestAbortSignal: controller.signal,
+      },
+      takerAddress: taker,
+      chainId,
+      collateralInTokenDecimals: amountIn,
+    });
+
+    expect(swapDataStub.calledOnce).to.equal(true);
+    // getSwapDataFromOneInch(chainId, amount, tokenIn, tokenOut, slippage,
+    //   fromAddress, usePatching, options) — options is the 8th positional arg.
+    expect(swapDataStub.firstCall.args[7]).to.deep.equal({
+      timeoutMs: undefined,
+      signal: controller.signal,
+    });
   });
 });

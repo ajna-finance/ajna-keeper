@@ -804,4 +804,56 @@ describe('LifiKeeperTaker', () => {
       )
     ).to.equal(true);
   });
+
+  it('rejects a zero-delivery aggregator swap even when the taker is pre-funded with the amount due', async () => {
+    // Donation immunity: the aggregator taker measures the quote it RECEIVES as a
+    // balance delta. Pre-funding the taker with exactly the amount due (a forced
+    // donation) must NOT let a swap that delivers nothing settle — an
+    // absolute-balanceOf taker would accept, the delta guard rejects.
+    const fixture = await deployFixture();
+    const amountIn = utils.parseEther('1');
+    const quoteAmountDue = utils.parseEther('1');
+
+    await fixture.collateral.mint(fixture.pool.address, amountIn);
+    await fixture.pool.setQuoteAmountDue(quoteAmountDue);
+
+    // mockNoOutput pulls the collateral but returns no quote at all.
+    const noOutputSelector =
+      fixture.target.interface.getSighash('mockNoOutput');
+    await fixture.taker.setCallSelector(
+      fixture.target.address,
+      noOutputSelector,
+      true
+    );
+
+    // The forced donation the attacker controls: exactly the amount due.
+    await fixture.quote.mint(fixture.taker.address, quoteAmountDue);
+
+    const callData = fixture.target.interface.encodeFunctionData(
+      'mockNoOutput',
+      [fixture.collateral.address, amountIn]
+    );
+    const details = encodeDetails({
+      approvalSpender: fixture.target.address,
+      srcToken: fixture.collateral.address,
+      dstToken: fixture.quote.address,
+      dstReceiver: fixture.taker.address,
+      amountIn,
+      amountOutMinimum: utils.parseEther('1'),
+      callData,
+    });
+
+    await expectRevertWith(
+      fixture.factory.takeWithAtomicSwap(
+        fixture.pool.address,
+        BORROWER,
+        constants.WeiPerEther,
+        amountIn,
+        LiquiditySource.LIFI,
+        fixture.target.address,
+        details
+      ),
+      'InsufficientQuoteReceived'
+    );
+  });
 });
