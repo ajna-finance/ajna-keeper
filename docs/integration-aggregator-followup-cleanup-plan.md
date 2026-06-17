@@ -318,6 +318,25 @@ execution order").
   the sibling/shim barrels are zero-risk). **Verify:** `tsc`,
   `npm run check-external-take-boundaries -- --base <ref>`, `npm run check-hot-file-growth -- --base <ref>`.
 
+### N16 — Validate the Sushi `apiBaseUrl` (parity with LI.FI) *(new; fail-closed completeness)*
+- **Location:** `src/config/schema.ts:636` (`SushiAggregatorDexConfig.apiBaseUrl`),
+  `src/config/sushi-aggregator-policy.ts:74-141` (`assertValidSushiAggregatorDexConfig` — no
+  `apiBaseUrl` branch), consumed unvalidated at `src/dex/sushi-aggregator/client.ts:36-60`.
+- **Problem:** Sushi's `apiBaseUrl` flows straight into the live quote URL (`${base}/${chainId}?…` →
+  `axios.get`) but is **never validated**, while every other Sushi field is — and the sibling LI.FI
+  provider routes the same field through `normalizeLifiApiBaseUrl` with `requireHttps` in production
+  (`lifi-policy.ts:61-65`, `dex/lifi/api-policy.ts:12-57`: rejects non-http(s), embedded
+  credentials, query, fragment). Sushi is production-only yet accepts a plaintext `http://` or
+  credentialed base URL silently; a malformed value surfaces as a confusing runtime axios failure
+  instead of a clear startup rejection. Defense-in-depth + provider parity (on-chain exact-fill
+  allowlist reconciliation still gates execution, so not a fund path).
+- **Remedy (reuse-canonical):** Validate `apiBaseUrl` in `assertValidSushiAggregatorDexConfig` with
+  the same URL-shape policy — ideally **extract a provider-neutral `normalizeAggregatorApiBaseUrl`**
+  shared by LI.FI and Sushi (and 1inch in W3) rather than two copies. Add a Sushi validation test
+  asserting a non-HTTPS/malformed `apiBaseUrl` is rejected.
+- **Effort:** S. **Risk:** low. **Verify:** `tsc`, `sushi-aggregator-validation` + `lifi-validation`
+  unit tests.
+
 ---
 
 ## Wave 2 — make every surface consume the descriptor
@@ -366,8 +385,20 @@ execution order").
   `onCalldataAggregatorExecutionFailure?` to `CalldataAggregatorExecutionConfigBase`; have
   the shared core call them directly. Delete the three provider field-pairs, the
   selector-threading params, and `makeCalldataAggregatorProviderRejectionRecorder`.
-- **Effort:** M. **Risk:** low-medium. **Verify:** aggregator execution + circuit + the
-  three provider taker suites.
+- **Blast radius (pass 5):** four test artifacts reference the provider-named callbacks and must be
+  migrated in the **same commit**: `tests/unit/lifi-execution.test.ts`,
+  `tests/unit/helpers/lifi-execution-scenarios.ts`, `tests/unit/lifi-discovery-handlers.test.ts`,
+  `tests/unit/discovery-handlers.test.ts`. ⚠️ Asymmetric and dangerous: `lifi-discovery-handlers`
+  stubs with a **typed** param so a rename compile-breaks (safe), but `discovery-handlers.test.ts:2535`
+  stubs `takeLiquidationOneInchAggregator` with `params: any` and fires
+  `params.config.onOneInchAggregatorQuoteResult?.(…)` via **optional chaining** — after the rename
+  that chain **silently short-circuits to a no-op**, the intended 1inch fault-injection never fires,
+  the test still passes, and the discovery-fallback path it claims to cover goes unexercised. Fix:
+  re-type that stub off `any` (so the rename compile-breaks) **or** migrate its `onOneInchAggregator*`
+  call sites to the neutral name as part of the move.
+- **Effort:** M. **Risk:** low-medium (the silent-no-op test regression above is the real trap).
+  **Verify:** aggregator execution + circuit + the three provider taker suites **+ both discovery
+  suites** (`discovery-handlers`, `lifi-discovery-handlers`).
 
 ### M-C′ — One generic `validateAggregatorAllowlistPreflight` *(folds the preflight twins; pre-solves Wave 3)*
 - **Location:** `src/discovery/route-preflight-validation.ts:358-440`
@@ -572,7 +603,7 @@ One PR, committed in dependency order so the bundle stays reviewable and the two
 (`slither`, deployment tests) are not skipped:
 
 1. **Deletions & canonical-reuse** — M-B, M-E, N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11,
-   N12, N13, N14, N15, B-T1, B-T3, B-D2, B-D3.
+   N12, N13, N14, N15, N16, B-T1, B-T3, B-D2, B-D3.
 2. **Descriptor consumers** — M-C, M-C′, M-D, M-F, M-G, M-H (M-C′ depends on M-B from step 1).
 3. **Contracts** — B-C1, B-C2; **run `npm run slither`** and the full taker suites here as a
    distinct commit so the contract gate stays auditable inside the single PR. (N4's dead-mock
