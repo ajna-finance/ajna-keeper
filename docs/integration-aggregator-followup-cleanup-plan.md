@@ -678,3 +678,49 @@ One PR, committed in dependency order so the bundle stays reviewable and the two
 
 Keep each step a separate commit so a reviewer can read the single PR as these five phases. The
 build/typecheck/unit + taker/aggregator integration suites run at each step; `slither` at step 3.
+
+---
+
+## Implementation status
+
+Implemented on branch `aggregator-cleanup-impl` as 16 verified commits (`impl phase 1a … phase 4`).
+Every gate was run and green at each step: `npm run typecheck`, `npm run unit-tests` (grew 1008 →
+1045), the taker/aggregator integration suites, and `npm run slither` at the contract step.
+
+**Done (Waves 1–4):**
+- **Wave 1** — all deletions/canonical-reuse: M-B, M-E, N1, N3, N4, N5, N6, N7, N8, N9, N10, N11,
+  N12, N13, N14, N15, N16, N17, N19, B-T1, B-T3, B-D2, B-D3.
+- **Wave 2** — M-C, M-D, M-F, M-G, N18, M-H, and M-C′. **N2** landed in Wave 2 (after M-B) as planned.
+- **Wave 3 (contracts)** — B-C2 (merged `RouterAuthorizedTakerBase` into `KeeperTakerBase`) and B-C1;
+  `slither` showed only the 15 pre-existing findings (none in the merged base, none new).
+- **Wave 4 (deploy)** — M-A: characterization tests (`tests/unit/deploy-factory-system.test.ts`,
+  18) written first, then the descriptor-driven loop via a deploy-side `scripts/deployment/deploy-registry.ts`.
+
+**Conscious deviations from the literal remedy (each behavior-preserving + verified):**
+- **M-C′** — implemented as a shared `reconcileTakerAllowlistSnapshot` helper in the canonical
+  allowlist module rather than one 8-hook generic. The two validators already shared the
+  reconciliation core; the genuinely-divergent fail-closed parts (compilation guard, contract-code
+  checks, selectorTargets, retry strategy, gating/messages) are kept **explicit per provider** —
+  clearer and lower-risk than burying them behind hooks. A future 1inch validator reuses the same helper.
+- **B-C1** — the zero-router "standalone owner-only mode" comment was **corrected, not deleted**:
+  standalone mode is a real, fixture-exercised capability for the direct-DEX takers (only the
+  aggregator base rejects a zero router), so extending the non-zero `require` to the base (which would
+  remove that tested capability) was deliberately not done.
+- **M-A residue (bounded follow-ups, not dead-in-prod risk):** the superseded per-provider helper fns
+  (`configure*Allowlists` / `register*` / `deploy*KeeperTaker` in
+  `scripts/deployment/{lifi-factory,sushi-aggregator}-deployment.ts`) are no longer called by the CLI
+  but retained as test-only utilities; `generateConfigUpdate` (B-S4) keeps its hardcoded per-provider
+  label lines (correct + char-tested).
+- **N18** — Sushi quote-circuit parity resolved by the documented-omission route (Sushi exposes no
+  quote-failure threshold/cooldown config to drive a circuit); the unified `providerCircuits.*` makes
+  adding one a small follow-up.
+
+**Remaining (Wave 5 — W3-FINAL, 1inch allowlist parity): NOT YET IMPLEMENTED.** This is the one step
+the execution order flags as un-verifiable here — its `oneinch-aggregator-fork-canary` is blocked by
+the 401 dev `ONEINCH_API_KEY`. It is also a genuinely additive new-provider production-policy surface
+(1inch currently has no allowlist-policy/mode in config and its CLI deploy is gated by an explicit
+throw), so it is the natural split-off: introduce `normalizeOneInchChainPolicy` + schema allowlist
+fields + fail-closed validation + a 1inch deploy-registry entry (auto-enrolling it in M-A's loop and
+M-C′'s preflight, deleting the `deploy-factory-system-cli.ts` 1inch throw), then land the canary code
+and run it where a valid key exists. Was deferred rather than rushed to preserve the verified-quality
+bar held across the other 38 items.
