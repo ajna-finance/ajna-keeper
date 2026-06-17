@@ -13,7 +13,7 @@ import {
   DirectDexExecutionConfig,
   takeLiquidationDirectDex,
 } from '../../../src/take/direct-dex';
-import { deriveApprovedMinOutRaw } from '../../../src/take/direct-dex/route-selection';
+import { deriveApprovedMinOutRaw } from '../../../src/take/direct-dex/route-amounts';
 import { ApprovedDirectDexQuoteEvaluation } from '../../../src/take/types';
 import { RequireFields } from '../../../src/utils';
 import { setBalance } from '../test-utils';

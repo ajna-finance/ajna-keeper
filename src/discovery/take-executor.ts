@@ -33,10 +33,8 @@ import { processTakeCandidates, TAKE_SKIP_REASONS } from '../take/engine';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../take/external-take/execution-plan';
 import { TakeWriteTransport } from '../take/write-transport';
 import { DirectDexRouteProfitabilityContext } from '../take/direct-dex';
-import {
-  prewarmDirectDexRouteAvailability,
-  withDirectDexRuntimeStats,
-} from '../take/direct-dex/route-selection';
+import { prewarmDirectDexRouteAvailability } from '../take/direct-dex/availability';
+import { withDirectDexRuntimeStats } from '../take/direct-dex/runtime-cache';
 import {
   AsyncOperationLimiter,
   RouteProbeLimiter,

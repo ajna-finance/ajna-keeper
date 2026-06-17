@@ -14,15 +14,19 @@ import { TakerRouter__factory } from '../../../typechain-types';
 import {
   DirectDexExecutionConfig,
   DirectDexQuoteConfig,
-  DirectDexQuoteProviderRuntimeCache,
   DirectDexRouteEvaluationContext,
+} from './route-types';
+import { DirectDexQuoteProviderRuntimeCache } from './runtime-cache';
+import {
   computeDirectDexAmountOutMinimum,
   DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
+  getSwapDeadlineCached,
+} from './route-amounts';
+import {
   formatDirectDexExecutionLog,
   formatDirectDexQuoteRequestLog,
-  getCurveQuoteProvider,
-  getSwapDeadlineCached,
-} from './route-selection';
+} from './logs';
+import { getCurveQuoteProvider } from './providers';
 import { resolveTakeWriteTransport } from '../write-transport';
 import {
   finalizeDirectDexQuoteEvaluation,

@@ -26,11 +26,11 @@ import {
   DiscoveryExecutionTransportConfig,
   DiscoveryRpcCache,
 } from './types';
+import { DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS } from '../take/direct-dex/route-amounts';
 import {
-  DEFAULT_DIRECT_DEX_ROUTE_RPC_TIMEOUT_MS,
   getCurveQuoteProvider,
   getUniswapV3QuoteProvider,
-} from '../take/direct-dex/route-selection';
+} from '../take/direct-dex/providers';
 import { GasPolicyRejectCode, GasQuoteAttempt } from '../take/types';
 import {
   DEFAULT_ONEINCH_QUOTE_TIMEOUT_MS,
