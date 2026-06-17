@@ -7,16 +7,16 @@ import {
 } from '../../src/config';
 import { normalizeLifiProductionChainPolicy } from '../../src/config/lifi-policy';
 import {
-  assertLifiTakerAllowlistPolicy,
-  buildLifiTakerAllowlistReconciliationPlan,
-  createLifiTakerAllowlistReader,
-  type LifiAllowlistReconciliationPlan,
-  readLifiTakerAllowlistSnapshot,
-  normalizeLifiTakerAllowlistSnapshot,
-} from '../../src/dex/lifi';
+  assertTakerAllowlistPolicy,
+  buildTakerAllowlistReconciliationPlan,
+  createTakerAllowlistReader,
+  type TakerAllowlistReconciliationPlan,
+  readTakerAllowlistSnapshot,
+  normalizeTakerAllowlistSnapshot,
+} from '../../src/take/aggregator-calldata/allowlist';
 
 export type LifiProductionAllowlists = NormalizedLifiAllowlistPolicy;
-export type { LifiAllowlistReconciliationPlan };
+export type { TakerAllowlistReconciliationPlan };
 
 type GasConfig = { gasLimit: string; gasPrice?: string };
 
@@ -64,10 +64,10 @@ export function buildLifiAllowlistReconciliationPlan(params: {
   currentCallTargets: readonly string[];
   currentApprovalSpenders: readonly string[];
   currentSelectorsByTarget: Record<string, readonly string[]>;
-}): LifiAllowlistReconciliationPlan {
-  return buildLifiTakerAllowlistReconciliationPlan({
+}): TakerAllowlistReconciliationPlan {
+  return buildTakerAllowlistReconciliationPlan({
     desired: params.desired,
-    current: normalizeLifiTakerAllowlistSnapshot({
+    current: normalizeTakerAllowlistSnapshot({
       callTargets: params.currentCallTargets,
       approvalSpenders: params.currentApprovalSpenders,
       selectorAllowlist: params.currentSelectorsByTarget,
@@ -203,13 +203,13 @@ export async function configureLifiAllowlists(
     ...desired.callTargets,
     ...Object.keys(desired.selectorAllowlist),
   ];
-  const current = await readLifiTakerAllowlistSnapshot({
-    reader: createLifiTakerAllowlistReader(taker),
+  const current = await readTakerAllowlistSnapshot({
+    reader: createTakerAllowlistReader(taker),
     selectorTargets: desiredSelectorTargets,
     labelPrefix: 'on-chain LI.FI',
   });
 
-  const plan = buildLifiTakerAllowlistReconciliationPlan({
+  const plan = buildTakerAllowlistReconciliationPlan({
     desired,
     current,
   });
@@ -232,10 +232,10 @@ export async function configureLifiAllowlists(
     await tx.wait();
   }
 
-  assertLifiTakerAllowlistPolicy({
+  assertTakerAllowlistPolicy({
     expected: desired,
-    actual: await readLifiTakerAllowlistSnapshot({
-      reader: createLifiTakerAllowlistReader(taker),
+    actual: await readTakerAllowlistSnapshot({
+      reader: createTakerAllowlistReader(taker),
       selectorTargets: desiredSelectorTargets,
       labelPrefix: 'on-chain LI.FI',
     }),
@@ -266,10 +266,10 @@ export async function configureLifiAllowlists(
     await tx.wait();
   }
 
-  assertLifiTakerAllowlistPolicy({
+  assertTakerAllowlistPolicy({
     expected: desired,
-    actual: await readLifiTakerAllowlistSnapshot({
-      reader: createLifiTakerAllowlistReader(taker),
+    actual: await readTakerAllowlistSnapshot({
+      reader: createTakerAllowlistReader(taker),
       selectorTargets: plan.selectorTargets,
       labelPrefix: 'on-chain LI.FI',
     }),

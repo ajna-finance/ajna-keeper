@@ -269,7 +269,7 @@ async function deployHybridFactorySystem(signer: Wallet) {
 
 // Configure the freshly deployed LI.FI taker's on-chain allowlists from the
 // reviewed production config (mirrors lifi-fork-execution-canary.test.ts).
-async function configureLifiTakerAllowlists(
+async function configureTakerAllowlists(
   taker: Contract,
   lifi: ProductionLifiDexConfig
 ): Promise<void> {
@@ -382,7 +382,7 @@ async function runLifiCallbackExecutionProof(params: {
     LifiKeeperTaker__factory.abi,
     params.owner
   );
-  await configureLifiTakerAllowlists(takerContract, params.lifi);
+  await configureTakerAllowlists(takerContract, params.lifi);
 
   const apiKey = getHybridLifiApiKey(params.lifi);
   const toolsResponse = await fetchLifiTools({
@@ -659,7 +659,7 @@ describe('Hybrid Base-fork discovery loop (oneinch + factory + lifi)', function 
 
     const { factory, oneInchTaker, uniswapTaker, curveTaker, lifiTaker } =
       await deployHybridFactorySystem(signer);
-    await configureLifiTakerAllowlists(
+    await configureTakerAllowlists(
       new Contract(lifiTaker.address, LifiKeeperTaker__factory.abi, signer),
       lifi
     );

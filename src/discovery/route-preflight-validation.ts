@@ -17,11 +17,11 @@ import {
   resolveExternalTakePathFromSource,
 } from '../config';
 import {
-  LIFI_TAKER_ALLOWLIST_ABI,
-  compareLifiTakerAllowlistPolicy,
-  createLifiTakerAllowlistReader,
-  readLifiTakerAllowlistSnapshot,
-} from '../dex/lifi';
+  AGGREGATOR_TAKER_ALLOWLIST_ABI,
+  compareTakerAllowlistPolicy,
+  createTakerAllowlistReader,
+  readTakerAllowlistSnapshot,
+} from '../take/aggregator-calldata/allowlist';
 import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
 import { validateSushiAggregatorAllowlistPreflight } from '../dex/sushi-aggregator/preflight';
 import { logger } from '../logging';
@@ -407,11 +407,11 @@ async function validateLifiAllowlistPreflight(params: {
   try {
     const taker = new ethers.Contract(
       params.takerAddress,
-      LIFI_TAKER_ALLOWLIST_ABI,
+      AGGREGATOR_TAKER_ALLOWLIST_ABI,
       params.provider
     );
-    const actual = await readLifiTakerAllowlistSnapshot({
-      reader: createLifiTakerAllowlistReader(taker),
+    const actual = await readTakerAllowlistSnapshot({
+      reader: createTakerAllowlistReader(taker),
       selectorTargets: [
         ...expectedTargets,
         ...Object.keys(policy.selectorAllowlist),
@@ -428,7 +428,7 @@ async function validateLifiAllowlistPreflight(params: {
       },
     });
     params.errors.push(
-      ...compareLifiTakerAllowlistPolicy({
+      ...compareTakerAllowlistPolicy({
         expected: policy,
         actual,
         mode: 'exact',
