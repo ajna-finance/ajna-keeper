@@ -678,7 +678,7 @@ describe('Discovery Handlers', () => {
     });
 
     expect(takeLiquidationStub.calledOnce).to.be.true;
-    expect(rpcCache.oneInchQuoteCircuits?.swap_data?.failures).to.equal(1);
+    expect(rpcCache.providerCircuits?.oneinch?.swap_data?.failures).to.equal(1);
     const summaryLog = getDiscoveredTakeSummary(loggerInfoStub);
     expect(summaryLog).to.include(
       'calldataAggregatorProviderFailures=oneinch.quote:1'

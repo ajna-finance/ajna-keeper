@@ -27,7 +27,6 @@ import {
 import {
   ExternalProviderCircuits,
   getDiscoveryExecutionConfig,
-  OneInchQuoteCircuitState,
 } from './types';
 import { logger } from '../logging';
 import {
@@ -86,7 +85,6 @@ type BoundDiscoveryRuntimeState = DiscoveryRuntimeState & {
   chainId?: number;
   hotAuctionCandidateCache?: HotAuctionCandidateCache;
   directDexQuoteProviders: DirectDexQuoteProviderRuntimeCache;
-  oneInchQuoteCircuit: OneInchQuoteCircuitState;
   providerCircuits: ExternalProviderCircuits;
   lastDiscoveredSettlementCycleStartedAtMs?: number;
   lastDiscoveredSettlementFailureAtMs?: number;
@@ -408,9 +406,6 @@ async function createDiscoveryCycleRpcCache(params: {
     includeDirectDexQuoteProviders: params.includeDirectDexQuoteProviders,
     directDexQuoteProviders: params.includeDirectDexQuoteProviders
       ? params.state.directDexQuoteProviders
-      : undefined,
-    oneInchQuoteCircuit: params.includeDirectDexQuoteProviders
-      ? params.state.oneInchQuoteCircuit
       : undefined,
     providerCircuits: params.includeDirectDexQuoteProviders
       ? params.state.providerCircuits
@@ -990,7 +985,6 @@ export function createDiscoveryRuntime(
       params.config
     ),
     directDexQuoteProviders: createDirectDexQuoteProviderRuntimeCache(),
-    oneInchQuoteCircuit: { failures: 0 },
     providerCircuits: {},
     readTransports: createDiscoveryReadTransports(
       getDiscoveryReadTransportConfig(params.config),

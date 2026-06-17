@@ -23,6 +23,13 @@ export async function quoteSushiAggregatorPathForDiscovery(
     providerId: 'sushi_aggregator',
     abortErrorMessage: 'Sushi aggregator external take quote aborted',
     timeoutLabel: 'Sushi aggregator external take quote',
+    // Sushi deliberately runs without a discovery quote circuit breaker: unlike
+    // LI.FI/1inch, SushiAggregatorDexConfig exposes no quote-failure threshold/
+    // cooldown fields to drive one, so failures fall through to the normal
+    // per-probe timeout/abort handling. Now that the breaker mechanics are
+    // unified on providerCircuits.*, wiring a Sushi circuit is a small follow-up
+    // (add the two config fields + a sushi-circuit module) if its discovery
+    // quote volume ever warrants the open-on-failure cooldown.
     circuitFactory: () => ({ kind: 'none' }),
     evaluate: async (signal, params, quoteCollateralWad) =>
       await getSushiAggregatorPathQuoteEvaluation(

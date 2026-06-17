@@ -820,10 +820,12 @@ describe('Discovery Gas Policy', () => {
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
         chainId: 8453,
-        oneInchQuoteCircuits: {
-          gas_conversion: {
-            failures: 2,
-            cooldownUntilMs: Date.now() + 30_000,
+        providerCircuits: {
+          oneinch: {
+            gas_conversion: {
+              failures: 2,
+              cooldownUntilMs: Date.now() + 30_000,
+            },
           },
         },
       },

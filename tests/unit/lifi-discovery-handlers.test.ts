@@ -666,8 +666,8 @@ describe('LI.FI discovery handlers', () => {
     };
     const rpcCache: DiscoveryRpcCache = {
       chainId: 8453,
-      oneInchQuoteCircuit: {
-        failures: 1,
+      providerCircuits: {
+        oneinch: { route_quote: { failures: 1 } },
       },
     };
     const params = makeDiscoveredTakeParams({
@@ -728,7 +728,9 @@ describe('LI.FI discovery handlers', () => {
     expect(
       rpcCache.providerCircuits!.lifi!.route_quote!.cooldownUntilMs
     ).to.be.a('number');
-    expect(rpcCache.oneInchQuoteCircuit!.failures).to.equal(1);
+    expect(
+      rpcCache.providerCircuits!.oneinch!.route_quote!.failures
+    ).to.equal(1);
 
     lifiQuoteStub.resetHistory();
     await handleDiscoveredTakeTarget(params);

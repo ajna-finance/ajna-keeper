@@ -4,18 +4,13 @@ import {
   DirectDexQuoteProviderRuntimeCache,
   createDirectDexQuoteProviderRuntimeCache,
 } from '../take/direct-dex';
-import {
-  DiscoveryRpcCache,
-  ExternalProviderCircuits,
-  OneInchQuoteCircuitState,
-} from './types';
+import { DiscoveryRpcCache, ExternalProviderCircuits } from './types';
 
 export async function createDiscoveryRpcCache(params: {
   signer: Signer;
   readRpc: ReadRpc;
   includeDirectDexQuoteProviders?: boolean;
   directDexQuoteProviders?: DirectDexQuoteProviderRuntimeCache;
-  oneInchQuoteCircuit?: OneInchQuoteCircuitState;
   providerCircuits?: ExternalProviderCircuits;
 }): Promise<DiscoveryRpcCache | undefined> {
   if (!params.signer.provider) {
@@ -40,10 +35,6 @@ export async function createDiscoveryRpcCache(params: {
   const providerCircuits = params.includeDirectDexQuoteProviders
     ? params.providerCircuits
     : undefined;
-  if (providerCircuits && params.oneInchQuoteCircuit) {
-    providerCircuits.oneinch ??= {};
-    providerCircuits.oneinch.route_quote = params.oneInchQuoteCircuit;
-  }
 
   return {
     chainId,
@@ -55,11 +46,6 @@ export async function createDiscoveryRpcCache(params: {
     ...(params.includeDirectDexQuoteProviders
       ? {
           directDexQuoteProviders,
-        }
-      : {}),
-    ...(params.oneInchQuoteCircuit
-      ? {
-          oneInchQuoteCircuit: params.oneInchQuoteCircuit,
         }
       : {}),
     ...(providerCircuits

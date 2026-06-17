@@ -177,7 +177,7 @@ describe('hybrid external take probes', () => {
 
       await clock.tickAsync(50);
       await handlePromise;
-      expect(rpcCache.oneInchQuoteCircuit?.failures).to.equal(1);
+      expect(rpcCache.providerCircuits?.oneinch?.route_quote?.failures).to.equal(1);
       expect(takeLiquidationStub.called).to.be.false;
 
       oneInchDeferred.resolve(
@@ -196,7 +196,7 @@ describe('hybrid external take probes', () => {
         })
       );
       await clock.tickAsync(0);
-      expect(rpcCache.oneInchQuoteCircuit?.failures).to.equal(1);
+      expect(rpcCache.providerCircuits?.oneinch?.route_quote?.failures).to.equal(1);
       expect(transports.readRpc.getGasPrice.called).to.be.false;
     } finally {
       clock.restore();

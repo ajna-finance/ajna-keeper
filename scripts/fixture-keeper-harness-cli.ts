@@ -366,12 +366,12 @@ async function runDiscoveredTakeAttempt(params: {
   });
   if (rpcCache) {
     const cooldownUntilMs = Date.now() + 60 * 60 * 1000;
-    rpcCache.oneInchQuoteCircuits = {
+    rpcCache.providerCircuits ??= {};
+    rpcCache.providerCircuits.oneinch = {
       route_quote: { failures: 99, cooldownUntilMs },
       gas_conversion: { failures: 99, cooldownUntilMs },
       swap_data: { failures: 99, cooldownUntilMs },
     };
-    rpcCache.oneInchQuoteCircuit = rpcCache.oneInchQuoteCircuits.route_quote;
   }
 
   const stats = await handleDiscoveredTakeTarget({
