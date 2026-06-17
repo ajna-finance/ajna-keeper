@@ -8,8 +8,11 @@ functional follow-up from the calldata-aggregator roadmap (1inch allowlist
 preflight parity). None of it blocked the merge; all of it is tracked here so it
 lands as one or more focused follow-up PRs rather than as drive-by edits.
 
-**Base branch:** `aggregator-followup-cleanup`, branched off
-`integration-aggregator` (after group-A test DRY cleanup, commit `cddb3ef`).
+**Base branch:** `aggregator-followup-cleanup` = `origin/master` (the
+squash-merged migration PR #20) + two commits: the group-A test DRY cleanup and
+this plan. Because #20 was squash-merged, the pre-merge commit SHAs no longer
+resolve on `master`; this plan refers to changes by migration scope (#20), not by
+SHA.
 
 **What is NOT in scope here:** the inclusion review confirmed the merge is a
 strict superset of PR #18 with zero missing content, and the donation-DoS
@@ -63,7 +66,7 @@ effort (S/M/L), risk, and how to verify.
 - **Problem:** `KeeperTakerBase` (lower) / `RouterAuthorizedTakerBase` (upper)
   existed only so the deleted standalone `AjnaKeeperTaker` could inherit the lower
   layer and the factory could detect a legacy taker by the absence of the router
-  mixin. `AjnaKeeperTaker.sol` is gone (commit `45c1f33`) and no contract inherits
+  mixin. `AjnaKeeperTaker.sol` is gone (deleted in the #20 migration) and no contract inherits
   `KeeperTakerBase` directly anymore, so the split is indirection with one
   consumer path.
 - **Remedy:** Merge into a single `abstract contract KeeperTakerBase is
@@ -77,8 +80,8 @@ effort (S/M/L), risk, and how to verify.
 ### src/take
 
 #### B-T1 — `direct-dex/route-selection.ts` is a 74-line pure re-export barrel
-- **Location:** `src/take/direct-dex/route-selection.ts:1-74` (zero own definitions).
-- **Problem:** The honest-modules refactor (commit `97200d8`) split the former
+- **Location:** `src/take/direct-dex/route-selection.ts:1-73` (zero own definitions).
+- **Problem:** The honest-modules refactor (#20) split the former
   573-line file into siblings (`route-amounts`, `route-candidates`, `route-ranking`,
   `route-profitability`, `providers`, `availability`, `logs`, `runtime-cache`,
   `route-types`, `route-rejection`) but left `route-selection.ts` as a re-export
@@ -91,9 +94,9 @@ effort (S/M/L), risk, and how to verify.
   `npm run check-external-take-boundaries -- --base origin/master`.
 
 #### B-T2 — Each aggregator provider wires the same two callbacks through three descriptor fields
-- **Location:** `src/take/lifi/execution.ts:113-122`,
-  `src/take/sushi-aggregator/execution.ts:89-101`,
-  `src/take/oneinch-aggregator/execution.ts:80-93`.
+- **Location:** `src/take/lifi/execution.ts:108-123`,
+  `src/take/sushi-aggregator/execution.ts:84-102`,
+  `src/take/oneinch-aggregator/execution.ts:75-94`.
 - **Problem:** After the (good) shared-execution-closure consolidation, each
   `takeLiquidationXxx` still re-specifies the provider's two real knobs
   (`onXxxQuoteResult`, `onXxxExecutionFailure`) spread across three descriptor
@@ -127,6 +130,12 @@ effort (S/M/L), risk, and how to verify.
 - **Remedy (reuse-canonical):** Replace the switch body with
   `provider.providerId ? getAggregatorProviderIdentity(provider.providerId).label
   : (provider.path === 'direct_dex' ? 'direct DEX' : provider.path)`.
+  **Behavior note:** this is the one Wave-1 item that changes an emitted string —
+  the descriptor `label` is `'Sushi Aggregator'` (capital A;
+  `external-take-descriptors.ts:93`) while the current switch emits `'Sushi
+  aggregator'` (lowercase; `hybrid.ts:64`). Pick one casing (align the descriptor
+  `label` or lowercase at the call site) and update the `hybrid-external-take-*`
+  assertion to match, so the warning text doesn't silently drift.
 - **Effort:** S. **Risk:** low. **Verify:** unit suite (`hybrid-external-take-*`).
 
 #### B-D2 — Duplicate Uniswap V3 required-address-fields constant
@@ -195,7 +204,14 @@ effort (S/M/L), risk, and how to verify.
 - **Remedy (reuse-canonical):** Hoist the orchestration into the canonical helper as
   `reconcileTakerAllowlists({ taker, desired, labelPrefix, txLabel })` taking an
   ethers.Contract bound to `AGGREGATOR_TAKER_ALLOWLIST_ABI`. Both `configure*`
-  collapse to a desired-policy computation + one call. (Reused again by 1inch in W3.)
+  collapse to a desired-policy computation + one call. (`reconcileTakerAllowlists`
+  does not exist yet — confirmed; it is net-new. Reused again by 1inch in W3.)
+- **Preserve when refactoring:** the LI.FI path additionally loads the taker via
+  `takerArtifact.abi` and goes through wrapper fns (`readLifiTakerAllowlistSnapshot`
+  etc., re-exports of the generic primitives Sushi calls directly) and has a
+  `hasProductionLifiConfig` guard that Sushi lacks. The shared helper must keep the
+  production-config short-circuit and bind to `AGGREGATOR_TAKER_ALLOWLIST_ABI`
+  directly rather than re-exporting per provider.
 - **Effort:** M. **Risk:** low-medium (deploy reconciliation is fail-closed — keep the
   'contains'-then-'exact' assertion order intact and tested).
 - **Verify:** the allowlist reconciliation unit tests + a deploy dry-run.
