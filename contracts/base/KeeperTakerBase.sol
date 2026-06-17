@@ -9,12 +9,16 @@ import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
 
-/// @notice Shared core for all keeper taker contracts: deployment wiring, pool
-///         validation, approval/sweep helpers, and the standard swap event.
+/// @notice Shared base for all keeper taker contracts: deployment wiring, pool
+///         validation, approval/sweep helpers, the standard swap event, the
+///         IAjnaKeeperTaker getters, and the owner-or-router access control.
 /// @dev AUDIT FIX: consolidates the helpers that were previously copy-pasted
 ///      across the five takers (and had already drifted in comments) so a
-///      future fix lands exactly once.
-abstract contract KeeperTakerBase is ReentrancyGuard {
+///      future fix lands exactly once. The former two-level
+///      KeeperTakerBase / RouterAuthorizedTakerBase split existed only so the
+///      since-removed standalone AjnaKeeperTaker could inherit the lower layer;
+///      every surviving taker is router-managed, so the layers are merged here.
+abstract contract KeeperTakerBase is IAjnaKeeperTaker, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @dev Hash used for all ERC20 pools, used for pool validation
@@ -25,6 +29,14 @@ abstract contract KeeperTakerBase is ReentrancyGuard {
 
     /// @dev Identifies the Ajna deployment, used to validate pools
     PoolDeployer internal immutable _poolFactory;
+
+    /// @dev Router contract that is also authorized to call functions. May be
+    ///      zero for a direct-DEX taker deployed in standalone (owner-only) mode
+    ///      — Curve/UniswapV3 takers permit this and their fixtures exercise it.
+    ///      The calldata-aggregator base (BaseAggregatorCalldataTaker)
+    ///      additionally rejects a zero router. Either way, the keeper router
+    ///      refuses to register a taker whose router does not match.
+    address internal immutable _authorizedRouter;
 
     /// @dev Standard per-swap monitoring event. Calldata-aggregator takers do
     ///      NOT emit this; they emit the base AggregatorSwapExecuted (indexed
@@ -41,27 +53,43 @@ abstract contract KeeperTakerBase is ReentrancyGuard {
     error InvalidSwapDetails();        // sig: 0x21d83cf6
     /// @notice External swap did not deliver enough quote token to satisfy Ajna's callback requirement.
     error InsufficientQuoteReceived();
+    /// @notice Emitted when the requested liquidity source is not handled by this taker.
+    error UnsupportedSource();  // sig: 0x79b7ef0d
+    /// @notice External swap could not be executed.
+    error SwapFailed();         // sig: 0x81ceff30
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
-    constructor(PoolDeployer ajnaErc20PoolFactory) {
+    /// @param authorizedRouter_ Router contract address that can also call functions.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_) {
         // A zero pool factory bricks the taker: _validatePool can never pass.
         require(address(ajnaErc20PoolFactory) != address(0), "Zero pool factory");
         _owner = msg.sender;
         _poolFactory = ajnaErc20PoolFactory;
+        _authorizedRouter = authorizedRouter_;
     }
 
-    /// @notice Returns the owner of this contract.
-    function owner() public view virtual returns (address) {
+    /// @inheritdoc IAjnaKeeperTaker
+    function owner() public view override returns (address) {
         return _owner;
     }
 
-    /// @notice Returns the Ajna pool factory this taker validates pools against.
-    function poolFactory() public view virtual returns (PoolDeployer) {
+    /// @inheritdoc IAjnaKeeperTaker
+    function poolFactory() public view override returns (PoolDeployer) {
         return _poolFactory;
+    }
+
+    /// @inheritdoc IAjnaKeeperTaker
+    function authorizedRouter() public view override returns (address) {
+        return _authorizedRouter;
     }
 
     modifier onlyOwner() {
         if (msg.sender != _owner) revert Unauthorized();
+        _;
+    }
+
+    modifier onlyOwnerOrRouter() {
+        if (msg.sender != _owner && msg.sender != _authorizedRouter) revert Unauthorized();
         _;
     }
 
@@ -111,49 +139,6 @@ abstract contract KeeperTakerBase is ReentrancyGuard {
         _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), 0);
         _recoverToken(IERC20(pool.quoteTokenAddress()));
         _recoverToken(IERC20(pool.collateralAddress()));
-    }
-}
-
-/// @notice Base for router-managed takers: implements the IAjnaKeeperTaker
-///         wiring getters, the shared owner-or-router access control, and
-///         token recovery.
-abstract contract RouterAuthorizedTakerBase is IAjnaKeeperTaker, KeeperTakerBase {
-    /// @dev Router contract that is also authorized to call functions.
-    ///      May be zero to deploy the taker in standalone (owner-only) mode; the
-    ///      keeper router refuses to register a taker whose router does not match.
-    address internal immutable _authorizedRouter;
-
-    /// @notice Emitted when the requested liquidity source is not handled by this taker.
-    error UnsupportedSource();  // sig: 0x79b7ef0d
-    /// @notice External swap could not be executed.
-    error SwapFailed();         // sig: 0x81ceff30
-
-    /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
-    /// @param authorizedRouter_ Router contract address that can also call functions.
-    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
-        KeeperTakerBase(ajnaErc20PoolFactory)
-    {
-        _authorizedRouter = authorizedRouter_;
-    }
-
-    /// @inheritdoc IAjnaKeeperTaker
-    function owner() public view override(IAjnaKeeperTaker, KeeperTakerBase) returns (address) {
-        return _owner;
-    }
-
-    /// @inheritdoc IAjnaKeeperTaker
-    function poolFactory() public view override(IAjnaKeeperTaker, KeeperTakerBase) returns (PoolDeployer) {
-        return _poolFactory;
-    }
-
-    /// @inheritdoc IAjnaKeeperTaker
-    function authorizedRouter() public view override returns (address) {
-        return _authorizedRouter;
-    }
-
-    modifier onlyOwnerOrRouter() {
-        if (msg.sender != _owner && msg.sender != _authorizedRouter) revert Unauthorized();
-        _;
     }
 
     /// @inheritdoc IAjnaKeeperTaker

@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
-import { RouterAuthorizedTakerBase } from "./KeeperTakerBase.sol";
+import { KeeperTakerBase } from "./KeeperTakerBase.sol";
 import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 
 /// @notice Shared layer for calldata-aggregator takers: executes one
@@ -41,7 +41,7 @@ import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 ///      parameterized AggregatorSwapExecuted event (whose indexed source field
 ///      distinguishes providers in one ABI, replacing the former
 ///      provider-distinct per-wrapper events).
-abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
+abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
     struct AggregatorSwapDetails {
         address approvalSpender;
         address srcToken;
@@ -97,7 +97,7 @@ abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
     ///        deployment.
     /// @param source_ The single liquidity source this taker serves.
     constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_, LiquiditySource source_)
-        RouterAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
+        KeeperTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
     {
         require(authorizedRouter_ != address(0), "Zero authorized router");
         require(source_ != LiquiditySource.None, "Zero liquidity source");
