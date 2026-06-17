@@ -8,6 +8,7 @@ import {
   validateOneInchSwapDetailsForAtomicTake,
 } from '../src/dex/one-inch';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../src/erc20';
+import { BASE_ONEINCH_ROUTER } from './no-spend/fixture-constants';
 
 type CanaryCheck = {
   label: string;
@@ -36,7 +37,6 @@ type CanarySummary = {
 };
 
 const BASE_CHAIN_ID = 8453;
-const BASE_ONEINCH_ROUTER = '0x1111111254EEB25477B68fb85Ed929f73A960582';
 const BASE_CADC = '0x043eb4b75d0805c43d7c834902e335621983cf03';
 const BASE_USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
 const BASE_WETH = '0x4200000000000000000000000000000000000006';

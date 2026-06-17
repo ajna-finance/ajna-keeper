@@ -1,59 +1,22 @@
-import { AGGREGATOR_SWAP_DETAILS_TUPLE_ABI } from '../../src/take/aggregator-calldata/execution';
 import { expect } from 'chai';
-import { BigNumber, constants, utils } from 'ethers';
+import { BigNumber, utils } from 'ethers';
 import { LiquiditySource } from '../../src/config';
-import { TakerRouter__factory } from '../../typechain-types/factories/contracts/factories';
-import { MockLifiSwapTarget__factory } from '../../typechain-types/factories/contracts/mocks';
 import { OneInchAggregatorKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
 import {
+  deployAggregatorTaker,
   deployMockTakerBase,
+  executeAggregatorTake,
   expectRevertContaining,
 } from './helpers/mock-taker-base';
 
-const DETAILS_ABI =
-  AGGREGATOR_SWAP_DETAILS_TUPLE_ABI;
-const BORROWER = utils.getAddress(
-  '0x00000000000000000000000000000000000000b0'
-);
-
 async function deployOneInchAggregatorFixture() {
-  const base = await deployMockTakerBase();
-  const { owner, poolDeployer, pool } = base;
-  const collateral = base.collateralToken;
-  const quote = base.quoteToken;
-
-  const factory = await new TakerRouter__factory(owner).deploy(
-    poolDeployer.address
-  );
-  await factory.deployed();
-
-  const taker = await new OneInchAggregatorKeeperTaker__factory(owner).deploy(
-    poolDeployer.address,
-    factory.address
-  );
-  await taker.deployed();
-
-  const target = await new MockLifiSwapTarget__factory(owner).deploy();
-  await target.deployed();
-
-  await factory.setTaker(LiquiditySource.ONEINCH, taker.address);
-  const selector = target.interface.getSighash('mockSwap');
-  await taker.setCallTarget(target.address, true);
-  await taker.setApprovalSpender(target.address, true);
-  await taker.setCallSelector(target.address, selector, true);
-
-  return { owner, collateral, quote, pool, factory, taker, target };
+  return deployAggregatorTaker(await deployMockTakerBase(), {
+    Factory: OneInchAggregatorKeeperTaker__factory,
+    source: LiquiditySource.ONEINCH,
+  });
 }
 
-/**
- * Deploys the 1inch aggregator fixture and stages a single mockSwap take through
- * TakerRouter: collateral in the pool, output quote in the target, the amount due
- * pre-funded+approved on the owner, and an encoded details/callData pair. Returns
- * the fixture plus a `send()` that fires the take, so each test asserts deltas
- * instead of re-staging the swap. `detailsAmountIn` defaults to `amountIn`; set it
- * higher to model stale (drifted) quoted calldata.
- */
-async function executeOneInchTake(
+function executeOneInchTake(
   params: {
     amountIn?: BigNumber;
     detailsAmountIn?: BigNumber;
@@ -62,64 +25,11 @@ async function executeOneInchTake(
     amountOutMinimum?: BigNumber;
   } = {}
 ) {
-  const fixture = await deployOneInchAggregatorFixture();
-  const amountIn = params.amountIn ?? utils.parseEther('1');
-  const detailsAmountIn = params.detailsAmountIn ?? amountIn;
-  const outputAmount = params.outputAmount ?? utils.parseEther('1.25');
-  const quoteAmountDue = params.quoteAmountDue ?? utils.parseEther('1');
-  const amountOutMinimum = params.amountOutMinimum ?? utils.parseEther('1.1');
-
-  await fixture.collateral.mint(fixture.pool.address, amountIn);
-  await fixture.quote.mint(fixture.target.address, outputAmount);
-  await fixture.quote.mint(fixture.owner.address, quoteAmountDue);
-  await fixture.quote
-    .connect(fixture.owner)
-    .approve(fixture.pool.address, constants.MaxUint256);
-  await fixture.pool.setQuoteAmountDue(quoteAmountDue);
-
-  const callData = fixture.target.interface.encodeFunctionData('mockSwap', [
-    fixture.collateral.address,
-    fixture.quote.address,
-    fixture.taker.address,
-    detailsAmountIn,
-    outputAmount,
-  ]);
-  const details = utils.defaultAbiCoder.encode(
-    [DETAILS_ABI],
-    [
-      {
-        approvalSpender: fixture.target.address,
-        srcToken: fixture.collateral.address,
-        dstToken: fixture.quote.address,
-        dstReceiver: fixture.taker.address,
-        amountInTokenUnits: detailsAmountIn,
-        amountOutMinimum,
-        callData,
-      },
-    ]
-  );
-
-  const send = () =>
-    fixture.factory.takeWithAtomicSwap(
-      fixture.pool.address,
-      BORROWER,
-      constants.WeiPerEther,
-      amountIn,
-      LiquiditySource.ONEINCH,
-      fixture.target.address,
-      details
-    );
-
-  return {
-    ...fixture,
-    amountIn,
-    detailsAmountIn,
-    outputAmount,
-    quoteAmountDue,
-    amountOutMinimum,
-    details,
-    send,
-  };
+  return executeAggregatorTake({
+    Factory: OneInchAggregatorKeeperTaker__factory,
+    source: LiquiditySource.ONEINCH,
+    ...params,
+  });
 }
 
 describe('OneInchAggregatorKeeperTaker (Packet 5)', () => {
