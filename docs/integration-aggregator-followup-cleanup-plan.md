@@ -314,6 +314,13 @@ execution order").
   and `check-external-take-boundaries.ts:100`; **keep** the `OWNERSHIP_FILE_LINE_CAPS` cap on the
   live `harness-report.ts` (it guards the real owner). Land the guard-config prune in the same commit
   so the gate stays auditable.
+- **Also prune guard entries for files deleted by OTHER items (pass 8):** N9 deletes
+  `src/discovery/route-preflight.ts` (live in `check-hot-file-growth.ts` `HOT_FILES:28` +
+  `COMPATIBILITY_ONLY_HOT_MODULES:86-89`) and B-T1 deletes `src/take/direct-dex/route-selection.ts`
+  (live in `OWNERSHIP_FILE_LINE_CAPS:45`). Drop those entries too, in the same commit as their
+  respective deletions — otherwise the plan re-creates the exact stale-pointer rot N15 exists to
+  remove. (Inert to the gate — a deleted file reports 0 lines — but it violates this plan's own
+  "keep the gate auditable" principle.)
 - **Effort:** S. **Risk:** low (the package `index.ts` deletions need the directory-import check;
   the sibling/shim barrels are zero-risk). **Verify:** `tsc`,
   `npm run check-external-take-boundaries -- --base <ref>`, `npm run check-hot-file-growth -- --base <ref>`.
