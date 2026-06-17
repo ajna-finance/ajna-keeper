@@ -8,6 +8,10 @@ import {
 import { normalizeLifiProductionChainPolicy } from '../../src/config/lifi-policy';
 import { normalizeSushiAggregatorChainPolicy } from '../../src/config/sushi-aggregator-policy';
 import {
+  hasOneInchAggregatorAllowlistPolicy,
+  normalizeOneInchChainPolicy,
+} from '../../src/config/oneinch-aggregator-policy';
+import {
   AGGREGATOR_TAKER_ALLOWLIST_ABI,
   assertTakerAllowlistPolicy,
   buildTakerAllowlistReconciliationPlan,
@@ -36,7 +40,8 @@ export type DeploymentAddressKey =
   | 'uniswapTaker'
   | 'curveTaker'
   | 'lifiTaker'
-  | 'sushiAggregatorTaker';
+  | 'sushiAggregatorTaker'
+  | 'oneInchAggregatorTaker';
 
 // Per-source artifact path under artifacts/contracts/takers/<Sol>/<Json>.
 type TakerArtifact = {
@@ -458,6 +463,38 @@ export const DEPLOY_DESCRIPTORS: readonly DeployDescriptor[] = [
       return normalizeSushiAggregatorChainPolicy({
         config: sushiAggregator,
         fieldName: 'dex.sushiAggregator',
+        chainId,
+      });
+    },
+  },
+  {
+    ...deployDescriptorFor({
+      source: LiquiditySource.ONEINCH,
+      addressKey: 'oneInchAggregatorTaker',
+      takerArtifact: {
+        contractFileName: 'OneInchAggregatorKeeperTaker.sol',
+        artifactName: 'OneInchAggregatorKeeperTaker.json',
+      },
+      deployStepLabel: 'Deploying OneInchAggregatorKeeperTaker...',
+      summaryIcon: '🟦',
+      summaryContractName: 'OneInchAggregatorKeeperTaker',
+    }),
+    category: 'aggregator',
+    allowlistLabelPrefix: '1inch aggregator taker',
+    // 1inch is provisioned only when dex.oneInch carries a production allowlist
+    // policy; without it, 1inch is quote/discovery-only (no on-chain taker).
+    isConfigured: (config) =>
+      hasOneInchAggregatorAllowlistPolicy(config.dex?.oneInch),
+    normalizeChainPolicy: (config, chainId) => {
+      const oneInch = config.dex?.oneInch;
+      if (!oneInch) {
+        throw new Error(
+          'dex.oneInch config is required for 1inch aggregator deployment'
+        );
+      }
+      return normalizeOneInchChainPolicy({
+        config: oneInch,
+        fieldName: 'dex.oneInch',
         chainId,
       });
     },

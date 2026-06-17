@@ -13,6 +13,7 @@ import {
   hasProductionLifiConfig,
   validateDetectedChainLifiProductionConfig,
 } from './deployment/lifi-factory-deployment';
+import { hasOneInchAggregatorAllowlistPolicy } from '../src/config/oneinch-aggregator-policy';
 import {
   DEPLOY_DESCRIPTORS,
   deployTaker,
@@ -44,6 +45,7 @@ export interface DeploymentAddresses {
   curveTaker?: string;
   lifiTaker?: string;
   sushiAggregatorTaker?: string;
+  oneInchAggregatorTaker?: string;
   // Future: uniswapV4, pancakeswap, balancer, izumi, etc.
 }
 
@@ -125,18 +127,19 @@ export async function validateConfig(config: KeeperConfig): Promise<void> {
     throw new Error('Missing ajna.erc20PoolFactory in config');
   }
 
-  // 1inch is not auto-provisioned by this script: unlike LI.FI/Sushi there is no
-  // on-chain allowlist-derivation for the 1inch taker, so it cannot be safely
-  // deployed+allowlisted+registered here. Fail BEFORE any deployment rather than
-  // silently leaving LiquiditySource.ONEINCH mapped to no taker (a runtime
-  // TakerNotSet liveness gap) or partially deploying then aborting.
-  if (config.dex?.oneInch) {
+  // 1inch is provisioned by the deploy loop only when dex.oneInch carries a
+  // production allowlist policy (callTargetAllowlist/approvalSpenderAllowlist/
+  // selectorAllowlist), which the loop reconciles + verifies on-chain like
+  // LI.FI/Sushi. A dex.oneInch present WITHOUT that policy is quote/discovery-
+  // only: fail BEFORE any deployment rather than silently leaving
+  // LiquiditySource.ONEINCH mapped to no taker (a runtime TakerNotSet gap).
+  if (config.dex?.oneInch && !hasOneInchAggregatorAllowlistPolicy(config.dex.oneInch)) {
     throw new Error(
-      'dex.oneInch is configured but this script does not provision the ' +
-        'OneInchAggregatorKeeperTaker (no automated allowlist derivation for ' +
-        '1inch yet). Deploy + allowlist + setTaker(LiquiditySource.ONEINCH, ...) ' +
-        'the 1inch taker via a reviewed manual step before enabling provider ' +
-        'oneinch, or remove dex.oneInch to deploy the rest of the system.'
+      'dex.oneInch is configured without an aggregator allowlist policy. Add ' +
+        'callTargetAllowlist/approvalSpenderAllowlist/selectorAllowlist to ' +
+        'provision the OneInchAggregatorKeeperTaker (it is deployed, allowlist-' +
+        'reconciled, and registered automatically), or remove dex.oneInch to ' +
+        'deploy the rest of the system.'
     );
   }
 
@@ -441,7 +444,8 @@ export function generateConfigUpdate(
     addresses.uniswapTaker ||
     addresses.curveTaker ||
     addresses.lifiTaker ||
-    addresses.sushiAggregatorTaker
+    addresses.sushiAggregatorTaker ||
+    addresses.oneInchAggregatorTaker
   ) {
     console.log('  contracts: {');
     if (addresses.uniswapTaker) {
@@ -455,6 +459,11 @@ export function generateConfigUpdate(
     }
     if (addresses.sushiAggregatorTaker) {
       console.log(`    SushiAggregator: '${addresses.sushiAggregatorTaker}',`);
+    }
+    if (addresses.oneInchAggregatorTaker) {
+      console.log(
+        `    OneInchAggregator: '${addresses.oneInchAggregatorTaker}',`
+      );
     }
     console.log('  },');
   }
@@ -484,6 +493,11 @@ export function generateConfigUpdate(
   if (addresses.sushiAggregatorTaker) {
     console.log(
       `🍣 SushiAggregatorKeeperTaker: ${addresses.sushiAggregatorTaker}`
+    );
+  }
+  if (addresses.oneInchAggregatorTaker) {
+    console.log(
+      `🟦 OneInchAggregatorKeeperTaker: ${addresses.oneInchAggregatorTaker}`
     );
   }
 

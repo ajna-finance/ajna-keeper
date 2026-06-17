@@ -133,13 +133,13 @@ describe('deploy-factory-system CLI orchestration (characterization)', () => {
   });
 
   describe('validateConfig gating predicates', () => {
-    it('fails BEFORE any deployment when dex.oneInch is configured', async () => {
+    it('fails BEFORE any deployment when dex.oneInch lacks an allowlist policy', async () => {
       const capture = captureConsole();
       try {
         await expect(
           validateConfig(baseConfig({ oneInch: { apiKey: 'x' } } as any))
         ).to.be.rejectedWith(
-          /dex\.oneInch is configured but this script does not provision/
+          /dex\.oneInch is configured without an aggregator allowlist policy/
         );
       } finally {
         capture.restore();

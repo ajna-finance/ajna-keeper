@@ -18,6 +18,10 @@ import {
 } from '../config';
 import { reconcileTakerAllowlistSnapshot } from '../take/aggregator-calldata/allowlist';
 import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
+import {
+  hasOneInchAggregatorAllowlistPolicy,
+  normalizeOneInchChainPolicy,
+} from '../config/oneinch-aggregator-policy';
 import { validateSushiAggregatorAllowlistPreflight } from '../dex/sushi-aggregator/preflight';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
@@ -423,6 +427,54 @@ async function validateLifiAllowlistPreflight(params: {
   });
 }
 
+async function validateOneInchAggregatorAllowlistPreflight(params: {
+  config: KeeperConfig;
+  provider: providers.Provider;
+  chainId: number;
+  takerAddress: string | undefined;
+  errors: string[];
+}): Promise<void> {
+  const oneInch = params.config.dex?.oneInch;
+  if (!hasOneInchAggregatorAllowlistPolicy(oneInch) || !params.takerAddress) {
+    return;
+  }
+  let policy;
+  try {
+    policy = normalizeOneInchChainPolicy({
+      config: oneInch!,
+      fieldName: 'dex.oneInch',
+      chainId: params.chainId,
+    });
+  } catch (error) {
+    params.errors.push(
+      `1inch production policy for chain ${params.chainId} is invalid: ${getErrorMessage(error)}`
+    );
+    return;
+  }
+  // Mirrors LI.FI: read selectors for the call targets AND any extra
+  // selectorAllowlist keys, retrying only on classified-retryable RPC errors.
+  await reconcileTakerAllowlistSnapshot({
+    provider: params.provider,
+    takerAddress: params.takerAddress,
+    policy,
+    selectorTargets: [
+      ...policy.callTargets,
+      ...Object.keys(policy.selectorAllowlist),
+    ],
+    labelPrefix: '1inch taker',
+    read: async ({ label, operation }) => {
+      const { value, error } = await retryRpcRead(operation);
+      if (value === undefined) {
+        throw new Error(
+          `${label} could not be read after retries: ${getErrorMessage(error)}`
+        );
+      }
+      return value;
+    },
+    errors: params.errors,
+  });
+}
+
 function createRouterRegisteredPreflightDescriptor(params: {
   takerLabel?: (source: ExternalTakeLiquiditySource) => string;
   getContractCodeRequirements: (
@@ -446,12 +498,28 @@ function createRouterRegisteredPreflightDescriptor(params: {
 
 const EXTERNAL_TAKE_SOURCE_PREFLIGHT_DESCRIPTORS = {
   [LiquiditySource.ONEINCH]: createRouterRegisteredPreflightDescriptor({
+    takerLabel: () => '1inch taker',
     getContractCodeRequirements: ({ config, chainId }) => [
       {
         label: `1inch router for chain ${chainId}`,
         address: config.dex?.oneInch?.routers?.[chainId],
       },
     ],
+    validateAdditional: async ({
+      config,
+      provider,
+      chainId,
+      takerAddress,
+      errors,
+    }) => {
+      await validateOneInchAggregatorAllowlistPreflight({
+        config,
+        provider,
+        chainId,
+        takerAddress,
+        errors,
+      });
+    },
   }),
   [LiquiditySource.UNISWAPV3]: createRouterRegisteredPreflightDescriptor({
     getContractCodeRequirements: ({ config }) => {

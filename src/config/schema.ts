@@ -552,6 +552,17 @@ export interface OneInchDexConfig {
    */
   aggregationExecutorAllowlist?: { [chainId: number]: string[] };
   connectorTokens?: Array<string>;
+  /**
+   * Production calldata-aggregator allowlist policy for the
+   * OneInchAggregatorKeeperTaker — the per-chain on-chain call-target /
+   * approval-spender / selector allowlists the deployed taker enforces. Required
+   * to deploy + register the 1inch taker and for live (non-dry-run) 1inch
+   * external takes (mirrors the Sushi aggregator policy). When absent, 1inch is
+   * quote/discovery-only and no aggregator taker is provisioned.
+   */
+  callTargetAllowlist?: ChainAddressAllowlist;
+  approvalSpenderAllowlist?: ChainAddressAllowlist;
+  selectorAllowlist?: ChainTargetSelectorAllowlist;
 }
 
 export type LifiDexMode = 'canary' | 'production';

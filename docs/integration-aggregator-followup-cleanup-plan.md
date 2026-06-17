@@ -715,12 +715,26 @@ Every gate was run and green at each step: `npm run typecheck`, `npm run unit-te
   quote-failure threshold/cooldown config to drive a circuit); the unified `providerCircuits.*` makes
   adding one a small follow-up.
 
-**Remaining (Wave 5 — W3-FINAL, 1inch allowlist parity): NOT YET IMPLEMENTED.** This is the one step
-the execution order flags as un-verifiable here — its `oneinch-aggregator-fork-canary` is blocked by
-the 401 dev `ONEINCH_API_KEY`. It is also a genuinely additive new-provider production-policy surface
-(1inch currently has no allowlist-policy/mode in config and its CLI deploy is gated by an explicit
-throw), so it is the natural split-off: introduce `normalizeOneInchChainPolicy` + schema allowlist
-fields + fail-closed validation + a 1inch deploy-registry entry (auto-enrolling it in M-A's loop and
-M-C′'s preflight, deleting the `deploy-factory-system-cli.ts` 1inch throw), then land the canary code
-and run it where a valid key exists. Was deferred rather than rushed to preserve the verified-quality
-bar held across the other 38 items.
+**Wave 5 — W3-FINAL (1inch allowlist parity): IMPLEMENTED.**
+- **Schema + normalizer** — `OneInchDexConfig` gains optional `callTargetAllowlist` /
+  `approvalSpenderAllowlist` / `selectorAllowlist`; `src/config/oneinch-aggregator-policy.ts` adds
+  `normalizeOneInchChainPolicy` (mirrors Sushi, reuses `normalizeTakerSelectorAllowlistRecord` with
+  fail-closed call-target coverage) + `hasOneInchAggregatorAllowlistPolicy` +
+  `assertValidOneInchAggregatorDexConfig`.
+- **Validation** — `validateOneInchTakeSource` requires a complete allowlist policy for live
+  (non-dry-run) 1inch takes; a present-but-incomplete/non-covering policy fails closed at config time.
+- **Deploy** — a 1inch entry in `scripts/deployment/deploy-registry.ts` auto-enrolls it in M-A's loop
+  (gated on the allowlist policy); the CLI's blanket 1inch throw is replaced by a no-policy-only guard,
+  and `generateConfigUpdate` emits the `OneInchAggregator` lines.
+- **Preflight** — the ONEINCH descriptor row gains `validateOneInchAggregatorAllowlistPreflight`
+  (reuses M-C′'s `reconcileTakerAllowlistSnapshot`), giving fail-closed on-chain drift detection.
+- **Fork canary** — `tests/integration/oneinch-aggregator-fork-canary.test.ts` mirrors the Sushi
+  canary via the production `requestValidatedOneInchAggregatorQuote` path. ⚠️ Gated off by default
+  (`RUN_ONEINCH_FORK_CANARY`) and **not run here** — the dev `ONEINCH_API_KEY` is 401; it typechecks
+  and skips cleanly and must be run where a valid key exists, pinned near the live head.
+- **Tests** — `tests/unit/oneinch-aggregator-policy.test.ts` covers the normalizer + the production /
+  quote-only / incomplete-policy validation paths; existing 1inch production fixtures were given the
+  allowlist policy. typecheck clean; unit suite 1045 → 1055.
+
+**Entire plan implemented.** The only piece not executed in this environment is the 1inch fork
+canary's live run (401 key) — code landed + gated, per the execution order's split-off note.
