@@ -15,12 +15,13 @@ import { KeeperConfig, LiquiditySource } from '../../src/config';
 
 // Characterization tests for the descriptor-driven deploy CLI orchestration
 // (plan item M-A). These pin the operator-facing behavior the consolidation
-// must preserve: the validateConfig gating predicates (including the 1inch
-// fail-before-deploy throw), the per-source configureFactory registration
-// ordering, the verifyDeployment per-source assertions (Uniswap + LI.FI + the
-// B-S1 Sushi branch added by the loop), and the generateConfigUpdate label /
-// address-line output. ethers RPC is fully mocked: ethers.Contract is stubbed
-// so no live network is touched.
+// must preserve: the validateConfig gating predicates (including the
+// no-allowlist-policy 1inch fail-before-deploy throw), the per-source
+// configureFactory registration ordering, the verifyDeployment per-source
+// assertions (Uniswap + LI.FI + the B-S1 Sushi branch the loop added, each with
+// pass + config/authorization/owner-mismatch cases), and the
+// generateConfigUpdate label / address-line output. ethers RPC is fully mocked:
+// the signer transport is stubbed so no live network is touched.
 
 const FACTORY = ethers.utils.getAddress(
   '0x00000000000000000000000000000000000fac01'
@@ -247,11 +248,15 @@ describe('deploy-factory-system CLI orchestration (characterization)', () => {
       registeredUniswap?: string;
       hasLifi?: boolean;
       registeredLifi?: string;
+      hasSushi?: boolean;
+      registeredSushi?: string;
       factoryOwner?: string;
       uniswapTakerOwner?: string;
       uniswapAuthorizedRouter?: string;
       lifiTakerOwner?: string;
       lifiAuthorizedRouter?: string;
+      sushiTakerOwner?: string;
+      sushiAuthorizedRouter?: string;
     }
 
     function deployer(options: VerifyStubOptions = {}): ethers.Wallet {
@@ -260,11 +265,15 @@ describe('deploy-factory-system CLI orchestration (characterization)', () => {
         registeredUniswap = UNISWAP_TAKER,
         hasLifi = true,
         registeredLifi = LIFI_TAKER,
+        hasSushi = true,
+        registeredSushi = SUSHI_TAKER,
         factoryOwner = OWNER,
         uniswapTakerOwner = OWNER,
         uniswapAuthorizedRouter = FACTORY,
         lifiTakerOwner = OWNER,
         lifiAuthorizedRouter = FACTORY,
+        sushiTakerOwner = OWNER,
+        sushiAuthorizedRouter = FACTORY,
       } = options;
 
       const call = (tx: { to?: string; data?: string }): string => {
@@ -275,7 +284,11 @@ describe('deploy-factory-system CLI orchestration (characterization)', () => {
           if (parsed.name === 'hasConfiguredTaker') {
             const source = Number(parsed.args[0]);
             return FACTORY_IFACE.encodeFunctionResult('hasConfiguredTaker', [
-              source === LiquiditySource.LIFI ? hasLifi : hasUniswap,
+              source === LiquiditySource.LIFI
+                ? hasLifi
+                : source === LiquiditySource.SUSHI_AGGREGATOR
+                  ? hasSushi
+                  : hasUniswap,
             ]);
           }
           if (parsed.name === 'takerContracts') {
@@ -283,7 +296,9 @@ describe('deploy-factory-system CLI orchestration (characterization)', () => {
             return FACTORY_IFACE.encodeFunctionResult('takerContracts', [
               source === LiquiditySource.LIFI
                 ? registeredLifi
-                : registeredUniswap,
+                : source === LiquiditySource.SUSHI_AGGREGATOR
+                  ? registeredSushi
+                  : registeredUniswap,
             ]);
           }
           if (parsed.name === 'owner') {
@@ -291,15 +306,24 @@ describe('deploy-factory-system CLI orchestration (characterization)', () => {
           }
         }
         const selector = data.slice(0, 10);
-        const isUniswap = to === UNISWAP_TAKER;
+        const takerOwnerByAddress: Record<string, string> = {
+          [UNISWAP_TAKER]: uniswapTakerOwner,
+          [LIFI_TAKER]: lifiTakerOwner,
+          [SUSHI_TAKER]: sushiTakerOwner,
+        };
+        const takerRouterByAddress: Record<string, string> = {
+          [UNISWAP_TAKER]: uniswapAuthorizedRouter,
+          [LIFI_TAKER]: lifiAuthorizedRouter,
+          [SUSHI_TAKER]: sushiAuthorizedRouter,
+        };
         if (selector === TAKER_IFACE.getSighash('owner')) {
           return TAKER_IFACE.encodeFunctionResult('owner', [
-            isUniswap ? uniswapTakerOwner : lifiTakerOwner,
+            takerOwnerByAddress[to] ?? OWNER,
           ]);
         }
         if (selector === TAKER_IFACE.getSighash('authorizedRouter')) {
           return TAKER_IFACE.encodeFunctionResult('authorizedRouter', [
-            isUniswap ? uniswapAuthorizedRouter : lifiAuthorizedRouter,
+            takerRouterByAddress[to] ?? FACTORY,
           ]);
         }
         throw new Error(`unexpected call to ${to}: ${selector}`);
@@ -413,6 +437,70 @@ describe('deploy-factory-system CLI orchestration (characterization)', () => {
             lifiTaker: LIFI_TAKER,
           })
         ).to.be.rejectedWith('LI.FI owner verification failed');
+      } finally {
+        capture.restore();
+      }
+    });
+
+    // B-S1: the descriptor loop gives Sushi (and any aggregator) the same
+    // post-registration verification Uniswap/LI.FI had. Exercise that branch
+    // directly so a regression dropping Sushi from the loop would fail here.
+    it('passes when the Sushi taker configuration/authorization/owner match', async () => {
+      const capture = captureConsole();
+      try {
+        await verifyDeployment(deployer(), {
+          factory: FACTORY,
+          sushiAggregatorTaker: SUSHI_TAKER,
+        });
+      } finally {
+        capture.restore();
+      }
+      expect(capture.logs.join('\n')).to.include(
+        'All verification checks passed'
+      );
+    });
+
+    it('throws on Sushi factory-configuration mismatch', async () => {
+      const capture = captureConsole();
+      try {
+        await expect(
+          verifyDeployment(deployer({ registeredSushi: CURVE_TAKER }), {
+            factory: FACTORY,
+            sushiAggregatorTaker: SUSHI_TAKER,
+          })
+        ).to.be.rejectedWith(
+          'Sushi Aggregator factory configuration verification failed'
+        );
+      } finally {
+        capture.restore();
+      }
+    });
+
+    it('throws on Sushi taker authorization mismatch', async () => {
+      const capture = captureConsole();
+      try {
+        await expect(
+          verifyDeployment(deployer({ sushiAuthorizedRouter: CURVE_TAKER }), {
+            factory: FACTORY,
+            sushiAggregatorTaker: SUSHI_TAKER,
+          })
+        ).to.be.rejectedWith(
+          'Sushi Aggregator taker authorization verification failed'
+        );
+      } finally {
+        capture.restore();
+      }
+    });
+
+    it('throws on Sushi owner mismatch', async () => {
+      const capture = captureConsole();
+      try {
+        await expect(
+          verifyDeployment(deployer({ sushiTakerOwner: CURVE_TAKER }), {
+            factory: FACTORY,
+            sushiAggregatorTaker: SUSHI_TAKER,
+          })
+        ).to.be.rejectedWith('Sushi Aggregator owner verification failed');
       } finally {
         capture.restore();
       }

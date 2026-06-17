@@ -376,8 +376,10 @@ function deployDescriptorFor(params: {
 
 // Ordered deploy registry. The loop iterates in this order so the deploy /
 // register / verify sequence and the config-update summary match the original
-// hand-unrolled order: Uniswap, Curve, LI.FI, Sushi. 1inch is intentionally
-// absent (W3-FINAL); the CLI keeps its explicit fail-before-deploy throw.
+// hand-unrolled order: Uniswap, Curve, LI.FI, Sushi, 1inch. 1inch auto-enrolls
+// only when hasOneInchAggregatorAllowlistPolicy(config.dex.oneInch) is true (its
+// isConfigured gate below); the CLI throws before deploy only when dex.oneInch
+// is present WITHOUT that allowlist policy (quote/discovery-only 1inch).
 export const DEPLOY_DESCRIPTORS: readonly DeployDescriptor[] = [
   {
     ...deployDescriptorFor({

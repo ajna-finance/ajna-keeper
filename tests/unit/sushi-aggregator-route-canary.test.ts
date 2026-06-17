@@ -3,10 +3,16 @@ import { BigNumber } from 'ethers';
 import { ApprovedCalldataAggregatorQuote } from '../../src/take/aggregator-calldata/types';
 import {
   SUSHI_CANARY_AMOUNT,
+  SUSHI_CANARY_PAIRS,
+  SUSHI_CANARY_TAKER,
   SushiRouteCanaryDeps,
   resolveSushiCanaryChains,
   runSushiRouteCanary,
 } from '../../src/dex/sushi-aggregator/route-canary';
+import {
+  DEFAULT_SUSHI_AGGREGATOR_MAX_PRICE_IMPACT,
+  DEFAULT_SUSHI_AGGREGATOR_SLIPPAGE,
+} from '../../src/config/sushi-aggregator-policy';
 
 const SCOPED_CHAIN_IDS = [1, 8453, 42161, 10, 137, 43114];
 const PROVEN_TARGET = '0xac4c6e212a361c968f1725b4d055b47e63f80b75';
@@ -136,6 +142,52 @@ describe('Sushi aggregator route canary', function () {
         sender: '0x000000000000000000000000000000000000dead',
       },
     ]);
+  });
+
+  it('wires the per-chain pair, scoped policy, and quote timestamp into the fail-closed validator', async () => {
+    const requestedAtMs = 1_700_000_123_456;
+    const seen: Array<Parameters<NonNullable<SushiRouteCanaryDeps['validateQuote']>>[0]> = [];
+    await runSushiRouteCanary({
+      argv: ['--chain', '8453'],
+      deps: {
+        fetchQuote: async ({ request }) => ({
+          status: 200,
+          data: { status: 'Success', chainId: request.chainId },
+          requestedAtMs,
+        }),
+        validateQuote: (params) => {
+          seen.push(params);
+          return approvedQuote({
+            chainId: params.chainId,
+            fromToken: params.fromToken,
+            toToken: params.toToken,
+            fromAmount: params.fromAmount,
+            takerAddress: params.takerAddress,
+            quotedAtMs: params.quotedAtMs,
+          });
+        },
+      },
+    });
+    expect(seen).to.have.length(1);
+    const params = seen[0];
+    expect(params.chainId).to.equal(8453);
+    expect(params.fromToken).to.equal(SUSHI_CANARY_PAIRS[8453].tokenIn);
+    expect(params.toToken).to.equal(SUSHI_CANARY_PAIRS[8453].tokenOut);
+    expect(params.fromAmount.eq(SUSHI_CANARY_AMOUNT)).to.equal(true);
+    expect(params.takerAddress).to.equal(SUSHI_CANARY_TAKER);
+    expect(params.maxSlippage).to.equal(DEFAULT_SUSHI_AGGREGATOR_SLIPPAGE);
+    expect(params.maxPriceImpact).to.equal(
+      DEFAULT_SUSHI_AGGREGATOR_MAX_PRICE_IMPACT
+    );
+    // Freshness wiring: the canary stamps the validator with the quote's
+    // request time, not Date.now().
+    expect(params.quotedAtMs).to.equal(requestedAtMs);
+    // The reviewed scoped chain policy is normalized (not empty) and forwarded.
+    expect(params.chainPolicy.callTargets.length).to.be.greaterThan(0);
+    expect(params.chainPolicy.approvalSpenders.length).to.be.greaterThan(0);
+    expect(
+      Object.keys(params.chainPolicy.selectorAllowlist).length
+    ).to.be.greaterThan(0);
   });
 
   it('fails a chain whose quote returns a non-200 status', async () => {
