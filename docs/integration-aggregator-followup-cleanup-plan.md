@@ -337,6 +337,20 @@ execution order").
 - **Effort:** S. **Risk:** low. **Verify:** `tsc`, `sushi-aggregator-validation` + `lifi-validation`
   unit tests.
 
+### N17 — Delete three more dead exported helpers orphaned by #20 *(new; same class as N12)*
+- **Location:** `src/take/external-take/route-binding.ts:375-397`
+  (`getExternalTakeRouteBindingFailurePath`, `getExternalTakeRouteBindingFailureSource`) and
+  `src/dex/lifi/exchange-policy.ts:100-104` (`isReviewedBroadLifiExchangePolicy`).
+- **Problem:** All three are exported but have **zero** callers tree-wide (`grep` over
+  src/tests/scripts returns only the declaration line). They survived because `noUnusedLocals` is off
+  and exported symbols escape it anyway (the exact gap N5 notes). The two route-binding accessors are
+  the dead subset of a union whose live consumer is the *sibling* `formatExternalTakeRouteBindingFailure`;
+  `isReviewedBroadLifiExchangePolicy` narrows to a type itself never consumed externally.
+- **Remedy:** Delete the three exports (and the now-unreferenced `ReviewedBroadLifiExchangePolicy`
+  narrowing target if nothing else needs it); fold into the same Wave-1 deletion commit as N12.
+  Reinforces N5's recommendation to enable `noUnusedLocals` / `no-unused-vars`.
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, + a re-grep confirming none of the three names remains.
+
 ---
 
 ## Wave 2 — make every surface consume the descriptor
@@ -424,15 +438,23 @@ execution order").
      core silently **extends** `eth_getCode` checks to Sushi (new RPC + fail-closed surface; the
      Sushi preflight test stub has no `getCode`); one that omits it silently **drops** LI.FI's
      bytecode check (covered by `route-preflight.test.ts:631-672`).
-- **Remedy:** Collapse only the reconciliation core; keep **four** per-provider hooks off the
+  4. **Read-retry policy differs (pass 6):** the `read` injector passed into the shared
+     `readTakerAllowlistSnapshot` is itself per-provider. LI.FI passes `retryRpcRead` (retries
+     **only** when `isRetryableRpcReadError` — rate-limit/5xx/timeout — else fails fast,
+     `route-preflight-validation.ts:243-267`); Sushi passes `readWithRetries` (retries on **any**
+     error, `preflight.ts:32-51`). Identical delays `[100,250,500]`, but the retryability gate
+     differs: on a transient-but-unclassified error Sushi can recover where LI.FI fails fast. A
+     core-collapse hardcoding one `read` impl silently changes the other's preflight read behavior.
+- **Remedy:** Collapse only the reconciliation core; keep **five** per-provider hooks off the
   descriptor: `normalizeChainPolicy`, a `selectorTargets` builder, an optional `preStep` (the
-  compilation guard), and a `contractCodeTargets` builder / per-source flag (whether to `getCode`
-  targets+spenders). For each of the three asymmetries make the **apply-to-all-vs-keep-as-is
-  decision explicit** (e.g. the compilation guard and the contract-code checks arguably *should*
-  extend to all providers — but that is a conscious, tested behavior change, not an incidental one).
-  Then Wave 3's 1inch preflight is a descriptor row. (Depends on **M-B** / **N2**.)
+  compilation guard), a `contractCodeTargets` builder / per-source flag (whether to `getCode`
+  targets+spenders), and a `read`/retry-strategy injector. For each of the **four** asymmetries make
+  the **apply-to-all-vs-keep-as-is decision explicit** (e.g. the compilation guard and contract-code
+  checks arguably *should* extend to all providers, and the gated `retryRpcRead` is the better shared
+  default — but each is a conscious, tested behavior change, not an incidental one). Then Wave 3's
+  1inch preflight is a descriptor row. (Depends on **M-B** / **N2**.)
 - **Effort:** M. **Risk:** medium-high (fail-closed preflight — preserve 'contains'→'exact'
-  reconciliation; do **not** silently extend-or-drop any of the three asymmetric checks).
+  reconciliation; do **not** silently extend-or-drop any of the four asymmetric behaviors).
 - **Verify:** preflight unit + fork-reconciliation tests, with **per-source** coverage of (a) the
   stale-factory rejection and (b) the no-bytecode target/spender rejection. **The Sushi preflight
   test stub must gain a `getCode` stub** if Sushi is brought into the contract-code check.
@@ -469,6 +491,18 @@ execution order").
   error the moment the field is deleted), not a follow-up.
 - **Effort:** M. **Risk:** low-medium (advisory cooldowns, no fund/correctness risk, but the
   hand-sync removal must preserve current open/close behavior). **Verify:** all 8 files above.
+
+### N18 — Resolve the Sushi quote-circuit parity gap *(new; parity — pairs with M-G)*
+- **Location:** `src/discovery/external-take/sushi-aggregator-quote.ts:28` (no circuit) vs
+  `lifi-quote.ts:31-48` + `oneinch-aggregator-quote.ts:34-51` (both wire a quote circuit breaker).
+- **Problem:** LI.FI **and** 1inch each guard their discovery quote path with a circuit breaker
+  (open-on-repeated-failure cooldown), but Sushi has none — an unexplained provider asymmetry on the
+  exact `providerCircuits.*` state M-G consolidates onto.
+- **Remedy:** Make it a **conscious** decision: either add a Sushi quote circuit mirroring LI.FI/1inch
+  (reusing the unified `providerCircuits.*` from M-G — cheap once M-G lands), **or** add a one-line
+  comment at `sushi-aggregator-quote.ts:28` stating why Sushi deliberately omits it. Do this as part
+  of M-G so the circuit story is uniform across providers.
+- **Effort:** S. **Risk:** low. **Verify:** sushi discovery quote tests (if a circuit is added).
 
 ### M-H — Lift the 1inch/Sushi route-canary orchestration into `src/` (mirror LI.FI) *(new)*
 - **Location:** `scripts/oneinch-route-canary.ts:1-546`,
@@ -603,8 +637,9 @@ One PR, committed in dependency order so the bundle stays reviewable and the two
 (`slither`, deployment tests) are not skipped:
 
 1. **Deletions & canonical-reuse** — M-B, M-E, N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11,
-   N12, N13, N14, N15, N16, B-T1, B-T3, B-D2, B-D3.
-2. **Descriptor consumers** — M-C, M-C′, M-D, M-F, M-G, M-H (M-C′ depends on M-B from step 1).
+   N12, N13, N14, N15, N16, N17, B-T1, B-T3, B-D2, B-D3.
+2. **Descriptor consumers** — M-C, M-C′, M-D, M-F, M-G, M-H, N18 (M-C′ depends on M-B from step 1;
+   N18 pairs with M-G).
 3. **Contracts** — B-C1, B-C2; **run `npm run slither`** and the full taker suites here as a
    distinct commit so the contract gate stays auditable inside the single PR. (N4's dead-mock
    deletion + typechain regen also lands with the contract commit.)
