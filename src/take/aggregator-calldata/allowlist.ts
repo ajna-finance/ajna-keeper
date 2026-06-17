@@ -9,7 +9,8 @@
 // defaults); every provider threads its own diagnostic label through the
 // `label`/`labelPrefix` params (e.g. LI.FI passes 'LI.FI selector
 // allowlist'/'LI.FI taker', Sushi passes 'Sushi aggregator taker').
-import { ethers } from 'ethers';
+import { ethers, providers } from 'ethers';
+import { getErrorMessage } from '../../utils';
 
 // Neutral expected-policy shape consumed by the assertion/reconciliation
 // helpers. Provider chain-policy types (e.g. the LI.FI production chain
@@ -469,6 +470,50 @@ export function compareTakerAllowlistPolicy(params: {
   }
 
   return errors;
+}
+
+/**
+ * Shared calldata-aggregator preflight reconciliation core. Reads the deployed
+ * taker's on-chain allowlist snapshot (using the caller's selectorTargets and
+ * retry strategy) and pushes any exact-match divergence from the expected
+ * normalized chain policy onto `errors`. Every aggregator provider's preflight
+ * (LI.FI, Sushi, and the future 1inch row) reuses this; the provider-specific
+ * gating, compilation guard, contract-code checks, selectorTargets builder, and
+ * retry strategy deliberately stay in each provider's validator so their
+ * fail-closed asymmetries remain explicit rather than hidden behind hooks.
+ */
+export async function reconcileTakerAllowlistSnapshot(params: {
+  provider: providers.Provider;
+  takerAddress: string;
+  policy: NormalizedTakerAllowlistPolicy;
+  selectorTargets: readonly string[];
+  labelPrefix: string;
+  read: TakerAllowlistRead;
+  errors: string[];
+}): Promise<void> {
+  try {
+    const taker = new ethers.Contract(
+      params.takerAddress,
+      AGGREGATOR_TAKER_ALLOWLIST_ABI,
+      params.provider
+    );
+    const actual = await readTakerAllowlistSnapshot({
+      reader: createTakerAllowlistReader(taker),
+      selectorTargets: params.selectorTargets,
+      labelPrefix: params.labelPrefix,
+      read: params.read,
+    });
+    params.errors.push(
+      ...compareTakerAllowlistPolicy({
+        expected: params.policy,
+        actual,
+        mode: 'exact',
+        labelPrefix: params.labelPrefix,
+      })
+    );
+  } catch (error) {
+    params.errors.push(getErrorMessage(error));
+  }
 }
 
 export function assertTakerAllowlistPolicy(params: {

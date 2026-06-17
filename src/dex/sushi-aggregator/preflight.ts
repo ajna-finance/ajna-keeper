@@ -1,12 +1,7 @@
 import { ethers, providers } from 'ethers';
 import { KeeperConfig, LiquiditySource } from '../../config';
 import { normalizeSushiAggregatorChainPolicy } from '../../config/sushi-aggregator-policy';
-import {
-  AGGREGATOR_TAKER_ALLOWLIST_ABI,
-  compareTakerAllowlistPolicy,
-  createTakerAllowlistReader,
-  readTakerAllowlistSnapshot,
-} from '../../take/aggregator-calldata/allowlist';
+import { reconcileTakerAllowlistSnapshot } from '../../take/aggregator-calldata/allowlist';
 import { getErrorMessage } from '../../utils';
 
 /**
@@ -116,25 +111,17 @@ export async function validateSushiAggregatorAllowlistPreflight(params: {
       fieldName: 'dex.sushiAggregator',
       chainId: params.chainId,
     });
-    const taker = new ethers.Contract(
-      params.takerAddress,
-      AGGREGATOR_TAKER_ALLOWLIST_ABI,
-      params.provider
-    );
-    const actual = await readTakerAllowlistSnapshot({
-      reader: createTakerAllowlistReader(taker),
+    // Sushi reads selectors only for its configured call targets (no extra
+    // selectorAllowlist keys) and retries on any read error.
+    await reconcileTakerAllowlistSnapshot({
+      provider: params.provider,
+      takerAddress: params.takerAddress,
+      policy,
       selectorTargets: policy.callTargets,
       labelPrefix: 'Sushi aggregator taker',
       read: readWithRetries,
+      errors: params.errors,
     });
-    params.errors.push(
-      ...compareTakerAllowlistPolicy({
-        expected: policy,
-        actual,
-        mode: 'exact',
-        labelPrefix: 'Sushi aggregator taker',
-      })
-    );
   } catch (error) {
     params.errors.push(getErrorMessage(error));
   }

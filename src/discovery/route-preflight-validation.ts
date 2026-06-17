@@ -16,12 +16,7 @@ import {
   resolveExternalTakePolicy,
   resolveExternalTakePathFromSource,
 } from '../config';
-import {
-  AGGREGATOR_TAKER_ALLOWLIST_ABI,
-  compareTakerAllowlistPolicy,
-  createTakerAllowlistReader,
-  readTakerAllowlistSnapshot,
-} from '../take/aggregator-calldata/allowlist';
+import { reconcileTakerAllowlistSnapshot } from '../take/aggregator-calldata/allowlist';
 import { normalizeLifiProductionChainPolicy } from '../dex/lifi/chain-policy';
 import { validateSushiAggregatorAllowlistPreflight } from '../dex/sushi-aggregator/preflight';
 import { logger } from '../logging';
@@ -404,40 +399,28 @@ async function validateLifiAllowlistPreflight(params: {
     });
   }
 
-  try {
-    const taker = new ethers.Contract(
-      params.takerAddress,
-      AGGREGATOR_TAKER_ALLOWLIST_ABI,
-      params.provider
-    );
-    const actual = await readTakerAllowlistSnapshot({
-      reader: createTakerAllowlistReader(taker),
-      selectorTargets: [
-        ...expectedTargets,
-        ...Object.keys(policy.selectorAllowlist),
-      ],
-      labelPrefix: 'LI.FI taker',
-      read: async ({ label, operation }) => {
-        const { value, error } = await retryRpcRead(operation);
-        if (value === undefined) {
-          throw new Error(
-            `${label} could not be read after retries: ${getErrorMessage(error)}`
-          );
-        }
-        return value;
-      },
-    });
-    params.errors.push(
-      ...compareTakerAllowlistPolicy({
-        expected: policy,
-        actual,
-        mode: 'exact',
-        labelPrefix: 'LI.FI taker',
-      })
-    );
-  } catch (error) {
-    params.errors.push(getErrorMessage(error));
-  }
+  // LI.FI reads selectors for its call targets AND any extra selectorAllowlist
+  // keys, and retries only on classified-retryable RPC read errors.
+  await reconcileTakerAllowlistSnapshot({
+    provider: params.provider,
+    takerAddress: params.takerAddress,
+    policy,
+    selectorTargets: [
+      ...expectedTargets,
+      ...Object.keys(policy.selectorAllowlist),
+    ],
+    labelPrefix: 'LI.FI taker',
+    read: async ({ label, operation }) => {
+      const { value, error } = await retryRpcRead(operation);
+      if (value === undefined) {
+        throw new Error(
+          `${label} could not be read after retries: ${getErrorMessage(error)}`
+        );
+      }
+      return value;
+    },
+    errors: params.errors,
+  });
 }
 
 function createRouterRegisteredPreflightDescriptor(params: {
