@@ -169,6 +169,81 @@ execution order").
 - **Remedy (reuse-canonical):** Import from `../utils`, delete the local copy.
 - **Effort:** S. **Risk:** none. **Verify:** `tsc`.
 
+### N4 — Delete five dead mock contracts orphaned by #20 *(new; dead-code)*
+- **Location:** `contracts/mocks/MockOneInchUnderdeliveryRouter.sol`,
+  `MockReentrantOneInchRouter.sol`, `UniswapV3SwapAdapter.sol`, + the two other mocks with zero
+  references (confirm the full set by grepping for `*__factory` imports + path references).
+- **Problem:** Each has **zero** references in `tests/`, `src/`, or `scripts/` — adversarial
+  doubles for the 1inch/factory liquidity paths #20 deleted.
+- **Remedy:** Delete the `.sol` files and regenerate typechain. **Do NOT** also delete the 1inch
+  swap interfaces in `contracts/OneInchInterfaces.sol` (`IGenericRouter` etc.) — those are still
+  used by the surviving 1inch decode path.
+- **Effort:** S. **Risk:** low. **Verify:** `npm run compile`, full test suite.
+
+### N5 — Delete four dead imports in `validation-rules.ts` *(new; dead-code)*
+- **Location:** `src/config/validation-rules.ts:21,25,27,29` (`isDirectDexDynamicSource`,
+  `formatSupportedExternalTakePaths`, `getExternalTakePathDescriptor`,
+  `resolveExternalTakePathFromSource` — each grep-matches only at its own import line).
+- **Problem:** Imported, never used. Uncaught because `noUnusedLocals` is off and there is no lint.
+- **Remedy:** Delete the four imports. Independently, consider enabling
+  `noUnusedLocals`/`noUnusedParameters` (or an eslint `no-unused-vars` rule) so this rot is caught
+  mechanically — scope that as its own follow-up since it may surface other dead locals repo-wide.
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`.
+
+### N8 — Delete the dead duplicate `getDiscoveryTokenDecimalsCache` *(new; dead-code)*
+- **Location:** `src/discovery/take-executor.ts:158-166`.
+- **Problem:** Module-private, never called/exported here; byte-identical to the live copy in
+  `discovered-take-target-runtime.ts`.
+- **Remedy:** Delete it (the live copy is unaffected).
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, discovery tests.
+
+### N9 — Delete the `route-preflight.ts` re-export barrel *(new; same kind as B-T1)*
+- **Location:** `src/discovery/route-preflight.ts` (one line:
+  `export * from './route-preflight-validation';`).
+- **Problem:** Pure re-export barrel with exactly one consumer (`scripts/no-spend/config-smoke.ts:11`);
+  the real production consumer imports from `route-preflight-validation` directly.
+- **Remedy:** Repoint `config-smoke.ts` at `route-preflight-validation`, delete the barrel.
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, no-spend config-smoke.
+
+### N10 — Import `BASE_ONEINCH_ROUTER` instead of re-hardcoding the literal *(new; duplication)*
+- **Location:** `scripts/oneinch-route-canary.ts:39` re-declares
+  `0x1111111254EEB25477B68fb85Ed929f73A960582`; canonical export is
+  `scripts/no-spend/fixture-constants.ts:14`.
+- **Remedy:** Import `BASE_ONEINCH_ROUTER` (still allowing the `AJNA_AGENT_ONEINCH_ROUTER_BASE`
+  override). (Leave the `.mjs` daemon-smoke copy — it can't import the `.ts` const.)
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, route-canary.
+
+### N11 — Deduplicate the aggregator-taker test fixtures *(new; duplication)*
+- **Location:** `tests/integration/oneinch-aggregator-taker.test.ts:18-45` (`deployOneInchAggregatorFixture`)
+  vs `tests/integration/sushi-aggregator-taker.test.ts:21-48` (`deploySushiFixture`) — character-for-
+  character identical except the taker `__factory` class and the `LiquiditySource` enum.
+- **Remedy:** Add `deployAggregatorTaker(base, { factory, source })` (and an
+  `executeAggregatorTake` matching the group-A `executeOneInchTake`) to
+  `tests/integration/helpers/mock-taker-base.ts`, alongside the existing `deployUniswapTaker`/
+  `deployCurveTaker`; both suites (and the group-A `executeOneInchTake`) consume it. Folds the
+  Sushi suite into the same helper the 1inch suite already half-uses.
+- **Effort:** S. **Risk:** low. **Verify:** the oneinch + sushi taker suites.
+
+### N6 — Drop the redundant per-source `category` descriptor field *(new; descriptor hygiene)*
+- **Location:** `src/config/external-take-descriptors.ts:36` (type) + `70,77,84,92,100`
+  (5 hardcoded copies).
+- **Problem:** `category` is strictly determined by `path` (`direct_dex`→`'direct_dex'`,
+  `calldata_aggregator`→`'aggregator'`), and `EXTERNAL_TAKE_PATH_METADATA` already owns that
+  `path`→`category` mapping. The source-level copies are derivable computed metadata.
+- **Remedy:** Drop `category` from `ExternalTakeSourceIdentityBase` and all 5 rows; derive via
+  `getExternalTakePathDescriptor(identity.path).category` where needed.
+- **Effort:** S. **Risk:** low. **Verify:** `tsc`, descriptor + config unit tests.
+
+### N7 — Derive `EXTERNAL_TAKE_SOURCE_ORDER` from the identities map *(new; correctness)*
+- **Location:** `src/config/external-take-descriptors.ts:127-133`.
+- **Problem:** A hand-maintained `readonly ExternalTakeLiquiditySource[]` with **no** exhaustiveness
+  guard (it seeds `SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES`, `DIRECT_DEX_DYNAMIC_SOURCES`, etc.);
+  a new source added to the identities map but forgotten here is silently dropped from those derived
+  sets.
+- **Remedy:** Derive the order from `EXTERNAL_TAKE_SOURCE_IDENTITIES` keys (already
+  exhaustiveness-guarded) so membership and order share one source of truth.
+- **Effort:** S. **Risk:** low. **Verify:** `tsc`, config unit tests.
+
 ---
 
 ## Wave 2 — make every surface consume the descriptor
@@ -221,18 +296,71 @@ execution order").
   three provider taker suites.
 
 ### M-C′ — One generic `validateAggregatorAllowlistPreflight` *(folds the preflight twins; pre-solves Wave 3)*
-- **Location:** `src/discovery/route-preflight-validation.ts:358-440` (LI.FI),
-  `:495-532` (the SUSHI/LIFI descriptor `validateAdditional` hooks).
-- **Problem:** `validateLifiAllowlistPreflight` and `validateSushiAggregatorAllowlistPreflight`
-  are the same shape (contract-code checks for targets/spenders + snapshot reconciliation
-  via `AGGREGATOR_TAKER_ALLOWLIST_ABI`), differing only by the provider's normalizer + label.
-- **Remedy:** Collapse to one `validateAggregatorAllowlistPreflight` parameterized by a
-  provider-local `normalizeChainPolicy` + descriptor label, wired once into the descriptor
-  table. Then Wave 3's 1inch preflight is a descriptor row, not a third copy. (Depends on
-  **M-B** so the neutral primitives are used directly, and **N2** so labels aren't LI.FI-biased.)
-- **Effort:** M. **Risk:** medium (fail-closed preflight — keep the 'contains'→'exact'
-  reconciliation and contract-code checks intact and tested). **Verify:** preflight unit +
-  fork-reconciliation tests.
+- **Location:** `src/discovery/route-preflight-validation.ts:358-440`
+  (`validateLifiAllowlistPreflight`, the LI.FI twin) and `src/dex/sushi-aggregator/preflight.ts:53-141`
+  (the Sushi twin + its `validateSushiAggregatorTakerRouterSupport` companion).
+  `route-preflight-validation.ts:495-532` is only the descriptor-table wiring that calls both.
+- **Problem:** The two validators share a core (contract-code checks for targets/spenders +
+  snapshot reconciliation via `AGGREGATOR_TAKER_ALLOWLIST_ABI`) but are **not** mere
+  normalizer+label twins — they differ in two fail-closed-relevant ways:
+  1. **Sushi has an extra fail-closed guard the LI.FI twin lacks:**
+     `validateSushiAggregatorTakerRouterSupport` (`preflight.ts:53-86`) asserts via
+     `getConfiguredTakers()` that the on-chain `TakerRouter` was compiled **with** the
+     `SUSHI_AGGREGATOR` source id (rejecting a stale factory whose enumeration stops short).
+     A naive collapse would either drop this guard or silently extend it to LI.FI.
+  2. **`selectorTargets` differ:** LI.FI reads `[...callTargets, ...Object.keys(selectorAllowlist)]`
+     (`route-preflight-validation.ts:415-418`); Sushi reads only `policy.callTargets`
+     (`preflight.ts:126`).
+- **Remedy:** Collapse the shared core to one `validateAggregatorAllowlistPreflight`, but keep
+  **per-provider hooks** off the descriptor: a `normalizeChainPolicy`, a `selectorTargets`
+  builder, and an optional `preStep` (the source-id compilation guard). Consciously decide
+  whether the compilation guard should apply to all providers (it arguably should — make it a
+  shared step keyed by descriptor source) rather than dropping it. Then Wave 3's 1inch preflight
+  is a descriptor row. (Depends on **M-B** for the neutral primitives and **N2** for labels.)
+- **Effort:** M. **Risk:** medium-high (fail-closed preflight — preserve the 'contains'→'exact'
+  reconciliation, the contract-code checks, AND the Sushi compilation guard; do not silently
+  change LI.FI's behavior). **Verify:** preflight unit + fork-reconciliation tests, with explicit
+  coverage of the stale-factory rejection for every aggregator source.
+
+### M-G — Unify the circuit-breaker mechanics; kill the 1inch dual-bookkeeping *(new)*
+- **Location:** `src/discovery/external-take/lifi-circuit.ts` (~116 lines),
+  `src/discovery/external-take/one-inch-circuit.ts` (~185 lines); `src/discovery/types.ts:110-114`
+  (`OneInchQuoteCircuitState`) vs `:121-125` (`ExternalProviderCircuitState`), `:130-132`
+  (dead `ExternalTakeCircuitPurpose`); `src/discovery/rpc-cache.ts:43-46`,
+  `src/discovery/runtime.ts:89,412-413,993`.
+- **Problem:** `lifi-circuit.ts` and `one-inch-circuit.ts` are two near-identical implementations
+  of the same circuit-breaker state machine (failure threshold, cooldown clamp to `MAX_*`,
+  5-min open-heartbeat, reset-on-expiry, record success/failure). Worse, the 1inch path keeps a
+  **parallel legacy bookkeeping** (the scalar `oneInchQuoteCircuit` + the `oneInchQuoteCircuits`
+  map) hand-synced with the canonical `providerCircuits.oneinch` map via
+  `linkOneInchProviderCircuitState` / `getExistingOneInchCircuitState` — triple storage with a
+  latent desync surface. LI.FI already uses **only** `providerCircuits.lifi`.
+  `OneInchQuoteCircuitState` is byte-identical to `ExternalProviderCircuitState`, and
+  `ExternalTakeCircuitPurpose` is dead (referenced only at its own definition; its comment claims
+  a `provider.ts` field that does not exist). This is precisely the parallel-registry pattern the
+  guardrails forbid, sitting directly beneath the wrappers M-C touches.
+- **Remedy (conservative, high-confidence subset):** Delete the 1inch dual-bookkeeping
+  (`oneInchQuoteCircuit` / `oneInchQuoteCircuits` / `linkOneInchProviderCircuitState` /
+  `getExistingOneInchCircuitState`) and collapse onto `providerCircuits.*` (mirroring LI.FI);
+  replace `OneInchQuoteCircuitState` with `ExternalProviderCircuitState`; delete the dead
+  `ExternalTakeCircuitPurpose`. (The larger "one circuit primitive keyed by descriptor identity,
+  purpose-sets as descriptor data" rewrite can follow once M-C lands — do **not** bundle it here.)
+- **Effort:** M. **Risk:** low-medium (advisory cooldowns, no fund/correctness risk, but the
+  hand-sync removal must preserve current open/close behavior). **Verify:** the circuit unit tests
+  (`lifi-circuit`, `one-inch-circuit`) + discovery runtime tests.
+
+### M-H — Lift the 1inch/Sushi route-canary orchestration into `src/` (mirror LI.FI) *(new)*
+- **Location:** `scripts/oneinch-route-canary.ts:1-546`,
+  `scripts/sushi-aggregator-route-canary.ts:71-149`; contrast the LI.FI shape:
+  `scripts/lifi-route-canary.ts` (~59-line shell) delegating to `src/dex/lifi/route-canary.ts`
+  + `route-canary-env.ts`, which has a real unit test (`tests/unit/lifi-route-canary.test.ts`).
+- **Problem:** The LI.FI canary already established the right layering — env parsing, check-running,
+  quote validation, and summary building live in `src/` and are unit-tested. The 1inch and Sushi
+  canaries instead bury that orchestration in the script, untested.
+- **Remedy:** Lift the 1inch and Sushi canary bodies into `src/dex/{oneinch-aggregator,sushi-aggregator}/route-canary.ts`
+  (or one shared aggregator route-canary harness parameterized by provider), leaving the scripts as
+  thin shells; add unit tests mirroring `lifi-route-canary.test.ts`.
+- **Effort:** M. **Risk:** low (test/dev tooling). **Verify:** the new + existing route-canary unit tests.
 
 ### M-F — One named `CalldataAggregatorPathQuoteEvaluator` type *(new; improvement)*
 - **Location:** `src/take/aggregator-calldata/adapter.ts:23-31` (descriptor
@@ -353,10 +481,12 @@ Decompose only with a clean domain split; do not bundle into the aggregator clea
 One PR, committed in dependency order so the bundle stays reviewable and the two hard gates
 (`slither`, deployment tests) are not skipped:
 
-1. **Deletions & canonical-reuse** — M-B, M-E, N1, N2, N3, B-T1, B-T3, B-D2, B-D3.
-2. **Descriptor consumers** — M-C, M-C′, M-D, M-F (M-C′ depends on M-B from step 1).
+1. **Deletions & canonical-reuse** — M-B, M-E, N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11,
+   B-T1, B-T3, B-D2, B-D3.
+2. **Descriptor consumers** — M-C, M-C′, M-D, M-F, M-G, M-H (M-C′ depends on M-B from step 1).
 3. **Contracts** — B-C1, B-C2; **run `npm run slither`** and the full taker suites here as a
-   distinct commit so the contract gate stays auditable inside the single PR.
+   distinct commit so the contract gate stays auditable inside the single PR. (N4's dead-mock
+   deletion + typechain regen also lands with the contract commit.)
 4. **Deploy** — write deployment-script **characterization tests first** (none exist), then M-A
    (the descriptor-driven loop), asserting the loop reproduces the captured per-provider output.
 5. **1inch parity** — `normalizeOneInchChainPolicy` + descriptor row + schema. ⚠️ Its
