@@ -6,7 +6,11 @@ import {
   hasProductionLifiConfig,
   validateDetectedChainLifiProductionConfig,
 } from '../../scripts/deployment/lifi-factory-deployment';
-import { KeeperConfig, LifiDexConfig } from '../../src/config';
+import {
+  KeeperConfig,
+  LifiConcreteAllowlistProductionDexConfig,
+  LifiDexConfig,
+} from '../../src/config';
 
 const BASE_CHAIN_ID = 8453;
 const CALL_TARGET = '0x1111111111111111111111111111111111111111';
@@ -37,9 +41,7 @@ function keeperConfigWithLifi(lifi: LifiDexConfig): KeeperConfig {
 }
 
 function productionConfig(
-  overrides: Partial<
-    Extract<NonNullable<KeeperConfig['dex']>['lifi'], { mode: 'production' }>
-  > = {}
+  overrides: Partial<LifiConcreteAllowlistProductionDexConfig> = {}
 ): KeeperConfig {
   return keeperConfigWithLifi({
     mode: 'production',

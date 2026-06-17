@@ -5,13 +5,13 @@ import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
 import { ISwapRouter02 } from "../interfaces/ISwapRouter02.sol";
-import { FactoryAuthorizedTakerBase } from "../base/KeeperTakerBase.sol";
+import { RouterAuthorizedTakerBase } from "../base/KeeperTakerBase.sol";
 import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 
 /// @notice Uniswap V3 implementation for Ajna keeper takes using direct SwapRouter02 execution.
 /// @dev Shared wiring, helpers, errors, and the SwapExecuted event live in
-///      FactoryAuthorizedTakerBase / KeeperTakerBase.
-contract UniswapV3KeeperTaker is FactoryAuthorizedTakerBase {
+///      RouterAuthorizedTakerBase / KeeperTakerBase.
+contract UniswapV3KeeperTaker is RouterAuthorizedTakerBase {
     /// @notice Direct Uniswap V3 swap configuration encoded by the keeper.
     struct UniswapV3SwapDetails {
         address swapRouter;
@@ -22,11 +22,11 @@ contract UniswapV3KeeperTaker is FactoryAuthorizedTakerBase {
     }
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment
-    /// @param authorizedFactory_ Factory contract address that can also call functions.
+    /// @param authorizedRouter_ Router contract address that can also call functions.
     ///        May be zero to deploy the taker in standalone (owner-only) mode; the
-    ///        keeper factory refuses to register a taker whose factory does not match.
-    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedFactory_)
-        FactoryAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedFactory_)
+    ///        keeper router refuses to register a taker whose router does not match.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
+        RouterAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
     {}
 
     /// @inheritdoc IAjnaKeeperTaker
@@ -38,7 +38,7 @@ contract UniswapV3KeeperTaker is FactoryAuthorizedTakerBase {
         LiquiditySource source,
         address swapRouter,
         bytes calldata swapDetails
-    ) external onlyOwnerOrFactory {
+    ) external onlyOwnerOrRouter {
         if (source != LiquiditySource.UniswapV3) revert UnsupportedSource();
         if (!_validatePool(pool)) revert InvalidPool();
 

@@ -2,7 +2,10 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import * as erc20 from '../../src/erc20';
-import { LiquiditySource } from '../../src/config';
+import {
+  LiquiditySource,
+  resolveCalldataAggregatorProviderForSource,
+} from '../../src/config';
 import { arbTakeLiquidation, checkIfArbTakeable } from '../../src/take/arb';
 import {
   createArbTakeStrategy,
@@ -15,14 +18,78 @@ import {
   ExternalTakeQuoteEvaluation,
 } from '../../src/take/types';
 import * as transactions from '../../src/transactions';
+import { ApprovedCalldataAggregatorQuote } from '../../src/take/aggregator-calldata/types';
 import { bindExternalTakeQuoteToExecutionResult } from '../../src/take/external-take/execution-plan';
+
+function createTestCalldataQuote(
+  quoteEvaluation: ExternalTakeQuoteEvaluation,
+  providerId: ApprovedCalldataAggregatorQuote['providerId']
+): ApprovedCalldataAggregatorQuote {
+  const quoteAmountRaw = quoteEvaluation.quoteAmountRaw ?? BigNumber.from(100);
+  return {
+    providerId,
+    quotedAtMs: 1,
+    chainId: 8453,
+    srcToken: '0x' + '11'.repeat(20),
+    dstToken: '0x' + '22'.repeat(20),
+    dstReceiver: '0x' + '33'.repeat(20),
+    amountInTokenUnits: BigNumber.from(1),
+    quoteAmountRaw,
+    routeMinOutRaw:
+      quoteEvaluation.approvedMinOutRaw ??
+      quoteEvaluation.routeExecutionFloorRaw ??
+      quoteAmountRaw,
+    transactionTarget: '0x' + '44'.repeat(20),
+    approvalSpender: '0x' + '44'.repeat(20),
+    callData: '0x12345678',
+    selector: '0x12345678',
+    txValue: '0',
+    routeSummary: {
+      providerId,
+      tool: providerId,
+      feeCosts: [],
+    },
+  };
+}
+
+function withTestCalldataAggregatorQuote(
+  quoteEvaluation: ExternalTakeQuoteEvaluation
+): ExternalTakeQuoteEvaluation {
+  const providerId =
+    quoteEvaluation.selectedLiquiditySource !== undefined
+      ? resolveCalldataAggregatorProviderForSource(
+          quoteEvaluation.selectedLiquiditySource
+        )
+      : undefined;
+  if (
+    providerId === undefined &&
+    quoteEvaluation.externalTakePath !== 'calldata_aggregator'
+  ) {
+    return quoteEvaluation;
+  }
+  if (providerId === undefined) {
+    return quoteEvaluation;
+  }
+  const calldataQuote =
+    quoteEvaluation.calldataQuote ??
+    createTestCalldataQuote(quoteEvaluation, providerId);
+  return {
+    ...quoteEvaluation,
+    externalTakePath: 'calldata_aggregator',
+    providerId,
+    routeMinOutRaw:
+      quoteEvaluation.routeMinOutRaw ?? calldataQuote.routeMinOutRaw,
+    calldataQuote,
+  };
+}
 
 function externalTakeEvaluation(
   quoteEvaluation: ExternalTakeQuoteEvaluation
 ): ExternalTakeEvaluationResult {
+  const executionQuoteEvaluation =
+    withTestCalldataAggregatorQuote(quoteEvaluation);
   return bindExternalTakeQuoteToExecutionResult({
-    quoteEvaluation,
-    configuredLiquiditySource: quoteEvaluation.selectedLiquiditySource,
+    quoteEvaluation: executionQuoteEvaluation,
     poolName: 'Execution Pool',
     borrower: '0xBorrower',
   });
@@ -169,8 +236,8 @@ describe('shared arbTake helpers', () => {
           signer: {},
         } as any,
       },
-      actionLabel: 'Factory ArbTake',
-      logPrefix: 'Factory: ',
+      actionLabel: 'Direct DEX ArbTake',
+      logPrefix: 'Direct DEX: ',
     });
 
     expect(firstResult).to.equal(true);
@@ -351,7 +418,7 @@ describe('shared arbTake helpers', () => {
         evaluateExternalTake: sinon.stub().resolves(
           externalTakeEvaluation({
             isTakeable: true,
-            externalTakePath: 'oneinch',
+            externalTakePath: 'calldata_aggregator',
             selectedLiquiditySource: LiquiditySource.ONEINCH,
             takeablePrice: 2,
             quoteAmountRaw: BigNumber.from(100),
@@ -417,7 +484,7 @@ describe('shared arbTake helpers', () => {
         evaluateExternalTake: sinon.stub().resolves(
           externalTakeEvaluation({
             isTakeable: true,
-            externalTakePath: 'oneinch',
+            externalTakePath: 'calldata_aggregator',
             selectedLiquiditySource: LiquiditySource.ONEINCH,
             takeablePrice: 2,
             quoteAmountRaw: BigNumber.from(100),
@@ -496,7 +563,7 @@ describe('shared arbTake helpers', () => {
         evaluateExternalTake: sinon.stub().resolves(
           externalTakeEvaluation({
             isTakeable: true,
-            externalTakePath: 'oneinch',
+            externalTakePath: 'calldata_aggregator',
             selectedLiquiditySource: LiquiditySource.ONEINCH,
             takeablePrice: 1,
             quoteAmountRaw: BigNumber.from(100),
@@ -563,7 +630,7 @@ describe('shared arbTake helpers', () => {
         evaluateExternalTake: sinon.stub().resolves(
           externalTakeEvaluation({
             isTakeable: true,
-            externalTakePath: 'oneinch',
+            externalTakePath: 'calldata_aggregator',
             selectedLiquiditySource: LiquiditySource.ONEINCH,
             takeablePrice: 1,
             quoteAmountRaw: BigNumber.from(100),
@@ -809,9 +876,9 @@ describe('shared arbTake helpers', () => {
     );
     expect(read.notCalled).to.equal(true);
     expect(executeExternalTake.calledOnce).to.equal(true);
-    expect(
-      executeExternalTake.firstCall.args[0].liquidation.borrower
-    ).to.equal(borrowers[0]);
+    expect(executeExternalTake.firstCall.args[0].liquidation.borrower).to.equal(
+      borrowers[0]
+    );
   });
 
   it('does not reuse preloaded evaluation statuses after a state-changing execution when continuing', async () => {
@@ -879,11 +946,7 @@ describe('shared arbTake helpers', () => {
   });
 
   it('continues same-pool execution until maxExecutions is reached', async () => {
-    const borrowers = [
-      '0xBorrowerA',
-      '0xBorrowerB',
-      '0xBorrowerC',
-    ];
+    const borrowers = ['0xBorrowerA', '0xBorrowerB', '0xBorrowerC'];
     const statusReader = {
       read: sinon.stub().callsFake(async ({ borrower }) => ({
         borrower,

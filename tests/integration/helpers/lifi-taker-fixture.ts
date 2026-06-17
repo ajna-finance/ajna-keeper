@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { BigNumber, constants, utils } from 'ethers';
 import { LiquiditySource } from '../../../src/config';
-import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import { MockLifiSwapTarget__factory } from '../../../typechain-types/factories/contracts/mocks';
 import { LifiKeeperTaker__factory } from '../../../typechain-types/factories/contracts/takers';
 import {
@@ -48,7 +48,7 @@ export async function deployFixture() {
   const collateral = base.collateralToken;
   const quote = base.quoteToken;
 
-  const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+  const factory = await new TakerRouter__factory(owner).deploy(
     poolDeployer.address
   );
   await factory.deployed();

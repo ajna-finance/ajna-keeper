@@ -1,13 +1,13 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
 import {
+  CALLDATA_AGGREGATOR_PROVIDER_IDS,
   ExternalTakePathKind,
   LiquiditySource,
   LiquiditySourceMap,
   TakeWriteTransportMode,
   formatLiquiditySource,
   getAutoDiscoverTakePolicy,
-  resolveExternalTakePolicy,
 } from '../config';
 import { ResolvedTakeTarget } from './targets';
 import {
@@ -32,11 +32,11 @@ import { createArbTakeStrategy } from '../take/arb-strategy';
 import { processTakeCandidates, TAKE_SKIP_REASONS } from '../take/engine';
 import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../take/external-take/execution-plan';
 import { TakeWriteTransport } from '../take/write-transport';
-import { FactoryRouteProfitabilityContext } from '../take/factory';
+import { DirectDexRouteProfitabilityContext } from '../take/direct-dex';
 import {
-  prewarmFactoryRouteAvailability,
-  withFactoryRuntimeStats,
-} from '../take/factory/shared';
+  prewarmDirectDexRouteAvailability,
+  withDirectDexRuntimeStats,
+} from '../take/direct-dex/route-selection';
 import {
   AsyncOperationLimiter,
   RouteProbeLimiter,
@@ -54,8 +54,10 @@ import { createDiscoveredTakeTargetRuntime } from './discovered-take-target-runt
 import { AutoDiscoverTakePolicyRuntime } from './external-take/quotes';
 import {
   APPROVED_EXTERNAL_TAKE_ROUTE_STAT_KEYS,
+  type CalldataAggregatorProviderCounters,
   type DiscoveredTakeTargetStats,
   type ExternalTakePathCounterField,
+  getCalldataAggregatorProviderCounter,
   getExternalTakePathCounter,
   incrementExternalTakeRouteStats,
 } from './external-take/stats';
@@ -156,32 +158,24 @@ function createDiscoveryRouteProbeLimiter(params: {
 function getDiscoveryTokenDecimalsCache(
   rpcCache?: DiscoveryRpcCache
 ): Map<string, number> | undefined {
-  if (!rpcCache?.factoryQuoteProviders) {
+  if (!rpcCache?.directDexQuoteProviders) {
     return undefined;
   }
-  rpcCache.factoryQuoteProviders.tokenDecimals ??= new Map();
-  return rpcCache.factoryQuoteProviders.tokenDecimals;
+  rpcCache.directDexQuoteProviders.tokenDecimals ??= new Map();
+  return rpcCache.directDexQuoteProviders.tokenDecimals;
 }
 
-async function buildFactoryRouteProfitabilityContext(params: {
+async function buildDirectDexRouteProfitabilityContext(params: {
   pool: FungiblePool;
   signer: Signer;
   config: DiscoveryExecutionConfig;
   transports: DiscoveryReadTransports;
   rpcCache?: DiscoveryRpcCache;
-  defaultLiquiditySource: LiquiditySource | undefined;
-  sources?: LiquiditySource[];
+  sources: LiquiditySource[];
   allowSubsidy?: boolean;
   takePolicy: ReturnType<typeof getAutoDiscoverTakePolicy>;
-}): Promise<FactoryRouteProfitabilityContext | undefined> {
-  const sources =
-    params.sources ??
-    Array.from(
-      resolveExternalTakePolicy({
-        defaultLiquiditySource: params.defaultLiquiditySource,
-        takePolicy: params.takePolicy,
-      }).factoryRouteSources
-    );
+}): Promise<DirectDexRouteProfitabilityContext | undefined> {
+  const sources = params.sources;
   const requiresRouteGasRanking = sources.length > 1;
   const requiresQuoteProfitability =
     params.takePolicy?.minExpectedProfitQuote !== undefined ||
@@ -216,9 +210,9 @@ async function buildFactoryRouteProfitabilityContext(params: {
   const routeGasLimitBySource: LiquiditySourceMap<BigNumber> = {};
   const nativeProfitFloorQuoteRawBySource: LiquiditySourceMap<BigNumber> = {};
   const routeRejectionReasonsBySource: LiquiditySourceMap<string> = {};
-  const gasPolicyRejectCodeBySource: FactoryRouteProfitabilityContext['gasPolicyRejectCodeBySource'] =
+  const gasPolicyRejectCodeBySource: DirectDexRouteProfitabilityContext['gasPolicyRejectCodeBySource'] =
     {};
-  const gasQuoteAttemptsBySource: FactoryRouteProfitabilityContext['gasQuoteAttemptsBySource'] =
+  const gasQuoteAttemptsBySource: DirectDexRouteProfitabilityContext['gasQuoteAttemptsBySource'] =
     {};
   const gasPriceFetchedAt = params.rpcCache?.gasPriceFetchedAt;
   const gasPriceAgeMs =
@@ -391,6 +385,20 @@ function logDiscoveredTakeTargetSummary(params: {
       path,
       field,
     });
+  const getProviderStat = (
+    providerId: (typeof CALLDATA_AGGREGATOR_PROVIDER_IDS)[number],
+    field: keyof CalldataAggregatorProviderCounters
+  ): number =>
+    getCalldataAggregatorProviderCounter({
+      stats,
+      providerId,
+      field,
+    });
+  const getProviderGroup = (field: keyof CalldataAggregatorProviderCounters) =>
+    CALLDATA_AGGREGATOR_PROVIDER_IDS.map((providerId) => ({
+      label: providerId,
+      value: getProviderStat(providerId, field),
+    }));
   const fields = [
     `pool=${params.pool.poolAddress}`,
     `name="${params.target.name}"`,
@@ -411,42 +419,58 @@ function logDiscoveredTakeTargetSummary(params: {
   appendNonZeroField(fields, 'dryRunExternalTakes', stats.dryRunExternalTakes);
   appendNonZeroField(fields, 'dryRunArbTakes', stats.dryRunArbTakes);
   appendNonZeroGroup(fields, 'approvedRoutes', [
-    { label: 'oneinch', value: getPathStat('oneinch', 'approved') },
-    { label: 'factory', value: getPathStat('factory', 'approved') },
-    { label: 'lifi', value: getPathStat('calldata_aggregator', 'approved') },
+    { label: 'direct_dex', value: getPathStat('direct_dex', 'approved') },
+    {
+      label: 'calldata_aggregator',
+      value: getPathStat('calldata_aggregator', 'approved'),
+    },
   ]);
-  appendNonZeroGroup(fields, 'approvedFactorySources', [
+  appendNonZeroGroup(fields, 'approvedDirectDexSources', [
     { label: 'uniswapV3', value: stats.approvedUniswapV3TakeDecisions },
     { label: 'curve', value: stats.approvedCurveTakeDecisions },
   ]);
+  appendNonZeroGroup(
+    fields,
+    'approvedCalldataAggregatorProviders',
+    getProviderGroup('approved')
+  );
   appendNonZeroGroup(fields, 'executedRoutes', [
-    { label: 'oneinch', value: getPathStat('oneinch', 'executed') },
-    { label: 'factory', value: getPathStat('factory', 'executed') },
-    { label: 'lifi', value: getPathStat('calldata_aggregator', 'executed') },
+    { label: 'direct_dex', value: getPathStat('direct_dex', 'executed') },
+    {
+      label: 'calldata_aggregator',
+      value: getPathStat('calldata_aggregator', 'executed'),
+    },
   ]);
-  appendNonZeroGroup(fields, 'executedFactorySources', [
+  appendNonZeroGroup(fields, 'executedDirectDexSources', [
     { label: 'uniswapV3', value: stats.executedUniswapV3Takes },
     { label: 'curve', value: stats.executedCurveTakes },
   ]);
+  appendNonZeroGroup(
+    fields,
+    'executedCalldataAggregatorProviders',
+    getProviderGroup('executed')
+  );
   appendNonZeroGroup(fields, 'dryRunRoutes', [
-    { label: 'oneinch', value: getPathStat('oneinch', 'dryRun') },
-    { label: 'factory', value: getPathStat('factory', 'dryRun') },
-    { label: 'lifi', value: getPathStat('calldata_aggregator', 'dryRun') },
+    { label: 'direct_dex', value: getPathStat('direct_dex', 'dryRun') },
+    {
+      label: 'calldata_aggregator',
+      value: getPathStat('calldata_aggregator', 'dryRun'),
+    },
   ]);
-  appendNonZeroGroup(fields, 'dryRunFactorySources', [
+  appendNonZeroGroup(fields, 'dryRunDirectDexSources', [
     { label: 'uniswapV3', value: stats.dryRunUniswapV3Takes },
     { label: 'curve', value: stats.dryRunCurveTakes },
   ]);
-  appendNonZeroGroup(fields, 'oneInchFailures', [
-    { label: 'swapData', value: stats.oneInchSwapDataFailures },
-    { label: 'preBroadcast', value: stats.oneInchPreBroadcastFailures },
-    { label: 'postSubmission', value: stats.oneInchPostSubmissionFailures },
+  appendNonZeroGroup(
+    fields,
+    'dryRunCalldataAggregatorProviders',
+    getProviderGroup('dryRun')
+  );
+  appendNonZeroGroup(fields, 'directDexFailures', [
+    { label: 'preBroadcast', value: getPathStat('direct_dex', 'preBroadcastFailures') },
+    { label: 'postSubmission', value: getPathStat('direct_dex', 'postSubmissionFailures') },
   ]);
-  appendNonZeroGroup(fields, 'factoryFailures', [
-    { label: 'preBroadcast', value: stats.factoryPreBroadcastFailures },
-    { label: 'postSubmission', value: stats.factoryPostSubmissionFailures },
-  ]);
-  appendNonZeroGroup(fields, 'lifiFailures', [
+  appendNonZeroGroup(fields, 'calldataAggregatorFailures', [
     {
       label: 'preBroadcast',
       value: getPathStat('calldata_aggregator', 'preBroadcastFailures'),
@@ -456,6 +480,24 @@ function logDiscoveredTakeTargetSummary(params: {
       value: getPathStat('calldata_aggregator', 'postSubmissionFailures'),
     },
   ]);
+  appendNonZeroGroup(
+    fields,
+    'calldataAggregatorProviderFailures',
+    CALLDATA_AGGREGATOR_PROVIDER_IDS.flatMap((providerId) => [
+      {
+        label: `${providerId}.quote`,
+        value: getProviderStat(providerId, 'quoteFailures'),
+      },
+      {
+        label: `${providerId}.preBroadcast`,
+        value: getProviderStat(providerId, 'preBroadcastFailures'),
+      },
+      {
+        label: `${providerId}.postSubmission`,
+        value: getProviderStat(providerId, 'postSubmissionFailures'),
+      },
+    ])
+  );
   appendNonZeroField(
     fields,
     'hybridFallbackAttempts',
@@ -557,8 +599,6 @@ export async function handleDiscoveredTakeTarget(
     candidateCount: params.target.candidates.length,
     approvedTakeDecisions: 0,
     approvedArbTakeDecisions: 0,
-    approvedOneInchTakeDecisions: 0,
-    approvedFactoryTakeDecisions: 0,
     approvedUniswapV3TakeDecisions: 0,
     approvedCurveTakeDecisions: 0,
     evaluationSkips: 0,
@@ -569,22 +609,14 @@ export async function handleDiscoveredTakeTarget(
     arbProfitUnavailableRejects: 0,
     executedExternalTakes: 0,
     executedArbTakes: 0,
-    executedOneInchTakes: 0,
-    executedFactoryTakes: 0,
     executedUniswapV3Takes: 0,
     executedCurveTakes: 0,
     dryRunExternalTakes: 0,
     dryRunArbTakes: 0,
-    dryRunOneInchTakes: 0,
-    dryRunFactoryTakes: 0,
     dryRunUniswapV3Takes: 0,
     dryRunCurveTakes: 0,
-    oneInchSwapDataFailures: 0,
-    oneInchPreBroadcastFailures: 0,
-    oneInchPostSubmissionFailures: 0,
-    factoryPreBroadcastFailures: 0,
-    factoryPostSubmissionFailures: 0,
     externalTakeByPath: {},
+    externalTakeByProvider: {},
     hybridFallbackAttempts: 0,
     hybridFallbackSuccesses: 0,
     hybridGasQuoteFallbackAttempts: 0,
@@ -596,11 +628,11 @@ export async function handleDiscoveredTakeTarget(
     (await createDiscoveryRpcCache({
       signer: params.signer,
       readRpc: transports.readRpc,
-      includeFactoryQuoteProviders: true,
+      includeDirectDexQuoteProviders: true,
     }));
   if (rpcCache) {
     rpcCache.stats ??= {};
-    rpcCache.stats.factory ??= {};
+    rpcCache.stats.directDex ??= {};
   }
   const takePolicy = getAutoDiscoverTakePolicy(params.config.autoDiscover);
   const maxExecutionsPerPoolPerRun = getMaxExecutionsPerPoolPerRun(takePolicy);
@@ -644,12 +676,12 @@ export async function handleDiscoveredTakeTarget(
     routeProbeLimiter,
     takeAuctionStatusReader,
     externalTakeProbeTimeoutMs,
-    buildFactoryRouteProfitabilityContext,
+    buildDirectDexRouteProfitabilityContext,
   });
   const {
     externalTakePaths,
-    defaultFactoryLiquiditySource,
-    factoryQuoteConfig,
+    defaultDirectDexLiquiditySource,
+    directDexQuoteConfig,
     externalTakeAdapter,
     externalExecutionConfig,
     approveExternalTake,
@@ -659,34 +691,34 @@ export async function handleDiscoveredTakeTarget(
     const candidates = params.target.candidates.map(({ borrower }) => ({
       borrower,
     }));
-    await withFactoryRuntimeStats(
-      rpcCache?.factoryQuoteProviders,
-      rpcCache?.stats?.factory,
+    await withDirectDexRuntimeStats(
+      rpcCache?.directDexQuoteProviders,
+      rpcCache?.stats?.directDex,
       async () => {
-        const prewarmFactoryRoutes =
-          externalTakePaths.includes('factory') &&
-          defaultFactoryLiquiditySource !== undefined &&
+        const prewarmDirectDexRoutes =
+          externalTakePaths.includes('direct_dex') &&
+          defaultDirectDexLiquiditySource !== undefined &&
           candidates.length > 0
-            ? prewarmFactoryRouteAvailability({
+            ? prewarmDirectDexRouteAvailability({
                 pool: params.pool,
                 signer: params.signer,
                 poolConfig: withTakeLiquiditySource(
                   params.target,
-                  defaultFactoryLiquiditySource
+                  defaultDirectDexLiquiditySource
                 ),
-                quoteConfig: factoryQuoteConfig,
+                quoteConfig: directDexQuoteConfig,
                 routeSelection: {
                   allowedLiquiditySources: takePolicy?.allowedLiquiditySources,
                   routeQuoteBudgetPerCandidate:
                     takePolicy?.takeRouteQuoteBudgetPerCandidate,
                   routeProbeLimiter,
                 },
-                runtimeCache: rpcCache?.factoryQuoteProviders,
+                runtimeCache: rpcCache?.directDexQuoteProviders,
                 timeoutMs: Math.min(1_000, externalTakeProbeTimeoutMs),
               })
             : undefined;
-        if (prewarmFactoryRoutes) {
-          await prewarmFactoryRoutes;
+        if (prewarmDirectDexRoutes) {
+          await prewarmDirectDexRoutes;
         }
         await processTakeCandidates<
           ResolvedTakeTarget,

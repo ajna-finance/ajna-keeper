@@ -1,7 +1,8 @@
 import { Address } from '@ajna-finance/sdk';
 import { FeeAmount } from '@uniswap/v3-sdk';
-import type { ExternalTakeTakerContractKey } from './external-take-registry';
+import type { ExternalTakeTakerContractKey } from './external-take-descriptors';
 import type { LifiFeeCostPolicy } from '../dex/lifi/schema';
+import type { LifiProductionExchangePolicyKind } from '../dex/lifi/exchange-policy';
 
 export type { LifiFeeCostPolicy } from '../dex/lifi/schema';
 
@@ -93,27 +94,24 @@ export enum LiquiditySource {
 export type LiquiditySourceMap<T> = Partial<Record<LiquiditySource, T>>;
 /**
  * Canonical internal execution families. `calldata_aggregator` is the shared
- * family for opaque-calldata aggregator providers (LI.FI today); provider
- * identity travels separately as CalldataAggregatorProviderId.
+ * family for opaque-calldata aggregator providers; provider identity travels
+ * separately as CalldataAggregatorProviderId.
  */
-export type ExternalTakePathKind = 'oneinch' | 'factory' | 'calldata_aggregator';
-/**
- * Operator/config-facing path names. `lifi` survives only as a legacy input
- * alias and normalizes to family `calldata_aggregator` plus provider `lifi`
- * at the resolveExternalTakePolicy boundary.
- */
-export type ConfiguredExternalTakePathKind = ExternalTakePathKind | 'lifi';
+export type ExternalTakePathKind = 'direct_dex' | 'calldata_aggregator';
 /**
  * Calldata-aggregator providers active in the current packet. Packet 3B
  * extended the union with `sushi_aggregator` in the same diff that added
- * Sushi support; an omitted allowedCalldataAggregatorProviders list still
- * resolves to LI.FI only, so Sushi is never silently enabled.
+ * Sushi support; an omitted allowedCalldataAggregatorProviders list follows
+ * source-derived defaults, so Sushi is never silently enabled.
  */
-export type CalldataAggregatorProviderId = 'lifi' | 'sushi_aggregator';
+export type CalldataAggregatorProviderId =
+  | 'lifi'
+  | 'sushi_aggregator'
+  | 'oneinch';
 export type ExternalTakeRouteSelectionMode =
   | 'maximize_profit'
-  | 'factory_first';
-export type HybridGasQuoteFailureFallbackMode = 'disabled' | 'factory_first';
+  | 'direct_dex_first';
+export type HybridGasQuoteFailureFallbackMode = 'disabled' | 'direct_dex_first';
 export type ExternalTakeTransportPolicy =
   | 'allow_public'
   | 'prefer_private_or_relay'
@@ -247,22 +245,26 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   /**
    * External take execution paths eligible for discovered liquidation takes.
    * When omitted, autodiscover preserves the single-path behavior from
-   * discovery.defaults.take.liquiditySource. Accepts the legacy `lifi` alias,
-   * which normalizes to the `calldata_aggregator` family with provider `lifi`.
+   * discovery.defaults.take.liquiditySource unless
+   * allowedCalldataAggregatorProviders explicitly enables multiple providers
+   * inside the derived calldata_aggregator family.
    */
-  allowedExternalTakePaths?: ConfiguredExternalTakePathKind[];
+  allowedExternalTakePaths?: ExternalTakePathKind[];
   /**
    * Calldata-aggregator providers allowed to quote and compete inside the
-   * `calldata_aggregator` family. Omitted resolves to `['lifi']` when the
-   * family is enabled. A non-empty list requires the family to be enabled;
-   * empty lists, duplicates, and unknown or packet-inactive ids are invalid.
+   * `calldata_aggregator` family. Omitted follows source-derived defaults
+   * such as ONEINCH -> oneinch and otherwise falls back to LI.FI when the
+   * family is enabled. An explicit multi-provider list engages hybrid
+   * provider selection even when allowedExternalTakePaths is omitted. A
+   * non-empty list requires the family to be enabled; empty lists, duplicates,
+   * and unknown or packet-inactive ids are invalid.
    */
   allowedCalldataAggregatorProviders?: CalldataAggregatorProviderId[];
   /**
-   * Factory path to use when discovery.defaults.take.liquiditySource is 1inch
-   * but allowedExternalTakePaths also enables the factory execution path.
+   * Direct DEX path to use when discovery.defaults.take.liquiditySource is an
+   * aggregator source but allowedExternalTakePaths also enables direct_dex.
    */
-  defaultFactoryLiquiditySource?: LiquiditySource;
+  defaultDirectDexLiquiditySource?: LiquiditySource;
   /**
    * Freshness windows for gas prices used in discovered external-take
    * profitability checks. L2 defaults are intentionally longer than L1.
@@ -303,14 +305,14 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   externalTakeProbeTimeoutMs?: number;
   /**
    * Hybrid route selection mode. maximize_profit probes all enabled paths and
-   * picks the best net-profit route. factory_first probes factory before
-   * 1inch and stops at the first non-subsidized approved path to reduce 1inch
-   * API use; subsidized approvals keep probing remaining paths.
+   * picks the best net-profit route. direct_dex_first probes direct DEX routes
+   * before aggregator providers and stops at the first non-subsidized approved
+   * path; subsidized approvals keep probing remaining paths.
    */
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
   /**
    * Disabled-by-default escape hatch for hybrid maximize_profit discovery when
-   * collateral->quote factory execution is viable but native gas cannot be
+   * collateral->quote direct DEX execution is viable but native gas cannot be
    * quoted into the pool quote token. When enabled, fallback approval uses only
    * native gas caps and rejects quote-denominated policy fields at runtime.
    */
@@ -322,12 +324,12 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
   externalTakeTransportPolicy?: ExternalTakeTransportPolicy;
   /**
    * Optional startup preflight that checks enabled route contracts have code
-   * and factory taker registry entries match configured taker addresses.
+   * and router taker registry entries match configured taker addresses.
    */
   validateRouteDeployments?: boolean;
   /**
-   * Maximum factory-route quote probes per liquidation candidate. Only applies
-   * when discovery.defaults.take.liquiditySource is a factory route source.
+   * Maximum direct DEX quote probes per liquidation candidate. Only applies
+   * when discovery.defaults.take.liquiditySource is a direct DEX route source.
    */
   takeRouteQuoteBudgetPerCandidate?: number;
   /**
@@ -349,8 +351,8 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
    */
   maxInFlightRouteProbes?: number;
   /**
-   * Factory-route sources eligible for dynamic route selection. 1inch is not
-   * supported here because it uses a separate aggregator execution path.
+   * Direct DEX sources eligible for dynamic route selection. Aggregator sources
+   * are selected through allowedCalldataAggregatorProviders.
    */
   allowedLiquiditySources?: LiquiditySource[];
   dexGasOverrides?: LiquiditySourceMap<string>;
@@ -481,7 +483,7 @@ export interface CurveRouterOverrides {
   wethAddress?: string;
   defaultSlippage?: number;
   /**
-   * Optional millisecond delay before submitting Curve factory takes. Leave unset
+   * Optional millisecond delay before submitting Curve direct DEX takes. Leave unset
    * or 0 for the lowest-latency path; set only if a target chain/provider needs
    * extra state propagation time. Values above 60,000ms are rejected because
    * they can stall hot take loops.
@@ -588,8 +590,10 @@ export interface LifiCanaryDexConfig extends LifiDexBaseConfig {
   observedSelectorAllowlist?: ChainTargetSelectorAllowlist;
 }
 
-export interface LifiProductionDexConfig extends LifiDexBaseConfig {
+export interface LifiConcreteAllowlistProductionDexConfig
+  extends LifiDexBaseConfig {
   mode: 'production';
+  exchangePolicy?: 'concrete_allowlist';
   allowExchanges: string[];
   denyExchanges?: string[];
   preferExchanges?: string[];
@@ -599,6 +603,24 @@ export interface LifiProductionDexConfig extends LifiDexBaseConfig {
   selectorAllowlist: ChainTargetSelectorAllowlist;
   observedSelectorAllowlist?: ChainTargetSelectorAllowlist;
 }
+
+export interface LifiReviewedBroadProductionDexConfig
+  extends LifiDexBaseConfig {
+  mode: 'production';
+  exchangePolicy: Extract<LifiProductionExchangePolicyKind, 'reviewed_broad'>;
+  allowExchanges?: never;
+  denyExchanges?: string[];
+  preferExchanges?: string[];
+  allowBroadExchangeFilters?: false;
+  callTargetAllowlist: ChainAddressAllowlist;
+  approvalSpenderAllowlist: ChainAddressAllowlist;
+  selectorAllowlist: ChainTargetSelectorAllowlist;
+  observedSelectorAllowlist?: ChainTargetSelectorAllowlist;
+}
+
+export type LifiProductionDexConfig =
+  | LifiConcreteAllowlistProductionDexConfig
+  | LifiReviewedBroadProductionDexConfig;
 
 export type LifiDexConfig = LifiCanaryDexConfig | LifiProductionDexConfig;
 
@@ -636,8 +658,7 @@ export interface DexConfig {
 }
 
 export interface TakersConfig {
-  oneInch?: string;
-  factory?: string;
+  router?: string;
   contracts?: Partial<Record<ExternalTakeTakerContractKey, string>>;
 }
 

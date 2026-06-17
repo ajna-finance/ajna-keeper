@@ -3,8 +3,8 @@ import {
   ActiveExternalTakeRouteSelectionMode,
   CalldataAggregatorProviderId,
   ExternalTakePathKind,
+  HybridGasQuoteFallbackPolicyResolution,
   formatLiquiditySource,
-  resolveHybridGasQuoteFallbackPolicy,
 } from '../../config';
 import { logger } from '../../logging';
 import { isSubsidizedExternalTakeQuote } from '../../take/external-take/policy';
@@ -31,10 +31,7 @@ import {
 } from './approval';
 import { cloneExternalTakeQuoteEvaluation } from './evaluation';
 import { refreshAndReapproveDiscoveryExternalTake } from './final-approval';
-import {
-  isCalldataAggregatorExternalTakeRoute,
-  isOneInchExternalTakeRoute,
-} from '../../take/external-take/route';
+import { isCalldataAggregatorExternalTakeRoute } from '../../take/external-take/route-binding';
 import {
   DiscoveryExternalExecutionConfig,
   ExternalTakeQuoteCircuitOutcome,
@@ -55,11 +52,20 @@ import {
 import { GasPolicyResult } from '../gas-policy';
 import { ResolvedTakeTarget } from '../targets';
 
-const PROVIDER_WARN_LABEL: Record<ExternalTakePathKind, string> = {
-  oneinch: '1inch',
-  calldata_aggregator: 'LI.FI',
-  factory: 'factory',
-};
+function formatProviderWarnLabel(
+  provider: DiscoveryExternalTakeRouteProvider
+): string {
+  switch (provider.providerId) {
+    case 'oneinch':
+      return '1inch';
+    case 'lifi':
+      return 'LI.FI';
+    case 'sushi_aggregator':
+      return 'Sushi aggregator';
+    default:
+      return provider.path === 'direct_dex' ? 'direct DEX' : provider.path;
+  }
+}
 
 export interface HybridExternalTakeStats {
   gasPolicyRejects: number;
@@ -67,6 +73,7 @@ export interface HybridExternalTakeStats {
 }
 
 export type HybridExternalTakeProbeResult = {
+  provider: DiscoveryExternalTakeRouteProvider;
   path: ExternalTakePathKind;
   providerId?: CalldataAggregatorProviderId;
   durationMs: number;
@@ -82,52 +89,6 @@ type ProbeControl = {
   abandoned: boolean;
   abortController: AbortController;
 };
-
-type HybridProbeUnit = {
-  path: ExternalTakePathKind;
-  providerId?: CalldataAggregatorProviderId;
-};
-
-// One probe unit per executable provider: the calldata_aggregator family
-// expands into its enabled providers so LI.FI and Sushi are probed (and
-// compete) independently instead of sharing a single path-keyed slot.
-function resolveProbeOrder(params: {
-  externalTakePaths: ExternalTakePathKind[];
-  calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
-  routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
-}): HybridProbeUnit[] {
-  const orderedPaths =
-    params.routeSelectionMode !== 'factory_first'
-      ? [...params.externalTakePaths]
-      : (() => {
-          const pathOrder = new Map<ExternalTakePathKind, number>(
-            params.externalTakePaths.map((path, index) => [path, index])
-          );
-          return [...params.externalTakePaths].sort((left, right) => {
-            if (left === right) {
-              return 0;
-            }
-            if (left === 'factory') {
-              return -1;
-            }
-            if (right === 'factory') {
-              return 1;
-            }
-            return (pathOrder.get(left) ?? 0) - (pathOrder.get(right) ?? 0);
-          });
-        })();
-  const units: HybridProbeUnit[] = [];
-  for (const path of orderedPaths) {
-    if (path === 'calldata_aggregator') {
-      for (const providerId of params.calldataAggregatorProviders) {
-        units.push({ path, providerId });
-      }
-    } else {
-      units.push({ path });
-    }
-  }
-  return units;
-}
 
 async function probeExternalTakePath(
   params: AuctionTakeFacts & {
@@ -158,6 +119,7 @@ async function probeExternalTakePath(
     });
     if (params.control.abandoned) {
       return {
+        provider: params.provider,
         path: params.provider.path,
         providerId: params.provider.providerId,
         durationMs: Date.now() - startedAt,
@@ -169,6 +131,7 @@ async function probeExternalTakePath(
       const gasPolicyRejectCode =
         evaluation.routeProfitability?.gasPolicyRejectCode;
       return {
+        provider: params.provider,
         path: params.provider.path,
         providerId: params.provider.providerId,
         durationMs: Date.now() - startedAt,
@@ -191,6 +154,7 @@ async function probeExternalTakePath(
     });
     if (!approval.approved) {
       return {
+        provider: params.provider,
         path: params.provider.path,
         providerId: params.provider.providerId,
         durationMs: Date.now() - startedAt,
@@ -202,6 +166,7 @@ async function probeExternalTakePath(
       };
     }
     return {
+      provider: params.provider,
       path: params.provider.path,
       providerId: params.provider.providerId,
       durationMs: Date.now() - startedAt,
@@ -210,6 +175,7 @@ async function probeExternalTakePath(
     };
   } catch (error) {
     return {
+      provider: params.provider,
       path: params.provider.path,
       providerId: params.provider.providerId,
       durationMs: Date.now() - startedAt,
@@ -224,15 +190,11 @@ async function probeExternalTakePath(
 
 function recordProbeCircuitOutcome(params: {
   result: HybridExternalTakeProbeResult;
-  providerRegistry: DiscoveryExternalTakeProviderRegistry;
 }): void {
   if (params.result.circuitOutcome) {
-    params.providerRegistry
-      .selectExternalTakeProvider({
-        selectedPath: params.result.path,
-        providerId: params.result.providerId,
-      })
-      .recordQuoteCircuitOutcome?.(params.result.circuitOutcome);
+    params.result.provider.recordQuoteCircuitOutcome?.(
+      params.result.circuitOutcome
+    );
   }
 }
 
@@ -263,7 +225,9 @@ async function withProbeTimeout(params: {
             new Error(`probe timed out after ${params.probeTimeoutMs}ms`)
           );
           resolve({
+            provider: params.provider,
             path: params.provider.path,
+            providerId: params.provider.providerId,
             durationMs: params.probeTimeoutMs,
             reason: `probe timed out after ${params.probeTimeoutMs}ms`,
             circuitOutcome:
@@ -295,7 +259,11 @@ async function runHybridExternalTakeProbes(
     approveExternalTake: DiscoveryExternalTakeApprover;
   }
 ): Promise<HybridExternalTakeProbeResult[]> {
-  const probeOrder = resolveProbeOrder(params);
+  const probeOrder = params.providerRegistry.listExternalTakeProbeProviders({
+    externalTakePaths: params.externalTakePaths,
+    calldataAggregatorProviders: params.calldataAggregatorProviders,
+    routeSelectionMode: params.routeSelectionMode,
+  });
   const runProbe = async (
     provider: DiscoveryExternalTakeRouteProvider,
     control: ProbeControl
@@ -306,14 +274,11 @@ async function runHybridExternalTakeProbes(
       control,
     });
 
-  if (params.routeSelectionMode !== 'factory_first') {
+  if (params.routeSelectionMode !== 'direct_dex_first') {
     const probeResults = await Promise.all(
-      probeOrder.map((unit) =>
+      probeOrder.map((provider) =>
         withProbeTimeout({
-          provider: params.providerRegistry.selectExternalTakeProvider({
-            selectedPath: unit.path,
-            providerId: unit.providerId,
-          }),
+          provider,
           probeTimeoutMs: params.probeTimeoutMs,
           probe: runProbe,
         })
@@ -322,26 +287,23 @@ async function runHybridExternalTakeProbes(
     probeResults.forEach((result) =>
       recordProbeCircuitOutcome({
         result,
-        providerRegistry: params.providerRegistry,
       })
     );
     return probeResults;
   }
 
   const probeResults: HybridExternalTakeProbeResult[] = [];
-  for (const unit of probeOrder) {
+  let remainingProbeStartIndex = 0;
+  const firstProvider = probeOrder[0];
+  if (firstProvider?.path === 'direct_dex') {
     const result = await withProbeTimeout({
-      provider: params.providerRegistry.selectExternalTakeProvider({
-        selectedPath: unit.path,
-        providerId: unit.providerId,
-      }),
+      provider: firstProvider,
       probeTimeoutMs: params.probeTimeoutMs,
       probe: runProbe,
     });
     probeResults.push(result);
     recordProbeCircuitOutcome({
       result,
-      providerRegistry: params.providerRegistry,
     });
     if (
       result.evaluation &&
@@ -349,7 +311,24 @@ async function runHybridExternalTakeProbes(
     ) {
       return probeResults;
     }
+    remainingProbeStartIndex = 1;
   }
+
+  const remainingResults = await Promise.all(
+    probeOrder.slice(remainingProbeStartIndex).map((provider) =>
+      withProbeTimeout({
+        provider,
+        probeTimeoutMs: params.probeTimeoutMs,
+        probe: runProbe,
+      })
+    )
+  );
+  remainingResults.forEach((result) =>
+    recordProbeCircuitOutcome({
+      result,
+    })
+  );
+  probeResults.push(...remainingResults);
   return probeResults;
 }
 
@@ -373,10 +352,10 @@ function formatGasQuoteAttempts(
 }
 
 function resolveHybridGasQuoteFallbackTriggerReason(params: {
-  factoryNativeToQuoteReject?: HybridExternalTakeProbeResult;
+  directDexNativeToQuoteReject?: HybridExternalTakeProbeResult;
 }): string | undefined {
-  return params.factoryNativeToQuoteReject === undefined
-    ? 'factory path was not rejected only by native-to-quote gas conversion'
+  return params.directDexNativeToQuoteReject === undefined
+    ? 'direct_dex path was not rejected only by native-to-quote gas conversion'
     : undefined;
 }
 
@@ -389,6 +368,7 @@ async function buildHybridGasQuoteFallbackEvaluation(
     externalTakePaths: ExternalTakePathKind[];
     calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
     routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+    hybridGasQuoteFallbackPolicy: HybridGasQuoteFallbackPolicyResolution;
     price: number;
     providerRegistry: DiscoveryExternalTakeProviderRegistry;
     approveExternalTake: DiscoveryExternalTakeApprover;
@@ -398,26 +378,18 @@ async function buildHybridGasQuoteFallbackEvaluation(
   | ExternalTakeExecutionCandidate<DiscoveryExternalTakeApprovalContext>
   | undefined
 > {
-  const factoryNativeToQuoteReject = params.probeResults.find(
+  const directDexNativeToQuoteReject = params.probeResults.find(
     (result) =>
-      result.path === 'factory' &&
+      result.path === 'direct_dex' &&
       result.gasPolicyRejectCode === 'native_to_quote_conversion_unavailable'
   );
-  const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
-    fallbackMode: params.takePolicy?.hybridGasQuoteFailureFallbackMode,
-    routeSelectionMode: params.routeSelectionMode,
-    externalTakePaths: params.externalTakePaths,
-    maxGasCostNative: params.takePolicy?.maxGasCostNative,
-    maxGasCostQuote: params.takePolicy?.maxGasCostQuote,
-    minExpectedProfitQuote: params.takePolicy?.minExpectedProfitQuote,
-    minProfitNative: params.takePolicy?.minProfitNative,
-  });
+  const fallbackEligibility = params.hybridGasQuoteFallbackPolicy;
   const fallbackIneligibleReason = fallbackEligibility.eligible
     ? resolveHybridGasQuoteFallbackTriggerReason({
-        factoryNativeToQuoteReject,
+        directDexNativeToQuoteReject,
       })
     : fallbackEligibility.reason;
-  if (factoryNativeToQuoteReject && fallbackIneligibleReason) {
+  if (directDexNativeToQuoteReject && fallbackIneligibleReason) {
     logger.debug(
       `Hybrid gas quote fallback skipped for pool ${params.pool.name}: ${fallbackIneligibleReason}`
     );
@@ -427,23 +399,25 @@ async function buildHybridGasQuoteFallbackEvaluation(
   }
 
   logger.warn(
-    `Hybrid external take max-profit ranking unavailable because native-to-quote gas conversion failed; attempting factory_first fallback pool=${params.pool.name} attempts="${formatGasQuoteAttempts(
-      factoryNativeToQuoteReject?.gasQuoteAttempts
+    `Hybrid external take max-profit ranking unavailable because native-to-quote gas conversion failed; attempting direct_dex_first fallback pool=${params.pool.name} attempts="${formatGasQuoteAttempts(
+      directDexNativeToQuoteReject?.gasQuoteAttempts
     )}"`
   );
-  const fallbackQuote = await params.providerRegistry.factoryProvider.quote({
-    pool: params.pool,
-    signer: params.signer,
-    poolConfig: params.poolConfig,
-    price: params.price,
-    auctionPrice: params.auctionPrice,
-    collateral: params.collateral,
-    debtToCover: params.debtToCover,
-    intent: { kind: HYBRID_GAS_QUOTE_FALLBACK_KIND },
-  });
+  const fallbackQuote = await params.providerRegistry
+    .selectExternalTakeProvider({ selectedPath: 'direct_dex' })
+    .quote({
+      pool: params.pool,
+      signer: params.signer,
+      poolConfig: params.poolConfig,
+      price: params.price,
+      auctionPrice: params.auctionPrice,
+      collateral: params.collateral,
+      debtToCover: params.debtToCover,
+      intent: { kind: HYBRID_GAS_QUOTE_FALLBACK_KIND },
+    });
   if (!fallbackQuote.isTakeable) {
     logger.debug(
-      `Hybrid gas quote fallback factory quote rejected for pool ${params.pool.name}: ${fallbackQuote.reason ?? 'not takeable'}`
+      `Hybrid gas quote fallback direct_dex quote rejected for pool ${params.pool.name}: ${fallbackQuote.reason ?? 'not takeable'}`
     );
     return undefined;
   }
@@ -467,8 +441,8 @@ async function buildHybridGasQuoteFallbackEvaluation(
 
   const approvedFallback = fallbackApproval.quoteEvaluation;
   logger.warn(
-    `Hybrid gas quote fallback activated: factory_first path=${approvedFallback.externalTakePath} source=${formatLiquiditySource(approvedFallback.selectedLiquiditySource)} pool=${params.pool.name} attempts="${formatGasQuoteAttempts(
-      factoryNativeToQuoteReject?.gasQuoteAttempts
+    `Hybrid gas quote fallback activated: direct_dex_first path=${approvedFallback.externalTakePath} source=${formatLiquiditySource(approvedFallback.selectedLiquiditySource)} pool=${params.pool.name} attempts="${formatGasQuoteAttempts(
+      directDexNativeToQuoteReject?.gasQuoteAttempts
     )}"`
   );
   return {
@@ -490,8 +464,14 @@ function formatRejectedProbeReasons(
     .filter((result) => !result.evaluation)
     .map(
       (result) =>
-        `${result.path}=${result.reason ?? 'not takeable'} (${result.durationMs}ms)`
+        `${formatProbeRouteLabel(result)}=${result.reason ?? 'not takeable'} (${result.durationMs}ms)`
     );
+}
+
+function formatProbeRouteLabel(result: HybridExternalTakeProbeResult): string {
+  return result.providerId
+    ? `${result.path}/${result.providerId}`
+    : result.path;
 }
 
 export async function evaluateHybridExternalTakeForDiscovery(
@@ -503,6 +483,7 @@ export async function evaluateHybridExternalTakeForDiscovery(
     externalTakePaths: ExternalTakePathKind[];
     calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
     routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
+    hybridGasQuoteFallbackPolicy: HybridGasQuoteFallbackPolicyResolution;
     probeTimeoutMs: number;
     price: number;
     providerRegistry: DiscoveryExternalTakeProviderRegistry;
@@ -515,22 +496,22 @@ export async function evaluateHybridExternalTakeForDiscovery(
   });
   const rejectedReasons = formatRejectedProbeReasons(probeResults);
 
-  if (params.routeSelectionMode === 'factory_first') {
+  if (params.routeSelectionMode === 'direct_dex_first') {
     for (const result of probeResults) {
       if (result.evaluation) {
         if (isSubsidizedExternalTakeQuote(result.evaluation)) {
           logger.debug(
-            `Hybrid external take factory-first found subsidized path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'}; deferring it while probing remaining paths for pool ${params.pool.name}`
+            `Hybrid external take direct_dex_first found subsidized path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'}; deferring it while probing remaining paths for pool ${params.pool.name}`
           );
           continue;
         }
         logger.debug(
-          `Hybrid external take factory-first selected path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} routeExecutionFloorRaw=${result.evaluation.routeExecutionFloorRaw.toString()} priorRejectedPaths=${
+          `Hybrid external take direct_dex_first selected path=${result.evaluation.externalTakePath} source=${formatLiquiditySource(result.evaluation.selectedLiquiditySource)} expectedNetProfitRaw=${result.evaluation.routeProfitability?.expectedNetProfitQuoteRaw?.toString() ?? 'n/a'} expectedSubsidyRaw=${result.evaluation.routeProfitability?.expectedSubsidyQuoteRaw?.toString() ?? 'n/a'} routeExecutionFloorRaw=${result.evaluation.routeExecutionFloorRaw.toString()} priorRejectedPaths=${
             probeResults
               .filter((probeResult) => !probeResult.evaluation)
               .map(
                 (probeResult) =>
-                  `${probeResult.path}=${probeResult.reason ?? 'not takeable'} (${probeResult.durationMs}ms)`
+                  `${formatProbeRouteLabel(probeResult)}=${probeResult.reason ?? 'not takeable'} (${probeResult.durationMs}ms)`
               )
               .join(', ') || 'none'
           } for pool ${params.pool.name}`
@@ -570,10 +551,7 @@ export async function evaluateHybridExternalTakeForDiscovery(
           evaluation: cloneExternalTakeQuoteEvaluation(evaluation),
         })
       );
-    if (
-      isOneInchExternalTakeRoute(selected) ||
-      isCalldataAggregatorExternalTakeRoute(selected)
-    ) {
+    if (isCalldataAggregatorExternalTakeRoute(selected)) {
       const gasQuoteFallback = await buildGasQuoteFallbackEvaluation();
       if (gasQuoteFallback) {
         fallbackCandidates.push(gasQuoteFallback);
@@ -704,7 +682,23 @@ export async function executeHybridExternalTakeForDiscovery(params: {
       approvedEvaluation = fallbackApproval.quoteEvaluation;
     }
 
-    const selectedPath = selection.effectiveSelectedPath;
+    const approvedSelection =
+      approvedEvaluation === candidateEvaluation
+        ? selection
+        : resolveHybridExternalTakeExecutionSelection({
+            quoteEvaluation: approvedEvaluation,
+            resolvedExternalTakePaths: params.externalTakePaths,
+          });
+    if (!approvedSelection.approved) {
+      logger.error(
+        `Hybrid external take ${approvedSelection.reason}; refusing execution for ${params.pool.name}/${params.liquidation.borrower}`
+      );
+      if (index === 0) {
+        return false;
+      }
+      continue;
+    }
+
     const liquidationForCandidate = {
       ...executionLiquidation,
       externalTakeExecutionPlan: createExternalTakeExecutionPlan({
@@ -713,13 +707,9 @@ export async function executeHybridExternalTakeForDiscovery(params: {
       }),
     };
 
-    const provider = params.providerRegistry.selectExternalTakeProvider({
-      selectedPath,
-      providerId:
-        'providerId' in approvedEvaluation
-          ? approvedEvaluation.providerId
-          : undefined,
-    });
+    const provider = params.providerRegistry.selectExternalTakeProviderForRoute(
+      approvedSelection.routeIdentity
+    );
     const attempt = await provider.execute({
       pool: params.pool,
       signer: params.signer,
@@ -743,7 +733,7 @@ export async function executeHybridExternalTakeForDiscovery(params: {
     }
     if (attempt.preBroadcastFailed && index < executionCandidates.length - 1) {
       logger.warn(
-        `Hybrid ${PROVIDER_WARN_LABEL[provider.path]} path failed before submission for ${params.pool.name}/${params.liquidation.borrower}; trying next approved fallback path`
+        `Hybrid ${formatProviderWarnLabel(provider)} path failed before submission for ${params.pool.name}/${params.liquidation.borrower}; trying next approved fallback path`
       );
       continue;
     }

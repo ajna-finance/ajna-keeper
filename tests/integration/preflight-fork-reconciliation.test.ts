@@ -17,10 +17,10 @@
 import { expect } from 'chai';
 import { Contract, Wallet, utils } from 'ethers';
 import { network } from 'hardhat';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types';
+import { TakerRouter__factory } from '../../typechain-types';
 import { LifiKeeperTaker__factory } from '../../typechain-types/factories/contracts/takers';
 import { KeeperConfig, LifiDexConfig, readConfigFile } from '../../src/config';
-import { validateAutoDiscoverRouteDeployments } from '../../src/discovery/route-preflight';
+import { validateAutoDiscoverRouteDeployments } from '../../src/discovery/route-preflight-validation';
 import { getProvider, resetHardhat, setBalance } from './test-utils';
 
 const RUN_PREFLIGHT_FORK = process.env.RUN_PREFLIGHT_FORK === 'true';
@@ -43,7 +43,7 @@ function requireConfiguredBaseForkRpc(): void {
 }
 
 async function deployFactoryAndLifiTaker(signer: Wallet) {
-  const factory = await new AjnaKeeperTakerFactory__factory(signer).deploy(
+  const factory = await new TakerRouter__factory(signer).deploy(
     BASE_ERC20_POOL_FACTORY
   );
   await factory.deployed();
@@ -130,7 +130,8 @@ describe('Startup preflight reconciliation on a Base fork (LI.FI)', function () 
         // factory-registration branches (no oneinch/uniswap deployments needed).
         take: {
           enabled: true,
-          allowedExternalTakePaths: ['lifi'],
+          allowedExternalTakePaths: ['calldata_aggregator'],
+          allowedCalldataAggregatorProviders: ['lifi'],
           validateRouteDeployments: true,
           dexGasOverrides: { 5: '900000' },
         },

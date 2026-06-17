@@ -103,6 +103,10 @@ export function validateSushiAggregatorQuote(params: {
   if (typeof priceImpact !== 'number' || !isFinite(priceImpact)) {
     fail('response priceImpact is missing or non-finite');
   }
+  // Sushi's RouteProcessor quote self-reports priceImpact with no on-chain
+  // fee ledger or included-step cross-check (unlike LI.FI). This ceiling is
+  // therefore the only bound that rejects economically manipulated quotes
+  // before they bind.
   if (Math.abs(priceImpact) > params.maxPriceImpact) {
     fail(
       `price impact ${Math.abs(priceImpact)} exceeds configured maximum ${params.maxPriceImpact}`
@@ -192,6 +196,15 @@ export function validateSushiAggregatorQuote(params: {
       `decoded minimum output ${decodedMinOut.toString()} exceeds expected output ${assumedAmountOut.toString()}`
     );
   }
+  // lifi/oneinch derive the execution min-out via the shared
+  // deriveRouteExecutionFloorRaw downstream AND validate the provider-supplied
+  // min-out against a structured estimate (toAmountMin / included-step
+  // min-out). Sushi exposes only a single decoded amountOutMin word with no
+  // structured estimate, so this validator instead pins that decoded word into
+  // a [floor, assumedAmountOut] band as defense-in-depth. This band is NOT
+  // redundant with deriveRouteExecutionFloorRaw: that helper computes the
+  // keeper's profit-aware execution floor, whereas this validates the
+  // provider's own quoted minimum.
   if (params.maxSlippage <= 0 || params.maxSlippage >= 1) {
     fail('maxSlippage is not a fraction in (0, 1)');
   }

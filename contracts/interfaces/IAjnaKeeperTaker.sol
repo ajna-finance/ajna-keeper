@@ -44,9 +44,9 @@ interface IAjnaKeeperTaker is IERC20Taker {
     /// @return The address of the contract owner.
     function owner() external view returns (address);
 
-    /// @notice Returns the factory contract authorized to invoke this taker.
-    /// @return The authorized factory address.
-    function authorizedFactory() external view returns (address);
+    /// @notice Returns the router contract authorized to invoke this taker.
+    /// @return The authorized router address.
+    function authorizedRouter() external view returns (address);
 
     /// @notice Returns the Ajna pool factory this taker validates pools against.
     /// @return The Ajna pool factory address.
@@ -54,10 +54,10 @@ interface IAjnaKeeperTaker is IERC20Taker {
 
     /// @notice Returns the supported liquidity sources for this taker.
     /// @return sources Array of supported LiquiditySource values.
-    function getSupportedSources() external pure returns (LiquiditySource[] memory sources);
+    function getSupportedSources() external view returns (LiquiditySource[] memory sources);
 
     /// @notice Checks if a specific liquidity source is supported by this taker.
     /// @param source The liquidity source to check.
     /// @return supported True if the source is supported, false otherwise.
-    function isSourceSupported(LiquiditySource source) external pure returns (bool supported);
+    function isSourceSupported(LiquiditySource source) external view returns (bool supported);
 }

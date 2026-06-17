@@ -40,15 +40,15 @@ describe('LifiKeeperTaker', () => {
         poolDeployer.address,
         constants.AddressZero
       ),
-      "reverted with reason string 'Zero authorized factory'"
+      "reverted with reason string 'Zero authorized router'"
     );
   });
 
-  it('emits LifiSwapExecuted and no generic SwapExecuted on successful takes', async () => {
+  it('emits AggregatorSwapExecuted and no generic SwapExecuted on successful takes', async () => {
     // The inherited 4-arg SwapExecuted is part of the ABI but is intentionally
-    // never emitted by this taker; monitoring must subscribe to LifiSwapExecuted
-    // (distinct topic0 carrying the allowlisted call target). This pins that
-    // event contract.
+    // never emitted by this taker; monitoring must subscribe to
+    // AggregatorSwapExecuted (distinct topic0 carrying the indexed source and
+    // the allowlisted call target). This pins that event contract.
     const result = await executeTake({});
     const receipt = await (await result.send()).wait();
 
@@ -56,7 +56,9 @@ describe('LifiKeeperTaker', () => {
       (log) => log.address.toLowerCase() === result.taker.address.toLowerCase()
     );
 
-    const lifiTopic = result.taker.interface.getEventTopic('LifiSwapExecuted');
+    const lifiTopic = result.taker.interface.getEventTopic(
+      'AggregatorSwapExecuted'
+    );
     const genericTopic = utils.id(
       'SwapExecuted(address,address,uint256,uint256)'
     );
@@ -64,6 +66,7 @@ describe('LifiKeeperTaker', () => {
     const lifiLogs = takerLogs.filter((log) => log.topics[0] === lifiTopic);
     expect(lifiLogs.length).to.equal(1);
     const parsed = result.taker.interface.parseLog(lifiLogs[0]);
+    expect(parsed.args.source).to.equal(LiquiditySource.LIFI);
     expect(parsed.args.tokenIn).to.equal(result.collateral.address);
     expect(parsed.args.tokenOut).to.equal(result.quote.address);
     expect(parsed.args.target).to.equal(result.target.address);
@@ -197,12 +200,27 @@ describe('LifiKeeperTaker', () => {
     expect(configured.takers).to.include(result.taker.address);
   });
 
-  it('reverts before callback execution when source collateral is already present', async () => {
+  it('sweeps a forced source-token donation instead of letting it grief the take', async () => {
     const result = await executeTake({});
+    const ownerCollateralBefore = await result.collateral.balanceOf(
+      result.owner.address
+    );
+    // An attacker can transfer dust of the collateral token directly to the
+    // taker. A balanceOf-based exact-fill check would revert every take for that
+    // collateral (cheap permanent griefing); the take must instead trust the
+    // pool's reported callback collateral, succeed, and sweep the dust to owner.
     await result.collateral.mint(result.taker.address, 1);
 
-    await expectRevertWith(result.send(), 'StaleSourceBalance');
-    expect((await result.pool.takeCount()).eq(0)).to.be.true;
+    await result.send();
+
+    expect((await result.pool.takeCount()).eq(1)).to.be.true;
+    expect((await result.collateral.balanceOf(result.taker.address)).eq(0)).to.be
+      .true;
+    expect(
+      (await result.collateral.balanceOf(result.owner.address))
+        .sub(ownerCollateralBefore)
+        .eq(1)
+    ).to.be.true;
   });
 
   it('reverts when LI.FI underdelivers below the approved floor', async () => {
@@ -458,7 +476,7 @@ describe('LifiKeeperTaker', () => {
     });
   });
 
-  it('rejects valid-pool callbacks outside an active factory take', async () => {
+  it('rejects valid-pool callbacks outside an active direct DEX take', async () => {
     const result = await deployFixture();
     const amountIn = utils.parseEther('1');
     const outputAmount = utils.parseEther('1.25');
@@ -785,5 +803,57 @@ describe('LifiKeeperTaker', () => {
         result.selector
       )
     ).to.equal(true);
+  });
+
+  it('rejects a zero-delivery aggregator swap even when the taker is pre-funded with the amount due', async () => {
+    // Donation immunity: the aggregator taker measures the quote it RECEIVES as a
+    // balance delta. Pre-funding the taker with exactly the amount due (a forced
+    // donation) must NOT let a swap that delivers nothing settle — an
+    // absolute-balanceOf taker would accept, the delta guard rejects.
+    const fixture = await deployFixture();
+    const amountIn = utils.parseEther('1');
+    const quoteAmountDue = utils.parseEther('1');
+
+    await fixture.collateral.mint(fixture.pool.address, amountIn);
+    await fixture.pool.setQuoteAmountDue(quoteAmountDue);
+
+    // mockNoOutput pulls the collateral but returns no quote at all.
+    const noOutputSelector =
+      fixture.target.interface.getSighash('mockNoOutput');
+    await fixture.taker.setCallSelector(
+      fixture.target.address,
+      noOutputSelector,
+      true
+    );
+
+    // The forced donation the attacker controls: exactly the amount due.
+    await fixture.quote.mint(fixture.taker.address, quoteAmountDue);
+
+    const callData = fixture.target.interface.encodeFunctionData(
+      'mockNoOutput',
+      [fixture.collateral.address, amountIn]
+    );
+    const details = encodeDetails({
+      approvalSpender: fixture.target.address,
+      srcToken: fixture.collateral.address,
+      dstToken: fixture.quote.address,
+      dstReceiver: fixture.taker.address,
+      amountIn,
+      amountOutMinimum: utils.parseEther('1'),
+      callData,
+    });
+
+    await expectRevertWith(
+      fixture.factory.takeWithAtomicSwap(
+        fixture.pool.address,
+        BORROWER,
+        constants.WeiPerEther,
+        amountIn,
+        LiquiditySource.LIFI,
+        fixture.target.address,
+        details
+      ),
+      'InsufficientQuoteReceived'
+    );
   });
 });

@@ -45,26 +45,27 @@ const config: KeeperConfig = {
         // want native->quote conversion during policy checks.
         // maxGasCostQuote: 1,
         // minExpectedProfitQuote: 1,
-        // If discovery.defaults.take enables factory external takes later, import
-        // LiquiditySource and list every direct-DEX factory route that may execute:
+        // If discovery.defaults.take enables direct DEX external takes later,
+        // import LiquiditySource and list every direct DEX route that may execute:
         // allowedLiquiditySources: [LiquiditySource.UNISWAPV3, LiquiditySource.CURVE],
-        // To compare aggregators against the best factory route for discovered takes:
-        // allowedExternalTakePaths: ['oneinch', 'factory'],
-        // allowedExternalTakePaths: ['factory', 'lifi'],
-        // allowedExternalTakePaths: ['oneinch', 'factory', 'lifi'],
-        // defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+        // To compare aggregators against the best direct DEX route for discovered takes:
+        // allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+        // allowedCalldataAggregatorProviders: ['oneinch'],
+        // allowedCalldataAggregatorProviders: ['lifi'],
+        // allowedCalldataAggregatorProviders: ['oneinch', 'lifi'],
+        // defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
         // externalTakeProbeTimeoutMs: 2_000,
-        // externalTakeRouteSelectionMode: 'factory_first', // lower aggregator API use, can skip a better aggregator route
+        // externalTakeRouteSelectionMode: 'direct_dex_first', // lower aggregator API use, can skip a better aggregator route
         // takeRouteQuoteBudgetPerCandidate: 2,
         // minProfitNative: '1000000000000000', // 0.001 ETH minimum net profit
-        // LI.FI is an aggregator path, not a factory source. Before enabling it,
+        // LI.FI is an aggregator provider, not a direct DEX source. Before enabling it,
         // configure production dex.lifi allowlists, takers.contracts.Lifi, both
         // LI.FI production gates, and a conservative LI.FI gas override:
         // dexGasOverrides: {
         //   [LiquiditySource.CURVE]: '700000',
         //   [LiquiditySource.LIFI]: '900000',
         // },
-        // validateRouteDeployments: true, // required for LI.FI and mixed factory/aggregator paths
+        // validateRouteDeployments: true, // required for LI.FI and mixed direct DEX/aggregator paths
         // gasPriceDriftToleranceBasisPoints: 2_000,
       },
       settlement: {

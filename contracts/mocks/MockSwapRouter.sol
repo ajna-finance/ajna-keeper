@@ -32,7 +32,7 @@ contract MockSwapRouter is IGenericRouter {
         require(address(desc.dstToken) != address(0), "MockSwapRouter: zero dstToken");
         require(desc.dstReceiver != address(0), "MockSwapRouter: zero dstReceiver");
 
-        // Pull srcToken from caller (the AjnaKeeperTaker)
+        // Pull srcToken from caller (the keeper taker)
         IERC20(desc.srcToken).transferFrom(msg.sender, address(this), desc.amount);
         spentAmount = desc.amount;
 

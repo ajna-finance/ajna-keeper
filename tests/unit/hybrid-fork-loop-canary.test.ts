@@ -4,7 +4,7 @@ import { expect } from 'chai';
 import { LifiDexConfig, LiquiditySource } from '../../src/config';
 import {
   buildForcedDiscoveryPolicy,
-  defaultSourceForHybridPaths,
+  fixtureLiquiditySourceForHybridPaths,
   getHybridLifiApiKey,
   loadHybridForkFixture,
   parseHybridPaths,
@@ -46,7 +46,7 @@ describe('Hybrid fork loop harness', () => {
     expect(script).to.include('RUN_HYBRID_FORK_LOOP=true');
     expect(script).to.include('HARDHAT_CHAIN_ID=8453');
     expect(script).to.include('FORK_NETWORK=base');
-    expect(script).to.include('AJNA_AGENT_HYBRID_PATHS=lifi');
+    expect(script).to.include('AJNA_AGENT_HYBRID_PATHS=calldata_aggregator');
     expect(script).to.include('AJNA_AGENT_HYBRID_LIFI_CALLBACK_PROOF=true');
     expect(script).to.include(
       'npx hardhat test tests/integration/hybrid-fork-loop.test.ts'
@@ -54,35 +54,42 @@ describe('Hybrid fork loop harness', () => {
     expect(script).to.not.include('--network');
   });
 
-  it('defaults to all three external-take paths and allows focused LI.FI proofs', () => {
-    expect(parseHybridPaths({})).to.deep.equal(['oneinch', 'factory', 'lifi']);
+  it('defaults to both external-take path families and allows focused LI.FI proofs', () => {
+    expect(parseHybridPaths({})).to.deep.equal([
+      'calldata_aggregator',
+      'direct_dex',
+    ]);
     expect(
-      parseHybridPaths({ AJNA_AGENT_HYBRID_PATHS: ' lifi , factory ' })
-    ).to.deep.equal(['lifi', 'factory']);
+      parseHybridPaths({
+        AJNA_AGENT_HYBRID_PATHS: ' calldata_aggregator , direct_dex ',
+      })
+    ).to.deep.equal(['calldata_aggregator', 'direct_dex']);
     expect(() =>
-      parseHybridPaths({ AJNA_AGENT_HYBRID_PATHS: 'lifi,unknown' })
+      parseHybridPaths({
+        AJNA_AGENT_HYBRID_PATHS: 'calldata_aggregator,unknown',
+      })
     ).to.throw(
-      'AJNA_AGENT_HYBRID_PATHS must be a non-empty CSV subset of: oneinch,factory,lifi'
+      'AJNA_AGENT_HYBRID_PATHS must be a non-empty CSV subset of: calldata_aggregator,direct_dex'
     );
   });
 
   it('selects the default liquidity source from the enabled path set', () => {
     expect(
-      defaultSourceForHybridPaths(['oneinch', 'factory', 'lifi'])
+      fixtureLiquiditySourceForHybridPaths([
+        'calldata_aggregator',
+        'direct_dex',
+      ])
     ).to.equal(LiquiditySource.UNISWAPV3);
-    expect(defaultSourceForHybridPaths(['lifi'])).to.equal(
-      LiquiditySource.LIFI
-    );
-    expect(defaultSourceForHybridPaths(['oneinch'])).to.equal(
-      LiquiditySource.ONEINCH
-    );
+    expect(
+      fixtureLiquiditySourceForHybridPaths(['calldata_aggregator'])
+    ).to.equal(LiquiditySource.LIFI);
   });
 
   it('builds a dry-run Base fork fixture with tunable economics', () => {
     const fixture = loadHybridForkFixture(
       fixtureEnv({
         AJNA_AGENT_HYBRID_KICKER_WHALE: KICKER,
-        AJNA_AGENT_HYBRID_PATHS: 'lifi',
+        AJNA_AGENT_HYBRID_PATHS: 'calldata_aggregator',
         AJNA_AGENT_HYBRID_DEPOSIT_PRICE: '2015',
         AJNA_AGENT_HYBRID_FORK_LIVE_TAKE: 'false',
       })
@@ -91,7 +98,7 @@ describe('Hybrid fork loop harness', () => {
     expect(fixture.lenderWhale).to.equal(LENDER);
     expect(fixture.borrowerWhale).to.equal(BORROWER);
     expect(fixture.kickerWhale).to.equal(KICKER);
-    expect(fixture.paths).to.deep.equal(['lifi']);
+    expect(fixture.paths).to.deep.equal(['calldata_aggregator']);
     expect(fixture.depositPrice).to.equal(2015);
     expect(fixture.liveTake).to.equal(false);
   });
@@ -109,10 +116,10 @@ describe('Hybrid fork loop harness', () => {
 
   it('gates the optional LI.FI callback proof on both path and env flag', () => {
     const lifiFixture = loadHybridForkFixture(
-      fixtureEnv({ AJNA_AGENT_HYBRID_PATHS: 'lifi' })
+      fixtureEnv({ AJNA_AGENT_HYBRID_PATHS: 'calldata_aggregator' })
     );
     const factoryFixture = loadHybridForkFixture(
-      fixtureEnv({ AJNA_AGENT_HYBRID_PATHS: 'factory' })
+      fixtureEnv({ AJNA_AGENT_HYBRID_PATHS: 'direct_dex' })
     );
 
     expect(
@@ -134,9 +141,8 @@ describe('Hybrid fork loop harness', () => {
     );
 
     expect(policy.take?.allowedExternalTakePaths).to.deep.equal([
-      'oneinch',
-      'factory',
-      'lifi',
+      'calldata_aggregator',
+      'direct_dex',
     ]);
     expect(policy.take?.externalTakeRouteSelectionMode).to.equal(
       'maximize_profit'

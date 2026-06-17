@@ -1,7 +1,5 @@
 import type { LifiDexConfig } from './schema';
-import {
-  normalizeLifiExchangeFilters,
-} from '../dex/lifi/filters';
+import { normalizeLifiExchangeFilters } from '../dex/lifi/filters';
 import {
   LIFI_CHAIN_POLICY_BOUNDS,
   assertValidLifiCanaryAllowlistPolicy,
@@ -12,6 +10,11 @@ import {
   requirePositiveIntegerPolicy as requirePositiveIntegerApiPolicy,
   validateLifiIntegrator,
 } from '../dex/lifi/api-policy';
+import {
+  isFiniteNumber,
+  requireOptionalPositive,
+  requireOptionalIntegerRange,
+} from './numeric-validation';
 export {
   getConfiguredLifiCompletePolicyChainIds,
   normalizeLifiCanaryChainPolicy,
@@ -35,35 +38,6 @@ export const LIFI_POLICY_BOUNDS = {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function requireOptionalPositive(value: unknown, message: string): void {
-  if (value !== undefined && (!isFiniteNumber(value) || value <= 0)) {
-    throw new Error(message);
-  }
-}
-
-function requireOptionalIntegerRange(
-  value: unknown,
-  min: number,
-  max: number,
-  message: string
-): void {
-  if (value === undefined) {
-    return;
-  }
-  if (
-    typeof value !== 'number' ||
-    !Number.isInteger(value) ||
-    value < min ||
-    value > max
-  ) {
-    throw new Error(message);
-  }
 }
 
 export function assertValidLifiDexConfig(params: {
@@ -158,22 +132,17 @@ export function assertValidLifiDexConfig(params: {
     );
   }
 
-  const filters = normalizeLifiExchangeFilters(lifi, {
-    fieldName: params.fieldName,
-    mode: lifi.mode,
-  });
   if (lifi.mode === 'production') {
-    if ((filters.allowExchanges ?? []).length === 0) {
-      throw new Error(
-        `${params.fieldName}.allowExchanges must be non-empty in production`
-      );
-    }
     normalizeProductionPolicyForValidation({
       config: lifi,
       fieldName: params.fieldName,
       chainId: params.chainId,
     });
   } else {
+    normalizeLifiExchangeFilters(lifi, {
+      fieldName: params.fieldName,
+      mode: lifi.mode,
+    });
     assertValidLifiCanaryAllowlistPolicy({
       config: lifi,
       fieldName: params.fieldName,
@@ -198,7 +167,10 @@ export function getLifiRequiredLiveProductionPolicyError(
   fieldName = 'config.dex.lifi'
 ): string | undefined {
   try {
-    const policy = normalizeProductionPolicyForValidation({ config, fieldName });
+    const policy = normalizeProductionPolicyForValidation({
+      config,
+      fieldName,
+    });
     if (policy.chains.length === 0) {
       return 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires at least one complete production LI.FI chain policy';
     }

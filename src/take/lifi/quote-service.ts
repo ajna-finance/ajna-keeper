@@ -1,12 +1,13 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import { LifiDexConfig } from '../../config';
-import { ApprovedLifiQuote, fetchLifiQuote, validateLifiQuote } from '../../dex/lifi';
-import { normalizeLifiProductionChainPolicy } from '../../dex/lifi/chain-policy';
 import {
-  getCachedTokenDecimals,
-  resolveExternalTakeChainId,
-} from '../external-take/chain';
+  ApprovedLifiQuote,
+  fetchLifiQuote,
+  validateLifiQuote,
+} from '../../dex/lifi';
+import { normalizeLifiProductionPolicy } from '../../dex/lifi/chain-policy';
+import { resolveExternalTakeChainId } from '../external-take/chain';
 import { LifiQuoteConfig } from './types';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
 
@@ -25,15 +26,6 @@ export function getLifiQuoteFailureMetadata(error: unknown): {
     retryable: typed.retryable ?? false,
     code: typed.status ?? 'exception',
   };
-}
-
-export async function getLifiTokenDecimals(params: {
-  signer: Signer;
-  tokenAddress: string;
-  chainId?: number;
-  cache?: Map<string, number>;
-}): Promise<number> {
-  return getCachedTokenDecimals(params);
 }
 
 export async function resolveLifiChainId(
@@ -61,11 +53,17 @@ export async function requestValidatedLifiQuote(params: {
   signal?: AbortSignal;
 }): Promise<ApprovedLifiQuote> {
   const productionConfig = requireProductionLifiConfig(params.lifiConfig);
-  const chainPolicy = normalizeLifiProductionChainPolicy({
+  const productionPolicy = normalizeLifiProductionPolicy({
     config: productionConfig,
     fieldName: 'LI.FI',
     chainId: params.chainId,
   });
+  const chainPolicy = productionPolicy.chains.find(
+    (entry) => entry.chainId === params.chainId
+  );
+  if (!chainPolicy) {
+    throw new Error(`LI.FI.callTargetAllowlist.${params.chainId} is required`);
+  }
   const result = await fetchLifiQuote({
     config: productionConfig,
     apiKey: getLifiApiKey(productionConfig),
@@ -89,7 +87,7 @@ export async function requestValidatedLifiQuote(params: {
     toToken: params.pool.quoteAddress,
     fromAmount: params.collateralInTokenDecimals,
     takerAddress: params.lifiTaker,
-    allowedExchangeTools: productionConfig.allowExchanges,
+    exchangePolicy: productionPolicy.exchangePolicy,
     callTargetAllowlist: chainPolicy.callTargets,
     approvalSpenderAllowlist: chainPolicy.approvalSpenders,
     selectorAllowlist: chainPolicy.selectorAllowlist,

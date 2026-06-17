@@ -1,21 +1,17 @@
 import type { KeeperConfig, LifiDexConfig } from '../../config';
-import {
-  getLifiRequiredLiveProductionPolicyError,
-} from '../../config/lifi-policy';
+import { getLifiRequiredLiveProductionPolicyError } from '../../config/lifi-policy';
 import {
   getConfiguredLifiCompletePolicyChainIds,
   normalizeLifiCanaryChainPolicy,
   normalizeLifiProductionChainPolicy,
+  normalizeLifiProductionPolicy,
 } from './chain-policy';
 import {
   getLifiPolicyApiKey,
   getSetLifiPolicyEnvNames,
   isDefaultLifiApiBaseUrl,
 } from './api-policy';
-import {
-  getConcreteProductionLifiPolicyError,
-  hasBroadLifiPolicyExchangeFilter,
-} from './filters';
+import { hasBroadLifiPolicyExchangeFilter } from './filters';
 import {
   DEFAULT_LIFI_CANARY_CHAIN_ID,
   normalizeAddress,
@@ -89,13 +85,6 @@ function getRequiredLivePolicySourceError(
   }
   if (!config.takers?.contracts?.Lifi) {
     return 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE requires config.takers.contracts.Lifi';
-  }
-  const concretePolicyError = getConcreteProductionLifiPolicyError({
-    config: config.dex.lifi,
-    context: 'AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE',
-  });
-  if (concretePolicyError !== undefined) {
-    return concretePolicyError;
   }
   const incompletePolicyError = getLifiRequiredLiveProductionPolicyError(
     config.dex.lifi
@@ -254,19 +243,28 @@ function buildLifiConfig(params: {
       : configured?.quoteTimeoutMs;
 
   if (configured?.mode === 'production') {
-    return {
+    const productionConfig = {
       ...configured,
-      mode: 'production',
+      mode: 'production' as const,
       apiBaseUrl,
       apiKeyEnvVar,
       quoteTimeoutMs,
-      allowExchanges: allowExchanges ?? configured.allowExchanges,
       denyExchanges,
       preferExchanges,
       ...(allowBroadExchangeFilters === false
         ? { allowBroadExchangeFilters }
         : {}),
     };
+    if (
+      allowExchanges !== undefined ||
+      configured.exchangePolicy !== 'reviewed_broad'
+    ) {
+      return {
+        ...productionConfig,
+        allowExchanges: allowExchanges ?? configured.allowExchanges,
+      } as LifiDexConfig;
+    }
+    return productionConfig as LifiDexConfig;
   }
 
   return {
@@ -356,7 +354,19 @@ export function resolveLifiRouteCanaryConfig(input: {
       'Missing AJNA_AGENT_LIFI_CANARY_TAKER_ADDRESS or config.takers.contracts.Lifi'
     );
   }
-  if (!lifiConfig.allowExchanges || lifiConfig.allowExchanges.length === 0) {
+  const exchangePolicy =
+    lifiConfig.mode === 'production'
+      ? normalizeLifiProductionPolicy({
+          config: lifiConfig,
+          fieldName: 'config.dex.lifi',
+          chainId,
+        }).exchangePolicy
+      : undefined;
+
+  if (
+    exchangePolicy?.kind !== 'reviewed_broad' &&
+    (!lifiConfig.allowExchanges || lifiConfig.allowExchanges.length === 0)
+  ) {
     return skipped(
       'Missing AJNA_AGENT_LIFI_CANARY_ALLOW_EXCHANGES or config.dex.lifi.allowExchanges; refusing broad LI.FI route discovery',
       takerAddress

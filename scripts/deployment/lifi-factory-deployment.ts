@@ -157,8 +157,8 @@ export async function registerLifiTakerInFactory(
     getArtifactPath(
       'contracts',
       'factories',
-      'AjnaKeeperTakerFactory.sol',
-      'AjnaKeeperTakerFactory.json'
+      'TakerRouter.sol',
+      'TakerRouter.json'
     )
   );
   const factory = new ethers.Contract(

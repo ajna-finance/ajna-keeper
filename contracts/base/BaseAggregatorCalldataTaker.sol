@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
-import { FactoryAuthorizedTakerBase } from "./KeeperTakerBase.sol";
+import { RouterAuthorizedTakerBase } from "./KeeperTakerBase.sol";
 import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 
 /// @notice Shared layer for calldata-aggregator takers: executes one
@@ -18,11 +18,15 @@ import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 ///        allowlists (storage, setters, getters, enforcement)
 ///      - the active-callback binding (pool + calldata hash) set and cleared
 ///        around pool.take
-///      - the exact source-balance check: calldata aggregators are exact-fill
-///        by construction (opaque provider calldata cannot be re-sized
-///        on-chain), so off-chain sizing debt-clamps the take and this layer
-///        rejects any mismatch. Do not port the factory takers' partial-fill
-///        pro-rating into this layer.
+///      - the exact-fill check against the pool's reported callback collateral:
+///        calldata aggregators use provider calldata sized off-chain and cannot
+///        be re-sized on-chain, so off-chain sizing debt-clamps the take and this
+///        layer rejects any mismatch before calling the aggregator. It compares
+///        the validated pool's collateral argument (not this taker's balance, so
+///        a forced donation cannot grief the take). Do not port the factory
+///        takers' partial-fill pro-rating into this layer.
+///      - the post-call residue policy: source-token residue returned by an
+///        aggregator is allowed and swept by the standard settlement path.
 ///      - the allowlisted low-level call with raw revert bubbling, the
 ///        code-existence check, and the zero-value ERC20 route policy
 ///      - the output backstop quoteReceived >= max(amountOutMinimum,
@@ -31,10 +35,13 @@ import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 ///        ceil-divided quote pull (merged audited invariant — a floored-due
 ///        comparison reintroduces the failed-take bug PR #17 fixed for
 ///        non-18-decimal quote tokens)
-///      Provider wrappers stay thin: construction, source identity, and a
-///      provider-distinct execution event (LifiSwapExecuted precedent — never
-///      overload the base SwapExecuted name).
-abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
+///      Provider wrappers stay thin: they forward only their single liquidity
+///      source identity to this base, which owns construction, source
+///      validation, the IAjnaKeeperTaker source getters, and the single
+///      parameterized AggregatorSwapExecuted event (whose indexed source field
+///      distinguishes providers in one ABI, replacing the former
+///      provider-distinct per-wrapper events).
+abstract contract BaseAggregatorCalldataTaker is RouterAuthorizedTakerBase {
     struct AggregatorSwapDetails {
         address approvalSpender;
         address srcToken;
@@ -44,6 +51,8 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
         uint256 amountOutMinimum;
         bytes callData;
     }
+
+    LiquiditySource private immutable _source;
 
     mapping(address => bool) private _callTargets;
     mapping(address => bool) private _approvalSpenders;
@@ -60,38 +69,51 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
     event CallTargetUpdated(address indexed target, bool allowed);
     event ApprovalSpenderUpdated(address indexed spender, bool allowed);
     event CallSelectorUpdated(address indexed target, bytes4 indexed selector, bool allowed);
+    /// @dev Single parameterized per-swap execution event for every
+    ///      calldata-aggregator taker. The indexed `source` distinguishes
+    ///      providers within one ABI (replacing the former provider-distinct
+    ///      events), and `target` carries the allowlisted call target. Distinct
+    ///      from the base 4-arg SwapExecuted, which these takers never emit.
+    event AggregatorSwapExecuted(
+        LiquiditySource indexed source,
+        address indexed target,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOut
+    );
 
     error CallTargetNotAllowed();
     error CallTargetHasNoCode();
     error ApprovalSpenderNotAllowed();
     error SelectorNotAllowed();
-    error StaleSourceBalance();
     error UnexpectedSourceBalance();
-    error SourceNotConsumed();
     error UnexpectedCallback();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
-    /// @param authorizedFactory_ Factory contract address that can also call functions.
+    /// @param authorizedRouter_ Router contract address that can also call functions.
     ///        Unlike the direct-DEX takers, calldata-aggregator takers are
-    ///        factory-only by design and refuse standalone (zero factory)
+    ///        router-only by design and refuse standalone (zero router)
     ///        deployment.
-    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedFactory_)
-        FactoryAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedFactory_)
+    /// @param source_ The single liquidity source this taker serves.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_, LiquiditySource source_)
+        RouterAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
     {
-        require(authorizedFactory_ != address(0), "Zero authorized factory");
+        require(authorizedRouter_ != address(0), "Zero authorized router");
+        require(source_ != LiquiditySource.None, "Zero liquidity source");
+        _source = source_;
     }
 
-    /// @dev Provider wrappers declare which single liquidity source they serve.
-    function _isSupportedSource(LiquiditySource source) internal pure virtual returns (bool);
+    /// @inheritdoc IAjnaKeeperTaker
+    function getSupportedSources() external view returns (LiquiditySource[] memory sources) {
+        sources = new LiquiditySource[](1);
+        sources[0] = _source;
+    }
 
-    /// @dev Provider wrappers emit their provider-distinct execution event here.
-    function _emitAggregatorSwapExecuted(
-        address tokenIn,
-        address tokenOut,
-        address target,
-        uint256 amountIn,
-        uint256 amountOut
-    ) internal virtual;
+    /// @inheritdoc IAjnaKeeperTaker
+    function isSourceSupported(LiquiditySource source) external view returns (bool) {
+        return source == _source;
+    }
 
     /// @inheritdoc IAjnaKeeperTaker
     function takeWithAtomicSwap(
@@ -102,15 +124,12 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
         LiquiditySource source,
         address swapRouter,
         bytes calldata swapDetails
-    ) external onlyOwnerOrFactory {
-        if (!_isSupportedSource(source)) revert UnsupportedSource();
+    ) external onlyOwnerOrRouter {
+        if (source != _source) revert UnsupportedSource();
         if (!_validatePool(pool)) revert InvalidPool();
 
         AggregatorSwapDetails memory details = abi.decode(swapDetails, (AggregatorSwapDetails));
         _validateSwapDetails(pool, swapRouter, details);
-        if (IERC20(details.srcToken).balanceOf(address(this)) != 0) {
-            revert StaleSourceBalance();
-        }
         if (_activeCallbackPool != address(0)) {
             revert UnexpectedCallback();
         }
@@ -131,7 +150,7 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
 
     /// @notice Called by the Ajna pool after it sends callback collateral to this taker.
     function atomicSwapCallback(
-        uint256,
+        uint256 collateral,
         uint256 quoteAmountDue,
         bytes calldata data
     ) external override nonReentrant {
@@ -143,7 +162,7 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
 
         (AggregatorSwapDetails memory details, address swapRouter) = abi.decode(data, (AggregatorSwapDetails, address));
         _validateSwapDetails(pool, swapRouter, details);
-        _executeAggregatorCall(pool, quoteAmountDue, swapRouter, details);
+        _executeAggregatorCall(pool, collateral, quoteAmountDue, swapRouter, details);
     }
 
     function setCallTarget(address target, bool allowed) external onlyOwner {
@@ -244,14 +263,20 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
 
     function _executeAggregatorCall(
         IERC20Pool pool,
+        uint256 collateral,
         uint256 quoteAmountDue,
         address swapRouter,
         AggregatorSwapDetails memory details
     ) private {
         IERC20 srcToken = IERC20(details.srcToken);
         IERC20 dstToken = IERC20(details.dstToken);
-        uint256 sourceBalanceBefore = srcToken.balanceOf(address(this));
-        if (sourceBalanceBefore != details.amountInTokenUnits) {
+        // Trust the validated pool's reported callback collateral rather than
+        // this taker's own token balance: an attacker can force a non-zero
+        // balance by donating 1 wei of srcToken, so a balanceOf-based exact-fill
+        // check would let them grief every take. The approval below is sized to
+        // amountInTokenUnits, so any donated dust is never spent and is swept by
+        // _settleAfterTake. (Matches CurveKeeperTaker / UniswapV3KeeperTaker.)
+        if (collateral != details.amountInTokenUnits) {
             revert UnexpectedSourceBalance();
         }
 
@@ -269,10 +294,11 @@ abstract contract BaseAggregatorCalldataTaker is FactoryAuthorizedTakerBase {
             revert InsufficientQuoteReceived();
         }
 
-        _emitAggregatorSwapExecuted(
+        emit AggregatorSwapExecuted(
+            _source,
+            swapRouter,
             pool.collateralAddress(),
             pool.quoteTokenAddress(),
-            swapRouter,
             details.amountInTokenUnits,
             quoteReceived
         );

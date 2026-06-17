@@ -57,7 +57,16 @@ export function normalizeSushiAggregatorChainPolicy(params: {
   );
   const selectorAllowlist = normalizeTakerSelectorAllowlistRecord(
     config.selectorAllowlist?.[chainId],
-    { label: `${fieldName}.selectorAllowlist[${chainId}]`, requireNonEmpty: true }
+    {
+      label: `${fieldName}.selectorAllowlist[${chainId}]`,
+      requireNonEmpty: true,
+      // Fail closed like LI.FI: every selector target must be an allowlisted call
+      // target, and every call target must have selector coverage. Otherwise the
+      // deploy/preflight could register a Sushi taker whose selectors don't cover
+      // its call targets, so a take passes config validation then reverts on-chain.
+      callTargetAllowlist: callTargets,
+      requireCallTargetCoverage: true,
+    }
   );
   return { chainId, callTargets, approvalSpenders, selectorAllowlist };
 }

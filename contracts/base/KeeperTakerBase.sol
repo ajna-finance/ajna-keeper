@@ -14,10 +14,6 @@ import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
 /// @dev AUDIT FIX: consolidates the helpers that were previously copy-pasted
 ///      across the five takers (and had already drifted in comments) so a
 ///      future fix lands exactly once.
-///      Deliberately does NOT expose an `authorizedFactory` getter: the
-///      standalone AjnaKeeperTaker inherits this layer directly because
-///      AjnaKeeperTakerFactory's legacy-taker detection keys on that getter's
-///      absence.
 abstract contract KeeperTakerBase is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -30,10 +26,10 @@ abstract contract KeeperTakerBase is ReentrancyGuard {
     /// @dev Identifies the Ajna deployment, used to validate pools
     PoolDeployer internal immutable _poolFactory;
 
-    /// @dev Standard per-swap monitoring event. LifiKeeperTaker does NOT emit
-    ///      this; it defines its own distinctly-named LifiSwapExecuted (extra
-    ///      indexed call-target parameter, different topic0) — provider takers
-    ///      that log a call target must follow that precedent rather than
+    /// @dev Standard per-swap monitoring event. Calldata-aggregator takers do
+    ///      NOT emit this; they emit the base AggregatorSwapExecuted (indexed
+    ///      source + call-target parameters, different topic0) — provider takers
+    ///      that log a call target use that distinctly-named event rather than
     ///      overloading this name, which creates ambiguous ABIs.
     event SwapExecuted(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
 
@@ -118,14 +114,14 @@ abstract contract KeeperTakerBase is ReentrancyGuard {
     }
 }
 
-/// @notice Base for factory-managed takers: implements the IAjnaKeeperTaker
-///         wiring getters, the shared owner-or-factory access control, and
+/// @notice Base for router-managed takers: implements the IAjnaKeeperTaker
+///         wiring getters, the shared owner-or-router access control, and
 ///         token recovery.
-abstract contract FactoryAuthorizedTakerBase is IAjnaKeeperTaker, KeeperTakerBase {
-    /// @dev Factory contract that is also authorized to call functions.
+abstract contract RouterAuthorizedTakerBase is IAjnaKeeperTaker, KeeperTakerBase {
+    /// @dev Router contract that is also authorized to call functions.
     ///      May be zero to deploy the taker in standalone (owner-only) mode; the
-    ///      keeper factory refuses to register a taker whose factory does not match.
-    address internal immutable _authorizedFactory;
+    ///      keeper router refuses to register a taker whose router does not match.
+    address internal immutable _authorizedRouter;
 
     /// @notice Emitted when the requested liquidity source is not handled by this taker.
     error UnsupportedSource();  // sig: 0x79b7ef0d
@@ -133,11 +129,11 @@ abstract contract FactoryAuthorizedTakerBase is IAjnaKeeperTaker, KeeperTakerBas
     error SwapFailed();         // sig: 0x81ceff30
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
-    /// @param authorizedFactory_ Factory contract address that can also call functions.
-    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedFactory_)
+    /// @param authorizedRouter_ Router contract address that can also call functions.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
         KeeperTakerBase(ajnaErc20PoolFactory)
     {
-        _authorizedFactory = authorizedFactory_;
+        _authorizedRouter = authorizedRouter_;
     }
 
     /// @inheritdoc IAjnaKeeperTaker
@@ -151,17 +147,17 @@ abstract contract FactoryAuthorizedTakerBase is IAjnaKeeperTaker, KeeperTakerBas
     }
 
     /// @inheritdoc IAjnaKeeperTaker
-    function authorizedFactory() public view override returns (address) {
-        return _authorizedFactory;
+    function authorizedRouter() public view override returns (address) {
+        return _authorizedRouter;
     }
 
-    modifier onlyOwnerOrFactory() {
-        if (msg.sender != _owner && msg.sender != _authorizedFactory) revert Unauthorized();
+    modifier onlyOwnerOrRouter() {
+        if (msg.sender != _owner && msg.sender != _authorizedRouter) revert Unauthorized();
         _;
     }
 
     /// @inheritdoc IAjnaKeeperTaker
-    function recover(IERC20 token) external override onlyOwnerOrFactory {
+    function recover(IERC20 token) external override onlyOwnerOrRouter {
         _recoverToken(token);
     }
 }

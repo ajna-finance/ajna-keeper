@@ -11,6 +11,7 @@ import {
   TakeActionConfig,
   TakeLiquidationPlan,
 } from '../../take/types';
+import type { ExternalTakeRouteIdentity } from '../../take/external-take/route-binding';
 import { HYBRID_GAS_QUOTE_FALLBACK_KIND } from './approval';
 import { DiscoveryExecutionConfig, DiscoveryRpcCache } from '../types';
 
@@ -26,6 +27,16 @@ export type ExternalTakeQuoteResult = {
   retryable?: boolean;
   errorCode?: number | string;
   error?: string;
+};
+
+export type ExternalTakeRouteQuoteResult = {
+  route: ExternalTakeRouteIdentity;
+  result: ExternalTakeQuoteResult;
+};
+
+export type ExternalTakeRouteExecutionFailureResult = {
+  route: ExternalTakeRouteIdentity;
+  result: ExternalTakeExecutionFailureResult;
 };
 
 /**
@@ -99,10 +110,10 @@ export type DiscoveryExternalExecutionConfig = Pick<
   | 'connectorTokens'
   | 'curveRouterOverrides'
   | 'dryRun'
-  | 'keeperTaker'
-  | 'keeperTakerFactory'
+  | 'keeperTakerRouter'
   | 'lifi'
   | 'lifiTaker'
+  | 'oneInchAggregatorTaker'
   | 'sushiAggregator'
   | 'sushiAggregatorTaker'
   | 'oneInchAggregationExecutorAllowlist'
@@ -112,27 +123,13 @@ export type DiscoveryExternalExecutionConfig = Pick<
   | 'uniswapV3RouterOverrides'
 > & {
   takeWriteTransport?: TakeWriteTransport;
-  runtimeCache?: DiscoveryRpcCache['factoryQuoteProviders'];
+  runtimeCache?: DiscoveryRpcCache['directDexQuoteProviders'];
   oneInchRequestTimeoutMs?: number;
   chainId?: number;
   tokenDecimalsCache?: Map<string, number>;
-  onOneInchSwapDataResult?: (result: {
-    success: boolean;
-    retryable?: boolean;
-    errorCode?: number | string;
-    error?: string;
-  }) => void;
-  onOneInchExecutionFailure?: (
-    result: ExternalTakeExecutionFailureResult
-  ) => void;
-  onFactoryExecutionFailure?: (
-    result: ExternalTakeExecutionFailureResult
-  ) => void;
-  onLifiQuoteResult?: (result: ExternalTakeQuoteResult) => void;
-  onLifiExecutionFailure?: (result: ExternalTakeExecutionFailureResult) => void;
-  onSushiAggregatorQuoteResult?: (result: ExternalTakeQuoteResult) => void;
-  onSushiAggregatorExecutionFailure?: (
-    result: ExternalTakeExecutionFailureResult
+  onExternalTakeQuoteResult?: (event: ExternalTakeRouteQuoteResult) => void;
+  onExternalTakeExecutionFailure?: (
+    event: ExternalTakeRouteExecutionFailureResult
   ) => void;
 };
 
@@ -151,27 +148,6 @@ export function createPreBroadcastFailureCapture(
       }
     },
     didFailPreBroadcast: () => preBroadcastFailed,
-  };
-}
-
-export function createPreSubmitResultCapture<T extends { success: boolean }>(
-  original?: (result: T) => void
-): {
-  handler(result: T): void;
-  didRejectBeforeSubmit(): boolean;
-} {
-  let preSubmitRejected = false;
-  let preSubmitSucceeded = false;
-  return {
-    handler: (result) => {
-      original?.(result);
-      if (result.success) {
-        preSubmitSucceeded = true;
-      } else {
-        preSubmitRejected = true;
-      }
-    },
-    didRejectBeforeSubmit: () => preSubmitRejected && !preSubmitSucceeded,
   };
 }
 

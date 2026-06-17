@@ -14,9 +14,10 @@ import type { ResolvedTakeTarget } from '../../../src/discovery/targets';
 import type { HandleDiscoveredTakeTargetParams } from '../../../src/discovery/take-executor';
 import type { DiscoveryReadTransports } from '../../../src/read-transports';
 import * as lifiExecutionModule from '../../../src/take/lifi/execution';
+import * as lifiQuoteEvaluationModule from '../../../src/take/lifi/quote-evaluation';
 import { normalizeApprovedLifiQuote } from '../../../src/take/lifi/quote-service';
 import type { ApprovedCalldataAggregatorQuote } from '../../../src/take/aggregator-calldata/types';
-import * as takeFactoryModule from '../../../src/take/factory';
+import * as directDexModule from '../../../src/take/direct-dex';
 import type { ExternalTakeQuoteEvaluation } from '../../../src/take/types';
 import type { TakeWriteTransport } from '../../../src/take/write-transport';
 import { createDiscoveryTransports } from '../../helpers/discovery';
@@ -120,12 +121,12 @@ export function makeTestCalldataAggregatorQuote(
   );
 }
 
-export function createHybridGasFallbackFactoryQuote(
+export function createHybridGasFallbackDirectDexQuote(
   overrides: Partial<ExternalTakeQuoteEvaluation> = {}
 ): ExternalTakeQuoteEvaluation {
   return {
     isTakeable: true,
-    externalTakePath: 'factory',
+    externalTakePath: 'direct_dex',
     selectedLiquiditySource: LiquiditySource.UNISWAPV3,
     selectedFeeTier: 500,
     quoteAmount: 125,
@@ -145,7 +146,7 @@ export function createNativeToQuoteGasConversionReject(
 ): ExternalTakeQuoteEvaluation {
   return {
     isTakeable: false,
-    externalTakePath: 'factory',
+    externalTakePath: 'direct_dex',
     selectedLiquiditySource: LiquiditySource.UNISWAPV3,
     reason: 'failed to quote gas cost into quote token',
     routeProfitability: {
@@ -158,7 +159,7 @@ export function createNativeToQuoteGasConversionReject(
           amountIn: '900000000000000',
           feeTiers: [3000, 100, 500, 10000],
           success: false,
-          reason: 'no factory pool at configured fee tiers',
+          reason: 'no direct DEX pool at configured fee tiers',
         },
       ],
     },
@@ -168,37 +169,37 @@ export function createNativeToQuoteGasConversionReject(
 
 export async function runLifiHybridGasFallbackScenario(
   options: {
-    factoryEvaluations?: ExternalTakeQuoteEvaluation[];
+    directDexEvaluations?: ExternalTakeQuoteEvaluation[];
   } = {}
 ) {
   sinon.stub(erc20, 'getDecimalsErc20').resolves(6);
   const takeLiquidationLifiStub = sinon
     .stub(lifiExecutionModule, 'takeLiquidationLifi')
     .resolves(true);
-  const takeLiquidationFactoryStub = sinon
-    .stub(takeFactoryModule, 'takeLiquidationFactory')
+  const takeLiquidationDirectDexStub = sinon
+    .stub(directDexModule, 'takeLiquidationDirectDex')
     .resolves(true);
   const lifiQuoteStub = sinon
-    .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+    .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
     .resolves({
       isTakeable: false,
       externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.LIFI,
       reason: 'LI.FI unavailable',
     });
-  const factoryEvaluations = options.factoryEvaluations ?? [
+  const directDexEvaluations = options.directDexEvaluations ?? [
     createNativeToQuoteGasConversionReject(),
-    createHybridGasFallbackFactoryQuote(),
+    createHybridGasFallbackDirectDexQuote(),
   ];
-  let factoryCallIndex = 0;
-  const factoryQuoteStub = sinon
-    .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+  let directDexCallIndex = 0;
+  const directDexQuoteStub = sinon
+    .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
     .callsFake(async () => {
       const evaluation =
-        factoryEvaluations[
-          Math.min(factoryCallIndex, factoryEvaluations.length - 1)
+        directDexEvaluations[
+          Math.min(directDexCallIndex, directDexEvaluations.length - 1)
         ];
-      factoryCallIndex += 1;
+      directDexCallIndex += 1;
       return evaluation;
     });
   const gasPrice = ethers.utils.parseUnits('1', 'gwei');
@@ -253,10 +254,11 @@ export async function runLifiHybridGasFallbackScenario(
           enabled: true,
           take: {
             enabled: true,
-            allowedExternalTakePaths: ['lifi', 'factory'],
+            allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+            allowedCalldataAggregatorProviders: ['lifi'],
             externalTakeRouteSelectionMode: 'maximize_profit',
-            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
-            hybridGasQuoteFailureFallbackMode: 'factory_first',
+            defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
+            hybridGasQuoteFailureFallbackMode: 'direct_dex_first',
             maxGasCostNative: 1,
           },
         },
@@ -269,24 +271,24 @@ export async function runLifiHybridGasFallbackScenario(
         chainId: 1,
         gasPrice,
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     })
   );
 
   return {
-    factoryQuoteStub,
+    directDexQuoteStub,
     lifiQuoteStub,
     takeLiquidationLifiStub,
-    takeLiquidationFactoryStub,
+    takeLiquidationDirectDexStub,
   };
 }
 
 export function createHybridLifiFallbackScenario(
   options: {
     lifiExpectedNetProfitRaw?: BigNumber;
-    factoryExpectedNetProfitRaw?: BigNumber;
+    directDexExpectedNetProfitRaw?: BigNumber;
     refreshedCollateral?: BigNumber;
     refreshedAuctionPrice?: BigNumber;
   } = {}
@@ -301,7 +303,7 @@ export function createHybridLifiFallbackScenario(
   sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
 
   const lifiQuoteStub = sinon
-    .stub(lifiExecutionModule, 'getLifiPathQuoteEvaluation')
+    .stub(lifiQuoteEvaluationModule, 'getLifiPathQuoteEvaluation')
     .resolves({
       isTakeable: true,
       externalTakePath: 'calldata_aggregator',
@@ -328,11 +330,11 @@ export function createHybridLifiFallbackScenario(
         gasPolicyEvaluatedAt,
       },
     });
-  const factoryQuoteStub = sinon
-    .stub(takeFactoryModule, 'getFactoryTakeQuoteEvaluation')
+  const directDexQuoteStub = sinon
+    .stub(directDexModule, 'getDirectDexTakeQuoteEvaluation')
     .resolves({
       isTakeable: true,
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
       selectedFeeTier: 500,
       quoteAmount: 120,
@@ -346,15 +348,16 @@ export function createHybridLifiFallbackScenario(
       quotedCollateralWad: ethers.utils.parseEther('1'),
       routeProfitability: {
         expectedNetProfitQuoteRaw:
-          options.factoryExpectedNetProfitRaw ?? ethers.utils.parseEther('19'),
+          options.directDexExpectedNetProfitRaw ??
+          ethers.utils.parseEther('19'),
         expectedSubsidyQuoteRaw: BigNumber.from(0),
         subsidyAllowed: false,
         gasPriceWei: gasPrice,
         gasPolicyEvaluatedAt,
       },
     });
-  const takeLiquidationFactoryStub = sinon
-    .stub(takeFactoryModule, 'takeLiquidationFactory')
+  const takeLiquidationDirectDexStub = sinon
+    .stub(directDexModule, 'takeLiquidationDirectDex')
     .resolves(true);
 
   const pool = {
@@ -372,8 +375,8 @@ export function createHybridLifiFallbackScenario(
 
   return {
     lifiQuoteStub,
-    factoryQuoteStub,
-    takeLiquidationFactoryStub,
+    directDexQuoteStub,
+    takeLiquidationDirectDexStub,
     params: makeDiscoveredTakeParams({
       pool,
       signer: {
@@ -410,9 +413,10 @@ export function createHybridLifiFallbackScenario(
           enabled: true,
           take: {
             enabled: true,
-            allowedExternalTakePaths: ['lifi', 'factory'],
+            allowedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+            allowedCalldataAggregatorProviders: ['lifi'],
             externalTakeRouteSelectionMode: 'maximize_profit',
-            defaultFactoryLiquiditySource: LiquiditySource.UNISWAPV3,
+            defaultDirectDexLiquiditySource: LiquiditySource.UNISWAPV3,
             dexGasOverrides: {
               [LiquiditySource.LIFI]: '900000',
               [LiquiditySource.UNISWAPV3]: '900000',
@@ -436,8 +440,8 @@ export function createHybridLifiFallbackScenario(
         chainId: 8453,
         gasPrice,
         gasPriceFetchedAt: Date.now(),
-        factoryQuoteProviders:
-          takeFactoryModule.createFactoryQuoteProviderRuntimeCache(),
+        directDexQuoteProviders:
+          directDexModule.createDirectDexQuoteProviderRuntimeCache(),
       },
     }),
   };

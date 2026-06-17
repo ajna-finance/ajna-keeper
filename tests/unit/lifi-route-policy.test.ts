@@ -1,8 +1,7 @@
 import { expect } from 'chai';
 import {
-  FACTORY_DYNAMIC_SOURCES,
+  DIRECT_DEX_DYNAMIC_SOURCES,
   LiquiditySource,
-  getExternalTakePathDefaultSource,
   getExternalTakePathDescriptor,
   isAggregatorExternalTakePath,
   resolveExternalTakePolicy,
@@ -19,42 +18,42 @@ describe('LI.FI route policy', () => {
     ).to.deep.equal(['calldata_aggregator']);
   });
 
-  it('resolves the legacy lifi config input to the calldata_aggregator family', () => {
-    expect(
+  it('rejects the retired top-level lifi config input', () => {
+    expect(() =>
       resolveExternalTakePolicy({
         defaultLiquiditySource: undefined,
-        takePolicy: { allowedExternalTakePaths: ['lifi'] },
-      }).externalTakePaths
-    ).to.deep.equal(['calldata_aggregator']);
+        takePolicy: { allowedExternalTakePaths: ['lifi' as any] },
+      })
+    ).to.throw(
+      'allowedExternalTakePaths currently supports only direct_dex or calldata_aggregator'
+    );
   });
 
-  it('does not treat LIFI as a factory dynamic source', () => {
-    expect(FACTORY_DYNAMIC_SOURCES).to.not.include(LiquiditySource.LIFI);
+  it('does not treat LIFI as a direct DEX dynamic source', () => {
+    expect(DIRECT_DEX_DYNAMIC_SOURCES).to.not.include(LiquiditySource.LIFI);
   });
 
-  it('describes aggregator paths and their default sources centrally', () => {
-    expect(getExternalTakePathDefaultSource('oneinch')).to.equal(
-      LiquiditySource.ONEINCH
+  it('describes aggregator paths without assigning path-level default sources', () => {
+    expect(getExternalTakePathDescriptor('calldata_aggregator')).to.not.have.property(
+      'defaultSource'
     );
-    expect(getExternalTakePathDefaultSource('calldata_aggregator')).to.equal(
-      LiquiditySource.LIFI
+    expect(getExternalTakePathDescriptor('direct_dex')).to.not.have.property(
+      'defaultSource'
     );
-    expect(getExternalTakePathDefaultSource('factory')).to.equal(undefined);
-    expect(isAggregatorExternalTakePath('oneinch')).to.equal(true);
     expect(isAggregatorExternalTakePath('calldata_aggregator')).to.equal(true);
-    expect(isAggregatorExternalTakePath('factory')).to.equal(false);
+    expect(isAggregatorExternalTakePath('direct_dex')).to.equal(false);
   });
 
   it('resolves liquidity sources to external take paths through the registry', () => {
     expect(resolveExternalTakePathFromSource(LiquiditySource.ONEINCH)).to.equal(
-      'oneinch'
+      'calldata_aggregator'
     );
     expect(resolveExternalTakePathFromSource(LiquiditySource.LIFI)).to.equal(
       'calldata_aggregator'
     );
-    expect(resolveExternalTakePathFromSource(LiquiditySource.UNISWAPV3)).to.equal(
-      'factory'
-    );
+    expect(
+      resolveExternalTakePathFromSource(LiquiditySource.UNISWAPV3)
+    ).to.equal('direct_dex');
   });
 
   it('marks LI.FI as requiring fail-closed deployment validation and gas overrides', () => {
@@ -67,9 +66,9 @@ describe('LI.FI route policy', () => {
   it('uses aggregator path classification for hybrid gas fallback eligibility', () => {
     expect(
       resolveHybridGasQuoteFallbackPolicy({
-        fallbackMode: 'factory_first',
+        fallbackMode: 'direct_dex_first',
         routeSelectionMode: 'maximize_profit',
-        externalTakePaths: ['factory', 'calldata_aggregator'],
+        externalTakePaths: ['direct_dex', 'calldata_aggregator'],
         maxGasCostNative: 1,
       })
     ).to.deep.equal({ eligible: true });

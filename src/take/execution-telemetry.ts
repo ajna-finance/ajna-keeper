@@ -35,7 +35,7 @@ function formatBorrowerTelemetryId(borrower: string): string {
 }
 
 export function logTakeExecutionTelemetry(params: {
-  path: 'oneinch' | 'factory' | 'calldata_aggregator';
+  path: 'direct_dex' | 'calldata_aggregator';
   providerId?: CalldataAggregatorProviderId;
   source?: LiquiditySource;
   poolName: string;

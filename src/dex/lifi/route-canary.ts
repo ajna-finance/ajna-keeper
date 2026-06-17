@@ -7,6 +7,7 @@ import {
   extractLifiExchangeToolKeys,
   normalizeLifiExchangeFilters,
 } from './filters';
+import { normalizeProductionLifiExchangePolicy } from './exchange-policy';
 import {
   hasBroadExchangeFilter,
   LifiRouteCanaryEnv,
@@ -173,7 +174,13 @@ async function runLifiToolsCheck(params: {
   deps?: LifiRouteCanaryDeps;
 }): Promise<{ check: LifiRouteCanaryCheck; exchangeTools?: string[] }> {
   try {
-    const filters = normalizeLifiExchangeFilters(params.config);
+    const filters =
+      params.config.mode === 'production'
+        ? normalizeProductionLifiExchangePolicy({
+            config: params.config,
+            fieldName: 'dex.lifi',
+          }).filters
+        : normalizeLifiExchangeFilters(params.config);
     const toolsResponse = await (params.deps?.fetchTools ?? fetchLifiTools)({
       config: params.config,
       apiKey: params.apiKey,
@@ -236,6 +243,13 @@ async function runLifiQuoteCheck(params: {
         maxPriceImpact: params.config.maxPriceImpact,
       },
     });
+    const exchangePolicy =
+      params.config.mode === 'production'
+        ? normalizeProductionLifiExchangePolicy({
+            config: params.config,
+            fieldName: 'dex.lifi',
+          })
+        : undefined;
     const approved = validateLifiQuote({
       quote: result.data,
       chainId: params.chainId,
@@ -243,8 +257,13 @@ async function runLifiQuoteCheck(params: {
       toToken: params.route.toToken,
       fromAmount: BigNumber.from(params.route.fromAmount),
       takerAddress: routeTaker,
-      allowedExchangeTools:
-        params.validationExchangeTools ?? params.config.allowExchanges ?? [],
+      exchangePolicy: exchangePolicy ?? {
+        kind: 'concrete_allowlist',
+        filters: {
+          allowExchanges:
+            params.validationExchangeTools ?? params.config.allowExchanges ?? [],
+        },
+      },
       callTargetAllowlist: params.callTargets,
       approvalSpenderAllowlist: params.approvalSpenders,
       selectorAllowlist: params.selectorAllowlist,

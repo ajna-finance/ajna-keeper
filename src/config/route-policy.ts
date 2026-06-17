@@ -1,21 +1,21 @@
 import {
   CalldataAggregatorProviderId,
-  ConfiguredExternalTakePathKind,
   ExternalTakePathKind,
   ExternalTakeRouteSelectionMode,
   HybridGasQuoteFailureFallbackMode,
   LiquiditySource,
 } from './schema';
 import {
-  isAggregatorExternalTakePath,
-  isFactoryLiquiditySource,
-  resolveExternalTakePathFromSource,
-} from './external-take-registry';
-import type { FactoryLiquiditySource } from './external-take-registry';
-import {
   CALLDATA_AGGREGATOR_PROVIDER_IDS,
+  formatSupportedExternalTakePaths,
+  isAggregatorExternalTakePath,
   isCalldataAggregatorProviderId,
-} from './aggregator-provider-identity';
+  isDirectDexLiquiditySource,
+  isExternalTakePath,
+  resolveCalldataAggregatorProviderForSource,
+  resolveExternalTakePathFromSource,
+} from './external-take-descriptors';
+import type { DirectDexLiquiditySource } from './external-take-descriptors';
 
 export {
   AGGREGATOR_PROVIDER_IDENTITIES,
@@ -24,20 +24,18 @@ export {
   getAggregatorProviderIdentity,
   isCalldataAggregatorProviderId,
   resolveCalldataAggregatorProviderForSource,
-} from './aggregator-provider-identity';
-export type { AggregatorProviderIdentity } from './aggregator-provider-identity';
+} from './external-take-descriptors';
 
 export {
   EXTERNAL_TAKE_PATH_DESCRIPTORS,
   EXTERNAL_TAKE_LIQUIDITY_SOURCE_DESCRIPTORS,
   EXTERNAL_TAKE_PATHS,
-  FACTORY_DYNAMIC_SOURCES,
+  DIRECT_DEX_DYNAMIC_SOURCES,
   SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES,
   SUPPORTED_EXTERNAL_TAKE_PATHS,
   formatSupportedExternalTakeLiquiditySources,
   formatSupportedExternalTakePaths,
   getExternalTakeLiquiditySourceDescriptor,
-  getExternalTakePathDefaultSource,
   getExternalTakePathDescriptor,
   getExternalTakePathDescriptors,
   getExternalTakeTakerContractKeyForSource,
@@ -47,7 +45,7 @@ export {
   isExternalTakePath,
   resolveExternalTakeDeployment,
   resolveExternalTakePathFromSource,
-} from './external-take-registry';
+} from './external-take-descriptors';
 export type {
   ActiveExternalTakeDeploymentResolution,
   ActiveExternalTakeDeploymentType,
@@ -55,25 +53,27 @@ export type {
   ExternalTakeDeploymentResolution,
   ExternalTakeDeploymentRuntimeConfig,
   ExternalTakeDeploymentType,
-  FactoryExternalTakeDeploymentResolution,
+  DirectDexExternalTakeDeploymentResolution,
   ExternalTakePathDescriptor,
   ExternalTakePathCategory,
   ExternalTakeLiquiditySource,
   ExternalTakeLiquiditySourceDescriptor,
   ExternalTakeTakerContractKey,
-  FactoryLiquiditySource,
+  DirectDexLiquiditySource,
   CalldataAggregatorExternalTakeDeploymentResolution,
-  OneInchExternalTakeDeploymentResolution,
-} from './external-take-registry';
+} from './external-take-descriptors';
 
 export type ActiveExternalTakeRouteSelectionMode =
   ExternalTakeRouteSelectionMode;
 
 export const EXTERNAL_TAKE_ROUTE_SELECTION_MODES =
-  new Set<ExternalTakeRouteSelectionMode>(['maximize_profit', 'factory_first']);
+  new Set<ExternalTakeRouteSelectionMode>([
+    'maximize_profit',
+    'direct_dex_first',
+  ]);
 
 export const HYBRID_GAS_QUOTE_FAILURE_FALLBACK_MODES =
-  new Set<HybridGasQuoteFailureFallbackMode>(['disabled', 'factory_first']);
+  new Set<HybridGasQuoteFailureFallbackMode>(['disabled', 'direct_dex_first']);
 
 export const DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE: ActiveExternalTakeRouteSelectionMode =
   'maximize_profit';
@@ -82,10 +82,10 @@ export type HybridGasQuoteFallbackPolicyResolution =
   | { eligible: true }
   | { eligible: false; reason: string };
 
-export function isFactoryDynamicSource(
+export function isDirectDexDynamicSource(
   source: LiquiditySource | undefined
-): source is FactoryLiquiditySource {
-  return isFactoryLiquiditySource(source);
+): source is DirectDexLiquiditySource {
+  return isDirectDexLiquiditySource(source);
 }
 
 export function normalizeExternalTakeRouteSelectionMode(
@@ -94,46 +94,14 @@ export function normalizeExternalTakeRouteSelectionMode(
   return mode ?? DEFAULT_EXTERNAL_TAKE_ROUTE_SELECTION_MODE;
 }
 
-const LEGACY_EXTERNAL_TAKE_PATH_ALIASES: Readonly<
-  Record<string, ExternalTakePathKind>
-> = {
-  lifi: 'calldata_aggregator',
-};
-
-export function isConfiguredExternalTakePath(
-  path: unknown
-): path is ConfiguredExternalTakePathKind {
-  return (
-    typeof path === 'string' &&
-    (path === 'oneinch' ||
-      path === 'factory' ||
-      path === 'calldata_aggregator' ||
-      LEGACY_EXTERNAL_TAKE_PATH_ALIASES[path] !== undefined)
-  );
-}
-
-export function normalizeConfiguredExternalTakePath(
-  path: ConfiguredExternalTakePathKind
-): ExternalTakePathKind {
-  return LEGACY_EXTERNAL_TAKE_PATH_ALIASES[path] ?? (path as ExternalTakePathKind);
-}
-
-export function formatSupportedConfiguredExternalTakePaths(): string {
-  return 'oneinch, factory, and calldata_aggregator (legacy alias: lifi)';
-}
-
 // Raw path resolution. Private: downstream runtime modules consume
 // resolveExternalTakePolicy(...) instead of reinterpreting raw config.
 function resolveExternalTakePaths(params: {
   defaultLiquiditySource: LiquiditySource | undefined;
-  allowedExternalTakePaths?: readonly ConfiguredExternalTakePathKind[];
+  allowedExternalTakePaths?: readonly ExternalTakePathKind[];
 }): ExternalTakePathKind[] {
   if (params.allowedExternalTakePaths !== undefined) {
-    return Array.from(
-      new Set(
-        params.allowedExternalTakePaths.map(normalizeConfiguredExternalTakePath)
-      )
-    );
+    return Array.from(new Set(params.allowedExternalTakePaths));
   }
   const path = resolveExternalTakePathFromSource(params.defaultLiquiditySource);
   return path !== undefined ? [path] : [];
@@ -148,7 +116,7 @@ export function resolveHybridGasQuoteFallbackPolicy(params: {
   minExpectedProfitQuote?: number;
   minProfitNative?: string;
 }): HybridGasQuoteFallbackPolicyResolution {
-  if (params.fallbackMode !== 'factory_first') {
+  if (params.fallbackMode !== 'direct_dex_first') {
     return { eligible: false, reason: 'fallback disabled' };
   }
   if (params.routeSelectionMode !== 'maximize_profit') {
@@ -158,13 +126,13 @@ export function resolveHybridGasQuoteFallbackPolicy(params: {
     };
   }
   if (
-    !params.externalTakePaths.includes('factory') ||
+    !params.externalTakePaths.includes('direct_dex') ||
     !params.externalTakePaths.some(isAggregatorExternalTakePath)
   ) {
     return {
       eligible: false,
       reason:
-        'hybrid paths do not include factory and at least one aggregator path',
+        'hybrid paths do not include direct_dex and at least one aggregator path',
     };
   }
   if (params.maxGasCostNative === undefined) {
@@ -183,37 +151,40 @@ export function resolveHybridGasQuoteFallbackPolicy(params: {
 }
 
 // Private: see resolveExternalTakePolicy(...).
-function resolveDefaultFactoryLiquiditySource(params: {
+function resolveDefaultDirectDexLiquiditySource(params: {
   defaultLiquiditySource: LiquiditySource | undefined;
-  configuredDefaultFactoryLiquiditySource?: LiquiditySource;
-}): FactoryLiquiditySource | undefined {
-  if (isFactoryDynamicSource(params.defaultLiquiditySource)) {
+  configuredDefaultDirectDexLiquiditySource?: LiquiditySource;
+}): DirectDexLiquiditySource | undefined {
+  if (isDirectDexDynamicSource(params.defaultLiquiditySource)) {
     return params.defaultLiquiditySource;
   }
-  return isFactoryDynamicSource(params.configuredDefaultFactoryLiquiditySource)
-    ? params.configuredDefaultFactoryLiquiditySource
+  return isDirectDexDynamicSource(
+    params.configuredDefaultDirectDexLiquiditySource
+  )
+    ? params.configuredDefaultDirectDexLiquiditySource
     : undefined;
 }
 
 // Private: see resolveExternalTakePolicy(...).
-function resolveFactoryRouteSelectionSources(params: {
+function resolveDirectDexRouteSelectionSources(params: {
   defaultLiquiditySource: LiquiditySource | undefined;
   allowedLiquiditySources?: readonly LiquiditySource[];
-  configuredDefaultFactoryLiquiditySource?: LiquiditySource;
-}): FactoryLiquiditySource[] {
+  configuredDefaultDirectDexLiquiditySource?: LiquiditySource;
+}): DirectDexLiquiditySource[] {
   if (params.allowedLiquiditySources !== undefined) {
     return Array.from(new Set(params.allowedLiquiditySources)).filter(
-      isFactoryDynamicSource
+      isDirectDexDynamicSource
     );
   }
 
-  const defaultFactoryLiquiditySource = resolveDefaultFactoryLiquiditySource({
-    defaultLiquiditySource: params.defaultLiquiditySource,
-    configuredDefaultFactoryLiquiditySource:
-      params.configuredDefaultFactoryLiquiditySource,
-  });
-  return defaultFactoryLiquiditySource !== undefined
-    ? [defaultFactoryLiquiditySource]
+  const defaultDirectDexLiquiditySource =
+    resolveDefaultDirectDexLiquiditySource({
+      defaultLiquiditySource: params.defaultLiquiditySource,
+      configuredDefaultDirectDexLiquiditySource:
+        params.configuredDefaultDirectDexLiquiditySource,
+    });
+  return defaultDirectDexLiquiditySource !== undefined
+    ? [defaultDirectDexLiquiditySource]
     : [];
 }
 
@@ -222,11 +193,16 @@ function resolveFactoryRouteSelectionSources(params: {
  * Structural subset of the discovery take-policy config.
  */
 export interface RawExternalTakePolicyInputs {
-  allowedExternalTakePaths?: readonly ConfiguredExternalTakePathKind[];
+  allowedExternalTakePaths?: readonly ExternalTakePathKind[];
   allowedCalldataAggregatorProviders?: readonly CalldataAggregatorProviderId[];
   allowedLiquiditySources?: readonly LiquiditySource[];
-  defaultFactoryLiquiditySource?: LiquiditySource;
+  defaultDirectDexLiquiditySource?: LiquiditySource;
   externalTakeRouteSelectionMode?: ExternalTakeRouteSelectionMode;
+  hybridGasQuoteFailureFallbackMode?: HybridGasQuoteFailureFallbackMode;
+  maxGasCostNative?: number;
+  maxGasCostQuote?: number;
+  minExpectedProfitQuote?: number;
+  minProfitNative?: string;
 }
 
 /**
@@ -239,20 +215,54 @@ export interface ResolvedExternalTakePolicy {
   readonly externalTakePaths: readonly ExternalTakePathKind[];
   /**
    * Providers enabled inside the calldata_aggregator family. Empty when the
-   * family is not enabled; defaults to ['lifi'] when the family is enabled
-   * without an explicit list.
+   * family is not enabled; omitted lists follow source-derived defaults such
+   * as ONEINCH -> oneinch and otherwise fall back to LI.FI.
    */
   readonly calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
-  /** Factory route allowlist for the factory family. */
-  readonly factoryRouteSources: readonly FactoryLiquiditySource[];
-  readonly defaultFactoryLiquiditySource: FactoryLiquiditySource | undefined;
+  /** Direct DEX route allowlist for the direct_dex family. */
+  readonly directDexRouteSources: readonly DirectDexLiquiditySource[];
+  readonly defaultDirectDexLiquiditySource:
+    | DirectDexLiquiditySource
+    | undefined;
   readonly routeSelectionMode: ActiveExternalTakeRouteSelectionMode;
   /**
-   * True when the operator explicitly configured allowedExternalTakePaths
-   * (hybrid machinery engages on explicit configuration, not on derived
-   * single-path defaults).
+   * Concrete routes under the resolved external-take families: one direct_dex
+   * quote plus one quote per enabled calldata provider.
+   */
+  readonly externalTakeRouteCount: number;
+  /**
+   * True when route selection needs quote-denominated gas cost so competing
+   * external routes are ranked by net profit instead of gross quote amount.
+   */
+  readonly requiresExternalTakeNetProfitRanking: boolean;
+  /**
+   * True when discovery should evaluate the resolved external routes through
+   * the hybrid selector instead of binding directly to a single adapter:
+   * explicit path configuration always opts in, and explicit multi-provider
+   * calldata lists opt in even when the calldata family came from defaults.
+   */
+  readonly externalTakeSelectorEnabled: boolean;
+  /** Resolved once so runtime layers do not reinterpret raw fallback config. */
+  readonly hybridGasQuoteFallbackPolicy: HybridGasQuoteFallbackPolicyResolution;
+  /**
+   * True when the operator explicitly configured allowedExternalTakePaths.
+   * Runtime selector decisions should use externalTakeSelectorEnabled.
    */
   readonly externalTakePathsExplicitlyConfigured: boolean;
+}
+
+function countExternalTakeRoutes(params: {
+  externalTakePaths: readonly ExternalTakePathKind[];
+  calldataAggregatorProviders: readonly CalldataAggregatorProviderId[];
+}): number {
+  let routeCount = 0;
+  if (params.externalTakePaths.includes('direct_dex')) {
+    routeCount += 1;
+  }
+  if (params.externalTakePaths.includes('calldata_aggregator')) {
+    routeCount += params.calldataAggregatorProviders.length;
+  }
+  return routeCount;
 }
 
 export function resolveExternalTakePolicy(params: {
@@ -269,13 +279,13 @@ export function resolveExternalTakePolicy(params: {
     }
     const seen = new Set<ExternalTakePathKind>();
     for (const path of rawPaths) {
-      if (!isConfiguredExternalTakePath(path)) {
+      if (!isExternalTakePath(path)) {
         throw new Error(
           'AutoDiscoverConfig.take: allowedExternalTakePaths currently supports ' +
-            `only ${formatSupportedConfiguredExternalTakePaths()}`
+            `only ${formatSupportedExternalTakePaths()}`
         );
       }
-      const canonical = normalizeConfiguredExternalTakePath(path);
+      const canonical = path;
       if (seen.has(canonical)) {
         throw new Error(
           'AutoDiscoverConfig.take: allowedExternalTakePaths cannot contain duplicates'
@@ -289,8 +299,9 @@ export function resolveExternalTakePolicy(params: {
     defaultLiquiditySource: params.defaultLiquiditySource,
     allowedExternalTakePaths: rawPaths,
   });
-  const calldataAggregatorFamilyEnabled =
-    externalTakePaths.includes('calldata_aggregator');
+  const calldataAggregatorFamilyEnabled = externalTakePaths.includes(
+    'calldata_aggregator'
+  );
 
   const rawProviders = takePolicy.allowedCalldataAggregatorProviders;
   let calldataAggregatorProviders: CalldataAggregatorProviderId[];
@@ -318,36 +329,64 @@ export function resolveExternalTakePolicy(params: {
     if (!calldataAggregatorFamilyEnabled) {
       throw new Error(
         'AutoDiscoverConfig.take: allowedCalldataAggregatorProviders requires the ' +
-          'calldata_aggregator family (or legacy lifi path) to be enabled'
+          'calldata_aggregator family to be enabled'
       );
     }
     calldataAggregatorProviders = Array.from(seenProviders);
   } else {
-    // An omitted provider list resolves to lifi only when the family is
-    // enabled. Adding a provider id in a later packet must not silently
-    // enable it for existing configs.
+    // An omitted provider list keeps the historical LI.FI-only default when
+    // the family is explicitly enabled, but follows source-derived defaults
+    // such as ONEINCH -> provider oneinch.
+    const defaultProvider = resolveCalldataAggregatorProviderForSource(
+      params.defaultLiquiditySource
+    );
     calldataAggregatorProviders = calldataAggregatorFamilyEnabled
-      ? ['lifi']
+      ? [defaultProvider ?? 'lifi']
       : [];
   }
+  const routeSelectionMode = normalizeExternalTakeRouteSelectionMode(
+    takePolicy.externalTakeRouteSelectionMode
+  );
+  const externalTakeRouteCount = countExternalTakeRoutes({
+    externalTakePaths,
+    calldataAggregatorProviders,
+  });
+  const externalTakeSelectorEnabled =
+    rawPaths !== undefined ||
+    (rawProviders !== undefined && externalTakeRouteCount > 1);
+  const requiresExternalTakeNetProfitRanking =
+    externalTakeSelectorEnabled &&
+    externalTakeRouteCount > 1 &&
+    routeSelectionMode === 'maximize_profit';
+  const hybridGasQuoteFallbackPolicy = resolveHybridGasQuoteFallbackPolicy({
+    fallbackMode: takePolicy.hybridGasQuoteFailureFallbackMode,
+    routeSelectionMode,
+    externalTakePaths,
+    maxGasCostNative: takePolicy.maxGasCostNative,
+    maxGasCostQuote: takePolicy.maxGasCostQuote,
+    minExpectedProfitQuote: takePolicy.minExpectedProfitQuote,
+    minProfitNative: takePolicy.minProfitNative,
+  });
 
   return {
     externalTakePaths,
     calldataAggregatorProviders,
-    factoryRouteSources: resolveFactoryRouteSelectionSources({
+    directDexRouteSources: resolveDirectDexRouteSelectionSources({
       defaultLiquiditySource: params.defaultLiquiditySource,
       allowedLiquiditySources: takePolicy.allowedLiquiditySources,
-      configuredDefaultFactoryLiquiditySource:
-        takePolicy.defaultFactoryLiquiditySource,
+      configuredDefaultDirectDexLiquiditySource:
+        takePolicy.defaultDirectDexLiquiditySource,
     }),
-    defaultFactoryLiquiditySource: resolveDefaultFactoryLiquiditySource({
+    defaultDirectDexLiquiditySource: resolveDefaultDirectDexLiquiditySource({
       defaultLiquiditySource: params.defaultLiquiditySource,
-      configuredDefaultFactoryLiquiditySource:
-        takePolicy.defaultFactoryLiquiditySource,
+      configuredDefaultDirectDexLiquiditySource:
+        takePolicy.defaultDirectDexLiquiditySource,
     }),
-    routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
-      takePolicy.externalTakeRouteSelectionMode
-    ),
+    routeSelectionMode,
+    externalTakeRouteCount,
+    requiresExternalTakeNetProfitRanking,
+    externalTakeSelectorEnabled,
+    hybridGasQuoteFallbackPolicy,
     externalTakePathsExplicitlyConfigured: rawPaths !== undefined,
   };
 }

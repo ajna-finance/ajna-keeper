@@ -43,10 +43,10 @@ export const WRAPPED_NATIVE_TOKEN_SYMBOLS = [
   'wone',
 ];
 
-type DefaultFactoryFeeTierSource = LiquiditySource.UNISWAPV3;
+type DefaultV3FeeTierSource = LiquiditySource.UNISWAPV3;
 
 export const DEFAULT_FEE_TIER_BY_SOURCE: Readonly<
-  Record<DefaultFactoryFeeTierSource, number>
+  Record<DefaultV3FeeTierSource, number>
 > = {
   [LiquiditySource.UNISWAPV3]: 3000,
 };
@@ -60,10 +60,10 @@ export const UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS = [
   'wethAddress',
 ] as const;
 
-export type UniswapV3FactoryRouteAddressField =
+export type UniswapV3DirectDexRouteAddressField =
   (typeof UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS)[number];
 
-export const UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS: readonly UniswapV3FactoryRouteAddressField[] =
+export const UNISWAP_V3_DIRECT_DEX_ROUTE_CONTRACT_ADDRESS_FIELDS: readonly UniswapV3DirectDexRouteAddressField[] =
   [
     'swapRouter02Address',
     'poolFactoryAddress',
@@ -71,7 +71,7 @@ export const UNISWAP_V3_FACTORY_ROUTE_CONTRACT_ADDRESS_FIELDS: readonly UniswapV
     'wethAddress',
   ];
 
-export interface ResolvedUniswapV3FactoryQuoteConfig {
+export interface ResolvedUniswapV3DirectDexQuoteConfig {
   poolFactoryAddress: string;
   quoterV2Address: string;
   wethAddress: string;
@@ -80,22 +80,22 @@ export interface ResolvedUniswapV3FactoryQuoteConfig {
   defaultSlippage?: number;
 }
 
-export interface ResolvedUniswapV3FactoryRouteConfig
-  extends ResolvedUniswapV3FactoryQuoteConfig {
+export interface ResolvedUniswapV3DirectDexRouteConfig
+  extends ResolvedUniswapV3DirectDexQuoteConfig {
   swapRouter02Address: string;
 }
 
-export function getMissingUniswapV3FactoryRouteConfigFields(
+export function getMissingUniswapV3DirectDexRouteConfigFields(
   config: UniswapV3RouterOverrides | undefined
-): UniswapV3FactoryRouteAddressField[] {
+): UniswapV3DirectDexRouteAddressField[] {
   return UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS.filter(
     (field) => !config?.[field]
   );
 }
 
-export function resolveUniswapV3FactoryQuoteConfig(
+export function resolveUniswapV3DirectDexQuoteConfig(
   config: UniswapV3RouterOverrides | undefined
-): ResolvedUniswapV3FactoryQuoteConfig | undefined {
+): ResolvedUniswapV3DirectDexQuoteConfig | undefined {
   if (
     !config?.poolFactoryAddress ||
     !config.quoterV2Address ||
@@ -116,10 +116,10 @@ export function resolveUniswapV3FactoryQuoteConfig(
   };
 }
 
-export function resolveUniswapV3FactoryRouteConfig(
+export function resolveUniswapV3DirectDexRouteConfig(
   config: UniswapV3RouterOverrides | undefined
-): ResolvedUniswapV3FactoryRouteConfig | undefined {
-  const quoteConfig = resolveUniswapV3FactoryQuoteConfig(config);
+): ResolvedUniswapV3DirectDexRouteConfig | undefined {
+  const quoteConfig = resolveUniswapV3DirectDexQuoteConfig(config);
   if (!quoteConfig || !config?.swapRouter02Address) {
     return undefined;
   }
@@ -130,7 +130,7 @@ export function resolveUniswapV3FactoryRouteConfig(
   };
 }
 
-export function isValidFactoryFeeTier(tier: number): boolean {
+export function isValidV3FeeTier(tier: number): boolean {
   return Number.isInteger(tier) && tier > 0 && tier <= MAX_UINT24_FEE_TIER;
 }
 
@@ -153,7 +153,7 @@ export function getEffectiveV3FeeTiers(params: {
       ...candidateTiers,
     ])
   );
-  return params.filterInvalid ? tiers.filter(isValidFactoryFeeTier) : tiers;
+  return params.filterInvalid ? tiers.filter(isValidV3FeeTier) : tiers;
 }
 
 export function formatLiquiditySource(
@@ -206,7 +206,7 @@ export function hasConfiguredGasQuoteLiquiditySource(
         (chainId === undefined || config.oneInchRouters?.[chainId])
       );
     case LiquiditySource.UNISWAPV3:
-      return !!resolveUniswapV3FactoryQuoteConfig(
+      return !!resolveUniswapV3DirectDexQuoteConfig(
         config.uniswapV3RouterOverrides
       );
     case LiquiditySource.CURVE:

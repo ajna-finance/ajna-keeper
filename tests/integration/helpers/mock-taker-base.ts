@@ -134,11 +134,11 @@ export type MockTakerBase = Awaited<ReturnType<typeof deployMockTakerBase>>;
 
 export async function deployUniswapTaker(
   base: MockTakerBase,
-  authorizedFactory: string = ZERO_FACTORY
+  authorizedRouter: string = ZERO_FACTORY
 ) {
   const taker = await new UniswapV3KeeperTaker__factory(base.owner).deploy(
     base.poolDeployer.address,
-    authorizedFactory
+    authorizedRouter
   );
   await taker.deployed();
   return taker;
@@ -146,11 +146,11 @@ export async function deployUniswapTaker(
 
 export async function deployCurveTaker(
   base: MockTakerBase,
-  authorizedFactory: string = ZERO_FACTORY
+  authorizedRouter: string = ZERO_FACTORY
 ) {
   const taker = await new CurveKeeperTaker__factory(base.owner).deploy(
     base.poolDeployer.address,
-    authorizedFactory
+    authorizedRouter
   );
   await taker.deployed();
   return taker;

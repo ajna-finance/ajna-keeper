@@ -5,22 +5,17 @@ import { LiquiditySource } from '../../src/config';
 import * as erc20 from '../../src/erc20';
 import * as oneInch from '../../src/dex/one-inch';
 import { NonceConsumedTransactionError, NonceTracker } from '../../src/nonce';
-import { takeLiquidation } from '../../src/take';
-import { takeLiquidationFactory } from '../../src/take/factory';
-import { DexRouter } from '../../src/dex/router';
-import { executeUniswapV3FactoryTake } from '../../src/take/factory/uniswap';
-import { executeCurveFactoryTake } from '../../src/take/factory/curve';
+import { takeLiquidationDirectDex } from '../../src/take/direct-dex';
+import { executeUniswapV3DirectDexTake } from '../../src/take/direct-dex/uniswap';
+import { executeCurveDirectDexTake } from '../../src/take/direct-dex/curve';
 import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
 import { CurvePoolType } from '../../src/config';
-import * as shared from '../../src/take/factory/shared';
+import * as shared from '../../src/take/direct-dex/route-selection';
 import {
   BoundExternalTakeRouteEvaluation,
   ExternalTakeQuoteEvaluation,
 } from '../../src/take/types';
-import {
-  AjnaKeeperTaker__factory,
-  AjnaKeeperTakerFactory__factory,
-} from '../../typechain-types';
+import { TakerRouter__factory } from '../../typechain-types';
 import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 
 function malformedBoundRoute(
@@ -34,116 +29,9 @@ describe('take write submission', () => {
     sinon.restore();
   });
 
-  async function runOneInchSubmissionBoundaryScenario(params: {
+  async function runUniswapDirectDexSubmissionBoundaryScenario(params: {
     submitTransaction: sinon.SinonStub;
-    onOneInchExecutionFailure: sinon.SinonSpy;
-  }) {
-    const readSigner = {
-      getChainId: sinon.stub().resolves(1),
-    };
-    const writeSigner = {
-      getAddress: sinon
-        .stub()
-        .resolves('0x00000000000000000000000000000000000000aa'),
-      getTransactionCount: sinon.stub().resolves(0),
-    };
-    const takeWriteTransport = {
-      mode: 'private_rpc',
-      signer: writeSigner,
-      submitTransaction: params.submitTransaction,
-    };
-    const estimateGasStub = sinon.stub().resolves(BigNumber.from(100_000));
-    const populateTransactionStub = sinon.stub().resolves({
-      to: '0x00000000000000000000000000000000000000dd',
-      data: '0x1234',
-    });
-    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns({
-      address: '0x00000000000000000000000000000000000000bb',
-      estimateGas: {
-        takeWithAtomicSwap: estimateGasStub,
-      },
-      populateTransaction: {
-        takeWithAtomicSwap: populateTransactionStub,
-      },
-    } as any);
-    sinon
-      .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
-      .resolves({ success: true, data: '0xdeadbeef' } as any);
-    sinon
-      .stub(DexRouter.prototype, 'getRouter')
-      .returns('0x00000000000000000000000000000000000000cc');
-    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').returns({
-      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
-      swapDescription: {
-        srcToken: '0x0000000000000000000000000000000000000002',
-        dstToken: '0x0000000000000000000000000000000000000003',
-        srcReceiver: '0x00000000000000000000000000000000000000cc',
-        dstReceiver: '0x00000000000000000000000000000000000000bb',
-        amount: ethers.utils.parseEther('1'),
-        minReturnAmount: BigNumber.from(1),
-        flags: BigNumber.from(0),
-      },
-      opaqueData: '0x1234',
-    } as any);
-    sinon.stub(shared, 'getQuoteAmountDueRaw').resolves(BigNumber.from(10));
-    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (_, txFn) => {
-      return await txFn(7);
-    });
-
-    const result = await takeLiquidation({
-      pool: {
-        name: '1inch Boundary Pool',
-        poolAddress: '0x0000000000000000000000000000000000000001',
-        collateralAddress: '0x0000000000000000000000000000000000000002',
-        quoteAddress: '0x0000000000000000000000000000000000000003',
-      } as any,
-      poolConfig: {
-        name: '1inch Boundary Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      },
-      signer: readSigner as any,
-      liquidation: {
-        borrower: '0xBorrower',
-        hpbIndex: 0,
-        collateral: ethers.utils.parseEther('1'),
-        auctionPrice: ethers.utils.parseEther('1'),
-        isTakeable: true,
-        isArbTakeable: false,
-        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(11),
-          routeExecutionFloorRaw: BigNumber.from(10),
-          approvedMinOutRaw: BigNumber.from(10),
-        }),
-      },
-      config: {
-        dryRun: false,
-        connectorTokens: [],
-        oneInchRouters: {
-          1: '0x00000000000000000000000000000000000000cc',
-        },
-        keeperTaker: '0x00000000000000000000000000000000000000dd',
-        takeWriteTransport: takeWriteTransport as any,
-        onOneInchExecutionFailure: params.onOneInchExecutionFailure,
-      },
-    });
-
-    return {
-      result,
-      estimateGasStub,
-      populateTransactionStub,
-    };
-  }
-
-  async function runUniswapFactorySubmissionBoundaryScenario(params: {
-    submitTransaction: sinon.SinonStub;
-    onFactoryExecutionFailure: sinon.SinonSpy;
+    onDirectDexExecutionFailure: sinon.SinonSpy;
   }) {
     const readSigner = {
       provider: {
@@ -166,7 +54,7 @@ describe('take write submission', () => {
       to: '0x0000000000000000000000000000000000000013',
       data: '0x5678',
     });
-    sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns({
+    sinon.stub(TakerRouter__factory, 'connect').returns({
       estimateGas: {
         takeWithAtomicSwap: estimateGasStub,
       },
@@ -175,7 +63,7 @@ describe('take write submission', () => {
       },
     } as any);
     sinon
-      .stub(shared, 'computeFactoryAmountOutMinimum')
+      .stub(shared, 'computeDirectDexAmountOutMinimum')
       .resolves(BigNumber.from(10));
     sinon.stub(NonceTracker, 'queueTransaction').callsFake(async (_, txFn) => {
       return await txFn(3);
@@ -183,14 +71,19 @@ describe('take write submission', () => {
 
     let thrown: unknown;
     try {
-      await executeUniswapV3FactoryTake({
+      await executeUniswapV3DirectDexTake({
         pool: {
-          name: 'Factory Boundary Pool',
+          name: 'Direct DEX Boundary Pool',
           poolAddress: '0x0000000000000000000000000000000000000011',
           quoteAddress: '0x0000000000000000000000000000000000000012',
+          contract: {
+            quoteTokenScale: sinon
+              .stub()
+              .resolves(ethers.utils.parseEther('1')),
+          },
         } as any,
         poolConfig: {
-          name: 'Factory Boundary Pool',
+          name: 'Direct DEX Boundary Pool',
           take: {
             liquiditySource: LiquiditySource.UNISWAPV3,
             marketPriceFactor: 0.95,
@@ -207,14 +100,14 @@ describe('take write submission', () => {
         },
         quoteEvaluation: {
           isTakeable: true,
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           quoteAmountRaw: BigNumber.from(11),
           approvedMinOutRaw: BigNumber.from(10),
           selectedLiquiditySource: LiquiditySource.UNISWAPV3,
           selectedFeeTier: 3000,
         },
         config: {
-          keeperTakerFactory: '0x0000000000000000000000000000000000000013',
+          keeperTakerRouter: '0x0000000000000000000000000000000000000013',
           uniswapV3RouterOverrides: {
             swapRouter02Address: '0x0000000000000000000000000000000000000014',
             poolFactoryAddress: '0x0000000000000000000000000000000000000015',
@@ -223,7 +116,7 @@ describe('take write submission', () => {
             defaultFeeTier: 3000,
           },
           takeWriteTransport: takeWriteTransport as any,
-          onFactoryExecutionFailure: params.onFactoryExecutionFailure,
+          onDirectDexExecutionFailure: params.onDirectDexExecutionFailure,
         },
       });
     } catch (error) {
@@ -420,8 +313,8 @@ describe('take write submission', () => {
     ).to.include('srcReceiver is not a valid address');
   });
 
-  it('keys factory token decimal cache by chain id', async () => {
-    const runtimeCache: shared.FactoryQuoteProviderRuntimeCache = {
+  it('keys direct DEX token decimal cache by chain id', async () => {
+    const runtimeCache: shared.DirectDexQuoteProviderRuntimeCache = {
       chainId: 1,
     };
     const tokenAddress = '0x0000000000000000000000000000000000000002';
@@ -432,13 +325,13 @@ describe('take write submission', () => {
       .onSecondCall()
       .resolves(18);
 
-    const firstDecimals = await shared.getCachedFactoryTokenDecimals(
+    const firstDecimals = await shared.getCachedDirectDexTokenDecimals(
       {} as any,
       tokenAddress,
       runtimeCache
     );
     runtimeCache.chainId = 2;
-    const secondDecimals = await shared.getCachedFactoryTokenDecimals(
+    const secondDecimals = await shared.getCachedDirectDexTokenDecimals(
       {} as any,
       tokenAddress,
       runtimeCache
@@ -449,597 +342,7 @@ describe('take write submission', () => {
     expect(decimalsStub.calledTwice).to.be.true;
   });
 
-  it('uses the configured take write transport for 1inch atomic take submission', async () => {
-    const readSigner = {
-      getChainId: sinon.stub().resolves(1),
-    };
-    const writeSigner = {
-      getAddress: sinon
-        .stub()
-        .resolves('0x00000000000000000000000000000000000000aa'),
-      getTransactionCount: sinon.stub().resolves(0),
-    };
-    const takeWriteTransport = {
-      mode: 'private_rpc',
-      signer: writeSigner,
-      submitTransaction: sinon.stub().resolves({
-        txHash: '0xhash',
-        wait: sinon.stub().resolves({ transactionHash: '0xhash' }),
-      }),
-    };
-    const estimateGasStub = sinon.stub().resolves(BigNumber.from(100_000));
-    const populateTransactionStub = sinon.stub().resolves({
-      to: '0x00000000000000000000000000000000000000dd',
-      data: '0x1234',
-    });
-    const keeperTaker = {
-      address: '0x00000000000000000000000000000000000000bb',
-      estimateGas: {
-        takeWithAtomicSwap: estimateGasStub,
-      },
-      populateTransaction: {
-        takeWithAtomicSwap: populateTransactionStub,
-      },
-    };
-
-    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
-    const getSwapDataStub = sinon
-      .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
-      .resolves({ success: true, data: '0xdeadbeef' } as any);
-    sinon
-      .stub(DexRouter.prototype, 'getRouter')
-      .returns('0x00000000000000000000000000000000000000cc');
-    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').returns({
-      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
-      swapDescription: {
-        srcToken: '0x0000000000000000000000000000000000000002',
-        dstToken: '0x0000000000000000000000000000000000000003',
-        srcReceiver: '0x00000000000000000000000000000000000000cc',
-        dstReceiver: '0x00000000000000000000000000000000000000bb',
-        amount: ethers.utils.parseEther('1'),
-        minReturnAmount: BigNumber.from(1),
-        flags: BigNumber.from(0),
-      },
-      opaqueData: '0x1234',
-    } as any);
-    sinon.stub(shared, 'getQuoteAmountDueRaw').resolves(BigNumber.from(10));
-    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    const queueTransactionStub = sinon
-      .stub(NonceTracker, 'queueTransaction')
-      .callsFake(async (signer, txFunction) => {
-        expect(signer).to.equal(writeSigner);
-        return await txFunction(7);
-      });
-
-    await takeLiquidation({
-      pool: {
-        name: '1inch Atomic Take Pool',
-        poolAddress: '0x0000000000000000000000000000000000000001',
-        collateralAddress: '0x0000000000000000000000000000000000000002',
-        quoteAddress: '0x0000000000000000000000000000000000000003',
-      } as any,
-      poolConfig: {
-        name: '1inch Atomic Take Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      },
-      signer: readSigner as any,
-      liquidation: {
-        borrower: '0xBorrower',
-        hpbIndex: 0,
-        collateral: ethers.utils.parseEther('1'),
-        auctionPrice: ethers.utils.parseEther('1'),
-        isTakeable: true,
-        isArbTakeable: false,
-        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(11),
-          routeExecutionFloorRaw: BigNumber.from(10),
-          approvedMinOutRaw: BigNumber.from(10),
-        }),
-      },
-      config: {
-        dryRun: false,
-        connectorTokens: [],
-        oneInchDefaultSlippage: 2.5,
-        oneInchRouters: {
-          1: '0x00000000000000000000000000000000000000cc',
-        },
-        keeperTaker: '0x00000000000000000000000000000000000000dd',
-        takeWriteTransport: takeWriteTransport as any,
-      },
-    });
-
-    expect(
-      (
-        AjnaKeeperTaker__factory.connect as sinon.SinonStub
-      ).calledOnceWithExactly(
-        '0x00000000000000000000000000000000000000dd',
-        readSigner
-      )
-    ).to.be.true;
-    expect(queueTransactionStub.calledOnce).to.be.true;
-    expect(takeWriteTransport.submitTransaction.calledOnce).to.be.true;
-    expect(getSwapDataStub.calledOnce).to.be.true;
-    expect(getSwapDataStub.firstCall.args[4]).to.equal(2.5);
-  });
-
-  it('reports 1inch transport rejection before acceptance as pre-broadcast', async () => {
-    const submitTransaction = sinon
-      .stub()
-      .rejects(new Error('local send rejected'));
-    const onOneInchExecutionFailure = sinon.spy();
-
-    const result = await runOneInchSubmissionBoundaryScenario({
-      submitTransaction,
-      onOneInchExecutionFailure,
-    });
-
-    expect(result.result).to.equal(false);
-    expect(result.estimateGasStub.calledOnce).to.equal(true);
-    expect(result.populateTransactionStub.calledOnce).to.equal(true);
-    expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onOneInchExecutionFailure.calledOnce).to.equal(true);
-    expect(onOneInchExecutionFailure.firstCall.args[0]).to.deep.equal({
-      preBroadcast: true,
-      error: 'local send rejected',
-    });
-  });
-
-  it('does not report accepted 1inch submission wait failure as pre-broadcast', async () => {
-    const submitTransaction = sinon.stub().resolves({
-      txHash: '0xhash',
-      wait: sinon.stub().rejects(new Error('receipt wait failed')),
-    });
-    const onOneInchExecutionFailure = sinon.spy();
-
-    const result = await runOneInchSubmissionBoundaryScenario({
-      submitTransaction,
-      onOneInchExecutionFailure,
-    });
-
-    expect(result.result).to.equal(false);
-    expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onOneInchExecutionFailure.calledOnce).to.equal(true);
-    expect(onOneInchExecutionFailure.firstCall.args[0]).to.deep.equal({
-      preBroadcast: false,
-      error: 'receipt wait failed',
-    });
-  });
-
-  it('does not report nonce-consumed 1inch submission errors as pre-broadcast', async () => {
-    const submitTransaction = sinon.stub().rejects(
-      new NonceConsumedTransactionError('relay accepted 1inch take', {
-        txHash: '0xhash',
-      })
-    );
-    const onOneInchExecutionFailure = sinon.spy();
-
-    const result = await runOneInchSubmissionBoundaryScenario({
-      submitTransaction,
-      onOneInchExecutionFailure,
-    });
-
-    expect(result.result).to.equal(false);
-    expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onOneInchExecutionFailure.calledOnce).to.equal(true);
-    expect(onOneInchExecutionFailure.firstCall.args[0]).to.deep.equal({
-      preBroadcast: false,
-      error: 'relay accepted 1inch take',
-    });
-  });
-
-  it('fails 1inch atomic execution before API calls when the router is not configured', async () => {
-    const readSigner = {
-      getChainId: sinon.stub().resolves(1),
-    };
-    const keeperTaker = {
-      address: '0x00000000000000000000000000000000000000bb',
-    };
-    const onOneInchSwapDataResult = sinon.stub();
-    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
-    const swapDataStub = sinon.stub(
-      DexRouter.prototype,
-      'getSwapDataFromOneInch'
-    );
-    const decimalsStub = sinon.stub(erc20, 'getDecimalsErc20');
-
-    const result = await takeLiquidation({
-      pool: {
-        name: '1inch Atomic Take Pool',
-        poolAddress: '0x0000000000000000000000000000000000000001',
-        collateralAddress: '0x0000000000000000000000000000000000000002',
-        quoteAddress: '0x0000000000000000000000000000000000000003',
-      } as any,
-      poolConfig: {
-        name: '1inch Atomic Take Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      },
-      signer: readSigner as any,
-      liquidation: {
-        borrower: '0xBorrower',
-        hpbIndex: 0,
-        collateral: ethers.utils.parseEther('1'),
-        auctionPrice: ethers.utils.parseEther('1'),
-        isTakeable: true,
-        isArbTakeable: false,
-        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
-          isTakeable: true,
-          quoteAmountRaw: BigNumber.from(11),
-          routeExecutionFloorRaw: BigNumber.from(10),
-          approvedMinOutRaw: BigNumber.from(10),
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-        }),
-      },
-      config: {
-        dryRun: false,
-        connectorTokens: [],
-        oneInchRouters: {},
-        keeperTaker: '0x00000000000000000000000000000000000000dd',
-        takeWriteTransport: {
-          mode: 'private_rpc',
-          signer: {},
-          submitTransaction: sinon.stub(),
-        } as any,
-        onOneInchSwapDataResult,
-      },
-    });
-
-    expect(result).to.be.false;
-    expect(swapDataStub.notCalled).to.be.true;
-    expect(decimalsStub.notCalled).to.be.true;
-    expect(onOneInchSwapDataResult.calledOnce).to.be.true;
-    expect(onOneInchSwapDataResult.firstCall.args[0]).to.include({
-      success: false,
-      retryable: false,
-    });
-  });
-
-  it('validates 1inch dry-run quotes before reporting a would-take action', async () => {
-    const connectStub = sinon.stub(AjnaKeeperTaker__factory, 'connect');
-
-    const result = await takeLiquidation({
-      pool: {
-        name: '1inch Atomic Take Pool',
-        poolAddress: '0x0000000000000000000000000000000000000001',
-        collateralAddress: '0x0000000000000000000000000000000000000002',
-        quoteAddress: '0x0000000000000000000000000000000000000003',
-      } as any,
-      poolConfig: {
-        name: '1inch Atomic Take Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      },
-      signer: {} as any,
-      liquidation: {
-        borrower: '0xBorrower',
-        hpbIndex: 0,
-        collateral: ethers.utils.parseEther('1'),
-        auctionPrice: ethers.utils.parseEther('1'),
-        isTakeable: true,
-        isArbTakeable: false,
-        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
-          malformedBoundRoute({
-            isTakeable: true,
-            externalTakePath: 'oneinch',
-            selectedLiquiditySource: LiquiditySource.ONEINCH,
-            quoteAmountRaw: BigNumber.from(11),
-          })
-        ),
-      },
-      config: {
-        dryRun: true,
-        connectorTokens: [],
-      },
-    });
-
-    expect(result).to.equal(false);
-    expect(connectStub.called).to.be.false;
-  });
-
-  it('raises the 1inch atomic minReturnAmount to the approved execution floor', async () => {
-    const readSigner = {
-      getChainId: sinon.stub().resolves(1),
-    };
-    const writeSigner = {
-      getAddress: sinon
-        .stub()
-        .resolves('0x00000000000000000000000000000000000000aa'),
-      getTransactionCount: sinon.stub().resolves(0),
-    };
-    const takeWriteTransport = {
-      mode: 'private_rpc',
-      signer: writeSigner,
-      submitTransaction: sinon.stub().resolves({
-        txHash: '0xhash',
-        wait: sinon.stub().resolves({ transactionHash: '0xhash' }),
-      }),
-    };
-    const estimateGasStub = sinon.stub().resolves(BigNumber.from(100_000));
-    const populateTransactionStub = sinon.stub().resolves({
-      to: '0x00000000000000000000000000000000000000dd',
-      data: '0x1234',
-    });
-    const keeperTaker = {
-      address: '0x00000000000000000000000000000000000000bb',
-      estimateGas: {
-        takeWithAtomicSwap: estimateGasStub,
-      },
-      populateTransaction: {
-        takeWithAtomicSwap: populateTransactionStub,
-      },
-    };
-
-    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
-    sinon
-      .stub(DexRouter.prototype, 'getSwapDataFromOneInch')
-      .resolves({ success: true, data: '0xdeadbeef' } as any);
-    sinon
-      .stub(DexRouter.prototype, 'getRouter')
-      .returns('0x00000000000000000000000000000000000000cc');
-    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').returns({
-      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
-      swapDescription: {
-        srcToken: '0x0000000000000000000000000000000000000002',
-        dstToken: '0x0000000000000000000000000000000000000003',
-        srcReceiver: '0x00000000000000000000000000000000000000cc',
-        dstReceiver: '0x00000000000000000000000000000000000000bb',
-        amount: ethers.utils.parseEther('1'),
-        minReturnAmount: BigNumber.from(900),
-        flags: BigNumber.from(0),
-      },
-      opaqueData: '0x1234',
-    } as any);
-    sinon.stub(shared, 'getQuoteAmountDueRaw').resolves(BigNumber.from(950));
-    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    sinon
-      .stub(NonceTracker, 'queueTransaction')
-      .callsFake(async (signer, txFunction) => {
-        expect(signer).to.equal(writeSigner);
-        return await txFunction(7);
-      });
-
-    await takeLiquidation({
-      pool: {
-        name: '1inch Atomic Take Pool',
-        poolAddress: '0x0000000000000000000000000000000000000001',
-        collateralAddress: '0x0000000000000000000000000000000000000002',
-        quoteAddress: '0x0000000000000000000000000000000000000003',
-      } as any,
-      poolConfig: {
-        name: '1inch Atomic Take Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      },
-      signer: readSigner as any,
-      liquidation: {
-        borrower: '0xBorrower',
-        hpbIndex: 0,
-        collateral: ethers.utils.parseEther('1'),
-        auctionPrice: ethers.utils.parseEther('1'),
-        isTakeable: true,
-        isArbTakeable: false,
-        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(1000),
-          routeExecutionFloorRaw: BigNumber.from(1100),
-          approvedMinOutRaw: BigNumber.from(1100),
-        }),
-      },
-      config: {
-        dryRun: false,
-        connectorTokens: [],
-        oneInchRouters: {
-          1: '0x00000000000000000000000000000000000000cc',
-        },
-        keeperTaker: '0x00000000000000000000000000000000000000dd',
-        takeWriteTransport: takeWriteTransport as any,
-      },
-    });
-
-    const encodedDetails = populateTransactionStub.firstCall.args[6];
-    const decoded = ethers.utils.defaultAbiCoder.decode(
-      [
-        '(address,(address,address,address,address,uint256,uint256,uint256),bytes)',
-      ],
-      encodedDetails
-    );
-    expect(decoded[0][1][5].toString()).to.equal('1100');
-  });
-
-  it('rejects 1inch atomic swap data before gas estimation when fresh dstAmount is below the execution floor', async () => {
-    const readSigner = {
-      getChainId: sinon.stub().resolves(1),
-    };
-    const keeperTaker = {
-      address: '0x00000000000000000000000000000000000000bb',
-      estimateGas: {
-        takeWithAtomicSwap: sinon.stub(),
-      },
-      populateTransaction: {
-        takeWithAtomicSwap: sinon.stub(),
-      },
-    };
-
-    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
-    sinon.stub(DexRouter.prototype, 'getSwapDataFromOneInch').resolves({
-      success: true,
-      data: '0xdeadbeef',
-      dstAmount: '1000',
-    } as any);
-    sinon
-      .stub(DexRouter.prototype, 'getRouter')
-      .returns('0x00000000000000000000000000000000000000cc');
-    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').returns({
-      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
-      swapDescription: {
-        srcToken: '0x0000000000000000000000000000000000000002',
-        dstToken: '0x0000000000000000000000000000000000000003',
-        srcReceiver: '0x00000000000000000000000000000000000000cc',
-        dstReceiver: '0x00000000000000000000000000000000000000bb',
-        amount: ethers.utils.parseEther('1'),
-        minReturnAmount: BigNumber.from(900),
-        flags: BigNumber.from(0),
-      },
-      opaqueData: '0x1234',
-    } as any);
-    sinon.stub(shared, 'getQuoteAmountDueRaw').resolves(BigNumber.from(950));
-    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    const queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction');
-
-    const result = await takeLiquidation({
-      pool: {
-        name: '1inch Atomic Take Pool',
-        poolAddress: '0x0000000000000000000000000000000000000001',
-        collateralAddress: '0x0000000000000000000000000000000000000002',
-        quoteAddress: '0x0000000000000000000000000000000000000003',
-      } as any,
-      poolConfig: {
-        name: '1inch Atomic Take Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      },
-      signer: readSigner as any,
-      liquidation: {
-        borrower: '0xBorrower',
-        hpbIndex: 0,
-        collateral: ethers.utils.parseEther('1'),
-        auctionPrice: ethers.utils.parseEther('1'),
-        isTakeable: true,
-        isArbTakeable: false,
-        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(1000),
-          routeExecutionFloorRaw: BigNumber.from(1100),
-          approvedMinOutRaw: BigNumber.from(1100),
-        }),
-      },
-      config: {
-        dryRun: false,
-        connectorTokens: [],
-        oneInchRouters: {
-          1: '0x00000000000000000000000000000000000000cc',
-        },
-        keeperTaker: '0x00000000000000000000000000000000000000dd',
-      },
-    });
-
-    expect(result).to.equal(false);
-    expect(queueTransactionStub.called).to.be.false;
-    expect(keeperTaker.estimateGas.takeWithAtomicSwap.called).to.be.false;
-  });
-
-  it('records 1inch atomic swap-data validation failures before clearing the circuit', async () => {
-    const readSigner = {
-      getChainId: sinon.stub().resolves(1),
-    };
-    const keeperTaker = {
-      address: '0x00000000000000000000000000000000000000bb',
-      estimateGas: {
-        takeWithAtomicSwap: sinon.stub(),
-      },
-      populateTransaction: {
-        takeWithAtomicSwap: sinon.stub(),
-      },
-    };
-
-    sinon.stub(AjnaKeeperTaker__factory, 'connect').returns(keeperTaker as any);
-    sinon.stub(DexRouter.prototype, 'getSwapDataFromOneInch').resolves({
-      success: true,
-      data: '0xdeadbeef',
-      dstAmount: '1200',
-    } as any);
-    sinon
-      .stub(DexRouter.prototype, 'getRouter')
-      .returns('0x00000000000000000000000000000000000000cc');
-    sinon.stub(oneInch, 'convertSwapApiResponseToDetails').returns({
-      aggregationExecutor: '0x00000000000000000000000000000000000000ce',
-      swapDescription: {
-        srcToken: '0x0000000000000000000000000000000000000002',
-        dstToken: '0x0000000000000000000000000000000000000003',
-        srcReceiver: '0x00000000000000000000000000000000000000cc',
-        dstReceiver: '0x00000000000000000000000000000000000000ff',
-        amount: ethers.utils.parseEther('1'),
-        minReturnAmount: BigNumber.from(900),
-        flags: BigNumber.from(0),
-      },
-      opaqueData: '0x1234',
-    } as any);
-    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    const queueTransactionStub = sinon.stub(NonceTracker, 'queueTransaction');
-    const onOneInchSwapDataResult = sinon.stub();
-
-    const result = await takeLiquidation({
-      pool: {
-        name: '1inch Atomic Take Pool',
-        poolAddress: '0x0000000000000000000000000000000000000001',
-        collateralAddress: '0x0000000000000000000000000000000000000002',
-        quoteAddress: '0x0000000000000000000000000000000000000003',
-      } as any,
-      poolConfig: {
-        name: '1inch Atomic Take Pool',
-        take: {
-          liquiditySource: LiquiditySource.ONEINCH,
-          marketPriceFactor: 0.95,
-        },
-      },
-      signer: readSigner as any,
-      liquidation: {
-        borrower: '0xBorrower',
-        hpbIndex: 0,
-        collateral: ethers.utils.parseEther('1'),
-        auctionPrice: ethers.utils.parseEther('1'),
-        isTakeable: true,
-        isArbTakeable: false,
-        externalTakeExecutionPlan: singleExternalTakeExecutionPlan({
-          isTakeable: true,
-          externalTakePath: 'oneinch',
-          selectedLiquiditySource: LiquiditySource.ONEINCH,
-          quoteAmountRaw: BigNumber.from(1000),
-          routeExecutionFloorRaw: BigNumber.from(900),
-          approvedMinOutRaw: BigNumber.from(900),
-        }),
-      },
-      config: {
-        dryRun: false,
-        connectorTokens: [],
-        oneInchRouters: {
-          1: '0x00000000000000000000000000000000000000cc',
-        },
-        keeperTaker: '0x00000000000000000000000000000000000000dd',
-        onOneInchSwapDataResult,
-      },
-    });
-
-    expect(result).to.equal(false);
-    expect(onOneInchSwapDataResult.calledOnce).to.be.true;
-    expect(onOneInchSwapDataResult.firstCall.args[0]).to.include({
-      success: false,
-      retryable: false,
-    });
-    expect(queueTransactionStub.called).to.be.false;
-    expect(keeperTaker.estimateGas.takeWithAtomicSwap.called).to.be.false;
-  });
-
-  it('uses the configured take write transport for Curve factory take submission without reselecting the pool', async () => {
+  it('uses the configured take write transport for Curve direct DEX take submission without reselecting the pool', async () => {
     // Deadline reads stay on the read signer; private/relay write transports
     // should only see transaction submission and nonce reads.
     const readSigner = {
@@ -1066,7 +369,7 @@ describe('take write submission', () => {
       to: '0x0000000000000000000000000000000000000013',
       data: '0x9876',
     });
-    const factory = {
+    const routerContract = {
       estimateGas: {
         takeWithAtomicSwap: estimateGasStub,
       },
@@ -1076,11 +379,11 @@ describe('take write submission', () => {
     };
 
     sinon
-      .stub(AjnaKeeperTakerFactory__factory, 'connect')
-      .returns(factory as any);
+      .stub(TakerRouter__factory, 'connect')
+      .returns(routerContract as any);
     const approvedExecutionFloor = BigNumber.from(10);
     sinon
-      .stub(shared, 'computeFactoryAmountOutMinimum')
+      .stub(shared, 'computeDirectDexAmountOutMinimum')
       .resolves(approvedExecutionFloor);
     const queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
@@ -1097,15 +400,20 @@ describe('take write submission', () => {
       'resolvePoolSelection'
     );
 
-    await executeCurveFactoryTake({
+    await executeCurveDirectDexTake({
       pool: {
-        name: 'Factory Curve Pool',
+        name: 'Direct DEX Curve Pool',
         poolAddress: '0x0000000000000000000000000000000000000011',
         collateralAddress: '0x00000000000000000000000000000000000000c1',
         quoteAddress: '0x00000000000000000000000000000000000000c2',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(ethers.utils.parseEther('1')),
+        },
       } as any,
       poolConfig: {
-        name: 'Factory Curve Pool',
+        name: 'Direct DEX Curve Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
@@ -1122,7 +430,7 @@ describe('take write submission', () => {
       },
       quoteEvaluation: {
         isTakeable: true,
-        externalTakePath: 'factory',
+        externalTakePath: 'direct_dex',
         quoteAmountRaw: BigNumber.from(11),
         approvedMinOutRaw: BigNumber.from(10),
         selectedLiquiditySource: LiquiditySource.CURVE,
@@ -1134,7 +442,7 @@ describe('take write submission', () => {
         },
       },
       config: {
-        keeperTakerFactory: '0x0000000000000000000000000000000000000013',
+        keeperTakerRouter: '0x0000000000000000000000000000000000000013',
         curveRouterOverrides: {
           poolConfigs: {
             'mismatched-key': {
@@ -1174,16 +482,16 @@ describe('take write submission', () => {
     ).to.be.true;
   });
 
-  it('refuses factory execution when an approved quote is missing route-binding fields', async () => {
-    const connectStub = sinon.stub(AjnaKeeperTakerFactory__factory, 'connect');
+  it('refuses direct DEX execution when an approved quote is missing route-binding fields', async () => {
+    const connectStub = sinon.stub(TakerRouter__factory, 'connect');
     const basePool = {
-      name: 'Factory Take Pool',
+      name: 'Direct DEX Take Pool',
       poolAddress: '0x0000000000000000000000000000000000000011',
       collateralAddress: '0x0000000000000000000000000000000000000012',
       quoteAddress: '0x0000000000000000000000000000000000000013',
     } as any;
     const basePoolConfig = {
-      name: 'Factory Take Pool',
+      name: 'Direct DEX Take Pool',
       take: {
         liquiditySource: LiquiditySource.UNISWAPV3,
         marketPriceFactor: 0.95,
@@ -1229,7 +537,7 @@ describe('take write submission', () => {
     ];
 
     for (const { label, quoteEvaluation } of cases) {
-      const result = await takeLiquidationFactory({
+      const result = await takeLiquidationDirectDex({
         pool: basePool,
         poolConfig: basePoolConfig,
         signer: {} as any,
@@ -1241,7 +549,7 @@ describe('take write submission', () => {
         },
         config: {
           dryRun: false,
-          keeperTakerFactory: '0x0000000000000000000000000000000000000014',
+          keeperTakerRouter: '0x0000000000000000000000000000000000000014',
         },
       });
       expect(result, label).to.equal(false);
@@ -1250,18 +558,18 @@ describe('take write submission', () => {
     expect(connectStub.called).to.be.false;
   });
 
-  it('validates factory dry-run quotes before reporting a would-take action', async () => {
-    const connectStub = sinon.stub(AjnaKeeperTakerFactory__factory, 'connect');
+  it('validates direct DEX dry-run quotes before reporting a would-take action', async () => {
+    const connectStub = sinon.stub(TakerRouter__factory, 'connect');
 
-    const result = await takeLiquidationFactory({
+    const result = await takeLiquidationDirectDex({
       pool: {
-        name: 'Factory Take Pool',
+        name: 'Direct DEX Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000011',
         collateralAddress: '0x0000000000000000000000000000000000000012',
         quoteAddress: '0x0000000000000000000000000000000000000013',
       } as any,
       poolConfig: {
-        name: 'Factory Take Pool',
+        name: 'Direct DEX Take Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
@@ -1278,7 +586,7 @@ describe('take write submission', () => {
         externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
           malformedBoundRoute({
             isTakeable: true,
-            externalTakePath: 'factory',
+            externalTakePath: 'direct_dex',
             quoteAmountRaw: BigNumber.from(11),
             selectedLiquiditySource: LiquiditySource.UNISWAPV3,
             selectedFeeTier: 3000,
@@ -1294,7 +602,7 @@ describe('take write submission', () => {
     expect(connectStub.called).to.be.false;
   });
 
-  it('uses the configured take write transport for Uniswap factory take submission', async () => {
+  it('uses the configured take write transport for Uniswap direct DEX take submission', async () => {
     const readSigner = {
       provider: {
         getBlock: sinon.stub().resolves({ timestamp: 123 }),
@@ -1310,8 +618,8 @@ describe('take write submission', () => {
       mode: 'private_rpc',
       signer: writeSigner,
       submitTransaction: sinon.stub().resolves({
-        txHash: '0xfactoryhash',
-        wait: sinon.stub().resolves({ transactionHash: '0xfactoryhash' }),
+        txHash: '0xd1ecde0000000000000000000000000000000000000000000000000000000000',
+        wait: sinon.stub().resolves({ transactionHash: '0xd1ecde0000000000000000000000000000000000000000000000000000000000' }),
       }),
     };
     const estimateGasStub = sinon.stub().resolves(BigNumber.from(120_000));
@@ -1319,7 +627,7 @@ describe('take write submission', () => {
       to: '0x0000000000000000000000000000000000000013',
       data: '0x5678',
     });
-    const factory = {
+    const routerContract = {
       estimateGas: {
         takeWithAtomicSwap: estimateGasStub,
       },
@@ -1329,11 +637,11 @@ describe('take write submission', () => {
     };
 
     sinon
-      .stub(AjnaKeeperTakerFactory__factory, 'connect')
-      .returns(factory as any);
+      .stub(TakerRouter__factory, 'connect')
+      .returns(routerContract as any);
     const approvedExecutionFloor = BigNumber.from(10);
     sinon
-      .stub(shared, 'computeFactoryAmountOutMinimum')
+      .stub(shared, 'computeDirectDexAmountOutMinimum')
       .resolves(approvedExecutionFloor);
     const queueTransactionStub = sinon
       .stub(NonceTracker, 'queueTransaction')
@@ -1342,14 +650,19 @@ describe('take write submission', () => {
         return await txFunction(3);
       });
 
-    await executeUniswapV3FactoryTake({
+    await executeUniswapV3DirectDexTake({
       pool: {
-        name: 'Factory Take Pool',
+        name: 'Direct DEX Take Pool',
         poolAddress: '0x0000000000000000000000000000000000000011',
         quoteAddress: '0x0000000000000000000000000000000000000012',
+        contract: {
+          quoteTokenScale: sinon
+            .stub()
+            .resolves(ethers.utils.parseEther('1')),
+        },
       } as any,
       poolConfig: {
-        name: 'Factory Take Pool',
+        name: 'Direct DEX Take Pool',
         take: {
           liquiditySource: LiquiditySource.UNISWAPV3,
           marketPriceFactor: 0.95,
@@ -1366,14 +679,14 @@ describe('take write submission', () => {
       },
       quoteEvaluation: {
         isTakeable: true,
-        externalTakePath: 'factory',
+        externalTakePath: 'direct_dex',
         quoteAmountRaw: BigNumber.from(11),
         approvedMinOutRaw: BigNumber.from(10),
         selectedLiquiditySource: LiquiditySource.UNISWAPV3,
         selectedFeeTier: 3000,
       },
       config: {
-        keeperTakerFactory: '0x0000000000000000000000000000000000000013',
+        keeperTakerRouter: '0x0000000000000000000000000000000000000013',
         uniswapV3RouterOverrides: {
           swapRouter02Address: '0x0000000000000000000000000000000000000014',
           poolFactoryAddress: '0x0000000000000000000000000000000000000015',
@@ -1387,7 +700,7 @@ describe('take write submission', () => {
 
     expect(
       (
-        AjnaKeeperTakerFactory__factory.connect as sinon.SinonStub
+        TakerRouter__factory.connect as sinon.SinonStub
       ).calledOnceWithExactly(
         '0x0000000000000000000000000000000000000013',
         readSigner
@@ -1417,15 +730,15 @@ describe('take write submission', () => {
     ).to.be.true;
   });
 
-  it('reports factory transport rejection before acceptance as pre-broadcast', async () => {
+  it('reports direct DEX transport rejection before acceptance as pre-broadcast', async () => {
     const submitTransaction = sinon
       .stub()
       .rejects(new Error('local send rejected'));
-    const onFactoryExecutionFailure = sinon.spy();
+    const onDirectDexExecutionFailure = sinon.spy();
 
-    const result = await runUniswapFactorySubmissionBoundaryScenario({
+    const result = await runUniswapDirectDexSubmissionBoundaryScenario({
       submitTransaction,
-      onFactoryExecutionFailure,
+      onDirectDexExecutionFailure,
     });
 
     expect(result.thrown).to.be.instanceOf(Error);
@@ -1433,54 +746,54 @@ describe('take write submission', () => {
     expect(result.estimateGasStub.calledOnce).to.equal(true);
     expect(result.populateTransactionStub.calledOnce).to.equal(true);
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onDirectDexExecutionFailure.calledOnce).to.equal(true);
+    expect(onDirectDexExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: true,
       error: 'local send rejected',
     });
   });
 
-  it('does not report accepted factory submission wait failure as pre-broadcast', async () => {
+  it('does not report accepted direct DEX submission wait failure as pre-broadcast', async () => {
     const submitTransaction = sinon.stub().resolves({
       txHash: '0xhash',
       wait: sinon.stub().rejects(new Error('receipt wait failed')),
     });
-    const onFactoryExecutionFailure = sinon.spy();
+    const onDirectDexExecutionFailure = sinon.spy();
 
-    const result = await runUniswapFactorySubmissionBoundaryScenario({
+    const result = await runUniswapDirectDexSubmissionBoundaryScenario({
       submitTransaction,
-      onFactoryExecutionFailure,
+      onDirectDexExecutionFailure,
     });
 
     expect(result.thrown).to.be.instanceOf(Error);
     expect((result.thrown as Error).message).to.equal('receipt wait failed');
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onDirectDexExecutionFailure.calledOnce).to.equal(true);
+    expect(onDirectDexExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: false,
       error: 'receipt wait failed',
     });
   });
 
-  it('does not report nonce-consumed factory submission errors as pre-broadcast', async () => {
+  it('does not report nonce-consumed direct DEX submission errors as pre-broadcast', async () => {
     const submitTransaction = sinon.stub().rejects(
-      new NonceConsumedTransactionError('relay accepted factory take', {
+      new NonceConsumedTransactionError('relay accepted direct DEX take', {
         txHash: '0xhash',
       })
     );
-    const onFactoryExecutionFailure = sinon.spy();
+    const onDirectDexExecutionFailure = sinon.spy();
 
-    const result = await runUniswapFactorySubmissionBoundaryScenario({
+    const result = await runUniswapDirectDexSubmissionBoundaryScenario({
       submitTransaction,
-      onFactoryExecutionFailure,
+      onDirectDexExecutionFailure,
     });
 
     expect((result.thrown as any).nonceConsumed).to.equal(true);
     expect(submitTransaction.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.calledOnce).to.equal(true);
-    expect(onFactoryExecutionFailure.firstCall.args[0]).to.deep.equal({
+    expect(onDirectDexExecutionFailure.calledOnce).to.equal(true);
+    expect(onDirectDexExecutionFailure.firstCall.args[0]).to.deep.equal({
       preBroadcast: false,
-      error: 'relay accepted factory take',
+      error: 'relay accepted direct DEX take',
     });
   });
 });

@@ -754,7 +754,11 @@ describe('Discovery Target Resolution', () => {
       ...BASE_CONFIG,
       takers: {
         ...BASE_CONFIG.takers,
-        oneInch: '0x1234567890123456789012345678901234567890',
+        router: '0x1234567890123456789012345678901234567890',
+        contracts: {
+          ...BASE_CONFIG.takers?.contracts,
+          OneInchAggregator: '0x1234567890123456789012345678901234567890',
+        },
       },
       dex: {
         ...BASE_CONFIG.dex,

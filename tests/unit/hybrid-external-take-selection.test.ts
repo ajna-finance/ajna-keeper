@@ -18,11 +18,37 @@ function quoteEvaluation(
 }
 
 describe('hybrid external take selection', () => {
+  it('returns the bound route identity used for provider dispatch', () => {
+    const selection = resolveHybridExternalTakeExecutionSelection({
+      resolvedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
+      quoteEvaluation: quoteEvaluation({
+        externalTakePath: 'calldata_aggregator',
+        providerId: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+      }),
+    });
+
+    expect(selection).to.deep.include({ approved: true });
+    if (!selection.approved) {
+      throw new Error('expected approved route selection');
+    }
+    expect(selection.routeIdentity).to.deep.equal({
+      path: 'calldata_aggregator',
+      providerId: 'oneinch',
+      source: LiquiditySource.ONEINCH,
+    });
+  });
+
   it('rejects disabled hybrid execution paths before dispatch', () => {
     const disabledPath = resolveHybridExternalTakeExecutionSelection({
-      resolvedExternalTakePaths: ['factory'],
+      resolvedExternalTakePaths: ['direct_dex'],
       quoteEvaluation: quoteEvaluation({
-        externalTakePath: 'oneinch',
+        externalTakePath: 'calldata_aggregator',
         selectedLiquiditySource: LiquiditySource.ONEINCH,
         quoteAmount: 125,
         quoteAmountRaw: ethers.utils.parseUnits('125', 6),
@@ -34,13 +60,13 @@ describe('hybrid external take selection', () => {
 
     expect(disabledPath).to.deep.include({
       approved: false,
-      reason: 'selected disabled path=oneinch',
+      reason: 'selected disabled path=calldata_aggregator',
     });
 
     const missingFactorySource = resolveHybridExternalTakeExecutionSelection({
-      resolvedExternalTakePaths: ['factory'],
+      resolvedExternalTakePaths: ['direct_dex'],
       quoteEvaluation: quoteEvaluation({
-        externalTakePath: 'factory',
+        externalTakePath: 'direct_dex',
         quoteAmount: 125,
         quoteAmountRaw: ethers.utils.parseUnits('125', 6),
         collateralAmount: 1,
@@ -51,11 +77,11 @@ describe('hybrid external take selection', () => {
 
     expect(missingFactorySource).to.deep.include({
       approved: false,
-      reason: 'selected factory path without a concrete factory source',
+      reason: 'selected direct_dex path without a concrete direct DEX source',
     });
 
     const missingSelectedPath = resolveHybridExternalTakeExecutionSelection({
-      resolvedExternalTakePaths: ['oneinch', 'factory'],
+      resolvedExternalTakePaths: ['calldata_aggregator', 'direct_dex'],
       quoteEvaluation: quoteEvaluation({
         quoteAmount: 125,
         quoteAmountRaw: ethers.utils.parseUnits('125', 6),
@@ -68,6 +94,23 @@ describe('hybrid external take selection', () => {
     expect(missingSelectedPath).to.deep.include({
       approved: false,
       reason: 'hybrid external take selection missing selected path',
+    });
+
+    const missingAggregatorSource = resolveHybridExternalTakeExecutionSelection({
+      resolvedExternalTakePaths: ['calldata_aggregator'],
+      quoteEvaluation: quoteEvaluation({
+        externalTakePath: 'calldata_aggregator',
+        quoteAmount: 125,
+        quoteAmountRaw: ethers.utils.parseUnits('125', 6),
+        collateralAmount: 1,
+        marketPrice: 125,
+        takeablePrice: 123.75,
+      }),
+    });
+
+    expect(missingAggregatorSource).to.deep.include({
+      approved: false,
+      reason: 'selected path=calldata_aggregator without a concrete source',
     });
 
     const lifiSourceOnly = resolveHybridExternalTakeExecutionSelection({
@@ -83,14 +126,14 @@ describe('hybrid external take selection', () => {
     });
 
     expect(lifiSourceOnly).to.deep.include({
-      approved: true,
-      effectiveSelectedPath: 'calldata_aggregator',
+      approved: false,
+      reason: 'hybrid external take selection missing selected path',
     });
 
     const inconsistentLifiPath = resolveHybridExternalTakeExecutionSelection({
-      resolvedExternalTakePaths: ['factory', 'calldata_aggregator'],
+      resolvedExternalTakePaths: ['direct_dex', 'calldata_aggregator'],
       quoteEvaluation: quoteEvaluation({
-        externalTakePath: 'factory',
+        externalTakePath: 'direct_dex',
         selectedLiquiditySource: LiquiditySource.LIFI,
         quoteAmount: 125,
         quoteAmountRaw: ethers.utils.parseUnits('125', 6),
@@ -102,13 +145,13 @@ describe('hybrid external take selection', () => {
 
     expect(inconsistentLifiPath).to.deep.include({
       approved: false,
-      reason: 'selected inconsistent path=factory source=LIFI',
+      reason: 'selected inconsistent path=direct_dex source=LIFI',
     });
   });
 
   it('prefers non-subsidized hybrid external take quotes over higher-profit subsidized quotes', () => {
     const nonSubsidized = quoteEvaluation({
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
       quoteAmountRaw: BigNumber.from(125),
       routeProfitability: {
@@ -118,7 +161,7 @@ describe('hybrid external take selection', () => {
       },
     });
     const subsidized = quoteEvaluation({
-      externalTakePath: 'oneinch',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       quoteAmountRaw: BigNumber.from(140),
       routeProfitability: {
@@ -131,14 +174,14 @@ describe('hybrid external take selection', () => {
     expect(
       selectBestExternalTakeQuoteEvaluation({
         evaluations: [subsidized, nonSubsidized],
-        externalTakePaths: ['oneinch', 'factory', 'calldata_aggregator'],
+        externalTakePaths: ['calldata_aggregator', 'direct_dex'],
       })
     ).to.equal(nonSubsidized);
   });
 
   it('ranks LI.FI hybrid quotes by expected net profit with path-order tie break', () => {
     const oneInch = quoteEvaluation({
-      externalTakePath: 'oneinch',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       quoteAmountRaw: BigNumber.from(130),
       routeProfitability: {
@@ -158,7 +201,7 @@ describe('hybrid external take selection', () => {
       },
     });
     const factoryTie = quoteEvaluation({
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.UNISWAPV3,
       quoteAmountRaw: BigNumber.from(140),
       routeProfitability: {
@@ -171,14 +214,14 @@ describe('hybrid external take selection', () => {
     expect(
       selectBestExternalTakeQuoteEvaluation({
         evaluations: [oneInch, lifi, factoryTie],
-        externalTakePaths: ['oneinch', 'calldata_aggregator', 'factory'],
+        externalTakePaths: ['calldata_aggregator', 'direct_dex'],
       })
     ).to.equal(lifi);
   });
 
   it('chooses the smallest subsidy among subsidized hybrid external take quotes', () => {
     const smallerSubsidy = quoteEvaluation({
-      externalTakePath: 'factory',
+      externalTakePath: 'direct_dex',
       selectedLiquiditySource: LiquiditySource.SUSHISWAP,
       quoteAmountRaw: BigNumber.from(130),
       routeProfitability: {
@@ -188,7 +231,7 @@ describe('hybrid external take selection', () => {
       },
     });
     const largerSubsidy = quoteEvaluation({
-      externalTakePath: 'oneinch',
+      externalTakePath: 'calldata_aggregator',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       quoteAmountRaw: BigNumber.from(150),
       routeProfitability: {
@@ -201,7 +244,7 @@ describe('hybrid external take selection', () => {
     expect(
       selectBestExternalTakeQuoteEvaluation({
         evaluations: [largerSubsidy, smallerSubsidy],
-        externalTakePaths: ['oneinch', 'factory'],
+        externalTakePaths: ['calldata_aggregator', 'direct_dex'],
       })
     ).to.equal(smallerSubsidy);
   });

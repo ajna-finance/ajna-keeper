@@ -1,9 +1,9 @@
 import { Signer } from '@ajna-finance/sdk';
 import { ReadRpc } from '../read-transports';
 import {
-  FactoryQuoteProviderRuntimeCache,
-  createFactoryQuoteProviderRuntimeCache,
-} from '../take/factory';
+  DirectDexQuoteProviderRuntimeCache,
+  createDirectDexQuoteProviderRuntimeCache,
+} from '../take/direct-dex';
 import {
   DiscoveryRpcCache,
   ExternalProviderCircuits,
@@ -13,8 +13,8 @@ import {
 export async function createDiscoveryRpcCache(params: {
   signer: Signer;
   readRpc: ReadRpc;
-  includeFactoryQuoteProviders?: boolean;
-  factoryQuoteProviders?: FactoryQuoteProviderRuntimeCache;
+  includeDirectDexQuoteProviders?: boolean;
+  directDexQuoteProviders?: DirectDexQuoteProviderRuntimeCache;
   oneInchQuoteCircuit?: OneInchQuoteCircuitState;
   providerCircuits?: ExternalProviderCircuits;
 }): Promise<DiscoveryRpcCache | undefined> {
@@ -31,13 +31,13 @@ export async function createDiscoveryRpcCache(params: {
     chainIdInflight,
     gasPriceInflight,
   ]);
-  const factoryQuoteProviders = params.includeFactoryQuoteProviders
-    ? (params.factoryQuoteProviders ?? createFactoryQuoteProviderRuntimeCache())
+  const directDexQuoteProviders = params.includeDirectDexQuoteProviders
+    ? (params.directDexQuoteProviders ?? createDirectDexQuoteProviderRuntimeCache())
     : undefined;
-  if (factoryQuoteProviders && chainId !== undefined) {
-    factoryQuoteProviders.chainId = chainId;
+  if (directDexQuoteProviders && chainId !== undefined) {
+    directDexQuoteProviders.chainId = chainId;
   }
-  const providerCircuits = params.includeFactoryQuoteProviders
+  const providerCircuits = params.includeDirectDexQuoteProviders
     ? params.providerCircuits
     : undefined;
   if (providerCircuits && params.oneInchQuoteCircuit) {
@@ -50,11 +50,11 @@ export async function createDiscoveryRpcCache(params: {
     gasPrice,
     gasPriceFetchedAt: Date.now(),
     stats: {
-      factory: {},
+      directDex: {},
     },
-    ...(params.includeFactoryQuoteProviders
+    ...(params.includeDirectDexQuoteProviders
       ? {
-          factoryQuoteProviders,
+          directDexQuoteProviders,
         }
       : {}),
     ...(params.oneInchQuoteCircuit

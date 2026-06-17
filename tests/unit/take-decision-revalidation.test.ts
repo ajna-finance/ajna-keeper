@@ -4,7 +4,7 @@ import { getRevalidatedQuoteContextIssue } from '../../src/take/take-decision-re
 import { getDebtConstrainedTakeCollateralWad } from '../../src/take/take-sizing';
 
 // Live-incident shape: aggregator quotes are denominated in the debt-clamped
-// size, factory quotes in the full collateral.
+// size, direct DEX quotes in the full collateral.
 const COLLATERAL = utils.parseEther('67.350885853762942258');
 const DEBT = utils.parseEther('7.181028045088476234');
 const PRICE = utils.parseEther('0.4646');
@@ -24,7 +24,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'oneinch',
+          externalTakePath: 'calldata_aggregator',
           quotedCollateralWad: CLAMPED,
           quotedAuctionPriceWad: PRICE,
         },
@@ -45,11 +45,11 @@ describe('getRevalidatedQuoteContextIssue', () => {
     ).to.equal('collateral_mismatch');
   });
 
-  it('accepts factory quotes denominated in the full collateral', () => {
+  it('accepts direct DEX quotes denominated in the full collateral', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           quotedCollateralWad: COLLATERAL,
         },
         ...FACTS,
@@ -61,7 +61,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           quotedCollateralWad: COLLATERAL,
           quotedAuctionPriceWad: PRICE.sub(1),
         },
@@ -74,7 +74,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
     expect(
       getRevalidatedQuoteContextIssue({
         quoteEvaluation: {
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           quotedCollateralWad: COLLATERAL,
           quotedAuctionPriceWad: PRICE.add(1),
         },
@@ -86,7 +86,7 @@ describe('getRevalidatedQuoteContextIssue', () => {
   it('accepts evaluations without quote-context fields', () => {
     expect(
       getRevalidatedQuoteContextIssue({
-        quoteEvaluation: { externalTakePath: 'oneinch' },
+        quoteEvaluation: { externalTakePath: 'calldata_aggregator' },
         ...FACTS,
       })
     ).to.equal(undefined);

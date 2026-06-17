@@ -54,6 +54,25 @@ describe('LI.FI quote validation', () => {
     expect(approved.tool).to.equal('uniswap');
   });
 
+  it('accepts reviewed-broad routes without an exchange-tool allowlist', () => {
+    const approved = validate(
+      quote({
+        type: 'lifi',
+        tool: 'lifi',
+        includedSteps: [step({ tool: 'balancer' })],
+      }),
+      {
+        exchangePolicy: {
+          kind: 'reviewed_broad',
+          filters: {},
+        },
+      }
+    );
+
+    expect(approved.topLevelTool).to.equal('lifi');
+    expect(approved.tool).to.equal('balancer');
+  });
+
   it('accepts current LI.FI same-chain shape with source-token feeCollection metadata', () => {
     const approved = validate(
       cloneFixture(currentSameChainFeeCollectionFixture)
@@ -436,7 +455,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -455,7 +474,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target, target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -472,7 +491,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender, spender],
         selectorAllowlist: {
@@ -491,7 +510,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: ['0x0000000000000000000000000000000000000000'],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -522,7 +541,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -546,7 +565,7 @@ describe('LI.FI quote validation', () => {
         }
       )
     ).to.throw(
-      'LI.FI selector allowlist must include selectors for every configured LI.FI call target'
+      'LI.FI selector allowlist must include selectors for every configured call target'
     );
 
     expect(() =>
@@ -573,7 +592,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target, otherTarget],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -581,7 +600,7 @@ describe('LI.FI quote validation', () => {
         },
       })
     ).to.throw(
-      'LI.FI selector allowlist must include selectors for every configured LI.FI call target'
+      'LI.FI selector allowlist must include selectors for every configured call target'
     );
 
     expect(() =>
@@ -592,7 +611,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {
@@ -614,7 +633,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['uniswap'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['uniswap'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {},
@@ -764,7 +783,7 @@ describe('LI.FI quote validation', () => {
           toToken: quoteToken,
           fromAmount,
           takerAddress: taker,
-          allowedExchangeTools: [tool],
+          exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: [tool] } },
           callTargetAllowlist: [target],
           approvalSpenderAllowlist: [spender],
           selectorAllowlist: {
@@ -789,7 +808,7 @@ describe('LI.FI quote validation', () => {
         toToken: quoteToken,
         fromAmount,
         takerAddress: taker,
-        allowedExchangeTools: ['feeCollection'],
+        exchangePolicy: { kind: 'concrete_allowlist', filters: { allowExchanges: ['feeCollection'] } },
         callTargetAllowlist: [target],
         approvalSpenderAllowlist: [spender],
         selectorAllowlist: {

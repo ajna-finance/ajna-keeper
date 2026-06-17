@@ -50,7 +50,7 @@ const config: KeeperConfig = {
     },
     uniswapV3: {
       router: {
-        swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481', // Base SwapRouter02 for factory external takes
+        swapRouter02Address: '0x2626664c2603336E57B271c5C0b26F421741e481', // Base SwapRouter02 for direct DEX external takes
         wethAddress: '0x4200000000000000000000000000000000000006', // WETH on Base
         defaultFeeTier: 3000, // Preferred/default 0.3% fee tier
         candidateFeeTiers: [500, 10000], // Optional: narrow/customize probed tiers; defaultFeeTier is always included
@@ -107,11 +107,11 @@ const config: KeeperConfig = {
           hpbPriceFactor: 0.9,
 
           // External Takes Example - uncomment and configure after contract deployment
-          // liquiditySource: LiquiditySource.ONEINCH,      // Use 1inch (requires takers.oneInch)
-          // liquiditySource: LiquiditySource.UNISWAPV3,    // Use Uniswap V3 (requires takers.factory)
-          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.factory)
+          // liquiditySource: LiquiditySource.ONEINCH,      // Use 1inch (requires takers.router + takers.contracts.OneInchAggregator)
+          // liquiditySource: LiquiditySource.UNISWAPV3,    // Use Uniswap V3 (requires takers.router)
+          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.router)
           // liquiditySource: LiquiditySource.LIFI,         // Use LI.FI same-chain aggregation
-          // Requires takers.factory, takers.contracts.Lifi, production dex.lifi allowlists, and LI.FI production gates.
+          // Requires takers.router, takers.contracts.Lifi, production dex.lifi allowlists, and LI.FI production gates.
           // marketPriceFactor: 0.98,                       // Take when auction < market * 0.98
           // allowSubsidy: false,                           // Default: require route-derived repayment + gas/profit coverage
         },
@@ -157,7 +157,7 @@ const config: KeeperConfig = {
           // Example external take configuration for major pool
           // liquiditySource: LiquiditySource.ONEINCH,     // 1inch aggregator path
           // liquiditySource: LiquiditySource.LIFI,        // LI.FI aggregator path after production canary/fork gates
-          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.factory)
+          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.router)
           // marketPriceFactor: 0.99,  // More conservative for volatile pairs
           // allowSubsidy: false,      // Set true only for reviewed defensive pools
         },
@@ -220,7 +220,7 @@ const config: KeeperConfig = {
           // Stable pair external take example - multiple options
           liquiditySource: LiquiditySource.ONEINCH, // 1inch for aggregation
           // liquiditySource: LiquiditySource.LIFI,      // LI.FI for reviewed same-chain aggregation; external-take only, not LP rewards
-          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.factory)
+          // liquiditySource: LiquiditySource.CURVE,    // Use Curve (requires takers.router)
           marketPriceFactor: 0.98, // Stable pairs can be more aggressive
           allowSubsidy: false,
         },

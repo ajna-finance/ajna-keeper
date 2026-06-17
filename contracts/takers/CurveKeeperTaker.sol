@@ -6,14 +6,14 @@ import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 import { IERC20Pool, PoolDeployer } from "../AjnaInterfaces.sol";
 import { IERC20 } from "../OneInchInterfaces.sol";
 import { IAjnaKeeperTaker } from "../interfaces/IAjnaKeeperTaker.sol";
-import { FactoryAuthorizedTakerBase } from "../base/KeeperTakerBase.sol";
+import { RouterAuthorizedTakerBase } from "../base/KeeperTakerBase.sol";
 import { TakerTakeScaling } from "../libraries/TakerTakeScaling.sol";
 
 /// @notice Curve DEX implementation for Ajna keeper takes using Curve pools
 /// @dev Follows the SushiSwap pattern for decimal handling and pre-calculated minimums.
 ///      Shared wiring, helpers, errors, and the SwapExecuted event live in
-///      FactoryAuthorizedTakerBase / KeeperTakerBase.
-contract CurveKeeperTaker is FactoryAuthorizedTakerBase {
+///      RouterAuthorizedTakerBase / KeeperTakerBase.
+contract CurveKeeperTaker is RouterAuthorizedTakerBase {
     /// @notice Configuration for Curve swaps with pre-calculated minimum and pre-discovered indices
     struct CurveSwapDetails {
         address poolAddress;        // Curve pool contract address (from config)
@@ -34,11 +34,11 @@ contract CurveKeeperTaker is FactoryAuthorizedTakerBase {
     error InvalidPoolType();    // sig: 0x2946cbf1
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment
-    /// @param authorizedFactory_ Factory contract address that can also call functions.
+    /// @param authorizedRouter_ Router contract address that can also call functions.
     ///        May be zero to deploy the taker in standalone (owner-only) mode; the
-    ///        keeper factory refuses to register a taker whose factory does not match.
-    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedFactory_)
-        FactoryAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedFactory_)
+    ///        keeper router refuses to register a taker whose router does not match.
+    constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_)
+        RouterAuthorizedTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
     {}
 
     /// @inheritdoc IAjnaKeeperTaker
@@ -50,7 +50,7 @@ contract CurveKeeperTaker is FactoryAuthorizedTakerBase {
         LiquiditySource source,
         address swapRouter,
         bytes calldata swapDetails
-    ) external onlyOwnerOrFactory {
+    ) external onlyOwnerOrRouter {
         // Validate inputs
         if (source != LiquiditySource.Curve) revert UnsupportedSource();
         if (!_validatePool(pool)) revert InvalidPool();

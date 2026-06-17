@@ -9,6 +9,7 @@ import {
   LifiQuoteResponse,
   LifiTransactionRequest,
 } from './schema';
+import type { LifiExchangePolicy } from './exchange-policy';
 import { normalizeLifiSelectorAllowlist } from './selector-allowlist';
 import {
   normalizeLifiAllowedToolSet,
@@ -31,7 +32,7 @@ export interface ValidateLifiQuoteParams {
   toToken: string;
   fromAmount: BigNumber;
   takerAddress: string;
-  allowedExchangeTools: readonly string[];
+  exchangePolicy: LifiExchangePolicy;
   callTargetAllowlist: readonly string[];
   approvalSpenderAllowlist: readonly string[];
   selectorAllowlist?: Record<string, readonly string[]>;
@@ -104,10 +105,16 @@ export function validateLifiQuote(
     throw new Error('LI.FI quote type must be swap or lifi');
   }
 
-  const allowedTools = normalizeLifiAllowedToolSet(params.allowedExchangeTools);
-  if (allowedTools.size === 0) {
-    throw new Error('LI.FI allowedExchangeTools must be non-empty');
+  const exchangePolicy = params.exchangePolicy;
+  if (exchangePolicy === undefined) {
+    throw new Error('LI.FI exchangePolicy is required');
   }
+  const allowedTools = normalizeLifiAllowedToolSet(
+    exchangePolicy.kind === 'concrete_allowlist'
+      ? exchangePolicy.filters.allowExchanges
+      : [],
+    { requireNonEmpty: exchangePolicy.kind === 'concrete_allowlist' }
+  );
   const callTargets = normalizeLifiAddressAllowlistSet(
     params.callTargetAllowlist,
     'LI.FI callTargetAllowlist'
@@ -135,6 +142,7 @@ export function validateLifiQuote(
     toToken: params.toToken,
     fromAmount: params.fromAmount,
     takerAddress: params.takerAddress,
+    requireAllowedExchangeTool: exchangePolicy.kind === 'concrete_allowlist',
   });
 
   const estimate = requireObject<LifiEstimate>(

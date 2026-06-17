@@ -1,17 +1,15 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import {
   LiquiditySource,
-  isFactoryDynamicSource,
-  normalizeExternalTakeRouteSelectionMode,
-  resolveExternalTakePolicy,
-  resolveHybridGasQuoteFallbackPolicy,
+  ResolvedExternalTakePolicy,
+  isDirectDexDynamicSource,
 } from '../../config';
 import { ZERO_BN } from '../../constants';
 import { getDecimalsErc20 } from '../../erc20';
 import { logger } from '../../logging';
 import { DiscoveryReadTransports } from '../../read-transports';
 import { isSubsidizedExternalTakeQuote } from '../../take/external-take/policy';
-import { bindExternalTakeRouteForDiscovery } from '../../take/external-take/quote-approval';
+import { bindExternalTakeRouteForDiscovery } from '../../take/external-take/quote-approval-rules';
 import { ExternalTakeQuoteEvaluation } from '../../take/types';
 import { TakeWriteTransport } from '../../take/write-transport';
 import { decimaledToWei } from '../../utils';
@@ -47,63 +45,40 @@ export { getExternalTakeGasLimit, refreshDiscoveryGasPriceIfStale };
 
 const ZERO = ZERO_BN;
 
-function requiresHybridNetProfitRanking(
-  takePolicy: AutoDiscoverTakePolicyRuntime
-): boolean {
-  const resolved = resolveExternalTakePolicy({
-    defaultLiquiditySource: undefined,
-    takePolicy,
-  });
-  return (
-    resolved.externalTakePathsExplicitlyConfigured &&
-    resolved.externalTakePaths.length > 1 &&
-    resolved.routeSelectionMode === 'maximize_profit'
-  );
-}
-
 function resolveApprovedExternalTakeSource(params: {
-  target: ResolvedTakeTarget;
   quoteEvaluation: ExternalTakeQuoteEvaluation;
-}): {
-  approved: boolean;
-  selectedLiquiditySource?: LiquiditySource;
-  selectedFactoryLiquiditySource?: LiquiditySource;
-  reason?: string;
-} {
-  let selectedLiquiditySource = params.quoteEvaluation.selectedLiquiditySource;
-  if (
-    params.quoteEvaluation.externalTakePath === 'factory' &&
-    selectedLiquiditySource === undefined
-  ) {
+}):
+  | {
+      approved: true;
+      selectedLiquiditySource: LiquiditySource;
+      selectedDirectDexLiquiditySource?: LiquiditySource;
+    }
+  | {
+      approved: false;
+      reason: string;
+    } {
+  const selectedLiquiditySource =
+    params.quoteEvaluation.selectedLiquiditySource;
+  if (selectedLiquiditySource === undefined) {
     return {
       approved: false,
-      reason: 'selected factory path without a concrete factory source',
+      reason:
+        params.quoteEvaluation.externalTakePath === 'direct_dex'
+          ? 'selected direct_dex path without a concrete direct DEX source'
+          : 'external take route approval missing selected liquidity source',
     };
   }
-  if (selectedLiquiditySource === undefined) {
-    const configuredLiquiditySource = params.target.take.liquiditySource;
-    if (
-      configuredLiquiditySource !== LiquiditySource.ONEINCH &&
-      isFactoryDynamicSource(configuredLiquiditySource)
-    ) {
-      return {
-        approved: false,
-        reason: 'factory route approval missing selected liquidity source',
-      };
-    }
-    selectedLiquiditySource = configuredLiquiditySource;
-  }
 
-  const selectedFactoryLiquiditySource =
+  const selectedDirectDexLiquiditySource =
     selectedLiquiditySource !== undefined &&
-    isFactoryDynamicSource(selectedLiquiditySource)
+    isDirectDexDynamicSource(selectedLiquiditySource)
       ? selectedLiquiditySource
       : undefined;
 
   return {
     approved: true,
     selectedLiquiditySource,
-    selectedFactoryLiquiditySource,
+    selectedDirectDexLiquiditySource,
   };
 }
 
@@ -139,6 +114,7 @@ export async function approveExternalTakeForDiscovery(
     target: ResolvedTakeTarget;
     rpcCache?: DiscoveryRpcCache;
     takePolicy: AutoDiscoverTakePolicyRuntime;
+    resolvedExternalTakePolicy: ResolvedExternalTakePolicy;
     takeWriteTransport?: TakeWriteTransport;
     stats: Pick<
       DiscoveredTakeTargetStats,
@@ -154,6 +130,7 @@ export async function approveExternalTakeForDiscovery(
     target,
     rpcCache,
     takePolicy,
+    resolvedExternalTakePolicy,
     takeWriteTransport,
     stats,
     price,
@@ -167,20 +144,8 @@ export async function approveExternalTakeForDiscovery(
   const approvalMode = params.approvalMode ?? 'strict_hybrid';
 
   if (approvalMode === HYBRID_GAS_QUOTE_FALLBACK_KIND) {
-    const fallbackEligibility = resolveHybridGasQuoteFallbackPolicy({
-      fallbackMode: takePolicy?.hybridGasQuoteFailureFallbackMode,
-      routeSelectionMode: normalizeExternalTakeRouteSelectionMode(
-        takePolicy?.externalTakeRouteSelectionMode
-      ),
-      externalTakePaths: resolveExternalTakePolicy({
-        defaultLiquiditySource: target.take.liquiditySource,
-        takePolicy,
-      }).externalTakePaths,
-      maxGasCostNative: takePolicy?.maxGasCostNative,
-      maxGasCostQuote: takePolicy?.maxGasCostQuote,
-      minExpectedProfitQuote: takePolicy?.minExpectedProfitQuote,
-      minProfitNative: takePolicy?.minProfitNative,
-    });
+    const fallbackEligibility =
+      resolvedExternalTakePolicy.hybridGasQuoteFallbackPolicy;
     if (!fallbackEligibility.eligible) {
       return {
         approved: false,
@@ -191,7 +156,6 @@ export async function approveExternalTakeForDiscovery(
   }
 
   const sourceSelection = resolveApprovedExternalTakeSource({
-    target,
     quoteEvaluation: candidateQuoteEvaluation,
   });
   if (!sourceSelection.approved) {
@@ -201,14 +165,8 @@ export async function approveExternalTakeForDiscovery(
     };
   }
   const selectedLiquiditySource = sourceSelection.selectedLiquiditySource;
-  if (selectedLiquiditySource === undefined) {
-    return {
-      approved: false,
-      reason: 'external take route approval missing selected liquidity source',
-    };
-  }
-  const selectedFactoryLiquiditySource =
-    sourceSelection.selectedFactoryLiquiditySource;
+  const selectedDirectDexLiquiditySource =
+    sourceSelection.selectedDirectDexLiquiditySource;
   const executableApproval = bindDiscoveryExecutionRoute({
     quoteEvaluation: candidateQuoteEvaluation,
     selectedLiquiditySource,
@@ -309,7 +267,7 @@ export async function approveExternalTakeForDiscovery(
     requireGasCostQuote:
       approvalMode === HYBRID_GAS_QUOTE_FALLBACK_KIND
         ? false
-        : requiresHybridNetProfitRanking(takePolicy),
+        : resolvedExternalTakePolicy.requiresExternalTakeNetProfitRanking,
     gasPrice: rpcCache?.gasPrice,
     chainId: rpcCache?.chainId,
     rpcCache,
@@ -348,10 +306,7 @@ export async function approveExternalTakeForDiscovery(
     takePolicy?.minProfitNative !== undefined;
   const needsSimpleProfitability =
     quoteAmountRaw !== undefined &&
-    (resolveExternalTakePolicy({
-      defaultLiquiditySource: undefined,
-      takePolicy,
-    }).externalTakePathsExplicitlyConfigured ||
+    (resolvedExternalTakePolicy.externalTakeSelectorEnabled ||
       hasQuoteProfitFloor ||
       gasCostQuoteRaw !== undefined);
   let quoteTokenDecimals = gasPolicy.quoteTokenDecimals;
@@ -420,7 +375,7 @@ export async function approveExternalTakeForDiscovery(
   const profitabilityApproval = applyDiscoveryApprovalProfitabilityPolicy({
     quoteEvaluation: approvedQuoteEvaluation,
     selectedLiquiditySource,
-    selectedFactoryLiquiditySource,
+    selectedDirectDexLiquiditySource,
     target,
     takePolicy,
     gasPolicy,
@@ -453,7 +408,7 @@ export async function approveExternalTakeForDiscovery(
   ) {
     return {
       approved: false,
-      reason: 'hybrid gas quote fallback rejected subsidized factory route',
+      reason: 'hybrid gas quote fallback rejected subsidized direct DEX route',
       rejectCategory: 'profitFloor',
     };
   }

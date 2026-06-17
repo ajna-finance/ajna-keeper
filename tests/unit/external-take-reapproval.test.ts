@@ -3,9 +3,36 @@ import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../src/config';
 import { createArbTakeStrategy } from '../../src/take/arb-strategy';
+import type { ApprovedCalldataAggregatorQuote } from '../../src/take/aggregator-calldata/types';
 import { processTakeCandidates } from '../../src/take/engine';
 import { BoundExternalTakeRouteEvaluation } from '../../src/take/types';
 import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
+
+function buildOneInchCalldataQuote(
+  quoteAmountRaw: BigNumber
+): ApprovedCalldataAggregatorQuote {
+  return {
+    providerId: 'oneinch',
+    quotedAtMs: Date.now(),
+    chainId: 1,
+    srcToken: '0x1111111111111111111111111111111111111111',
+    dstToken: '0x2222222222222222222222222222222222222222',
+    dstReceiver: '0x3333333333333333333333333333333333333333',
+    amountInTokenUnits: BigNumber.from(1),
+    quoteAmountRaw,
+    routeMinOutRaw: quoteAmountRaw,
+    transactionTarget: '0x4444444444444444444444444444444444444444',
+    approvalSpender: '0x5555555555555555555555555555555555555555',
+    callData: '0x12345678',
+    selector: '0x12345678',
+    txValue: '0',
+    routeSummary: {
+      providerId: 'oneinch',
+      tool: '1inch',
+      feeCosts: [],
+    },
+  };
+}
 
 describe('external take reapproval', () => {
   afterEach(() => {
@@ -15,19 +42,23 @@ describe('external take reapproval', () => {
   it('reports the reapproved external take plan to execution callbacks', async () => {
     const initialEvaluation: BoundExternalTakeRouteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'oneinch',
+      externalTakePath: 'calldata_aggregator',
+      providerId: 'oneinch',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       takeablePrice: 1.2,
       quoteAmountRaw: BigNumber.from(100),
       routeExecutionFloorRaw: BigNumber.from(90),
+      calldataQuote: buildOneInchCalldataQuote(BigNumber.from(100)),
     };
     const reapprovedEvaluation: BoundExternalTakeRouteEvaluation = {
       isTakeable: true,
-      externalTakePath: 'oneinch',
+      externalTakePath: 'calldata_aggregator',
+      providerId: 'oneinch',
       selectedLiquiditySource: LiquiditySource.ONEINCH,
       takeablePrice: 1.3,
       quoteAmountRaw: BigNumber.from(120),
       routeExecutionFloorRaw: BigNumber.from(110),
+      calldataQuote: buildOneInchCalldataQuote(BigNumber.from(120)),
     };
     const approvalContext = { source: 'initial approval' };
     const executeExternalTake = sinon.stub().resolves(true);

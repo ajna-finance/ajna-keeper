@@ -8,7 +8,7 @@ import {
   utils,
 } from 'ethers';
 import { network } from 'hardhat';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../typechain-types/factories/contracts/factories';
 import {
   MockAtomicSwapPool__factory,
   MockPoolDeployer__factory,
@@ -38,9 +38,9 @@ const RUN_LIFI_FORK_CANARY =
 
 // Opt-in, NON-PRODUCTION mode: skip the configured-production-deployment
 // registration gate and instead verify real LI.FI calldata execution against the
-// freshly deployed local factory/taker this test already creates. Use this to
+// freshly deployed local router/taker this test already creates. Use this to
 // validate real same-chain calldata key-free WITHOUT a deployed production
-// factory/taker. The strict production gate remains the default.
+// router/taker. The strict production gate remains the default.
 const USE_FRESH_DEPLOYMENT =
   process.env.AJNA_AGENT_LIFI_FORK_CANARY_USE_FRESH_DEPLOYMENT === 'true';
 
@@ -106,7 +106,7 @@ async function requireConfiguredProductionTakerRegistration(params: {
 }): Promise<void> {
   await requireForkContractCode({
     provider: params.provider,
-    label: 'config.takers.factory',
+    label: 'config.takers.router',
     address: params.config.configuredFactoryAddress,
   });
   await requireForkContractCode({
@@ -115,7 +115,7 @@ async function requireConfiguredProductionTakerRegistration(params: {
     address: params.config.configuredTakerAddress,
   });
 
-  const configuredFactory = AjnaKeeperTakerFactory__factory.connect(
+  const configuredFactory = TakerRouter__factory.connect(
     params.config.configuredFactoryAddress,
     params.provider
   );
@@ -124,11 +124,11 @@ async function requireConfiguredProductionTakerRegistration(params: {
   );
   if (registeredTaker !== params.config.configuredTakerAddress) {
     throw new Error(
-      `LI.FI configured factory registration mismatch: expected ${params.config.configuredTakerAddress}, got ${registeredTaker}`
+      `LI.FI configured TakerRouter registration mismatch: expected ${params.config.configuredTakerAddress}, got ${registeredTaker}`
     );
   }
   if (!(await configuredFactory.hasConfiguredTaker(LiquiditySource.LIFI))) {
-    throw new Error('LI.FI configured factory does not report LIFI as enabled');
+    throw new Error('LI.FI configured TakerRouter does not report LIFI as enabled');
   }
 }
 
@@ -249,7 +249,7 @@ describe('LI.FI callback-path fork execution canary', function () {
       toToken,
       pool.address
     );
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();
@@ -286,7 +286,10 @@ describe('LI.FI callback-path fork execution canary', function () {
       toToken,
       fromAmount,
       takerAddress: taker.address,
-      allowedExchangeTools: lifiConfig.allowExchanges,
+      exchangePolicy: {
+        kind: 'concrete_allowlist',
+        filters: { allowExchanges: [...lifiConfig.allowExchanges] },
+      },
       callTargetAllowlist: lifiConfig.callTargetAllowlist[BASE_CHAIN_ID],
       approvalSpenderAllowlist:
         lifiConfig.approvalSpenderAllowlist[BASE_CHAIN_ID],

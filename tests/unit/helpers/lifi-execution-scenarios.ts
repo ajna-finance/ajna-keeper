@@ -3,7 +3,7 @@ import { ethers } from 'ethers';
 import sinon from 'sinon';
 import { LiquiditySource, TakeWriteTransportMode } from '../../../src/config';
 import { takeLiquidationLifi } from '../../../src/take/lifi/execution';
-import { AjnaKeeperTakerFactory__factory } from '../../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../../typechain-types/factories/contracts/factories';
 import { malformedSingleExternalTakeExecutionPlan } from '../../helpers/external-take-plan';
 
 export interface ValidLifiQuoteResponseParams {
@@ -120,7 +120,7 @@ export async function runLifiSubmissionBoundaryScenario(params: {
     data: '0x',
   });
   const estimateGas = sinon.stub().resolves(ethers.BigNumber.from(500_000));
-  sinon.stub(AjnaKeeperTakerFactory__factory, 'connect').returns({
+  sinon.stub(TakerRouter__factory, 'connect').returns({
     estimateGas: {
       takeWithAtomicSwap: estimateGas,
     },
@@ -174,7 +174,7 @@ export async function runLifiSubmissionBoundaryScenario(params: {
       }),
     } as any,
     config: {
-      keeperTakerFactory: '0x9999999999999999999999999999999999999999',
+      keeperTakerRouter: '0x9999999999999999999999999999999999999999',
       lifiTaker,
       chainId,
       lifi: {

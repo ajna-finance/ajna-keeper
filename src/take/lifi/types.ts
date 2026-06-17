@@ -1,5 +1,6 @@
 import { TakeWriteTransportConfig } from '../write-transport';
 import { LifiDexConfig } from '../../config';
+import { CalldataAggregatorQuoteResultNotification } from '../aggregator-calldata/execution';
 
 export interface LifiQuoteConfig {
   lifi?: LifiDexConfig;
@@ -13,13 +14,10 @@ export interface LifiExecutionConfig
   extends LifiQuoteConfig,
     TakeWriteTransportConfig {
   dryRun?: boolean;
-  keeperTakerFactory?: string;
-  onLifiQuoteResult?: (result: {
-    success: boolean;
-    retryable?: boolean;
-    errorCode?: number | string;
-    error?: string;
-  }) => void;
+  keeperTakerRouter?: string;
+  onLifiQuoteResult?: (
+    result: CalldataAggregatorQuoteResultNotification
+  ) => void;
   onLifiExecutionFailure?: (result: {
     preBroadcast: boolean;
     error?: string;

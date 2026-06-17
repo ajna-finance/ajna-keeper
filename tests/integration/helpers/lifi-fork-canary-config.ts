@@ -1,6 +1,7 @@
 import { constants, utils } from 'ethers';
 import {
   KeeperConfig,
+  LifiConcreteAllowlistProductionDexConfig,
   LifiDexConfig,
   readConfigFile,
 } from '../../../src/config';
@@ -17,7 +18,7 @@ import { requireConcreteProductionLifiChainPolicy } from '../../../src/config/li
 
 export type LifiForkCanaryEnv = Record<string, string | undefined>;
 
-export type ForkCanaryLifiConfig = LifiDexConfig & {
+export type ForkCanaryLifiConfig = LifiConcreteAllowlistProductionDexConfig & {
   mode: 'production';
   configuredFactoryAddress: string;
   configuredTakerAddress: string;
@@ -191,16 +192,16 @@ export function resolveLifiForkCanaryConfig(params: {
       'LI.FI fork canary requires reviewed production keeper config with production dex.lifi'
     );
   }
-  if (!params.keeperConfig.takers?.factory) {
-    throw new Error('LI.FI fork canary requires config.takers.factory');
+  if (!params.keeperConfig.takers?.router) {
+    throw new Error('LI.FI fork canary requires config.takers.router');
   }
   if (!params.keeperConfig.takers?.contracts?.Lifi) {
     throw new Error('LI.FI fork canary requires config.takers.contracts.Lifi');
   }
 
   const configuredFactoryAddress = requireConfiguredAddress(
-    params.keeperConfig.takers.factory,
-    'config.takers.factory'
+    params.keeperConfig.takers.router,
+    'config.takers.router'
   );
   const configuredTakerAddress = requireConfiguredAddress(
     params.keeperConfig.takers.contracts.Lifi,
@@ -213,6 +214,8 @@ export function resolveLifiForkCanaryConfig(params: {
     fieldName: 'config.dex.lifi',
     context: 'LI.FI fork canary',
   });
+  const concreteConfigured =
+    configured as LifiConcreteAllowlistProductionDexConfig;
 
   return {
     mode: 'production',
@@ -237,7 +240,7 @@ export function resolveLifiForkCanaryConfig(params: {
       max: MAX_LIFI_FORK_CANARY_PRICE_IMPACT,
       label: 'config.dex.lifi.maxPriceImpact',
     }),
-    allowExchanges: configured.allowExchanges,
+    allowExchanges: concreteConfigured.allowExchanges,
     denyExchanges: configured.denyExchanges,
     preferExchanges: configured.preferExchanges,
     feeCostPolicy: configured.feeCostPolicy,

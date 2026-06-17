@@ -3,28 +3,18 @@ import {
   CalldataAggregatorProviderId,
   getAggregatorProviderIdentity,
 } from '../../config';
-import { deriveApprovedMinOutRaw } from '../factory/shared';
+import { deriveRouteExecutionFloorRaw } from '../external-take/quote-economics';
 import {
   ApprovedCalldataAggregatorQuoteEvaluation,
   ExternalTakeQuoteEvaluation,
 } from '../types';
 
 export type CalldataAggregatorQuoteApprovalResult =
-  | { approved: true; quoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation }
+  | {
+      approved: true;
+      quoteEvaluation: ApprovedCalldataAggregatorQuoteEvaluation;
+    }
   | { approved: false; reason: string };
-
-function deriveRouteExecutionFloorRaw(
-  quoteEvaluation: ExternalTakeQuoteEvaluation
-): ExternalTakeQuoteEvaluation['routeExecutionFloorRaw'] {
-  return (
-    quoteEvaluation.routeExecutionFloorRaw ??
-    deriveApprovedMinOutRaw({
-      routeMinOutRaw: quoteEvaluation.routeMinOutRaw,
-      profitMinOutRaw: quoteEvaluation.profitMinOutRaw,
-      fallbackMinOutRaw: quoteEvaluation.approvedMinOutRaw,
-    })
-  );
-}
 
 /**
  * The single calldata-aggregator execution approval helper (Packet 2B).
@@ -62,7 +52,7 @@ export function approveCalldataAggregatorQuoteForExecution(params: {
       reason: `${label} execution received a non-calldata-aggregator approved path for ${context}`,
     };
   }
-  if (quoteEvaluation.selectedLiquiditySource !== identity.liquiditySource) {
+  if (quoteEvaluation.selectedLiquiditySource !== identity.source) {
     return {
       approved: false,
       reason: `${label} execution received an unexpected approved source for ${context}`,
@@ -95,7 +85,7 @@ export function approveCalldataAggregatorQuoteForExecution(params: {
       externalTakePath: 'calldata_aggregator',
       providerId,
       quoteAmountRaw: quoteEvaluation.quoteAmountRaw,
-      selectedLiquiditySource: identity.liquiditySource,
+      selectedLiquiditySource: identity.source,
       routeExecutionFloorRaw:
         quoteEvaluation.routeExecutionFloorRaw ?? approvedMinOutRaw,
       approvedMinOutRaw,

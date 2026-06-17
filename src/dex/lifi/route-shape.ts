@@ -51,7 +51,8 @@ export type NormalizedLifiRouteShape =
     };
 
 export function normalizeLifiAllowedToolSet(
-  tools: readonly string[]
+  tools: readonly string[],
+  options: { requireNonEmpty?: boolean } = {}
 ): Set<string> {
   const normalized = new Set<string>();
   for (const tool of tools) {
@@ -70,6 +71,9 @@ export function normalizeLifiAllowedToolSet(
       );
     }
     normalized.add(normalizedTool);
+  }
+  if (options.requireNonEmpty === true && normalized.size === 0) {
+    throw new Error('LI.FI allowedExchangeTools must be non-empty');
   }
   return normalized;
 }
@@ -394,6 +398,7 @@ export function normalizeLifiRouteShape(params: {
   fromAmount: BigNumber;
   takerAddress: string;
   allowedTools: Set<string>;
+  requireAllowedExchangeTool: boolean;
 }): NormalizedLifiRouteShape {
   if (params.quote.type !== 'swap' && params.quote.type !== 'lifi') {
     throw new Error('LI.FI quote.type must be swap or lifi');
@@ -423,10 +428,11 @@ export function normalizeLifiRouteShape(params: {
     takerAddress: params.takerAddress,
     allowedTools: params.allowedTools,
     requireAllowedTool:
-      quoteType === 'swap' ||
-      (quoteType === 'lifi' &&
-        typeof params.quote.tool === 'string' &&
-        params.quote.tool.trim().toLowerCase() !== 'lifi'),
+      params.requireAllowedExchangeTool &&
+      (quoteType === 'swap' ||
+        (quoteType === 'lifi' &&
+          typeof params.quote.tool === 'string' &&
+          params.quote.tool.trim().toLowerCase() !== 'lifi')),
   });
   const topLevelTool = topLevelStep.tool;
   const included = getExecutableIncludedSwap({
@@ -461,7 +467,7 @@ export function normalizeLifiRouteShape(params: {
     fromAmount: included.effectiveSwapFromAmount,
     takerAddress: params.takerAddress,
     allowedTools: params.allowedTools,
-    requireAllowedTool: true,
+    requireAllowedTool: params.requireAllowedExchangeTool,
     requireTakerAddresses: false,
   });
   const resolvedExecutableTool = requireStepTool(

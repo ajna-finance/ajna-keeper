@@ -36,9 +36,7 @@ function createMockKeeperConfig(
       delayBetweenRuns: 0,
       dryRun: true,
     },
-    takers: {
-      oneInch: '0x0000000000000000000000000000000000000000',
-    },
+    takers: {},
     manual: {
       pools: [],
     },

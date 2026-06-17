@@ -35,10 +35,10 @@ import {
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
 
 /**
- * Integration tests for factory take implementation and quote provider.
+ * Integration tests for direct DEX take implementation and quote provider.
  *
- * Purpose: Ensure take/factory and UniswapV3QuoteProvider work together correctly.
- * Critical for: Future developers modifying factory take logic or quote providers.
+ * Purpose: Ensure take/direct-dex and UniswapV3QuoteProvider work together correctly.
+ * Critical for: Future developers modifying direct DEX take logic or quote providers.
  *
  * Focus Areas:
  * 1. Factory take workflow execution
@@ -48,14 +48,14 @@ import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
  */
 const FORK_INTEGRATION_TIMEOUT_MS = 120_000;
 
-describe('Factory Takes Integration Tests', function () {
+describe('Direct DEX Takes Integration Tests', function () {
   this.timeout(FORK_INTEGRATION_TIMEOUT_MS);
   let ajna: AjnaSDK;
   let pool: FungiblePool;
   let signer: Signer;
   let borrowerAddress: string;
 
-  const setupFactoryTakeScenario = async () => {
+  const setupDirectDexTakeScenario = async () => {
     // Create liquidatable loan scenario
     await depositQuoteToken({
       pool,
@@ -127,22 +127,22 @@ describe('Factory Takes Integration Tests', function () {
     sinon.restore();
   });
 
-  describe('Factory Take Workflow', () => {
+  describe('Direct DEX Take Workflow', () => {
     beforeEach(setupForkContext);
 
     /**
-     * Critical: Tests that factory take workflow executes correctly.
+     * Critical: Tests that direct DEX take workflow executes correctly.
      * If someone modifies processManualTakeCandidates(), these tests catch breaking changes.
      */
 
-    it('should execute factory take workflow with valid Hemi configuration', async () => {
-      await setupFactoryTakeScenario();
+    it('should execute direct DEX take workflow with valid Hemi configuration', async () => {
+      await setupDirectDexTakeScenario();
 
       // Based on your working hemi-conf-settlement.ts
       const hemiFactoryConfig = {
         dryRun: true, // Test workflow without external transactions
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+        keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
@@ -166,7 +166,7 @@ describe('Factory Takes Integration Tests', function () {
         },
       };
 
-      // Should execute factory take workflow without throwing
+      // Should execute direct DEX take workflow without throwing
       await processManualTakeCandidates({
         signer,
         pool,
@@ -178,13 +178,13 @@ describe('Factory Takes Integration Tests', function () {
       expect(true).to.be.true;
     });
 
-    it('should handle factory take with both external and arbTake strategies', async () => {
-      await setupFactoryTakeScenario();
+    it('should handle direct DEX take with both external and arbTake strategies', async () => {
+      await setupDirectDexTakeScenario();
 
-      const factoryConfig = {
+      const directDexConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -212,19 +212,19 @@ describe('Factory Takes Integration Tests', function () {
         signer,
         pool,
         poolConfig: combinedPoolConfig as any,
-        config: factoryConfig as any,
+        config: directDexConfig as any,
       });
 
       expect(true).to.be.true;
     });
 
-    it('should handle factory take with minimal valid configuration', async () => {
-      await setupFactoryTakeScenario();
+    it('should handle direct DEX take with minimal valid configuration', async () => {
+      await setupDirectDexTakeScenario();
 
       const minimalFactoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -233,7 +233,7 @@ describe('Factory Takes Integration Tests', function () {
           wethAddress: '0x4200000000000000000000000000000000000006',
           poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
           quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
-          // Minimal required fields for factory external takes.
+          // Minimal required fields for direct DEX external takes.
         },
       };
 
@@ -263,7 +263,7 @@ describe('Factory Takes Integration Tests', function () {
     beforeEach(setupQuoteProviderSigner);
 
     /**
-     * Tests that UniswapV3QuoteProvider integrates correctly with factory takes.
+     * Tests that UniswapV3QuoteProvider integrates correctly with direct DEX takes.
      * Critical for accurate pricing decisions in take logic.
      */
 
@@ -393,17 +393,17 @@ describe('Factory Takes Integration Tests', function () {
 
     /**
      * Tests various Uniswap V3 configuration scenarios.
-     * Ensures factory takes work with different chain configurations.
+     * Ensures direct DEX takes work with different chain configurations.
      */
 
     it('should handle Hemi-specific Uniswap V3 configuration', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
       // Hemi-specific addresses from your config
       const hemiUniswapConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
+        keeperTakerRouter: '0xB6006B9e9696a0A097D4990964D5bDa6E940ba0D',
         takerContracts: {
           UniswapV3: '0x81D39B4A2Be43e5655608fCcE18A0edd8906D7c7',
         },
@@ -439,13 +439,13 @@ describe('Factory Takes Integration Tests', function () {
     });
 
     it('should handle mainnet-style Uniswap V3 configuration', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
       // Mainnet-style addresses
       const mainnetUniswapConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -480,7 +480,7 @@ describe('Factory Takes Integration Tests', function () {
     });
 
     it('should handle different fee tier configurations', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
       const feeTierConfigs = [
         { tier: 500, name: '0.05%' },
@@ -489,10 +489,10 @@ describe('Factory Takes Integration Tests', function () {
       ];
 
       for (const feeConfig of feeTierConfigs) {
-        const factoryConfig = {
+        const directDexConfig = {
           dryRun: true,
           subgraphUrl: 'http://test-url',
-          keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+          keeperTakerRouter: '0x1234567890123456789012345678901234567890',
           takerContracts: {
             UniswapV3: '0x2234567890123456789012345678901234567890',
           },
@@ -519,7 +519,7 @@ describe('Factory Takes Integration Tests', function () {
           signer,
           pool,
           poolConfig: poolConfig as any,
-          config: factoryConfig as any,
+          config: directDexConfig as any,
         });
       }
 
@@ -531,17 +531,17 @@ describe('Factory Takes Integration Tests', function () {
     beforeEach(setupForkContext);
 
     /**
-     * Tests factory take error handling for various edge cases.
+     * Tests direct DEX take error handling for various edge cases.
      * Ensures robust operation when configurations are incomplete or invalid.
      */
 
     it('should handle missing factory configuration gracefully', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
       const incompleteConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         // Missing takerContracts and uniswapV3RouterOverrides
       };
 
@@ -567,12 +567,12 @@ describe('Factory Takes Integration Tests', function () {
     });
 
     it('should handle missing uniswapV3RouterOverrides', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
       const configWithoutRouterOverrides = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -600,12 +600,12 @@ describe('Factory Takes Integration Tests', function () {
     });
 
     it('should handle invalid liquiditySource for factory', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
       const validFactoryConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -638,13 +638,13 @@ describe('Factory Takes Integration Tests', function () {
       expect(true).to.be.true;
     });
 
-    it('should handle concurrent factory take requests', async () => {
-      await setupFactoryTakeScenario();
+    it('should handle concurrent direct DEX take requests', async () => {
+      await setupDirectDexTakeScenario();
 
-      const factoryConfig = {
+      const directDexConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -665,13 +665,13 @@ describe('Factory Takes Integration Tests', function () {
         },
       };
 
-      // Test concurrent factory take requests
+      // Test concurrent direct DEX take requests
       const promises = Array.from({ length: 3 }, () =>
         processManualTakeCandidates({
           signer,
           pool,
           poolConfig: poolConfig as any,
-          config: factoryConfig as any,
+          config: directDexConfig as any,
         })
       );
 
@@ -681,12 +681,12 @@ describe('Factory Takes Integration Tests', function () {
     });
 
     it('should handle pool configuration without take settings', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
-      const factoryConfig = {
+      const directDexConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -709,7 +709,7 @@ describe('Factory Takes Integration Tests', function () {
           signer,
           pool,
           poolConfig: poolConfigWithoutTake as any,
-          config: factoryConfig as any,
+          config: directDexConfig as any,
         });
         expect(true).to.be.true;
       } catch (error) {
@@ -725,18 +725,18 @@ describe('Factory Takes Integration Tests', function () {
     beforeEach(setupForkContext);
 
     /**
-     * Tests that factory takes integrate properly with existing keeper components.
+     * Tests that direct DEX takes integrate properly with existing keeper components.
      * Ensures factory system doesn't break other keeper functionality.
      */
 
     it('should integrate with existing kick functionality', async () => {
       // Setup scenario and kick
-      await setupFactoryTakeScenario(); // This includes kicking
+      await setupDirectDexTakeScenario(); // This includes kicking
 
-      const factoryConfig = {
+      const directDexConfig = {
         dryRun: true,
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -763,19 +763,19 @@ describe('Factory Takes Integration Tests', function () {
         signer,
         pool,
         poolConfig: poolConfig as any,
-        config: factoryConfig as any,
+        config: directDexConfig as any,
       });
 
       expect(true).to.be.true;
     });
 
     it('should handle dry run mode consistently', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
       const dryRunConfig = {
         dryRun: true, // Critical: dry run mode
         subgraphUrl: 'http://test-url',
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -808,7 +808,7 @@ describe('Factory Takes Integration Tests', function () {
     });
 
     it('should work with different subgraph configurations', async () => {
-      await setupFactoryTakeScenario();
+      await setupDirectDexTakeScenario();
 
       const subgraphConfigs = [
         'http://test-url',
@@ -816,9 +816,9 @@ describe('Factory Takes Integration Tests', function () {
         'http://invalid-url-that-should-fail',
       ];
 
-      const factoryConfig = {
+      const directDexConfig = {
         dryRun: true,
-        keeperTakerFactory: '0x1234567890123456789012345678901234567890',
+        keeperTakerRouter: '0x1234567890123456789012345678901234567890',
         takerContracts: {
           UniswapV3: '0x2234567890123456789012345678901234567890',
         },
@@ -842,7 +842,7 @@ describe('Factory Takes Integration Tests', function () {
       // Should handle different subgraph URLs gracefully
       for (const subgraphUrl of subgraphConfigs) {
         const configWithSubgraph = {
-          ...factoryConfig,
+          ...directDexConfig,
           subgraphUrl,
         };
 

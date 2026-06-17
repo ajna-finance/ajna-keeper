@@ -4,8 +4,12 @@
 // snapshot normalization, reconciliation-plan construction, and
 // contains/exact assertion helpers promoted out of src/dex/lifi (which
 // keeps compatibility re-exports). Every calldata-aggregator provider
-// keeps its own isolated per-deployment allowlists; nothing here is
-// LI.FI-specific.
+// keeps its own isolated per-deployment allowlists. The helper MECHANICS
+// are provider-neutral (no provider branching in the logic), but their
+// fallback diagnostic labels default to the LI.FI provider for backward
+// compatibility; non-LI.FI providers (e.g. Sushi) override them via the
+// `label`/`labelPrefix` params (e.g. src/dex/sushi-aggregator/preflight.ts
+// passes 'Sushi aggregator taker').
 import { ethers } from 'ethers';
 
 // Neutral expected-policy shape consumed by the assertion/reconciliation
@@ -137,7 +141,7 @@ export function normalizeTakerSelectorAllowlist(
     for (const callTarget of Array.from(callTargetAllowlist)) {
       if (!normalized.has(callTarget)) {
         throw new Error(
-          `${label} must include selectors for every configured LI.FI call target`
+          `${label} must include selectors for every configured call target`
         );
       }
     }
@@ -418,10 +422,12 @@ export function compareTakerAllowlistPolicy(params: {
   expected: NormalizedTakerAllowlistPolicy;
   actual: TakerAllowlistSnapshot;
   mode: TakerAllowlistCompareMode;
+  labelPrefix?: string;
 }): string[] {
+  const labelPrefix = params.labelPrefix ?? 'LI.FI taker';
   const errors: string[] = [];
   const callTargetMismatch = getSetMismatch({
-    label: 'LI.FI taker call target allowlist',
+    label: `${labelPrefix} call target allowlist`,
     expected: params.expected.callTargets,
     actual: params.actual.callTargets,
     mode: params.mode,
@@ -431,7 +437,7 @@ export function compareTakerAllowlistPolicy(params: {
   }
 
   const approvalSpenderMismatch = getSetMismatch({
-    label: 'LI.FI taker approval spender allowlist',
+    label: `${labelPrefix} approval spender allowlist`,
     expected: params.expected.approvalSpenders,
     actual: params.actual.approvalSpenders,
     mode: params.mode,
@@ -453,7 +459,7 @@ export function compareTakerAllowlistPolicy(params: {
       getSelectorsForTarget(params.actual.selectorAllowlist, target)
     );
     const selectorMismatch = getSetMismatch({
-      label: `LI.FI taker selector allowlist for ${target}`,
+      label: `${labelPrefix} selector allowlist for ${target}`,
       expected: expectedSelectors,
       actual: actualSelectors,
       mode: params.mode,
@@ -470,6 +476,7 @@ export function assertTakerAllowlistPolicy(params: {
   expected: NormalizedTakerAllowlistPolicy;
   actual: TakerAllowlistSnapshot;
   mode: TakerAllowlistCompareMode;
+  labelPrefix?: string;
 }): void {
   const errors = compareTakerAllowlistPolicy(params);
   if (errors.length > 0) {

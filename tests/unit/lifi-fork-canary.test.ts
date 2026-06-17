@@ -1,7 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { expect } from 'chai';
-import { KeeperConfig, LifiDexConfig } from '../../src/config';
+import {
+  KeeperConfig,
+  LifiConcreteAllowlistProductionDexConfig,
+  LifiDexConfig,
+} from '../../src/config';
 import {
   LIFI_FORK_CANARY_BASE_CHAIN_ID,
   getLifiForkCanaryApiKey,
@@ -34,7 +38,7 @@ function keeperConfigWithLifi(lifi: LifiDexConfig): KeeperConfig {
     },
     manual: { pools: [] },
     takers: {
-      factory: FACTORY,
+      router: FACTORY,
       contracts: { Lifi: LIFI_TAKER },
     },
     dex: { lifi },
@@ -42,7 +46,7 @@ function keeperConfigWithLifi(lifi: LifiDexConfig): KeeperConfig {
 }
 
 function productionConfig(
-  overrides: Partial<Extract<LifiDexConfig, { mode: 'production' }>> = {}
+  overrides: Partial<LifiConcreteAllowlistProductionDexConfig> = {}
 ): KeeperConfig {
   return keeperConfigWithLifi({
     mode: 'production',
@@ -125,7 +129,7 @@ describe('LI.FI fork execution canary', () => {
     ).to.throw('refusing LI.FI policy env overrides');
   });
 
-  it('requires production mode, configured factory, and configured LI.FI taker', () => {
+  it('requires production mode, configured TakerRouter, and configured LI.FI taker', () => {
     expect(() =>
       resolveLifiForkCanaryConfig({
         keeperConfig: keeperConfigWithLifi({
@@ -146,7 +150,7 @@ describe('LI.FI fork execution canary', () => {
         },
         env: {},
       })
-    ).to.throw('LI.FI fork canary requires config.takers.factory');
+    ).to.throw('LI.FI fork canary requires config.takers.router');
   });
 
   it('requires the default LI.FI API base URL before fetching executable calldata', () => {

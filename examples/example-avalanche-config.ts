@@ -50,7 +50,7 @@ const config: KeeperConfig = {
     },
     uniswapV3: {
       router: {
-        swapRouter02Address: '0xbb00FF08d01D300023C629E8fFfFcb65A5a578cE', // Avalanche SwapRouter02 for factory external takes
+        swapRouter02Address: '0xbb00FF08d01D300023C629E8fFfFcb65A5a578cE', // Avalanche SwapRouter02 for direct DEX external takes
         wethAddress: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', // wrapped AVAX as intermediary token
         defaultFeeTier: 3000, // 0.3% as default for this chain
         defaultSlippage: 0.5, // 0.5% as default slippage
@@ -60,7 +60,10 @@ const config: KeeperConfig = {
     },
   },
   takers: {
-    oneInch: '0x[DEPLOY_WITH_query-1inch.ts]',
+    router: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
+    contracts: {
+      OneInchAggregator: '0x[DEPLOYED_ONEINCH_AGGREGATOR_TAKER_ADDRESS]',
+    },
   },
   pricing: {
     coinGeckoApiKey: process.env.COINGECKO_API_KEY,
@@ -93,7 +96,7 @@ const config: KeeperConfig = {
           minCollateral: 0.07,
           hpbPriceFactor: 0.9,
 
-          // External Takes via 1inch (requires takers.oneInch deployment)
+          // External Takes via 1inch (requires takers.router and takers.contracts.OneInchAggregator)
           liquiditySource: LiquiditySource.ONEINCH,
           marketPriceFactor: 0.98, // Take when auction price < market * 0.98
           allowSubsidy: false,

@@ -32,20 +32,10 @@ import {
 } from './manual-context';
 import { createArbTakeStrategy } from './arb-strategy';
 
-export type {
-  OneInchExecutionConfig,
-  OneInchQuoteConfig,
-} from './one-inch-types';
-export {
-  getOneInchPathQuoteEvaluation,
-  getOneInchTakeQuoteEvaluation,
-  takeLiquidation,
-} from './one-inch-execution';
-export {
-  createNoExternalTakeAdapter,
-  createOneInchTakeAdapter,
-} from './one-inch-adapter';
+export { createNoExternalTakeAdapter } from './no-external-take-adapter';
 export { createLifiTakeAdapter } from './lifi/adapter';
+export { createOneInchAggregatorTakeAdapter } from './oneinch-aggregator/adapter';
+export { createSushiAggregatorTakeAdapter } from './sushi-aggregator/adapter';
 export type {
   TakeAuctionStatus,
   TakeAuctionStatusReader,
@@ -68,7 +58,10 @@ interface HandleTakeParams {
 
 interface ResolvedHandleTakeParams extends Omit<HandleTakeParams, 'config'> {
   config: HandleTakeConfig;
-  context: ResolvedManualTakeContext;
+  // ManualTakeContext<T> is invariant in T (executeExternalTake takes config: T),
+  // so the resolved heterogeneous union cannot be held as ManualTakeContext<unknown>;
+  // `any` bridges the runtime-dispatched context here intentionally.
+  context: ManualTakeContext<any>;
 }
 
 export async function handleTakes({

@@ -1,15 +1,14 @@
-import {
-  normalizeLifiAddressAllowlist,
-} from './address-allowlist';
+import { normalizeLifiAddressAllowlist } from './address-allowlist';
 import {
   getConcreteProductionLifiPolicyError,
-  normalizeLifiExchangeFilters,
   type LifiExchangeFilterConfig,
-  type NormalizedLifiExchangeFilters,
 } from './filters';
 import {
-  normalizeLifiSelectorAllowlistRecord,
-} from './selector-allowlist';
+  normalizeProductionLifiExchangePolicy,
+  type LifiExchangePolicy,
+  type LifiProductionExchangePolicyConfig,
+} from './exchange-policy';
+import { normalizeLifiSelectorAllowlistRecord } from './selector-allowlist';
 
 export const LIFI_CHAIN_POLICY_BOUNDS = {
   maxAllowlistEntries: 128,
@@ -26,7 +25,8 @@ export interface LifiChainPolicyConfig extends LifiExchangeFilterConfig {
 }
 
 export interface LifiProductionChainPolicyConfig
-  extends LifiChainPolicyConfig {
+  extends LifiChainPolicyConfig,
+    LifiProductionExchangePolicyConfig {
   mode: 'production';
 }
 
@@ -42,7 +42,8 @@ export interface NormalizedLifiChainPolicy
 }
 
 export interface NormalizedLifiProductionPolicy {
-  filters: NormalizedLifiExchangeFilters;
+  exchangePolicy: LifiExchangePolicy;
+  filters: LifiExchangePolicy['filters'];
   chains: NormalizedLifiChainPolicy[];
 }
 
@@ -273,17 +274,13 @@ export function normalizeLifiProductionPolicy(params: {
     throw new Error(`${params.fieldName}.mode must be production`);
   }
   const productionConfig = params.config as LifiProductionChainPolicyConfig;
-  const filters = normalizeLifiExchangeFilters(productionConfig, {
+  const exchangePolicy = normalizeProductionLifiExchangePolicy({
+    config: productionConfig,
     fieldName: params.fieldName,
-    mode: productionConfig.mode,
   });
-  if ((filters.allowExchanges ?? []).length === 0) {
-    throw new Error(
-      `${params.fieldName}.allowExchanges must be non-empty in production`
-    );
-  }
   return {
-    filters,
+    exchangePolicy,
+    filters: exchangePolicy.filters,
     chains: normalizeProductionChains({
       config: productionConfig,
       fieldName: params.fieldName,

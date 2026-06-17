@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { BigNumber, utils } from 'ethers';
-import { isAggregatorExternalTakePath } from '../../src/config/external-take-registry';
+import { isAggregatorExternalTakePath } from '../../src/config/external-take-descriptors';
 import {
   getDebtConstrainedTakeCollateralWad,
   getExpectedQuotedCollateralWad,
@@ -84,7 +84,7 @@ describe('take sizing', () => {
     it('clamps for aggregator paths and not for factory', () => {
       expect(
         getExpectedQuotedCollateralWad({
-          externalTakePath: 'oneinch',
+          externalTakePath: 'calldata_aggregator',
           ...params,
         }).eq(clamped)
       ).to.equal(true);
@@ -96,7 +96,7 @@ describe('take sizing', () => {
       ).to.equal(true);
       expect(
         getExpectedQuotedCollateralWad({
-          externalTakePath: 'factory',
+          externalTakePath: 'direct_dex',
           ...params,
         }).eq(COLLATERAL)
       ).to.equal(true);
@@ -111,11 +111,10 @@ describe('take sizing', () => {
 
   describe('isAggregatorExternalTakePath', () => {
     it('classifies paths', () => {
-      expect(isAggregatorExternalTakePath('oneinch')).to.equal(true);
       expect(isAggregatorExternalTakePath('calldata_aggregator')).to.equal(
         true
       );
-      expect(isAggregatorExternalTakePath('factory')).to.equal(false);
+      expect(isAggregatorExternalTakePath('direct_dex')).to.equal(false);
     });
   });
 });

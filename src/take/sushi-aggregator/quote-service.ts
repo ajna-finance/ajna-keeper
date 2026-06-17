@@ -14,8 +14,8 @@ import {
   SushiAggregatorRouteValidationError,
   validateSushiAggregatorQuote,
 } from '../../dex/sushi-aggregator/validate-route';
-import { getDecimalsErc20 } from '../../erc20';
 import { ApprovedCalldataAggregatorQuote } from '../aggregator-calldata/types';
+import { resolveExternalTakeChainId } from '../external-take/chain';
 import { SushiAggregatorQuoteConfig } from './types';
 
 export function requireSushiAggregatorConfig(
@@ -33,27 +33,7 @@ export async function resolveSushiAggregatorChainId(
   config: Pick<SushiAggregatorQuoteConfig, 'chainId'>,
   signer: Signer
 ): Promise<number> {
-  return config.chainId ?? (await signer.getChainId());
-}
-
-export async function getSushiAggregatorTokenDecimals(params: {
-  signer: Signer;
-  tokenAddress: string;
-  chainId?: number;
-  cache?: Map<string, number>;
-}): Promise<number> {
-  const cacheKey = `${params.chainId ?? 'default'}:${params.tokenAddress.toLowerCase()}`;
-  const cached = params.cache?.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const decimals = await getDecimalsErc20(
-    params.signer,
-    params.tokenAddress,
-    params.chainId
-  );
-  params.cache?.set(cacheKey, decimals);
-  return decimals;
+  return resolveExternalTakeChainId(config, signer, 'Sushi Aggregator');
 }
 
 export interface SushiAggregatorQuoteFailureMetadata {

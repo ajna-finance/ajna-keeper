@@ -13,9 +13,9 @@ verify that the keeper discovery path can evaluate or take the auction.
 Use this fixture when you need to prove one of these paths end to end:
 
 - a keeper can discover a live Base liquidation through its configured subgraph
-- a Uniswap V3 factory external take can execute against fixture liquidity
-- hybrid route selection behaves correctly when 1inch and factory paths are both enabled
-- the factory-first gas quote fallback behaves as expected when native gas cannot be converted into quote token terms
+- a Uniswap V3 direct DEX external take can execute against fixture liquidity
+- hybrid route selection behaves correctly when 1inch and direct DEX paths are both enabled
+- the direct DEX-first gas quote fallback behaves as expected when native gas cannot be converted into quote token terms
 
 Use normal unit, integration, and fork-backed production verification tests for
 ordinary development. This fixture spends live gas when pointed at Base mainnet.
@@ -58,7 +58,7 @@ npm run no-spend-validation
 
 This starts a local Base fork, creates and kicks a fresh mock-token fixture,
 runs the discovery harness in dry-run mode, reverts that dry run, then executes
-the same discovered factory/Uniswap take path on the local fork. It uses the
+the same discovered direct DEX/Uniswap take path on the local fork. It uses the
 Hardhat default key and temporary files, so it does not change the live fixture
 command or spend live Base gas.
 
@@ -122,7 +122,7 @@ If either route cannot quote, the script exits before the final kick.
 ### Fallback Regression
 
 Use fallback regression mode to validate
-`hybridGasQuoteFailureFallbackMode: 'factory_first'`:
+`hybridGasQuoteFailureFallbackMode: 'direct_dex_first'`:
 
 ```bash
 export AJNA_AGENT_UNISWAP_LIQUIDITY_MODE=fallback_regression
@@ -137,7 +137,7 @@ Run the same fixture in two keeper configurations when proving the fallback:
 
 1. Fallback disabled: the keeper should discover the auction and skip with
    `native_to_quote_conversion_unavailable`.
-2. Fallback enabled: the keeper should execute the Uniswap V3 factory route if
+2. Fallback enabled: the keeper should execute the Uniswap V3 direct DEX route if
    the native gas cap and route policy allow it.
 
 For local harness validation:
@@ -154,7 +154,7 @@ npm run run-fixture-keeper-harness -- \
 npm run run-fixture-keeper-harness -- \
   --summary /tmp/ajna-fallback-fixture-summary.json \
   --mode discovery \
-  --hybrid-gas-quote-fallback factory_first \
+  --hybrid-gas-quote-fallback direct_dex_first \
   --auto-warp-to-take \
   --max-take-warps 0 \
   --dry-run
@@ -266,8 +266,8 @@ Useful keeper log markers:
 Discovery take cycle summary: ... auctionCount=... targets=... discoveredTargets=...
 Discovered take target summary: pool=0x... name="discovered:0x..." dryRun=false candidates=...
 executedExternalTakes=1
-executedFactoryTakes=1
-executedFactorySources=uniswapV3:1
+executedRoutes=direct_dex:1
+executedDirectDexSources=uniswapV3:1
 ```
 
 For fallback-disabled controls, useful evidence includes:
@@ -281,10 +281,10 @@ For fallback-enabled runs, useful evidence includes:
 
 ```text
 Hybrid external take max-profit ranking unavailable
-factory_gas_quote_fallback
+hybrid_gas_quote_fallback
 hybridGasQuoteFallbackAttempts=1
 hybridGasQuoteFallbackSuccesses=1
-Factory: Executing
+Direct DEX: Executing
 ```
 
 ## Common Failures

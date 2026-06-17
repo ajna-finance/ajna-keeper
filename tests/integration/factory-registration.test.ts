@@ -1,13 +1,13 @@
 import { expect } from 'chai';
 import { Wallet, constants } from 'ethers';
-import { AjnaKeeperTaker__factory } from '../../typechain-types/factories/contracts';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../typechain-types/factories/contracts/factories';
 import {
   LifiKeeperTaker__factory,
   UniswapV3KeeperTaker__factory,
 } from '../../typechain-types/factories/contracts/takers';
 import {
   MockConfigurableTaker__factory,
+  MockLegacyDirectOneInchTaker__factory,
   MockPoolDeployer__factory,
 } from '../../typechain-types/factories/contracts/mocks';
 import { LiquiditySource } from '../../src/config';
@@ -17,13 +17,13 @@ import {
   getProvider,
 } from './helpers/mock-taker-base';
 
-describe('Factory taker registration', () => {
+describe('Direct DEX taker registration', () => {
   it('rejects a zero Ajna pool factory at construction', async () => {
     const owner = Wallet.createRandom().connect(getProvider());
     await fundSigner(owner.address);
 
     await expectRevertContaining(
-      new AjnaKeeperTakerFactory__factory(owner).deploy(constants.AddressZero),
+      new TakerRouter__factory(owner).deploy(constants.AddressZero),
       "reverted with reason string 'Zero pool factory'"
     );
   });
@@ -38,7 +38,7 @@ describe('Factory taker registration', () => {
     const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
     await poolDeployer.deployed();
 
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();
@@ -63,14 +63,14 @@ describe('Factory taker registration', () => {
     const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
     await poolDeployer.deployed();
 
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();
 
-    const legacyTaker = await new AjnaKeeperTaker__factory(owner).deploy(
-      poolDeployer.address
-    );
+    const legacyTaker = await new MockLegacyDirectOneInchTaker__factory(
+      owner
+    ).deploy(poolDeployer.address);
     await legacyTaker.deployed();
 
     await expectRevertContaining(
@@ -87,7 +87,7 @@ describe('Factory taker registration', () => {
     const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
     await poolDeployer.deployed();
 
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();
@@ -100,7 +100,7 @@ describe('Factory taker registration', () => {
 
     await expectRevertContaining(
       factory.setTaker(LiquiditySource.UNISWAPV3, taker.address),
-      'Factory mismatch'
+      'Router mismatch'
     );
   });
 
@@ -111,7 +111,7 @@ describe('Factory taker registration', () => {
     const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
     await poolDeployer.deployed();
 
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();
@@ -138,7 +138,7 @@ describe('Factory taker registration', () => {
     const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
     await poolDeployer.deployed();
 
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();
@@ -163,7 +163,7 @@ describe('Factory taker registration', () => {
       const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
       await poolDeployer.deployed();
 
-      const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+      const factory = await new TakerRouter__factory(owner).deploy(
         poolDeployer.address
       );
       await factory.deployed();
@@ -237,7 +237,7 @@ describe('Factory taker registration', () => {
     const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
     await poolDeployer.deployed();
 
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();
@@ -267,7 +267,7 @@ describe('Factory taker registration', () => {
     const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
     await poolDeployer.deployed();
 
-    const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+    const factory = await new TakerRouter__factory(owner).deploy(
       poolDeployer.address
     );
     await factory.deployed();

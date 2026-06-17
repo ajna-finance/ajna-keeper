@@ -1,5 +1,6 @@
 import { TakeWriteTransportConfig } from '../write-transport';
 import { SushiAggregatorDexConfig } from '../../config';
+import { CalldataAggregatorQuoteResultNotification } from '../aggregator-calldata/execution';
 
 export interface SushiAggregatorQuoteConfig {
   sushiAggregator?: SushiAggregatorDexConfig;
@@ -13,13 +14,10 @@ export interface SushiAggregatorExecutionConfig
   extends SushiAggregatorQuoteConfig,
     TakeWriteTransportConfig {
   dryRun?: boolean;
-  keeperTakerFactory?: string;
-  onSushiAggregatorQuoteResult?: (result: {
-    success: boolean;
-    retryable?: boolean;
-    errorCode?: number | string;
-    error?: string;
-  }) => void;
+  keeperTakerRouter?: string;
+  onSushiAggregatorQuoteResult?: (
+    result: CalldataAggregatorQuoteResultNotification
+  ) => void;
   onSushiAggregatorExecutionFailure?: (result: {
     preBroadcast: boolean;
     error?: string;

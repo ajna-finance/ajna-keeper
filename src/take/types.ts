@@ -65,9 +65,8 @@ export interface TakeActionConfig {
 
 export type ExternalTakeStrategyKind =
   | 'none'
-  | 'oneinch'
   | 'calldata_aggregator'
-  | 'factory'
+  | 'direct_dex'
   | 'hybrid';
 
 export interface TakeBorrowerCandidate {
@@ -85,6 +84,7 @@ export interface ExternalTakeQuoteEvaluation {
   quoteFailureRetryable?: boolean;
   quoteFailureCode?: number | string;
   selectedLiquiditySource?: LiquiditySource;
+  providerId?: CalldataAggregatorProviderId;
   selectedFeeTier?: number;
   routeMinOutRaw?: BigNumber;
   profitMinOutRaw?: BigNumber;
@@ -123,37 +123,27 @@ interface ApprovedExternalTakeQuoteBase<TSource extends LiquiditySource>
   approvedMinOutRaw: BigNumber;
 }
 
-export interface BoundOneInchRouteEvaluation
-  extends BoundExternalTakeRouteBase<LiquiditySource.ONEINCH> {
-  externalTakePath: 'oneinch';
-}
-
-export interface ApprovedOneInchQuoteEvaluation
-  extends ApprovedExternalTakeQuoteBase<LiquiditySource.ONEINCH> {
-  externalTakePath: 'oneinch';
-}
-
-export interface BoundUniswapV3FactoryRouteEvaluation
+export interface BoundUniswapV3DirectDexRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.UNISWAPV3> {
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   selectedFeeTier: number;
 }
 
-export interface ApprovedUniswapV3FactoryQuoteEvaluation
+export interface ApprovedUniswapV3DirectDexQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.UNISWAPV3> {
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   selectedFeeTier: number;
 }
 
-export interface BoundCurveFactoryRouteEvaluation
+export interface BoundCurveDirectDexRouteEvaluation
   extends BoundExternalTakeRouteBase<LiquiditySource.CURVE> {
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   curvePool: CurvePoolSelection;
 }
 
-export interface ApprovedCurveFactoryQuoteEvaluation
+export interface ApprovedCurveDirectDexQuoteEvaluation
   extends ApprovedExternalTakeQuoteBase<LiquiditySource.CURVE> {
-  externalTakePath: 'factory';
+  externalTakePath: 'direct_dex';
   curvePool: CurvePoolSelection;
 }
 
@@ -171,17 +161,16 @@ export interface BoundCalldataAggregatorRouteEvaluation
   calldataQuote: ApprovedCalldataAggregatorQuote;
 }
 
-export type BoundFactoryRouteEvaluation =
-  | BoundUniswapV3FactoryRouteEvaluation
-  | BoundCurveFactoryRouteEvaluation;
+export type BoundDirectDexRouteEvaluation =
+  | BoundUniswapV3DirectDexRouteEvaluation
+  | BoundCurveDirectDexRouteEvaluation;
 
-export type ApprovedFactoryQuoteEvaluation =
-  | ApprovedUniswapV3FactoryQuoteEvaluation
-  | ApprovedCurveFactoryQuoteEvaluation;
+export type ApprovedDirectDexQuoteEvaluation =
+  | ApprovedUniswapV3DirectDexQuoteEvaluation
+  | ApprovedCurveDirectDexQuoteEvaluation;
 
 export type BoundExternalTakeRouteEvaluation =
-  | BoundOneInchRouteEvaluation
-  | BoundFactoryRouteEvaluation
+  | BoundDirectDexRouteEvaluation
   | BoundCalldataAggregatorRouteEvaluation;
 
 export interface ExternalTakeExecutionCandidate<TApprovalContext = unknown> {
@@ -206,8 +195,7 @@ export type ExternalTakeEvaluationResult<TApprovalContext = unknown> =
     };
 
 export type ApprovedExternalTakeQuoteEvaluation =
-  | ApprovedOneInchQuoteEvaluation
-  | ApprovedFactoryQuoteEvaluation
+  | ApprovedDirectDexQuoteEvaluation
   | ApprovedCalldataAggregatorQuoteEvaluation;
 
 export interface ArbTakeEvaluation {

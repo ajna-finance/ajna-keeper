@@ -1,6 +1,6 @@
 import { BigNumber, constants } from 'ethers';
 import { ExternalTakePathKind } from '../config/schema';
-import { isAggregatorExternalTakePath } from '../config/external-take-registry';
+import { isAggregatorExternalTakePath } from '../config/external-take-descriptors';
 import { AuctionTakeFacts } from './types';
 
 /**
@@ -37,7 +37,7 @@ export function getDebtConstrainedTakeCollateralWad(
 /**
  * The collateral size a route's quote is expected to be denominated in.
  * Aggregator-category paths (1inch and calldata aggregators such as LI.FI)
- * quote and execute the debt-clamped size; factory paths quote the full
+ * quote and execute the debt-clamped size; direct DEX paths quote the full
  * collateral and let the taker contract pro-rate the min-out to whatever
  * Ajna actually fills. The non-resizable classification is keyed on the
  * registry's aggregator category, not the calldata_aggregator family alone,

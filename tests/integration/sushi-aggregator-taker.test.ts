@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { constants, utils } from 'ethers';
 import { LiquiditySource } from '../../src/config';
-import { AjnaKeeperTakerFactory__factory } from '../../typechain-types/factories/contracts/factories';
+import { TakerRouter__factory } from '../../typechain-types/factories/contracts/factories';
 import { MockLifiSwapTarget__factory } from '../../typechain-types/factories/contracts/mocks';
 import {
   LifiKeeperTaker__factory,
@@ -24,7 +24,7 @@ async function deploySushiFixture() {
   const collateral = base.collateralToken;
   const quote = base.quoteToken;
 
-  const factory = await new AjnaKeeperTakerFactory__factory(owner).deploy(
+  const factory = await new TakerRouter__factory(owner).deploy(
     poolDeployer.address
   );
   await factory.deployed();
@@ -78,7 +78,7 @@ describe('SushiAggregatorKeeperTaker (Packet 3B)', () => {
         fixture.target.address,
         '0x1234'
       ),
-      // Factory routes by registered source; calling the taker directly with
+      // Direct DEX routes by registered source; calling the taker directly with
       // the wrong source must fail closed.
       ''
     ).catch(() => undefined);
@@ -96,7 +96,7 @@ describe('SushiAggregatorKeeperTaker (Packet 3B)', () => {
     );
   });
 
-  it('emits exactly one SushiAggregatorSwapExecuted and never the base SwapExecuted', async () => {
+  it('emits exactly one AggregatorSwapExecuted and never the base SwapExecuted', async () => {
     const fixture = await deploySushiFixture();
     const amountIn = utils.parseEther('1');
     const outputAmount = utils.parseEther('1.25');
@@ -144,7 +144,7 @@ describe('SushiAggregatorKeeperTaker (Packet 3B)', () => {
     const receipt = await tx.wait();
 
     const sushiTopic = fixture.taker.interface.getEventTopic(
-      'SushiAggregatorSwapExecuted'
+      'AggregatorSwapExecuted'
     );
     const baseTopic = fixture.taker.interface.getEventTopic('SwapExecuted');
     const sushiEvents = receipt.logs.filter(
@@ -156,10 +156,11 @@ describe('SushiAggregatorKeeperTaker (Packet 3B)', () => {
     expect(sushiEvents.length).to.equal(1);
     expect(baseEvents.length).to.equal(0);
     const decoded = fixture.taker.interface.decodeEventLog(
-      'SushiAggregatorSwapExecuted',
+      'AggregatorSwapExecuted',
       sushiEvents[0].data,
       sushiEvents[0].topics
     );
+    expect(decoded.source).to.equal(LiquiditySource.SUSHI_AGGREGATOR);
     expect(decoded.target).to.equal(fixture.target.address);
     expect(decoded.amountIn.eq(amountIn)).to.equal(true);
   });

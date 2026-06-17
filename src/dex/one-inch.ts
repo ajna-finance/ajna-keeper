@@ -4,18 +4,30 @@ import { BigNumber } from 'ethers';
 // duplicate definition - ETHTransferFailed()
 // duplicate definition - InvalidMsgValue()
 import genericRouterABI from '../abis/1inch-genericrouter.abi.json';
-import {
-  AjnaKeeperTaker,
-  SwapDescriptionStructOutput,
-} from '../../typechain-types/contracts/AjnaKeeperTaker';
 import { logger } from '../logging';
 import { getErrorMessage } from '../utils';
 
 const ONE_INCH_ATOMIC_TAKE_ALLOWED_FLAGS = BigNumber.from(0);
 
+export interface OneInchSwapDescription {
+  srcToken: string;
+  dstToken: string;
+  srcReceiver: string;
+  dstReceiver: string;
+  amount: BigNumber;
+  minReturnAmount: BigNumber;
+  flags: BigNumber;
+}
+
+export interface OneInchSwapDetails {
+  aggregationExecutor: string;
+  swapDescription: OneInchSwapDescription;
+  opaqueData: string;
+}
+
 export interface SwapCalldata {
   aggregationExecutor: string;
-  swapDescription: SwapDescriptionStructOutput;
+  swapDescription: OneInchSwapDescription;
   encodedCalls: string;
 }
 
@@ -32,7 +44,7 @@ export function decodeSwapCalldata(apiResponse: any): SwapCalldata {
 
 export function convertSwapApiResponseToDetails(
   apiResponse: any
-): AjnaKeeperTaker.OneInchSwapDetailsStruct {
+): OneInchSwapDetails {
   const swapCalldata: SwapCalldata = decodeSwapCalldata(apiResponse);
   logger.debug(
     `1inch swap decoded: executor=${swapCalldata.aggregationExecutor.slice(0, 10)}`
@@ -111,7 +123,7 @@ function parseOneInchSwapDescriptionUint(
 }
 
 export function validateOneInchSwapDetailsForAtomicTake(
-  details: AjnaKeeperTaker.OneInchSwapDetailsStruct,
+  details: OneInchSwapDetails,
   expected: {
     srcToken: string;
     dstToken: string;
@@ -227,7 +239,7 @@ export function validateOneInchSwapDetailsForAtomicTake(
 }
 
 export function encodeOneInchSwapDetailsBytes(
-  details: AjnaKeeperTaker.OneInchSwapDetailsStruct
+  details: OneInchSwapDetails
 ): string {
   return ethers.utils.defaultAbiCoder.encode(
     [
