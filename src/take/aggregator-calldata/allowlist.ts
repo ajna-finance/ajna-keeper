@@ -2,14 +2,13 @@
 // deployments and preflight (SushiSwap aggregator roadmap, Packet 2B).
 // Canonical home of the allowlist ABI fragments, on-chain snapshot reads,
 // snapshot normalization, reconciliation-plan construction, and
-// contains/exact assertion helpers promoted out of src/dex/lifi (which
-// keeps compatibility re-exports). Every calldata-aggregator provider
-// keeps its own isolated per-deployment allowlists. The helper MECHANICS
-// are provider-neutral (no provider branching in the logic), but their
-// fallback diagnostic labels default to the LI.FI provider for backward
-// compatibility; non-LI.FI providers (e.g. Sushi) override them via the
-// `label`/`labelPrefix` params (e.g. src/dex/sushi-aggregator/preflight.ts
-// passes 'Sushi aggregator taker').
+// contains/exact assertion helpers promoted out of src/dex/lifi. Every
+// calldata-aggregator provider keeps its own isolated per-deployment
+// allowlists. The helper MECHANICS and their fallback diagnostic labels
+// are provider-neutral (no provider branching, neutral 'aggregator ...'
+// defaults); every provider threads its own diagnostic label through the
+// `label`/`labelPrefix` params (e.g. LI.FI passes 'LI.FI selector
+// allowlist'/'LI.FI taker', Sushi passes 'Sushi aggregator taker').
 import { ethers } from 'ethers';
 
 // Neutral expected-policy shape consumed by the assertion/reconciliation
@@ -86,7 +85,7 @@ export function normalizeTakerSelectorAllowlist(
     requireCallTargetCoverage?: boolean;
   } = {}
 ): Map<string, Set<string>> {
-  const label = params.label ?? 'LI.FI selector allowlist';
+  const label = params.label ?? 'aggregator selector allowlist';
   const callTargetAllowlist = params.callTargetAllowlist
     ? new Set(
         normalizeTakerAddressAllowlist(params.callTargetAllowlist, {
@@ -327,7 +326,7 @@ export function normalizeTakerAllowlistSnapshot(params: {
   selectorTargets?: readonly string[];
   labelPrefix?: string;
 }): TakerAllowlistSnapshot {
-  const labelPrefix = params.labelPrefix ?? 'LI.FI taker';
+  const labelPrefix = params.labelPrefix ?? 'aggregator taker';
   const callTargets = normalizeAddressList(
     params.callTargets,
     `${labelPrefix} call target allowlist`
@@ -365,7 +364,7 @@ export async function readTakerAllowlistSnapshot(params: {
   labelPrefix?: string;
   read?: TakerAllowlistRead;
 }): Promise<TakerAllowlistSnapshot> {
-  const labelPrefix = params.labelPrefix ?? 'LI.FI taker';
+  const labelPrefix = params.labelPrefix ?? 'aggregator taker';
   const read =
     params.read ??
     (async <T>(readParams: { operation: () => Promise<T> }): Promise<T> =>
@@ -424,7 +423,7 @@ export function compareTakerAllowlistPolicy(params: {
   mode: TakerAllowlistCompareMode;
   labelPrefix?: string;
 }): string[] {
-  const labelPrefix = params.labelPrefix ?? 'LI.FI taker';
+  const labelPrefix = params.labelPrefix ?? 'aggregator taker';
   const errors: string[] = [];
   const callTargetMismatch = getSetMismatch({
     label: `${labelPrefix} call target allowlist`,

@@ -432,6 +432,7 @@ async function validateLifiAllowlistPreflight(params: {
         expected: policy,
         actual,
         mode: 'exact',
+        labelPrefix: 'LI.FI taker',
       })
     );
   } catch (error) {

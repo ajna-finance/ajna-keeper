@@ -126,8 +126,9 @@ export function validateLifiQuote(
   const selectorsByTarget = normalizeTakerSelectorAllowlist(
     params.selectorAllowlist,
     params.selectorAllowlist === undefined
-      ? {}
+      ? { label: 'LI.FI selector allowlist' }
       : {
+          label: 'LI.FI selector allowlist',
           requireNonEmpty: true,
           callTargetAllowlist: params.callTargetAllowlist,
           requireCallTargetCoverage: true,

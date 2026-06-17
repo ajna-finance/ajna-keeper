@@ -563,7 +563,7 @@ describe('LI.FI quote validation', () => {
         }
       )
     ).to.throw(
-      'LI.FI selector allowlist must include selectors for every configured call target'
+      'aggregator selector allowlist must include selectors for every configured call target'
     );
 
     expect(() =>
@@ -579,7 +579,7 @@ describe('LI.FI quote validation', () => {
         }
       )
     ).to.throw(
-      `LI.FI selector allowlist.${otherTarget} is not present in callTargetAllowlist`
+      `aggregator selector allowlist.${otherTarget} is not present in callTargetAllowlist`
     );
 
     expect(() =>
