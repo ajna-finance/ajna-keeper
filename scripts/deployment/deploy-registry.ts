@@ -156,7 +156,7 @@ export async function registerTakerInRouter(params: {
 // LI.FI branch but NO Sushi branch; routing every registered taker through this
 // helper gives Sushi (and any future aggregator) the same router-config /
 // authorization / owner checks.
-export async function verifyAggregatorTakerRegistration(params: {
+export async function verifyTakerRegistration(params: {
   descriptor: DeployDescriptor;
   deployer: ethers.Wallet;
   factoryAddress: string;

@@ -1,7 +1,8 @@
 import { KeeperConfig, SushiAggregatorDexConfig } from './schema';
 import {
-  normalizeTakerAddressAllowlist,
-  normalizeTakerSelectorAllowlistRecord,
+  NormalizedAggregatorChainPolicy,
+  assertValidAggregatorAllowlistPolicyChains,
+  normalizeAggregatorChainPolicy,
 } from '../take/aggregator-calldata/allowlist';
 import { normalizeAggregatorApiBaseUrl } from '../dex/lifi/api-policy';
 
@@ -32,44 +33,15 @@ export const SUSHI_AGGREGATOR_POLICY_BOUNDS = {
   maxPriceImpactCap: 0.15,
 } as const;
 
-export interface NormalizedSushiAggregatorChainPolicy {
-  chainId: number;
-  callTargets: string[];
-  approvalSpenders: string[];
-  selectorAllowlist: Record<string, string[]>;
-}
+export type NormalizedSushiAggregatorChainPolicy =
+  NormalizedAggregatorChainPolicy;
 
 export function normalizeSushiAggregatorChainPolicy(params: {
   config: SushiAggregatorDexConfig;
   fieldName: string;
   chainId: number;
 }): NormalizedSushiAggregatorChainPolicy {
-  const { config, fieldName, chainId } = params;
-  const callTargets = normalizeTakerAddressAllowlist(
-    config.callTargetAllowlist?.[chainId],
-    { label: `${fieldName}.callTargetAllowlist[${chainId}]`, requireNonEmpty: true }
-  );
-  const approvalSpenders = normalizeTakerAddressAllowlist(
-    config.approvalSpenderAllowlist?.[chainId],
-    {
-      label: `${fieldName}.approvalSpenderAllowlist[${chainId}]`,
-      requireNonEmpty: true,
-    }
-  );
-  const selectorAllowlist = normalizeTakerSelectorAllowlistRecord(
-    config.selectorAllowlist?.[chainId],
-    {
-      label: `${fieldName}.selectorAllowlist[${chainId}]`,
-      requireNonEmpty: true,
-      // Fail closed like LI.FI: every selector target must be an allowlisted call
-      // target, and every call target must have selector coverage. Otherwise the
-      // deploy/preflight could register a Sushi taker whose selectors don't cover
-      // its call targets, so a take passes config validation then reverts on-chain.
-      callTargetAllowlist: callTargets,
-      requireCallTargetCoverage: true,
-    }
-  );
-  return { chainId, callTargets, approvalSpenders, selectorAllowlist };
+  return normalizeAggregatorChainPolicy(params);
 }
 
 export function assertValidSushiAggregatorDexConfig(params: {
@@ -129,23 +101,16 @@ export function assertValidSushiAggregatorDexConfig(params: {
       `${fieldName}.maxPriceImpact must be a fraction in (0, ${SUSHI_AGGREGATOR_POLICY_BOUNDS.maxPriceImpactCap}]`
     );
   }
-  if (chainId !== undefined) {
-    normalizeSushiAggregatorChainPolicy({ config, fieldName, chainId });
-  } else {
-    const chains = Object.keys(config.callTargetAllowlist ?? {});
-    if (chains.length === 0) {
-      throw new Error(
-        `${fieldName}.callTargetAllowlist must configure at least one chain`
-      );
-    }
-    for (const chain of chains) {
-      normalizeSushiAggregatorChainPolicy({
-        config,
-        fieldName,
-        chainId: Number(chain),
-      });
-    }
+  // Sushi requires its callTargetAllowlist (the policy is mandatory, not
+  // mode-gated like 1inch), then every chain present in ANY of the three
+  // allowlist records (plus the active chainId) is validated fail-closed via
+  // the shared helper — a spender-only or selector-only chain cannot slip past.
+  if (Object.keys(config.callTargetAllowlist ?? {}).length === 0) {
+    throw new Error(
+      `${fieldName}.callTargetAllowlist must configure at least one chain`
+    );
   }
+  assertValidAggregatorAllowlistPolicyChains({ config, fieldName, chainId });
 }
 
 /**

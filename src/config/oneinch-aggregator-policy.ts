@@ -1,59 +1,27 @@
 import { OneInchDexConfig } from './schema';
 import {
-  normalizeTakerAddressAllowlist,
-  normalizeTakerSelectorAllowlistRecord,
+  NormalizedAggregatorChainPolicy,
+  assertValidAggregatorAllowlistPolicyChains,
+  normalizeAggregatorChainPolicy,
 } from '../take/aggregator-calldata/allowlist';
 
 // Production calldata-aggregator allowlist policy for the
-// OneInchAggregatorKeeperTaker. Mirrors src/config/sushi-aggregator-policy.ts:
-// the per-chain reviewed call-target / approval-spender / selector allowlists
-// the deployed 1inch taker enforces on-chain, normalized fail-closed so the
-// deploy loop and preflight reconciliation share one definition. 1inch keeps no
-// mode field (unlike LI.FI's canary/production); the presence of an allowlist
-// policy is what marks dex.oneInch as production-deployable for external takes.
+// OneInchAggregatorKeeperTaker. The per-chain reviewed call-target /
+// approval-spender / selector allowlists the deployed 1inch taker enforces are
+// normalized fail-closed through the canonical normalizeAggregatorChainPolicy
+// (shared verbatim with Sushi), so the deploy loop, preflight reconciliation,
+// and config validation cannot drift. 1inch keeps no mode field (unlike LI.FI's
+// canary/production); the presence of an allowlist policy is what marks
+// dex.oneInch as production-deployable for external takes.
 
-export interface NormalizedOneInchChainPolicy {
-  chainId: number;
-  callTargets: string[];
-  approvalSpenders: string[];
-  selectorAllowlist: Record<string, string[]>;
-}
+export type NormalizedOneInchChainPolicy = NormalizedAggregatorChainPolicy;
 
 export function normalizeOneInchChainPolicy(params: {
   config: OneInchDexConfig;
   fieldName: string;
   chainId: number;
 }): NormalizedOneInchChainPolicy {
-  const { config, fieldName, chainId } = params;
-  const callTargets = normalizeTakerAddressAllowlist(
-    config.callTargetAllowlist?.[chainId],
-    {
-      label: `${fieldName}.callTargetAllowlist[${chainId}]`,
-      requireNonEmpty: true,
-    }
-  );
-  const approvalSpenders = normalizeTakerAddressAllowlist(
-    config.approvalSpenderAllowlist?.[chainId],
-    {
-      label: `${fieldName}.approvalSpenderAllowlist[${chainId}]`,
-      requireNonEmpty: true,
-    }
-  );
-  const selectorAllowlist = normalizeTakerSelectorAllowlistRecord(
-    config.selectorAllowlist?.[chainId],
-    {
-      label: `${fieldName}.selectorAllowlist[${chainId}]`,
-      requireNonEmpty: true,
-      // Fail closed like LI.FI/Sushi: every selector target must be an
-      // allowlisted call target, and every call target must have selector
-      // coverage. Otherwise deploy/preflight could register a 1inch taker whose
-      // selectors don't cover its call targets, so a take passes config
-      // validation then reverts on-chain.
-      callTargetAllowlist: callTargets,
-      requireCallTargetCoverage: true,
-    }
-  );
-  return { chainId, callTargets, approvalSpenders, selectorAllowlist };
+  return normalizeAggregatorChainPolicy(params);
 }
 
 /**
@@ -96,20 +64,5 @@ export function assertValidOneInchAggregatorDexConfig(params: {
   if (!config || !hasPolicy) {
     return;
   }
-  const chainIds = new Set<number>();
-  for (const list of [
-    config.callTargetAllowlist,
-    config.approvalSpenderAllowlist,
-    config.selectorAllowlist,
-  ]) {
-    for (const key of Object.keys(list ?? {})) {
-      chainIds.add(Number(key));
-    }
-  }
-  if (chainId !== undefined) {
-    chainIds.add(chainId);
-  }
-  for (const id of Array.from(chainIds)) {
-    normalizeOneInchChainPolicy({ config, fieldName, chainId: id });
-  }
+  assertValidAggregatorAllowlistPolicyChains({ config, fieldName, chainId });
 }

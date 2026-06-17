@@ -1,9 +1,13 @@
 import { BigNumber } from 'ethers';
-import { LiquiditySource } from '../../config';
 import {
   CalldataAggregatorProviderId,
   getAggregatorProviderIdentity,
 } from '../../config';
+import { deriveRouteExecutionFloorRaw } from '../external-take/quote-economics';
+import {
+  ApprovedCalldataAggregatorQuoteEvaluation,
+  ExternalTakeQuoteEvaluation,
+} from '../types';
 
 /**
  * True only when `txValue` represents a genuinely non-zero native value.
@@ -21,11 +25,6 @@ function hasNonZeroNativeValue(txValue: string | undefined): boolean {
     return true;
   }
 }
-import { deriveRouteExecutionFloorRaw } from '../external-take/quote-economics';
-import {
-  ApprovedCalldataAggregatorQuoteEvaluation,
-  ExternalTakeQuoteEvaluation,
-} from '../types';
 
 export type CalldataAggregatorQuoteApprovalResult =
   | {

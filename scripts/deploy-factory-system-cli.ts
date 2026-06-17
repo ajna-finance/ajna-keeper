@@ -2,12 +2,7 @@ import { ethers } from 'ethers';
 import { readFileSync } from 'fs';
 import * as path from 'path';
 import { password } from '@inquirer/prompts';
-import {
-  getManualPools,
-  readConfigFile,
-  KeeperConfig,
-  LiquiditySource,
-} from '../src/config';
+import { getManualPools, readConfigFile, KeeperConfig } from '../src/config';
 import {
   getLifiProductionDeploymentGateMessages,
   hasProductionLifiConfig,
@@ -19,8 +14,9 @@ import {
   deployTaker,
   reconcileTakerAllowlists,
   registerTakerInRouter,
-  verifyAggregatorTakerRegistration,
+  verifyTakerRegistration,
   type AggregatorDeployDescriptor,
+  type DeploymentAddressKey,
 } from './deployment/deploy-registry';
 
 /**
@@ -39,15 +35,11 @@ import {
  * - Manual gas limits for problematic networks
  */
 
-export interface DeploymentAddresses {
-  factory?: string;
-  uniswapTaker?: string;
-  curveTaker?: string;
-  lifiTaker?: string;
-  sushiAggregatorTaker?: string;
-  oneInchAggregatorTaker?: string;
-  // Future: uniswapV4, pancakeswap, balancer, izumi, etc.
-}
+// Derived from the deploy registry's DeploymentAddressKey union so the two
+// cannot drift: adding a taker to the registry automatically widens this.
+export type DeploymentAddresses = { factory?: string } & Partial<
+  Record<DeploymentAddressKey, string>
+>;
 
 // Gas configuration for different networks
 const GAS_CONFIGS: {
@@ -356,23 +348,21 @@ export async function configureFactory(
     deployer
   );
 
-  // Register UniswapV3 taker (LiquiditySource.UNISWAPV3 = 2)
-  if (addresses.uniswapTaker) {
-    const setUniTakerTx = await factory.setTaker(2, addresses.uniswapTaker);
-    console.log('✅ UniswapV3 configuration tx:', setUniTakerTx.hash);
-    await setUniTakerTx.wait();
-    console.log('🎉 Factory configured with UniswapV3 taker');
-  }
-
-  // Register Curve taker (LiquiditySource.CURVE = 4)
-  if (addresses.curveTaker) {
-    const setCurveTakerTx = await factory.setTaker(
-      LiquiditySource.CURVE,
-      addresses.curveTaker
-    );
-    console.log('✅ Curve configuration tx:', setCurveTakerTx.hash);
-    await setCurveTakerTx.wait();
-    console.log('🎉 Factory configured with Curve taker');
+  // Register the direct-DEX takers by iterating their descriptors — no magic
+  // source ids, no hand-unrolled per-DEX branch. Each registers at its
+  // canonical descriptor.source (UNISWAPV3=2, CURVE=4) with no allowlist step.
+  for (const descriptor of DEPLOY_DESCRIPTORS) {
+    if (descriptor.category !== 'direct_dex') {
+      continue;
+    }
+    const takerAddress = addresses[descriptor.addressKey];
+    if (!takerAddress) {
+      continue;
+    }
+    const setTakerTx = await factory.setTaker(descriptor.source, takerAddress);
+    console.log(`✅ ${descriptor.label} configuration tx:`, setTakerTx.hash);
+    await setTakerTx.wait();
+    console.log(`🎉 Factory configured with ${descriptor.label} taker`);
   }
 
   // Aggregator taker registration is intentionally NOT done here. The deploy
@@ -404,7 +394,7 @@ export async function verifyDeployment(
     if (!takerAddress) {
       continue;
     }
-    await verifyAggregatorTakerRegistration({
+    await verifyTakerRegistration({
       descriptor,
       deployer,
       factoryAddress: addresses.factory,
@@ -426,12 +416,18 @@ export function generateConfigUpdate(
   console.log('\n```typescript');
   console.log('// ADD/UPDATE these lines in your config:');
 
-  if (
+  // Emit the takers: { ... } wrapper whenever ANY taker (or the router) is
+  // present, including Sushi/1inch — a Sushi-only or 1inch-only deploy must not
+  // print the contracts block without its enclosing takers: { }.
+  const hasTakerConfigBlock = Boolean(
     addresses.factory ||
-    addresses.uniswapTaker ||
-    addresses.curveTaker ||
-    addresses.lifiTaker
-  ) {
+      addresses.uniswapTaker ||
+      addresses.curveTaker ||
+      addresses.lifiTaker ||
+      addresses.sushiAggregatorTaker ||
+      addresses.oneInchAggregatorTaker
+  );
+  if (hasTakerConfigBlock) {
     console.log('takers: {');
   }
   if (addresses.factory) {
@@ -467,12 +463,7 @@ export function generateConfigUpdate(
     }
     console.log('  },');
   }
-  if (
-    addresses.factory ||
-    addresses.uniswapTaker ||
-    addresses.curveTaker ||
-    addresses.lifiTaker
-  ) {
+  if (hasTakerConfigBlock) {
     console.log('},');
   }
   console.log('```');

@@ -167,6 +167,89 @@ export function normalizeTakerSelectorAllowlistRecord(
   return record;
 }
 
+export interface NormalizedAggregatorChainPolicy
+  extends NormalizedTakerAllowlistPolicy {
+  chainId: number;
+}
+
+// The per-chain production allowlist policy shape every calldata-aggregator
+// provider config (LI.FI / Sushi / 1inch) exposes identically.
+type AggregatorAllowlistPolicyConfig = {
+  callTargetAllowlist?: { [chainId: number]: readonly string[] };
+  approvalSpenderAllowlist?: { [chainId: number]: readonly string[] };
+  selectorAllowlist?: {
+    [chainId: number]: { [target: string]: readonly string[] };
+  };
+};
+
+/**
+ * Canonical per-chain normalizer for a calldata-aggregator production allowlist
+ * policy. Sushi and 1inch share this verbatim (only their config type and
+ * diagnostic field name differ). Fail-closed: every list must be non-empty and
+ * every selector target must be an allowlisted call target with full coverage.
+ */
+export function normalizeAggregatorChainPolicy(params: {
+  config: AggregatorAllowlistPolicyConfig;
+  fieldName: string;
+  chainId: number;
+}): NormalizedAggregatorChainPolicy {
+  const { config, fieldName, chainId } = params;
+  const callTargets = normalizeTakerAddressAllowlist(
+    config.callTargetAllowlist?.[chainId],
+    {
+      label: `${fieldName}.callTargetAllowlist[${chainId}]`,
+      requireNonEmpty: true,
+    }
+  );
+  const approvalSpenders = normalizeTakerAddressAllowlist(
+    config.approvalSpenderAllowlist?.[chainId],
+    {
+      label: `${fieldName}.approvalSpenderAllowlist[${chainId}]`,
+      requireNonEmpty: true,
+    }
+  );
+  const selectorAllowlist = normalizeTakerSelectorAllowlistRecord(
+    config.selectorAllowlist?.[chainId],
+    {
+      label: `${fieldName}.selectorAllowlist[${chainId}]`,
+      requireNonEmpty: true,
+      callTargetAllowlist: callTargets,
+      requireCallTargetCoverage: true,
+    }
+  );
+  return { chainId, callTargets, approvalSpenders, selectorAllowlist };
+}
+
+/**
+ * Fail-closed validation that every chain present in ANY of the three allowlist
+ * records (plus an optional active chainId) has a complete, covering policy.
+ * Shared by the Sushi/1inch production validators so a spender-only or
+ * selector-only chain cannot slip through unvalidated.
+ */
+export function assertValidAggregatorAllowlistPolicyChains(params: {
+  config: AggregatorAllowlistPolicyConfig;
+  fieldName: string;
+  chainId?: number;
+}): void {
+  const { config, fieldName, chainId } = params;
+  const chainIds = new Set<number>();
+  for (const list of [
+    config.callTargetAllowlist,
+    config.approvalSpenderAllowlist,
+    config.selectorAllowlist,
+  ]) {
+    for (const key of Object.keys(list ?? {})) {
+      chainIds.add(Number(key));
+    }
+  }
+  if (chainId !== undefined) {
+    chainIds.add(chainId);
+  }
+  for (const id of Array.from(chainIds)) {
+    normalizeAggregatorChainPolicy({ config, fieldName, chainId: id });
+  }
+}
+
 
 export const AGGREGATOR_TAKER_ALLOWLIST_ABI = [
   'function getAllowedCallTargets() view returns (address[])',
