@@ -351,6 +351,24 @@ execution order").
   Reinforces N5's recommendation to enable `noUnusedLocals` / `no-unused-vars`.
 - **Effort:** S. **Risk:** none. **Verify:** `tsc`, + a re-grep confirming none of the three names remains.
 
+### N19 — Make `examples/example-config.ts` internally consistent *(new; docs-accuracy)*
+- **Location:** `examples/example-config.ts:221` (`liquiditySource: LiquiditySource.ONEINCH` active),
+  `:266` (`liquiditySource: LiquiditySource.CURVE` active); no top-level `takers` block anywhere in
+  the example.
+- **Problem:** Two pools **activate** external-take sources (ONEINCH, CURVE) while the example
+  provides **no `takers: { router, contracts }` block** — yet the example's own comments
+  (`:110-114`) correctly state ONEINCH/UNISWAPV3/CURVE "require `takers.router` + `takers.contracts.*`".
+  External-take validation requires a registered taker per source, so the example config **as written
+  would fail validation**; an operator copying it hits a confusing startup error. (Verified the rest
+  is accurate: `dex.oneInch` is still a valid runtime key — `schema.ts:653` — and the migrated
+  `takers.router` / `takers.contracts.OneInchAggregator` naming in the comments is correct; the
+  inconsistency is only the missing `takers` block vs the active sources.)
+- **Remedy:** Either comment out the active `liquiditySource`/`marketPriceFactor`/`allowSubsidy` lines
+  in those two pools (matching the "uncomment after deployment" pattern the other pools use), **or**
+  add an illustrative `takers: { router: '0x…', contracts: { OneInchAggregator: '0x…', Curve: '0x…' } }`
+  block so the example validates. Prefer adding the `takers` block (operators need to see its shape).
+- **Effort:** S. **Risk:** none. **Verify:** load the example through `readConfigFile`/validation in a test.
+
 ---
 
 ## Wave 2 — make every surface consume the descriptor
@@ -637,7 +655,7 @@ One PR, committed in dependency order so the bundle stays reviewable and the two
 (`slither`, deployment tests) are not skipped:
 
 1. **Deletions & canonical-reuse** — M-B, M-E, N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11,
-   N12, N13, N14, N15, N16, N17, B-T1, B-T3, B-D2, B-D3.
+   N12, N13, N14, N15, N16, N17, N19, B-T1, B-T3, B-D2, B-D3.
 2. **Descriptor consumers** — M-C, M-C′, M-D, M-F, M-G, M-H, N18 (M-C′ depends on M-B from step 1;
    N18 pairs with M-G).
 3. **Contracts** — B-C1, B-C2; **run `npm run slither`** and the full taker suites here as a
