@@ -104,6 +104,22 @@ export type CalldataAggregatorProviderExecutionParams<
   config: TConfig;
 };
 
+/**
+ * The 7-positional-arg path-quote evaluation contract every calldata-aggregator
+ * provider implements (getLifiPathQuoteEvaluation et al.). Threading one named
+ * type through the take adapter descriptor and the prepare-execution param
+ * removes the positional-arg drift between those surfaces.
+ */
+export type CalldataAggregatorPathQuoteEvaluator<TConfig> = (
+  pool: FungiblePool,
+  price: number,
+  collateralWad: BigNumber,
+  poolConfig: TakeActionConfig,
+  quoteConfig: TConfig,
+  signer: Signer,
+  auctionPrice?: BigNumber
+) => Promise<ExternalTakeQuoteEvaluation>;
+
 export function recordCalldataAggregatorPreBroadcastRejection<
   TConfig extends CalldataAggregatorExecutionConfigBase,
 >(params: {
@@ -263,15 +279,7 @@ export async function prepareCalldataAggregatorExecution<
   missingRouterReason: string;
   missingTakerReason: string;
   collateralRoundsToZeroReason: string;
-  getPathQuoteEvaluation: (
-    pool: FungiblePool,
-    price: number,
-    collateralWad: BigNumber,
-    poolConfig: TakeActionConfig,
-    quoteConfig: TConfig,
-    signer: Signer,
-    auctionPrice?: BigNumber
-  ) => Promise<ExternalTakeQuoteEvaluation>;
+  getPathQuoteEvaluation: CalldataAggregatorPathQuoteEvaluator<TConfig>;
   getTakerAddress: (config: TConfig) => string | undefined;
   resolveChainId: (config: TConfig, signer: Signer) => Promise<number>;
   requestValidatedQuote: (params: {

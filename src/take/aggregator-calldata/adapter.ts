@@ -1,13 +1,9 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { BigNumber } from 'ethers';
 import { ExternalTakeAdapter } from '../engine';
 import { bindExternalTakeQuoteToExecutionResult } from '../external-take/execution-plan';
 import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
-import {
-  ExternalTakeQuoteEvaluation,
-  TakeActionConfig,
-  TakeLiquidationPlan,
-} from '../types';
+import { TakeActionConfig, TakeLiquidationPlan } from '../types';
+import { CalldataAggregatorPathQuoteEvaluator } from './execution';
 
 /**
  * Provider-neutral calldata-aggregator take adapter. The three provider
@@ -20,15 +16,7 @@ export function createCalldataAggregatorTakeAdapter<
   TExecutionConfig,
   TQuoteConfig,
 >(descriptor: {
-  getPathQuoteEvaluation: (
-    pool: FungiblePool,
-    price: number,
-    collateralWad: BigNumber,
-    poolConfig: TakeActionConfig,
-    quoteConfig: TQuoteConfig,
-    signer: Signer,
-    auctionPrice?: BigNumber
-  ) => Promise<ExternalTakeQuoteEvaluation>;
+  getPathQuoteEvaluation: CalldataAggregatorPathQuoteEvaluator<TQuoteConfig>;
   executeTake: (params: {
     pool: FungiblePool;
     signer: Signer;
