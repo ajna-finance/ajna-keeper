@@ -600,7 +600,7 @@ describe('Discovery Handlers', () => {
         'takeLiquidationOneInchAggregator'
       )
       .callsFake(async ({ config }: any) => {
-        config.onOneInchAggregatorQuoteResult?.({
+        config.onCalldataAggregatorQuoteResult?.({
           success: false,
           retryable: true,
           errorCode: 429,
@@ -1169,7 +1169,7 @@ describe('Discovery Handlers', () => {
         'takeLiquidationOneInchAggregator'
       )
       .callsFake(async ({ config }: any) => {
-        config.onOneInchAggregatorExecutionFailure?.({
+        config.onCalldataAggregatorExecutionFailure?.({
           preBroadcast: true,
           error: 'gas estimation failed',
         });
@@ -2533,12 +2533,12 @@ describe('Discovery Handlers', () => {
         'takeLiquidationOneInchAggregator'
       )
       .callsFake(async (params: any) => {
-        params.config.onOneInchAggregatorQuoteResult?.({
+        params.config.onCalldataAggregatorQuoteResult?.({
           success: false,
           retryable: true,
           error: '1inch swap-data unavailable',
         });
-        params.config.onOneInchAggregatorExecutionFailure?.({
+        params.config.onCalldataAggregatorExecutionFailure?.({
           preBroadcast: true,
           error: '1inch swap-data unavailable',
         });
@@ -2696,12 +2696,12 @@ describe('Discovery Handlers', () => {
       )
       .callsFake(async (params: any) => {
         oneInchAttempted = true;
-        params.config.onOneInchAggregatorQuoteResult?.({
+        params.config.onCalldataAggregatorQuoteResult?.({
           success: false,
           retryable: true,
           error: '1inch swap-data unavailable',
         });
-        params.config.onOneInchAggregatorExecutionFailure?.({
+        params.config.onCalldataAggregatorExecutionFailure?.({
           preBroadcast: true,
           error: '1inch swap-data unavailable',
         });

@@ -118,7 +118,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
         executionFailureHandler,
       }) => ({
         ...config,
-        onLifiQuoteResult: createQuoteResultHandler(config, route, (result) =>
+        onCalldataAggregatorQuoteResult: createQuoteResultHandler(config, route, (result) =>
           recordLifiCircuitOutcome(
             result.success
               ? 'success'
@@ -128,7 +128,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
             'execution_refresh'
           )
         ),
-        onLifiExecutionFailure: executionFailureHandler,
+        onCalldataAggregatorExecutionFailure: executionFailureHandler,
       }),
       getExecutionRefreshCircuitOpenReason:
         getLifiExecutionRefreshCircuitOpenReason,
@@ -145,7 +145,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
         executionFailureHandler,
       }) => ({
         ...config,
-        onOneInchAggregatorQuoteResult: createQuoteResultHandler(
+        onCalldataAggregatorQuoteResult: createQuoteResultHandler(
           config,
           route,
           (result) => {
@@ -161,7 +161,7 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
             }
           }
         ),
-        onOneInchAggregatorExecutionFailure: executionFailureHandler,
+        onCalldataAggregatorExecutionFailure: executionFailureHandler,
       }),
       executeTake:
         oneInchAggregatorExecutionModule.takeLiquidationOneInchAggregator,
@@ -175,8 +175,8 @@ export function createDiscoveryCalldataAggregatorRouteProviders(params: {
         executionFailureHandler,
       }) => ({
         ...config,
-        onSushiAggregatorQuoteResult: createQuoteResultHandler(config, route),
-        onSushiAggregatorExecutionFailure: executionFailureHandler,
+        onCalldataAggregatorQuoteResult: createQuoteResultHandler(config, route),
+        onCalldataAggregatorExecutionFailure: executionFailureHandler,
       }),
       executeTake:
         sushiAggregatorExecutionModule.takeLiquidationSushiAggregator,

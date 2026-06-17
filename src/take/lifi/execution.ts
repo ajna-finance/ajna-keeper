@@ -3,7 +3,6 @@ import { LifiDexConfig } from '../../config';
 import type { ExternalTakeTakerContractKey } from '../../config';
 import { DEFAULT_LIFI_QUOTE_MAX_AGE_MS } from '../../dex/lifi';
 import {
-  makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
@@ -91,7 +90,6 @@ async function prepareLifiExecution(params: {
     getFailureMetadata: getLifiQuoteFailureMetadata,
     getMaxQuoteAgeMs: (config) =>
       getLifiMaxQuoteAgeMs(requireProductionLifiConfig(config.lifi)),
-    onQuoteResult: (config, result) => config.onLifiQuoteResult?.(result),
   });
 }
 
@@ -106,14 +104,6 @@ export async function takeLiquidationLifi(params: {
     ...params,
     providerId: 'lifi',
     prepareExecution: prepareLifiExecution,
-    recordPreparedRejection:
-      makeCalldataAggregatorProviderRejectionRecorder<LifiExecutionConfig>({
-        onQuoteResult: (c, r) => c.onLifiQuoteResult?.(r),
-        onExecutionFailure: (c, r) => c.onLifiExecutionFailure?.(r),
-      }),
-    onQuoteConsumed: (config) => config.onLifiQuoteResult?.({ success: true }),
-    onExecutionFailure: (config, result) =>
-      config.onLifiExecutionFailure?.(result),
   });
 }
 

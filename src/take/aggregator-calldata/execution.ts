@@ -77,10 +77,21 @@ export type PreparedCalldataAggregatorExecution =
     }
   | CalldataAggregatorPreBroadcastRejection;
 
-type CalldataAggregatorExecutionConfigBase = TakeWriteTransportConfig & {
+export type CalldataAggregatorExecutionConfigBase = TakeWriteTransportConfig & {
   dryRun?: boolean;
   keeperTakerRouter?: string;
   tokenDecimalsCache?: Map<string, number>;
+  // Provider-neutral discovery/execution notification hooks. Every
+  // calldata-aggregator provider shares this single pair; the discovery layer
+  // (calldata-aggregator-providers.ts) populates them and the shared execution
+  // core invokes them directly — there are no per-provider callback names.
+  onCalldataAggregatorQuoteResult?: (
+    result: CalldataAggregatorQuoteResultNotification
+  ) => void;
+  onCalldataAggregatorExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void;
 };
 
 export type CalldataAggregatorProviderExecutionParams<
@@ -93,59 +104,24 @@ export type CalldataAggregatorProviderExecutionParams<
   config: TConfig;
 };
 
-export function recordCalldataAggregatorPreBroadcastRejection<TConfig>(params: {
+export function recordCalldataAggregatorPreBroadcastRejection<
+  TConfig extends CalldataAggregatorExecutionConfigBase,
+>(params: {
   config: TConfig;
   rejection: CalldataAggregatorPreBroadcastRejection;
-  onQuoteResult: (
-    config: TConfig,
-    result: CalldataAggregatorQuoteResultNotification
-  ) => void;
-  onExecutionFailure: (
-    config: TConfig,
-    result: {
-      preBroadcast: boolean;
-      error?: string;
-    }
-  ) => void;
 }): void {
   if (params.rejection.logError) {
     logger.error(params.rejection.reason);
   }
   if (params.rejection.quoteResult) {
-    params.onQuoteResult(params.config, params.rejection.quoteResult);
+    params.config.onCalldataAggregatorQuoteResult?.(
+      params.rejection.quoteResult
+    );
   }
-  params.onExecutionFailure(params.config, {
+  params.config.onCalldataAggregatorExecutionFailure?.({
     preBroadcast: true,
     error: params.rejection.reason,
   });
-}
-
-/**
- * Builds a provider-labeled pre-broadcast rejection recorder from the
- * provider's quote-result / execution-failure callback selectors. The shared
- * recorder body lives in recordCalldataAggregatorPreBroadcastRejection; this
- * factory only binds the per-provider callback field names.
- */
-export function makeCalldataAggregatorProviderRejectionRecorder<TConfig>(selectors: {
-  onQuoteResult: (
-    config: TConfig,
-    result: CalldataAggregatorQuoteResultNotification
-  ) => void;
-  onExecutionFailure: (
-    config: TConfig,
-    result: { preBroadcast: boolean; error?: string }
-  ) => void;
-}): (
-  config: TConfig,
-  rejection: CalldataAggregatorPreBroadcastRejection
-) => void {
-  return (config, rejection) =>
-    recordCalldataAggregatorPreBroadcastRejection({
-      config,
-      rejection,
-      onQuoteResult: selectors.onQuoteResult,
-      onExecutionFailure: selectors.onExecutionFailure,
-    });
 }
 
 /**
@@ -311,10 +287,6 @@ export async function prepareCalldataAggregatorExecution<
     code?: number | string;
   };
   getMaxQuoteAgeMs: (config: TConfig) => number;
-  onQuoteResult: (
-    config: TConfig,
-    result: CalldataAggregatorQuoteResultNotification
-  ) => void;
 }): Promise<PreparedCalldataAggregatorExecution> {
   const { pool, signer, poolConfig, liquidation, config } = params;
   const { label } = getAggregatorProviderIdentity(params.providerId);
@@ -399,7 +371,7 @@ export async function prepareCalldataAggregatorExecution<
     });
   } catch (error) {
     const failure = params.getFailureMetadata(error);
-    params.onQuoteResult(config, {
+    config.onCalldataAggregatorQuoteResult?.({
       success: false,
       retryable: failure.retryable,
       errorCode: failure.code,
@@ -452,7 +424,7 @@ export async function prepareCalldataAggregatorExecution<
         label,
       });
       if (error) {
-        params.onQuoteResult(config, {
+        config.onCalldataAggregatorQuoteResult?.({
           success: false,
           retryable: false,
           error,
@@ -576,15 +548,6 @@ export async function takeLiquidationCalldataAggregatorProvider<
     prepareExecution: (
       params: CalldataAggregatorProviderExecutionParams<TConfig>
     ) => Promise<PreparedCalldataAggregatorExecution>;
-    recordPreparedRejection: (
-      config: TConfig,
-      rejection: CalldataAggregatorPreBroadcastRejection
-    ) => void;
-    onQuoteConsumed: (config: TConfig) => void;
-    onExecutionFailure: (
-      config: TConfig,
-      result: { preBroadcast: boolean; error?: string }
-    ) => void;
   }
 ): Promise<boolean> {
   const { pool, liquidation, config } = params;
@@ -607,7 +570,10 @@ export async function takeLiquidationCalldataAggregatorProvider<
   try {
     const prepared = await params.prepareExecution(params);
     if (prepared.kind === 'rejected') {
-      params.recordPreparedRejection(config, prepared);
+      recordCalldataAggregatorPreBroadcastRejection({
+        config,
+        rejection: prepared,
+      });
       return false;
     }
     if (prepared.kind === 'dry_run') {
@@ -622,14 +588,15 @@ export async function takeLiquidationCalldataAggregatorProvider<
       liquidation,
       prepared,
       providerId: params.providerId,
-      onQuoteConsumed: () => params.onQuoteConsumed(config),
+      onQuoteConsumed: () =>
+        config.onCalldataAggregatorQuoteResult?.({ success: true }),
       onSubmissionAccepted: () => {
         attemptedSubmission = true;
       },
     });
     return true;
   } catch (error) {
-    params.onExecutionFailure(config, {
+    config.onCalldataAggregatorExecutionFailure?.({
       preBroadcast:
         !attemptedSubmission && !isNonceConsumedTransactionError(error),
       error: getErrorMessage(error),

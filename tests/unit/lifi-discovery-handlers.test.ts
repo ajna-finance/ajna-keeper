@@ -40,7 +40,7 @@ describe('LI.FI discovery handlers', () => {
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
       .callsFake(async (params: LifiTakeParams) => {
-        params.config.onLifiExecutionFailure?.({
+        params.config.onCalldataAggregatorExecutionFailure?.({
           preBroadcast: true,
           error: 'LI.FI refresh unavailable',
         });
@@ -741,7 +741,7 @@ describe('LI.FI discovery handlers', () => {
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
       .callsFake(async (params: LifiTakeParams) => {
-        params.config.onLifiExecutionFailure?.({
+        params.config.onCalldataAggregatorExecutionFailure?.({
           preBroadcast: true,
           error: 'LI.FI fresh quote min output below execution floor',
         });
@@ -857,7 +857,7 @@ describe('LI.FI discovery handlers', () => {
     const takeLiquidationLifiStub = sinon
       .stub(lifiExecutionModule, 'takeLiquidationLifi')
       .callsFake(async (params: LifiTakeParams) => {
-        params.config.onLifiExecutionFailure?.({
+        params.config.onCalldataAggregatorExecutionFailure?.({
           preBroadcast: false,
           error: 'relay accepted LI.FI take before timeout',
         });

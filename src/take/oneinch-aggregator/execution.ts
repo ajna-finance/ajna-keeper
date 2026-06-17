@@ -1,6 +1,5 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import {
-  makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
@@ -57,8 +56,6 @@ async function prepareOneInchAggregatorExecution(params: {
       }),
     getFailureMetadata: getOneInchAggregatorQuoteFailureMetadata,
     getMaxQuoteAgeMs: () => DEFAULT_ONEINCH_AGGREGATOR_MAX_QUOTE_AGE_MS,
-    onQuoteResult: (config, result) =>
-      config.onOneInchAggregatorQuoteResult?.(result),
   });
 }
 
@@ -73,17 +70,5 @@ export async function takeLiquidationOneInchAggregator(params: {
     ...params,
     providerId: 'oneinch',
     prepareExecution: prepareOneInchAggregatorExecution,
-    recordPreparedRejection:
-      makeCalldataAggregatorProviderRejectionRecorder<OneInchAggregatorExecutionConfig>(
-        {
-          onQuoteResult: (c, r) => c.onOneInchAggregatorQuoteResult?.(r),
-          onExecutionFailure: (c, r) =>
-            c.onOneInchAggregatorExecutionFailure?.(r),
-        }
-      ),
-    onQuoteConsumed: (config) =>
-      config.onOneInchAggregatorQuoteResult?.({ success: true }),
-    onExecutionFailure: (config, result) =>
-      config.onOneInchAggregatorExecutionFailure?.(result),
   });
 }

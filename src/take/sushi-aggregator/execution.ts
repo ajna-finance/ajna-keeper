@@ -1,7 +1,6 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { DEFAULT_SUSHI_AGGREGATOR_MAX_QUOTE_AGE_MS } from '../../config/sushi-aggregator-policy';
 import {
-  makeCalldataAggregatorProviderRejectionRecorder,
   prepareCalldataAggregatorExecution,
   takeLiquidationCalldataAggregatorProvider,
 } from '../aggregator-calldata/execution';
@@ -65,8 +64,6 @@ async function prepareSushiAggregatorExecution(params: {
     },
     getFailureMetadata: getSushiAggregatorQuoteFailureMetadata,
     getMaxQuoteAgeMs: getSushiMaxQuoteAgeMs,
-    onQuoteResult: (config, result) =>
-      config.onSushiAggregatorQuoteResult?.(result),
   });
 }
 
@@ -81,16 +78,5 @@ export async function takeLiquidationSushiAggregator(params: {
     ...params,
     providerId: 'sushi_aggregator',
     prepareExecution: prepareSushiAggregatorExecution,
-    recordPreparedRejection:
-      makeCalldataAggregatorProviderRejectionRecorder<SushiAggregatorExecutionConfig>(
-        {
-          onQuoteResult: (c, r) => c.onSushiAggregatorQuoteResult?.(r),
-          onExecutionFailure: (c, r) => c.onSushiAggregatorExecutionFailure?.(r),
-        }
-      ),
-    onQuoteConsumed: (config) =>
-      config.onSushiAggregatorQuoteResult?.({ success: true }),
-    onExecutionFailure: (config, result) =>
-      config.onSushiAggregatorExecutionFailure?.(result),
   });
 }
