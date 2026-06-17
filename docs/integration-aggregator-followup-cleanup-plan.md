@@ -50,8 +50,13 @@ into "add a descriptor row + a provider-local normalizer."
 
 ## Sequencing
 
+Delivered as **one PR** (per the single-PR decision), with the three waves below
+as its internal, ordered commit phases — the ordering is what keeps the bundle
+reviewable and the `slither` / deployment-test gates intact (see "Single-PR
+execution order").
+
 1. **Wave 1 — deletions & canonical-reuse.** Pure removals / reuse-an-existing
-   helper. Mechanical, low-risk, independently mergeable.
+   helper. Mechanical, low-risk.
 2. **Wave 2 — make every surface consume the descriptor.** The code-judo core:
    behavior-preserving refactors that delete per-provider branching. Require the
    taker/aggregator + discovery suites (and `slither` for the contract items).
@@ -229,6 +234,18 @@ into "add a descriptor row + a provider-local normalizer."
   reconciliation and contract-code checks intact and tested). **Verify:** preflight unit +
   fork-reconciliation tests.
 
+### M-F — One named `CalldataAggregatorPathQuoteEvaluator` type *(new; improvement)*
+- **Location:** `src/take/aggregator-calldata/adapter.ts:23-31` (descriptor
+  `getPathQuoteEvaluation` typed `TQuoteConfig`) vs the prepare-execution / quote-evaluation
+  params (typed the broader `TExecutionConfig`).
+- **Problem:** The same provider function (`getLifiPathQuoteEvaluation`) threads through three
+  descriptor surfaces whose 5th param is typed differently, relying on structural compatibility +
+  a `Partial<>` widening to line up — a 7-positional-arg contract that is easy to mis-wire.
+- **Remedy:** Define one named object-params type `CalldataAggregatorPathQuoteEvaluator` in the
+  shared module; have all three surfaces + the provider fns reference it. Rearranges (not deletes)
+  but collapses three near-duplicate signatures into one and removes the positional-arg fragility.
+- **Effort:** S. **Risk:** low. **Verify:** `tsc`, aggregator quote tests.
+
 ### B-C1 — Stale "standalone owner-only mode" comments describe an unreachable path
 - **Location:** `contracts/base/KeeperTakerBase.sol:122-124`;
   `contracts/takers/CurveKeeperTaker.sol:38-39`; `contracts/takers/UniswapV3KeeperTaker.sol:26-27`.
@@ -331,14 +348,22 @@ Decompose only with a clean domain split; do not bundle into the aggregator clea
   `npm run check-external-take-boundaries -- --base <ref>` at closeout for any PR touching the hot
   files; remediate by domain ownership, not line-count appeasement.
 
-## Suggested PR decomposition
+## Single-PR execution order
 
-- **PR 1 (Wave 1):** M-B (shim delete), M-E (empty types), N1 (txValue), N2 (neutral labels),
-  N3 (ABI constant), B-T1, B-T3, B-D2, B-D3 — pure deletions / canonical reuse, one review pass.
-- **PR 2 (Wave 2 — descriptor consumers):** M-C, M-D, M-C′ — the code-judo core (depends on PR 1's
-  M-B for M-C′).
-- **PR 3 (Wave 2 — contracts):** B-C1 + B-C2 — isolated so the `slither` + taker-suite gate is
-  unambiguous.
-- **PR 4 (Wave 3a):** deployment-script characterization tests, then M-A (the deploy loop).
-- **PR 5 (Wave 3b):** 1inch parity (`normalizeOneInchChainPolicy` + descriptor row + schema +
-  canary), riding on PR 2/PR 4.
+One PR, committed in dependency order so the bundle stays reviewable and the two hard gates
+(`slither`, deployment tests) are not skipped:
+
+1. **Deletions & canonical-reuse** — M-B, M-E, N1, N2, N3, B-T1, B-T3, B-D2, B-D3.
+2. **Descriptor consumers** — M-C, M-C′, M-D, M-F (M-C′ depends on M-B from step 1).
+3. **Contracts** — B-C1, B-C2; **run `npm run slither`** and the full taker suites here as a
+   distinct commit so the contract gate stays auditable inside the single PR.
+4. **Deploy** — write deployment-script **characterization tests first** (none exist), then M-A
+   (the descriptor-driven loop), asserting the loop reproduces the captured per-provider output.
+5. **1inch parity** — `normalizeOneInchChainPolicy` + descriptor row + schema. ⚠️ Its
+   `oneinch-aggregator-fork-canary` cannot be verified in this env (401 `ONEINCH_API_KEY`); land
+   the canary code but run it where a valid key exists. This is the one step whose live
+   verification can't happen here — if every line must be CI-green before merge, it's the natural
+   candidate to split off; otherwise note the unrun canary in the PR description.
+
+Keep each step a separate commit so a reviewer can read the single PR as these five phases. The
+build/typecheck/unit + taker/aggregator integration suites run at each step; `slither` at step 3.
