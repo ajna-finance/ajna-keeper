@@ -5,7 +5,7 @@
 // hot files must run this against their declared base ref; overrides happen
 // only through packet-closeout justification, never by editing the rules.
 //
-// Rules (docs/calldata-aggregator-followup-plan.md):
+// Rules (enforced directly by this checker):
 //   1. net-growth:     a hot file's final line count exceeds its base count
 //   2. added-lines:    more than MAX_ADDED_LINES gross added lines in a hot
 //                      file, even when net growth is zero or negative
