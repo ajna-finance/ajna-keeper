@@ -14,302 +14,331 @@ this plan. Because #20 was squash-merged, the pre-merge commit SHAs no longer
 resolve on `master`; this plan refers to changes by migration scope (#20), not by
 SHA.
 
-**What is NOT in scope here:** the inclusion review confirmed the merge is a
-strict superset of PR #18 with zero missing content, and the donation-DoS
-exact-fill fix is already shipped. This plan is cleanup + one parity feature, not
-correctness recovery.
+> **Revision note.** A second deep review reframed this plan. The original draft
+> listed ~13 findings as independent cleanups; most are symptoms of **one** root
+> cause (below), so they are now organized as a small number of decisive,
+> descriptor-driven moves. The original IDs (B-C1…B-S4) are preserved and mapped
+> onto the moves so nothing is lost. Three genuinely-new findings (N1–N3) and a
+> test prerequisite were added.
+
+## The unifying insight: one descriptor, N non-consumers
+
+The canonical descriptor registry already owns, per provider, everything most of
+these findings re-derive:
+
+```
+EXTERNAL_TAKE_SOURCE_IDENTITIES / getAggregatorProviderIdentity(providerId)
+  -> { source, label, takerContractKey, providerId, category, path }
+resolveExternalTakeDeployment(source) -> taker
+```
+
+Yet **at least five surfaces re-hardcode or re-switch on what the descriptor
+already owns** instead of consuming it: the deploy CLI (hand-unrolled per
+provider), the preflight validators (`validateLifi…`/`validateSushi…` twins), the
+discovery quote wrappers (hardcoded `label`/`selectedLiquiditySource`), the
+provider `execution.ts` literals (`providerId`+`source`+`label` passed
+separately), and the `hybrid`/`stats` source-switches. The guardrails already
+forbid "a second or third route/provider identity registry"; these are exactly
+that, at the behavior layer. **The work is: make every surface consume the
+descriptor, and the per-provider duplication — and most of Group B — disappears.**
+
+The clearest proof: `scripts/deploy-factory-system-cli.ts:134` *throws* for
+`dex.oneInch` because there is no loop to extend — the only way to add a provider
+today is to hand-edit ~6 sites. The original plan's Wave-3 (1inch) then added a
+fifth hand-wired copy on top. Consuming the descriptor turns "add a provider"
+into "add a descriptor row + a provider-local normalizer."
 
 ## Sequencing
 
-Three waves, cheapest-and-safest first:
-
-1. **Wave 1 — canonical-reuse wins (pure deletion, no behavior change).** Reuse an
-   existing helper / descriptor instead of a near-duplicate. Mechanical, low risk,
-   independently mergeable. Items: B-D1, B-D2, B-D3, B-T1, B-T3.
-2. **Wave 2 — structural simplifications (behavior-preserving refactors).** Touch
-   shared structure; require the full taker/aggregator suites (and `slither` for
-   the contract item) to re-confirm. Items: B-C1, B-C2, B-T2, B-S1, B-S2, B-S3,
-   B-S4, B-D4.
-3. **Wave 3 — 1inch allowlist preflight parity (functional feature).** The only
-   non-cleanup item; needs a valid `ONEINCH_API_KEY` for its fork canary (the dev
-   env key is currently 401, so the canary cannot be exercised locally here).
-
-Each item below lists: location, the problem, the remedy (thermo-nuclear style),
-effort (S/M/L), risk, and how to verify.
+1. **Wave 1 — deletions & canonical-reuse.** Pure removals / reuse-an-existing
+   helper. Mechanical, low-risk, independently mergeable.
+2. **Wave 2 — make every surface consume the descriptor.** The code-judo core:
+   behavior-preserving refactors that delete per-provider branching. Require the
+   taker/aggregator + discovery suites (and `slither` for the contract items).
+3. **Wave 3 — descriptor-driven deploy loop + 1inch parity.** Gated on first
+   adding deployment-script tests (none exist today — see the ⚠️ below). 1inch
+   parity rides on this wave as a descriptor row, not a fresh copy.
 
 ---
 
-## Group B — code-quality findings (pre-existing in OURS, verified by the review)
+## Wave 1 — deletions & canonical-reuse
 
-### Contracts
+### M-B — Delete the LI.FI allowlist alias shims *(new; supersedes the spirit of B-D2/B-D3 at a larger scale)*
+- **Location:** `src/dex/lifi/taker-allowlist.ts` (19-line shim), `address-allowlist.ts`,
+  `selector-allowlist.ts`, plus their wildcard re-export in `src/dex/lifi/index.ts`.
+  Consumers: `scripts/deployment/lifi-factory-deployment.ts`,
+  `src/discovery/route-preflight-validation.ts:20-23,410-431`,
+  `src/dex/lifi/chain-policy.ts`, `src/dex/sushi-aggregator/validate-route.ts`.
+- **Problem:** All three files are pure cosmetic-rename re-export barrels over the
+  provider-neutral `src/take/aggregator-calldata/allowlist.ts` (e.g.
+  `LIFI_TAKER_ALLOWLIST_ABI = AGGREGATOR_TAKER_ALLOWLIST_ABI`,
+  `readLifiTakerAllowlistSnapshot = readTakerAllowlistSnapshot`) — 7 fns + 6 types,
+  zero own logic. They create a parallel **vocabulary** (`Lifi*` names) for neutral
+  primitives; Sushi already imports the canonical names directly. They also force
+  LI.FI deploy to load the full `takerArtifact.abi` where Sushi binds the 3-fn ABI.
+- **Remedy (delete-indirection):** Delete the three barrels, drop them from
+  `dex/lifi/index.ts`, repoint the ~6 consumers at the canonical names. Prerequisite
+  for **M-A** — once gone, the LI.FI and Sushi deploy paths are the same code modulo
+  the normalizer.
+- **Effort:** S. **Risk:** low (mechanical rename). **Verify:** `tsc`, lifi unit +
+  preflight tests.
 
-#### B-C1 — Stale "standalone owner-only mode" comments describe an unreachable path
-- **Location:** `contracts/base/KeeperTakerBase.sol:122-124`;
-  `contracts/takers/CurveKeeperTaker.sol:38-39`;
-  `contracts/takers/UniswapV3KeeperTaker.sol:26-27`.
-- **Problem:** The comments say the authorized router "may be zero to deploy in
-  standalone owner-only mode." After Packet 5, the aggregator base hard-rejects a
-  zero router (`'Zero authorized router'`) and every deploy path supplies a
-  router, so the documented mode is effectively dead for the direct-DEX takers and
-  contradicted for the aggregator base.
-- **Remedy:** Pick one invariant. Preferred: make the direct-DEX takers also
-  `require(authorizedRouter_ != address(0))` so all takers share one rule and the
-  comment becomes "router is mandatory." Alternative: delete the standalone-mode
-  comments and keep the (intentionally) permissive direct-DEX constructors.
-- **Effort:** S. **Risk:** low (but it is the security-critical base — if tightening
-  the require, re-run the taker suites + `slither`).
-- **Verify:** `npm run compile`, taker integration suites, `npm run slither`.
+### M-E — Delete the empty per-provider quote-path types *(new)*
+- **Location:** `src/discovery/external-take/quotes.ts:44-87`,
+  `src/discovery/external-take/calldata-aggregator-providers.ts:45-76`.
+- **Problem:** `OneInchAggregatorPathQuoteInput` / `LifiPathQuoteInput` /
+  `SushiAggregatorPathQuoteInput` are **empty** interfaces extending
+  `CalldataAggregatorPathQuoteInput`; the three `*PathQuoteFn` aliases are
+  byte-identical to `CalldataAggregatorPathQuoteFn`; `*CircuitOutcome` are bare
+  aliases. They make three identical closures look type-distinct.
+- **Remedy:** Delete the empty interfaces + redundant aliases; reference the
+  canonical types directly. The three closures collapse toward one.
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, discovery unit tests.
 
-#### B-C2 — The two-level abstract split is vestigial — collapse it
-- **Location:** `contracts/base/KeeperTakerBase.sol:17,120` (+ owner/poolFactory at
-  54,59,140,145).
-- **Problem:** `KeeperTakerBase` (lower) / `RouterAuthorizedTakerBase` (upper)
-  existed only so the deleted standalone `AjnaKeeperTaker` could inherit the lower
-  layer and the factory could detect a legacy taker by the absence of the router
-  mixin. `AjnaKeeperTaker.sol` is gone (deleted in the #20 migration) and no contract inherits
-  `KeeperTakerBase` directly anymore, so the split is indirection with one
-  consumer path.
-- **Remedy:** Merge into a single `abstract contract KeeperTakerBase is
-  IAjnaKeeperTaker, ReentrancyGuard` that owns the wiring, helpers, AND the router
-  authorization (`_authorizedRouter`, `onlyOwnerOrRouter`).
-- **Effort:** M. **Risk:** medium — security-critical base contract; needs careful
-  diff + full taker suites + `slither` + a re-read of the donation-immune callback
-  path to confirm nothing shifts.
-- **Verify:** `npm run compile`, all `tests/integration/*taker*`, `npm run slither`.
+### N3 — Export one on-chain details-tuple ABI constant *(new)*
+- **Location:** `src/take/aggregator-calldata/execution.ts:171` (inlined, un-exported)
+  + 6 test files re-typing it verbatim (`oneinch-aggregator-taker`,
+  `sushi-aggregator-taker`, `lifi-fork-execution-canary`, `hybrid-fork-loop` integ;
+  `lifi-execution` unit; `lifi-taker-fixture` helper).
+- **Problem:** The load-bearing tuple
+  `tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)`
+  has no single source of truth (7 copies). A struct change desyncs the tests
+  silently — they would encode the wrong shape and still "pass" their own encode/decode.
+- **Remedy (reuse-canonical):** Export `AGGREGATOR_SWAP_DETAILS_TUPLE_ABI` from
+  `aggregator-calldata` (used by `encodeAggregatorSwapDetails`); have manual-encode
+  tests call `encodeAggregatorSwapDetails` (as the sushi fork canary already does) or
+  import the constant for decode-side assertions.
+- **Effort:** S. **Risk:** none. **Verify:** the aggregator taker suites.
 
-### src/take
+### N1 — `txValue` is a write-only dead field *(new; correctness-adjacent)*
+- **Location:** declared `src/take/aggregator-calldata/types.ts:68`; written
+  `src/take/lifi/quote-service.ts:122`, `src/take/oneinch-aggregator/quote-service.ts:173`;
+  **never read anywhere**, and absent from the on-chain `AggregatorSwapDetails` tuple.
+- **Problem:** It is documented as load-bearing ("native value… `'0'` for ERC20-input
+  takes") but `encodeAggregatorSwapDetails` never references it and no approval check
+  asserts it. A provider returning a non-zero native value would be **silently
+  dropped, not rejected** — execution is ERC20-input-only by construction.
+- **Remedy:** Either delete `txValue` (and `normalizeTxValue`) since execution is
+  ERC20-input-only, **or** add one boundary assertion in
+  `approveCalldataAggregatorQuoteForExecution` that rejects `txValue !== '0'`. Deleting
+  is simpler; asserting is safer if a native-value provider is ever plausible. Pick one.
+- **Effort:** S. **Risk:** low. **Verify:** quote-approval unit tests.
 
-#### B-T1 — `direct-dex/route-selection.ts` is a 74-line pure re-export barrel
+### N2 — Provider-neutral allowlist module hard-defaults labels to LI.FI *(new)*
+- **Location:** `src/take/aggregator-calldata/allowlist.ts:89,330,368,427`
+  (`?? 'LI.FI selector allowlist'`, `?? 'LI.FI taker'`).
+- **Problem:** A module documented as provider-neutral and now consumed by Sushi/1inch
+  preflight falls back to LI.FI-branded diagnostic labels. Any caller that omits the
+  override silently emits LI.FI error text for another provider — a latent
+  mislabeling trap (and it gets worse as 1inch is added in Wave 3).
+- **Remedy:** Make `label`/`labelPrefix` required (no default) so the compiler forces
+  each call site to supply its own, or default to a neutral `'aggregator taker'`.
+- **Effort:** S. **Risk:** low. **Verify:** allowlist/preflight unit tests.
+
+### B-T1 — `direct-dex/route-selection.ts` is a 73-line pure re-export barrel
 - **Location:** `src/take/direct-dex/route-selection.ts:1-73` (zero own definitions).
-- **Problem:** The honest-modules refactor (#20) split the former
-  573-line file into siblings (`route-amounts`, `route-candidates`, `route-ranking`,
-  `route-profitability`, `providers`, `availability`, `logs`, `runtime-cache`,
-  `route-types`, `route-rejection`) but left `route-selection.ts` as a re-export
-  façade. It is indirection that hides which module actually owns each symbol.
-- **Remedy:** Repoint the 6 importers at the owning sibling modules (mechanical
-  import rewrite — the symbols already live there) and delete the barrel. The two
-  `src/discovery` importers pull a small set; confirm none rely on the barrel as a
-  compatibility boundary per the followup-plan hot-file rules.
-- **Effort:** S. **Risk:** low. **Verify:** `npm run typecheck`, unit suite,
-  `npm run check-external-take-boundaries -- --base origin/master`.
+- **Problem:** The honest-modules refactor (#20) split the former 573-line file into
+  siblings (`route-amounts`, `route-candidates`, `route-ranking`, `route-profitability`,
+  `providers`, `availability`, `logs`, `runtime-cache`, `route-types`, `route-rejection`)
+  but left this barrel as a façade hiding which module owns each symbol.
+- **Remedy:** Repoint the 6 importers at the owning siblings; delete the barrel.
+- **Effort:** S. **Risk:** low. **Verify:** `tsc`, unit suite,
+  `npm run check-external-take-boundaries -- --base <ref>`.
 
-#### B-T2 — Each aggregator provider wires the same two callbacks through three descriptor fields
-- **Location:** `src/take/lifi/execution.ts:108-123`,
-  `src/take/sushi-aggregator/execution.ts:84-102`,
-  `src/take/oneinch-aggregator/execution.ts:75-94`.
-- **Problem:** After the (good) shared-execution-closure consolidation, each
-  `takeLiquidationXxx` still re-specifies the provider's two real knobs
-  (`onXxxQuoteResult`, `onXxxExecutionFailure`) spread across three descriptor
-  slots (`recordPreparedRejection`, the quote-result hook, the failure hook),
-  byte-identical across all three providers.
-- **Remedy (code-judo):** Change `takeLiquidationCalldataAggregatorProvider` to
-  accept a single `selectors: { onQuoteResult, onExecutionFailure }` and derive
-  `recordPreparedRejection` internally (via the existing factory). The three
-  providers shrink to one selector object each.
-- **Effort:** M. **Risk:** low-medium (shared aggregator execution path; full
-  aggregator suites + the circuit/refresh tests).
-- **Verify:** `npm run typecheck`, lifi/sushi/oneinch taker + circuit unit tests.
-
-#### B-T3 — `routeMetadata` diagnostic string built eagerly but only used in the catch
+### B-T3 — `routeMetadata` built eagerly but only used in the catch
 - **Location:** `src/take/direct-dex/index.ts:661-682`.
-- **Problem:** In `takeLiquidationDirectDex`, `routeMetadata` (a 4-part concat) is
-  built unconditionally before the `try`, but referenced only in the catch's
-  `logger.error`. Built and discarded on every successful take.
-- **Remedy (code-judo, trivial):** Move the construction into the catch block.
+- **Problem:** `routeMetadata` (a 4-part concat) is built unconditionally before the
+  `try`, but read only by the catch's `logger.error`.
+- **Remedy:** Move the construction into the catch block.
 - **Effort:** S. **Risk:** none. **Verify:** unit suite.
 
-### src/config + src/discovery
-
-#### B-D1 — `hybrid.ts` re-derives provider labels via a hardcoded switch the descriptor owns
-- **Location:** `src/discovery/external-take/hybrid.ts:55-68`
-  (`formatProviderWarnLabel`).
-- **Problem:** Hardcodes `'oneinch'->'1inch'`, `'lifi'->'LI.FI'`,
-  `'sushi_aggregator'->'Sushi aggregator'` — exactly the provider-specific
-  special-casing the descriptor table exists to eliminate.
-  `getAggregatorProviderIdentity(providerId).label` already returns these.
-- **Remedy (reuse-canonical):** Replace the switch body with
-  `provider.providerId ? getAggregatorProviderIdentity(provider.providerId).label
-  : (provider.path === 'direct_dex' ? 'direct DEX' : provider.path)`.
-  **Behavior note:** this is the one Wave-1 item that changes an emitted string —
-  the descriptor `label` is `'Sushi Aggregator'` (capital A;
-  `external-take-descriptors.ts:93`) while the current switch emits `'Sushi
-  aggregator'` (lowercase; `hybrid.ts:64`). Pick one casing (align the descriptor
-  `label` or lowercase at the call site) and update the `hybrid-external-take-*`
-  assertion to match, so the warning text doesn't silently drift.
-- **Effort:** S. **Risk:** low. **Verify:** unit suite (`hybrid-external-take-*`).
-
-#### B-D2 — Duplicate Uniswap V3 required-address-fields constant
+### B-D2 — Duplicate Uniswap V3 required-address-fields constant
 - **Location:** `src/config/liquidity-source.ts:56-72`.
 - **Problem:** `UNISWAP_V3_FACTORY_ROUTE_REQUIRED_ADDRESS_FIELDS` and
-  `UNISWAP_V3_DIRECT_DEX_ROUTE_CONTRACT_ADDRESS_FIELDS` hold byte-identical
-  four-string lists, consumed by different callers.
-- **Remedy (reuse-canonical):** Drop the second; have
-  `route-preflight-validation.ts:475` import the first directly.
-- **Effort:** S. **Risk:** none. **Verify:** `npm run typecheck`, route-preflight tests.
+  `UNISWAP_V3_DIRECT_DEX_ROUTE_CONTRACT_ADDRESS_FIELDS` are byte-identical.
+- **Remedy:** Drop the second; have `route-preflight-validation.ts:475` import the first.
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, route-preflight tests.
 
-#### B-D3 — Private `getErrorMessage` in `lifi-policy.ts` duplicates `src/utils.ts`
+### B-D3 — Private `getErrorMessage` in `lifi-policy.ts` duplicates `src/utils.ts`
 - **Location:** `src/config/lifi-policy.ts:39-41`.
-- **Problem:** Byte-identical to the exported `getErrorMessage` in `src/utils.ts`
-  that `quotes.ts`/`hybrid.ts` already import.
 - **Remedy (reuse-canonical):** Import from `../utils`, delete the local copy.
-- **Effort:** S. **Risk:** none. **Verify:** `npm run typecheck`.
-
-#### B-D4 — `stats.ts` keeps legacy per-DEX scalar counters in parallel with the generic maps
-- **Location:** `src/discovery/external-take/stats.ts:30-31,222-229`.
-- **Problem:** Dedicated `uniswapV3`/`curve` approved/executed/dryRun scalar fields
-  filled by a hardcoded `switch (routeIdentity?.source)`, paralleling the generic
-  `externalTakeByPath`/`externalTakeByProvider` maps.
-- **Remedy (decompose, deferred):** Derive the scalars from the generic maps (or a
-  `source -> field` descriptor map) and drop the hardcoded switch. Lower priority —
-  touch only when the telemetry surface is next revisited (consumers may read the
-  scalar fields).
-- **Effort:** M. **Risk:** medium (telemetry consumers). **Verify:** stats unit tests
-  + any dashboard/telemetry consumer.
-
-### scripts / deployment
-
-#### B-S1 — `verifyDeployment` never reads back the Sushi router mapping
-- **Location:** `scripts/deploy-factory-system-cli.ts:486-618` (`verifyDeployment`),
-  `:875-889` (sushi branch in `main`).
-- **Problem:** Step 4 cross-checks `hasConfiguredTaker`/`takerContracts`/
-  `authorizedRouter`/`owner` for Uniswap and LI.FI, but has no branch for
-  `sushiAggregatorTaker`; Sushi's only post-deploy check is the allowlist
-  reconciliation. Asymmetric verification coverage.
-- **Remedy (tighten-boundary):** Extract the LI.FI verification block into a generic
-  `verifyAggregatorTakerRegistration({ factory, source, takerAddress, deployer,
-  label })` and call it for LI.FI, Sushi (and 1inch once W3 lands).
-- **Effort:** M. **Risk:** low (deploy tooling, no runtime contract change).
-- **Verify:** `deploy-factory-system` script unit tests / a dry-run.
-
-#### B-S2 — `registerSushiAggregatorTakerInFactory` ≈ `registerLifiTakerInFactory`
-- **Location:** `scripts/deployment/sushi-aggregator-deployment.ts:187-217` vs
-  `scripts/deployment/lifi-factory-deployment.ts:147-178`.
-- **Problem:** Differ only in the `LiquiditySource` value, the address-bag field
-  name, and log strings. Both load the TakerRouter artifact, build the contract,
-  `setTaker`, and wait.
-- **Remedy (reuse-canonical):** Add a shared `registerTakerInRouter({ deployer,
-  routerAddress, source, takerAddress, label })`; both `register*` become thin
-  callers. (Fold the 1inch registration into the same helper in W3.)
-- **Effort:** S. **Risk:** low. **Verify:** deployment-script unit tests.
-
-#### B-S3 — `configure*Allowlists` duplicate ~85 lines of reconciliation orchestration
-- **Location:** `scripts/deployment/sushi-aggregator-deployment.ts:98-182` vs
-  `scripts/deployment/lifi-factory-deployment.ts:180-282`.
-- **Problem:** The canonical helper (`src/take/aggregator-calldata/allowlist.ts`)
-  factored out the PRIMITIVES (`readTakerAllowlistSnapshot`,
-  `buildTakerAllowlistReconciliationPlan`, `assertTakerAllowlistPolicy`,
-  `createTakerAllowlistReader`) but NOT the orchestration that strings them
-  together (read snapshot -> build plan -> enable -> assert 'contains' -> disable ->
-  assert 'exact'), which is duplicated line-for-line.
-- **Remedy (reuse-canonical):** Hoist the orchestration into the canonical helper as
-  `reconcileTakerAllowlists({ taker, desired, labelPrefix, txLabel })` taking an
-  ethers.Contract bound to `AGGREGATOR_TAKER_ALLOWLIST_ABI`. Both `configure*`
-  collapse to a desired-policy computation + one call. (`reconcileTakerAllowlists`
-  does not exist yet — confirmed; it is net-new. Reused again by 1inch in W3.)
-- **Preserve when refactoring:** the LI.FI path additionally loads the taker via
-  `takerArtifact.abi` and goes through wrapper fns (`readLifiTakerAllowlistSnapshot`
-  etc., re-exports of the generic primitives Sushi calls directly) and has a
-  `hasProductionLifiConfig` guard that Sushi lacks. The shared helper must keep the
-  production-config short-circuit and bind to `AGGREGATOR_TAKER_ALLOWLIST_ABI`
-  directly rather than re-exporting per provider.
-- **Effort:** M. **Risk:** low-medium (deploy reconciliation is fail-closed — keep the
-  'contains'-then-'exact' assertion order intact and tested).
-- **Verify:** the allowlist reconciliation unit tests + a deploy dry-run.
-
-#### B-S4 — `generateConfigUpdate` hardcodes contract labels instead of the descriptor registry
-- **Location:** `scripts/deploy-factory-system-cli.ts:631-673` (and the parallel
-  hardcoding in `configureFactory:459-475`, `verifyDeployment`).
-- **Problem:** Emits literal `UniswapV3:`/`Curve:`/`Lifi:`/`SushiAggregator:` labels
-  via hand-maintained per-field `if`s, while
-  `getExternalTakeTakerContractKeyForSource` (in `external-take-descriptors.ts`)
-  already owns the canonical `LiquiditySource -> takerContractKey` mapping.
-- **Remedy (reuse-canonical):** Drive the contracts block from an array of
-  `{ address, source }` pairs, mapping each present address through
-  `getExternalTakeTakerContractKeyForSource(source)` for its label.
-- **Effort:** M. **Risk:** low. **Verify:** deploy-script unit tests / dry-run diff.
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`.
 
 ---
 
-## Wave 3 — 1inch allowlist preflight parity (the deferred "LI.FI-style selector" work)
+## Wave 2 — make every surface consume the descriptor
 
-### Problem
-1inch is the only calldata-aggregator path **without** an on-chain allowlist
-preflight. LI.FI and Sushi each register a `validateAdditional` hook
-(`validateLifiAllowlistPreflight` / `validateSushiAggregatorAllowlistPreflight`)
-that, in production mode, reads the deployed taker's call-target / approval-spender
-/ selector allowlists and fail-closed reconciles them against the configured
-policy. The `ONEINCH` preflight descriptor
-(`src/discovery/route-preflight-validation.ts:464`) has **no** `validateAdditional`,
-and there is **no** 1inch allowlist policy module at all (compare
-`src/dex/lifi/chain-policy.ts`, `src/config/sushi-aggregator-policy.ts`).
+### M-C — Consume `getAggregatorProviderIdentity` instead of re-deriving `{source,label}` *(consolidates B-D1, B-D4; new sub-items)*
+- **Locations & sub-items:**
+  - `src/discovery/external-take/hybrid.ts:55-68` — `formatProviderWarnLabel` hardcodes
+    `providerId -> label` **(was B-D1)**. **Behavior note:** the descriptor label is
+    `'Sushi Aggregator'` (capital A; `external-take-descriptors.ts:93`) while the switch
+    emits `'Sushi aggregator'` (lowercase; `hybrid.ts:64`). Pick one casing and update
+    the `hybrid-external-take-*` assertion — this is the one place the emitted string
+    can drift.
+  - `src/discovery/external-take/stats.ts:30-31,222-229` — per-DEX scalar counters
+    filled by a hardcoded `switch (routeIdentity?.source)` paralleling the generic maps
+    **(was B-D4)**.
+  - Provider `execution.ts` (`lifi:21,108-112`, `sushi-aggregator:19,85-87`,
+    `oneinch-aggregator:17,76-78`) each pass `providerId` + `liquiditySource` + `label`
+    as three literals to `takeLiquidationCalldataAggregatorProvider`, when the descriptor
+    maps `providerId -> {source,label}`.
+  - Discovery quote wrappers (`lifi-quote.ts:27-29`, `oneinch-aggregator-quote.ts:30-32`,
+    `sushi-aggregator-quote.ts:24-26`) hardcode `label`/`selectedLiquiditySource`
+    (a 4th parallel label source) and synthesize `abortErrorMessage`/`timeoutLabel`.
+  - Per-provider rejection-reason strings (`missingRouterReason` etc.) are
+    `${label} <fixed suffix>` templates duplicated across providers.
+- **Remedy (code-judo):** Take only `providerId` through the shared core /
+  prepare/evaluate params and derive `{source,label}` internally via
+  `getAggregatorProviderIdentity`. Replace the per-site switches with the descriptor
+  lookup; build the rejection reasons from `label` + shared suffix constants. Net-deletes
+  the `liquiditySource`/`label` params, the two source-switches, and ~21 literal strings.
+- **Effort:** M. **Risk:** low-medium (touches the shared evaluator + discovery). **Verify:**
+  aggregator quote/circuit + discovery + `hybrid-external-take-*` unit tests.
 
-The on-chain support already exists: `OneInchAggregatorKeeperTaker` inherits the
-allowlist setters (`setCallTarget` / `setApprovalSpender` / `setCallSelector`,
-exercised in the taker fixture). The gap is entirely off-chain: policy config,
-preflight reconciliation, deploy-time reconciliation, and a fork canary.
+### M-D — One neutral notification-callback pair on the base config *(supersedes B-T2)*
+- **Location:** `src/take/{lifi,sushi-aggregator,oneinch-aggregator}/types.ts`
+  (`on*QuoteResult`/`on*ExecutionFailure` fields); `src/take/aggregator-calldata/execution.ts`
+  (`makeCalldataAggregatorProviderRejectionRecorder` + selector threading);
+  `src/discovery/external-take/calldata-aggregator-providers.ts:124,151,181`.
+- **Problem:** Each provider declares an identically-typed but differently-**named**
+  callback pair (`onLifiQuoteResult` vs `onSushiAggregatorQuoteResult` vs
+  `onOneInchAggregatorQuoteResult`). Verified: nothing keys off the names; they carry no
+  provider-specific data. The cosmetic rename forces a whole selector-threading layer
+  (`makeCalldataAggregatorProviderRejectionRecorder`) whose only job is to map the neutral
+  hook onto each provider's name. B-T2 proposed passing a `selectors` object — that
+  rearranges; this **deletes the layer**.
+- **Remedy (code-judo):** Add `onCalldataAggregatorQuoteResult?` /
+  `onCalldataAggregatorExecutionFailure?` to `CalldataAggregatorExecutionConfigBase`; have
+  the shared core call them directly. Delete the three provider field-pairs, the
+  selector-threading params, and `makeCalldataAggregatorProviderRejectionRecorder`.
+- **Effort:** M. **Risk:** low-medium. **Verify:** aggregator execution + circuit + the
+  three provider taker suites.
 
-### Work items (mirror the LI.FI/Sushi structure)
-1. **1inch chain policy + normalizer** — add a `OneInchAggregatorChainPolicyConfig`
-   (per-chain `callTargetAllowlist` / `approvalSpenderAllowlist` / `selectorAllowlist`)
-   and a `normalizeOneInchAggregatorChainPolicy`, analogous to
-   `normalizeSushiAggregatorChainPolicy` (fail-closed: `requireCallTargetCoverage`,
-   selector coverage cross-check). Reuse the shared
-   `normalizeTakerSelectorAllowlistRecord` primitive — do **not** fork a new one.
-2. **Preflight hook** — add `validateOneInchAggregatorAllowlistPreflight`
-   (mirroring `validateLifiAllowlistPreflight`: contract-code checks for targets/
-   spenders + `readTakerAllowlistSnapshot` reconciliation via the shared
-   `AGGREGATOR_TAKER_ALLOWLIST_ABI`) and wire it as the `ONEINCH` descriptor's
-   `validateAdditional`.
-3. **Schema** — add the production 1inch allowlist policy fields under the 1inch
-   config, with validation rejecting a production 1inch source that lacks target/
-   spender/selector policy (mirror the Sushi/LI.FI `reviewed_broad` requirement).
-4. **Deploy-time reconciliation** — provision the 1inch taker allowlists at deploy
-   using the **shared** `reconcileTakerAllowlists` helper introduced by B-S3 (and
-   register via B-S2's `registerTakerInRouter`, verify via B-S1's
-   `verifyAggregatorTakerRegistration`). This is why W3 should land after W2.
-5. **Fork canary** — add a `oneinch-aggregator-fork-canary` (mirror
-   `sushi-aggregator-fork-canary`) exercising real 1inch calldata through the taker
-   on a pinned-fresh Base fork. **Blocked locally:** the dev `ONEINCH_API_KEY` is
-   401; the canary must be run wherever a valid key is available, and pinned near
-   the live head (the Sushi canary needed `BASE_FORK_BLOCK=latest` to avoid
-   live-quote-vs-stale-block skew).
+### M-C′ — One generic `validateAggregatorAllowlistPreflight` *(folds the preflight twins; pre-solves Wave 3)*
+- **Location:** `src/discovery/route-preflight-validation.ts:358-440` (LI.FI),
+  `:495-532` (the SUSHI/LIFI descriptor `validateAdditional` hooks).
+- **Problem:** `validateLifiAllowlistPreflight` and `validateSushiAggregatorAllowlistPreflight`
+  are the same shape (contract-code checks for targets/spenders + snapshot reconciliation
+  via `AGGREGATOR_TAKER_ALLOWLIST_ABI`), differing only by the provider's normalizer + label.
+- **Remedy:** Collapse to one `validateAggregatorAllowlistPreflight` parameterized by a
+  provider-local `normalizeChainPolicy` + descriptor label, wired once into the descriptor
+  table. Then Wave 3's 1inch preflight is a descriptor row, not a third copy. (Depends on
+  **M-B** so the neutral primitives are used directly, and **N2** so labels aren't LI.FI-biased.)
+- **Effort:** M. **Risk:** medium (fail-closed preflight — keep the 'contains'→'exact'
+  reconciliation and contract-code checks intact and tested). **Verify:** preflight unit +
+  fork-reconciliation tests.
 
-### Acceptance
-- `ONEINCH` production config without a complete allowlist policy fails validation
-  with an explicit error (parity with LI.FI/Sushi).
-- Preflight fail-closed reconciliation rejects a deployed 1inch taker whose
-  on-chain allowlist drifts from config.
-- The fork canary executes a real 1inch take through the taker (run with a valid
-  key).
+### B-C1 — Stale "standalone owner-only mode" comments describe an unreachable path
+- **Location:** `contracts/base/KeeperTakerBase.sol:122-124`;
+  `contracts/takers/CurveKeeperTaker.sol:38-39`; `contracts/takers/UniswapV3KeeperTaker.sol:26-27`.
+- **Problem:** The comments say the authorized router may be zero for standalone owner-only
+  mode, but the aggregator base hard-rejects a zero router (`'Zero authorized router'`) and
+  every deploy path supplies one.
+- **Remedy:** Either make the direct-DEX takers also `require(authorizedRouter_ != address(0))`
+  (one shared invariant) or delete the standalone-mode comments.
+- **Effort:** S. **Risk:** low (re-run taker suites + `slither` if tightening the require).
+
+### B-C2 — Collapse the vestigial `KeeperTakerBase` / `RouterAuthorizedTakerBase` split
+- **Location:** `contracts/base/KeeperTakerBase.sol:17,120` (+ owner/poolFactory 54,59,140,145).
+- **Problem:** The two-level split existed only so the deleted standalone `AjnaKeeperTaker`
+  could inherit the lower layer. `AjnaKeeperTaker.sol` is gone (deleted in the #20 migration)
+  and no contract inherits `KeeperTakerBase` directly anymore.
+- **Remedy:** Merge into a single `abstract contract KeeperTakerBase is IAjnaKeeperTaker,
+  ReentrancyGuard` owning the wiring, helpers, AND router authorization.
+- **Effort:** M. **Risk:** medium — security-critical base contract; full taker suites +
+  `slither` + a re-read of the donation-immune callback path. **Keep B-C1/B-C2 in their own
+  PR** so the `slither` gate is unambiguous.
 
 ---
+
+## Wave 3 — descriptor-driven deploy loop + 1inch parity
+
+### M-A — One descriptor-driven deploy loop *(consolidates B-S1, B-S2, B-S3, B-S4)*
+- **Location:** `scripts/deploy-factory-system-cli.ts` (the `dex.oneInch` throw ~130-145;
+  the `configureFactory` uniswap/curve if-chain ~459-475; `verifyDeployment` with Uniswap
+  ~514-563 + LI.FI ~565-615 but **no Sushi branch** = the B-S1 asymmetry; the hardcoded
+  `generateConfigUpdate` labels + address-print ~631-693; the deploy/configure/register
+  blocks ~789-892) + `scripts/deployment/{lifi-factory,sushi-aggregator}-deployment.ts`.
+- **Problem:** The deploy CLI is a fully hand-unrolled per-provider sequence; each provider
+  re-appears in ~6 sites (deploy block, configure-allowlists call, `register*` fn, verify
+  branch, config label, address line). B-S1 (missing Sushi verify), B-S2 (`register*`
+  near-identical), B-S3 (`configure*Allowlists` duplicate orchestration), and B-S4 (hardcoded
+  labels) are all symptoms. The `dex.oneInch` throw is the tell: there is no loop to extend.
+- **Remedy (code-judo):** Hang two provider-local fields off each aggregator descriptor —
+  `takerArtifact` (path) and `normalizeChainPolicy` (already exists per provider:
+  `normalizeLifiProductionChainPolicy` / `normalizeSushiAggregatorChainPolicy`) — then write
+  **one** loop over present aggregator sources: `deploy → reconcileTakerAllowlists(normalize…) →
+  registerTakerInRouter(source) → verifyAggregatorTakerRegistration(source) →
+  emit ${takerContractKey}: addr`. Direct-DEX (uniswap/curve) folds into the same loop minus
+  the allowlist step. `reconcileTakerAllowlists` is net-new (the orchestration the per-provider
+  `configure*` fns duplicate); **preserve** LI.FI's `hasProductionLifiConfig` short-circuit and
+  bind `AGGREGATOR_TAKER_ALLOWLIST_ABI` directly (free once **M-B** lands).
+- **⚠️ Prerequisite — add deployment-script tests first.** There are **zero** deployment-script
+  unit tests today, so the safety net the other waves rely on does not exist here, and the
+  per-provider paths differ in real ways (the `hasProductionLifiConfig` short-circuit, inter-step
+  delays, gating predicates). Write characterization tests for the current per-provider deploy
+  output **before** collapsing to the loop, then assert the loop reproduces them.
+- **Effort:** L (incl. the test prerequisite). **Risk:** medium — deploy-only tooling (no
+  runtime/contract/fund risk) but currently untested. **Verify:** the new deployment-script
+  tests + a fork deploy dry-run.
+
+### W3-FINAL — 1inch allowlist preflight parity *(now a descriptor row, not a fresh copy)*
+With M-A (deploy loop), M-C′ (generic preflight), and M-B (shims gone) in place, bringing 1inch
+to LI.FI/Sushi parity collapses to:
+1. **`normalizeOneInchChainPolicy`** — a provider-local normalizer mirroring
+   `normalizeSushiAggregatorChainPolicy` (per-chain target/spender/selector allowlists,
+   fail-closed coverage), reusing `normalizeTakerSelectorAllowlistRecord` (do **not** fork it).
+2. **Descriptor row** — add `takerArtifact` + `normalizeChainPolicy` to the 1inch descriptor
+   entry; this auto-enrolls it in M-A's deploy loop and M-C′'s preflight (deleting the
+   `deploy-factory-system-cli.ts:134` throw).
+3. **Schema** — production 1inch allowlist policy fields, with validation rejecting a production
+   1inch source that lacks target/spender/selector policy (mirror Sushi/LI.FI `reviewed_broad`).
+4. **Fork canary** — `oneinch-aggregator-fork-canary` mirroring the Sushi canary. **Blocked
+   locally:** the dev `ONEINCH_API_KEY` is 401; run it where a valid key exists, pinned near the
+   live head (the Sushi canary needed `BASE_FORK_BLOCK=latest` to avoid live-quote-vs-stale-block
+   skew).
+
+**Acceptance:** production 1inch config without a complete allowlist policy fails validation;
+preflight fail-closed reconciliation rejects on-chain allowlist drift; the canary executes a real
+1inch take.
+
+---
+
+## Out of scope (honest scoping)
+
+The repo's >1000-line files are **not** aggregator-cleanup targets:
+- `src/discovery/gas-policy.ts` (~1205) was **shrunk** (net −92) by the migration; if decomposed
+  later, extract the gas-quote conversion-cache + config-identity cluster (~200 lines) into
+  `src/discovery/gas-quote-cache.ts` — but as orthogonal work, not bundled here.
+- `src/discovery/targets.ts` (~1133) has **zero** production churn on this branch — out of scope.
+
+Decompose only with a clean domain split; do not bundle into the aggregator cleanup.
 
 ## Guardrails (carried from `docs/calldata-aggregator-followup-plan.md`)
 
-- Do **not** add a second/third route or provider identity registry; consume the
-  canonical descriptor (`src/config/external-take-descriptors.ts`).
-- Do **not** add provider-specific execution-approval helpers or new top-level
-  external-take paths; normalize into `ApprovedCalldataAggregatorQuote` and use the
-  shared approval path.
-- Keep provider policy/allowlist/route-shape/canary/preflight-hook behavior in
-  provider-local modules keyed by descriptor identity; keep shared route/preflight/
-  approval/telemetry thin (no new `source`/`path` switch branches — B-D1 is exactly
-  this anti-pattern to remove, not to add to).
-- Preserve exact-fill calldata-aggregator mechanics (route freshness, exact source
-  amount, balance-delta checks, allowance reset) — the W2 contract refactors
-  (B-C1/B-C2) must not touch these behaviors.
+- This revision **is** the "fold everything into the one canonical descriptor" the guardrails
+  demand: do not add a second/third route or provider identity registry — make surfaces consume
+  `external-take-descriptors.ts`.
+- Do not add provider-specific execution-approval helpers or new top-level external-take paths;
+  normalize into `ApprovedCalldataAggregatorQuote` and use the shared approval path.
+- Keep provider-local **behavior** (quote/execute/route-shape/canary/preflight-hook/normalizer)
+  in provider modules keyed by descriptor identity; keep shared route/preflight/approval/telemetry
+  thin (no new `source`/`path` switch branches — M-C removes the existing ones).
+- Preserve exact-fill calldata-aggregator mechanics (route freshness, exact source amount,
+  balance-delta checks, allowance reset) — the contract refactors (B-C1/B-C2) must not touch them.
 - Run `npm run check-hot-file-growth -- --base <ref>` and
-  `npm run check-external-take-boundaries -- --base <ref>` at closeout for any PR
-  touching the hot files; remediate by domain ownership, not line-count appeasement.
+  `npm run check-external-take-boundaries -- --base <ref>` at closeout for any PR touching the hot
+  files; remediate by domain ownership, not line-count appeasement.
 
 ## Suggested PR decomposition
 
-- **PR 1 (Wave 1):** B-D1, B-D2, B-D3, B-T1, B-T3 — pure canonical-reuse deletions,
-  one review pass.
-- **PR 2 (Wave 2a, contracts):** B-C1 + B-C2 — isolated so the `slither` + taker
-  suite gate is unambiguous.
-- **PR 3 (Wave 2b, plumbing):** B-T2, B-S1, B-S2, B-S3, B-S4 (and B-D4 if revisiting
-  telemetry) — the helper-extraction refactors; lands the shared deploy helpers W3
-  depends on.
-- **PR 4 (Wave 3):** 1inch allowlist preflight parity, built on PR 3's shared deploy
-  helpers; canary run where a valid `ONEINCH_API_KEY` exists.
+- **PR 1 (Wave 1):** M-B (shim delete), M-E (empty types), N1 (txValue), N2 (neutral labels),
+  N3 (ABI constant), B-T1, B-T3, B-D2, B-D3 — pure deletions / canonical reuse, one review pass.
+- **PR 2 (Wave 2 — descriptor consumers):** M-C, M-D, M-C′ — the code-judo core (depends on PR 1's
+  M-B for M-C′).
+- **PR 3 (Wave 2 — contracts):** B-C1 + B-C2 — isolated so the `slither` + taker-suite gate is
+  unambiguous.
+- **PR 4 (Wave 3a):** deployment-script characterization tests, then M-A (the deploy loop).
+- **PR 5 (Wave 3b):** 1inch parity (`normalizeOneInchChainPolicy` + descriptor row + schema +
+  canary), riding on PR 2/PR 4.
