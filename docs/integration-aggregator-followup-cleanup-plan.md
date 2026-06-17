@@ -120,14 +120,19 @@ execution order").
   `src/take/lifi/quote-service.ts:122`, `src/take/oneinch-aggregator/quote-service.ts:173`;
   **never read anywhere**, and absent from the on-chain `AggregatorSwapDetails` tuple.
 - **Problem:** It is documented as load-bearing ("native value… `'0'` for ERC20-input
-  takes") but `encodeAggregatorSwapDetails` never references it and no approval check
-  asserts it. A provider returning a non-zero native value would be **silently
-  dropped, not rejected** — execution is ERC20-input-only by construction.
-- **Remedy:** Either delete `txValue` (and `normalizeTxValue`) since execution is
-  ERC20-input-only, **or** add one boundary assertion in
-  `approveCalldataAggregatorQuoteForExecution` that rejects `txValue !== '0'`. Deleting
-  is simpler; asserting is safer if a native-value provider is ever plausible. Pick one.
-- **Effort:** S. **Risk:** low. **Verify:** quote-approval unit tests.
+  takes") but `encodeAggregatorSwapDetails` never references it and no *shared* approval
+  check asserts it. **Important correction (pass 2):** the guard is only *partially*
+  present — **Sushi already fail-closes** on a non-zero native value
+  (`src/dex/sushi-aggregator/validate-route.ts:138-143`), while **LI.FI and 1inch do
+  not** (LI.FI copies `transactionRequest.value` raw at `quote-service.ts:122`; 1inch
+  `normalizeTxValue`s it). So the "silently dropped" risk is real for LI.FI/1inch only.
+- **Remedy:** Prefer **asserting** over deleting — add one boundary assertion in
+  `approveCalldataAggregatorQuoteForExecution` that rejects `txValue !== '0'`. That
+  brings LI.FI/1inch up to Sushi's existing fail-closed behavior with a single shared
+  guard (and lets the per-provider Sushi check be deduped into it). Deleting the field
+  would instead drop Sushi's guard — don't.
+- **Effort:** S. **Risk:** low. **Verify:** quote-approval unit tests (assert the
+  non-zero-`txValue` reject for each provider).
 
 ### N2 — Provider-neutral allowlist module hard-defaults labels to LI.FI *(new)*
 - **Location:** `src/take/aggregator-calldata/allowlist.ts:89,330,368,427`
@@ -240,9 +245,44 @@ execution order").
   guard (it seeds `SUPPORTED_EXTERNAL_TAKE_LIQUIDITY_SOURCES`, `DIRECT_DEX_DYNAMIC_SOURCES`, etc.);
   a new source added to the identities map but forgotten here is silently dropped from those derived
   sets.
-- **Remedy:** Derive the order from `EXTERNAL_TAKE_SOURCE_IDENTITIES` keys (already
-  exhaustiveness-guarded) so membership and order share one source of truth.
+- **Remedy:** Keep an **explicit ordered array** and add a compile-time exhaustiveness guard
+  (a `satisfies`/mapped-type check that every `EXTERNAL_TAKE_SOURCE_IDENTITIES` key appears) —
+  do **NOT** derive via raw `Object.keys`. ⚠️ **(pass 2)** the identities map is keyed by numeric
+  enum values (`ONEINCH=1,UNISWAPV3=2,CURVE=4,LIFI=5,SUSHI_AGGREGATOR=6`), so key-iteration is
+  ascending-numeric and would silently reorder the list (`ONEINCH` jumps last→first). That order
+  feeds the operator-facing `liquiditySource must be …` validation message
+  (`formatSupportedExternalTakeLiquiditySources`) and telemetry grouping — both cosmetic (routing
+  is by key, not order), but no test pins the string so the change would be silent. The
+  `satisfies`-guard variant gets the exhaustiveness win with zero reorder; if you instead accept
+  the reorder, pin `formatSupportedExternalTakeLiquiditySources()` output in a test.
 - **Effort:** S. **Risk:** low. **Verify:** `tsc`, config unit tests.
+
+### N12 — Delete the dead `approveExternalTakeQuoteForExecution` dispatcher *(new; dead-code)*
+- **Location:** `src/take/external-take/quote-approval-rules.ts:334-359` (+ its dedicated
+  `ApprovedExternalTakeQuoteEvaluation` / `ExternalTakeQuoteApprovalResult<…>` union specialization).
+- **Problem:** This is the path-dispatching approval wrapper (re-bind route → delegate to
+  `approveCalldataAggregatorQuoteForExecution` or `approveDirectDexQuoteForExecution`). A repo-wide
+  grep (src/tests/scripts/docs) finds **zero** callers — discovery calls the per-path approvers
+  directly. Dead since the descriptor wiring made the dispatcher redundant.
+- **Remedy:** Delete the function and the now-unused union return type (the per-path approvers stay).
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, external-take approval unit tests.
+
+### N13 — Delete the dead `warnings` field on `CalldataAggregatorRouteSummary` *(new; same pattern as N1)*
+- **Location:** `src/take/aggregator-calldata/types.ts:41-42` (`warnings?: string[]`).
+- **Problem:** Same write-only-dead-field pattern as N1: `warnings` appears **only** at its own
+  declaration — never written by any provider, never read. (The enclosing
+  `CalldataAggregatorRouteSummary` is itself largely write-only telemetry; `warnings` is the
+  clean-delete subset.)
+- **Remedy:** Delete the `warnings?` field.
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`.
+
+### N14 — Reuse the canonical `pruneMapToMaxSize` in two inline copies *(new; duplication)*
+- **Location:** `src/discovery/gas-policy.ts:542-548` (`pruneGasQuoteConversionCache`) and
+  `src/erc20.ts:91-99` (`pruneCachedDecimals`) — both re-implement the byte-identical
+  insertion-order size-cap eviction loop from `src/utils.ts:22-30`.
+- **Remedy (reuse-canonical):** Replace both bodies with
+  `pruneMapToMaxSize(cache, MAX_…)` (import from `./utils` / `../utils`).
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, gas-policy + erc20 unit tests.
 
 ---
 
@@ -345,9 +385,15 @@ execution order").
   replace `OneInchQuoteCircuitState` with `ExternalProviderCircuitState`; delete the dead
   `ExternalTakeCircuitPurpose`. (The larger "one circuit primitive keyed by descriptor identity,
   purpose-sets as descriptor data" rewrite can follow once M-C lands — do **not** bundle it here.)
+- **Blast radius (pass 2):** the legacy fields `oneInchQuoteCircuit`/`oneInchQuoteCircuits` are
+  asserted (via `expect`/fixture literals) in **8** unit-test files, not the 2–3 first listed:
+  `one-inch-circuit`, `lifi-circuit`, `discovery-runtime`, `discovery-handlers`,
+  `discovery-gas-policy`, `discovery-external-take-route-binding`, `hybrid-external-take-probes`,
+  `lifi-discovery-handlers`. Migrating those assertions onto `providerCircuits.oneinch.*` is part
+  of **the same commit** (a `discovery-gas-policy` object-literal seed becomes a TS excess-property
+  error the moment the field is deleted), not a follow-up.
 - **Effort:** M. **Risk:** low-medium (advisory cooldowns, no fund/correctness risk, but the
-  hand-sync removal must preserve current open/close behavior). **Verify:** the circuit unit tests
-  (`lifi-circuit`, `one-inch-circuit`) + discovery runtime tests.
+  hand-sync removal must preserve current open/close behavior). **Verify:** all 8 files above.
 
 ### M-H — Lift the 1inch/Sushi route-canary orchestration into `src/` (mirror LI.FI) *(new)*
 - **Location:** `scripts/oneinch-route-canary.ts:1-546`,
@@ -482,7 +528,7 @@ One PR, committed in dependency order so the bundle stays reviewable and the two
 (`slither`, deployment tests) are not skipped:
 
 1. **Deletions & canonical-reuse** — M-B, M-E, N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11,
-   B-T1, B-T3, B-D2, B-D3.
+   N12, N13, N14, B-T1, B-T3, B-D2, B-D3.
 2. **Descriptor consumers** — M-C, M-C′, M-D, M-F, M-G, M-H (M-C′ depends on M-B from step 1).
 3. **Contracts** — B-C1, B-C2; **run `npm run slither`** and the full taker suites here as a
    distinct commit so the contract gate stays auditable inside the single PR. (N4's dead-mock
