@@ -175,15 +175,21 @@ execution order").
 - **Effort:** S. **Risk:** none. **Verify:** `tsc`.
 
 ### N4 — Delete five dead mock contracts orphaned by #20 *(new; dead-code)*
-- **Location:** `contracts/mocks/MockOneInchUnderdeliveryRouter.sol`,
-  `MockReentrantOneInchRouter.sol`, `UniswapV3SwapAdapter.sol`, + the two other mocks with zero
-  references (confirm the full set by grepping for `*__factory` imports + path references).
-- **Problem:** Each has **zero** references in `tests/`, `src/`, or `scripts/` — adversarial
-  doubles for the 1inch/factory liquidity paths #20 deleted.
-- **Remedy:** Delete the `.sol` files and regenerate typechain. **Do NOT** also delete the 1inch
-  swap interfaces in `contracts/OneInchInterfaces.sol` (`IGenericRouter` etc.) — those are still
-  used by the surviving 1inch decode path.
-- **Effort:** S. **Risk:** low. **Verify:** `npm run compile`, full test suite.
+- **Location (all five named — pass 3):** `contracts/mocks/MockOneInchUnderdeliveryRouter.sol`,
+  `MockReentrantOneInchRouter.sol`, `UniswapV3SwapAdapter.sol`, `MockUniversalRouter.sol`, and
+  `MockPermit2.sol`.
+- **Problem:** Adversarial doubles for the 1inch / UniversalRouter+Permit2 paths #20 deleted. Four
+  have zero references; **`MockPermit2` is only *transitively* dead** — its sole reference is the
+  `import` inside `MockUniversalRouter.sol`, which is itself dead.
+- **Remedy:** Delete `MockUniversalRouter.sol` **first** (that is what makes `MockPermit2` dead),
+  then `MockPermit2.sol`, alongside the other three; regenerate typechain. ⚠️ A one-shot grep
+  mis-classifies `MockPermit2` as live (it has a reference until `MockUniversalRouter` is gone) and
+  Solidity compiles every `.sol` regardless of references, so neither a single grep nor `compile`
+  catches the transitive orphan — **iterate-to-fixpoint** (re-grep after each deletion) or use a
+  no-unused check. **Do NOT** delete `contracts/OneInchInterfaces.sol` (`IGenericRouter` etc.) —
+  still used by the surviving 1inch decode path.
+- **Effort:** S. **Risk:** low. **Verify:** `npm run compile`, full test suite, + a final grep
+  confirming none of the five names remains.
 
 ### N5 — Delete four dead imports in `validation-rules.ts` *(new; dead-code)*
 - **Location:** `src/config/validation-rules.ts:21,25,27,29` (`isDirectDexDynamicSource`,
@@ -276,13 +282,41 @@ execution order").
 - **Remedy:** Delete the `warnings?` field.
 - **Effort:** S. **Risk:** none. **Verify:** `tsc`.
 
-### N14 — Reuse the canonical `pruneMapToMaxSize` in two inline copies *(new; duplication)*
-- **Location:** `src/discovery/gas-policy.ts:542-548` (`pruneGasQuoteConversionCache`) and
-  `src/erc20.ts:91-99` (`pruneCachedDecimals`) — both re-implement the byte-identical
-  insertion-order size-cap eviction loop from `src/utils.ts:22-30`.
-- **Remedy (reuse-canonical):** Replace both bodies with
-  `pruneMapToMaxSize(cache, MAX_…)` (import from `./utils` / `../utils`).
-- **Effort:** S. **Risk:** none. **Verify:** `tsc`, gas-policy + erc20 unit tests.
+### N14 — Reuse the canonical `pruneMapToMaxSize` in **six** inline copies *(new; duplication)*
+- **Location (all six — pass 3):** `src/discovery/gas-policy.ts:542-548`, `src/erc20.ts:91-99`,
+  `src/take/external-take/chain.ts:35-41` (`getCachedTokenDecimals`),
+  `src/dex/providers/curve-quote-provider.ts:337-344`,
+  `src/dex/providers/pool-existence-cache.ts:89-94` (`prune()`),
+  `src/discovery/targets.ts:293-299` (`pruneToMax()`) — each a byte-identical insertion-order
+  size-cap eviction loop reimplementing `src/utils.ts:22-30`.
+- **Remedy (reuse-canonical):** Replace each body with `pruneMapToMaxSize(map, MAX_…)` (import from
+  `./utils` / `../utils`), preserving each site's early-return-on-no-cache where present. (The
+  `targets.ts` 6-line→1-line dedup is a *reduction*, not the decomposition the out-of-scope note
+  defers — it is in scope.)
+- **Effort:** S. **Risk:** none. **Verify:** `tsc`, the respective unit suites.
+
+### N15 — Delete the remaining dead re-export barrels + prune the stale guard config *(new; same kind as B-T1/N9)*
+- **Location:** sibling barrels `src/take/external-take/route.ts` (`export * from './route-binding'`)
+  and `src/take/external-take/quote-approval.ts` (`export * from './quote-approval-rules'`); package
+  barrels `src/dex/index.ts`, `src/discovery/external-take/index.ts`, `src/take/external-take/index.ts`,
+  `src/take/lifi/index.ts`; and the no-spend shim `scripts/no-spend/harness-artifacts.ts`
+  (`export * from './harness-report'`).
+- **Problem:** Each has **zero** importers (real consumers import the owning sibling directly; e.g.
+  `take/index.ts:36` pulls `createLifiTakeAdapter` from `./lifi/adapter`, not the `lifi/index`
+  barrel). They are the same dead-barrel pattern as B-T1/N9, missed by the prior passes. Two of them
+  also rot the **manual guard registries**: `check-hot-file-growth.ts` lists `external-take/route.ts`,
+  `quote-approval.ts`, and `harness-artifacts.ts` in `HOT_FILES` + `COMPATIBILITY_ONLY_HOT_MODULES`,
+  and `check-external-take-boundaries.ts:100` special-cases `quote-approval.ts` — so the guards police
+  import paths nothing uses (corroborating the known "guards partly broken" state).
+- **Remedy:** Delete the barrels (each only after confirming there is **no** `import … from '<dir>'`
+  directory-import that would resolve to its `index.ts`). Then prune the now-stale guard entries:
+  `check-hot-file-growth.ts` `HOT_FILES`/`COMPATIBILITY_ONLY_HOT_MODULES` lines for the three files
+  and `check-external-take-boundaries.ts:100`; **keep** the `OWNERSHIP_FILE_LINE_CAPS` cap on the
+  live `harness-report.ts` (it guards the real owner). Land the guard-config prune in the same commit
+  so the gate stays auditable.
+- **Effort:** S. **Risk:** low (the package `index.ts` deletions need the directory-import check;
+  the sibling/shim barrels are zero-risk). **Verify:** `tsc`,
+  `npm run check-external-take-boundaries -- --base <ref>`, `npm run check-hot-file-growth -- --base <ref>`.
 
 ---
 
@@ -528,7 +562,7 @@ One PR, committed in dependency order so the bundle stays reviewable and the two
 (`slither`, deployment tests) are not skipped:
 
 1. **Deletions & canonical-reuse** — M-B, M-E, N1, N2, N3, N4, N5, N6, N7, N8, N9, N10, N11,
-   N12, N13, N14, B-T1, B-T3, B-D2, B-D3.
+   N12, N13, N14, N15, B-T1, B-T3, B-D2, B-D3.
 2. **Descriptor consumers** — M-C, M-C′, M-D, M-F, M-G, M-H (M-C′ depends on M-B from step 1).
 3. **Contracts** — B-C1, B-C2; **run `npm run slither`** and the full taker suites here as a
    distinct commit so the contract gate stays auditable inside the single PR. (N4's dead-mock
