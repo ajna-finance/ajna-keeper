@@ -1,3 +1,4 @@
+import { AGGREGATOR_SWAP_DETAILS_TUPLE_ABI } from '../../src/take/aggregator-calldata/execution';
 // Tier-2 full-loop Base-fork keeper harness.
 //
 // This is the ONLY test that drives the real keeper discovery loop
@@ -308,7 +309,7 @@ function encodeLifiSwapDetails(params: {
 }): string {
   return utils.defaultAbiCoder.encode(
     [
-      'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)',
+      AGGREGATOR_SWAP_DETAILS_TUPLE_ABI,
     ],
     [params]
   );

@@ -1,3 +1,4 @@
+import { AGGREGATOR_SWAP_DETAILS_TUPLE_ABI } from '../../src/take/aggregator-calldata/execution';
 import { expect } from 'chai';
 import { BigNumber, constants, utils } from 'ethers';
 import { LiquiditySource } from '../../src/config';
@@ -10,7 +11,7 @@ import {
 } from './helpers/mock-taker-base';
 
 const DETAILS_ABI =
-  'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)';
+  AGGREGATOR_SWAP_DETAILS_TUPLE_ABI;
 const BORROWER = utils.getAddress(
   '0x00000000000000000000000000000000000000b0'
 );

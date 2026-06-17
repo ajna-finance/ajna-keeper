@@ -1,3 +1,4 @@
+import { AGGREGATOR_SWAP_DETAILS_TUPLE_ABI } from '../../src/take/aggregator-calldata/execution';
 import { expect } from 'chai';
 import {
   BigNumber,
@@ -161,7 +162,7 @@ function encodeLifiSwapDetails(params: {
 }): string {
   return utils.defaultAbiCoder.encode(
     [
-      'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)',
+      AGGREGATOR_SWAP_DETAILS_TUPLE_ABI,
     ],
     [params]
   );

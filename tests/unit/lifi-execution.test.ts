@@ -1,3 +1,4 @@
+import { AGGREGATOR_SWAP_DETAILS_TUPLE_ABI } from '../../src/take/aggregator-calldata/execution';
 import { expect } from 'chai';
 import sinon from 'sinon';
 import axios from 'axios';
@@ -19,7 +20,7 @@ import { malformedSingleExternalTakeExecutionPlan } from '../helpers/external-ta
 
 describe('LI.FI execution', () => {
   const LIFI_DETAILS_ABI =
-    'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)';
+    AGGREGATOR_SWAP_DETAILS_TUPLE_ABI;
 
   afterEach(() => {
     NonceTracker.clearNonces();

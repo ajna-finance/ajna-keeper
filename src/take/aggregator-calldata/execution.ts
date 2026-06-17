@@ -154,6 +154,14 @@ export function makeCalldataAggregatorProviderRejectionRecorder<TConfig>(selecto
  * BaseAggregatorCalldataTaker. The amountOutMinimum is the keeper's approved
  * execution floor, not the provider's route minimum.
  */
+/**
+ * Canonical on-chain AggregatorSwapDetails tuple ABI — the single source of
+ * truth every calldata-aggregator taker decodes. Encoders and decode-side test
+ * assertions must reference this instead of re-typing the literal.
+ */
+export const AGGREGATOR_SWAP_DETAILS_TUPLE_ABI =
+  'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)';
+
 export function encodeAggregatorSwapDetails(params: {
   quote: Pick<
     ApprovedCalldataAggregatorQuote,
@@ -167,9 +175,7 @@ export function encodeAggregatorSwapDetails(params: {
   amountOutMinimum: BigNumber;
 }): string {
   return ethers.utils.defaultAbiCoder.encode(
-    [
-      'tuple(address approvalSpender,address srcToken,address dstToken,address dstReceiver,uint256 amountInTokenUnits,uint256 amountOutMinimum,bytes callData)',
-    ],
+    [AGGREGATOR_SWAP_DETAILS_TUPLE_ABI],
     [
       {
         approvalSpender: params.quote.approvalSpender,
