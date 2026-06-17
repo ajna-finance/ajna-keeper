@@ -5,10 +5,10 @@ import {
   validateOneInchSwapDetailsForAtomicTake,
 } from '../one-inch';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../../erc20';
-import { BASE_ONEINCH_ROUTER } from '../../../scripts/no-spend/fixture-constants';
 import {
   BASE_CADC,
   BASE_CHAIN_ID,
+  BASE_ONEINCH_ROUTER,
   BASE_UNISWAP_V3_QUOTER_V2,
   BASE_USDC,
   BASE_WETH,

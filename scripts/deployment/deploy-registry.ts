@@ -1,10 +1,7 @@
 import { ethers } from 'ethers';
 import * as path from 'path';
 import { KeeperConfig, LiquiditySource } from '../../src/config';
-import {
-  type ExternalTakeTakerContractKey,
-  getExternalTakeLiquiditySourceDescriptor,
-} from '../../src/config/external-take-descriptors';
+import { getExternalTakeLiquiditySourceDescriptor } from '../../src/config/external-take-descriptors';
 import { normalizeLifiProductionChainPolicy } from '../../src/config/lifi-policy';
 import { normalizeSushiAggregatorChainPolicy } from '../../src/config/sushi-aggregator-policy';
 import {
@@ -60,7 +57,6 @@ export interface DeployTakerContext {
 interface DeployDescriptorBase {
   readonly source: LiquiditySource;
   readonly label: string;
-  readonly takerContractKey: ExternalTakeTakerContractKey;
   readonly addressKey: DeploymentAddressKey;
   readonly takerArtifact: TakerArtifact;
   // Step label printed by the deploy phase (preserves the original CLI strings).
@@ -357,15 +353,9 @@ function deployDescriptorFor(params: {
       typeof getExternalTakeLiquiditySourceDescriptor
     >[0]
   );
-  if (!identity.takerContractKey) {
-    throw new Error(
-      `deploy descriptor for ${LiquiditySource[params.source]} requires a takerContractKey`
-    );
-  }
   return {
     source: params.source,
     label: identity.label,
-    takerContractKey: identity.takerContractKey,
     addressKey: params.addressKey,
     takerArtifact: params.takerArtifact,
     deployStepLabel: params.deployStepLabel,

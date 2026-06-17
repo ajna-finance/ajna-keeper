@@ -208,6 +208,81 @@ describe('route deployment preflight', () => {
     return config;
   }
 
+  // 1inch config WITH a production allowlist policy + a provider that serves the
+  // on-chain allowlist reads, so the W3-FINAL validateOneInchAggregatorAllowlist-
+  // Preflight reconciliation branch is actually exercised (mirrors lifiProviderStub).
+  function oneInchAllowlistProviderStub(params?: {
+    registeredTaker?: string;
+    allowedTargets?: string[];
+    allowedSpenders?: string[];
+    allowedSelectors?: string[];
+    invalidPolicy?: boolean;
+  }) {
+    const config = oneInchConfig();
+    const callTarget = '0x3333333333333333333333333333333333333333';
+    const spender = '0x4444444444444444444444444444444444444444';
+    config.dex!.oneInch!.callTargetAllowlist = { 1: [callTarget] };
+    config.dex!.oneInch!.approvalSpenderAllowlist = { 1: [spender] };
+    config.dex!.oneInch!.selectorAllowlist = params?.invalidPolicy
+      ? // selector targets an address NOT in the call-target allowlist: the
+        // normalizer rejects it fail-closed before any on-chain read.
+        { 1: { [spender]: ['0xabcdef12'] } }
+      : { 1: { [callTarget]: ['0xabcdef12'] } };
+
+    const routerIface = new ethers.utils.Interface([
+      'function takerContracts(uint8 source) view returns (address)',
+    ]);
+    const allowlistIface = new ethers.utils.Interface([
+      'function getAllowedCallTargets() view returns (address[])',
+      'function getAllowedApprovalSpenders() view returns (address[])',
+      'function getAllowedCallSelectors(address target) view returns (bytes4[])',
+    ]);
+    const registeredTaker =
+      params?.registeredTaker ?? config.takers!.contracts!.OneInchAggregator;
+    const allowedTargets = params?.allowedTargets ?? [callTarget];
+    const allowedSpenders = params?.allowedSpenders ?? [spender];
+    const allowedSelectors = params?.allowedSelectors ?? ['0xabcdef12'];
+
+    return {
+      config,
+      provider: {
+        _isProvider: true,
+        resolveName: sinon.stub().callsFake(async (name: string) => name),
+        getCode: sinon.stub().resolves('0x6000'),
+        call: sinon.stub().callsFake(async (tx: { data: string }) => {
+          const selector = tx.data.slice(0, 10);
+          if (selector === routerIface.getSighash('takerContracts')) {
+            return routerIface.encodeFunctionResult('takerContracts', [
+              registeredTaker,
+            ]);
+          }
+          if (selector === allowlistIface.getSighash('getAllowedCallTargets')) {
+            return allowlistIface.encodeFunctionResult('getAllowedCallTargets', [
+              allowedTargets,
+            ]);
+          }
+          if (
+            selector === allowlistIface.getSighash('getAllowedApprovalSpenders')
+          ) {
+            return allowlistIface.encodeFunctionResult(
+              'getAllowedApprovalSpenders',
+              [allowedSpenders]
+            );
+          }
+          if (
+            selector === allowlistIface.getSighash('getAllowedCallSelectors')
+          ) {
+            return allowlistIface.encodeFunctionResult(
+              'getAllowedCallSelectors',
+              [allowedSelectors]
+            );
+          }
+          throw new Error(`unexpected call ${selector}`);
+        }),
+      },
+    };
+  }
+
   it('passes when enabled route contracts have bytecode and router registry matches', async () => {
     const config = baseConfig();
     const provider = {
@@ -550,6 +625,82 @@ describe('route deployment preflight', () => {
       );
       expect((error as Error).message).to.include(
         config.takers!.contracts!.OneInchAggregator
+      );
+    }
+  });
+
+  it('passes 1inch preflight when router registry and on-chain allowlists match config', async () => {
+    const { config, provider } = oneInchAllowlistProviderStub();
+
+    await validateAutoDiscoverRouteDeployments({
+      config,
+      provider: provider as any,
+      chainId: 1,
+    });
+
+    // registry read + the three on-chain allowlist reads
+    // (callTargets/approvalSpenders/selectors) prove the reconciliation ran.
+    expect(provider.call.callCount).to.be.greaterThanOrEqual(4);
+  });
+
+  it('fails 1inch preflight when on-chain call targets do not exactly match config', async () => {
+    const { config, provider } = oneInchAllowlistProviderStub({
+      allowedTargets: ['0x5555555555555555555555555555555555555555'],
+    });
+
+    try {
+      await validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      expect.fail('expected preflight to fail');
+    } catch (error) {
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        '1inch taker call target allowlist'
+      );
+      expect((error as Error).message).to.include('mismatch');
+    }
+  });
+
+  it('fails 1inch preflight when on-chain selectors do not exactly match config', async () => {
+    const { config, provider } = oneInchAllowlistProviderStub({
+      allowedSelectors: ['0xdeadbeef'],
+    });
+
+    try {
+      await validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      expect.fail('expected preflight to fail');
+    } catch (error) {
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        '1inch taker selector allowlist'
+      );
+      expect((error as Error).message).to.include('mismatch');
+    }
+  });
+
+  it('fails 1inch preflight when the production allowlist policy is invalid', async () => {
+    const { config, provider } = oneInchAllowlistProviderStub({
+      invalidPolicy: true,
+    });
+
+    try {
+      await validateAutoDiscoverRouteDeployments({
+        config,
+        provider: provider as any,
+        chainId: 1,
+      });
+      expect.fail('expected preflight to fail');
+    } catch (error) {
+      expect(error).to.be.instanceOf(Error);
+      expect((error as Error).message).to.include(
+        '1inch production policy for chain 1 is invalid'
       );
     }
   });

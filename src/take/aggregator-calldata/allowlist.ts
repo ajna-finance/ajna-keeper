@@ -245,6 +245,15 @@ export function assertValidAggregatorAllowlistPolicyChains(params: {
   if (chainId !== undefined) {
     chainIds.add(chainId);
   }
+  // Fail closed: a present-but-empty policy (e.g. callTargetAllowlist: {}) must
+  // not pass as a "configured" production allowlist. Without an active chainId
+  // there would otherwise be no chain to normalize and the empty policy would
+  // slip through.
+  if (chainIds.size === 0) {
+    throw new Error(
+      `${fieldName} allowlist policy must configure at least one chain`
+    );
+  }
   for (const id of Array.from(chainIds)) {
     normalizeAggregatorChainPolicy({ config, fieldName, chainId: id });
   }

@@ -6,6 +6,11 @@ export const BASE_CHAIN_ID = 8453;
 export const BASE_CADC = '0x043eb4b75d0805c43d7c834902e335621983cf03';
 export const BASE_USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
 export const BASE_WETH = '0x4200000000000000000000000000000000000006';
+// Canonical Base 1inch aggregation router. Lives in src so production canary
+// code never reaches up into scripts/; the no-spend fixture-constants module
+// re-exports it (scripts -> src is the correct dependency direction).
+export const BASE_ONEINCH_ROUTER =
+  '0x1111111254EEB25477B68fb85Ed929f73A960582';
 export const BASE_UNISWAP_V3_QUOTER_V2 =
   '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a';
 
