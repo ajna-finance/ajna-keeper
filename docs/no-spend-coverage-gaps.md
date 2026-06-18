@@ -55,7 +55,7 @@ sub-cases (crash-recovery at fork level, RPC failover, degraded mode, gas-spike,
 | P1-1 | Full-lifecycle composition + keeper-kick | ✅ done |
 | P1-2 | Promote real-Ajna + real-DEX fork tests to first-class | ⬜ not started |
 | P1-3 | Daemon lifecycle & resilience (defects #3/#4) | ✅ persistent-daemon multi-cycle + real discovery + idempotency + SIGTERM done · 🟡 failure-injection sub-cases remain |
-| P1-4 | Reward-collection & bond-withdrawal loops | 🟡 LP-sweep principal-preservation done (found+fixed defect #9) · reactive-settlement retry + bond-withdrawal remain |
+| P1-4 | Reward-collection & bond-withdrawal loops | 🟡 LP-sweep principal-preservation (found+fixed defect #9) + bond-withdrawal done · LP reactive-settlement retry remains |
 | P2-1 | Token/subgraph realism + `verify:routes` canary | ⬜ not started |
 | P2-2 | Price sourcing, inversion & multi-chain config (defect #6) | 🟡 defect fixed + unit-guarded · price/inversion scenarios remain |
 
@@ -76,12 +76,13 @@ sub-cases (crash-recovery at fork level, RPC failover, degraded mode, gas-spike,
    subgraph outage); gas-spike skip; and nonce consistency when SIGTERM lands mid-broadcast. The two crash
    wrappers are already unit-covered (`loop-crash-recovery.test.ts`); these are the fork-level scenarios.
    **Catches:** silent permanent loop death, ungraceful shutdown, and unsafe degradation under infra failure.
-2. **Reward-collection & bond-withdrawal money-safety (`P1-4`).** ✅ *The load-bearing one is done* — the
-   **LP-redemption-never-burns-principal** invariant is covered (`tests/integration/collect-lp.test.ts`), and
-   it **found + fixed defect #9** (the sweep redeemed the full position, not the tracked reward). Remaining:
-   reactive-settlement-retry on `AuctionNotCleared`, and bond withdrawal (`claimable → 0`, balance up — needs
-   the keeper-as-kicker compose of keeper-kick + settlement). **Catches:** stuck-bond/withdrawal bugs and the
-   settlement-retry path.
+2. **Reward-collection & bond-withdrawal money-safety (`P1-4`).** ✅ *Mostly done.* The
+   **LP-redemption-never-burns-principal** invariant is covered (`tests/integration/collect-lp.test.ts`) and
+   **found + fixed defect #9** (the sweep redeemed the full position, not the tracked reward). **Bond
+   withdrawal** is covered too (`AJNA_AGENT_NO_SPEND_BOND_WITHDRAWAL=1`): after settlement unlocks the keeper's
+   kick bond, a dry-run withdraws nothing and a real `collectBondFromPool` pays the keeper exactly the bond
+   (`claimable → 0`, balance up — validated). Remaining: LP-sweep → reactive-settlement retry on
+   `AuctionNotCleared` (lower value). **Catches:** the settlement-retry redemption path.
 3. **Multi-cycle idempotency / no duplicate action (`P1-3`).** After cycle 1 takes/kicks, assert cycle 2
    (same state) submits **zero** additional keeper txs; optional SIGTERM-then-restart variant. **Catches:**
    double-spend / re-action on an already-actioned auction across cycles or restart.
