@@ -42,7 +42,24 @@ const HARDHAT_BIN = path.join(
   'bootstrap.js'
 );
 const DEFAULT_RPC_TIMEOUT_MS = 120_000;
-const DEFAULT_BASE_FORK_BLOCK = 'latest';
+// Pin to a known-warm Base block instead of `latest`. Forking at the moving tip
+// leaves Alchemy's upstream state cache cold, so the first `eth_estimateGas`
+// during fixture creation triggers a slow lazy-state fetch and times out. 30M is
+// the same block `hardhat.config.ts` defaults the Base fork to (and that the
+// base-fork integration tests use), so the Ajna ERC20PoolFactory + Uniswap V3
+// infra the synthetic fixture needs is present and the state is warm/cacheable.
+// Override with --base-fork-block / BASE_FORK_BLOCK / AJNA_AGENT_NO_SPEND_BASE_FORK_BLOCK.
+const DEFAULT_BASE_FORK_BLOCK = '30000000';
+// Hard ceiling for the fixture-creation child (runNodeScript otherwise resolves
+// only on `close`, so a hung cold call would block indefinitely). This is a
+// backstop against a true hang, not a perf target: the FIRST run against a
+// never-fetched pinned block pays the full upstream lazy-state cost (observed
+// multiple minutes) before Alchemy caches it; warm subsequent runs finish in
+// ~1 min. The default is generous so a cold first run completes; override via
+// AJNA_AGENT_NO_SPEND_FIXTURE_TIMEOUT_MS in a colder/CI environment.
+const FIXTURE_CREATION_TIMEOUT_MS = Number(
+  process.env.AJNA_AGENT_NO_SPEND_FIXTURE_TIMEOUT_MS ?? 600_000
+);
 
 let hardhatNode;
 
@@ -749,7 +766,8 @@ async function main() {
         egressReportPath,
         expectedFeeTier: options.expectedFeeTier,
       }),
-      fixtureLogPath
+      fixtureLogPath,
+      FIXTURE_CREATION_TIMEOUT_MS
     );
     const fixtureSummary = readJson(summaryPath, 'fixture summary');
     assertFixtureSummary(fixtureSummary);
