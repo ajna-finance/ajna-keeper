@@ -102,6 +102,8 @@ function parseArgs(argv) {
       process.env.AJNA_AGENT_NO_SPEND_HYBRID_GAS_QUOTE_FALLBACK ??
       'direct_dex_first',
     runConfigSmoke: process.env.AJNA_AGENT_NO_SPEND_CONFIG_SMOKE === '1',
+    // P0-4: drive + assert an on-chain settlement after the take.
+    driveSettlement: process.env.AJNA_AGENT_NO_SPEND_SETTLEMENT === '1',
     runDaemonSmoke: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE === '1',
     daemonSmokeOnly: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE_ONLY === '1',
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
@@ -593,6 +595,20 @@ function assertExecutionReport(report, options) {
       'manual LI.FI no-broadcast policy/context resolution recorded'
     );
   }
+  if (options.driveSettlement) {
+    requireInvariant(
+      report.settlementArtifact?.collateralZeroDebtPositiveReached === true,
+      'settlement precondition reached: zero collateral with residual debt'
+    );
+    requireInvariant(
+      report.settlementArtifact?.kickTimeTransitionedToZero === true,
+      'settlement cleared the auction on-chain (kickTime_ -> 0)'
+    );
+    requireInvariant(
+      report.settlementArtifact?.bondsUnlocked === true,
+      'settlement unlocked kicker bonds (locked -> 0)'
+    );
+  }
 }
 
 function assertConfigArtifact(report) {
@@ -714,6 +730,12 @@ function harnessEnv(params) {
   }
   if (params.configSmoke) {
     scenarioEnv.AJNA_AGENT_HARNESS_CONFIG_SMOKE = '1';
+  }
+  // P0-4: drive the settlement stage in the execution leg only (the dry-run leg
+  // must not, since a dry-run take never reduces collateral so it can't reach
+  // the zero-collateral precondition).
+  if (params.settlementStage) {
+    scenarioEnv.AJNA_AGENT_HARNESS_SETTLEMENT_STAGE = '1';
   }
   return withNoEgressGuard(
     baseChildEnv({
@@ -940,6 +962,9 @@ async function main() {
           '--hybrid-gas-quote-fallback',
           options.hybridGasQuoteFallback,
           '--auto-warp-to-take',
+          // P0-4: settlement needs the take loop to drive collateral to ZERO,
+          // which takes many warps — raise the budget for the settlement run.
+          ...(options.driveSettlement ? ['--max-take-warps', '80'] : []),
         ],
         harnessEnv({
           rpcUrl,
@@ -947,6 +972,7 @@ async function main() {
           allowedHosts,
           egressReportPath,
           configSmoke: false,
+          settlementStage: options.driveSettlement,
         }),
         executionLogPath
       );
@@ -955,6 +981,7 @@ async function main() {
         mode: options.harnessMode,
         expectedFeeTier: options.expectedFeeTier,
         aggregatorExpectedSource: aggregatorExpectedSourceFromEnv(),
+        driveSettlement: options.driveSettlement,
       });
     }
 

@@ -93,6 +93,22 @@ export type HarnessReport = {
   skipArtifact: SkipArtifact;
   configArtifact?: ConfigArtifact;
   manualArtifact?: ManualArtifact;
+  settlementArtifact?: SettlementArtifact;
+};
+
+// P0-4: the result of the harness settlement stage — proves bad debt was
+// cleared on-chain (kickTime_ -> 0) and kicker bonds were unlocked.
+export type SettlementArtifact = {
+  driven: boolean;
+  collateralZeroDebtPositiveReached: boolean;
+  kickTimeTransitionedToZero: boolean;
+  bondsUnlocked: boolean;
+  kickTimeBefore: string;
+  kickTimeAfter: string;
+  lockedBefore: string;
+  lockedAfter: string;
+  auctionAgeSecondsAtCheck?: number;
+  minAuctionAge?: number;
 };
 
 type SerializedRouteEvaluation = {

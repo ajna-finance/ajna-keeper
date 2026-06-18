@@ -122,6 +122,50 @@ export function makeFixtureSubgraphReader(
       return [];
     }
   };
+  // P0-4: surface the fixture borrower as an unsettled-auction candidate
+  // whenever it has an active auction (kickTime_ != 0). Unlike
+  // getChainwideAuction this does NOT gate on collateral > 0 — settlement is
+  // exactly the zero-collateral-with-debt case. The scanner re-validates
+  // needsSettlement on-chain, so this only needs borrower + kickTime (seconds).
+  const getUnsettledAuctionRows = async () => {
+    try {
+      const auctionInfo = await pool.contract.auctionInfo(borrower);
+      if (auctionInfo.kickTime_.eq(0)) {
+        return [];
+      }
+      let debtRemaining = '0';
+      let collateralRemaining = '0';
+      try {
+        const liquidation = await pool.getLiquidation(borrower);
+        const status = await liquidation.getStatus();
+        collateralRemaining = status.collateral.toString();
+        debtRemaining = (status as any).debtToCover?.toString?.() ?? '0';
+      } catch (statusError) {
+        if (!isBenignNoLiquidationError(statusError)) {
+          throw statusError;
+        }
+      }
+      return [
+        {
+          id: `${pool.poolAddress.toLowerCase()}-${borrower.toLowerCase()}`,
+          borrower,
+          // Subgraph kickTime is SECONDS (parseSubgraphKickTimeMs ×1000s it).
+          kickTime: auctionInfo.kickTime_.toString(),
+          debtRemaining,
+          collateralRemaining,
+          neutralPrice: '0',
+          debt: debtRemaining,
+          collateral: collateralRemaining,
+          pool: { id: pool.poolAddress.toLowerCase() },
+        },
+      ];
+    } catch (error) {
+      if (!isBenignNoLiquidationError(error)) {
+        throw error;
+      }
+      return [];
+    }
+  };
   return {
     cacheKey: `fixture:${pool.poolAddress}:${borrower.toLowerCase()}`,
     getLoans(poolAddress) {
@@ -138,7 +182,7 @@ export function makeFixtureSubgraphReader(
       return { buckets: [] } as any;
     },
     async getUnsettledAuctions() {
-      return { liquidationAuctions: [] } as any;
+      return { liquidationAuctions: await getUnsettledAuctionRows() } as any;
     },
     async getChainwideLiquidationAuctions() {
       return { liquidationAuctions: await getChainwideAuction() };

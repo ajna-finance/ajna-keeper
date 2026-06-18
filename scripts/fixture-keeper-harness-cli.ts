@@ -10,6 +10,8 @@ import type { DiscoveredTakeTargetStats } from '../src/discovery/take-executor';
 import type { ResolvedTakeTarget } from '../src/discovery/targets';
 import { handleKicks } from '../src/kick';
 import { handleTakes } from '../src/take';
+import { handleSettlements } from '../src/settlement';
+import { clearSharedSettlementScannerCache } from '../src/settlement/scanner';
 import type { DiscoveryReadTransports } from '../src/read-transports';
 import {
   LiquiditySource,
@@ -631,6 +633,11 @@ export async function main() {
     takeWarpSeconds,
     maxTakeWarps,
   } = parseArgs(process.argv.slice(2));
+  // P0-4: when set, drive the take loop to ZERO collateral with residual debt,
+  // then run a real settlement stage and assert the auction clears. Gated so
+  // take-only runs are byte-identical.
+  const settlementStage =
+    process.env.AJNA_AGENT_HARNESS_SETTLEMENT_STAGE === '1';
   const keeperKey = process.env.AJNA_AGENT_KEEPER_KEY;
   if (!keeperKey) {
     throw new Error('Missing AJNA_AGENT_KEEPER_KEY');
@@ -675,6 +682,15 @@ export async function main() {
       minCollateral: 0.01,
       liquiditySource: LiquiditySource.UNISWAPV3,
       marketPriceFactor: 0.98,
+    },
+    // P0-4: minAuctionAge cannot be 0 (|| 3600-floored); use a small positive
+    // value. The age gate compares wall-clock Date.now()-kickTime, satisfied by
+    // real elapsed runtime (fork warping does not move Date.now()).
+    settlement: {
+      enabled: true,
+      minAuctionAge: 1,
+      maxBucketDepth: 50,
+      maxIterations: 10,
     },
   } as const;
 
@@ -915,8 +931,18 @@ export async function main() {
           : collateralBeforeTake !== undefined &&
             liquidationStatusAfterTake === null;
 
+      // P0-4: needsSettlement requires collateral==0 && debt>0, and a single
+      // partial take leaves residual collateral. When settling, keep
+      // warping+re-taking until on-chain collateral reaches 0; otherwise stop at
+      // the first reduction (existing take-only behavior).
+      const collateralIsZero =
+        liquidationStatusAfterTake === null ||
+        ethers.BigNumber.from(liquidationStatusAfterTake.collateral).eq(0);
+      const takeLoopGoalReached = settlementStage
+        ? collateralIsZero
+        : collateralReducedByTake;
       if (
-        collateralReducedByTake ||
+        takeLoopGoalReached ||
         !autoWarpToTake ||
         takeWarpCount >= maxTakeWarps
       ) {
@@ -960,6 +986,69 @@ export async function main() {
       before: keeperQuoteBalanceBefore,
       after: keeperQuoteBalanceAfter,
     });
+
+    // P0-4: run a real settlement AFTER all take-artifact collection (settle is
+    // irreversible and emits keeper txs; running it earlier would pollute the
+    // take tx/approval/balance reads above).
+    let settlementArtifact: HarnessReport['settlementArtifact'] | undefined;
+    if (settlementStage) {
+      const settleBorrower = summary.borrower.owner;
+      const auctionBeforeSettle =
+        await pool.contract.auctionInfo(settleBorrower);
+      const kickTimeBefore = auctionBeforeSettle.kickTime_;
+      const { locked: lockedBefore } = await pool.kickerInfo(keeper.address);
+      const collateralZero =
+        liquidationStatusAfterTake === null ||
+        ethers.BigNumber.from(liquidationStatusAfterTake.collateral).eq(0);
+      // Precondition: an ACTIVE auction (kickTime_ != 0 => residual debt) with
+      // zero collateral. Fail loudly if not reached, else settlement finds
+      // nothing and the test silently passes proving nothing.
+      const collateralZeroDebtPositiveReached =
+        !kickTimeBefore.eq(0) && collateralZero;
+      if (!collateralZeroDebtPositiveReached) {
+        throw new Error(
+          `Settlement precondition not reached (need an active auction with zero collateral): ` +
+            `kickTime_=${kickTimeBefore.toString()} collateral=${
+              liquidationStatusAfterTake?.collateral ?? 'null'
+            } (raise --max-take-warps or check the fixture debt/collateral economics)`
+        );
+      }
+      // The age gate compares wall-clock Date.now()-kickTime (seconds).
+      const auctionAgeSecondsAtCheck = Math.floor(
+        Date.now() / 1000 - Number(kickTimeBefore.toString())
+      );
+
+      clearSharedSettlementScannerCache();
+      await handleSettlements({
+        pool,
+        poolConfig: poolConfig as never,
+        signer: keeper,
+        config: {
+          dryRun: false,
+          subgraph: makeFixtureSubgraphReader(pool, settleBorrower, provider),
+        },
+      });
+
+      const auctionAfterSettle = await pool.contract.auctionInfo(settleBorrower);
+      const kickTimeAfter = auctionAfterSettle.kickTime_;
+      const { locked: lockedAfter } = await pool.kickerInfo(keeper.address);
+      settlementArtifact = {
+        driven: true,
+        collateralZeroDebtPositiveReached,
+        kickTimeBefore: kickTimeBefore.toString(),
+        kickTimeAfter: kickTimeAfter.toString(),
+        kickTimeTransitionedToZero:
+          !kickTimeBefore.eq(0) && kickTimeAfter.eq(0),
+        lockedBefore: lockedBefore.toString(),
+        lockedAfter: lockedAfter.toString(),
+        bondsUnlocked: lockedAfter.eq(0),
+        auctionAgeSecondsAtCheck,
+        minAuctionAge: poolConfig.settlement.minAuctionAge,
+      };
+      process.stdout.write(
+        `[harness] settlement: kickTime_ ${kickTimeBefore.toString()} -> ${kickTimeAfter.toString()}, locked ${lockedBefore.toString()} -> ${lockedAfter.toString()}\n`
+      );
+    }
 
     const report: HarnessReport = {
       mode,
@@ -1026,6 +1115,7 @@ export async function main() {
         blockBeforeTake,
         blockAfterTake,
       },
+      settlementArtifact,
     };
 
     const outputPath = process.env.AJNA_AGENT_HARNESS_OUTPUT_PATH;
