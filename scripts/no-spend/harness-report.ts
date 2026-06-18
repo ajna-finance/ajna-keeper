@@ -43,8 +43,23 @@ type FixtureSummary = {
     deployment: {
       keeperTakerRouter: string;
       uniswapV3Taker: string;
+      aggregatorTakers?: Array<{
+        key: 'Lifi' | 'SushiAggregator' | 'OneInchAggregator';
+        source: number;
+        takerAddress: string;
+        targetAddress: string;
+      }>;
     };
   };
+};
+
+// Map a selected-source label (formatLiquiditySource output) to the
+// aggregatorTakers descriptor key, so the route artifact can report the taker
+// that actually executed instead of the hardcoded Uniswap one.
+const AGGREGATOR_LABEL_TO_KEY: Record<string, string> = {
+  LIFI: 'Lifi',
+  SUSHI_AGGREGATOR: 'SushiAggregator',
+  ONEINCH: 'OneInchAggregator',
 };
 
 export type HarnessReport = {
@@ -517,7 +532,22 @@ export function buildRouteArtifact(params: {
     expectedExecutionFeeTier: uniswapV3ExternalTake?.expectedExecutionFeeTier,
     factoryRegistryAddress:
       uniswapV3ExternalTake?.deployment.keeperTakerRouter,
-    selectedTakerAddress: uniswapV3ExternalTake?.deployment.uniswapV3Taker,
+    // Derive the executed taker from the selected source: for an aggregator
+    // winner, resolve its taker from aggregatorTakers; otherwise the Uniswap
+    // taker (the shared TakerRouter, factoryRegistryAddress, is correct as-is).
+    selectedTakerAddress: (() => {
+      const label = lastRouteEvent?.route?.selectedLiquiditySource;
+      const aggregatorKey = label ? AGGREGATOR_LABEL_TO_KEY[label] : undefined;
+      const aggregatorTaker = aggregatorKey
+        ? uniswapV3ExternalTake?.deployment.aggregatorTakers?.find(
+            (taker) => taker.key === aggregatorKey
+          )
+        : undefined;
+      return (
+        aggregatorTaker?.takerAddress ??
+        uniswapV3ExternalTake?.deployment.uniswapV3Taker
+      );
+    })(),
     decisions: params.routeDecisionEvents,
     counters:
       params.mode === 'discovery'
