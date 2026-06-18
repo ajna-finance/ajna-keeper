@@ -27,7 +27,11 @@ export function deriveSwapMinimumOut(params: {
     );
   }
   const slippageBps = Math.round(params.slippagePercent * 100);
-  if (!Number.isFinite(slippageBps) || slippageBps < 0 || slippageBps >= 10000) {
+  if (
+    !Number.isFinite(slippageBps) ||
+    slippageBps < 0 ||
+    slippageBps >= 10000
+  ) {
     throw new Error(
       `Invalid reward-swap slippage tolerance: ${params.slippagePercent}% (expected 0 <= slippage < 100)`
     );

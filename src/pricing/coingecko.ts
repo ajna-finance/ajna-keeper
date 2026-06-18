@@ -86,7 +86,7 @@ async function fetchCoinGeckoPrice(
 
 // Map CoinGecko token IDs to contract addresses for Alchemy fallback
 // This mapping is chain-specific and should be expanded as needed
-function getTokenAddress(
+export function getTokenAddress(
   tokenId: string,
   chainId: number,
   tokenAddresses?: { [key: string]: string }
@@ -149,6 +149,32 @@ function getTokenAddress(
       dai: '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
       tether: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', // USDT
       usdt: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    },
+    // Optimism (10) — surfaced-defects #6
+    10: {
+      ethereum: '0x4200000000000000000000000000000000000006', // WETH
+      weth: '0x4200000000000000000000000000000000000006',
+      'usd-coin': '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', // native USDC
+      usdc: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+      dai: '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
+      tether: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58', // USDT
+      usdt: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58',
+      'wrapped-bitcoin': '0x68f180fcCe6836688e9084f035309E29Bf0A2095', // WBTC
+      wbtc: '0x68f180fcCe6836688e9084f035309E29Bf0A2095',
+    },
+    // Polygon PoS (137) — surfaced-defects #6
+    137: {
+      ethereum: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', // WETH
+      weth: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+      'usd-coin': '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', // native USDC
+      usdc: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+      dai: '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063',
+      tether: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', // USDT
+      usdt: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
+      'wrapped-bitcoin': '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6', // WBTC
+      wbtc: '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6',
+      'matic-network': '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270', // WMATIC
+      wmatic: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
     },
   };
 
