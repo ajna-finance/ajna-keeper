@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import process from 'process';
+import { fileURLToPath } from 'url';
 import {
   ROOT,
   assertLocalRpcUrl,
@@ -1089,12 +1090,21 @@ process.once('SIGTERM', async () => {
   process.exit(143);
 });
 
-main().catch(async (error) => {
-  await stopHardhatNode();
-  process.stderr.write(
-    `[no-spend] validation failed: ${
-      error instanceof Error ? (error.stack ?? error.message) : String(error)
-    }\n`
-  );
-  process.exitCode = 1;
-});
+// Only run the full validation when invoked directly (not when imported by a
+// test that exercises the exported assertion helpers).
+const isDirectInvocation =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectInvocation) {
+  main().catch(async (error) => {
+    await stopHardhatNode();
+    process.stderr.write(
+      `[no-spend] validation failed: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }\n`
+    );
+    process.exitCode = 1;
+  });
+}
+
+export { assertExecutionReport, assertSuccessfulDryRunReport };
