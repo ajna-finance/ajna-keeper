@@ -414,7 +414,13 @@ export async function prepareCalldataAggregatorExecution<
     };
   }
 
-  const maxQuoteAgeMs = params.getMaxQuoteAgeMs(config);
+  // params.getMaxQuoteAgeMs re-runs the provider production-config guard for
+  // some providers (e.g. LI.FI), which the injected no-spend path does not
+  // supply. The injector stamps quotedAtMs fresh per call, so a generous
+  // default age window is correct when injecting.
+  const maxQuoteAgeMs = quoteInjector
+    ? 5 * 60_000
+    : params.getMaxQuoteAgeMs(config);
   const ageError = getAggregatorQuoteAgeError({
     quote: freshQuote,
     maxQuoteAgeMs,

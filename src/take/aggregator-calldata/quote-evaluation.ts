@@ -126,9 +126,15 @@ export async function evaluateCalldataAggregatorPathQuote<
   }
 
   try {
-    const preparedConfig = params.prepareConfig
-      ? await params.prepareConfig(params.config)
-      : (undefined as TPreparedConfig);
+    // No-spend seam: when an aggregator quote injector is installed (harness
+    // only, env-gated), skip the provider's production-config guard
+    // (prepareConfig) — the injected quote bypasses the live fetch that guard
+    // protects, and getTakerAddress reads the configured taker directly.
+    const injector = getAggregatorQuoteInjector();
+    const preparedConfig =
+      !injector && params.prepareConfig
+        ? await params.prepareConfig(params.config)
+        : (undefined as TPreparedConfig);
     const takerAddress = params.getTakerAddress(params.config, preparedConfig);
     if (!takerAddress) {
       return rejected(params.takerMissingReason);
@@ -149,10 +155,8 @@ export async function evaluateCalldataAggregatorPathQuote<
       return rejected(params.tokenRoundedToZeroReason);
     }
 
-    // No-spend seam: when an aggregator quote injector is installed (harness
-    // only, env-gated), use it instead of the live provider fetch+normalize so
-    // the rest of the real evaluate->approve->rank pipeline runs unchanged.
-    const injector = getAggregatorQuoteInjector();
+    // Same injector (resolved above): use it instead of the live provider
+    // fetch+normalize so the rest of the evaluate->approve->rank pipeline runs.
     let providerQuote: TProviderQuote | undefined;
     let calldataQuote: ApprovedCalldataAggregatorQuote;
     if (injector) {

@@ -392,6 +392,24 @@ function assertRouteFee(report, expectedFeeTier, label) {
   }
 }
 
+// P0-3: when an aggregator provider is driven, the flagship asserts the
+// aggregator path/source instead of direct_dex/UNISWAPV3.
+function aggregatorExpectedSourceFromEnv() {
+  const provider = process.env.AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER;
+  if (!provider) return undefined;
+  const source = {
+    Lifi: 'LIFI',
+    SushiAggregator: 'SUSHI_AGGREGATOR',
+    OneInchAggregator: 'ONEINCH',
+  }[provider];
+  if (!source) {
+    throw new Error(
+      `Unknown AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER="${provider}"`
+    );
+  }
+  return source;
+}
+
 function assertSuccessfulDryRunReport(report, options) {
   if (report.mode !== options.mode) {
     throw new Error(
@@ -403,26 +421,40 @@ function assertSuccessfulDryRunReport(report, options) {
       report,
       'dryRunExternalTakes'
     );
-    const dryRunDirectDexPathTakes = sumPathCounter(
-      report,
-      'direct_dex',
-      'dryRun'
-    );
-    if (dryRunExternalTakes < 1 || dryRunDirectDexPathTakes < 1) {
-      throw new Error(
-        `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} directDexDryRuns=${dryRunDirectDexPathTakes}`
+    if (options.aggregatorExpectedSource) {
+      // Aggregator scenario: the take runs the calldata_aggregator path, not
+      // direct_dex, so only require an external take to have been reached.
+      if (dryRunExternalTakes < 1) {
+        throw new Error(
+          `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes}`
+        );
+      }
+    } else {
+      const dryRunDirectDexPathTakes = sumPathCounter(
+        report,
+        'direct_dex',
+        'dryRun'
       );
+      if (dryRunExternalTakes < 1 || dryRunDirectDexPathTakes < 1) {
+        throw new Error(
+          `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} directDexDryRuns=${dryRunDirectDexPathTakes}`
+        );
+      }
     }
   }
   requireInvariant(
-    report.routeArtifact?.selectedPath === 'direct_dex',
-    'dry-run routeArtifact selected direct_dex path'
+    report.routeArtifact?.selectedPath ===
+      (options.aggregatorExpectedSource ? 'calldata_aggregator' : 'direct_dex'),
+    `dry-run routeArtifact selected ${options.aggregatorExpectedSource ? 'calldata_aggregator' : 'direct_dex'} path`
   );
   requireInvariant(
-    report.routeArtifact?.selectedLiquiditySource === 'UNISWAPV3',
-    'dry-run routeArtifact selected UNISWAPV3'
+    report.routeArtifact?.selectedLiquiditySource ===
+      (options.aggregatorExpectedSource ?? 'UNISWAPV3'),
+    `dry-run routeArtifact selected ${options.aggregatorExpectedSource ?? 'UNISWAPV3'}`
   );
-  assertRouteFee(report, options.expectedFeeTier, 'dry-run');
+  if (!options.aggregatorExpectedSource) {
+    assertRouteFee(report, options.expectedFeeTier, 'dry-run');
+  }
   requireInvariant(
     report.txArtifact?.transactions?.length === 0,
     'dry-run records no broadcast transactions'
@@ -475,26 +507,38 @@ function assertExecutionReport(report, options) {
       report,
       'executedExternalTakes'
     );
-    const executedDirectDexPathTakes = sumPathCounter(
-      report,
-      'direct_dex',
-      'executed'
-    );
-    if (executedExternalTakes < 1 || executedDirectDexPathTakes < 1) {
-      throw new Error(
-        `Execution did not record a direct DEX external take. executedExternalTakes=${executedExternalTakes} directDexExecutions=${executedDirectDexPathTakes}`
+    if (options.aggregatorExpectedSource) {
+      if (executedExternalTakes < 1) {
+        throw new Error(
+          `Execution did not record an external take. executedExternalTakes=${executedExternalTakes}`
+        );
+      }
+    } else {
+      const executedDirectDexPathTakes = sumPathCounter(
+        report,
+        'direct_dex',
+        'executed'
       );
+      if (executedExternalTakes < 1 || executedDirectDexPathTakes < 1) {
+        throw new Error(
+          `Execution did not record a direct DEX external take. executedExternalTakes=${executedExternalTakes} directDexExecutions=${executedDirectDexPathTakes}`
+        );
+      }
     }
   }
   requireInvariant(
-    report.routeArtifact?.selectedPath === 'direct_dex',
-    'execution routeArtifact selected direct_dex path'
+    report.routeArtifact?.selectedPath ===
+      (options.aggregatorExpectedSource ? 'calldata_aggregator' : 'direct_dex'),
+    `execution routeArtifact selected ${options.aggregatorExpectedSource ? 'calldata_aggregator' : 'direct_dex'} path`
   );
   requireInvariant(
-    report.routeArtifact?.selectedLiquiditySource === 'UNISWAPV3',
-    'execution routeArtifact selected UNISWAPV3'
+    report.routeArtifact?.selectedLiquiditySource ===
+      (options.aggregatorExpectedSource ?? 'UNISWAPV3'),
+    `execution routeArtifact selected ${options.aggregatorExpectedSource ?? 'UNISWAPV3'}`
   );
-  assertRouteFee(report, options.expectedFeeTier, 'execution');
+  if (!options.aggregatorExpectedSource) {
+    assertRouteFee(report, options.expectedFeeTier, 'execution');
+  }
   requireInvariant(
     options.mode !== 'discovery' ||
       (report.routeArtifact?.counters?.preBroadcastFailures === 0 &&
@@ -511,7 +555,13 @@ function assertExecutionReport(report, options) {
     'execution receipt gas used recorded'
   );
   requireInvariant(
-    report.balanceArtifact?.positiveDelta === true,
+    // The mock aggregator keeps swap profit in the taker contract, not the
+    // keeper wallet, so the keeper quote-balance delta is not a faithful signal
+    // for the aggregator scenario (real-Ajna-vs-mock divergence). Assert the
+    // on-chain auction state + approvals reset instead (below).
+    options.aggregatorExpectedSource
+      ? true
+      : report.balanceArtifact?.positiveDelta === true,
     'keeper quote-token balance delta is positive'
   );
   requireInvariant(
@@ -653,6 +703,10 @@ function harnessEnv(params) {
     'AJNA_AGENT_HARNESS_MAX_EXECUTIONS_PER_POOL_PER_RUN',
     'AJNA_AGENT_HARNESS_TAKE_ROUTE_QUOTE_BUDGET_PER_CANDIDATE',
     'AJNA_AGENT_HARNESS_TAKE_QUOTE_BUDGET_PER_RUN',
+    // P0-2/P0-3: select an aggregator provider (Lifi|SushiAggregator|
+    // OneInchAggregator) to drive a real mock aggregator calldata-take.
+    'AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER',
+    'AJNA_AGENT_HARNESS_AGGREGATOR_QUOTE_MOCK',
   ]) {
     if (process.env[name]) {
       scenarioEnv[name] = process.env[name];
@@ -862,6 +916,7 @@ async function main() {
         assertSuccessfulDryRunReport(dryRunReport, {
           mode: options.harnessMode,
           expectedFeeTier: options.expectedFeeTier,
+          aggregatorExpectedSource: aggregatorExpectedSourceFromEnv(),
         });
       }
       if (options.runConfigSmoke && options.harnessMode === 'discovery') {
@@ -899,6 +954,7 @@ async function main() {
       assertExecutionReport(executionReport, {
         mode: options.harnessMode,
         expectedFeeTier: options.expectedFeeTier,
+        aggregatorExpectedSource: aggregatorExpectedSourceFromEnv(),
       });
     }
 
