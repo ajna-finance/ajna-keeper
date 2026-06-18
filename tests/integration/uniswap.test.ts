@@ -169,6 +169,7 @@ describe('Uniswap V3 Integration Tests', function () {
       wbtcToken.address,
       amountToSwap,
       FeeAmount.MEDIUM,
+      1,
       {
         wethAddress: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
         uniswapV3Router: '0xE592427A0AEce92De3Edee1F18E0157C05861564',

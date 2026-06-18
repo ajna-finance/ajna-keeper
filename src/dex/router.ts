@@ -665,6 +665,7 @@ export class DexRouter {
         universalRouterAddress?: string;
         permit2Address?: string;
         poolFactoryAddress?: string;
+        quoterV2Address?: string;
         defaultFeeTier?: number;
         defaultSlippage?: number;
       };
@@ -775,7 +776,8 @@ export class DexRouter {
               combinedSettings.uniswap.universalRouterAddress,
               combinedSettings.uniswap.permit2Address,
               combinedSettings.uniswap.defaultFeeTier || feeAmount,
-              combinedSettings.uniswap.poolFactoryAddress
+              combinedSettings.uniswap.poolFactoryAddress,
+              combinedSettings.uniswap.quoterV2Address
             );
             logger.info(
               `Universal Router swap successful: ${adjustedAmount.toString()} ${tokenIn} -> ${tokenOut}`
@@ -797,6 +799,7 @@ export class DexRouter {
               tokenIn,
               adjustedAmount,
               feeAmount,
+              slippage,
               combinedSettings?.uniswap
             );
             logger.info(

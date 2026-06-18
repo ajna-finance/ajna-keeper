@@ -13,8 +13,8 @@ are expected to fail against current code until the defect is fixed (that failur
 
 | # | Sev | Defect | Location | Exposed by |
 |---|-----|--------|----------|-----------|
-| 1 | **High** | Legacy reward swap drops operator slippage + floors `minOut` to ~0.01% of input | `src/dex/uniswap.ts:217,222-223` | P0-5 |
-| 2 | **Medium** | Universal Router reward swap derives `amountOutMin` from the **input** amount, not a quote | `src/dex/universal-router.ts:218-223` | P0-5 |
+| 1 | **High** | ✅ **FIXED** — Legacy reward swap dropped operator slippage + floored `minOut` to ~0.01% of input | `src/dex/uniswap.ts` | P0-5 |
+| 2 | **Medium** | ✅ **FIXED** — Universal Router reward swap derived `amountOutMin` from the **input** amount, not a quote | `src/dex/universal-router.ts` | P0-5 |
 | 3 | **Medium** | No process-level crash/shutdown guards (`unhandledRejection`/SIGTERM/`.catch`) | `src/index.ts:55`, `src/run.ts:307-322` | P1-3 |
 | 4 | Low | Kick/Bond/LP loops lack the crash-recovery wrapper Take/Settlement have | `src/run.ts:420-461,497-525,644-758` | P1-3 |
 | 5 | Low | Curve + Permit2 reward-swap approvals are `MaxUint256`, never reset | `src/dex/curve-router.ts:195-198`, `src/dex/universal-router.ts:160-163` | — |

@@ -1,23 +1,20 @@
 import {
   CurrencyAmount,
-  Percent,
   SWAP_ROUTER_02_ADDRESSES,
   V3_CORE_FACTORY_ADDRESSES,
   Token,
-  TradeType,
   WETH9,
 } from '@uniswap/sdk-core';
 import IUniswapV3PoolABI from '@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json';
 import { abi as UniswapABI } from '@uniswap/v3-periphery/artifacts/contracts/SwapRouter.sol/SwapRouter.json';
 import {
   FeeAmount,
-  Route,
   Tick,
   TickListDataProvider,
   TickMath,
-  Trade,
   Pool as UniswapV3Pool,
 } from '@uniswap/v3-sdk';
+import { deriveSwapMinimumOut } from './swap-min-out';
 import {
   BigNumber,
   Contract,
@@ -94,6 +91,7 @@ export async function swapToWeth(
   tokenAddress: string,
   amount: BigNumber,
   feeAmount: FeeAmount,
+  slippagePercent: number,
   uniswapOverrides?: UniswapV3Overrides
 ) {
   if (!signer || !tokenAddress || !amount) {
@@ -198,8 +196,6 @@ export async function swapToWeth(
     tickDataProvider
   );
 
-  const route = new Route([pool], tokenToSwap, weth);
-
   const inputAmount = CurrencyAmount.fromRawAmount(
     tokenToSwap,
     amount.toString()
@@ -207,21 +203,13 @@ export async function swapToWeth(
   const quote = await pool.getOutputAmount(inputAmount);
   const expectedOutputAmount = quote[0];
 
-  const trade = Trade.createUncheckedTrade({
-    route,
-    inputAmount,
-    outputAmount: expectedOutputAmount,
-    tradeType: TradeType.EXACT_INPUT,
+  // Derive amountOutMinimum from the QUOTED output and the OPERATOR's slippage
+  // (was hardcoded 0.5% + a 0.01%-of-input near-zero floor — surfaced-defects #1).
+  const minOut = deriveSwapMinimumOut({
+    expectedOutputRaw: BigNumber.from(expectedOutputAmount.quotient.toString()),
+    inputRaw: amount,
+    slippagePercent,
   });
-
-  const slippageTolerance = new Percent(50, 10000);
-  let minOut = BigNumber.from(
-    trade.minimumAmountOut(slippageTolerance).quotient.toString()
-  );
-
-  if (minOut.lte(constants.Zero)) {
-    minOut = amount.div(BigNumber.from('10000'));
-  }
 
   const swapRouter = new Contract(uniswapV3Router, UniswapABI, signer);
   const recipient = await signer.getAddress();
