@@ -98,6 +98,7 @@ export type HarnessReport = {
   manualArtifact?: ManualArtifact;
   settlementArtifact?: SettlementArtifact;
   kickArtifact?: KickArtifact;
+  bondArtifact?: BondArtifact;
 };
 
 // P0-3/P1-1: the result of the KEEPER's own kick decision — proves the keeper
@@ -111,6 +112,24 @@ export type KickArtifact = {
   lockedBefore: string;
   lockedAfter: string;
   kicker: string;
+};
+
+// P1-4: the result of the harness bond-withdrawal stage — proves the keeper's
+// settlement-unlocked kick bond is withdrawn to its wallet (claimable -> 0,
+// quote balance up) by the REAL collectBondFromPool, and that a dry-run first
+// withdraws nothing (no tx, claimable + balance unchanged).
+export type BondArtifact = {
+  driven: boolean;
+  claimableBefore: string;
+  lockedBefore: string;
+  dryRunClaimableUnchanged: boolean;
+  dryRunBalanceUnchanged: boolean;
+  claimableAfter: string;
+  lockedAfter: string;
+  claimableTransitionedToZero: boolean;
+  bondWithdrawn: boolean;
+  keeperQuoteBalanceBeforeBond: string;
+  keeperQuoteBalanceAfterBond: string;
 };
 
 // P0-4: the result of the harness settlement stage — proves bad debt was

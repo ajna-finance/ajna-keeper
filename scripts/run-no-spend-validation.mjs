@@ -107,7 +107,15 @@ function parseArgs(argv) {
       'direct_dex_first',
     runConfigSmoke: process.env.AJNA_AGENT_NO_SPEND_CONFIG_SMOKE === '1',
     // P0-4: drive + assert an on-chain settlement after the take.
-    driveSettlement: process.env.AJNA_AGENT_NO_SPEND_SETTLEMENT === '1',
+    // P1-4 bond withdrawal builds on settlement (the bond unlocks there), so it
+    // implies driveSettlement.
+    driveSettlement:
+      process.env.AJNA_AGENT_NO_SPEND_SETTLEMENT === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_BOND_WITHDRAWAL === '1',
+    // P1-4: after settlement unlocks the keeper's kick bond, withdraw it and
+    // assert the keeper is paid (claimable -> 0, balance up; dry-run no-op).
+    driveBondWithdrawal:
+      process.env.AJNA_AGENT_NO_SPEND_BOND_WITHDRAWAL === '1',
     // P0-3/P1-1: create an unkicked fixture so the KEEPER's own kick decision
     // (handleKicks) runs, and assert it kicked + bonded.
     driveKeeperKick: process.env.AJNA_AGENT_NO_SPEND_KEEPER_KICK === '1',
@@ -690,6 +698,29 @@ function assertExecutionReport(report, options) {
       'settlement unlocked kicker bonds (locked -> 0)'
     );
   }
+  if (options.driveBondWithdrawal) {
+    const bond = report.bondArtifact;
+    requireInvariant(bond?.driven === true, 'bond-withdrawal stage ran');
+    // Precondition: settlement actually left a claimable bond to withdraw, so
+    // the assertions below cannot pass trivially on a zero bond.
+    requireInvariant(
+      BigInt(bond?.claimableBefore ?? '0') > 0n,
+      'bond withdrawal had a claimable bond after settlement (claimableBefore > 0)'
+    );
+    requireInvariant(
+      bond?.dryRunClaimableUnchanged === true &&
+        bond?.dryRunBalanceUnchanged === true,
+      'bond dry-run withdrew nothing (claimable + keeper balance unchanged)'
+    );
+    requireInvariant(
+      bond?.claimableTransitionedToZero === true,
+      'real bond withdrawal zeroed claimable (claimable -> 0)'
+    );
+    requireInvariant(
+      bond?.bondWithdrawn === true,
+      'real bond withdrawal paid the keeper (quote balance increased)'
+    );
+  }
 }
 
 function assertConfigArtifact(report) {
@@ -822,6 +853,10 @@ function harnessEnv(params) {
   }
   if (params.keeperKick) {
     scenarioEnv.AJNA_AGENT_HARNESS_KEEPER_KICK = '1';
+  }
+  // P1-4: bond withdrawal runs after the settlement stage in the execution leg.
+  if (params.bondWithdrawal) {
+    scenarioEnv.AJNA_AGENT_HARNESS_BOND_WITHDRAWAL = '1';
   }
   return withNoEgressGuard(
     baseChildEnv({
@@ -1094,6 +1129,7 @@ async function main() {
           configSmoke: false,
           settlementStage: options.driveSettlement,
           keeperKick: options.driveKeeperKick,
+          bondWithdrawal: options.driveBondWithdrawal,
         }),
         executionLogPath
       );
@@ -1105,6 +1141,7 @@ async function main() {
         competitionRoster: aggregatorCompetitionRosterFromEnv(),
         driveSettlement: options.driveSettlement,
         driveKeeperKick: options.driveKeeperKick,
+        driveBondWithdrawal: options.driveBondWithdrawal,
       });
     }
 

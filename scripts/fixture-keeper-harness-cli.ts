@@ -11,6 +11,10 @@ import type { ResolvedTakeTarget } from '../src/discovery/targets';
 import { handleKicks } from '../src/kick';
 import { handleTakes } from '../src/take';
 import { handleSettlements } from '../src/settlement';
+import {
+  collectBondFromPool,
+  clearIdleBondCache,
+} from '../src/rewards/collect-bond';
 import { clearSharedSettlementScannerCache } from '../src/settlement/scanner';
 import type { DiscoveryReadTransports } from '../src/read-transports';
 import {
@@ -720,6 +724,10 @@ export async function main() {
   // actually exercises getLoansToKick + poolKick + bond posting.
   const keeperKickMode =
     process.env.AJNA_AGENT_HARNESS_KEEPER_KICK === '1';
+  // P1-4: after the settlement stage unlocks the keeper's kick bond, withdraw it
+  // via the REAL collectBondFromPool and assert claimable -> 0 + keeper paid.
+  const bondWithdrawalStage =
+    process.env.AJNA_AGENT_HARNESS_BOND_WITHDRAWAL === '1';
   const keeperKey = process.env.AJNA_AGENT_KEEPER_KEY;
   if (!keeperKey) {
     throw new Error('Missing AJNA_AGENT_KEEPER_KEY');
@@ -1167,6 +1175,77 @@ export async function main() {
       );
     }
 
+    // P1-4: withdraw the keeper's settlement-unlocked kick bond. Runs only after
+    // the settlement stage (which unlocked it: locked -> 0 => claimable). Proves
+    // a dry-run withdraws nothing, then a real collectBondFromPool pays the
+    // keeper and zeroes claimable.
+    let bondArtifact: HarnessReport['bondArtifact'] | undefined;
+    if (bondWithdrawalStage && settlementStage) {
+      const bondBorrower = summary.borrower.owner;
+      const bondSubgraph = makeFixtureSubgraphReader(
+        pool,
+        bondBorrower,
+        provider
+      );
+      const { claimable: claimableBefore, locked: lockedBeforeBond } =
+        await pool.kickerInfo(keeper.address);
+      const keeperQuoteBeforeBond = await getBalanceOfErc20(
+        keeper,
+        pool.quoteAddress
+      );
+
+      // (a) Dry-run must withdraw NOTHING.
+      clearIdleBondCache();
+      await collectBondFromPool({
+        pool,
+        signer: keeper,
+        poolConfig: poolConfig as never,
+        config: { dryRun: true, subgraph: bondSubgraph },
+      });
+      const { claimable: claimableAfterDryRun } = await pool.kickerInfo(
+        keeper.address
+      );
+      const keeperQuoteAfterDryRun = await getBalanceOfErc20(
+        keeper,
+        pool.quoteAddress
+      );
+
+      // (b) Real withdrawal: claimable -> 0, keeper paid the bond.
+      clearIdleBondCache();
+      await collectBondFromPool({
+        pool,
+        signer: keeper,
+        poolConfig: poolConfig as never,
+        config: { dryRun: false, subgraph: bondSubgraph },
+      });
+      const { claimable: claimableAfter, locked: lockedAfterBond } =
+        await pool.kickerInfo(keeper.address);
+      const keeperQuoteAfterBond = await getBalanceOfErc20(
+        keeper,
+        pool.quoteAddress
+      );
+
+      bondArtifact = {
+        driven: true,
+        claimableBefore: claimableBefore.toString(),
+        lockedBefore: lockedBeforeBond.toString(),
+        dryRunClaimableUnchanged: claimableAfterDryRun.eq(claimableBefore),
+        dryRunBalanceUnchanged: keeperQuoteAfterDryRun.eq(keeperQuoteBeforeBond),
+        claimableAfter: claimableAfter.toString(),
+        lockedAfter: lockedAfterBond.toString(),
+        claimableTransitionedToZero:
+          claimableBefore.gt(0) && claimableAfter.eq(0),
+        bondWithdrawn:
+          claimableBefore.gt(0) &&
+          keeperQuoteAfterBond.gt(keeperQuoteBeforeBond),
+        keeperQuoteBalanceBeforeBond: keeperQuoteBeforeBond.toString(),
+        keeperQuoteBalanceAfterBond: keeperQuoteAfterBond.toString(),
+      };
+      process.stdout.write(
+        `[harness] bond withdrawal: claimable ${claimableBefore.toString()} -> ${claimableAfter.toString()}, keeper quote ${keeperQuoteBeforeBond.toString()} -> ${keeperQuoteAfterBond.toString()}\n`
+      );
+    }
+
     const report: HarnessReport = {
       mode,
       hybridGasQuoteFailureFallbackMode:
@@ -1234,6 +1313,7 @@ export async function main() {
         blockAfterTake,
       },
       settlementArtifact,
+      bondArtifact,
     };
 
     const outputPath = process.env.AJNA_AGENT_HARNESS_OUTPUT_PATH;
