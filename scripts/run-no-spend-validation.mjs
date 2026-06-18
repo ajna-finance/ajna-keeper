@@ -105,6 +105,9 @@ function parseArgs(argv) {
     runConfigSmoke: process.env.AJNA_AGENT_NO_SPEND_CONFIG_SMOKE === '1',
     // P0-4: drive + assert an on-chain settlement after the take.
     driveSettlement: process.env.AJNA_AGENT_NO_SPEND_SETTLEMENT === '1',
+    // P0-3/P1-1: create an unkicked fixture so the KEEPER's own kick decision
+    // (handleKicks) runs, and assert it kicked + bonded.
+    driveKeeperKick: process.env.AJNA_AGENT_NO_SPEND_KEEPER_KICK === '1',
     runDaemonSmoke: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE === '1',
     daemonSmokeOnly: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE_ONLY === '1',
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
@@ -322,7 +325,7 @@ function requireInvariant(condition, message) {
   }
 }
 
-function assertFixtureSummary(summary) {
+function assertFixtureSummary(summary, options = {}) {
   requireInvariant(summary.network === 'base', 'fixture network is base');
   requireInvariant(
     typeof summary.rpcUrl === 'string' && isLocalhostUrl(summary.rpcUrl),
@@ -346,10 +349,23 @@ function assertFixtureSummary(summary) {
     ['deployed', 'reused'].includes(summary.stages?.deployExternalTake?.mode),
     'external-take router/taker deployed or reused'
   );
-  requireInvariant(
-    ['kicked', 'already_active'].includes(summary.finalKick?.status),
-    'final kick status is kicked or already_active'
-  );
+  if (options.driveKeeperKick) {
+    // Keeper-kick mode: the fixture is intentionally kick-ELIGIBLE-but-unkicked
+    // (the keeper does the kick), so assert eligibility instead of a fixture kick.
+    requireInvariant(
+      summary.liquidationCheck?.keeperKickEligibleByCurrentCode === true,
+      'fixture borrower is keeper-kick-eligible'
+    );
+    requireInvariant(
+      summary.finalKick?.status !== 'kicked',
+      'fixture did not pre-kick the borrower (keeper-kick mode)'
+    );
+  } else {
+    requireInvariant(
+      ['kicked', 'already_active'].includes(summary.finalKick?.status),
+      'final kick status is kicked or already_active'
+    );
+  }
   requireInvariant(
     summary.uniswapV3ExternalTake?.routeShapeVerification?.status === 'passed',
     'route-shape verification passed'
@@ -598,6 +614,16 @@ function assertExecutionReport(report, options) {
       'manual LI.FI no-broadcast policy/context resolution recorded'
     );
   }
+  if (options.driveKeeperKick) {
+    requireInvariant(
+      report.kickArtifact?.kickTimeTransitionedToNonZero === true,
+      'keeper kicked an eligible loan on-chain (kickTime_ 0 -> non-zero)'
+    );
+    requireInvariant(
+      report.kickArtifact?.bondPosted === true,
+      'keeper posted a liquidation bond (kicker locked increased)'
+    );
+  }
   if (options.driveSettlement) {
     requireInvariant(
       report.settlementArtifact?.collateralZeroDebtPositiveReached === true,
@@ -748,6 +774,9 @@ function harnessEnv(params) {
   if (params.settlementStage) {
     scenarioEnv.AJNA_AGENT_HARNESS_SETTLEMENT_STAGE = '1';
   }
+  if (params.keeperKick) {
+    scenarioEnv.AJNA_AGENT_HARNESS_KEEPER_KICK = '1';
+  }
   return withNoEgressGuard(
     baseChildEnv({
       ...scenarioEnv,
@@ -843,7 +872,9 @@ async function main() {
       [
         '--with-uniswap-v3-external-take',
         '--allow-evm-time-travel',
-        '--final-kick',
+        // Keeper-kick coverage needs an eligible-but-UNKICKED borrower so the
+        // keeper's own handleKicks does the kick; otherwise the fixture kicks.
+        options.driveKeeperKick ? '--no-final-kick' : '--final-kick',
       ],
       fixtureEnv({
         rpcUrl,
@@ -857,7 +888,9 @@ async function main() {
       FIXTURE_CREATION_TIMEOUT_MS
     );
     const fixtureSummary = readJson(summaryPath, 'fixture summary');
-    assertFixtureSummary(fixtureSummary);
+    assertFixtureSummary(fixtureSummary, {
+      driveKeeperKick: options.driveKeeperKick,
+    });
     let daemonArtifact;
     if (options.runDaemonSmoke) {
       daemonArtifact = await runDaemonSmoke({
@@ -915,6 +948,9 @@ async function main() {
       return;
     }
 
+    // Keeper-kick mode has no auction until the keeper kicks (execution leg
+    // only), so the take-focused dry-run leg does not apply — skip it.
+    if (!options.driveKeeperKick) {
     const snapshotId = await requestJsonRpc(rpcUrl, 'evm_snapshot');
     try {
       await runNodeScript(
@@ -958,8 +994,11 @@ async function main() {
     } finally {
       await requestJsonRpc(rpcUrl, 'evm_revert', [snapshotId]);
     }
+    }
 
-    const dryRunReport = readJson(dryRunReportPath, 'dry-run report');
+    const dryRunReport = options.driveKeeperKick
+      ? undefined
+      : readJson(dryRunReportPath, 'dry-run report');
     let executionReport;
     if (!options.dryRunOnly && options.expectedResult === 'success') {
       await runNodeScript(
@@ -984,6 +1023,7 @@ async function main() {
           egressReportPath,
           configSmoke: false,
           settlementStage: options.driveSettlement,
+          keeperKick: options.driveKeeperKick,
         }),
         executionLogPath
       );
@@ -993,6 +1033,7 @@ async function main() {
         expectedFeeTier: options.expectedFeeTier,
         aggregatorExpectedSource: aggregatorExpectedSourceFromEnv(),
         driveSettlement: options.driveSettlement,
+        driveKeeperKick: options.driveKeeperKick,
       });
     }
 
@@ -1044,20 +1085,22 @@ async function main() {
         execution: executionReport ? executionLogPath : undefined,
         hardhat: nodeLogPath,
       },
-      dryRun: {
-        route: dryRunReport.routeArtifact,
-        skip: dryRunReport.skipArtifact,
-        config: dryRunReport.configArtifact,
-        policy: dryRunReport.policyArtifact,
-      },
-      route: (executionReport ?? dryRunReport).routeArtifact,
+      dryRun: dryRunReport
+        ? {
+            route: dryRunReport.routeArtifact,
+            skip: dryRunReport.skipArtifact,
+            config: dryRunReport.configArtifact,
+            policy: dryRunReport.policyArtifact,
+          }
+        : undefined,
+      route: (executionReport ?? dryRunReport)?.routeArtifact,
       receipt: executionReport?.receiptArtifact,
-      balance: executionReport?.balanceArtifact ?? dryRunReport.balanceArtifact,
+      balance: executionReport?.balanceArtifact ?? dryRunReport?.balanceArtifact,
       approval:
-        executionReport?.approvalArtifact ?? dryRunReport.approvalArtifact,
+        executionReport?.approvalArtifact ?? dryRunReport?.approvalArtifact,
       transport:
-        executionReport?.transportArtifact ?? dryRunReport.transportArtifact,
-      env: executionReport?.envArtifact ?? dryRunReport.envArtifact,
+        executionReport?.transportArtifact ?? dryRunReport?.transportArtifact,
+      env: executionReport?.envArtifact ?? dryRunReport?.envArtifact,
       stateIntegrity,
       daemon: daemonArtifact,
     };

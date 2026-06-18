@@ -94,6 +94,20 @@ export type HarnessReport = {
   configArtifact?: ConfigArtifact;
   manualArtifact?: ManualArtifact;
   settlementArtifact?: SettlementArtifact;
+  kickArtifact?: KickArtifact;
+};
+
+// P0-3/P1-1: the result of the KEEPER's own kick decision — proves the keeper
+// kicked an eligible loan on-chain (kickTime_ 0 -> non-zero) and posted a bond.
+export type KickArtifact = {
+  driven: boolean;
+  kickTimeTransitionedToNonZero: boolean;
+  bondPosted: boolean;
+  kickTimeBefore: string;
+  kickTimeAfter: string;
+  lockedBefore: string;
+  lockedAfter: string;
+  kicker: string;
 };
 
 // P0-4: the result of the harness settlement stage — proves bad debt was

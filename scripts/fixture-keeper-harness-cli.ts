@@ -715,6 +715,11 @@ export async function main() {
   // take-only runs are byte-identical.
   const settlementStage =
     process.env.AJNA_AGENT_HARNESS_SETTLEMENT_STAGE === '1';
+  // P0-3/P1-1: assert the KEEPER's own kick decision. Requires the fixture to be
+  // created kick-eligible-but-unkicked (--no-final-kick), so handleKicks below
+  // actually exercises getLoansToKick + poolKick + bond posting.
+  const keeperKickMode =
+    process.env.AJNA_AGENT_HARNESS_KEEPER_KICK === '1';
   const keeperKey = process.env.AJNA_AGENT_KEEPER_KEY;
   if (!keeperKey) {
     throw new Error('Missing AJNA_AGENT_KEEPER_KEY');
@@ -892,6 +897,15 @@ export async function main() {
       return;
     }
 
+    // Capture the keeper's own kick: kickTime_ 0 -> non-zero and a posted bond.
+    const kickBorrower = summary.borrower.owner;
+    const auctionBeforeKick = keeperKickMode
+      ? await pool.contract.auctionInfo(kickBorrower)
+      : undefined;
+    const kickerLockedBefore = keeperKickMode
+      ? (await pool.kickerInfo(keeper.address)).locked
+      : undefined;
+
     await handleKicks({
       pool,
       poolConfig,
@@ -907,6 +921,32 @@ export async function main() {
       },
       chainId: 8453,
     });
+
+    let kickArtifact: HarnessReport['kickArtifact'];
+    if (
+      keeperKickMode &&
+      auctionBeforeKick &&
+      kickerLockedBefore !== undefined
+    ) {
+      const auctionAfterKick = await pool.contract.auctionInfo(kickBorrower);
+      const kickerLockedAfter = (await pool.kickerInfo(keeper.address)).locked;
+      const kickTimeBefore = auctionBeforeKick.kickTime_;
+      const kickTimeAfter = auctionAfterKick.kickTime_;
+      kickArtifact = {
+        driven: true,
+        kickTimeBefore: kickTimeBefore.toString(),
+        kickTimeAfter: kickTimeAfter.toString(),
+        kickTimeTransitionedToNonZero:
+          kickTimeBefore.eq(0) && kickTimeAfter.gt(0),
+        lockedBefore: kickerLockedBefore.toString(),
+        lockedAfter: kickerLockedAfter.toString(),
+        bondPosted: kickerLockedAfter.gt(kickerLockedBefore),
+        kicker: auctionAfterKick.kicker_,
+      };
+      process.stdout.write(
+        `[harness] keeper kick: kickTime_ ${kickTimeBefore.toString()} -> ${kickTimeAfter.toString()}, locked ${kickerLockedBefore.toString()} -> ${kickerLockedAfter.toString()}\n`
+      );
+    }
 
     const liquidationStatusAfterKick = await tryGetLiquidationStatus(
       pool,
@@ -1145,6 +1185,7 @@ export async function main() {
           ? false
           : liquidationStatusAfterKick !== undefined &&
             liquidationStatusAfterKick.collateral !== '0',
+      kickArtifact,
       liquidationStatusAfterKick,
       takeExecuted: collateralReducedByTake,
       liquidationStatusAfterTake,
