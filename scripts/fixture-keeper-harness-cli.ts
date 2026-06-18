@@ -387,8 +387,13 @@ async function setupAggregatorInjection(params: {
       'Keeper holds no quote token to pre-fund the mock aggregator target'
     );
   }
-  const premintAmount = keeperQuoteBalance.div(2);
-  const mockAmountOut = keeperQuoteBalance.div(20);
+  // Fund the mock target with ~90% of the keeper buffer and keep each mock
+  // payout small enough that the premint covers many partial takes. The
+  // settlement scenario can need dozens of warp+take iterations to drive
+  // collateral to zero, so a too-small payout-to-premint ratio would
+  // false-red the precondition. premint/mockAmountOut ≈ 36 payouts.
+  const premintAmount = keeperQuoteBalance.mul(9).div(10);
+  const mockAmountOut = keeperQuoteBalance.div(40);
   await transferErc20(
     params.keeper,
     quoteAddress,

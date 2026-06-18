@@ -19,6 +19,9 @@ are expected to fail against current code until the defect is fixed (that failur
 | 4 | Low | ✅ **FIXED** — Kick/Bond/LP loops lacked the crash-recovery wrapper Take/Settlement have | `src/run.ts` (`runResilientLoop`) | P1-3 |
 | 5 | Low | Curve + Permit2 reward-swap approvals are `MaxUint256`, never reset | `src/dex/curve-router.ts:195-198`, `src/dex/universal-router.ts:160-163` | — |
 | 6 | Low | ✅ **FIXED** — Alchemy price-fallback `addressMap` omitted Optimism (10) + Polygon (137) | `src/pricing/coingecko.ts` | P2-2 |
+| 7 | Low | ✅ **FIXED** — Curve reward-swap min-out was the #1/#2 sibling: no fail-closed on a zero `get_dy` quote + no slippage-range guard (Curve was never migrated to `deriveSwapMinimumOut`) | `src/dex/curve-router.ts` | post-impl audit |
+
+*Defect #7 was found by a post-implementation audit (after #1/#2 were fixed): the reward-swap money-safety fix was completed for Uniswap-legacy + Universal Router but Curve retained the under-protected inline math. Now routed through the same `deriveSwapMinimumOut` helper (fails closed on `get_dy<=0`, range-checks slippage). The audit also hardened two no-spend-harness test invariants (settlement now requires `lockedBefore>0` so bond-unlock can't pass trivially; the mock-target funding headroom was raised so settlement runs needing more partial takes don't false-red). Defect #5 (MaxUint256 approvals) remains the only un-fixed surfaced defect (low; trusted spenders).*
 
 ---
 

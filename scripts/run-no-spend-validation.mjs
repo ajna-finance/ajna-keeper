@@ -604,6 +604,12 @@ function assertExecutionReport(report, options) {
       report.settlementArtifact?.kickTimeTransitionedToZero === true,
       'settlement cleared the auction on-chain (kickTime_ -> 0)'
     );
+    // Require a bond was actually locked before settling, so bondsUnlocked
+    // (locked -> 0) cannot pass trivially on a keeper that held no bond.
+    requireInvariant(
+      BigInt(report.settlementArtifact?.lockedBefore ?? '0') > 0n,
+      'settlement had a locked kicker bond to unlock (lockedBefore > 0)'
+    );
     requireInvariant(
       report.settlementArtifact?.bondsUnlocked === true,
       'settlement unlocked kicker bonds (locked -> 0)'

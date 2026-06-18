@@ -5,6 +5,7 @@ import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import { weiToDecimaled } from '../utils';
 import { getTokenFromAddress } from './uniswap';
+import { deriveSwapMinimumOut } from './swap-min-out';
 import { CurvePoolType } from '../config';
 
 // ABIs - Based on working test scripts
@@ -162,12 +163,15 @@ export async function swapWithCurveRouter(
       targetToken.decimals
     );
 
-    // STEP 3: Conservative slippage calculation (same as SushiSwap pattern)
-    const slippageBasisPoints = slippagePercentage * 100;
-    const conservativeOutputRatio = (10000 - slippageBasisPoints) / 10000;
-    const minAmountOutWithSlippage = minAmountOut
-      .mul(Math.floor(conservativeOutputRatio * 10000))
-      .div(10000);
+    // STEP 3: derive the output floor from the get_dy quote + operator slippage
+    // via the shared helper, so a zero/degenerate quote fails closed and the
+    // slippage is range-checked (parity with the Uniswap/Universal Router reward
+    // paths — surfaced-defects #1/#2 siblings).
+    const minAmountOutWithSlippage = deriveSwapMinimumOut({
+      expectedOutputRaw: minAmountOut,
+      inputRaw: amount,
+      slippagePercent: slippagePercentage,
+    });
     const minAmountOutWithSlippageFormatted = weiToDecimaled(
       minAmountOutWithSlippage,
       targetToken.decimals
