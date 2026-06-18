@@ -1,7 +1,10 @@
 import { FungiblePool } from '@ajna-finance/sdk';
 import { ethers } from 'ethers';
 import type { DiscoveredTakeTargetStats } from '../../src/discovery/take-executor';
-import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../src/take/external-take/execution-plan';
+import {
+  getExternalTakeExecutionPlanPrimaryEvaluation,
+  resolveExternalTakeExecutionCandidates,
+} from '../../src/take/external-take/execution-plan';
 import type {
   ExternalTakeQuoteEvaluation,
   TakeDecision,
@@ -147,6 +150,12 @@ export type RouteDecisionEvent = {
   executedArbTake?: boolean;
   borrower: string;
   route?: SerializedRouteEvaluation;
+  // Distinct liquidity sources that produced an approved, ranked quote for this
+  // decision — the execution plan's primary plus its fallbacks (ranking order,
+  // winner first). This is the per-decision roster of providers that actually
+  // *competed*: a provider only appears here if it was probed AND its quote
+  // passed approval and was ranked. Absent for non-approved decisions.
+  candidateProviders?: string[];
 };
 
 export type RouteSkipEvent = {
@@ -166,6 +175,12 @@ export type RouteArtifact = {
   expectedExecutionFeeTier?: number;
   factoryRegistryAddress?: string;
   selectedTakerAddress?: string;
+  // Distinct union (ranking order) of every provider that produced an approved,
+  // ranked quote across all decision events in the run. In competition mode this
+  // makes "all wired aggregators actually competed" falsifiable from the JSON:
+  // if route selection regressed to probing only the winner, the runner-ups
+  // would be absent here. Omitted when no approved decision was recorded.
+  competingProviders?: string[];
   decisions: RouteDecisionEvent[];
   counters?: {
     approvedDirectDexPathTakes: number;
@@ -427,6 +442,31 @@ export function liquiditySourceLabelsToValues(
   return labels.map(parseLiquiditySourceLabel);
 }
 
+function dedupePreserveOrder(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+// The distinct, ranking-ordered roster of liquidity sources that produced an
+// approved quote for this decision (execution plan primary + fallbacks). For an
+// aggregator winner the fallbacks include the runner-up aggregators plus the
+// direct-DEX gas-quote fallback, so this is the falsifiable "who competed" list.
+function resolveCandidateProviders(decision: TakeDecision): string[] | undefined {
+  if (!decision.approvedTake) {
+    return undefined;
+  }
+  const candidates = resolveExternalTakeExecutionCandidates({
+    executionPlan: decision.externalTakeExecutionPlan,
+  });
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  return dedupePreserveOrder(
+    candidates.map((candidate) =>
+      formatLiquiditySource(candidate.evaluation.selectedLiquiditySource)
+    )
+  );
+}
+
 function bnString(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (ethers.BigNumber.isBigNumber(value)) {
@@ -483,6 +523,7 @@ export function serializeDecisionEvent(
     approvedArbTake: decision.approvedArbTake,
     borrower: decision.borrower,
     route,
+    candidateProviders: resolveCandidateProviders(decision),
     ...executed,
   };
 }
@@ -546,6 +587,11 @@ export function buildRouteArtifact(params: {
   const lastRouteEvent = [...params.routeDecisionEvents]
     .reverse()
     .find((event) => event.route?.selectedLiquiditySource);
+  const competingProviders = dedupePreserveOrder(
+    params.routeDecisionEvents.flatMap(
+      (event) => event.candidateProviders ?? []
+    )
+  );
   const uniswapV3ExternalTake = params.summary.uniswapV3ExternalTake;
   const expectedSource = formatLiquiditySource(LiquiditySource.UNISWAPV3);
   return {
@@ -578,6 +624,7 @@ export function buildRouteArtifact(params: {
         uniswapV3ExternalTake?.deployment.uniswapV3Taker
       );
     })(),
+    ...(competingProviders.length > 0 ? { competingProviders } : {}),
     decisions: params.routeDecisionEvents,
     counters:
       params.mode === 'discovery'

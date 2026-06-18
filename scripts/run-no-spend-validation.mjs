@@ -431,6 +431,30 @@ function aggregatorExpectedSourceFromEnv() {
   return source;
 }
 
+// In competition mode (AGGREGATOR_WINNER set, vs AGGREGATOR_PROVIDER for a
+// single provider) the harness wires ALL aggregators as competitors. Return the
+// full roster of liquidity-source labels that must therefore appear in the route
+// artifact's competingProviders — i.e. each one produced an approved, ranked
+// quote. If route selection regressed to probing only the designated winner, the
+// runner-ups would be missing and this assertion fails. Undefined outside
+// competition mode (single-provider / direct-DEX runs make no such claim).
+function aggregatorCompetitionRosterFromEnv() {
+  if (!process.env.AJNA_AGENT_HARNESS_AGGREGATOR_WINNER) return undefined;
+  return ['LIFI', 'SUSHI_AGGREGATOR', 'ONEINCH'];
+}
+
+function assertCompetitionRoster(report, options, leg) {
+  if (!options.competitionRoster) return;
+  const competing = report.routeArtifact?.competingProviders ?? [];
+  for (const source of options.competitionRoster) {
+    requireInvariant(
+      competing.includes(source),
+      `${leg} routeArtifact.competingProviders must include competitor ${source} ` +
+        `(all wired aggregators must compete); got [${competing.join(', ') || 'none'}]`
+    );
+  }
+}
+
 function assertSuccessfulDryRunReport(report, options) {
   if (report.mode !== options.mode) {
     throw new Error(
@@ -473,6 +497,7 @@ function assertSuccessfulDryRunReport(report, options) {
       (options.aggregatorExpectedSource ?? 'UNISWAPV3'),
     `dry-run routeArtifact selected ${options.aggregatorExpectedSource ?? 'UNISWAPV3'}`
   );
+  assertCompetitionRoster(report, options, 'dry-run');
   if (!options.aggregatorExpectedSource) {
     assertRouteFee(report, options.expectedFeeTier, 'dry-run');
   }
@@ -557,6 +582,7 @@ function assertExecutionReport(report, options) {
       (options.aggregatorExpectedSource ?? 'UNISWAPV3'),
     `execution routeArtifact selected ${options.aggregatorExpectedSource ?? 'UNISWAPV3'}`
   );
+  assertCompetitionRoster(report, options, 'execution');
   if (!options.aggregatorExpectedSource) {
     assertRouteFee(report, options.expectedFeeTier, 'execution');
   }
@@ -986,6 +1012,7 @@ async function main() {
           mode: options.harnessMode,
           expectedFeeTier: options.expectedFeeTier,
           aggregatorExpectedSource: aggregatorExpectedSourceFromEnv(),
+          competitionRoster: aggregatorCompetitionRosterFromEnv(),
         });
       }
       if (options.runConfigSmoke && options.harnessMode === 'discovery') {
@@ -1032,6 +1059,7 @@ async function main() {
         mode: options.harnessMode,
         expectedFeeTier: options.expectedFeeTier,
         aggregatorExpectedSource: aggregatorExpectedSourceFromEnv(),
+        competitionRoster: aggregatorCompetitionRosterFromEnv(),
         driveSettlement: options.driveSettlement,
         driveKeeperKick: options.driveKeeperKick,
       });
