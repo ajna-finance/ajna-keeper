@@ -1,11 +1,12 @@
 import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
 
 import { expect } from 'chai';
-import { BigNumber, Wallet, constants } from 'ethers';
+import { BigNumber, Wallet, constants, utils } from 'ethers';
 import { RewardActionTracker } from '../../src/rewards';
 import { makeSinglePoolLpCollector } from './lp-test-helpers';
 
 import { configureAjna, TokenToCollect } from '../../src/config';
+import { decimaledToWei } from '../../src/utils';
 import { DexRouter } from '../../src/dex/router';
 import { getBalanceOfErc20 } from '../../src/erc20';
 import { handleKicks } from '../../src/kick';
@@ -29,6 +30,7 @@ import {
   getProvider,
   impersonateSigner,
   increaseTime,
+  mine,
   resetHardhat,
 } from './test-utils';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
@@ -359,5 +361,119 @@ describe('LpCollector collections', () => {
     // The stale reward should have been pruned via the lpBalance=0 path in
     // collectLpRewardFromBucket, leaving lpMap empty.
     expect(secondRun.lpMap.size).to.equal(0);
+  });
+
+  // P1-4 money-safety: LP redemption must NEVER burn lender PRINCIPAL — only the
+  // accrued reward. The collector trusts the subgraph's reported reward amount
+  // and does no on-chain validation of it, so a STALE (cold-start replay) or
+  // INFLATED reward row reporting more LP than was actually earned must not let
+  // the sweep redeem the signer's principal deposit in that bucket. (Reachable
+  // when the keeper signer also lends from the same hot wallet.)
+  it('does not burn lender principal when an inflated/stale BucketTake reward is reported for a bucket the signer also lent into', async () => {
+    // No active auction here (a kicked auction with a decayed ~0 price would
+    // reject any addQuoteToken as AddAboveAuctionPrice). This test is purely
+    // about the LP sweep, so a clean pool + a principal deposit is enough.
+    configureAjna(MAINNET_CONFIG.AJNA_CONFIG);
+    const ajna = new AjnaSDK(getProvider());
+    const pool: FungiblePool =
+      await ajna.fungiblePoolFactory.getPoolByAddress(
+        MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
+      );
+    const signerAddress = MAINNET_CONFIG.SOL_WETH_POOL.quoteWhaleAddress2;
+    const signer = await impersonateSigner(signerAddress);
+
+    // The signer deposits PRINCIPAL into a deep bucket — a clean quote-only,
+    // fully-redeemable position.
+    const principalPrice = 0.04;
+    await depositQuoteToken({
+      pool,
+      owner: signerAddress,
+      amount: 0.5,
+      price: principalPrice,
+    });
+    const bucket = await pool.getBucketByPrice(decimaledToWei(principalPrice));
+    const principalLp = (await bucket.getPosition(signerAddress)).lpBalance;
+    expect(principalLp.gt(constants.Zero)).to.be.true; // precondition: has principal
+
+    // Report a reward strictly SMALLER than the signer's LP balance (one fifth),
+    // so the line-514 "clamp to lpBalance" does NOT fire — this is the cleanly
+    // fixable case: the redemption must consume at most the reported reward, not
+    // the whole position. (A reward > balance is an inherent fungibility limit:
+    // on-chain LP can't be split into principal vs reward — documented, not
+    // fixed here.)
+    const reportedRewardLp = principalLp.div(5);
+    overrideGetBucketTakeLPAwards(async (_subgraphUrl, sa) => {
+      if (sa.toLowerCase() !== signerAddress.toLowerCase()) {
+        return { bucketTakes: [] };
+      }
+      return {
+        bucketTakes: [
+          {
+            id: '0xstalereward000000000000000000000000000000000000000000000000000001',
+            index: bucket.index,
+            taker: signerAddress.toLowerCase(),
+            pool: { id: pool.poolAddress.toLowerCase() },
+            lpAwarded: {
+              lpAwardedTaker: utils.formatUnits(reportedRewardLp, 18),
+              lpAwardedKicker: '0',
+              kicker: constants.AddressZero,
+            },
+            blockTimestamp: '1',
+          },
+        ],
+      };
+    });
+
+    const dexRouter = new DexRouter(signer);
+    const lpCollector = makeSinglePoolLpCollector(
+      pool,
+      signer,
+      {
+        redeemFirst: TokenToCollect.QUOTE,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
+      },
+      {},
+      new RewardActionTracker(
+        signer,
+        {
+          uniswapOverrides: {
+            wethAddress: MAINNET_CONFIG.WETH_ADDRESS,
+            uniswapV3Router: MAINNET_CONFIG.UNISWAP_V3_ROUTER,
+          },
+          manual: { pools: [] },
+        } as any,
+        dexRouter
+      ),
+      createSubgraphReader({ subgraphUrl: 'mock://' })
+    );
+
+    await lpCollector.ingestNewAwardsFromSubgraph();
+    // Precondition: the reward was actually credited (else the test would pass
+    // trivially without exercising the redemption path).
+    const credited = lpCollector.lpMap.get(bucket.index);
+    expect(!!credited && credited.gt(constants.Zero)).to.be.true;
+
+    // depositQuoteToken leaves the NonceTracker one ahead of chain (its trailing
+    // getNonce allocates an unused slot via a separate wallet instance). Settle
+    // the deposit and clear the cache so the sweep reads the true chain nonce —
+    // otherwise the withdrawal tx nonce-fails and the assertion passes vacuously.
+    await mine();
+    NonceTracker.clearNonces();
+
+    await lpCollector.redeemer.sweep();
+
+    const principalLpAfter = (await bucket.getPosition(signerAddress)).lpBalance;
+    const lpConsumed = principalLp.sub(principalLpAfter);
+    // MONEY-SAFETY INVARIANT: the sweep must consume at most the REPORTED reward
+    // LP — never reach into principal. Allow a 1-wei rounding slack on the LP
+    // math. (Current code redeems min(depositRedeemable, deposit) = the whole
+    // position, so lpConsumed == principalLp >> reportedRewardLp and this fails.)
+    expect(
+      lpConsumed.lte(reportedRewardLp.add(1)),
+      `sweep consumed more LP than the reported reward (burned principal): ` +
+        `consumed=${lpConsumed.toString()} reportedReward=${reportedRewardLp.toString()} ` +
+        `principalBefore=${principalLp.toString()} after=${principalLpAfter.toString()}`
+    ).to.be.true;
   });
 });

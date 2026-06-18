@@ -25,8 +25,13 @@ function makeFakeBucket(position: {
       depositRedeemable: position.depositRedeemable ?? constants.Zero,
       collateralRedeemable: position.collateralRedeemable ?? constants.Zero,
     }),
-    lpToQuoteTokens: sinon.stub().resolves(constants.Zero),
-    lpToCollateral: sinon.stub().resolves(constants.Zero),
+    // These fakes model a 1:1 LP<->token bucket, matching how the fixtures
+    // construct positions (lpBalance == deposit == depositRedeemable). The
+    // redemption now bounds its first leg to the reward's token-equivalent
+    // (lpToQuoteTokens/lpToCollateral of rewardLp), so these must convert
+    // faithfully rather than collapse to zero (which would skip every redeem).
+    lpToQuoteTokens: sinon.stub().callsFake(async (lp: BigNumber) => lp),
+    lpToCollateral: sinon.stub().callsFake(async (lp: BigNumber) => lp),
   };
 }
 

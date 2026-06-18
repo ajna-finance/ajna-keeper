@@ -7,10 +7,11 @@ to be wrong, not merely untested), then **independently verified against the cur
 auditor that defaulted to "not a defect" unless the code proved otherwise. Each was confirmed with high
 confidence; severities were adjusted down from the reviewer's first framing where the code showed mitigations.
 
-**8 defects total: 7 fixed, 1 open (#5).** Defects #1–#6 came out of the original coverage review; #7 and #8
+**9 defects total: 8 fixed, 1 open (#5).** Defects #1–#6 came out of the original coverage review; #7 and #8
 were found by a later post-implementation audit (and #8 was, until this entry, fixed-but-unrecorded here — see
-its note). Where a no-spend test packet is designed to *expose* a defect, it's noted — those tests failed
-against the pre-fix code (that failure was their assurance value) and now pass.
+its note); #9 was found by the P1-4 LP-reward coverage work (test-then-fix). Where a no-spend test packet is
+designed to *expose* a defect, it's noted — those tests failed against the pre-fix code (that failure was
+their assurance value) and now pass.
 
 | # | Sev | Defect | Location | Exposed by |
 |---|-----|--------|----------|-----------|
@@ -22,6 +23,7 @@ against the pre-fix code (that failure was their assurance value) and now pass.
 | 6 | Low | ✅ **FIXED** — Alchemy price-fallback `addressMap` omitted Optimism (10) + Polygon (137) | `src/pricing/coingecko.ts` | P2-2 |
 | 7 | Low | ✅ **FIXED** — Curve reward-swap min-out was the #1/#2 sibling: no fail-closed on a zero `get_dy` quote + no slippage-range guard (Curve was never migrated to `deriveSwapMinimumOut`) | `src/dex/curve-router.ts` | post-impl audit |
 | 8 | Low | ✅ **FIXED** — Arb-strategy `minDeposit = minCollateral / hpb` could become `Infinity` when `hpb` ≤ 0 / non-finite, then be stringified into the subgraph query | `src/take/arb-strategy.ts` | post-impl audit |
+| 9 | **Medium** | ✅ **FIXED** — LP reward sweep redeemed the signer's **full bucket position** (`min(depositRedeemable, deposit)`), not the tracked reward — burning lender **principal** if the keeper also lends from the same wallet | `src/rewards/collect-lp.ts` | P1-4 (test-then-fix) |
 
 *Defects #7 and #8 were found by a post-implementation audit (after #1/#2 were fixed). #7: the reward-swap money-safety fix was completed for Uniswap-legacy + Universal Router but Curve retained the under-protected inline math — now routed through the same `deriveSwapMinimumOut` helper (fails closed on `get_dy<=0`, range-checks slippage). #8: the arb-takeable check divided by `hpb` without guarding `hpb<=0`/non-finite, so `minDeposit` could be `Infinity` and get serialized into a subgraph query string — now guarded to return non-takeable early (commit `419051e`); **this fix shipped before it was recorded here, so the log previously under-counted its own defects (7 logged vs 8 real).** The audit also hardened two no-spend-harness test invariants (settlement now requires `lockedBefore>0` so bond-unlock can't pass trivially; the mock-target funding headroom was raised so settlement runs needing more partial takes don't false-red). Defect #5 (MaxUint256 approvals) remains the only un-fixed surfaced defect (low; trusted spenders).*
 
@@ -129,7 +131,38 @@ against the pre-fix code (that failure was their assurance value) and now pass.
 
 ---
 
+## 9. [MEDIUM] LP reward sweep redeems the signer's full bucket position, not just the tracked reward — burns lender principal ✅ FIXED
+
+**Where:** `src/rewards/collect-lp.ts` — `collectLpRewardFromBucket`. The first redemption leg withdrew
+`min(depositRedeemable, deposit)` (quote-first) / `min(collateralRedeemable, collateral)` (collateral-first) —
+the signer's **entire redeemable position** — instead of bounding to the tracked reward LP. Only the *second*
+leg was reward-bounded (`remainingLp = rewardLp - reedemed`).
+
+**What's wrong:** the collector treats the signer's whole LP balance in a reward bucket as redeemable reward.
+That holds only if the signer is a pure keeper (taker/kicker) that never lent into the bucket. If the keeper
+**also lends from the same wallet** (holds principal LP in that bucket), the first sweep redeems the *full
+deposit* — principal included — to satisfy a smaller reward claim. The line-514 `rewardLp → lpBalance` clamp
+does not protect principal: it caps the reward at the *total* balance (principal + reward), which the
+unbounded first leg then redeems in full.
+
+**Impact:** direct loss of lender **principal** (not just rewards) for the keeper-also-lends configuration.
+Medium: real fund impact, but reachable only when one wallet is both keeper and lender in the same bucket.
+
+**Reproduced (test-then-fix):** `tests/integration/collect-lp.test.ts` — "does not burn lender principal…":
+the signer deposits 0.5 LP of principal, a reward of 0.1 LP is reported for that bucket, and the pre-fix sweep
+redeemed the full 0.5 (`after=0`). Now bounded → consumes ≤ the reported reward.
+
+**Fix (shipped):** bound the first leg to the reward's token-equivalent —
+`min(bucket.lpToQuoteTokens(rewardLp), min(depositRedeemable, deposit))` and the collateral analogue. A no-op
+for reward-only keepers (`rewardLp ≈ lpBalance` → same redemption, existing LP tests unchanged), principal-
+preserving for keeper-lenders. **Residual limitation (documented, not a code bug):** an *inflated* reward
+(reported reward > on-chain balance) still cannot be bounded below the balance — on-chain LP is fungible, so
+principal and over-reported reward are indistinguishable. Mitigation is operational (don't run keeper + lender
+on one wallet/bucket) or upstream (trust the subgraph's reward amounts; durable cross-restart reward dedupe).
+
+---
+
 *Generated from an adversarial verification pass during the no-spend coverage review (#1–#6), extended by a
-post-implementation audit (#7, #8). **8 defects total — 7 fixed, 1 open (#5).** The reward-swap defects (#1,
-#2) were the highest priority — they put harvested operator funds at MEV risk on common configs, and the
-documented LP-rewards setup uses the path with defect #2.*
+post-implementation audit (#7, #8) and the P1-4 reward-coverage work (#9). **9 defects total — 8 fixed, 1 open
+(#5).** The reward-swap defects (#1, #2) were the highest priority — they put harvested operator funds at MEV
+risk on common configs, and the documented LP-rewards setup uses the path with defect #2.*
