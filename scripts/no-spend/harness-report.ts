@@ -298,6 +298,13 @@ function parseLiquiditySourceLabel(raw: string): LiquiditySource {
   if (value === 'LIFI' || value === 'LI.FI' || value === '5') {
     return LiquiditySource.LIFI;
   }
+  if (
+    value === 'SUSHI_AGGREGATOR' ||
+    value === 'SUSHIAGGREGATOR' ||
+    value === '6'
+  ) {
+    return LiquiditySource.SUSHI_AGGREGATOR;
+  }
   throw new Error(
     `Unsupported AJNA_AGENT_HARNESS_ALLOWED_LIQUIDITY_SOURCES entry: ${raw}`
   );
