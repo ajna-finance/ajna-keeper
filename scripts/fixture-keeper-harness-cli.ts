@@ -319,131 +319,191 @@ const MOCK_SWAP_ABI = [
   'function mockSwap(address tokenIn, address tokenOut, address recipient, uint256 amountIn, uint256 amountOut)',
 ];
 
+type ResolvedAggregatorProviderId = NonNullable<
+  ReturnType<typeof resolveCalldataAggregatorProviderForSource>
+>;
+
+const AGGREGATOR_CONFIG_FIELD: Record<AggregatorProviderKey, string> = {
+  Lifi: 'lifiTaker',
+  SushiAggregator: 'sushiAggregatorTaker',
+  OneInchAggregator: 'oneInchAggregatorTaker',
+};
+
 interface AggregatorDriveContext {
-  providerKey: AggregatorProviderKey;
+  // Winner (single mode) / intended-winner (competition) source — drives the
+  // discovered-take target's liquiditySource + the orchestrator's assertion.
   liquiditySource: LiquiditySource;
-  takerAddress: string;
+  // All aggregator taker addresses wired into config.{lifiTaker,...}.
+  takerConfig: Record<string, string>;
+  // Provider IDs to actually probe. Without this the policy defaults to a SINGLE
+  // provider (from defaultLiquiditySource), so competition needs all of them.
+  aggregatorProviderIds: ResolvedAggregatorProviderId[];
+  // True when driving >1 provider as competitors (don't force-disable 1inch).
+  competition: boolean;
 }
 
-function aggregatorTakerConfigField(
-  ctx: AggregatorDriveContext
-): Record<string, string> {
-  switch (ctx.liquiditySource) {
-    case LiquiditySource.LIFI:
-      return { lifiTaker: ctx.takerAddress };
-    case LiquiditySource.SUSHI_AGGREGATOR:
-      return { sushiAggregatorTaker: ctx.takerAddress };
-    case LiquiditySource.ONEINCH:
-      return { oneInchAggregatorTaker: ctx.takerAddress };
-    default:
-      return {};
-  }
+interface AggregatorTakerQuoteSpec {
+  providerId: ResolvedAggregatorProviderId;
+  targetAddress: string;
+  quoteAmountRaw: ReturnType<typeof ethers.BigNumber.from>;
 }
 
+// P0-3: support both single-provider (AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER) and
+// multi-provider competition (AJNA_AGENT_HARNESS_AGGREGATOR_WINNER). In
+// competition mode ALL deployed aggregator takers are wired + probed, each
+// injected with a DISTINCT quoteAmountRaw so the real ranking has an
+// unambiguous winner (the designated one), which the orchestrator then asserts.
 async function setupAggregatorInjection(params: {
   summary: FixtureSummary;
   pool: FungiblePool;
   keeper: Wallet;
 }): Promise<AggregatorDriveContext | null> {
-  const providerKey = process.env.AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER as
-    | AggregatorProviderKey
-    | undefined;
-  if (!providerKey) {
+  const singleProvider = process.env
+    .AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER as AggregatorProviderKey | undefined;
+  const winnerProvider = process.env
+    .AJNA_AGENT_HARNESS_AGGREGATOR_WINNER as AggregatorProviderKey | undefined;
+  if (!singleProvider && !winnerProvider) {
     return null;
   }
-  if (!(providerKey in AGGREGATOR_PROVIDER_SOURCES)) {
+  const competition = Boolean(winnerProvider);
+  const winnerKey = (winnerProvider ?? singleProvider) as AggregatorProviderKey;
+  if (!(winnerKey in AGGREGATOR_PROVIDER_SOURCES)) {
     throw new Error(
-      `Unknown AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER="${providerKey}" (expected Lifi|SushiAggregator|OneInchAggregator)`
+      `Unknown aggregator provider "${winnerKey}" (expected Lifi|SushiAggregator|OneInchAggregator)`
     );
   }
-  const liquiditySource = AGGREGATOR_PROVIDER_SOURCES[providerKey];
-  const entry = params.summary.uniswapV3ExternalTake?.deployment?.aggregatorTakers?.find(
-    (taker) => taker.key === providerKey
-  );
-  if (!entry) {
+
+  const allTakers =
+    params.summary.uniswapV3ExternalTake?.deployment?.aggregatorTakers ?? [];
+  const driveKeys: AggregatorProviderKey[] = competition
+    ? allTakers.map((taker) => taker.key)
+    : [winnerKey];
+  if (!driveKeys.includes(winnerKey)) {
     throw new Error(
-      `Fixture summary missing aggregatorTakers entry for ${providerKey} (re-run fixture creation after the P0-2 deploy change)`
+      `Winner ${winnerKey} is not among the deployed aggregatorTakers (re-run fixture creation)`
     );
-  }
-  const providerId = resolveCalldataAggregatorProviderForSource(liquiditySource);
-  if (!providerId) {
-    throw new Error(`No providerId for liquidity source ${liquiditySource}`);
   }
 
   const collateralAddress = params.pool.collateralAddress;
   const quoteAddress = params.pool.quoteAddress;
-
-  // The mock pays a generous quote amount that clears BOTH the off-chain
-  // approvedMinOutRaw floor and the on-chain quoteAmountDueCeiling. The take
-  // only owes ~debt-scale quote (fixture debt ~10 quote); excess is harmless
-  // kept profit (InsufficientQuoteReceived is a lower bound, so over-paying is
-  // safe). Size from the keeper's ACTUAL quote balance (the fixture leaves the
-  // keeper a buffer of the supply) and pre-fund the shared mock target: half
-  // the balance funds it, each mock payout is a 20th (well above the debt scale
-  // and within the buffer for several probe/execution payouts).
-  const keeperQuoteBalance = await getBalanceOfErc20(params.keeper, quoteAddress);
+  const keeperQuoteBalance = await getBalanceOfErc20(
+    params.keeper,
+    quoteAddress
+  );
   if (keeperQuoteBalance.lte(0)) {
     throw new Error(
       'Keeper holds no quote token to pre-fund the mock aggregator target'
     );
   }
-  // Fund the mock target with ~90% of the keeper buffer and keep each mock
-  // payout small enough that the premint covers many partial takes. The
-  // settlement scenario can need dozens of warp+take iterations to drive
-  // collateral to zero, so a too-small payout-to-premint ratio would
-  // false-red the precondition. premint/mockAmountOut ≈ 36 payouts.
-  const premintAmount = keeperQuoteBalance.mul(9).div(10);
-  const mockAmountOut = keeperQuoteBalance.div(40);
+  // Tiered payouts: winner highest, others descending, all comfortably above
+  // the debt-scale floor (~10 quote) so losers are not floor-rejected — only
+  // their rank loses. Only the winning provider executes (transfers its
+  // payout), so the premint (90% of the buffer) covers it across the take loop.
+  const tierAmounts = [
+    keeperQuoteBalance.div(20),
+    keeperQuoteBalance.div(30),
+    keeperQuoteBalance.div(40),
+  ];
+  const orderedKeys = [
+    winnerKey,
+    ...driveKeys.filter((key) => key !== winnerKey),
+  ];
+
+  const specsByTaker = new Map<string, AggregatorTakerQuoteSpec>();
+  const takerConfig: Record<string, string> = {};
+  const aggregatorProviderIds: ResolvedAggregatorProviderId[] = [];
+  let sharedTargetAddress: string | undefined;
+  orderedKeys.forEach((key, index) => {
+    const entry = allTakers.find((taker) => taker.key === key);
+    if (!entry) {
+      throw new Error(`Missing aggregatorTakers entry for ${key}`);
+    }
+    const source = AGGREGATOR_PROVIDER_SOURCES[key];
+    const providerId = resolveCalldataAggregatorProviderForSource(source);
+    if (!providerId) {
+      throw new Error(`No providerId for ${key}`);
+    }
+    specsByTaker.set(entry.takerAddress.toLowerCase(), {
+      providerId,
+      targetAddress: entry.targetAddress,
+      quoteAmountRaw: tierAmounts[Math.min(index, tierAmounts.length - 1)],
+    });
+    takerConfig[AGGREGATOR_CONFIG_FIELD[key]] = entry.takerAddress;
+    aggregatorProviderIds.push(providerId);
+    sharedTargetAddress = entry.targetAddress;
+  });
+  if (!sharedTargetAddress) {
+    throw new Error('No aggregator mock target resolved');
+  }
+
+  // All takers share one MockLifiSwapTarget; fund it once.
   await transferErc20(
     params.keeper,
     quoteAddress,
-    entry.targetAddress,
-    premintAmount
+    sharedTargetAddress,
+    keeperQuoteBalance.mul(9).div(10)
   );
 
   const mockSwapInterface = new ethers.utils.Interface(MOCK_SWAP_ABI);
   const selector = mockSwapInterface.getSighash('mockSwap');
 
   // Enable the env-gated injector (install throws unless this is set). Only
-  // reached because AGGREGATOR_PROVIDER is a harness-only env; production keeper
-  // configs never set it, so the seam stays inert outside the harness.
+  // reached via the harness-only AGGREGATOR_* envs, so the seam stays inert in
+  // any production config.
   process.env.AJNA_AGENT_HARNESS_AGGREGATOR_QUOTE_MOCK = '1';
   const injector: AggregatorQuoteInjector = ({
     takerAddress,
     chainId,
     collateralInTokenDecimals,
   }) => {
+    const spec = specsByTaker.get(takerAddress.toLowerCase());
+    if (!spec) {
+      throw new Error(
+        `No mock aggregator quote spec for taker ${takerAddress}`
+      );
+    }
     const callData = mockSwapInterface.encodeFunctionData('mockSwap', [
       collateralAddress,
       quoteAddress,
       takerAddress,
       collateralInTokenDecimals,
-      mockAmountOut,
+      spec.quoteAmountRaw,
     ]);
     return {
-      providerId,
+      providerId: spec.providerId,
       quotedAtMs: Date.now(),
       chainId,
       srcToken: collateralAddress,
       dstToken: quoteAddress,
       dstReceiver: takerAddress,
       amountInTokenUnits: collateralInTokenDecimals,
-      quoteAmountRaw: mockAmountOut,
-      routeMinOutRaw: mockAmountOut,
-      transactionTarget: entry.targetAddress,
-      approvalSpender: entry.targetAddress,
+      quoteAmountRaw: spec.quoteAmountRaw,
+      routeMinOutRaw: spec.quoteAmountRaw,
+      transactionTarget: spec.targetAddress,
+      approvalSpender: spec.targetAddress,
       callData,
       selector,
       txValue: '0',
-      routeSummary: { providerId, tool: 'mock-aggregator', feeCosts: [] },
+      routeSummary: {
+        providerId: spec.providerId,
+        tool: 'mock-aggregator',
+        feeCosts: [],
+      },
     };
   };
   installAggregatorQuoteInjector(injector);
 
   process.stdout.write(
-    `[harness] aggregator injection active: provider=${providerKey} source=${liquiditySource} taker=${entry.takerAddress} target=${entry.targetAddress}\n`
+    `[harness] aggregator injection active: ${
+      competition ? 'competition' : 'single'
+    } winner=${winnerKey} providers=[${orderedKeys.join(',')}] target=${sharedTargetAddress}\n`
   );
-  return { providerKey, liquiditySource, takerAddress: entry.takerAddress };
+  return {
+    liquiditySource: AGGREGATOR_PROVIDER_SOURCES[winnerKey],
+    takerConfig,
+    aggregatorProviderIds,
+    competition,
+  };
 }
 
 async function buildDiscoveredTakeTarget(params: {
@@ -524,10 +584,16 @@ async function runDiscoveredTakeAttempt(params: {
     readRpc,
     includeDirectDexQuoteProviders: true,
   });
-  if (rpcCache && params.aggregator?.liquiditySource !== LiquiditySource.ONEINCH) {
+  const oneInchActive =
+    params.aggregator !== null &&
+    params.aggregator !== undefined &&
+    (params.aggregator.competition ||
+      params.aggregator.liquiditySource === LiquiditySource.ONEINCH);
+  if (rpcCache && !oneInchActive) {
     // Force-disable the live 1inch circuit so the default Uniswap/aggregator
     // path never reaches the 401-keyed 1inch API — UNLESS we are explicitly
-    // driving a mock-1inch aggregator take (then the injector serves it).
+    // driving a mock-1inch take or a competition that includes it (the injector
+    // then serves 1inch).
     const cooldownUntilMs = Date.now() + 60 * 60 * 1000;
     rpcCache.providerCircuits ??= {};
     rpcCache.providerCircuits.oneinch = {
@@ -564,6 +630,14 @@ async function runDiscoveredTakeAttempt(params: {
           allowedLiquiditySources: liquiditySourceLabelsToValues(
             params.policyArtifact.allowedLiquiditySources
           ),
+          // Probe ALL wired aggregator providers (otherwise the policy defaults
+          // to a single provider from defaultLiquiditySource — no competition).
+          ...(params.aggregator
+            ? {
+                allowedCalldataAggregatorProviders:
+                  params.aggregator.aggregatorProviderIds,
+              }
+            : {}),
           externalTakeRouteSelectionMode:
             params.policyArtifact.externalTakeRouteSelectionMode,
           hybridGasQuoteFailureFallbackMode:
@@ -583,9 +657,7 @@ async function runDiscoveredTakeAttempt(params: {
         },
       },
       keeperTakerRouter: uniswapV3ExternalTake.deployment.keeperTakerRouter,
-      ...(params.aggregator
-        ? aggregatorTakerConfigField(params.aggregator)
-        : {}),
+      ...(params.aggregator ? params.aggregator.takerConfig : {}),
       uniswapV3RouterOverrides: uniswapV3ExternalTake.routerConfig,
       tokenAddresses: {
         weth: uniswapV3ExternalTake.routerConfig.wethAddress,

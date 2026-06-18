@@ -398,7 +398,11 @@ function assertRouteFee(report, expectedFeeTier, label) {
 // P0-3: when an aggregator provider is driven, the flagship asserts the
 // aggregator path/source instead of direct_dex/UNISWAPV3.
 function aggregatorExpectedSourceFromEnv() {
-  const provider = process.env.AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER;
+  // The expected winner is AGGREGATOR_WINNER (competition) or AGGREGATOR_PROVIDER
+  // (single). Either way the route artifact must report that source as selected.
+  const provider =
+    process.env.AJNA_AGENT_HARNESS_AGGREGATOR_WINNER ??
+    process.env.AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER;
   if (!provider) return undefined;
   const source = {
     Lifi: 'LIFI',
@@ -406,9 +410,7 @@ function aggregatorExpectedSourceFromEnv() {
     OneInchAggregator: 'ONEINCH',
   }[provider];
   if (!source) {
-    throw new Error(
-      `Unknown AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER="${provider}"`
-    );
+    throw new Error(`Unknown aggregator provider "${provider}"`);
   }
   return source;
 }
@@ -727,8 +729,10 @@ function harnessEnv(params) {
     'AJNA_AGENT_HARNESS_TAKE_ROUTE_QUOTE_BUDGET_PER_CANDIDATE',
     'AJNA_AGENT_HARNESS_TAKE_QUOTE_BUDGET_PER_RUN',
     // P0-2/P0-3: select an aggregator provider (Lifi|SushiAggregator|
-    // OneInchAggregator) to drive a real mock aggregator calldata-take.
+    // OneInchAggregator) to drive a real mock aggregator calldata-take, or set
+    // AGGREGATOR_WINNER to drive ALL providers as competitors with that winner.
     'AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER',
+    'AJNA_AGENT_HARNESS_AGGREGATOR_WINNER',
     'AJNA_AGENT_HARNESS_AGGREGATOR_QUOTE_MOCK',
   ]) {
     if (process.env[name]) {
