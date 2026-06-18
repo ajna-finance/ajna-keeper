@@ -90,6 +90,14 @@ type FixtureSummary = {
     deployment: {
       keeperTakerRouter: string;
       uniswapV3Taker: string;
+      // P0-2: LI.FI/Sushi/1inch takers + shared MockLifiSwapTarget, registered on
+      // the same TakerRouter. P0-3 consumes these to drive the aggregator/hybrid path.
+      aggregatorTakers?: Array<{
+        key: 'Lifi' | 'SushiAggregator' | 'OneInchAggregator';
+        source: number;
+        takerAddress: string;
+        targetAddress: string;
+      }>;
     };
   };
   finalKick?: {
