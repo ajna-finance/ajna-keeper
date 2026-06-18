@@ -11,11 +11,14 @@ those for detail rather than restating it.
 
 ## What the test actually is (fidelity boundary)
 
-**It is a driven-handler harness, not a real running keeper.** `npm run no-spend-validation` spawns
-`scripts/run-fixture-keeper-harness.ts`, which calls the **real production handlers** — `handleKicks`,
-`handleDiscoveredTakeTarget`, `handleTakes`, `handleSettlements` — **once each**, against a synthetic
-mock-token Ajna pool on a pinned Base fork (block `30000000`). It never starts the long-lived daemon
-(`src/index.ts main` / `startKeeperFromConfig`) and never runs the timer-driven polling loops.
+**The primary flow is a driven-handler harness; a dedicated lifecycle scenario now also runs the real
+daemon.** `npm run no-spend-validation` spawns `scripts/run-fixture-keeper-harness.ts`, which calls the
+**real production handlers** — `handleKicks`, `handleDiscoveredTakeTarget`, `handleTakes`,
+`handleSettlements` — **once each**, against a synthetic mock-token Ajna pool on a pinned Base fork (block
+`30000000`). Separately, the **`--daemon-lifecycle-only` scenario (P1-3)** *does* start the long-lived daemon
+(`src/index.ts` / `startKeeperFromConfig`) with its timer loops, proving it discovers via the real subgraph
+enumeration, takes, stays idempotent across cycles, and shuts down cleanly on SIGTERM (see the status table).
+The remaining daemon gaps are the failure-injection sub-cases, not the happy-path lifecycle.
 
 What this means concretely:
 
@@ -25,16 +28,18 @@ What this means concretely:
 | **Discovery / "finding work"** | the handler consumes the candidate verbatim | ❌ the keeper is **handed** the exact pool/borrower the fixture made (`buildDiscoveredTakeTarget` builds a single hard-coded candidate); the real chainwide subgraph **enumeration** (`getChainwideLiquidationAuctionsShared` → `buildDiscoveredTakeTargets`) is bypassed |
 | **Subgraph** | gated on real on-chain `auctionInfo`/`getLiquidation` reads | ❌ in-process fake (`makeFixtureSubgraphReader`) returning the one fixture borrower; no live Graph query, pagination, `_meta` freshness, or `fallbackUrls` failover |
 | **Aggregator quotes** | real probe → rank → execute calldata path | ❌ the off-chain LI.FI/Sushi/1inch quote is **injected** against a pre-funded `MockLifiSwapTarget`; the live 1inch circuit is force-disabled |
-| **Daemon lifecycle** | — | ❌ no persistent process, no `while(true)` loops, no `delayBetweenRuns` cadence, no multi-cycle, no crash-recovery restart, no SIGTERM/SIGINT graceful shutdown, no cross-cycle nonce/dedup |
+| **Daemon lifecycle** | ✅ (lifecycle scenario) persistent process, `while(true)` loops, `delayBetweenRuns` cadence, multi-cycle, real-subgraph discovery, cross-cycle idempotency, SIGTERM graceful shutdown | ❌ still: fork-level crash-injection across all 5 loops, read-RPC failover, degraded-mode continuity, gas-spike skip, nonce-consistency during a SIGTERM mid-broadcast |
 | **Time** | real auction-state reads | ❌ `evm_increaseTime` warps into the take window; real wall-clock decay is not waited on |
 
-**One exception:** the optional `--run-daemon-smoke` leg *does* launch the real entrypoint in `--run-once`
-mode through the real enumeration code — but against an HTTP **subgraph stub** that always returns the single
-fixture auction. So even there, multi-pool/multi-cycle/long-running behavior is not proven.
+**Two daemon legs use the real entrypoint** (both against an HTTP **subgraph stub** returning the single
+fixture auction): `--run-daemon-smoke` runs one `--run-once` cycle; `--daemon-lifecycle-only` (P1-3) runs the
+**persistent** daemon across multiple cycles with SIGTERM teardown. Multi-*pool* enumeration is still not
+exercised (the stub returns one auction).
 
 **Net:** the suite faithfully proves the **take/kick/settlement execution mechanics are real and
-no-spend-safe**; the **discovery/enumeration and long-running daemon orchestration are simulated.** Closing
-that second half is what most of the remaining backlog below is about.
+no-spend-safe**, and the **happy-path long-running daemon now genuinely discovers + acts + shuts down
+cleanly**. What remains simulated/uncovered: multi-pool enumeration realism and the daemon **failure-injection**
+sub-cases (crash-recovery at fork level, RPC failover, degraded mode, gas-spike, nonce-during-broadcast).
 
 ---
 
@@ -49,7 +54,7 @@ that second half is what most of the remaining backlog below is about.
 | P0-5 | Reward-swap money-safety (defects #1/#2/#7) | ✅ fixed · 🟡 fork-capture of submitted `amountOutMinimum` remains |
 | P1-1 | Full-lifecycle composition + keeper-kick | ✅ done |
 | P1-2 | Promote real-Ajna + real-DEX fork tests to first-class | ⬜ not started |
-| P1-3 | Daemon lifecycle & resilience (defects #3/#4) | 🟡 defects fixed + unit-guarded · daemon scenarios remain |
+| P1-3 | Daemon lifecycle & resilience (defects #3/#4) | ✅ persistent-daemon multi-cycle + real discovery + idempotency + SIGTERM done · 🟡 failure-injection sub-cases remain |
 | P1-4 | Reward-collection & bond-withdrawal loops | ⬜ not started |
 | P2-1 | Token/subgraph realism + `verify:routes` canary | ⬜ not started |
 | P2-2 | Price sourcing, inversion & multi-chain config (defect #6) | 🟡 defect fixed + unit-guarded · price/inversion scenarios remain |
@@ -62,13 +67,15 @@ that second half is what most of the remaining backlog below is about.
 
 ### High value
 
-1. **Daemon multi-cycle + crash-recovery + SIGTERM (`P1-3`).** The single biggest fidelity gap. The
-   production entrypoint launches five infinite loops; today only a single `--run-once` cycle is ever proven.
-   Spawn the real persistent entrypoint against the fixture, run ≥2 cycles, inject a throw that *escapes*
-   `runTakeCycle`, and assert `runResilientLoopIteration` returns `{recovered:true, delaySeconds:30}` and the
-   next cycle runs. **Catches:** silent permanent loop death and ungraceful shutdown (the defect class of #3/#4
-   — now fixed, but unproven at the loop level). Bind a `loopCrashRecovery:{take,settlement,kick,collectBond,
-   collectLpRewards}` artifact across **all five** loops.
+1. **Daemon failure-injection sub-cases (`P1-3`).** ✅ *The persistent-daemon happy path is done* —
+   `--daemon-lifecycle-only` runs the real long-lived keeper across ≥2 cycles, proves real-subgraph discovery +
+   action + cross-cycle idempotency + clean SIGTERM (validated: 3 cycles / 1 take / idempotent / exit 0). What
+   remains is **failure injection**: a throw that *escapes* `runTakeCycle` for one cycle (assert recovery + next
+   cycle runs) bound across **all five** loops as `loopCrashRecovery:{take,settlement,kick,collectBond,
+   collectLpRewards}`; read-RPC failover; degraded-mode continuity (keep taking on cached data during a
+   subgraph outage); gas-spike skip; and nonce consistency when SIGTERM lands mid-broadcast. The two crash
+   wrappers are already unit-covered (`loop-crash-recovery.test.ts`); these are the fork-level scenarios.
+   **Catches:** silent permanent loop death, ungraceful shutdown, and unsafe degradation under infra failure.
 2. **Reward-collection & bond-withdrawal money-safety (`P1-4`).** Fund-moving paths with **zero** no-spend
    coverage (explicitly excluded by `daemon-smoke`). The load-bearing one: **LP redemption must never burn
    lender principal** — feed an inflated/stale BucketTake reward and assert post-sweep
