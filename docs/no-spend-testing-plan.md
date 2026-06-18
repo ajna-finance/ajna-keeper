@@ -1,5 +1,10 @@
 # No-Spend Coverage Plan: Aggregator System (SushiSwap + LI.FI), Hybrid Provider Selection, and Full Keeper Lifecycle
 
+> **See also:** [`no-spend-coverage-gaps.md`](./no-spend-coverage-gaps.md) — an at-a-glance status table, the
+> **test-fidelity boundary** (what the harness really exercises vs. simulates), and the prioritized
+> remaining-gaps backlog. [`surfaced-code-defects.md`](./surfaced-code-defects.md) — the 8 real code defects
+> surfaced by this effort (7 fixed, 1 open). This file is the detailed per-packet design.
+
 ## Goal & current state
 
 The no-spend story works in parts but not as a whole. What works fund-free today: the egress guard and Base-fork boot in `scripts/run-no-spend-validation.mjs`; the mock-EVM aggregator suites (`tests/integration/oneinch-aggregator-taker.test.ts`, `sushi-aggregator-taker.test.ts`, `helpers/mock-taker-base.ts`) that execute the REAL LI.FI/Sushi/1inch taker contracts against a deployed `MockLifiSwapTarget`; the hybrid-selection ranking unit tests (`tests/unit/hybrid-external-take-selection.test.ts`, `hybrid-external-take-probes.test.ts`); and the gated multi-provider fork loop (`tests/integration/hybrid-fork-loop.test.ts`). What is broken or gated: (1) the flagship `npm run no-spend-validation` FAILS because fixture creation times out on `eth_estimateGas` against a cold `latest`-pinned Base fork (`scripts/no-spend/runtime.mjs`; cold lazy-state cascade in `scripts/create-liquidatable-ajna-fixture-cli.ts` estimateGas calls); (2) only `LiquiditySource.UNISWAPV3` is executed end-to-end through the fixture harness — the aggregator takers and the hybrid "which provider" decision are never exercised against a real Ajna auction (`scripts/fixture-keeper-harness-cli.ts` hardcodes UNISWAPV3 at lines 310/399/516/719); (3) settlement is NOT asserted anywhere — the fixture harness never calls `handleSettlements`, and `daemon-smoke.mjs:467` hardcodes a `coveredCycles:['take','settlement']` label that is aspirational (its config has no settlement policy, so `shouldRunSettlementLoop` returns false and `runSettlementCycle` never runs); (4) the 1inch real-API leg is blocked by a 401 `ONEINCH_API_KEY`.
