@@ -1,9 +1,11 @@
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
+import { spawn } from 'child_process';
 import { Wallet } from 'ethers';
 import {
   ROOT,
+  TS_NODE_BIN,
   baseChildEnv,
   readJson,
   requestJsonRpc,
@@ -11,6 +13,13 @@ import {
   runNodeScript,
 } from './runtime.mjs';
 import { withNoEgressGuard } from './egress.mjs';
+
+// The take loop logs this line once per cycle (src/discovery/runtime.ts
+// logDiscoveryCycleSummary). Counting it proves the persistent daemon actually
+// looped; its discoveredTargets / targetSuccesses fields prove the keeper found
+// the auction via the real subgraph enumeration and acted on it.
+const DAEMON_TAKE_CYCLE_MARKER = 'Discovery take cycle summary:';
+const DAEMON_SIGTERM_LOG = 'Received SIGTERM; shutting down keeper.';
 
 const HARDHAT_DEFAULT_KEEPER_KEY =
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
@@ -204,7 +213,10 @@ function buildDaemonConfig(params) {
       },
     },
     takers: {
-      factory: uniswap.deployment.keeperTakerRouter,
+      // Schema field is `router` (the KeeperTakerRouter registry address); a
+      // stale `factory` key is silently ignored and trips the take-settings
+      // validation "takers.router required when liquiditySource is UNISWAPV3".
+      router: uniswap.deployment.keeperTakerRouter,
       contracts: {
         UniswapV3: uniswap.deployment.uniswapV3Taker,
       },
@@ -295,15 +307,134 @@ async function runStateOnlyHarness(params) {
   return readJson(params.outputPath, params.label);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Common encrypted-keystore + password file both daemon scenarios need. The
+// real entrypoint requires config.signer.keystore + KEYSTORE_PASSWORD_FILE, so
+// driving it faithfully means decrypting a real keystore (not a raw key env).
+async function setupDaemonKeystore(tempDir) {
+  const password = `ajna-local-${Date.now()}`;
+  const passwordPath = path.join(tempDir, 'daemon-keystore-password.txt');
+  const keystorePath = path.join(tempDir, 'daemon-keeper-keystore.json');
+  const wallet = new Wallet(HARDHAT_DEFAULT_KEEPER_KEY);
+  fs.writeFileSync(passwordPath, `${password}\n`, { mode: 0o600 });
+  fs.writeFileSync(keystorePath, await wallet.encrypt(password), {
+    mode: 0o600,
+  });
+  return { password, passwordPath, keystorePath, wallet };
+}
+
+// Parse every per-cycle take summary line into a field map. Each occurrence is
+// one completed take cycle; the fields (discoveredTargets, targetSuccesses, ...)
+// let the caller assert real discovery + action without log-line guessing.
+function parseTakeCycleSummaries(logText) {
+  const summaries = [];
+  const re = new RegExp(`${DAEMON_TAKE_CYCLE_MARKER} ([^\\n]*)`, 'g');
+  let match;
+  while ((match = re.exec(logText)) !== null) {
+    const fields = {};
+    for (const pair of match[1].trim().split(/\s+/)) {
+      const eq = pair.indexOf('=');
+      if (eq > 0) fields[pair.slice(0, eq)] = pair.slice(eq + 1);
+    }
+    summaries.push(fields);
+  }
+  return summaries;
+}
+
+// Spawn the REAL keeper entrypoint as a PERSISTENT daemon (NO --run-once), watch
+// it loop via the on-chain tx count + per-cycle log marker until `isDone`, then
+// SIGTERM it and assert a graceful exit within the grace window. ts-node is
+// spawned directly (not `npm start`) so SIGTERM reaches the keeper process and
+// its installProcessSafetyHandlers handler actually runs (surfaced-defects #3).
+async function spawnPersistentDaemon(params) {
+  const logStream = fs.createWriteStream(params.logPath);
+  const child = spawn(
+    process.execPath,
+    [TS_NODE_BIN, 'src/index.ts', '--config', params.configPath],
+    { cwd: ROOT, env: params.env, stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  let logText = '';
+  const capture = (chunk) => {
+    logText += chunk.toString();
+    logStream.write(chunk);
+  };
+  child.stdout.on('data', capture);
+  child.stderr.on('data', capture);
+  let exit = null;
+  child.on('exit', (code, signal) => {
+    exit = { code, signal };
+  });
+
+  // Watch loop: poll the keeper tx count + cycle count until the done-condition
+  // holds (or the watch budget elapses). `stablePolls` tracks consecutive polls
+  // with no new keeper tx — the idempotency signal (looped without re-acting).
+  const startedAt = Date.now();
+  let txCount = 0;
+  let txHashes = [];
+  let prevTxCount = -1;
+  let stablePolls = 0;
+  let reachedDone = false;
+  while (Date.now() - startedAt < params.maxWatchMs && exit === null) {
+    await sleep(params.pollIntervalMs);
+    const cycles = parseTakeCycleSummaries(logText).length;
+    const toBlock = await readBlockNumber(params.rpcUrl);
+    const txs = await countTransactionsFrom({
+      rpcUrl: params.rpcUrl,
+      fromBlockExclusive: params.startBlock,
+      toBlockInclusive: toBlock,
+      from: params.keeperAddress,
+    });
+    stablePolls = txs.count === prevTxCount ? stablePolls + 1 : 0;
+    prevTxCount = txs.count;
+    txCount = txs.count;
+    txHashes = txs.hashes;
+    if (params.isDone({ cycles, txCount, stablePolls })) {
+      reachedDone = true;
+      break;
+    }
+  }
+
+  // SIGTERM teardown; require graceful exit within grace, else SIGKILL.
+  const shutdownStartedAt = Date.now();
+  let shutdownClean = false;
+  if (exit === null) {
+    child.kill('SIGTERM');
+    while (Date.now() - shutdownStartedAt < params.graceMs && exit === null) {
+      await sleep(200);
+    }
+    if (exit === null) {
+      child.kill('SIGKILL');
+    } else {
+      shutdownClean = true;
+    }
+  }
+  logStream.end();
+  const summaries = parseTakeCycleSummaries(logText);
+  return {
+    cyclesObserved: summaries.length,
+    summaries,
+    txCount,
+    txHashes,
+    reachedDone,
+    stablePolls,
+    exit,
+    shutdownClean,
+    sigtermHandled: logText.includes(DAEMON_SIGTERM_LOG),
+    shutdownMs: Date.now() - shutdownStartedAt,
+    logPath: params.logPath,
+  };
+}
+
 export async function runDaemonSmoke(params) {
   const subgraph = await startFixtureSubgraphStub({
     summary: params.summary,
     rpcUrl: params.rpcUrl,
   });
-  const password = `ajna-local-${Date.now()}`;
-  const passwordPath = path.join(
-    params.tempDir,
-    'daemon-keystore-password.txt'
+  const { passwordPath, keystorePath, wallet } = await setupDaemonKeystore(
+    params.tempDir
   );
   const wrongPasswordPath = path.join(
     params.tempDir,
@@ -313,13 +444,7 @@ export async function runDaemonSmoke(params) {
     params.tempDir,
     'daemon-keystore-password-missing.txt'
   );
-  const keystorePath = path.join(params.tempDir, 'daemon-keeper-keystore.json');
-  const wallet = new Wallet(HARDHAT_DEFAULT_KEEPER_KEY);
-  fs.writeFileSync(passwordPath, `${password}\n`, { mode: 0o600 });
   fs.writeFileSync(wrongPasswordPath, 'wrong-password\n', { mode: 0o600 });
-  fs.writeFileSync(keystorePath, await wallet.encrypt(password), {
-    mode: 0o600,
-  });
 
   const dryRunConfigPath = path.join(
     params.tempDir,
@@ -507,6 +632,148 @@ export async function runDaemonSmoke(params) {
       localExecutionCollateralReduced: artifact.localExecutionCollateralReduced,
     })) {
       requireNoSpendInvariant(value === true, `daemon smoke ${field}`);
+    }
+    return artifact;
+  } finally {
+    await subgraph.close();
+  }
+}
+
+// P1-3: the PERSISTENT-daemon lifecycle scenario — the fidelity complement to
+// runDaemonSmoke's bounded --run-once. Launches the REAL long-lived keeper (no
+// --run-once) against the fixture, proves it loops multiple cycles, genuinely
+// DISCOVERS the auction via the real subgraph enumeration and acts, does NOT
+// re-act on the already-cleared auction across later cycles (idempotency), and
+// shuts down cleanly on SIGTERM. A dry-run leg proves repeated cycles broadcast
+// nothing. This is what turns "is it a real running keeper?" from no into yes.
+export async function runDaemonLifecycle(params) {
+  const subgraph = await startFixtureSubgraphStub({
+    summary: params.summary,
+    rpcUrl: params.rpcUrl,
+  });
+  try {
+    const { passwordPath, keystorePath, wallet } = await setupDaemonKeystore(
+      params.tempDir
+    );
+    const writeConfig = (dryRun, name) => {
+      const configPath = path.join(params.tempDir, name);
+      fs.writeFileSync(
+        configPath,
+        `${JSON.stringify(
+          buildDaemonConfig({
+            ...params,
+            subgraphUrl: subgraph.url,
+            keystorePath,
+            dryRun,
+          }),
+          null,
+          2
+        )}\n`
+      );
+      return configPath;
+    };
+    const executionConfigPath = writeConfig(
+      false,
+      'daemon-lifecycle-execution-config.json'
+    );
+    const dryRunConfigPath = writeConfig(
+      true,
+      'daemon-lifecycle-dry-run-config.json'
+    );
+    const env = daemonChildEnv({
+      allowedHosts: params.allowedHosts,
+      egressReportPath: params.egressReportPath,
+      passwordFile: passwordPath,
+    });
+
+    // EXECUTION leg: discovers + takes, then loops past its action without
+    // re-taking (tx count stabilizes), then we SIGTERM it.
+    const executionSnapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
+    await warpLocalTakeWindow(params.rpcUrl);
+    const executionStartBlock = await readBlockNumber(params.rpcUrl);
+    const execution = await spawnPersistentDaemon({
+      configPath: executionConfigPath,
+      env,
+      logPath: path.join(params.tempDir, 'daemon-lifecycle-execution.log'),
+      rpcUrl: params.rpcUrl,
+      keeperAddress: wallet.address,
+      startBlock: executionStartBlock,
+      pollIntervalMs: 1_500,
+      maxWatchMs: 120_000,
+      graceMs: 20_000,
+      // Done once it has looped >=2 cycles, taken at least once, and the keeper
+      // tx count has held steady across >=2 consecutive polls (idempotent: it
+      // re-entered the loop after acting without submitting a duplicate take).
+      isDone: (s) => s.cycles >= 2 && s.txCount >= 1 && s.stablePolls >= 2,
+    });
+    await requestJsonRpc(params.rpcUrl, 'evm_revert', [executionSnapshot]);
+
+    // DRY-RUN leg: loops >=2 cycles and broadcasts nothing.
+    const dryRunSnapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
+    await warpLocalTakeWindow(params.rpcUrl);
+    const dryRunStartBlock = await readBlockNumber(params.rpcUrl);
+    const dryRun = await spawnPersistentDaemon({
+      configPath: dryRunConfigPath,
+      env,
+      logPath: path.join(params.tempDir, 'daemon-lifecycle-dry-run.log'),
+      rpcUrl: params.rpcUrl,
+      keeperAddress: wallet.address,
+      startBlock: dryRunStartBlock,
+      pollIntervalMs: 1_500,
+      maxWatchMs: 45_000,
+      graceMs: 20_000,
+      isDone: (s) => s.cycles >= 2,
+    });
+    await requestJsonRpc(params.rpcUrl, 'evm_revert', [dryRunSnapshot]);
+
+    const artifact = {
+      enabled: true,
+      subgraphUrl: subgraph.url,
+      execution: {
+        cyclesObserved: execution.cyclesObserved,
+        loopedMultipleCycles: execution.cyclesObserved >= 2,
+        discoveredViaSubgraph: execution.summaries.some(
+          (s) => Number(s.discoveredTargets ?? 0) >= 1
+        ),
+        takeExecuted:
+          execution.txCount >= 1 &&
+          execution.summaries.some((s) => Number(s.targetSuccesses ?? 0) >= 1),
+        takeTxCount: execution.txCount,
+        takeTxHashes: execution.txHashes,
+        // The auction was actioned once and NOT re-actioned on later cycles.
+        idempotentNoDuplicateTake: execution.reachedDone,
+        shutdownCleanOnSigterm:
+          execution.shutdownClean && execution.sigtermHandled,
+        sigtermHandlerRan: execution.sigtermHandled,
+        exit: execution.exit,
+      },
+      dryRun: {
+        cyclesObserved: dryRun.cyclesObserved,
+        loopedMultipleCycles: dryRun.cyclesObserved >= 2,
+        transactionsFromKeeper: dryRun.txCount,
+        submittedNoTransactions: dryRun.txCount === 0,
+        shutdownCleanOnSigterm: dryRun.shutdownClean && dryRun.sigtermHandled,
+        exit: dryRun.exit,
+      },
+      logs: {
+        execution: execution.logPath,
+        dryRun: dryRun.logPath,
+      },
+    };
+
+    for (const [field, value] of Object.entries({
+      executionLoopedMultipleCycles: artifact.execution.loopedMultipleCycles,
+      executionDiscoveredViaSubgraph: artifact.execution.discoveredViaSubgraph,
+      executionTakeExecuted: artifact.execution.takeExecuted,
+      executionIdempotentNoDuplicateTake:
+        artifact.execution.idempotentNoDuplicateTake,
+      executionShutdownCleanOnSigterm:
+        artifact.execution.shutdownCleanOnSigterm,
+      dryRunLoopedMultipleCycles: artifact.dryRun.loopedMultipleCycles,
+      dryRunSubmittedNoTransactions: artifact.dryRun.submittedNoTransactions,
+      dryRunShutdownCleanOnSigterm: artifact.dryRun.shutdownCleanOnSigterm,
+    })) {
+      requireNoSpendInvariant(value === true, `daemon lifecycle ${field}`);
     }
     return artifact;
   } finally {

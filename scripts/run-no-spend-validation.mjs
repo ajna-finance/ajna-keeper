@@ -26,7 +26,10 @@ import {
   runNoEgressRequirePositiveControl,
   withNoEgressGuard,
 } from './no-spend/egress.mjs';
-import { runDaemonSmoke } from './no-spend/daemon-smoke.mjs';
+import {
+  runDaemonSmoke,
+  runDaemonLifecycle,
+} from './no-spend/daemon-smoke.mjs';
 import {
   buildReplayCommand,
   buildStateIntegrityArtifact,
@@ -65,7 +68,7 @@ const FIXTURE_CREATION_TIMEOUT_MS = Number(
 let hardhatNode;
 
 function usage() {
-  return `Usage: node scripts/run-no-spend-validation.mjs [--port N] [--base-fork-block N|latest] [--scenario NAME] [--mode discovery|manual] [--expect success|skip] [--dry-run-only] [--hybrid-gas-quote-fallback disabled|direct_dex_first] [--run-config-smoke] [--run-daemon-smoke] [--daemon-smoke-only] [--expected-fee-tier N] [--output /path/report.json]
+  return `Usage: node scripts/run-no-spend-validation.mjs [--port N] [--base-fork-block N|latest] [--scenario NAME] [--mode discovery|manual] [--expect success|skip] [--dry-run-only] [--hybrid-gas-quote-fallback disabled|direct_dex_first] [--run-config-smoke] [--run-daemon-smoke] [--daemon-smoke-only] [--run-daemon-lifecycle] [--daemon-lifecycle-only] [--expected-fee-tier N] [--output /path/report.json]
 
 Runs a no-spend Base fork replay:
 1. starts a local Base fork
@@ -110,6 +113,14 @@ function parseArgs(argv) {
     driveKeeperKick: process.env.AJNA_AGENT_NO_SPEND_KEEPER_KICK === '1',
     runDaemonSmoke: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE === '1',
     daemonSmokeOnly: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE_ONLY === '1',
+    // The *_ONLY env implies the run too, so setting it alone is sufficient
+    // (otherwise the daemonLifecycleOnly early-exit could "pass" without ever
+    // running the daemon).
+    runDaemonLifecycle:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_LIFECYCLE === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_LIFECYCLE_ONLY === '1',
+    daemonLifecycleOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_LIFECYCLE_ONLY === '1',
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
       ? Number(process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER)
       : undefined,
@@ -167,6 +178,15 @@ function parseArgs(argv) {
     if (arg === '--daemon-smoke-only') {
       options.runDaemonSmoke = true;
       options.daemonSmokeOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-lifecycle') {
+      options.runDaemonLifecycle = true;
+      continue;
+    }
+    if (arg === '--daemon-lifecycle-only') {
+      options.runDaemonLifecycle = true;
+      options.daemonLifecycleOnly = true;
       continue;
     }
     if (arg === '--expected-fee-tier') {
@@ -928,8 +948,29 @@ async function main() {
         egressReportPath,
       });
     }
+    let daemonLifecycleArtifact;
+    if (options.runDaemonLifecycle) {
+      daemonLifecycleArtifact = await runDaemonLifecycle({
+        summary: fixtureSummary,
+        summaryPath,
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
 
-    if (options.daemonSmokeOnly) {
+    if (options.daemonSmokeOnly || options.daemonLifecycleOnly) {
+      // Guard against a false pass: the *-only early-exit must not report
+      // success unless the scenario it names actually produced an artifact.
+      requireInvariant(
+        !options.daemonSmokeOnly || daemonArtifact !== undefined,
+        'daemon-smoke-only ran the daemon smoke scenario'
+      );
+      requireInvariant(
+        !options.daemonLifecycleOnly || daemonLifecycleArtifact !== undefined,
+        'daemon-lifecycle-only ran the daemon lifecycle scenario'
+      );
       await stopHardhatNode();
       hardhatStopped = true;
       const egress = assertEgressReport(egressReportPath, 'daemon smoke');
@@ -937,7 +978,8 @@ async function main() {
         status: 'passed',
         scenario: options.scenarioName,
         harnessMode: options.harnessMode,
-        daemonSmokeOnly: true,
+        daemonSmokeOnly: options.daemonSmokeOnly === true,
+        daemonLifecycleOnly: options.daemonLifecycleOnly === true,
         command: ['npm', 'run', 'no-spend-validation'],
         replayCommand,
         requestedForkBlock: resolvedForkBlock.requested,
@@ -958,6 +1000,7 @@ async function main() {
           hardhat: nodeLogPath,
         },
         daemon: daemonArtifact,
+        daemonLifecycle: daemonLifecycleArtifact,
       };
       fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
       fs.writeFileSync(
@@ -1131,6 +1174,7 @@ async function main() {
       env: executionReport?.envArtifact ?? dryRunReport?.envArtifact,
       stateIntegrity,
       daemon: daemonArtifact,
+      daemonLifecycle: daemonLifecycleArtifact,
     };
     fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
     fs.writeFileSync(
