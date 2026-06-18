@@ -4,12 +4,13 @@ These are **real code defects** in the keeper — distinct from the *coverage ga
 [`no-spend-testing-plan.md`](./no-spend-testing-plan.md). They were surfaced as a side effect of the
 coverage/assurance review (the review kept finding paths with no test, and several of those paths turned out
 to be wrong, not merely untested), then **independently verified against the current code** by an adversarial
-auditor that defaulted to "not a defect" unless the code proved otherwise. All six below were confirmed with
-high confidence; severities were adjusted down from the reviewer's first framing where the code showed
-mitigations.
+auditor that defaulted to "not a defect" unless the code proved otherwise. Each was confirmed with high
+confidence; severities were adjusted down from the reviewer's first framing where the code showed mitigations.
 
-None are fixed yet. Where a no-spend test packet is designed to *expose* the defect, it's noted — those tests
-are expected to fail against current code until the defect is fixed (that failure is their assurance value).
+**8 defects total: 7 fixed, 1 open (#5).** Defects #1–#6 came out of the original coverage review; #7 and #8
+were found by a later post-implementation audit (and #8 was, until this entry, fixed-but-unrecorded here — see
+its note). Where a no-spend test packet is designed to *expose* a defect, it's noted — those tests failed
+against the pre-fix code (that failure was their assurance value) and now pass.
 
 | # | Sev | Defect | Location | Exposed by |
 |---|-----|--------|----------|-----------|
@@ -20,8 +21,9 @@ are expected to fail against current code until the defect is fixed (that failur
 | 5 | Low | Curve + Permit2 reward-swap approvals are `MaxUint256`, never reset | `src/dex/curve-router.ts:195-198`, `src/dex/universal-router.ts:160-163` | — |
 | 6 | Low | ✅ **FIXED** — Alchemy price-fallback `addressMap` omitted Optimism (10) + Polygon (137) | `src/pricing/coingecko.ts` | P2-2 |
 | 7 | Low | ✅ **FIXED** — Curve reward-swap min-out was the #1/#2 sibling: no fail-closed on a zero `get_dy` quote + no slippage-range guard (Curve was never migrated to `deriveSwapMinimumOut`) | `src/dex/curve-router.ts` | post-impl audit |
+| 8 | Low | ✅ **FIXED** — Arb-strategy `minDeposit = minCollateral / hpb` could become `Infinity` when `hpb` ≤ 0 / non-finite, then be stringified into the subgraph query | `src/take/arb-strategy.ts` | post-impl audit |
 
-*Defect #7 was found by a post-implementation audit (after #1/#2 were fixed): the reward-swap money-safety fix was completed for Uniswap-legacy + Universal Router but Curve retained the under-protected inline math. Now routed through the same `deriveSwapMinimumOut` helper (fails closed on `get_dy<=0`, range-checks slippage). The audit also hardened two no-spend-harness test invariants (settlement now requires `lockedBefore>0` so bond-unlock can't pass trivially; the mock-target funding headroom was raised so settlement runs needing more partial takes don't false-red). Defect #5 (MaxUint256 approvals) remains the only un-fixed surfaced defect (low; trusted spenders).*
+*Defects #7 and #8 were found by a post-implementation audit (after #1/#2 were fixed). #7: the reward-swap money-safety fix was completed for Uniswap-legacy + Universal Router but Curve retained the under-protected inline math — now routed through the same `deriveSwapMinimumOut` helper (fails closed on `get_dy<=0`, range-checks slippage). #8: the arb-takeable check divided by `hpb` without guarding `hpb<=0`/non-finite, so `minDeposit` could be `Infinity` and get serialized into a subgraph query string — now guarded to return non-takeable early (commit `419051e`); **this fix shipped before it was recorded here, so the log previously under-counted its own defects (7 logged vs 8 real).** The audit also hardened two no-spend-harness test invariants (settlement now requires `lockedBefore>0` so bond-unlock can't pass trivially; the mock-target funding headroom was raised so settlement runs needing more partial takes don't false-red). Defect #5 (MaxUint256 approvals) remains the only un-fixed surfaced defect (low; trusted spenders).*
 
 ---
 
@@ -103,6 +105,31 @@ are expected to fail against current code until the defect is fixed (that failur
 
 ---
 
-*Generated from an adversarial verification pass (6/6 confirmed) during the no-spend coverage review. The
-reward-swap defects (#1, #2) are the highest priority — they put harvested operator funds at MEV risk on
-common configs, and the documented LP-rewards setup uses the path with defect #2.*
+## 7. [LOW] Curve reward-swap min-out: no fail-closed on a zero quote + no slippage-range guard ✅ FIXED
+
+**Where:** `src/dex/curve-router.ts` — the inline `amountOutMin` math, which was never migrated to the shared `deriveSwapMinimumOut` helper when #1/#2 were fixed for the Uniswap-legacy and Universal Router paths.
+
+**What's wrong:** the Curve path is the direct sibling of #1/#2 — it computed its swap floor inline without (a) failing closed when the on-chain `get_dy` quote is ≤ 0 (an untrustworthy/empty quote would yield a ~0 floor, i.e. no MEV protection), and (b) range-checking the configured slippage. The reward-swap money-safety fix landed for two of the three DEX paths but left Curve under-protected.
+
+**Impact / why LOW:** rewards-only, keeper-signed, and only on the Curve reward-swap path. Same value-leakage class as #1/#2 but on a less-common config.
+
+**Fix (shipped):** routed through the same `deriveSwapMinimumOut` helper as #1/#2 — fails closed on `get_dy<=0`, range-checks slippage. Covered by `tests/unit/swap-min-out.test.ts`.
+
+---
+
+## 8. [LOW] Arb-strategy `minDeposit` can be `Infinity` and get serialized into a subgraph query ✅ FIXED
+
+**Where:** `src/take/arb-strategy.ts` — `minDeposit = minCollateral / hpb`, computed before any guard on `hpb`.
+
+**What's wrong:** when the highest-price-bucket `hpb` is `0` or non-finite (a degenerate/edge auction state), `minCollateral / hpb` evaluates to `Infinity` (or `NaN`). That value then flows into the arb-takeable decision and, downstream, is stringified into a subgraph query — producing a malformed query (`"Infinity"`) rather than a clean "not arb-takeable" result. Found by the same post-implementation audit as #7.
+
+**Impact / why LOW:** no fund risk and no mispriced action — the worst case is a malformed/failed query for a degenerate auction, i.e. a liveness/robustness wart, not a money bug. Low likelihood (`hpb<=0` is an edge state).
+
+**Fix (shipped, commit `419051e`):** guard `if (!Number.isFinite(hpb) || hpb <= 0)` returns `{ isArbTakeable: false, ... }` before the division. **This fix was committed but never written into this log until now** — which is why the reconciliation found the doc tracked 7 defects while git history showed 8 real `src/` fixes.
+
+---
+
+*Generated from an adversarial verification pass during the no-spend coverage review (#1–#6), extended by a
+post-implementation audit (#7, #8). **8 defects total — 7 fixed, 1 open (#5).** The reward-swap defects (#1,
+#2) were the highest priority — they put harvested operator funds at MEV risk on common configs, and the
+documented LP-rewards setup uses the path with defect #2.*
