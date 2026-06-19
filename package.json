@@ -33,6 +33,7 @@
     "create-liquidatable-uniswap-fixture": "./node_modules/ts-node/dist/bin.js scripts/create-liquidatable-ajna-fixture.ts --with-uniswap-v3-external-take",
     "oneinch-route-canary": "./node_modules/ts-node/dist/bin.js scripts/oneinch-route-canary.ts",
     "lifi-route-canary": "./node_modules/ts-node/dist/bin.js scripts/lifi-route-canary.ts",
+    "verify:routes": "npm run lifi-route-canary && npm run sushi-aggregator-route-canary && npm run curve-selector-canary",
     "lifi-fork-execution-canary": "RUN_LIFI_FORK_CANARY=true HARDHAT_CHAIN_ID=8453 FORK_NETWORK=base npx hardhat test tests/integration/lifi-fork-execution-canary.test.ts",
     "check-external-take-boundaries": "./node_modules/ts-node/dist/bin.js scripts/check-external-take-boundaries.ts",
     "hybrid-fork-loop": "RUN_HYBRID_FORK_LOOP=true HARDHAT_CHAIN_ID=8453 FORK_NETWORK=base npx hardhat test tests/integration/hybrid-fork-loop.test.ts",

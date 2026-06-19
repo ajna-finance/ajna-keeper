@@ -57,6 +57,46 @@ describe('durable nonce state', () => {
     expect(updatedEntry?.nextNonce).to.equal(9);
   });
 
+  // P1-3 nonce consistency on SIGTERM mid-broadcast: a take/settlement broadcast
+  // persists its durable nonce floor BEFORE the receipt confirms, so if the
+  // process is killed mid-broadcast the floor survives on disk and the restarted
+  // keeper resumes from it — it cannot reuse the in-flight nonce (a gap/dup that
+  // would strand the wallet).
+  it('preserves the durable nonce floor across a simulated restart (SIGTERM mid-broadcast)', async () => {
+    const address = '0x00000000000000000000000000000000000000bb';
+
+    // Keeper broadcast nonce 7 -> persists floor nextNonce=8 before confirmation.
+    await upsertDurableNonceFloor({
+      chainId: 8453,
+      address,
+      nextNonce: 8,
+      submittedAtMs: 1000,
+    });
+    // Durable on disk — survives process death.
+    const onDisk = JSON.parse(fs.readFileSync(durableStatePath, 'utf8'));
+    expect(
+      onDisk.entries.find(
+        (e: any) => e.address.toLowerCase() === address.toLowerCase()
+      )?.nextNonce
+    ).to.equal(8);
+
+    // Simulate a fresh process start: reset in-memory state, KEEP the file.
+    setDurableNonceStateFilePathForTests(durableStatePath);
+    const afterRestart = await getDurableNonceFloor(8453, address);
+    expect(afterRestart?.nextNonce).to.equal(8); // resumes at the floor, no reuse of 7
+
+    // A stale/lower floor (e.g. a racing reload) must NOT lower it — monotonic,
+    // so no path can roll back into reusing an already-broadcast nonce.
+    await upsertDurableNonceFloor({
+      chainId: 8453,
+      address,
+      nextNonce: 6,
+      submittedAtMs: 500,
+    });
+    const afterStale = await getDurableNonceFloor(8453, address);
+    expect(afterStale?.nextNonce).to.equal(8);
+  });
+
   it('merges on-disk durable nonce floors instead of clobbering them on save', async () => {
     const addressA = '0x00000000000000000000000000000000000000aa';
     const addressB = '0x00000000000000000000000000000000000000bb';

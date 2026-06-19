@@ -591,7 +591,10 @@ export async function runResilientLoopIteration(
   }
 }
 
-async function runResilientLoop(
+// Exported for crash-recovery testing: the Kick/Bond/LP loops route through this
+// while(true) wrapper so a crashing iteration is caught, delayed, and re-entered
+// (defect #4). Take/Settlement use the equivalent inline pattern.
+export async function runResilientLoop(
   loopName: string,
   iteration: () => Promise<void>,
   successDelaySeconds: () => number
