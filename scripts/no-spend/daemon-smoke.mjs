@@ -198,7 +198,9 @@ function buildDaemonConfig(params) {
         allowedLiquiditySources: [2],
         externalTakeRouteSelectionMode: 'maximize_profit',
         hybridGasQuoteFailureFallbackMode: 'disabled',
-        maxGasCostNative: 1,
+        // Default 1 native token; a tiny override drives the gas-policy skip
+        // (P1-3 gas-spike: every take is rejected native_gas_cost_above_cap).
+        maxGasCostNative: params.maxGasCostNative ?? 1,
         validateRouteDeployments: true,
       },
     },
@@ -655,7 +657,7 @@ export async function runDaemonLifecycle(params) {
     const { passwordPath, keystorePath, wallet } = await setupDaemonKeystore(
       params.tempDir
     );
-    const writeConfig = (dryRun, name) => {
+    const writeConfig = (dryRun, name, extra = {}) => {
       const configPath = path.join(params.tempDir, name);
       fs.writeFileSync(
         configPath,
@@ -665,6 +667,7 @@ export async function runDaemonLifecycle(params) {
             subgraphUrl: subgraph.url,
             keystorePath,
             dryRun,
+            ...extra,
           }),
           null,
           2
@@ -679,6 +682,12 @@ export async function runDaemonLifecycle(params) {
     const dryRunConfigPath = writeConfig(
       true,
       'daemon-lifecycle-dry-run-config.json'
+    );
+    // Gas-spike leg: a tiny gas-cost cap so the gas policy rejects every take.
+    const gasSpikeConfigPath = writeConfig(
+      false,
+      'daemon-lifecycle-gas-spike-config.json',
+      { maxGasCostNative: 0.000000001 }
     );
     const env = daemonChildEnv({
       allowedHosts: params.allowedHosts,
@@ -726,6 +735,28 @@ export async function runDaemonLifecycle(params) {
     });
     await requestJsonRpc(params.rpcUrl, 'evm_revert', [dryRunSnapshot]);
 
+    // GAS-SPIKE leg (P1-3): with a tiny maxGasCostNative the keeper still
+    // discovers the auction every cycle but the gas policy rejects every take,
+    // so it loops >=2 cycles and broadcasts NOTHING (no overspend), then exits
+    // cleanly on SIGTERM. The discovered-but-no-tx pair is the meaningful skip
+    // (not a vacuous "found nothing" zero-tx).
+    const gasSnapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
+    await warpLocalTakeWindow(params.rpcUrl);
+    const gasStartBlock = await readBlockNumber(params.rpcUrl);
+    const gasSpike = await spawnPersistentDaemon({
+      configPath: gasSpikeConfigPath,
+      env,
+      logPath: path.join(params.tempDir, 'daemon-lifecycle-gas-spike.log'),
+      rpcUrl: params.rpcUrl,
+      keeperAddress: wallet.address,
+      startBlock: gasStartBlock,
+      pollIntervalMs: 1_500,
+      maxWatchMs: 60_000,
+      graceMs: 20_000,
+      isDone: (s) => s.cycles >= 2,
+    });
+    await requestJsonRpc(params.rpcUrl, 'evm_revert', [gasSnapshot]);
+
     const artifact = {
       enabled: true,
       subgraphUrl: subgraph.url,
@@ -755,9 +786,24 @@ export async function runDaemonLifecycle(params) {
         shutdownCleanOnSigterm: dryRun.shutdownClean && dryRun.sigtermHandled,
         exit: dryRun.exit,
       },
+      gasSpike: {
+        cyclesObserved: gasSpike.cyclesObserved,
+        loopedMultipleCycles: gasSpike.cyclesObserved >= 2,
+        // Found the auction but did NOT take it — the gas policy skip, not a
+        // vacuous "nothing to do" zero-tx.
+        discoveredViaSubgraph: gasSpike.summaries.some(
+          (s) => Number(s.discoveredTargets ?? 0) >= 1
+        ),
+        takeTxCount: gasSpike.txCount,
+        submittedNoTransactions: gasSpike.txCount === 0,
+        shutdownCleanOnSigterm:
+          gasSpike.shutdownClean && gasSpike.sigtermHandled,
+        exit: gasSpike.exit,
+      },
       logs: {
         execution: execution.logPath,
         dryRun: dryRun.logPath,
+        gasSpike: gasSpike.logPath,
       },
     };
 
@@ -772,6 +818,10 @@ export async function runDaemonLifecycle(params) {
       dryRunLoopedMultipleCycles: artifact.dryRun.loopedMultipleCycles,
       dryRunSubmittedNoTransactions: artifact.dryRun.submittedNoTransactions,
       dryRunShutdownCleanOnSigterm: artifact.dryRun.shutdownCleanOnSigterm,
+      gasSpikeLoopedMultipleCycles: artifact.gasSpike.loopedMultipleCycles,
+      gasSpikeDiscoveredViaSubgraph: artifact.gasSpike.discoveredViaSubgraph,
+      gasSpikeSubmittedNoTransactions: artifact.gasSpike.submittedNoTransactions,
+      gasSpikeShutdownCleanOnSigterm: artifact.gasSpike.shutdownCleanOnSigterm,
     })) {
       requireNoSpendInvariant(value === true, `daemon lifecycle ${field}`);
     }
