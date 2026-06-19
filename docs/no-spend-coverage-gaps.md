@@ -39,7 +39,8 @@ exercised (the stub returns one auction).
 **Net:** the suite faithfully proves the **take/kick/settlement execution mechanics are real and
 no-spend-safe**, and the **happy-path long-running daemon now genuinely discovers + acts + shuts down
 cleanly**. What remains simulated/uncovered: multi-pool enumeration realism and the daemon **failure-injection**
-sub-cases (crash-recovery at fork level, RPC failover, degraded mode, gas-spike, nonce-during-broadcast).
+sub-cases (gas-spike skip and read-RPC cooldown/recovery are now covered; fork-level crash-injection,
+degraded-mode, and nonce-during-broadcast remain).
 
 ---
 
@@ -51,12 +52,12 @@ sub-cases (crash-recovery at fork level, RPC failover, degraded mode, gas-spike,
 | P0-2 | Real aggregator calldata-take via mock target | ✅ done |
 | P0-3 | Hybrid decision: all providers compete, winner selected, `competingProviders` roster | ✅ core done · 🟡 decision-matrix sub-cases remain |
 | P0-4 | On-chain settlement assertion | ✅ core done · 🟡 multi-iteration/multi-auction remain |
-| P0-5 | Reward-swap money-safety (defects #1/#2/#7) | ✅ fixed · 🟡 fork-capture of submitted `amountOutMinimum` remains |
+| P0-5 | Reward-swap money-safety (defects #1/#2/#7) | ✅ fixed + fork-capture of the submitted `amountOutMinimum` (decoded from live calldata) |
 | P1-1 | Full-lifecycle composition + keeper-kick | ✅ done |
 | P1-2 | Promote real-Ajna + real-DEX fork tests to first-class | ⬜ not started |
-| P1-3 | Daemon lifecycle & resilience (defects #3/#4) | ✅ persistent-daemon multi-cycle + real discovery + idempotency + SIGTERM done · 🟡 failure-injection sub-cases remain |
+| P1-3 | Daemon lifecycle & resilience (defects #3/#4) | ✅ persistent-daemon multi-cycle + discovery + idempotency + SIGTERM + gas-spike skip + read-RPC cooldown/recovery done · 🟡 fork-level crash-injection / degraded-mode / nonce-mid-broadcast remain |
 | P1-4 | Reward-collection & bond-withdrawal loops | 🟡 LP-sweep principal-preservation (found+fixed defect #9) + bond-withdrawal done · LP reactive-settlement retry remains |
-| P2-1 | Token/subgraph realism + `verify:routes` canary | ⬜ not started |
+| P2-1 | Token/subgraph realism + `verify:routes` canary | ✅ non-18-decimal ceiling + multi-auction enumeration/handling done · 🟡 fee-on-transfer + `verify:routes` canary remain |
 | P2-2 | Price sourcing, inversion & multi-chain config (defect #6) | 🟡 defect fixed + unit-guarded · price/inversion scenarios remain |
 
 ✅ = implemented & fork-validated 🟡 = partially done (core or defect done; sub-cases remain) ⬜ = not started
@@ -89,24 +90,26 @@ sub-cases (crash-recovery at fork level, RPC failover, degraded mode, gas-spike,
 
 ### Medium value
 
-4. **Fork-capture of the submitted `amountOutMinimum` (`P0-5`).** The reward-swap defects (#1/#2/#7) are fixed
-   and unit-guarded, but a fork-level assertion that the *actually submitted* swap floor matches a real quote
-   would be the strongest regression guard at the real call sites. **Catches:** a future regression that
-   re-introduces an input-denominated or near-zero floor.
-5. **Read-RPC failover & degraded-mode continuity (`P1-3`).** Two `readRpcUrls` with the first dead → failover
-   keeps producing gas prices; and a subgraph outage within the snapshot-freshness window → keeper keeps
-   taking on cached data (`snapshotFallbackUsed===true`). **Catches:** liveness loss on transient
-   infra failure.
-6. **Gas-spike skip (`P1-3`).** One cycle with the gas cap below the fork's real gas cost → route artifact
-   records `native_gas_cost_above_cap`, zero take txs, loop survives. **Catches:** the keeper spending into an
-   unprofitable gas environment.
+4. ✅ **DONE — Fork-capture of the submitted `amountOutMinimum` (`P0-5`).** A real `swapToWeth` on the mainnet
+   fork now has its live `exactInputSingle` calldata decoded and the submitted floor asserted to be ≥90% of the
+   realized WETH output (quote-derived, in output units) — pinning the fix at the real call site against a
+   re-introduced input-denominated / near-zero floor (`tests/integration/uniswap.test.ts`).
+5. **Read-RPC failover & degraded-mode continuity (`P1-3`).** ✅ *Failover + cooldown/recovery done* — the
+   endpoint health state machine (3-failure threshold → 30s cooldown deprioritization → retry after the window)
+   is unit-pinned (`tests/unit/endpoint-health.test.ts`), on top of the existing single-failure failover.
+   Remaining: degraded-mode continuity (keep taking on cached data through a subgraph outage,
+   `snapshotFallbackUsed===true`).
+6. ✅ **DONE — Gas-spike skip (`P1-3`).** A persistent-daemon leg with a tiny `maxGasCostNative` proves the
+   keeper still discovers the auction each cycle but the gas policy rejects every take → **zero** broadcasts,
+   loop survives ≥2 cycles, clean SIGTERM (`daemon-smoke.mjs` `runDaemonLifecycle` gas-spike leg).
 7. **Decision-matrix sub-cases (`P0-3`).** With injected quotes, exercise the *deciding* branches:
    subsidy-vs-profit tiebreak, profit-floor rejection (all-sub-floor leg executes **zero** takes), circuit-open,
    and execution-fallback (primary fails → fallback candidate). **Catches:** mis-ranking and fail-open in the
    selection policy.
-8. **Multi-pool / multi-auction discovery realism (`P2-1`, `P1-3`).** Extend the subgraph stub to return
-   multiple auctions so `resolveTakeCycleTargets`/`findSettleableAuctions` enumerate more than one — the only
-   place real pagination/dedup gets exercised. **Catches:** enumeration, target-dedup, and hot-auction TTL bugs.
+8. ✅ **DONE — Multi-auction discovery + handling (`P2-1`).** Enumeration/dedup of multiple auctions into one
+   target's candidates is covered (`discovery-targets.test.ts`), and the executor now has explicit coverage that
+   it takes BOTH auctions of a multi-candidate target when `maxExecutions=2` and stops at one when
+   `maxExecutions=1` (`external-take-reapproval.test.ts`). Remaining (lower value): multi-*pool* fixture realism.
 9. **Promote real-route fork tests to first-class (`P1-2`).** Named npm scripts for the LI.FI/Sushi/Curve
    route canaries (real egress, still fund-free), config-derived whales/blocks with skip-on-drift. **Catches:**
    real aggregator API/route drift that the injected-quote path can't see. (1inch documented as skip-on-401.)
@@ -118,8 +121,9 @@ sub-cases (crash-recovery at fork level, RPC failover, degraded mode, gas-spike,
 
 11. **Settlement sub-cases (`P0-4`).** Multi-iteration/partial-settle, multi-auction + dedup,
     `checkBotIncentive` negative, dry-run parity leg.
-12. **Token realism (`P2-1`).** 6-decimal quote token (exercises the `quoteAmountDueCeiling` +1-wei ceiling)
-    and a fee-on-transfer collateral token. **Catches:** the non-18-decimal / fee-on-transfer bug class.
+12. **Token realism (`P2-1`).** ✅ *Non-18-decimal ceiling done* — the `quoteAmountDueCeiling` +1-wei backstop
+    is unit-pinned for a 6-decimal quote token (`quote-amount-due-ceiling.test.ts`). Remaining: a
+    fee-on-transfer collateral token.
 13. **Negative-take / partial-fill (`P0-3`, `P1-1`).** A reverting take through the real keeper failure path;
     partial-fill + mixed-availability sub-cases.
 14. **Private/relay take transports (`P1-3`).** Only public-RPC transport is exercised; `PRIVATE_RPC`/`RELAY`
@@ -133,4 +137,4 @@ sub-cases (crash-recovery at fork level, RPC failover, degraded mode, gas-spike,
 
 One **surfaced defect remains unfixed**: **#5 — Curve + Permit2 reward-swap approvals are `MaxUint256`,
 never reset** (low; trusted spenders). See [`surfaced-code-defects.md`](./surfaced-code-defects.md). All other
-surfaced defects (#1–#4, #6, #7, #8) are fixed.
+surfaced defects (#1–#4, #6, #7, #8, #9) are fixed.
