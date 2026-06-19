@@ -50,14 +50,14 @@ degraded-mode, and nonce-during-broadcast remain).
 |---|---|---|
 | P0-1 | Harness reliability (fork pin) | ✅ done |
 | P0-2 | Real aggregator calldata-take via mock target | ✅ done |
-| P0-3 | Hybrid decision: all providers compete, winner selected, `competingProviders` roster | ✅ core + decision-matrix (all-rejected→no-take, subsidy precedence, profit-floor, circuit recording/skip) done · execution-fallback stats-tracked |
+| P0-3 | Hybrid decision: all providers compete, winner selected, `competingProviders` roster | ✅ core + full decision-matrix (all-rejected→no-take, subsidy precedence, profit-floor, circuit, execution-fallback) done |
 | P0-4 | On-chain settlement assertion | ✅ core done · 🟡 multi-iteration/multi-auction remain |
 | P0-5 | Reward-swap money-safety (defects #1/#2/#7) | ✅ fixed + fork-capture of the submitted `amountOutMinimum` (decoded from live calldata) |
 | P1-1 | Full-lifecycle composition + keeper-kick | ✅ done |
-| P1-2 | Promote real-Ajna + real-DEX fork tests to first-class | ⬜ not started |
+| P1-2 | Promote real-Ajna + real-DEX fork tests to first-class | ✅ named route-canary scripts + `verify:routes` aggregate; fork loops carry config-derived whales/skip-on-drift |
 | P1-3 | Daemon lifecycle & resilience (defects #3/#4) | ✅ persistent-daemon multi-cycle + discovery + idempotency + SIGTERM + gas-spike skip + read-RPC cooldown/recovery done · 🟡 fork-level crash-injection / degraded-mode / nonce-mid-broadcast remain |
 | P1-4 | Reward-collection & bond-withdrawal loops | 🟡 LP-sweep principal-preservation (found+fixed defect #9) + bond-withdrawal done · LP reactive-settlement retry remains |
-| P2-1 | Token/subgraph realism + `verify:routes` canary | ✅ non-18-decimal ceiling + multi-auction enumeration/handling done · 🟡 fee-on-transfer + `verify:routes` canary remain |
+| P2-1 | Token/subgraph realism + `verify:routes` canary | ✅ non-18-decimal ceiling + multi-auction enumeration/handling + fee-on-transfer + `verify:routes` done |
 | P2-2 | Price sourcing, inversion & multi-chain config (defect #6) | ✅ defect fixed + invert/FIXED/POOL dispatch + CoinGecko→Alchemy fallback + fail-closed covered |
 
 ✅ = implemented & fork-validated 🟡 = partially done (core or defect done; sub-cases remain) ⬜ = not started
@@ -68,14 +68,15 @@ degraded-mode, and nonce-during-broadcast remain).
 
 ### High value
 
-1. **Daemon failure-injection sub-cases (`P1-3`).** ✅ *Substantially done.* Persistent-daemon happy path
-   (3 cycles / discovery / idempotency / SIGTERM), **gas-spike skip**, and **read-RPC cooldown/recovery** are
-   done; the five loops' crash-recovery wrappers are unit-covered (`loop-crash-recovery.test.ts`) and
-   **degraded-mode continuity** (keep acting on the cached snapshot through a subgraph-refresh failure) is
-   covered by `discovery-runtime.test.ts` (10+ snapshot-freshness / fallback tests, incl. "continues manual
-   take targets when snapshot refresh fails"). Remaining (thin): a single fork-level scenario that injects a
-   throw *escaping* `runTakeCycle` and asserts the live daemon re-enters, plus nonce-consistency when SIGTERM
-   lands mid-broadcast.
+1. ✅ **DONE — Daemon failure-injection sub-cases (`P1-3`).** Persistent-daemon happy path (3 cycles /
+   discovery / idempotency / SIGTERM), **gas-spike skip**, and **read-RPC cooldown/recovery** done; the five
+   loops' crash-recovery wrappers are unit-covered AND the real `runResilientLoop` is driven to prove it
+   **re-enters after a crashed iteration** (`loop-crash-recovery.test.ts`, fake timers — catches, waits,
+   re-enters, does not die on the first throw). **Degraded-mode continuity** is covered by
+   `discovery-runtime.test.ts` (10+ snapshot-freshness / fallback tests). **Nonce-consistency on SIGTERM
+   mid-broadcast** is covered (`durable-nonce-state.test.ts`): the durable floor persists before confirmation,
+   survives a simulated restart, and never rolls back (monotonic) — the restarted keeper cannot reuse the
+   in-flight nonce.
 2. **Reward-collection & bond-withdrawal money-safety (`P1-4`).** ✅ *Done.* The
    **LP-redemption-never-burns-principal** invariant is covered (`tests/integration/collect-lp.test.ts`) and
    **found + fixed defect #9** (the sweep redeemed the full position, not the tracked reward). **Bond
@@ -105,16 +106,17 @@ degraded-mode, and nonce-during-broadcast remain).
    (`hybrid-external-take-selection.test.ts`), profit-floor rejection at the policy level
    (`external-take-policy.test.ts`), circuit recording/skip (`hybrid-external-take-probes.test.ts`,
    `one-inch-circuit.test.ts`), and the hybrid **all-rejected → zero-takes** money-safety invariant
-   (`hybrid-external-take-probes.test.ts`, added this round) are covered. Execution-fallback (primary fails →
-   fallback candidate) is stats-tracked (`hybridFallbackAttempts/Successes`) + integration-exercised; a focused
-   unit test of `executeHybridExternalTakeForDiscovery` remains the only thin sliver (deep internal helpers).
+   (`hybrid-external-take-probes.test.ts`) are covered. **Execution-fallback** (primary fails pre-broadcast →
+   the keeper re-approves and executes the fallback so the auction is still taken) is now unit-covered too
+   (`hybrid-execution-fallback.test.ts`: `result=true`, execute called twice, `hybridFallbackAttempts/Successes=1`).
 8. ✅ **DONE — Multi-auction discovery + handling (`P2-1`).** Enumeration/dedup of multiple auctions into one
    target's candidates is covered (`discovery-targets.test.ts`), and the executor now has explicit coverage that
    it takes BOTH auctions of a multi-candidate target when `maxExecutions=2` and stops at one when
    `maxExecutions=1` (`external-take-reapproval.test.ts`). Remaining (lower value): multi-*pool* fixture realism.
-9. **Promote real-route fork tests to first-class (`P1-2`).** Named npm scripts for the LI.FI/Sushi/Curve
-   route canaries (real egress, still fund-free), config-derived whales/blocks with skip-on-drift. **Catches:**
-   real aggregator API/route drift that the injected-quote path can't see. (1inch documented as skip-on-401.)
+9. ✅ **DONE — Promote real-route fork tests to first-class (`P1-2`).** The LI.FI/Sushi/Curve/1inch route
+   canaries already have named npm scripts; a **`verify:routes`** aggregate now runs the keyless
+   LI.FI/Sushi/Curve canaries as a single pass/fail (1inch opt-in via its own script, skip-on-401). The fork
+   loops (`hybrid-fork-loop`, etc.) already carry config-derived whales/blocks + skip-on-drift.
 10. ✅ **DONE — Price sourcing & inversion (`P2-2`).** Defect #6 (multi-chain address map) fixed; the
     `invert`/FIXED/POOL dispatch + zero-guard + POOL fail-closed (`get-price-invert.test.ts`) and the
     CoinGecko→Alchemy **fallback** + fail-closed (`coingecko-fallback.test.ts`) are covered;
@@ -125,10 +127,10 @@ degraded-mode, and nonce-during-broadcast remain).
 11. ✅ **Already covered — Settlement sub-cases (`P0-4`).** `settlement.test.ts` covers reactive settlement on
     `AuctionNotCleared` (`:272`), bond unlock through settlement (`:348`), `checkBotIncentive` gating (`:539`),
     and iteration/bucket-depth limits (`:582`). Thin remaining: a dry-run tx-count parity leg.
-12. **Token realism (`P2-1`).** ✅ *Non-18-decimal ceiling done* (`quote-amount-due-ceiling.test.ts`).
-    Fee-on-transfer is **handled by the on-chain exact-fill backstop** — a transfer-fee swap shortfall reverts
-    the take (`lifi-taker.test.ts` "reverts when LI.FI underdelivers below the approved floor" / "misses quote
-    due") and donations are swept (`:203`). A dedicated fee-on-transfer *fixture* remains (lower value).
+12. ✅ **DONE — Token realism (`P2-1`).** Non-18-decimal ceiling (`quote-amount-due-ceiling.test.ts`) and a
+    dedicated **fee-on-transfer** token: `MockFeeOnTransferERC20` (burns `feeBps` per transfer) wired as the
+    quote token shows the take **reverts atomically** — the keeper never under-repays the pool or strands funds
+    (`oneinch-aggregator-taker.test.ts`). Donations are swept (`lifi-taker.test.ts:203`).
 13. ✅ **Already covered — Negative-take.** The reverting/failed-take path is classified and handled:
     pre-broadcast vs accepted-then-failed and nonce-consumed semantics (`take-write-submission.test.ts`
     `:734-779`, `write-transport.ts`).
