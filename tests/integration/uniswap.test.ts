@@ -13,8 +13,10 @@ import {
 } from './test-utils';
 import { addLiquidity } from './uniswap-helpers';
 import { expect } from 'chai';
+import sinon from 'sinon';
 import { getPoolInfo, swapToWeth } from '../../src/dex/uniswap';
 import { getBalanceOfErc20 } from '../../src/erc20';
+import { NonceTracker } from '../../src/nonce';
 
 const UNISWAP_V3_ROUTER = '0xE592427A0AEce92De3Edee1F18E0157C05861564';
 const NONFUNGIBLE_POSITION_MANAGER_ADDRESS =
@@ -191,5 +193,94 @@ describe('Uniswap V3 Integration Tests', function () {
     ).to.be.true;
     expect(wethBalanceAfter.gt(wethBalanceBefore), 'User should gain WETH').to
       .be.true;
+  });
+
+  // P0-5 reward-swap money-safety: pin defect #1 at the real call site by
+  // decoding the amountOutMinimum actually submitted to the SwapRouter. The pre-
+  // fix legacy path floored it to ~0.01% of the INPUT amount (no MEV protection);
+  // the fix derives it from the real output quote * (1 - slippage). We capture
+  // the live exactInputSingle calldata (no swap mock — a pass-through spy on
+  // queueTransaction just grabs the receipt) and assert the floor is a real
+  // fraction of the realized WETH output, in OUTPUT units.
+  it('submits an amountOutMinimum derived from the output quote, not the input amount or a near-zero floor', async function () {
+    const provider = getProvider();
+    const chainId = (await provider.getNetwork()).chainId;
+    const wbtcToken = new Token(
+      chainId,
+      MAINNET_CONFIG.WBTC_USDC_POOL.collateralAddress,
+      8,
+      'WBTC',
+      'Wrapped Bitcoin'
+    );
+
+    const realQueue = NonceTracker.queueTransaction.bind(NonceTracker);
+    const receipts: any[] = [];
+    const queueSpy = sinon
+      .stub(NonceTracker, 'queueTransaction')
+      .callsFake(async (s: any, fn: any) => {
+        const r = await realQueue(s, fn);
+        receipts.push(r);
+        return r;
+      });
+
+    const wethBalanceBefore = await getBalanceOfErc20(
+      wbtcSigner,
+      MAINNET_CONFIG.WETH_ADDRESS
+    );
+    const amountToSwap = ethers.BigNumber.from('10000000'); // 0.1 WBTC (8dp)
+    const slippage = 1; // 1%
+
+    try {
+      await swapToWeth(
+        wbtcSigner,
+        wbtcToken.address,
+        amountToSwap,
+        FeeAmount.MEDIUM,
+        slippage,
+        {
+          wethAddress: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+          uniswapV3Router: UNISWAP_V3_ROUTER,
+        }
+      );
+    } finally {
+      queueSpy.restore();
+    }
+
+    const wethReceived = (
+      await getBalanceOfErc20(wbtcSigner, MAINNET_CONFIG.WETH_ADDRESS)
+    ).sub(wethBalanceBefore);
+    expect(wethReceived.gt(0), 'swap should have produced WETH').to.be.true;
+
+    // Decode the exactInputSingle call among the queued txs (approval txs won't
+    // decode against this selector and are skipped).
+    const iface = new ethers.utils.Interface(UniswapABI);
+    let submittedMinOut: ethers.BigNumber | undefined;
+    for (const r of receipts) {
+      const tx = await provider.getTransaction(r.transactionHash);
+      try {
+        const decoded = iface.decodeFunctionData('exactInputSingle', tx.data);
+        submittedMinOut = ethers.BigNumber.from(
+          decoded.params?.amountOutMinimum ?? decoded[0].amountOutMinimum
+        );
+        break;
+      } catch {
+        // not the swap call
+      }
+    }
+    expect(
+      submittedMinOut !== undefined,
+      'should have decoded an exactInputSingle amountOutMinimum'
+    ).to.be.true;
+    const minOut = submittedMinOut!;
+
+    // The swap succeeded, so the realized output cleared the floor.
+    expect(minOut.lte(wethReceived), 'floor must not exceed realized output').to
+      .be.true;
+    // >= 90% of the realized WETH proves the floor is the quote*(1-slippage)
+    // value (in OUTPUT units), NOT the pre-fix ~0.01%-of-input near-zero floor.
+    expect(
+      minOut.gte(wethReceived.mul(90).div(100)),
+      `amountOutMinimum ${minOut.toString()} should be >= 90% of realized WETH ${wethReceived.toString()} (quote-derived, not near-zero/input-denominated)`
+    ).to.be.true;
   });
 });
