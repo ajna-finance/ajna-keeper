@@ -146,4 +146,28 @@ describe('OneInchAggregatorKeeperTaker (Packet 5)', () => {
       (await fixture.collateral.balanceOf(fixture.taker.address)).eq(0)
     ).to.equal(true);
   });
+
+  // P2-1 fee-on-transfer quote token: it burns a cut on every transfer, so the
+  // amounts the taker moves don't reconcile — repaying the pool the exact amount
+  // due requires more than the swap delivered. The take must REVERT ATOMICALLY
+  // (the keeper never under-repays the pool or strands funds), not settle short.
+  it('reverts a take atomically when a fee-on-transfer quote token cannot repay the pool the full amount due', async () => {
+    const fixture = await executeAggregatorTake({
+      Factory: OneInchAggregatorKeeperTaker__factory,
+      source: LiquiditySource.ONEINCH,
+      outputAmount: utils.parseEther('1.1'),
+      amountOutMinimum: utils.parseEther('1.0'),
+      quoteAmountDue: utils.parseEther('1.05'),
+      feeOnTransferQuoteBps: 200, // 2% fee on every quote transfer
+    });
+
+    // The fee leaves a transfer short, so the take aborts (ERC20 shortfall)
+    // rather than under-repaying the pool.
+    await expectRevertContaining(fixture.send(), 'ERC20');
+    // Atomic: no take recorded, no quote stranded on the taker.
+    expect((await fixture.pool.takeCount()).eq(0)).to.equal(true);
+    expect(
+      (await fixture.quote.balanceOf(fixture.taker.address)).eq(0)
+    ).to.equal(true);
+  });
 });
