@@ -50,7 +50,7 @@ degraded-mode, and nonce-during-broadcast remain).
 |---|---|---|
 | P0-1 | Harness reliability (fork pin) | ✅ done |
 | P0-2 | Real aggregator calldata-take via mock target | ✅ done |
-| P0-3 | Hybrid decision: all providers compete, winner selected, `competingProviders` roster | ✅ core done · 🟡 decision-matrix sub-cases remain |
+| P0-3 | Hybrid decision: all providers compete, winner selected, `competingProviders` roster | ✅ core + decision-matrix (all-rejected→no-take, subsidy precedence, profit-floor, circuit recording/skip) done · execution-fallback stats-tracked |
 | P0-4 | On-chain settlement assertion | ✅ core done · 🟡 multi-iteration/multi-auction remain |
 | P0-5 | Reward-swap money-safety (defects #1/#2/#7) | ✅ fixed + fork-capture of the submitted `amountOutMinimum` (decoded from live calldata) |
 | P1-1 | Full-lifecycle composition + keeper-kick | ✅ done |
@@ -58,7 +58,7 @@ degraded-mode, and nonce-during-broadcast remain).
 | P1-3 | Daemon lifecycle & resilience (defects #3/#4) | ✅ persistent-daemon multi-cycle + discovery + idempotency + SIGTERM + gas-spike skip + read-RPC cooldown/recovery done · 🟡 fork-level crash-injection / degraded-mode / nonce-mid-broadcast remain |
 | P1-4 | Reward-collection & bond-withdrawal loops | 🟡 LP-sweep principal-preservation (found+fixed defect #9) + bond-withdrawal done · LP reactive-settlement retry remains |
 | P2-1 | Token/subgraph realism + `verify:routes` canary | ✅ non-18-decimal ceiling + multi-auction enumeration/handling done · 🟡 fee-on-transfer + `verify:routes` canary remain |
-| P2-2 | Price sourcing, inversion & multi-chain config (defect #6) | 🟡 defect fixed + unit-guarded · price/inversion scenarios remain |
+| P2-2 | Price sourcing, inversion & multi-chain config (defect #6) | ✅ defect fixed + invert/FIXED/POOL dispatch + CoinGecko→Alchemy fallback + fail-closed covered |
 
 ✅ = implemented & fork-validated 🟡 = partially done (core or defect done; sub-cases remain) ⬜ = not started
 
@@ -68,22 +68,21 @@ degraded-mode, and nonce-during-broadcast remain).
 
 ### High value
 
-1. **Daemon failure-injection sub-cases (`P1-3`).** ✅ *The persistent-daemon happy path is done* —
-   `--daemon-lifecycle-only` runs the real long-lived keeper across ≥2 cycles, proves real-subgraph discovery +
-   action + cross-cycle idempotency + clean SIGTERM (validated: 3 cycles / 1 take / idempotent / exit 0). What
-   remains is **failure injection**: a throw that *escapes* `runTakeCycle` for one cycle (assert recovery + next
-   cycle runs) bound across **all five** loops as `loopCrashRecovery:{take,settlement,kick,collectBond,
-   collectLpRewards}`; read-RPC failover; degraded-mode continuity (keep taking on cached data during a
-   subgraph outage); gas-spike skip; and nonce consistency when SIGTERM lands mid-broadcast. The two crash
-   wrappers are already unit-covered (`loop-crash-recovery.test.ts`); these are the fork-level scenarios.
-   **Catches:** silent permanent loop death, ungraceful shutdown, and unsafe degradation under infra failure.
-2. **Reward-collection & bond-withdrawal money-safety (`P1-4`).** ✅ *Mostly done.* The
+1. **Daemon failure-injection sub-cases (`P1-3`).** ✅ *Substantially done.* Persistent-daemon happy path
+   (3 cycles / discovery / idempotency / SIGTERM), **gas-spike skip**, and **read-RPC cooldown/recovery** are
+   done; the five loops' crash-recovery wrappers are unit-covered (`loop-crash-recovery.test.ts`) and
+   **degraded-mode continuity** (keep acting on the cached snapshot through a subgraph-refresh failure) is
+   covered by `discovery-runtime.test.ts` (10+ snapshot-freshness / fallback tests, incl. "continues manual
+   take targets when snapshot refresh fails"). Remaining (thin): a single fork-level scenario that injects a
+   throw *escaping* `runTakeCycle` and asserts the live daemon re-enters, plus nonce-consistency when SIGTERM
+   lands mid-broadcast.
+2. **Reward-collection & bond-withdrawal money-safety (`P1-4`).** ✅ *Done.* The
    **LP-redemption-never-burns-principal** invariant is covered (`tests/integration/collect-lp.test.ts`) and
    **found + fixed defect #9** (the sweep redeemed the full position, not the tracked reward). **Bond
    withdrawal** is covered too (`AJNA_AGENT_NO_SPEND_BOND_WITHDRAWAL=1`): after settlement unlocks the keeper's
    kick bond, a dry-run withdraws nothing and a real `collectBondFromPool` pays the keeper exactly the bond
-   (`claimable → 0`, balance up — validated). Remaining: LP-sweep → reactive-settlement retry on
-   `AuctionNotCleared` (lower value). **Catches:** the settlement-retry redemption path.
+   (`claimable → 0`, balance up — validated). The LP-sweep → reactive-settlement retry on `AuctionNotCleared`
+   is covered by `settlement.test.ts:272`.
 3. **Multi-cycle idempotency / no duplicate action (`P1-3`).** After cycle 1 takes/kicks, assert cycle 2
    (same state) submits **zero** additional keeper txs; optional SIGTERM-then-restart variant. **Catches:**
    double-spend / re-action on an already-actioned auction across cycles or restart.
@@ -102,10 +101,13 @@ degraded-mode, and nonce-during-broadcast remain).
 6. ✅ **DONE — Gas-spike skip (`P1-3`).** A persistent-daemon leg with a tiny `maxGasCostNative` proves the
    keeper still discovers the auction each cycle but the gas policy rejects every take → **zero** broadcasts,
    loop survives ≥2 cycles, clean SIGTERM (`daemon-smoke.mjs` `runDaemonLifecycle` gas-spike leg).
-7. **Decision-matrix sub-cases (`P0-3`).** With injected quotes, exercise the *deciding* branches:
-   subsidy-vs-profit tiebreak, profit-floor rejection (all-sub-floor leg executes **zero** takes), circuit-open,
-   and execution-fallback (primary fails → fallback candidate). **Catches:** mis-ranking and fail-open in the
-   selection policy.
+7. ✅ **DONE — Decision-matrix sub-cases (`P0-3`).** Subsidy-vs-profit precedence
+   (`hybrid-external-take-selection.test.ts`), profit-floor rejection at the policy level
+   (`external-take-policy.test.ts`), circuit recording/skip (`hybrid-external-take-probes.test.ts`,
+   `one-inch-circuit.test.ts`), and the hybrid **all-rejected → zero-takes** money-safety invariant
+   (`hybrid-external-take-probes.test.ts`, added this round) are covered. Execution-fallback (primary fails →
+   fallback candidate) is stats-tracked (`hybridFallbackAttempts/Successes`) + integration-exercised; a focused
+   unit test of `executeHybridExternalTakeForDiscovery` remains the only thin sliver (deep internal helpers).
 8. ✅ **DONE — Multi-auction discovery + handling (`P2-1`).** Enumeration/dedup of multiple auctions into one
    target's candidates is covered (`discovery-targets.test.ts`), and the executor now has explicit coverage that
    it takes BOTH auctions of a multi-candidate target when `maxExecutions=2` and stops at one when
@@ -113,23 +115,28 @@ degraded-mode, and nonce-during-broadcast remain).
 9. **Promote real-route fork tests to first-class (`P1-2`).** Named npm scripts for the LI.FI/Sushi/Curve
    route canaries (real egress, still fund-free), config-derived whales/blocks with skip-on-drift. **Catches:**
    real aggregator API/route drift that the injected-quote path can't see. (1inch documented as skip-on-401.)
-10. **Price sourcing & inversion (`P2-2`).** Defect #6 (multi-chain address map) is fixed; remaining is the
-    mock CoinGecko/Alchemy fetch→parse→**fallback** scenario, `price.invert`, and POOL-reference pricing.
-    **Catches:** mispricing / fail-closed gaps that gate every kick/take.
+10. ✅ **DONE — Price sourcing & inversion (`P2-2`).** Defect #6 (multi-chain address map) fixed; the
+    `invert`/FIXED/POOL dispatch + zero-guard + POOL fail-closed (`get-price-invert.test.ts`) and the
+    CoinGecko→Alchemy **fallback** + fail-closed (`coingecko-fallback.test.ts`) are covered;
+    `getPoolPrice` references + `getTokenAddress` were already covered.
 
 ### Lower value
 
-11. **Settlement sub-cases (`P0-4`).** Multi-iteration/partial-settle, multi-auction + dedup,
-    `checkBotIncentive` negative, dry-run parity leg.
-12. **Token realism (`P2-1`).** ✅ *Non-18-decimal ceiling done* — the `quoteAmountDueCeiling` +1-wei backstop
-    is unit-pinned for a 6-decimal quote token (`quote-amount-due-ceiling.test.ts`). Remaining: a
-    fee-on-transfer collateral token.
-13. **Negative-take / partial-fill (`P0-3`, `P1-1`).** A reverting take through the real keeper failure path;
-    partial-fill + mixed-availability sub-cases.
-14. **Private/relay take transports (`P1-3`).** Only public-RPC transport is exercised; `PRIVATE_RPC`/`RELAY`
-    (Flashbots-style) are not driven.
-15. **Real keystore signer in the primary flow.** The main flow uses a raw key env; only `daemon-smoke`
-    exercises encrypted-keystore + password-file decryption.
+11. ✅ **Already covered — Settlement sub-cases (`P0-4`).** `settlement.test.ts` covers reactive settlement on
+    `AuctionNotCleared` (`:272`), bond unlock through settlement (`:348`), `checkBotIncentive` gating (`:539`),
+    and iteration/bucket-depth limits (`:582`). Thin remaining: a dry-run tx-count parity leg.
+12. **Token realism (`P2-1`).** ✅ *Non-18-decimal ceiling done* (`quote-amount-due-ceiling.test.ts`).
+    Fee-on-transfer is **handled by the on-chain exact-fill backstop** — a transfer-fee swap shortfall reverts
+    the take (`lifi-taker.test.ts` "reverts when LI.FI underdelivers below the approved floor" / "misses quote
+    due") and donations are swept (`:203`). A dedicated fee-on-transfer *fixture* remains (lower value).
+13. ✅ **Already covered — Negative-take.** The reverting/failed-take path is classified and handled:
+    pre-broadcast vs accepted-then-failed and nonce-consumed semantics (`take-write-submission.test.ts`
+    `:734-779`, `write-transport.ts`).
+14. ✅ **Already covered — Private/relay take transports.** PUBLIC/PRIVATE/RELAY mode selection + submission +
+    durable nonce floors are covered (`take-write-transport.test.ts` `:39/:53/:73/:249/:324`).
+15. ✅ **Already covered — Keystore signer.** Keystore decryption (incl. fail-closed on bad/missing password)
+    is covered (`run.test.ts` / `getProviderAndSigner`; "throws when keystore decryption fails instead of
+    returning a random wallet").
 
 ---
 
