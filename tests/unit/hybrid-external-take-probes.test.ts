@@ -88,6 +88,64 @@ describe('hybrid external take probes', () => {
     expect(recordedOutcomes).to.deep.equal(['failure']);
   });
 
+  // P0-3 decision-matrix money-safety: when EVERY probed provider is rejected
+  // (e.g. all below the profit floor), the hybrid must return takeable=false so
+  // the keeper executes ZERO takes — never falling open to an unprofitable one.
+  it('returns takeable=false (no take) when every provider quote is rejected', async () => {
+    const rejectingProvider = (providerId: string) => ({
+      path: 'calldata_aggregator' as const,
+      providerId,
+      quote: async () => ({
+        isTakeable: false as const,
+        externalTakePath: 'calldata_aggregator' as const,
+        reason: 'route below required profit floor',
+      }),
+      recordQuoteCircuitOutcome: () => undefined,
+      execute: async () => ({ succeeded: false, preBroadcastFailed: true }),
+    });
+    const lifi = rejectingProvider('lifi');
+    const sushi = rejectingProvider('sushi_aggregator');
+    const providerRegistry = {
+      listExternalTakeProbeProviders: () => [lifi, sushi],
+      selectExternalTakeProvider: ({
+        providerId,
+      }: {
+        selectedPath: string;
+        providerId?: string;
+      }) => {
+        if (providerId === 'lifi') return lifi;
+        if (providerId === 'sushi_aggregator') return sushi;
+        throw new Error(`Unsupported provider ${providerId}`);
+      },
+    };
+
+    let approvalRan = false;
+    const result = await evaluateHybridExternalTakeForDiscovery({
+      pool: { name: 'All-Rejected Pool' } as any,
+      signer: {} as any,
+      poolConfig: { name: 'All-Rejected Pool', take: {} } as any,
+      takePolicy: {},
+      externalTakePaths: ['calldata_aggregator'],
+      calldataAggregatorProviders: ['lifi', 'sushi_aggregator'],
+      routeSelectionMode: 'maximize_profit',
+      hybridGasQuoteFallbackPolicy: { eligible: false, reason: 'fallback disabled' },
+      probeTimeoutMs: 1000,
+      price: 1,
+      auctionPrice: BigNumber.from(1),
+      collateral: BigNumber.from(1),
+      providerRegistry: providerRegistry as any,
+      approveExternalTake: async () => {
+        approvalRan = true;
+        throw new Error('approval must not run for a rejected quote');
+      },
+      stats: { gasPolicyRejects: 0, profitFloorRejects: 0 },
+    });
+
+    expect(result.takeable).to.equal(false);
+    // A rejected quote never reaches approval/execution.
+    expect(approvalRan).to.equal(false);
+  });
+
   it('does not let an abandoned 1inch probe overwrite circuit state after timeout', async () => {
     const clock = sinon.useFakeTimers();
     try {
