@@ -147,27 +147,104 @@ describe('OneInchAggregatorKeeperTaker (Packet 5)', () => {
     ).to.equal(true);
   });
 
-  // P2-1 fee-on-transfer quote token: it burns a cut on every transfer, so the
-  // amounts the taker moves don't reconcile — repaying the pool the exact amount
-  // due requires more than the swap delivered. The take must REVERT ATOMICALLY
-  // (the keeper never under-repays the pool or strands funds), not settle short.
-  it('reverts a take atomically when a fee-on-transfer quote token cannot repay the pool the full amount due', async () => {
+  // P2-1 / audit F-01 — fee-on-transfer quote token. The quote burns a cut on
+  // every TRANSFER, so a take's quote movements don't reconcile. There are two
+  // distinct legs, and only one is guardable on-chain:
+  //   (1) swap -> taker: the fee shrinks what the taker receives, so the per-take
+  //       backstop (quoteReceived >= max(amountOutMinimum, quoteAmountDueCeiling))
+  //       catches the shortfall and REVERTS atomically.
+  //   (2) taker -> pool pull: the pool repays itself by pulling `due` from the
+  //       taker AFTER the callback returns; the fee shrinks what the POOL nets,
+  //       and the taker cannot observe that on-chain. The keeper backstop does
+  //       NOT cover this leg — fee-on-transfer quote tokens are unsupported (see
+  //       the _approveQuoteForTake NatSpec). The third test pins that shortfall.
+  //
+  // The earlier single test set quoteAmountDue (1.05) ABOVE the approval ceiling
+  // (ceil(amountIn * auctionPrice) = 1.0), so it reverted on an allowance gap a
+  // non-fee token hits identically — never proving the backstop. These params
+  // keep the pull within the approval so the fee is the only variable.
+  it('reverts atomically (InsufficientQuoteReceived) when the fee shrinks the taker receipt below the amount due', async () => {
     const fixture = await executeAggregatorTake({
       Factory: OneInchAggregatorKeeperTaker__factory,
       source: LiquiditySource.ONEINCH,
-      outputAmount: utils.parseEther('1.1'),
-      amountOutMinimum: utils.parseEther('1.0'),
-      quoteAmountDue: utils.parseEther('1.05'),
-      feeOnTransferQuoteBps: 200, // 2% fee on every quote transfer
+      amountIn: utils.parseEther('1'), // approval ceiling = ceil(1 * 1.0) = 1.0
+      quoteAmountDue: utils.parseEther('1'), // pull 1.0 <= approval: no allowance gap
+      outputAmount: utils.parseEther('1'), // 1.0 nominal -> 0.98 net after the 2% fee
+      amountOutMinimum: utils.parseEther('0.9'), // below the due, so the due ceiling binds
+      feeOnTransferQuoteBps: 200,
     });
 
-    // The fee leaves a transfer short, so the take aborts (ERC20 shortfall)
-    // rather than under-repaying the pool.
-    await expectRevertContaining(fixture.send(), 'ERC20');
+    // 0.98 net clears amountOutMinimum (0.9) but not quoteAmountDueCeiling (1.0):
+    // the pool-repayment backstop (not the min-out) rejects it.
+    await expectRevertContaining(fixture.send(), 'InsufficientQuoteReceived');
     // Atomic: no take recorded, no quote stranded on the taker.
     expect((await fixture.pool.takeCount()).eq(0)).to.equal(true);
     expect(
       (await fixture.quote.balanceOf(fixture.taker.address)).eq(0)
     ).to.equal(true);
+  });
+
+  it('positive control: the same amounts settle cleanly with a non-fee quote token', async () => {
+    // Identical params, no transfer fee: the taker receives the full 1.0, clears
+    // the 1.0 due ceiling, and the pool is repaid in full. Isolates the fee (not
+    // the param choice) as the cause of the revert above.
+    const fixture = await executeAggregatorTake({
+      Factory: OneInchAggregatorKeeperTaker__factory,
+      source: LiquiditySource.ONEINCH,
+      amountIn: utils.parseEther('1'),
+      quoteAmountDue: utils.parseEther('1'),
+      outputAmount: utils.parseEther('1'),
+      amountOutMinimum: utils.parseEther('0.9'),
+    });
+
+    await (await fixture.send()).wait();
+
+    expect((await fixture.pool.takeCount()).eq(1)).to.equal(true);
+    // The pool was repaid the full amount due...
+    expect(
+      (await fixture.quote.balanceOf(fixture.pool.address)).eq(
+        fixture.quoteAmountDue
+      )
+    ).to.equal(true);
+    // ...and the taker retains no residual quote.
+    expect(
+      (await fixture.quote.balanceOf(fixture.taker.address)).eq(0)
+    ).to.equal(true);
+  });
+
+  it('DOCUMENTED LIMITATION (F-01): a fee-on-transfer quote under-repays the pool when the swap over-delivers — the backstop is taker-side only', async () => {
+    // The swap over-delivers enough that the taker clears the due ceiling even
+    // after the fee, so the taker-side backstop passes and the take SUCCEEDS.
+    // But the pool's post-callback pull of `due` from the taker also loses the
+    // fee, so the POOL nets less than the due. The keeper cannot observe or guard
+    // the pool's receipt on-chain (the pull happens after the callback returns) —
+    // this is why fee-on-transfer quote tokens are unsupported. The mock pull does
+    // not balance-check (the pessimistic case), so it under-repays.
+    const fee = 200; // 2%
+    const quoteAmountDue = utils.parseEther('1');
+    const fixture = await executeAggregatorTake({
+      Factory: OneInchAggregatorKeeperTaker__factory,
+      source: LiquiditySource.ONEINCH,
+      amountIn: utils.parseEther('1'),
+      quoteAmountDue,
+      outputAmount: utils.parseEther('2'), // 2.0 nominal -> 1.96 net clears the 1.0 ceiling
+      amountOutMinimum: utils.parseEther('1'),
+      feeOnTransferQuoteBps: fee,
+    });
+
+    await (await fixture.send()).wait();
+
+    // The take succeeded despite the pool being under-repaid by the transfer fee.
+    expect((await fixture.pool.takeCount()).eq(1)).to.equal(true);
+    const expectedPoolReceipt = quoteAmountDue.sub(
+      quoteAmountDue.mul(fee).div(10_000)
+    );
+    // The pool pulled 1.0 but netted 0.98 — short by the 2% fee.
+    expect(
+      (await fixture.quote.balanceOf(fixture.pool.address)).eq(
+        expectedPoolReceipt
+      )
+    ).to.equal(true);
+    expect(expectedPoolReceipt.lt(quoteAmountDue)).to.equal(true);
   });
 });
