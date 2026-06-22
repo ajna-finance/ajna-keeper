@@ -65,8 +65,10 @@ function buildInjector(
   summary: FixtureSummaryLike,
   payoutRaw: BigNumber
 ): AggregatorQuoteInjector {
-  const collateralAddress = summary.collateralToken.deployedAddress;
-  const quoteAddress = summary.quoteToken.deployedAddress;
+  // Only the taker->target mapping comes from the (shared) summary deployment;
+  // the src/dst tokens are read PER-POOL from the pool object at injection time,
+  // so one shared mock target can serve a multipool set where each pool has its
+  // own quote token.
   const takers =
     summary.uniswapV3ExternalTake?.deployment?.aggregatorTakers ?? [];
 
@@ -85,14 +87,16 @@ function buildInjector(
     });
   }
 
-  return ({ takerAddress, chainId, collateralInTokenDecimals }) => {
+  return ({ pool, takerAddress, chainId, collateralInTokenDecimals }) => {
     const spec = specsByTaker.get(takerAddress.toLowerCase());
     if (!spec) {
       throw new Error(`No mock aggregator quote spec for taker ${takerAddress}`);
     }
+    const srcToken = pool.collateralAddress;
+    const dstToken = pool.quoteAddress;
     const callData = MOCK_SWAP_IFACE.encodeFunctionData('mockSwap', [
-      collateralAddress,
-      quoteAddress,
+      srcToken,
+      dstToken,
       takerAddress,
       collateralInTokenDecimals,
       spec.quoteAmountRaw,
@@ -101,8 +105,8 @@ function buildInjector(
       providerId: spec.providerId,
       quotedAtMs: Date.now(),
       chainId,
-      srcToken: collateralAddress,
-      dstToken: quoteAddress,
+      srcToken,
+      dstToken,
       dstReceiver: takerAddress,
       amountInTokenUnits: collateralInTokenDecimals,
       quoteAmountRaw: spec.quoteAmountRaw,

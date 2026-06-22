@@ -146,6 +146,13 @@ function parseArgs(argv) {
       process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_ONLY === '1',
     daemonAggregatorOnly:
       process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_ONLY === '1',
+    // Combined leg: the daemon enumerates SEVERAL pools and takes each via the
+    // calldata_aggregator path (joins the multipool + aggregator scenarios).
+    runDaemonAggregatorMultipool:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_MULTIPOOL === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_MULTIPOOL_ONLY === '1',
+    daemonAggregatorMultipoolOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_MULTIPOOL_ONLY === '1',
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
       ? Number(process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER)
       : undefined,
@@ -230,6 +237,15 @@ function parseArgs(argv) {
     if (arg === '--daemon-aggregator-only') {
       options.runDaemonAggregator = true;
       options.daemonAggregatorOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-aggregator-multipool') {
+      options.runDaemonAggregatorMultipool = true;
+      continue;
+    }
+    if (arg === '--daemon-aggregator-multipool-only') {
+      options.runDaemonAggregatorMultipool = true;
+      options.daemonAggregatorMultipoolOnly = true;
       continue;
     }
     if (arg === '--expected-fee-tier') {
@@ -1139,11 +1155,37 @@ async function main() {
       });
     }
 
+    let daemonAggregatorMultipoolArtifact;
+    if (options.runDaemonAggregatorMultipool) {
+      // Build the shared-deployment multipool fixtures, then run the aggregator
+      // daemon across ALL of them: enumerate several pools + take each via LI.FI.
+      const aggregatorMultipoolFixtures = await buildMultipoolFixtures(
+        {
+          rpcUrl,
+          tempDir,
+          allowedHosts,
+          egressReportPath,
+          expectedFeeTier: options.expectedFeeTier,
+        },
+        options.multipoolDiscoveredCount
+      );
+      daemonAggregatorMultipoolArtifact = await runDaemonAggregator({
+        summaries: aggregatorMultipoolFixtures,
+        // run-0's summary carries the shared deployment the harness entry reads.
+        summaryPath: path.join(tempDir, 'multipool-fixture-summary-0.json'),
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
     if (
       options.daemonSmokeOnly ||
       options.daemonLifecycleOnly ||
       options.daemonMultipoolOnly ||
-      options.daemonAggregatorOnly
+      options.daemonAggregatorOnly ||
+      options.daemonAggregatorMultipoolOnly
     ) {
       // Guard against a false pass: the *-only early-exit must not report
       // success unless the scenario it names actually produced an artifact.
@@ -1163,6 +1205,11 @@ async function main() {
         !options.daemonAggregatorOnly || daemonAggregatorArtifact !== undefined,
         'daemon-aggregator-only ran the daemon aggregator scenario'
       );
+      requireInvariant(
+        !options.daemonAggregatorMultipoolOnly ||
+          daemonAggregatorMultipoolArtifact !== undefined,
+        'daemon-aggregator-multipool-only ran the combined scenario'
+      );
       await stopHardhatNode();
       hardhatStopped = true;
       const egress = assertEgressReport(egressReportPath, 'daemon smoke');
@@ -1174,6 +1221,8 @@ async function main() {
         daemonLifecycleOnly: options.daemonLifecycleOnly === true,
         daemonMultipoolOnly: options.daemonMultipoolOnly === true,
         daemonAggregatorOnly: options.daemonAggregatorOnly === true,
+        daemonAggregatorMultipoolOnly:
+          options.daemonAggregatorMultipoolOnly === true,
         command: ['npm', 'run', 'no-spend-validation'],
         replayCommand,
         requestedForkBlock: resolvedForkBlock.requested,
@@ -1197,19 +1246,22 @@ async function main() {
         daemonLifecycle: daemonLifecycleArtifact,
         daemonMultipool: daemonMultipoolArtifact,
         daemonAggregator: daemonAggregatorArtifact,
+        daemonAggregatorMultipool: daemonAggregatorMultipoolArtifact,
       };
       fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
       fs.writeFileSync(
         validationReportPath,
         `${JSON.stringify(validationReport, null, 2)}\n`
       );
-      const onlyLabel = options.daemonAggregatorOnly
-        ? 'daemon aggregator'
-        : options.daemonMultipoolOnly
-          ? 'daemon multipool'
-          : options.daemonLifecycleOnly
-            ? 'daemon lifecycle'
-            : 'daemon smoke';
+      const onlyLabel = options.daemonAggregatorMultipoolOnly
+        ? 'daemon aggregator multipool'
+        : options.daemonAggregatorOnly
+          ? 'daemon aggregator'
+          : options.daemonMultipoolOnly
+            ? 'daemon multipool'
+            : options.daemonLifecycleOnly
+              ? 'daemon lifecycle'
+              : 'daemon smoke';
       process.stdout.write(
         `[no-spend] ${onlyLabel} passed\n` +
           `[no-spend] validationReport=${validationReportPath}\n` +
@@ -1382,6 +1434,7 @@ async function main() {
       daemonLifecycle: daemonLifecycleArtifact,
       daemonMultipool: daemonMultipoolArtifact,
       daemonAggregator: daemonAggregatorArtifact,
+      daemonAggregatorMultipool: daemonAggregatorMultipoolArtifact,
     };
     fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
     fs.writeFileSync(

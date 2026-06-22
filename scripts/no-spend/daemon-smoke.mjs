@@ -1084,7 +1084,13 @@ const FUND_ERC20_ABI = [
  * AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW.
  */
 export async function runDaemonAggregator(params) {
-  const deployment = params.summary.uniswapV3ExternalTake?.deployment;
+  // Single-pool (params.summary) or multipool (params.summaries, all sharing one
+  // deployment). Multipool joins the two flagship scenarios: the real daemon
+  // enumerates SEVERAL pools and takes each via the calldata_aggregator path.
+  const summaries = params.summaries ?? [params.summary];
+  const primary = summaries[0];
+  const expectedTakes = summaries.length;
+  const deployment = primary.uniswapV3ExternalTake?.deployment;
   const lifiTaker = (deployment?.aggregatorTakers ?? []).find(
     (taker) => taker.key === 'Lifi'
   );
@@ -1094,31 +1100,36 @@ export async function runDaemonAggregator(params) {
     );
   }
 
-  // Fund the shared MockLifiSwapTarget with quote from the fixture keeper, and
-  // size the per-take payout to a generous fraction of that balance (it must
-  // exceed the on-chain amount-due; mirrors the in-process harness tiering).
+  // Fund the shared MockLifiSwapTarget with EACH pool's quote token (multipool
+  // pools deploy distinct quote tokens), from the fixture keeper. Size the
+  // per-take payout from the primary pool's balance (fixtures share a profile,
+  // so one value exceeds every pool's amount-due; mirrors the harness tiering).
   const provider = new providers.JsonRpcProvider(params.rpcUrl);
   const keeper = new Wallet(HARDHAT_DEFAULT_KEEPER_KEY, provider);
-  const quote = new Contract(
-    params.summary.quoteToken.deployedAddress,
-    FUND_ERC20_ABI,
-    keeper
-  );
-  const keeperQuoteBalance = await quote.balanceOf(keeper.address);
   const targets = Array.from(
     new Set(
       (deployment.aggregatorTakers ?? []).map((taker) => taker.targetAddress)
     )
   );
-  for (const target of targets) {
-    await (
-      await quote.transfer(target, keeperQuoteBalance.mul(9).div(10).div(targets.length))
-    ).wait();
+  let primaryQuoteBalance;
+  for (let i = 0; i < summaries.length; i += 1) {
+    const quote = new Contract(
+      summaries[i].quoteToken.deployedAddress,
+      FUND_ERC20_ABI,
+      keeper
+    );
+    const balance = await quote.balanceOf(keeper.address);
+    if (i === 0) primaryQuoteBalance = balance;
+    for (const target of targets) {
+      await (
+        await quote.transfer(target, balance.mul(9).div(10).div(targets.length))
+      ).wait();
+    }
   }
-  const payoutRaw = keeperQuoteBalance.div(20).toString();
+  const payoutRaw = primaryQuoteBalance.div(20).toString();
 
   const subgraph = await startFixtureSubgraphStub({
-    summary: params.summary,
+    summaries,
     rpcUrl: params.rpcUrl,
   });
   try {
@@ -1133,7 +1144,8 @@ export async function runDaemonAggregator(params) {
       configPath,
       `${JSON.stringify(
         buildAggregatorDaemonConfig({
-          summary: params.summary,
+          summary: primary,
+          allowPools: summaries.map((s) => s.pool.address),
           rpcUrl: params.rpcUrl,
           subgraphUrl: subgraph.url,
           keystorePath,
@@ -1166,9 +1178,10 @@ export async function runDaemonAggregator(params) {
       keeperAddress: wallet.address,
       startBlock,
       pollIntervalMs: 1_500,
-      maxWatchMs: 150_000,
+      maxWatchMs: expectedTakes > 1 ? 240_000 : 150_000,
       graceMs: 20_000,
-      isDone: (s) => s.cycles >= 2 && s.txCount >= 1 && s.stablePolls >= 2,
+      isDone: (s) =>
+        s.cycles >= 2 && s.txCount >= expectedTakes && s.stablePolls >= 2,
     });
     await requestJsonRpc(params.rpcUrl, 'evm_revert', [snapshot]);
 
@@ -1176,18 +1189,21 @@ export async function runDaemonAggregator(params) {
     const artifact = {
       enabled: true,
       subgraphUrl: subgraph.url,
+      poolCount: expectedTakes,
       mockTarget: lifiTaker.targetAddress,
       lifiTaker: lifiTaker.takerAddress,
       payoutRaw,
       cyclesObserved: execution.cyclesObserved,
       loopedMultipleCycles: execution.cyclesObserved >= 2,
-      discoveredViaSubgraph: execution.summaries.some(
-        (s) => num(s.discoveredTargets) >= 1
+      // Every allowed pool was discovered via the real chainwide enumeration...
+      discoveredAllPools: execution.summaries.some(
+        (s) => num(s.discoveredTargets) >= expectedTakes
       ),
-      // Took via the calldata_aggregator (LI.FI) path against the mock target.
-      tookViaAggregator:
-        execution.txCount >= 1 &&
-        execution.summaries.some((s) => num(s.targetSuccesses) >= 1),
+      // ...and taken. The config allows ONLY calldata_aggregator, so every
+      // success IS an aggregator take — proving the LI.FI path across N pools.
+      tookAllViaAggregator:
+        execution.txCount >= expectedTakes &&
+        execution.summaries.some((s) => num(s.targetSuccesses) >= expectedTakes),
       takeTxCount: execution.txCount,
       idempotentNoDuplicateTake: execution.reachedDone,
       shutdownCleanOnSigterm:
@@ -1198,8 +1214,8 @@ export async function runDaemonAggregator(params) {
 
     for (const [field, value] of Object.entries({
       aggregatorLoopedMultipleCycles: artifact.loopedMultipleCycles,
-      aggregatorDiscoveredViaSubgraph: artifact.discoveredViaSubgraph,
-      aggregatorTookViaAggregator: artifact.tookViaAggregator,
+      aggregatorDiscoveredAllPools: artifact.discoveredAllPools,
+      aggregatorTookAllViaAggregator: artifact.tookAllViaAggregator,
       aggregatorIdempotentNoDuplicateTake: artifact.idempotentNoDuplicateTake,
       aggregatorShutdownCleanOnSigterm: artifact.shutdownCleanOnSigterm,
     })) {

@@ -22,6 +22,7 @@ manual loop and **skipped** by discovery (manual-take precedence).
 | Orchestrator leg: `--run-daemon-multipool` / `--daemon-multipool-only` | `scripts/run-no-spend-validation.mjs` | ✅ **fork-validated** |
 | Aggregator-in-daemon entrypoint (installs the env-gated injector) | `scripts/no-spend/daemon-harness-entry.ts` | ✅ **fork-validated** (LI.FI take in the daemon) |
 | Aggregator daemon leg `--run-daemon-aggregator` / `--daemon-aggregator-only` | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** |
+| **Combined** aggregator × multipool leg `--daemon-aggregator-multipool-only` | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** (daemon takes N pools via LI.FI) |
 
 **Flags / env:** `--run-daemon-multipool` (env `AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL=1`)
 or `--daemon-multipool-only` (env `…_MULTIPOOL_ONLY=1`, implies the run + early-exits
@@ -144,6 +145,27 @@ Key things this proved:
   required for the `calldata_aggregator` path.
 - The injected payout (`keeperQuoteBalance/20`) exceeds the on-chain amount-due,
   so the take settles.
+
+## Combined aggregator × multipool fork validation result ✅
+
+`AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT=1 node scripts/run-no-spend-validation.mjs
+--scenario take-settlement-run-once --daemon-aggregator-multipool-only` joins the
+two flagship scenarios: the orchestrator builds the shared-deployment multipool
+fixtures, then runs the aggregator daemon across ALL of them. Artifact:
+
+```
+poolCount: 2, cyclesObserved: 2, discoveredAllPools: true,
+tookAllViaAggregator: true, takeTxCount: 2 (both pools via LI.FI),
+idempotentNoDuplicateTake: true, shutdownCleanOnSigterm: true, exit.code: 0
+```
+
+The enabler: `buildInjector` now derives each take's src/dst tokens from the
+`pool` object (`pool.collateralAddress`/`pool.quoteAddress`) instead of a single
+summary, so ONE shared `MockLifiSwapTarget` — funded with each pool's distinct
+quote token by `runDaemonAggregator` — serves every pool. The daemon config is
+`calldata_aggregator`-only, so every one of the N successful takes is provably an
+aggregator take. Scale with `AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT` (the run used
+count=1 → 2 pools).
 
 > Note: `--daemon-multipool-only` still builds the orchestrator's single fixture
 > first (that build is unconditional in `main()`); the multipool leg then builds
