@@ -24,7 +24,11 @@ abstract contract KeeperTakerBase is IAjnaKeeperTaker, ReentrancyGuard {
     /// @dev Hash used for all ERC20 pools, used for pool validation
     bytes32 public constant ERC20_NON_SUBSET_HASH = keccak256("ERC20_NON_SUBSET_HASH");
 
-    /// @dev Actor allowed to take auctions using this contract
+    /// @dev Actor allowed to take auctions using this contract. Immutable and set
+    ///      to the deployer: there is intentionally no owner transfer/renounce, so
+    ///      key rotation means redeploying the taker (and re-registering it in the
+    ///      router). Acceptable because the taker custodies no funds at rest —
+    ///      every take approves, swaps, and sweeps to the owner atomically.
     address internal immutable _owner;
 
     /// @dev Identifies the Ajna deployment, used to validate pools
@@ -127,6 +131,17 @@ abstract contract KeeperTakerBase is IAjnaKeeperTaker, ReentrancyGuard {
     /// @dev Approves the pool to pull the worst-case quote repayment for a take:
     ///      ceil(maxAmount * auctionPrice) converted to quote token precision,
     ///      rounded up so it always covers the pool's ceil-divided pull.
+    ///
+    ///      UNSUPPORTED — fee-on-transfer quote tokens: the per-take swap backstop
+    ///      (quoteReceived >= max(amountOutMinimum, quoteAmountDueCeiling)) only
+    ///      proves THIS taker received enough quote. The pool repays itself by
+    ///      pulling from the taker AFTER the callback returns, so a fee-on-transfer
+    ///      quote token delivers the pool less than it pulls, and the taker cannot
+    ///      observe or guard that net pool receipt on-chain. Ajna core does not
+    ///      support fee-on-transfer tokens; operators must not configure pools
+    ///      whose quote token charges a transfer fee. The fee-on-transfer tests in
+    ///      oneinch-aggregator-taker.test.ts pin both the taker-side backstop
+    ///      (revert) and the documented pool-pull shortfall on such tokens.
     function _approveQuoteForTake(IERC20Pool pool, uint256 maxAmount, uint256 auctionPrice) internal {
         uint256 approvalAmount = Math.ceilDiv(_ceilWmul(maxAmount, auctionPrice), pool.quoteTokenScale());
         _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), approvalAmount);

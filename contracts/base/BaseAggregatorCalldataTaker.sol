@@ -92,9 +92,15 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
     /// @param authorizedRouter_ Router contract address that can also call functions.
-    ///        Unlike the direct-DEX takers, calldata-aggregator takers are
-    ///        router-only by design and refuse standalone (zero router)
-    ///        deployment.
+    ///        Unlike the direct-DEX takers, calldata-aggregator takers refuse a
+    ///        zero-router DEPLOYMENT (the require below). This constrains
+    ///        deployment, not execution: takeWithAtomicSwap is onlyOwnerOrRouter,
+    ///        so the owner may still execute directly without going through the
+    ///        router. Deregistering this taker in TakerRouter therefore stops
+    ///        router-mediated takes but is NOT an execution kill switch — the
+    ///        owner key retains direct execution either way (and owner compromise
+    ///        is already total). Treat router registration as routing/monitoring
+    ///        state, not as an authorization gate that can disable a taker.
     /// @param source_ The single liquidity source this taker serves.
     constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_, LiquiditySource source_)
         KeeperTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
