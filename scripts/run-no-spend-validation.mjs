@@ -153,6 +153,11 @@ function parseArgs(argv) {
       process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_MULTIPOOL_ONLY === '1',
     daemonAggregatorMultipoolOnly:
       process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_MULTIPOOL_ONLY === '1',
+    // Sushi aggregator daemon leg (the other calldata_aggregator provider).
+    runDaemonSushi:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_SUSHI === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_SUSHI_ONLY === '1',
+    daemonSushiOnly: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SUSHI_ONLY === '1',
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
       ? Number(process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER)
       : undefined,
@@ -246,6 +251,15 @@ function parseArgs(argv) {
     if (arg === '--daemon-aggregator-multipool-only') {
       options.runDaemonAggregatorMultipool = true;
       options.daemonAggregatorMultipoolOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-sushi') {
+      options.runDaemonSushi = true;
+      continue;
+    }
+    if (arg === '--daemon-sushi-only') {
+      options.runDaemonSushi = true;
+      options.daemonSushiOnly = true;
       continue;
     }
     if (arg === '--expected-fee-tier') {
@@ -1180,12 +1194,28 @@ async function main() {
       });
     }
 
+    let daemonSushiArtifact;
+    if (options.runDaemonSushi) {
+      // Same single fixture (deploys all aggregator takers + the shared mock);
+      // exercises the Sushi calldata_aggregator path in the spawned daemon.
+      daemonSushiArtifact = await runDaemonAggregator({
+        summary: fixtureSummary,
+        summaryPath,
+        provider: 'sushi_aggregator',
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
     if (
       options.daemonSmokeOnly ||
       options.daemonLifecycleOnly ||
       options.daemonMultipoolOnly ||
       options.daemonAggregatorOnly ||
-      options.daemonAggregatorMultipoolOnly
+      options.daemonAggregatorMultipoolOnly ||
+      options.daemonSushiOnly
     ) {
       // Guard against a false pass: the *-only early-exit must not report
       // success unless the scenario it names actually produced an artifact.
@@ -1210,6 +1240,10 @@ async function main() {
           daemonAggregatorMultipoolArtifact !== undefined,
         'daemon-aggregator-multipool-only ran the combined scenario'
       );
+      requireInvariant(
+        !options.daemonSushiOnly || daemonSushiArtifact !== undefined,
+        'daemon-sushi-only ran the daemon sushi scenario'
+      );
       await stopHardhatNode();
       hardhatStopped = true;
       const egress = assertEgressReport(egressReportPath, 'daemon smoke');
@@ -1223,6 +1257,7 @@ async function main() {
         daemonAggregatorOnly: options.daemonAggregatorOnly === true,
         daemonAggregatorMultipoolOnly:
           options.daemonAggregatorMultipoolOnly === true,
+        daemonSushiOnly: options.daemonSushiOnly === true,
         command: ['npm', 'run', 'no-spend-validation'],
         replayCommand,
         requestedForkBlock: resolvedForkBlock.requested,
@@ -1247,21 +1282,24 @@ async function main() {
         daemonMultipool: daemonMultipoolArtifact,
         daemonAggregator: daemonAggregatorArtifact,
         daemonAggregatorMultipool: daemonAggregatorMultipoolArtifact,
+        daemonSushi: daemonSushiArtifact,
       };
       fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
       fs.writeFileSync(
         validationReportPath,
         `${JSON.stringify(validationReport, null, 2)}\n`
       );
-      const onlyLabel = options.daemonAggregatorMultipoolOnly
-        ? 'daemon aggregator multipool'
-        : options.daemonAggregatorOnly
-          ? 'daemon aggregator'
-          : options.daemonMultipoolOnly
-            ? 'daemon multipool'
-            : options.daemonLifecycleOnly
-              ? 'daemon lifecycle'
-              : 'daemon smoke';
+      const onlyLabel = options.daemonSushiOnly
+        ? 'daemon sushi'
+        : options.daemonAggregatorMultipoolOnly
+          ? 'daemon aggregator multipool'
+          : options.daemonAggregatorOnly
+            ? 'daemon aggregator'
+            : options.daemonMultipoolOnly
+              ? 'daemon multipool'
+              : options.daemonLifecycleOnly
+                ? 'daemon lifecycle'
+                : 'daemon smoke';
       process.stdout.write(
         `[no-spend] ${onlyLabel} passed\n` +
           `[no-spend] validationReport=${validationReportPath}\n` +
@@ -1435,6 +1473,7 @@ async function main() {
       daemonMultipool: daemonMultipoolArtifact,
       daemonAggregator: daemonAggregatorArtifact,
       daemonAggregatorMultipool: daemonAggregatorMultipoolArtifact,
+      daemonSushi: daemonSushiArtifact,
     };
     fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
     fs.writeFileSync(

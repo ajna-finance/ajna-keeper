@@ -207,26 +207,78 @@ function buildDaemonConfig(params) {
   };
 }
 
-// Aggregator (LI.FI) daemon config. Distinct from buildDaemonConfig in three
-// ways: the take path is calldata_aggregator (not direct_dex), the taker is the
-// deployed Lifi taker, and dex.lifi is a production-mode config whose allowlist
-// points at the deployed MockLifiSwapTarget (+ mockSwap selector) — so the
-// startup route-deployment preflight reconciles the config allowlist against the
-// taker's on-chain allowlist (which the fixture set to the same mock target).
+// Per-provider descriptors for the calldata_aggregator daemon path. All share the
+// same deployed MockLifiSwapTarget allowlist (the fixture allowlists every
+// aggregator taker for the mock), so only the source/provider-id/taker key/dex
+// key differ. 1inch is omitted (force-disabled / 401).
+const AGGREGATOR_PROVIDERS = {
+  lifi: {
+    source: 5,
+    providerId: 'lifi',
+    takerKey: 'Lifi',
+    contractKey: 'Lifi',
+    dexKey: 'lifi',
+  },
+  sushi_aggregator: {
+    source: 6,
+    providerId: 'sushi_aggregator',
+    takerKey: 'SushiAggregator',
+    contractKey: 'SushiAggregator',
+    dexKey: 'sushiAggregator',
+  },
+};
+
+// Build the provider-specific dex block. The three allowlists point at the shared
+// mock target (+ mockSwap selector) so the route-deployment preflight reconciles
+// against the taker's on-chain allowlist. LI.FI carries extra production-policy
+// fields (feeCostPolicy/allowExchanges) that Sushi does not.
+function buildAggregatorDexConfig(providerKey, mockTarget) {
+  const allowlists = {
+    callTargetAllowlist: { 8453: [mockTarget] },
+    approvalSpenderAllowlist: { 8453: [mockTarget] },
+    selectorAllowlist: { 8453: { [mockTarget]: [MOCK_SWAP_SELECTOR] } },
+  };
+  if (providerKey === 'lifi') {
+    return {
+      lifi: {
+        mode: 'production',
+        defaultSlippage: 0.005,
+        feeCostPolicy: 'included_only',
+        allowExchanges: ['sushiswap', 'nordstern', 'fly'],
+        ...allowlists,
+      },
+    };
+  }
+  return {
+    sushiAggregator: { mode: 'production', defaultSlippage: 0.005, ...allowlists },
+  };
+}
+
+// Aggregator daemon config (LI.FI or Sushi). Distinct from buildDaemonConfig in
+// three ways: the take path is calldata_aggregator (not direct_dex), the taker is
+// the deployed provider taker, and the dex block is a production-mode config whose
+// allowlist points at the deployed MockLifiSwapTarget (+ mockSwap selector) — so
+// the startup route-deployment preflight reconciles the config allowlist against
+// the taker's on-chain allowlist (which the fixture set to the same mock target).
 // The env-gated quote injector (installed by daemon-harness-entry.ts) supplies
 // the actual quote at take time; validation/preflight still run for real.
 function buildAggregatorDaemonConfig(params) {
+  const providerKey = params.provider ?? 'lifi';
+  const provider = AGGREGATOR_PROVIDERS[providerKey];
+  if (!provider) {
+    throw new Error(`Unknown aggregator provider: ${providerKey}`);
+  }
   const uniswap = params.summary.uniswapV3ExternalTake;
   const deployment = uniswap?.deployment;
-  const lifiTaker = (deployment?.aggregatorTakers ?? []).find(
-    (taker) => taker.key === 'Lifi'
+  const taker = (deployment?.aggregatorTakers ?? []).find(
+    (entry) => entry.key === provider.takerKey
   );
-  if (!lifiTaker) {
+  if (!taker) {
     throw new Error(
-      'Fixture summary missing the Lifi aggregator taker (re-run the fixture with external-take deployment)'
+      `Fixture summary missing the ${provider.takerKey} aggregator taker (re-run the fixture with external-take deployment)`
     );
   }
-  const mockTarget = lifiTaker.targetAddress;
+  const mockTarget = taker.targetAddress;
   const allowPools = params.allowPools ?? [params.summary.pool.address];
   return {
     network: {
@@ -252,36 +304,26 @@ function buildAggregatorDaemonConfig(params) {
       defaults: {
         take: {
           minCollateral: 0.0001,
-          liquiditySource: 5, // LIFI
+          liquiditySource: provider.source,
           marketPriceFactor: 0.99,
         },
       },
       take: {
         enabled: true,
         allowedExternalTakePaths: ['calldata_aggregator'],
-        allowedCalldataAggregatorProviders: ['lifi'],
+        allowedCalldataAggregatorProviders: [provider.providerId],
         externalTakeRouteSelectionMode: 'maximize_profit',
         hybridGasQuoteFailureFallbackMode: 'disabled',
         maxGasCostNative: params.maxGasCostNative ?? 1,
         validateRouteDeployments: true,
-        // Required for the calldata_aggregator path (keyed by LiquiditySource.LIFI=5).
-        dexGasOverrides: { 5: '900000' },
+        // Required for the calldata_aggregator path (keyed by LiquiditySource).
+        dexGasOverrides: { [provider.source]: '900000' },
       },
     },
-    dex: {
-      lifi: {
-        mode: 'production',
-        defaultSlippage: 0.005,
-        feeCostPolicy: 'included_only',
-        allowExchanges: ['sushiswap', 'nordstern', 'fly'],
-        callTargetAllowlist: { 8453: [mockTarget] },
-        approvalSpenderAllowlist: { 8453: [mockTarget] },
-        selectorAllowlist: { 8453: { [mockTarget]: [MOCK_SWAP_SELECTOR] } },
-      },
-    },
+    dex: buildAggregatorDexConfig(providerKey, mockTarget),
     takers: {
       router: deployment.keeperTakerRouter,
-      contracts: { Lifi: lifiTaker.takerAddress },
+      contracts: { [provider.contractKey]: taker.takerAddress },
     },
   };
 }
@@ -1087,16 +1129,22 @@ export async function runDaemonAggregator(params) {
   // Single-pool (params.summary) or multipool (params.summaries, all sharing one
   // deployment). Multipool joins the two flagship scenarios: the real daemon
   // enumerates SEVERAL pools and takes each via the calldata_aggregator path.
+  // params.provider selects LI.FI (default) or Sushi.
+  const providerKey = params.provider ?? 'lifi';
+  const provider = AGGREGATOR_PROVIDERS[providerKey];
+  if (!provider) {
+    throw new Error(`Unknown aggregator provider: ${providerKey}`);
+  }
   const summaries = params.summaries ?? [params.summary];
   const primary = summaries[0];
   const expectedTakes = summaries.length;
   const deployment = primary.uniswapV3ExternalTake?.deployment;
-  const lifiTaker = (deployment?.aggregatorTakers ?? []).find(
-    (taker) => taker.key === 'Lifi'
+  const aggTaker = (deployment?.aggregatorTakers ?? []).find(
+    (taker) => taker.key === provider.takerKey
   );
-  if (!lifiTaker) {
+  if (!aggTaker) {
     throw new Error(
-      'runDaemonAggregator requires a fixture with deployed aggregator takers'
+      `runDaemonAggregator requires a fixture with the ${provider.takerKey} aggregator taker deployed`
     );
   }
 
@@ -1104,8 +1152,8 @@ export async function runDaemonAggregator(params) {
   // pools deploy distinct quote tokens), from the fixture keeper. Size the
   // per-take payout from the primary pool's balance (fixtures share a profile,
   // so one value exceeds every pool's amount-due; mirrors the harness tiering).
-  const provider = new providers.JsonRpcProvider(params.rpcUrl);
-  const keeper = new Wallet(HARDHAT_DEFAULT_KEEPER_KEY, provider);
+  const rpcProvider = new providers.JsonRpcProvider(params.rpcUrl);
+  const keeper = new Wallet(HARDHAT_DEFAULT_KEEPER_KEY, rpcProvider);
   const targets = Array.from(
     new Set(
       (deployment.aggregatorTakers ?? []).map((taker) => taker.targetAddress)
@@ -1145,6 +1193,7 @@ export async function runDaemonAggregator(params) {
       `${JSON.stringify(
         buildAggregatorDaemonConfig({
           summary: primary,
+          provider: providerKey,
           allowPools: summaries.map((s) => s.pool.address),
           rpcUrl: params.rpcUrl,
           subgraphUrl: subgraph.url,
@@ -1189,9 +1238,10 @@ export async function runDaemonAggregator(params) {
     const artifact = {
       enabled: true,
       subgraphUrl: subgraph.url,
+      provider: providerKey,
       poolCount: expectedTakes,
-      mockTarget: lifiTaker.targetAddress,
-      lifiTaker: lifiTaker.takerAddress,
+      mockTarget: aggTaker.targetAddress,
+      taker: aggTaker.takerAddress,
       payoutRaw,
       cyclesObserved: execution.cyclesObserved,
       loopedMultipleCycles: execution.cyclesObserved >= 2,

@@ -23,6 +23,7 @@ manual loop and **skipped** by discovery (manual-take precedence).
 | Aggregator-in-daemon entrypoint (installs the env-gated injector) | `scripts/no-spend/daemon-harness-entry.ts` | ✅ **fork-validated** (LI.FI take in the daemon) |
 | Aggregator daemon leg `--run-daemon-aggregator` / `--daemon-aggregator-only` | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** |
 | **Combined** aggregator × multipool leg `--daemon-aggregator-multipool-only` | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** (daemon takes N pools via LI.FI) |
+| **Sushi** aggregator daemon leg `--daemon-sushi-only` (provider-parameterized) | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** (daemon take via Sushi) |
 
 **Flags / env:** `--run-daemon-multipool` (env `AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL=1`)
 or `--daemon-multipool-only` (env `…_MULTIPOOL_ONLY=1`, implies the run + early-exits
@@ -166,6 +167,20 @@ quote token by `runDaemonAggregator` — serves every pool. The daemon config is
 `calldata_aggregator`-only, so every one of the N successful takes is provably an
 aggregator take. Scale with `AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT` (the run used
 count=1 → 2 pools).
+
+## Sushi aggregator daemon fork validation result ✅
+
+`buildAggregatorDaemonConfig` + `runDaemonAggregator` are now parameterized by
+provider (`AGGREGATOR_PROVIDERS`), so `--daemon-sushi-only` runs the same daemon
+scenario via the **Sushi** calldata-aggregator path (`liquiditySource=6`,
+`allowedCalldataAggregatorProviders:['sushi_aggregator']`, `takers.contracts.SushiAggregator`,
+a `dex.sushiAggregator` production config with the mock-target allowlist, and
+`dexGasOverrides:{6:'900000'}`). Fork run: `provider:'sushi_aggregator'`,
+`discoveredAllPools:true`, `tookAllViaAggregator:true`, `takeTxCount:1`, idempotent,
+clean SIGTERM, exit 0 — passed first try (the Sushi config shape was de-risked
+in-process against the validators before the fork run, and the Sushi allowlist
+preflight reconciles against the same shared-mock allowlist the fixture sets on
+every aggregator taker). 1inch stays daemon-skip (401); Curve is `direct_dex`.
 
 > Note: `--daemon-multipool-only` still builds the orchestrator's single fixture
 > first (that build is unconditional in `main()`); the multipool leg then builds
