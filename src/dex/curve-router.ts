@@ -199,13 +199,15 @@ export async function swapWithCurveRouter(
       `Current Curve pool allowance: ${weiToDecimaled(currentAllowance, tokenToSwap.decimals)} ${tokenToSwap.symbol}`
     );
 
-    if (currentAllowance.lt(amount)) {
+    if (!currentAllowance.eq(amount)) {
       logger.info(`Approving Curve pool to spend ${tokenToSwap.symbol}`);
-      // USDT-safe: approval-strict tokens revert on a non-zero -> non-zero
-      // approve, so reset a residual non-zero allowance to 0 first (a partial or
-      // failed prior swap can leave one now that the approval is bounded to the
-      // exact amount rather than MaxUint256). Mirrors the take-path
-      // _safeApproveWithReset (audit Pass-2 / Codex).
+      // Reconcile the allowance to EXACTLY `amount` whenever it differs — both
+      // when it is too LOW and when a prior swap that did not pull left a stale
+      // LARGER allowance to this untrusted pool (Codex Pass-3 MEDIUM: the old
+      // `lt(amount)` guard skipped the over-allowance case). USDT-safe:
+      // approval-strict tokens revert on a non-zero -> non-zero approve, so reset
+      // a residual non-zero allowance to 0 first. Mirrors the take-path
+      // _safeApproveWithReset (audit Pass-2/3 / Codex).
       if (currentAllowance.gt(0)) {
         await NonceTracker.queueTransaction(signer, async (nonce) => {
           const resetTx = await tokenContract.approve(poolAddress, 0, { nonce });
@@ -230,7 +232,7 @@ export async function swapWithCurveRouter(
       });
     } else {
       logger.info(
-        `Curve pool already has sufficient allowance for ${tokenToSwap.symbol}`
+        `Curve pool already approved for exactly the ${tokenToSwap.symbol} swap amount`
       );
     }
 
