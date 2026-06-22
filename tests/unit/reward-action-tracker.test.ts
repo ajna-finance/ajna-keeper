@@ -237,6 +237,7 @@ describe('RewardActionTracker', () => {
                 '0x0000000000000000000000000000000000000001',
               permit2Address: '0x0000000000000000000000000000000000000002',
               poolFactoryAddress: '0x0000000000000000000000000000000000000003',
+              quoterV2Address: '0x0000000000000000000000000000000000000004',
               wethAddress,
               defaultFeeTier: FeeAmount.MEDIUM,
             },
