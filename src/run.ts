@@ -304,21 +304,53 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     discoverySnapshotState,
   });
 
-  kickPoolsLoop({ poolMap, config, signer, chainId, subgraph });
+  superviseDaemonLoop(
+    'Kick',
+    kickPoolsLoop({ poolMap, config, signer, chainId, subgraph })
+  );
   if (takeLoopEnabled) {
-    takePoolsLoop({ config, signer, poolMap, discoveryRuntime });
+    superviseDaemonLoop(
+      'Take',
+      takePoolsLoop({ config, signer, poolMap, discoveryRuntime })
+    );
   }
   if (shouldRunSettlementLoop(config)) {
-    settlementLoop({ config, signer, poolMap, discoveryRuntime });
+    superviseDaemonLoop(
+      'Settlement',
+      settlementLoop({ config, signer, poolMap, discoveryRuntime })
+    );
   }
-  collectBondLoop({ poolMap, config, signer, subgraph });
-  collectLpRewardsLoop({
-    poolMap,
-    config,
-    signer,
-    subgraph,
-    ajna,
-    hydrationCooldowns,
+  superviseDaemonLoop(
+    'Bond',
+    collectBondLoop({ poolMap, config, signer, subgraph })
+  );
+  superviseDaemonLoop(
+    'LpRewards',
+    collectLpRewardsLoop({
+      poolMap,
+      config,
+      signer,
+      subgraph,
+      ajna,
+      hydrationCooldowns,
+    })
+  );
+}
+
+/**
+ * Attach a fatal-rejection guard to a fire-and-forget daemon loop launcher
+ * (surfaced-defects #4 follow-up). Each loop is infinite and self-recovering
+ * (runResilientLoop catches per-iteration crashes), so a rejection that escapes
+ * here is NOT a recoverable cycle error — it is a fatal startup/structural
+ * failure (e.g. a throw in a loop's pre-loop setup). Escalate to a loud exit(1)
+ * so the operator/container notices and restarts, instead of leaving the
+ * installed log-only `unhandledRejection` handler to silently swallow it and run
+ * the daemon with one loop (e.g. LP-reward collection) permanently dead.
+ */
+function superviseDaemonLoop(name: string, loop: Promise<void>): void {
+  loop.catch((error) => {
+    logger.error(`${name} daemon loop terminated unexpectedly; exiting.`, error);
+    process.exit(1);
   });
 }
 
@@ -468,31 +500,11 @@ function hasKickSettings(
 }
 
 async function takePoolsLoop(params: DiscoveryLoopParams) {
-  while (true) {
-    const result = await runTakeLoopIteration(params);
-    await delay(result.delaySeconds);
-    if (result.recovered) {
-      logger.info(`Restarting take loop after crash recovery delay`);
-    }
-  }
-}
-
-export async function runTakeLoopIteration(
-  params: DiscoveryLoopParams
-): Promise<LoopIterationResult> {
-  try {
-    await params.discoveryRuntime.runTakeCycle();
-    return {
-      delaySeconds: params.config.runtime.delayBetweenRuns,
-      recovered: false,
-    };
-  } catch (outerError) {
-    logLoopCrash('Take', outerError);
-    return {
-      delaySeconds: LOOP_CRASH_RECOVERY_DELAY_SECONDS,
-      recovered: true,
-    };
-  }
+  await runResilientLoop(
+    'Take',
+    () => params.discoveryRuntime.runTakeCycle(),
+    () => params.config.runtime.delayBetweenRuns
+  );
 }
 
 async function collectBondLoop({
@@ -535,27 +547,19 @@ async function collectBondLoop({
 }
 
 async function settlementLoop(params: DiscoveryLoopParams) {
-  while (true) {
-    try {
-      const startTime = new Date().toISOString();
-      logger.debug(`Settlement loop iteration starting at ${startTime}`);
-      await params.discoveryRuntime.runSettlementCycle();
-
-      const settlementCheckIntervalSeconds =
-        params.discoveryRuntime.getSettlementCheckIntervalSeconds();
-      const nextCheck = new Date(
-        Date.now() + settlementCheckIntervalSeconds * 1000
-      ).toISOString();
+  await runResilientLoop(
+    'Settlement',
+    async () => {
       logger.debug(
-        `Settlement loop completed, sleeping for ${settlementCheckIntervalSeconds}s until ${nextCheck}`
+        `Settlement loop iteration starting at ${new Date().toISOString()}`
       );
-      await delay(settlementCheckIntervalSeconds);
-    } catch (outerError) {
-      logLoopCrash('Settlement', outerError);
-      await delay(LOOP_CRASH_RECOVERY_DELAY_SECONDS);
-      logger.info(`Restarting settlement loop after crash recovery delay`);
-    }
-  }
+      await params.discoveryRuntime.runSettlementCycle();
+      logger.debug(
+        `Settlement loop completed, sleeping for ${params.discoveryRuntime.getSettlementCheckIntervalSeconds()}s`
+      );
+    },
+    () => params.discoveryRuntime.getSettlementCheckIntervalSeconds()
+  );
 }
 
 function logLoopCrash(loopName: string, outerError: unknown): void {
@@ -574,8 +578,8 @@ function logLoopCrash(loopName: string, outerError: unknown): void {
 /**
  * Run one loop iteration with crash recovery (surfaced-defects #4): an error
  * escaping the iteration is logged and recovered from instead of rejecting the
- * (un-awaited) loop promise and silently killing it. Mirrors the Take loop's
- * existing wrapper so all five daemon loops are symmetric.
+ * (un-awaited) loop promise and silently killing it. All five daemon loops route
+ * through this single wrapper, so their crash-recovery behavior is identical.
  */
 export async function runResilientLoopIteration(
   loopName: string,
@@ -591,9 +595,10 @@ export async function runResilientLoopIteration(
   }
 }
 
-// Exported for crash-recovery testing: the Kick/Bond/LP loops route through this
-// while(true) wrapper so a crashing iteration is caught, delayed, and re-entered
-// (defect #4). Take/Settlement use the equivalent inline pattern.
+// Exported for crash-recovery testing: all five daemon loops (Kick / Take /
+// Settlement / Bond / LpRewards) route through this while(true) wrapper so a
+// crashing iteration is caught, delayed, and re-entered rather than silently
+// killing the loop (defect #4).
 export async function runResilientLoop(
   loopName: string,
   iteration: () => Promise<void>,

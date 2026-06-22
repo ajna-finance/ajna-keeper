@@ -1,22 +1,16 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import {
-  runResilientLoop,
-  runResilientLoopIteration,
-  runTakeLoopIteration,
-} from '../../src/run';
+import { runResilientLoop, runResilientLoopIteration } from '../../src/run';
 import { logger } from '../../src/logging';
 
 // Reproducer for surfaced-defects #4: the Kick / Bond / LP loops lacked the
 // crash-recovery wrapper that the Take/Settlement loops have, so an error
 // escaping an iteration would silently kill that loop while the process and the
-// other loops kept running. All five daemon loops are now crash-recoverable:
-//   - Kick / Bond / LP  → runResilientLoopIteration (shared helper)
-//   - Take              → runTakeLoopIteration (its own exported wrapper)
-//   - Settlement        → an equivalent inline try/catch (covered end-to-end by
-//                         the P1-3 persistent-daemon fork scenario)
-// Both exported iteration wrappers are asserted here to recover rather than
-// reject, and to surface the recovery delay so the loop re-enters.
+// other loops kept running. All five daemon loops (Kick / Take / Settlement /
+// Bond / LpRewards) now route through the single runResilientLoop /
+// runResilientLoopIteration wrapper, so their crash-recovery behavior is
+// identical: a throwing iteration is caught, the recovery delay is surfaced, and
+// the loop re-enters rather than rejecting.
 const LOOP_CRASH_RECOVERY_DELAY_SECONDS = 30;
 
 describe('runResilientLoopIteration — Kick/Bond/LP crash recovery (defect #4)', () => {
@@ -42,20 +36,18 @@ describe('runResilientLoopIteration — Kick/Bond/LP crash recovery (defect #4)'
   });
 });
 
-describe('runTakeLoopIteration — Take loop crash recovery (defect #4)', () => {
-  const paramsWithTakeCycle = (runTakeCycle: () => Promise<void>) =>
-    ({
-      config: { runtime: { delayBetweenRuns: 7 } },
-      discoveryRuntime: { runTakeCycle },
-    }) as never;
-
+describe('Take loop crash recovery via runResilientLoopIteration (defect #4)', () => {
+  // takePoolsLoop routes through runResilientLoop('Take', () => runTakeCycle(),
+  // () => delayBetweenRuns); these assert that same iteration contract.
   it('recovers from a runTakeCycle that throws and returns the recovery delay', async () => {
     let calls = 0;
-    const result = await runTakeLoopIteration(
-      paramsWithTakeCycle(async () => {
+    const result = await runResilientLoopIteration(
+      'Take',
+      async () => {
         calls += 1;
         throw new Error('take cycle boom');
-      })
+      },
+      7
     );
     expect(calls).to.equal(1);
     expect(result.recovered).to.equal(true);
@@ -63,9 +55,7 @@ describe('runTakeLoopIteration — Take loop crash recovery (defect #4)', () => 
   });
 
   it('returns the configured delay (no recovery) when the take cycle succeeds', async () => {
-    const result = await runTakeLoopIteration(
-      paramsWithTakeCycle(async () => {})
-    );
+    const result = await runResilientLoopIteration('Take', async () => {}, 7);
     expect(result.recovered).to.equal(false);
     expect(result.delaySeconds).to.equal(7);
   });

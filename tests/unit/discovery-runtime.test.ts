@@ -4,7 +4,7 @@ import { BigNumber, ethers } from 'ethers';
 import { clearSharedDiscoveryScans } from '../../src/discovery/targets';
 import { clearSharedSettlementScannerCache } from '../../src/settlement/scanner';
 import { createDiscoveryRuntime } from '../../src/discovery/runtime';
-import { processKickCycle, runTakeLoopIteration } from '../../src/run';
+import { processKickCycle, runResilientLoopIteration } from '../../src/run';
 import {
   KeeperConfig,
   PriceOriginSource,
@@ -2168,18 +2168,21 @@ describe('Run Loop Discovery Integration', () => {
         },
       },
     };
-    const result = await runTakeLoopIteration({
+    // takePoolsLoop routes through runResilientLoop('Take', () => runTakeCycle(),
+    // () => delayBetweenRuns); a snapshot refresh failure is swallowed inside
+    // runTakeCycle, so the iteration succeeds (no crash recovery).
+    const runtime = createTestDiscoveryRuntime({
       config,
-      signer: {} as any,
-      poolMap: new Map(),
-      discoveryRuntime: createTestDiscoveryRuntime({
-        config,
-        discoverySnapshotState: {},
-      }),
+      discoverySnapshotState: {},
     });
+    const result = await runResilientLoopIteration(
+      'Take',
+      () => runtime.runTakeCycle(),
+      config.runtime.delayBetweenRuns
+    );
 
     expect(result).to.deep.equal({
-      delaySeconds: 1,
+      delaySeconds: config.runtime.delayBetweenRuns,
       recovered: false,
     });
   });
