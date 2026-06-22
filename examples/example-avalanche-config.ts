@@ -47,6 +47,15 @@ const config: KeeperConfig = {
         '0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7',
         '0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7',
       ],
+      // REQUIRED for the live ONEINCH external take below (runtime.dryRun is
+      // false): without this production allowlist policy the take is rejected
+      // and the factory deploy refuses to provision the taker. The 1inch router
+      // is the call target + approval spender; supply the reviewed selector(s).
+      callTargetAllowlist: { 43114: ['0x111111125421ca6dc452d289314280a0f8842a65'] },
+      approvalSpenderAllowlist: { 43114: ['0x111111125421ca6dc452d289314280a0f8842a65'] },
+      selectorAllowlist: {
+        43114: { '0x111111125421ca6dc452d289314280a0f8842a65': ['0x[reviewed-selector]'] },
+      },
     },
     uniswapV3: {
       router: {
@@ -56,6 +65,18 @@ const config: KeeperConfig = {
         defaultSlippage: 0.5, // 0.5% as default slippage
         poolFactoryAddress: '0x740b1c1de25031C31FF4fC9A62f554A55cdC1baD',
         quoterV2Address: '0xbe0F5544EC67e9B3b2D979aaA43f18Fd87E6257F',
+      },
+      // REQUIRED for UNISWAP_V3 LP-reward swaps: the reward action below uses
+      // PostAuctionDex.UNISWAP_V3, which fails closed at reward time without a
+      // universalRouter block. Supply your chain's Universal Router address.
+      universalRouter: {
+        universalRouterAddress: '0x[your-chain-universal-router-address]',
+        permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3', // canonical Permit2 (same on all chains)
+        wethAddress: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', // WAVAX
+        poolFactoryAddress: '0x740b1c1de25031C31FF4fC9A62f554A55cdC1baD',
+        quoterV2Address: '0xbe0F5544EC67e9B3b2D979aaA43f18Fd87E6257F',
+        defaultFeeTier: 3000,
+        defaultSlippage: 0.5,
       },
     },
   },

@@ -10,7 +10,7 @@ While the main README covers the basic setup process, production deployments ben
 
 - **RPC Provider**: Alchemy or QuickNode (hosted)
 - **Subgraph**: BuiltByMom/Ajna-subgraph deployed on Goldsky (hosted)
-- **External-Take Liquidity**: 1inch single-contract aggregation, LI.FI same-chain aggregation through a factory-registered taker after production canary gates pass, or direct DEX adapters for Uniswap V3 and Curve
+- **External-Take Liquidity**: 1inch, LI.FI, and Sushi same-chain calldata-aggregation — all through factory-registered takers (LI.FI gated behind production canary gates) — or direct DEX adapters for Uniswap V3 and Curve
 - **Monitoring**: Goldsky subgraph monitoring + custom logging
 
 ## Step 1: RPC Provider Setup
@@ -167,14 +167,16 @@ This makes fee tier selection a runtime route-optimization decision. It is still
 
 | Chain Type                                                 | 1inch Available? | Uniswap V3? | Curve? | Recommended Approach                        | Deployment Script                  |
 | ---------------------------------------------------------- | ---------------- | ----------- | ------ | ------------------------------------------- | ---------------------------------- |
-| **Major Chains**<br/>(Ethereum, Avalanche, Base, Arbitrum) | ✅ Yes           | ✅ Yes      | ✅ Yes | **1inch Single-Contract Aggregator**        | `scripts/query-1inch.ts`           |
+| **Major Chains**<br/>(Ethereum, Avalanche, Base, Arbitrum) | ✅ Yes           | ✅ Yes      | ✅ Yes | **1inch / Sushi / LI.FI calldata-aggregators** (factory-registered) | `scripts/deploy-factory-system.ts` |
 | **Emerging L2s**<br/>(Hemi, Scroll, etc.)                  | ❌ No            | ✅ Yes      | ✅ Yes | **Direct DEX Adapters**             | `scripts/deploy-factory-system.ts` |
 | **Stablecoin-Heavy Chains**                                | ❌ No            | ✅ Yes      | ✅ Yes | **Direct DEX (Uniswap V3 + Curve)** | `scripts/deploy-factory-system.ts` |
 | **Uniswap-only Chains**                                    | ❌ No            | ✅ Yes      | ❌ No  | **Direct DEX (Uniswap V3 Only)**    | `scripts/deploy-factory-system.ts` |
 
+1inch, LI.FI, and Sushi are all same-chain **calldata-aggregator** takers, each registered in the `TakerRouter` by `scripts/deploy-factory-system.ts` (there is no separate per-provider deploy script). 1inch and Sushi each require a production allowlist policy (`callTargetAllowlist` / `approvalSpenderAllowlist` / `selectorAllowlist`) in their `dex.*` config before the deploy will provision their taker.
+
 The LI.FI integration is an optional same-chain aggregator path for chains and pairs where reviewed LI.FI routes can fill gaps left by direct-DEX adapters. It is not a separate top-level keeper route path, even though execution is dispatched through `TakerRouter` to a factory-registered `LifiKeeperTaker`. LI.FI production support for a chain/pair remains gated on the required-live route-shape canary and callback-path fork execution canary.
 
-### Option A: 1inch Single-Contract Aggregator Deployment
+### Option A: 1inch Calldata-Aggregator Deployment (factory-registered)
 
 **Best for:** Established chains with 1inch aggregator support
 
@@ -198,12 +200,14 @@ yarn compile
 **Deployment Steps:**
 
 ```bash
-# Deploy the 1inch single-contract taker
-yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
+# Deploy the factory + every configured taker. The 1inch aggregator taker
+# (OneInchAggregatorKeeperTaker) auto-enrolls when dex.oneInch carries a
+# production allowlist policy; deployment aborts if that policy is missing.
+yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 # Expected output:
-# ✅ 1inch keeper taker deployed to: 0x[deployed-address]
-# ✅ Contract verification successful
+# ✅ TakerRouter deployed to: 0x[router-address]
+# ✅ OneInchAggregatorKeeperTaker deployed, allowlist-reconciled, and registered
 # ✅ Ready for 1inch external takes
 ```
 
@@ -233,6 +237,15 @@ const config: KeeperConfig = {
         '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', // WAVAX
         // ... more tokens for your chain
       ],
+      // REQUIRED for live (non-dry-run) 1inch external takes: the production
+      // allowlist policy (keyed by chainId). Live 1inch is rejected without it,
+      // and the factory deploy refuses to provision the taker. The 1inch router
+      // is both the call target and the approval spender; mirrors LI.FI/Sushi.
+      callTargetAllowlist: { 43114: ['0x[reviewed-1inch-router]'] },
+      approvalSpenderAllowlist: { 43114: ['0x[reviewed-1inch-router]'] },
+      selectorAllowlist: {
+        43114: { '0x[reviewed-1inch-router]': ['0x[reviewed-selector]'] },
+      },
     },
   },
 
@@ -371,7 +384,7 @@ Minimal config shape:
 ```typescript
 const config: KeeperConfig = {
   takers: {
-    factory: '0x[factory-address]',
+    router: '0x[router-address]',
     contracts: {
       Lifi: '0x[lifi-taker-address]',
     },
@@ -397,6 +410,29 @@ const config: KeeperConfig = {
       validateRouteDeployments: true,
       dexGasOverrides: {
         [LiquiditySource.LIFI]: '650000',
+      },
+    },
+  },
+};
+```
+
+### Option C2: Sushi Same-Chain Aggregator
+
+Sushi is a second calldata-aggregator, structurally identical to 1inch and LI.FI: a factory-registered `SushiAggregatorKeeperTaker` deployed by `scripts/deploy-factory-system.ts`. Configure it under `dex.sushiAggregator` with the same production allowlist-policy shape as LI.FI/1inch, register `takers.contracts.SushiAggregator`, and gate it with `npm run sushi-aggregator-route-canary`. (The legacy direct-SushiSwap taker was removed; Sushi is supported only as an aggregator.)
+
+```typescript
+const config: KeeperConfig = {
+  takers: {
+    router: '0x[router-address]',
+    contracts: { SushiAggregator: '0x[sushi-taker-address]' },
+  },
+  dex: {
+    sushiAggregator: {
+      mode: 'production',
+      callTargetAllowlist: { 8453: ['0x[reviewed-sushi-target]'] },
+      approvalSpenderAllowlist: { 8453: ['0x[reviewed-approval-spender]'] },
+      selectorAllowlist: {
+        8453: { '0x[reviewed-sushi-target]': ['0x[reviewed-selector]'] },
       },
     },
   },
@@ -451,13 +487,15 @@ const config: KeeperConfig = {
 
 ### Deployment Validation
 
-**For 1inch Single-Contract Aggregator:**
+**For 1inch (calldata-aggregator):**
 
 ```bash
-# Test the deployment
-yarn ts-node scripts/query-1inch.ts --config your-config.ts --action quote --poolName "Your Pool" --amount 1
+# No-broadcast 1inch route-shape check (validates quotes + decoded swap-data shape)
+# Requires a Base RPC env (AJNA_AGENT_RPC_URL / BASE_RPC_URL / ALCHEMY_API_KEY),
+# 1inch credentials, and AJNA_AGENT_ONEINCH_CANARY_TAKER_ADDRESS
+npm run oneinch-route-canary
 
-# Expected: Quote data returned successfully
+# Expected: route-shape checks pass
 ```
 
 **For Direct DEX Adapters:**
@@ -869,9 +907,12 @@ const config: KeeperConfig = {
   //   },
   // },
 
-  // 1inch single-contract aggregator setup
+  // 1inch calldata-aggregator (factory-registered) setup
   takers: {
-    oneInch: '0x[DEPLOY_WITH_query-1inch.ts]',
+    router: '0x[router-address]',
+    contracts: {
+      OneInchAggregator: '0x[DEPLOY_WITH_deploy-factory-system.ts]',
+    },
   },
   dex: {
     oneInch: {
@@ -879,6 +920,14 @@ const config: KeeperConfig = {
         43114: '0x111111125421ca6dc452d289314280a0f8842a65',
       },
       defaultSlippage: 1.0,
+      // REQUIRED for live 1inch external takes (keyed by chainId); the factory
+      // deploy aborts without it. The 1inch router is the call target + approval
+      // spender.
+      callTargetAllowlist: { 43114: ['0x111111125421ca6dc452d289314280a0f8842a65'] },
+      approvalSpenderAllowlist: { 43114: ['0x111111125421ca6dc452d289314280a0f8842a65'] },
+      selectorAllowlist: {
+        43114: { '0x111111125421ca6dc452d289314280a0f8842a65': ['0x[reviewed-selector]'] },
+      },
     },
     // Universal Router configuration (for LP rewards)
     uniswapV3: {
@@ -952,8 +1001,8 @@ const config: KeeperConfig = {
 **Deployment Commands:**
 
 ```bash
-# 1. Deploy 1inch single-contract taker
-yarn ts-node scripts/query-1inch.ts --config avalanche-config.ts --action deploy
+# 1. Deploy the factory + the 1inch aggregator taker (auto-enrolled when dex.oneInch has an allowlist policy)
+yarn ts-node scripts/deploy-factory-system.ts avalanche-config.ts
 
 # 2. Update config with deployed address
 # 3. Test with dry run first
@@ -1251,7 +1300,7 @@ const config: KeeperConfig = {
 ```bash
 # Error: "Contract creation failed"
 # Solution: Check gas limits and network congestion
-yarn ts-node scripts/query-1inch.ts --config config.ts --action deploy
+yarn ts-node scripts/deploy-factory-system.ts config.ts
 ```
 
 **Factory Deployment Failures:**
@@ -1386,8 +1435,8 @@ yarn ts-node scripts/deploy-factory-system.ts config.ts
 **Health Check Commands:**
 
 ```bash
-# Test 1inch single-contract aggregation
-yarn ts-node scripts/query-1inch.ts --config config.ts --action quote --poolName "Pool Name" --amount 1
+# Test 1inch route shape (no broadcast)
+npm run oneinch-route-canary
 
 # Verify factory deployment
 grep "Type: factory, Valid: true" logs/debug.log

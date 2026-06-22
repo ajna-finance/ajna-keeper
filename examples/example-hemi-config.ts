@@ -46,6 +46,18 @@ const config: KeeperConfig = {
         poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
         quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5', // QuoterV2 for accurate pricing
       },
+      // REQUIRED for UNISWAP_V3 LP-reward swaps: the reward actions below use
+      // PostAuctionDex.UNISWAP_V3, which fails closed at reward time without a
+      // universalRouter block. Supply your chain's Universal Router address.
+      universalRouter: {
+        universalRouterAddress: '0x[your-chain-universal-router-address]',
+        permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3', // canonical Permit2 (same on all chains)
+        wethAddress: '0x4200000000000000000000000000000000000006', // Wrapped ETH on HEMI
+        poolFactoryAddress: '0x346239972d1fa486FC4a521031BC81bFB7D6e8a4',
+        quoterV2Address: '0xcBa55304013187D49d4012F4d7e4B63a04405cd5',
+        defaultFeeTier: 3000,
+        defaultSlippage: 0.5,
+      },
     },
   },
   takers: {
