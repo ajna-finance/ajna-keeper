@@ -154,6 +154,44 @@ describe('LpCollector stale-entry prune', () => {
   });
 });
 
+describe('LpCollector principal preservation (defect #9)', () => {
+  afterEach(() => sinon.restore());
+
+  it('redeems only the reward-equivalent, not the full redeemable position, when the signer also holds principal LP', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = utils.parseUnits('1', 18);
+    // The signer's redeemable position is 5x the tracked reward (reward +
+    // principal it lent from the same wallet) — the over-redeem scenario the
+    // 1:1 fixtures elsewhere cannot distinguish.
+    const principal = utils.parseUnits('5', 18);
+    const bucket = makeFakeBucket({
+      lpBalance: principal,
+      deposit: principal,
+      depositRedeemable: principal,
+    });
+    const removeQuoteStub = sinon
+      .stub(transactions, 'bucketRemoveQuoteToken')
+      .resolves();
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+      bucket,
+    });
+
+    collector.lpMap.set(3000, rewardLp);
+    await collector.collectLpRewards();
+
+    // Money-safety: the quote leg must withdraw at most the reward's quote-
+    // equivalent (lpToQuoteTokens(rewardLp) == rewardLp under the 1:1 mock), NOT
+    // the signer's full redeemable deposit. Pre-fix code withdrew
+    // min(depositRedeemable, deposit) == principal (5x), burning principal — so
+    // this assertion fails against the unfixed code.
+    expect(removeQuoteStub.calledOnce).to.equal(true);
+    const withdrawn = removeQuoteStub.firstCall.args[2] as BigNumber;
+    expect(withdrawn.toString()).to.equal(rewardLp.toString());
+  });
+});
+
 describe('LpCollector cursor advancement', () => {
   afterEach(() => sinon.restore());
 

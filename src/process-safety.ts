@@ -22,6 +22,14 @@ export function installProcessSafetyHandlers(
     logger.error('Uncaught exception in keeper process', error);
     process.exit(1);
   });
+  // SIGTERM/SIGINT exit immediately without draining in-flight work. Cross-restart
+  // nonce safety relies on the durable nonce floor, which is persisted once a tx
+  // is ACCEPTED by the RPC/relay. There is a small unprotected window between
+  // dispatching a tx and its acceptance returning: a signal landing there can
+  // abort the request before the floor is written, so if that tx still lands
+  // on-chain a restarted keeper could collide on the nonce (wasted/stranded tx,
+  // not fund loss). Draining that window (an in-flight-submit gate) is left as
+  // optional hardening; the immediate exit is the documented behavior.
   target.on('SIGTERM', () => {
     logger.info('Received SIGTERM; shutting down keeper.');
     process.exit(0);

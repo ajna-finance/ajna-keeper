@@ -57,12 +57,14 @@ describe('durable nonce state', () => {
     expect(updatedEntry?.nextNonce).to.equal(9);
   });
 
-  // P1-3 nonce consistency on SIGTERM mid-broadcast: a take/settlement broadcast
-  // persists its durable nonce floor BEFORE the receipt confirms, so if the
-  // process is killed mid-broadcast the floor survives on disk and the restarted
-  // keeper resumes from it — it cannot reuse the in-flight nonce (a gap/dup that
-  // would strand the wallet).
-  it('preserves the durable nonce floor across a simulated restart (SIGTERM mid-broadcast)', async () => {
+  // P1-3 nonce consistency across a restart: once a take/settlement broadcast is
+  // ACCEPTED, its durable nonce floor is persisted BEFORE the receipt confirms,
+  // so a process killed after acceptance resumes from the on-disk floor and
+  // cannot reuse the broadcast nonce (a gap/dup that would strand the wallet).
+  // NOTE: this proves only the post-acceptance restart path; it does NOT exercise
+  // a kill during the dispatch->acceptance round-trip (the unprotected in-flight
+  // window documented in process-safety.ts), which writes no floor.
+  it('preserves the durable nonce floor across a simulated restart (post-acceptance)', async () => {
     const address = '0x00000000000000000000000000000000000000bb';
 
     // Keeper broadcast nonce 7 -> persists floor nextNonce=8 before confirmation.
