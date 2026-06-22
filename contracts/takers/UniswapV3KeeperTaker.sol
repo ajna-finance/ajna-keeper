@@ -55,7 +55,9 @@ contract UniswapV3KeeperTaker is KeeperTakerBase {
 
         _approveQuoteForTake(pool, maxAmount, auctionPrice);
 
+        _beginCallbackBinding(address(pool), data);
         pool.take(borrowerAddress, maxAmount, address(this), data);
+        _endCallbackBinding();
 
         _settleAfterTake(pool);
     }
@@ -64,6 +66,10 @@ contract UniswapV3KeeperTaker is KeeperTakerBase {
     function atomicSwapCallback(uint256 collateral, uint256 quoteAmountDue, bytes calldata data) external override nonReentrant {
         IERC20Pool pool = IERC20Pool(msg.sender);
         if (!_validatePool(pool)) revert InvalidPool();
+        // Authoritative callback gate: only the pool this taker just called take()
+        // on, with the exact bytes it handed over, may reach the swap below. Blocks
+        // out-of-band pool.take(...,thisTaker,craftedData) by a third party.
+        _requireActiveCallback(data);
 
         (UniswapV3SwapDetails memory details, uint256 plannedAmountIn) =
             abi.decode(data, (UniswapV3SwapDetails, uint256));

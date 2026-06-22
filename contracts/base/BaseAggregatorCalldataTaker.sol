@@ -63,8 +63,6 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
     address[] private _callTargetList;
     address[] private _approvalSpenderList;
     mapping(address => bytes4[]) private _callSelectorList;
-    address private _activeCallbackPool;
-    bytes32 private _activeCallbackDataHash;
 
     event CallTargetUpdated(address indexed target, bool allowed);
     event ApprovalSpenderUpdated(address indexed spender, bool allowed);
@@ -88,7 +86,6 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
     error ApprovalSpenderNotAllowed();
     error SelectorNotAllowed();
     error UnexpectedSourceBalance();
-    error UnexpectedCallback();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
     /// @param authorizedRouter_ Router contract address that can also call functions.
@@ -136,18 +133,13 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
 
         AggregatorSwapDetails memory details = abi.decode(swapDetails, (AggregatorSwapDetails));
         _validateSwapDetails(pool, swapRouter, details);
-        if (_activeCallbackPool != address(0)) {
-            revert UnexpectedCallback();
-        }
 
         bytes memory data = abi.encode(details, swapRouter);
         _approveQuoteForTake(pool, maxAmount, auctionPrice);
 
-        _activeCallbackPool = address(pool);
-        _activeCallbackDataHash = keccak256(data);
+        _beginCallbackBinding(address(pool), data);
         pool.take(borrowerAddress, maxAmount, address(this), data);
-        _activeCallbackPool = address(0);
-        _activeCallbackDataHash = bytes32(0);
+        _endCallbackBinding();
 
         // srcToken is validated equal to the pool collateral, so the standard
         // settle sweep covers both the quote profit and any unconsumed source.
@@ -162,9 +154,7 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
     ) external override nonReentrant {
         IERC20Pool pool = IERC20Pool(msg.sender);
         if (!_validatePool(pool)) revert InvalidPool();
-        if (msg.sender != _activeCallbackPool || keccak256(data) != _activeCallbackDataHash) {
-            revert UnexpectedCallback();
-        }
+        _requireActiveCallback(data);
 
         (AggregatorSwapDetails memory details, address swapRouter) = abi.decode(data, (AggregatorSwapDetails, address));
         _validateSwapDetails(pool, swapRouter, details);

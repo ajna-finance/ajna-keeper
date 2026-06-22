@@ -96,8 +96,10 @@ contract CurveKeeperTaker is KeeperTakerBase {
 
         _approveQuoteForTake(pool, maxAmount, auctionPrice);
 
-        // Invoke the take
+        // Invoke the take, bound so only this pool's matching callback is accepted.
+        _beginCallbackBinding(address(pool), data);
         pool.take(borrowerAddress, maxAmount, address(this), data);
+        _endCallbackBinding();
 
         _settleAfterTake(pool);
     }
@@ -107,16 +109,19 @@ contract CurveKeeperTaker is KeeperTakerBase {
         // Ensure msg.sender is a valid Ajna pool
         IERC20Pool pool = IERC20Pool(msg.sender);
         if (!_validatePool(pool)) revert InvalidPool();
+        // Authoritative callback gate: only the pool this taker just called take()
+        // on, with the exact bytes it handed over, may reach the swap below. Blocks
+        // out-of-band pool.take(...,thisTaker,craftedData) by a third party.
+        _requireActiveCallback(data);
 
         // Decode swap configuration
         (CurveSwapDetails memory details, uint256 plannedAmountIn) =
             abi.decode(data, (CurveSwapDetails, uint256));
         if (plannedAmountIn == 0) revert InvalidSwapDetails();
-        // Re-bind swap tokens to the calling pool. Anyone may invoke pool.take with this
-        // taker as callee and arbitrary data; without this check crafted details could
-        // point tokenOut at an attacker-minted token so the balance-delta guard below
-        // measures the wrong asset (no taker funds at risk, but events get spoofed and
-        // the contract acts as a swap conduit). Mirrors UniswapV3KeeperTaker.
+        // Redundant backstop behind the binding above: the bound data is exactly
+        // what _executeCurveTake encoded, so tokenIn/tokenOut already equal the
+        // pool's assets. Kept as cheap defense-in-depth so the balance-delta guard
+        // can never measure the wrong asset even if the binding were ever bypassed.
         if (
             details.tokenIn != pool.collateralAddress() ||
             details.tokenOut != pool.quoteTokenAddress()

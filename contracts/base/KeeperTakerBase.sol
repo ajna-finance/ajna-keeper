@@ -42,6 +42,19 @@ abstract contract KeeperTakerBase is IAjnaKeeperTaker, ReentrancyGuard {
     ///      refuses to register a taker whose router does not match.
     address internal immutable _authorizedRouter;
 
+    /// @dev Transient binding for the in-flight Ajna take callback. Every taker's
+    ///      takeWithAtomicSwap sets these around pool.take (via the helpers below)
+    ///      so atomicSwapCallback can prove it is the callback for THIS take — the
+    ///      bound pool calling back with the exact bytes handed to pool.take —
+    ///      rather than an out-of-band pool.take(borrower, amt, thisTaker,
+    ///      craftedData) by a third party. Real Ajna pulls the quote repayment
+    ///      from the take CALLER, not the taker, so an out-of-band caller could
+    ///      otherwise drive a taker's callback as an unpaid swap conduit and spoof
+    ///      its events. Private here so all five takers share one authenticated
+    ///      callback path (the aggregator base previously carried its own copy).
+    address private _activeCallbackPool;
+    bytes32 private _activeCallbackDataHash;
+
     /// @dev Standard per-swap monitoring event. Calldata-aggregator takers do
     ///      NOT emit this; they emit the base AggregatorSwapExecuted (indexed
     ///      source + call-target parameters, different topic0) — provider takers
@@ -61,6 +74,10 @@ abstract contract KeeperTakerBase is IAjnaKeeperTaker, ReentrancyGuard {
     error UnsupportedSource();  // sig: 0x79b7ef0d
     /// @notice External swap could not be executed.
     error SwapFailed();         // sig: 0x81ceff30
+    /// @notice atomicSwapCallback was invoked outside a takeWithAtomicSwap this
+    ///         taker initiated — wrong caller, or callback data that does not match
+    ///         the bytes handed to pool.take (also raised on a nested take).
+    error UnexpectedCallback();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
     /// @param authorizedRouter_ Router contract address that can also call functions.
@@ -154,6 +171,35 @@ abstract contract KeeperTakerBase is IAjnaKeeperTaker, ReentrancyGuard {
         _safeApproveWithReset(IERC20(pool.quoteTokenAddress()), address(pool), 0);
         _recoverToken(IERC20(pool.quoteTokenAddress()));
         _recoverToken(IERC20(pool.collateralAddress()));
+    }
+
+    /// @dev Open the callback binding immediately before pool.take; the matching
+    ///      atomicSwapCallback authenticates against it via _requireActiveCallback.
+    ///      Reverts if a take is already in flight (a nested-take / pool-reentry
+    ///      guard). This is why takeWithAtomicSwap needs no nonReentrant modifier —
+    ///      and cannot use one anyway, since the pool legitimately re-enters this
+    ///      taker through atomicSwapCallback during pool.take.
+    function _beginCallbackBinding(address pool, bytes memory data) internal {
+        if (_activeCallbackPool != address(0)) revert UnexpectedCallback();
+        _activeCallbackPool = pool;
+        _activeCallbackDataHash = keccak256(data);
+    }
+
+    /// @dev Close the callback binding after pool.take returns.
+    function _endCallbackBinding() internal {
+        _activeCallbackPool = address(0);
+        _activeCallbackDataHash = bytes32(0);
+    }
+
+    /// @dev Authenticate an atomicSwapCallback: msg.sender must be the bound pool
+    ///      AND the callback data must hash to the bytes handed to pool.take. Both
+    ///      halves are required — a compromised pool that mutates the callback data
+    ///      fails the hash even though the sender matches. This is the authoritative
+    ///      callback gate; per-taker token re-binding below it is redundant backstop.
+    function _requireActiveCallback(bytes calldata data) internal view {
+        if (msg.sender != _activeCallbackPool || keccak256(data) != _activeCallbackDataHash) {
+            revert UnexpectedCallback();
+        }
     }
 
     /// @inheritdoc IAjnaKeeperTaker

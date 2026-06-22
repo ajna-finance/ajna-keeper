@@ -8,7 +8,6 @@ import {
   MockAtomicSwapPool__factory,
   MockCurveSwapPool__factory,
   MockCurveTricryptoPool__factory,
-  MockERC20__factory,
   MockPoolDeployer__factory,
   MockStrictApprovalToken__factory,
   MockSwapRouter02__factory,
@@ -29,6 +28,7 @@ import {
   UniswapDetailsParams,
   encodeCurveKeeperDetails,
   encodeTakerCallbackData,
+  encodeUniswapCallbackData,
   encodeUniswapDetails,
   expectRevertContaining,
   fundSigner,
@@ -185,69 +185,29 @@ describe('Taker hardening regressions', () => {
     });
   });
 
-  describe('callback output-token binding', () => {
-    // The direct-Sushi crafted-callback case was removed with the direct Sushi
-    // path; the curve tokenOut/tokenIn binding cases below cover the same
-    // re-binding invariant (both takers share the RouterAuthorizedTakerBase
-    // callback shape).
+  describe('active-callback binding (out-of-band callback rejection)', () => {
+    // takeWithAtomicSwap binds the in-flight callback to (this pool, exact data)
+    // in KeeperTakerBase, so any address invoking a taker's atomicSwapCallback out
+    // of band — pool.take(...,thisTaker,craftedData), or a direct callback — has
+    // no binding set and is rejected before any swap. Real Ajna pulls the quote
+    // repayment from the take CALLER (not the taker), so without this an out-of-
+    // band caller could drive a taker's callback as an unpaid swap conduit and
+    // spoof its events. This gate subsumes the older per-token re-bind check
+    // (kept as a redundant backstop in the takers): crafted tokenOut/tokenIn can
+    // no longer even reach it. Both direct-DEX takers share the same base gate.
 
-    it('rejects crafted curve callbacks whose tokenOut is not the pool quote', async () => {
+    it('rejects an out-of-band curve callback (no active binding)', async () => {
       const base = await deployMockTakerBase();
-      const { collateralToken, owner, pool } = base;
+      const { collateralToken, pool, quoteToken } = base;
       const taker = await deployCurveTaker(base);
-
-      const fakeToken = await new MockERC20__factory(owner).deploy(
-        'Fake Quote',
-        'FAKE',
-        18
-      );
-      await fakeToken.deployed();
       const curvePool = await deployFundedCurvePool(base, FULL_MIN_OUT);
 
+      // Even fully valid callback data is rejected: no take is in flight.
       const callbackData = encodeTakerCallbackData(
         CURVE_DETAILS_TYPE,
         [
           curvePool.address,
           collateralToken.address,
-          fakeToken.address,
-          0,
-          0,
-          1,
-          FULL_MIN_OUT,
-          DEADLINE,
-        ],
-        MAX_AMOUNT
-      );
-
-      await expectRevertContaining(
-        pool.callAtomicSwapCallback(
-          taker.address,
-          TAKEN_PARTIAL,
-          DUE_PARTIAL,
-          callbackData
-        ),
-        'InvalidSwapDetails'
-      );
-    });
-
-    it('rejects crafted curve callbacks whose tokenIn is not the pool collateral', async () => {
-      const base = await deployMockTakerBase();
-      const { owner, pool, quoteToken } = base;
-      const taker = await deployCurveTaker(base);
-
-      const fakeToken = await new MockERC20__factory(owner).deploy(
-        'Fake Collateral',
-        'FAKE',
-        18
-      );
-      await fakeToken.deployed();
-      const curvePool = await deployFundedCurvePool(base, FULL_MIN_OUT);
-
-      const callbackData = encodeTakerCallbackData(
-        CURVE_DETAILS_TYPE,
-        [
-          curvePool.address,
-          fakeToken.address,
           quoteToken.address,
           0,
           0,
@@ -265,7 +225,31 @@ describe('Taker hardening regressions', () => {
           DUE_PARTIAL,
           callbackData
         ),
-        'InvalidSwapDetails'
+        'UnexpectedCallback'
+      );
+    });
+
+    it('rejects an out-of-band uniswap callback (no active binding)', async () => {
+      const base = await deployMockTakerBase();
+      const { pool, quoteToken } = base;
+      const taker = await deployUniswapTaker(base);
+      const router = await deployFundedSwapRouter02(base, FULL_MIN_OUT);
+
+      const callbackData = encodeUniswapCallbackData({
+        routerAddress: router.address,
+        targetToken: quoteToken.address,
+        amountOutMinimum: FULL_MIN_OUT,
+        plannedAmountIn: MAX_AMOUNT,
+      });
+
+      await expectRevertContaining(
+        pool.callAtomicSwapCallback(
+          taker.address,
+          TAKEN_PARTIAL,
+          DUE_PARTIAL,
+          callbackData
+        ),
+        'UnexpectedCallback'
       );
     });
   });
