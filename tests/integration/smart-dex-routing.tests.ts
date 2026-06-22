@@ -161,10 +161,10 @@ describe('Manual External Take Routing Integration Tests', () => {
   });
 
   describe('Take Settings Integration', () => {
-    it('validates Uniswap V3 take settings with factory config', async () => {
+    it('validates Uniswap V3 take settings with router config', async () => {
       const directDexConfig = {
         takers: {
-          factory: '0x1234567890123456789012345678901234567890',
+          router: '0x1234567890123456789012345678901234567890',
           contracts: {
             UniswapV3: '0x2234567890123456789012345678901234567890',
           },
@@ -207,6 +207,21 @@ describe('Manual External Take Routing Integration Tests', () => {
             routers: {
               1: '0x1111111254EEB25477B68fb85Ed929f73A960582',
             },
+            // Live (non-dry-run) 1inch external takes require a complete
+            // production allowlist policy (call target / approval spender /
+            // selector), validated fail-closed. Mirrors the canonical shape in
+            // tests/unit/auto-discover-validation-helpers.configureOneInchAggregatorTake.
+            callTargetAllowlist: {
+              1: ['0x6666666666666666666666666666666666666666'],
+            },
+            approvalSpenderAllowlist: {
+              1: ['0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
+            },
+            selectorAllowlist: {
+              1: {
+                '0x6666666666666666666666666666666666666666': ['0x12345678'],
+              },
+            },
           },
         },
       };
@@ -230,7 +245,7 @@ describe('Manual External Take Routing Integration Tests', () => {
           dryRun: true,
         },
         takers: {
-          factory: '0x1234567890123456789012345678901234567890',
+          router: '0x1234567890123456789012345678901234567890',
           contracts: {
             Lifi: '0x2234567890123456789012345678901234567890',
           },
