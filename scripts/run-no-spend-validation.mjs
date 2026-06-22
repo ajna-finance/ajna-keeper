@@ -30,6 +30,7 @@ import {
   runDaemonSmoke,
   runDaemonLifecycle,
   runDaemonMultipool,
+  runDaemonAggregator,
 } from './no-spend/daemon-smoke.mjs';
 import {
   buildReplayCommand,
@@ -140,6 +141,11 @@ function parseArgs(argv) {
     multipoolDiscoveredCount: process.env.AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT
       ? Number(process.env.AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT)
       : 2,
+    runDaemonAggregator:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_ONLY === '1',
+    daemonAggregatorOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_ONLY === '1',
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
       ? Number(process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER)
       : undefined,
@@ -215,6 +221,15 @@ function parseArgs(argv) {
     if (arg === '--daemon-multipool-only') {
       options.runDaemonMultipool = true;
       options.daemonMultipoolOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-aggregator') {
+      options.runDaemonAggregator = true;
+      continue;
+    }
+    if (arg === '--daemon-aggregator-only') {
+      options.runDaemonAggregator = true;
+      options.daemonAggregatorOnly = true;
       continue;
     }
     if (arg === '--expected-fee-tier') {
@@ -1110,10 +1125,25 @@ async function main() {
       });
     }
 
+    let daemonAggregatorArtifact;
+    if (options.runDaemonAggregator) {
+      // Uses the single fixture (which deploys the aggregator takers + mock
+      // target); spawns the harness daemon entry to exercise the LI.FI path.
+      daemonAggregatorArtifact = await runDaemonAggregator({
+        summary: fixtureSummary,
+        summaryPath,
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
     if (
       options.daemonSmokeOnly ||
       options.daemonLifecycleOnly ||
-      options.daemonMultipoolOnly
+      options.daemonMultipoolOnly ||
+      options.daemonAggregatorOnly
     ) {
       // Guard against a false pass: the *-only early-exit must not report
       // success unless the scenario it names actually produced an artifact.
@@ -1129,6 +1159,10 @@ async function main() {
         !options.daemonMultipoolOnly || daemonMultipoolArtifact !== undefined,
         'daemon-multipool-only ran the daemon multipool scenario'
       );
+      requireInvariant(
+        !options.daemonAggregatorOnly || daemonAggregatorArtifact !== undefined,
+        'daemon-aggregator-only ran the daemon aggregator scenario'
+      );
       await stopHardhatNode();
       hardhatStopped = true;
       const egress = assertEgressReport(egressReportPath, 'daemon smoke');
@@ -1139,6 +1173,7 @@ async function main() {
         daemonSmokeOnly: options.daemonSmokeOnly === true,
         daemonLifecycleOnly: options.daemonLifecycleOnly === true,
         daemonMultipoolOnly: options.daemonMultipoolOnly === true,
+        daemonAggregatorOnly: options.daemonAggregatorOnly === true,
         command: ['npm', 'run', 'no-spend-validation'],
         replayCommand,
         requestedForkBlock: resolvedForkBlock.requested,
@@ -1161,17 +1196,20 @@ async function main() {
         daemon: daemonArtifact,
         daemonLifecycle: daemonLifecycleArtifact,
         daemonMultipool: daemonMultipoolArtifact,
+        daemonAggregator: daemonAggregatorArtifact,
       };
       fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
       fs.writeFileSync(
         validationReportPath,
         `${JSON.stringify(validationReport, null, 2)}\n`
       );
-      const onlyLabel = options.daemonMultipoolOnly
-        ? 'daemon multipool'
-        : options.daemonLifecycleOnly
-          ? 'daemon lifecycle'
-          : 'daemon smoke';
+      const onlyLabel = options.daemonAggregatorOnly
+        ? 'daemon aggregator'
+        : options.daemonMultipoolOnly
+          ? 'daemon multipool'
+          : options.daemonLifecycleOnly
+            ? 'daemon lifecycle'
+            : 'daemon smoke';
       process.stdout.write(
         `[no-spend] ${onlyLabel} passed\n` +
           `[no-spend] validationReport=${validationReportPath}\n` +
@@ -1343,6 +1381,7 @@ async function main() {
       daemon: daemonArtifact,
       daemonLifecycle: daemonLifecycleArtifact,
       daemonMultipool: daemonMultipoolArtifact,
+      daemonAggregator: daemonAggregatorArtifact,
     };
     fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
     fs.writeFileSync(

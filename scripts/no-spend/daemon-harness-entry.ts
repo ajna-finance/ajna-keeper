@@ -11,15 +11,17 @@
 // production code is untouched and stays inert (the flag is only ever set here).
 //
 // It mirrors the in-process injector that fixture-keeper-harness-cli.ts installs,
-// but for the spawned daemon: set flag -> fund the shared MockLifiSwapTarget ->
-// install the injector -> start the keeper loops.
+// but for the spawned daemon: set flag -> install the injector -> start the
+// keeper loops. The MockLifiSwapTarget is funded (and the per-take payout sized)
+// by the caller runDaemonAggregator, which holds the quote-rich fixture keeper
+// and passes the payout via AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW.
 //
-// DRAFT: tsc-checked, but the payout sizing + target funding need a funded-fork
-// run to validate end-to-end (see docs/multi-pool-enumeration-scenario.md).
+// Fork-validated: the real daemon took an auction via the LI.FI calldata path
+// against the mock target, exit 0 (see docs/multi-pool-enumeration-scenario.md).
 
 import fs from 'fs';
 import yargs from 'yargs/yargs';
-import { BigNumber, Contract, utils } from 'ethers';
+import { BigNumber, utils } from 'ethers';
 
 import { readConfigFile, resolveCalldataAggregatorProviderForSource } from '../../src/config';
 import type { LiquiditySource } from '../../src/config';
@@ -31,13 +33,8 @@ import {
   type AggregatorQuoteInjector,
 } from '../../src/take/aggregator-calldata/quote-injection';
 import type { ApprovedCalldataAggregatorQuote } from '../../src/take/aggregator-calldata/types';
-import { getProviderAndSigner } from '../../src/utils';
 import { logger, setLoggerConfig } from '../../src/logging';
 
-const ERC20_ABI = [
-  'function transfer(address to, uint256 amount) returns (bool)',
-  'function balanceOf(address account) view returns (uint256)',
-];
 const MOCK_SWAP_IFACE = new utils.Interface([
   'function mockSwap(address tokenIn, address tokenOut, address recipient, uint256 amountIn, uint256 amountOut)',
 ]);
@@ -142,38 +139,17 @@ async function main(): Promise<void> {
     fs.readFileSync(argv['fixture-summary'], 'utf8')
   ) as FixtureSummaryLike;
 
-  const { signer } = await getProviderAndSigner(
-    config.signer.keystore,
-    config.network.rpcUrl
-  );
-
-  // Fund the shared MockLifiSwapTarget(s) so each calldata-take can be paid out
-  // in quote token. (One target is shared across aggregator takers.)
-  const quote = new Contract(
-    fixtureSummary.quoteToken.deployedAddress,
-    ERC20_ABI,
-    signer
-  );
-  const keeperQuoteBalance: BigNumber = await quote.balanceOf(
-    await signer.getAddress()
-  );
-  const payoutBudget = keeperQuoteBalance.mul(9).div(10);
-  const targets = Array.from(
-    new Set(
-      (
-        fixtureSummary.uniswapV3ExternalTake?.deployment?.aggregatorTakers ?? []
-      ).map((t) => t.targetAddress)
-    )
-  );
-  for (const target of targets) {
-    await (await quote.transfer(target, payoutBudget.div(targets.length))).wait();
+  // The mock target is funded with quote token (and the per-take payout sized) by
+  // the caller (runDaemonAggregator), which holds the quote-rich fixture keeper —
+  // this entry's keystore wallet has no quote. The payout MUST exceed the on-chain
+  // amount-due, so it is required here rather than guessed.
+  const payoutEnv = process.env.AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW;
+  if (!payoutEnv) {
+    throw new Error(
+      'Harness daemon entry requires AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW (the mock quote-token payout per take)'
+    );
   }
-
-  // Payout per take: a fraction of the funded budget. MUST exceed the on-chain
-  // amount-due (fork-validate); override via env for tuning.
-  const payoutRaw = process.env.AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW
-    ? BigNumber.from(process.env.AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW)
-    : payoutBudget.div(100);
+  const payoutRaw = BigNumber.from(payoutEnv);
 
   installAggregatorQuoteInjector(buildInjector(fixtureSummary, payoutRaw));
   logger.info(

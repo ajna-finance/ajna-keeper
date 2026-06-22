@@ -2,7 +2,7 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { spawn } from 'child_process';
-import { Wallet } from 'ethers';
+import { Wallet, Contract, providers } from 'ethers';
 import {
   ROOT,
   TS_NODE_BIN,
@@ -28,6 +28,11 @@ const DAEMON_SIGTERM_LOG = 'Received SIGTERM; shutting down keeper.';
 const HARDHAT_DEFAULT_KEEPER_KEY =
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 const BASE_ONEINCH_ROUTER = '0x1111111254EEB25477B68fb85Ed929f73A960582';
+// Sighash of MockLifiSwapTarget.mockSwap(address,address,address,uint256,uint256).
+// The fixture allowlists each aggregator taker for {mockTarget, this selector},
+// so the aggregator daemon's dex.lifi allowlist must match it for the on-chain
+// route-deployment preflight to reconcile.
+const MOCK_SWAP_SELECTOR = '0x79c6257b';
 const BASE_AJNA_CONFIG = {
   erc20PoolFactory: '0x214f62B5836D83f3D6c4f71F174209097B1A779C',
   erc721PoolFactory: '0xeefEC5d1Cc4bde97279d01D88eFf9e0fEe981769',
@@ -202,6 +207,85 @@ function buildDaemonConfig(params) {
   };
 }
 
+// Aggregator (LI.FI) daemon config. Distinct from buildDaemonConfig in three
+// ways: the take path is calldata_aggregator (not direct_dex), the taker is the
+// deployed Lifi taker, and dex.lifi is a production-mode config whose allowlist
+// points at the deployed MockLifiSwapTarget (+ mockSwap selector) — so the
+// startup route-deployment preflight reconciles the config allowlist against the
+// taker's on-chain allowlist (which the fixture set to the same mock target).
+// The env-gated quote injector (installed by daemon-harness-entry.ts) supplies
+// the actual quote at take time; validation/preflight still run for real.
+function buildAggregatorDaemonConfig(params) {
+  const uniswap = params.summary.uniswapV3ExternalTake;
+  const deployment = uniswap?.deployment;
+  const lifiTaker = (deployment?.aggregatorTakers ?? []).find(
+    (taker) => taker.key === 'Lifi'
+  );
+  if (!lifiTaker) {
+    throw new Error(
+      'Fixture summary missing the Lifi aggregator taker (re-run the fixture with external-take deployment)'
+    );
+  }
+  const mockTarget = lifiTaker.targetAddress;
+  const allowPools = params.allowPools ?? [params.summary.pool.address];
+  return {
+    network: {
+      rpcUrl: params.rpcUrl,
+      readRpcUrls: [params.rpcUrl],
+      subgraph: {
+        url: params.subgraphUrl,
+        fallbackUrls: [`${params.subgraphUrl}/fallback`],
+      },
+      tokenAddresses: { weth: uniswap.routerConfig.wethAddress },
+    },
+    signer: { keystore: params.keystorePath },
+    runtime: { logLevel: 'debug', delayBetweenRuns: 1, dryRun: params.dryRun },
+    ajna: BASE_AJNA_CONFIG,
+    manual: { pools: [] },
+    discovery: {
+      enabled: true,
+      dryRunNewPools: false,
+      hydrateCooldownSec: 30,
+      logSkips: true,
+      allowPools,
+      denyPools: [],
+      defaults: {
+        take: {
+          minCollateral: 0.0001,
+          liquiditySource: 5, // LIFI
+          marketPriceFactor: 0.99,
+        },
+      },
+      take: {
+        enabled: true,
+        allowedExternalTakePaths: ['calldata_aggregator'],
+        allowedCalldataAggregatorProviders: ['lifi'],
+        externalTakeRouteSelectionMode: 'maximize_profit',
+        hybridGasQuoteFailureFallbackMode: 'disabled',
+        maxGasCostNative: params.maxGasCostNative ?? 1,
+        validateRouteDeployments: true,
+        // Required for the calldata_aggregator path (keyed by LiquiditySource.LIFI=5).
+        dexGasOverrides: { 5: '900000' },
+      },
+    },
+    dex: {
+      lifi: {
+        mode: 'production',
+        defaultSlippage: 0.005,
+        feeCostPolicy: 'included_only',
+        allowExchanges: ['sushiswap', 'nordstern', 'fly'],
+        callTargetAllowlist: { 8453: [mockTarget] },
+        approvalSpenderAllowlist: { 8453: [mockTarget] },
+        selectorAllowlist: { 8453: { [mockTarget]: [MOCK_SWAP_SELECTOR] } },
+      },
+    },
+    takers: {
+      router: deployment.keeperTakerRouter,
+      contracts: { Lifi: lifiTaker.takerAddress },
+    },
+  };
+}
+
 function daemonChildEnv(params) {
   return withNoEgressGuard(
     baseChildEnv({
@@ -329,9 +413,18 @@ function parseTakeCycleSummaries(logText) {
 // its installProcessSafetyHandlers handler actually runs (surfaced-defects #3).
 async function spawnPersistentDaemon(params) {
   const logStream = fs.createWriteStream(params.logPath);
+  // Default to the production entry; the aggregator leg spawns the harness entry
+  // (which installs the env-gated quote injector) with extra args instead.
+  const scriptPath = params.scriptPath ?? 'src/index.ts';
   const child = spawn(
     process.execPath,
-    [TS_NODE_BIN, 'src/index.ts', '--config', params.configPath],
+    [
+      TS_NODE_BIN,
+      scriptPath,
+      '--config',
+      params.configPath,
+      ...(params.extraArgs ?? []),
+    ],
     { cwd: ROOT, env: params.env, stdio: ['ignore', 'pipe', 'pipe'] }
   );
   let logText = '';
@@ -966,6 +1059,151 @@ export async function runDaemonMultipool(params) {
       multipoolShutdownCleanOnSigterm: artifact.shutdownCleanOnSigterm,
     })) {
       requireNoSpendInvariant(value === true, `daemon multipool ${field}`);
+    }
+    return artifact;
+  } finally {
+    await subgraph.close();
+  }
+}
+
+const FUND_ERC20_ABI = [
+  'function transfer(address to, uint256 amount) returns (bool)',
+  'function balanceOf(address account) view returns (uint256)',
+];
+
+/**
+ * Aggregator-in-daemon scenario: proves the REAL persistent keeper takes via the
+ * calldata_aggregator (LI.FI) path — not direct_dex — when spawned from the
+ * harness daemon entry (which installs the env-gated quote injector). Production
+ * src/index.ts never installs the injector, so this is the only way a spawned
+ * daemon can exercise the aggregator path; the seam stays inert in production.
+ *
+ * Funding lives here (not in the entry) because the quote-rich account is the
+ * fixture keeper, not the daemon keystore wallet: we fund the MockLifiSwapTarget
+ * with quote and size the per-take payout, then pass the payout to the entry via
+ * AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW.
+ */
+export async function runDaemonAggregator(params) {
+  const deployment = params.summary.uniswapV3ExternalTake?.deployment;
+  const lifiTaker = (deployment?.aggregatorTakers ?? []).find(
+    (taker) => taker.key === 'Lifi'
+  );
+  if (!lifiTaker) {
+    throw new Error(
+      'runDaemonAggregator requires a fixture with deployed aggregator takers'
+    );
+  }
+
+  // Fund the shared MockLifiSwapTarget with quote from the fixture keeper, and
+  // size the per-take payout to a generous fraction of that balance (it must
+  // exceed the on-chain amount-due; mirrors the in-process harness tiering).
+  const provider = new providers.JsonRpcProvider(params.rpcUrl);
+  const keeper = new Wallet(HARDHAT_DEFAULT_KEEPER_KEY, provider);
+  const quote = new Contract(
+    params.summary.quoteToken.deployedAddress,
+    FUND_ERC20_ABI,
+    keeper
+  );
+  const keeperQuoteBalance = await quote.balanceOf(keeper.address);
+  const targets = Array.from(
+    new Set(
+      (deployment.aggregatorTakers ?? []).map((taker) => taker.targetAddress)
+    )
+  );
+  for (const target of targets) {
+    await (
+      await quote.transfer(target, keeperQuoteBalance.mul(9).div(10).div(targets.length))
+    ).wait();
+  }
+  const payoutRaw = keeperQuoteBalance.div(20).toString();
+
+  const subgraph = await startFixtureSubgraphStub({
+    summary: params.summary,
+    rpcUrl: params.rpcUrl,
+  });
+  try {
+    const { passwordPath, keystorePath, wallet } = await setupDaemonKeystore(
+      params.tempDir
+    );
+    const configPath = path.join(
+      params.tempDir,
+      'daemon-aggregator-execution-config.json'
+    );
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        buildAggregatorDaemonConfig({
+          summary: params.summary,
+          rpcUrl: params.rpcUrl,
+          subgraphUrl: subgraph.url,
+          keystorePath,
+          dryRun: false,
+        }),
+        null,
+        2
+      )}\n`
+    );
+    const env = {
+      ...daemonChildEnv({
+        allowedHosts: params.allowedHosts,
+        egressReportPath: params.egressReportPath,
+        passwordFile: passwordPath,
+      }),
+      AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW: payoutRaw,
+    };
+
+    const snapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
+    await warpLocalTakeWindow(params.rpcUrl);
+    const startBlock = await readBlockNumber(params.rpcUrl);
+    const execution = await spawnPersistentDaemon({
+      // Spawn the HARNESS entry (installs the injector), not src/index.ts.
+      scriptPath: 'scripts/no-spend/daemon-harness-entry.ts',
+      extraArgs: ['--fixture-summary', params.summaryPath],
+      configPath,
+      env,
+      logPath: path.join(params.tempDir, 'daemon-aggregator-execution.log'),
+      rpcUrl: params.rpcUrl,
+      keeperAddress: wallet.address,
+      startBlock,
+      pollIntervalMs: 1_500,
+      maxWatchMs: 150_000,
+      graceMs: 20_000,
+      isDone: (s) => s.cycles >= 2 && s.txCount >= 1 && s.stablePolls >= 2,
+    });
+    await requestJsonRpc(params.rpcUrl, 'evm_revert', [snapshot]);
+
+    const num = (value) => Number(value ?? 0);
+    const artifact = {
+      enabled: true,
+      subgraphUrl: subgraph.url,
+      mockTarget: lifiTaker.targetAddress,
+      lifiTaker: lifiTaker.takerAddress,
+      payoutRaw,
+      cyclesObserved: execution.cyclesObserved,
+      loopedMultipleCycles: execution.cyclesObserved >= 2,
+      discoveredViaSubgraph: execution.summaries.some(
+        (s) => num(s.discoveredTargets) >= 1
+      ),
+      // Took via the calldata_aggregator (LI.FI) path against the mock target.
+      tookViaAggregator:
+        execution.txCount >= 1 &&
+        execution.summaries.some((s) => num(s.targetSuccesses) >= 1),
+      takeTxCount: execution.txCount,
+      idempotentNoDuplicateTake: execution.reachedDone,
+      shutdownCleanOnSigterm:
+        execution.shutdownClean && execution.sigtermHandled,
+      exit: execution.exit,
+      logPath: execution.logPath,
+    };
+
+    for (const [field, value] of Object.entries({
+      aggregatorLoopedMultipleCycles: artifact.loopedMultipleCycles,
+      aggregatorDiscoveredViaSubgraph: artifact.discoveredViaSubgraph,
+      aggregatorTookViaAggregator: artifact.tookViaAggregator,
+      aggregatorIdempotentNoDuplicateTake: artifact.idempotentNoDuplicateTake,
+      aggregatorShutdownCleanOnSigterm: artifact.shutdownCleanOnSigterm,
+    })) {
+      requireNoSpendInvariant(value === true, `daemon aggregator ${field}`);
     }
     return artifact;
   } finally {

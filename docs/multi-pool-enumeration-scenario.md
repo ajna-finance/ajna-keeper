@@ -20,7 +20,8 @@ manual loop and **skipped** by discovery (manual-take precedence).
 | `runDaemonMultipool` leg + assertions | `scripts/no-spend/daemon-smoke.mjs` | ✅ **fork-validated** (see below) |
 | Shared-deployment fixture multiplication driver (`buildMultipoolFixtures`) | `scripts/run-no-spend-validation.mjs` | ✅ **fork-validated** (reuse confirmed) |
 | Orchestrator leg: `--run-daemon-multipool` / `--daemon-multipool-only` | `scripts/run-no-spend-validation.mjs` | ✅ **fork-validated** |
-| Aggregator-in-daemon entrypoint (installs the env-gated injector) | `scripts/no-spend/daemon-harness-entry.ts` | 🟡 draft — tsc-clean; not yet spawned by a leg (aggregator-reuse risk retired by code, see below) |
+| Aggregator-in-daemon entrypoint (installs the env-gated injector) | `scripts/no-spend/daemon-harness-entry.ts` | ✅ **fork-validated** (LI.FI take in the daemon) |
+| Aggregator daemon leg `--run-daemon-aggregator` / `--daemon-aggregator-only` | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** |
 
 **Flags / env:** `--run-daemon-multipool` (env `AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL=1`)
 or `--daemon-multipool-only` (env `…_MULTIPOOL_ONLY=1`, implies the run + early-exits
@@ -116,15 +117,33 @@ registrations (including the aggregator takers) are permanent on the shared rout
 so they persist for runs 1..N; the driver's graft of run 0's deployment mirrors
 that on-chain reality.
 
-## Remaining (aggregator-in-daemon variant only)
+## Aggregator-in-daemon fork validation result ✅
 
-The core scenario is fork-validated for `direct_dex`. The only unvalidated piece is
-the **aggregator** execution path in the daemon, which needs:
+Ran `node scripts/run-no-spend-validation.mjs --scenario take-settlement-run-once
+--daemon-aggregator-only` against the Base fork. The `--run-daemon-aggregator` leg
+funds the `MockLifiSwapTarget` from the quote-rich fixture keeper, spawns
+`daemon-harness-entry.ts` (which installs the env-gated injector) instead of
+`src/index.ts`, with a `calldata_aggregator` LI.FI config. The artifact passed:
 
-1. A leg variant that spawns `daemon-harness-entry.ts` (installs the env-gated
-   injector) instead of `src/index.ts`, with a `calldata_aggregator` config.
-2. **Size the aggregator payout** so the mock's quote-token payout exceeds the
-   on-chain amount-due (`AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW`).
+```
+cyclesObserved: 4, discoveredViaSubgraph: true,
+tookViaAggregator: true, takeTxCount: 1 (LI.FI path against the mock target),
+payoutRaw ~= keeperQuoteBalance/20, idempotentNoDuplicateTake: true,
+shutdownCleanOnSigterm: true, exit.code: 0
+```
+
+Key things this proved:
+- The harness daemon entry installs the injector + starts the keeper; production
+  `src/index.ts` is untouched and stays inert.
+- The `dex.lifi` **production** config whose allowlist points at the deployed
+  `MockLifiSwapTarget` (+ mockSwap selector `0x79c6257b`) passes both config
+  validation (`validateAutoDiscoverConfig` / `validateTakeSettingsForChain`) and
+  the on-chain route-deployment preflight (`reconcileTakerAllowlistSnapshot`
+  exact-matches the config allowlist to the taker's on-chain allowlist).
+- `discovery.take.dexGasOverrides: { 5: '900000' }` (LiquiditySource.LIFI) is
+  required for the `calldata_aggregator` path.
+- The injected payout (`keeperQuoteBalance/20`) exceeds the on-chain amount-due,
+  so the take settles.
 
 > Note: `--daemon-multipool-only` still builds the orchestrator's single fixture
 > first (that build is unconditional in `main()`); the multipool leg then builds
