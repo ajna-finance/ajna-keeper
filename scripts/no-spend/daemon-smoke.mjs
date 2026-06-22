@@ -13,6 +13,10 @@ import {
   runNodeScript,
 } from './runtime.mjs';
 import { withNoEgressGuard } from './egress.mjs';
+import {
+  getFixtureAuctions,
+  buildFixtureSubgraphData,
+} from './fixture-subgraph-stub.mjs';
 
 // The take loop logs this line once per cycle (src/discovery/runtime.ts
 // logDiscoveryCycleSummary). Counting it proves the persistent daemon actually
@@ -41,25 +45,12 @@ function requireNoSpendInvariant(condition, message) {
   }
 }
 
-function getFixtureAuction(summary) {
-  return {
-    id: `${summary.pool.address.toLowerCase()}-${summary.borrower.owner.toLowerCase()}`,
-    borrower: summary.borrower.owner,
-    kickTime: String(summary.finalKick?.auction?.kickTime ?? '0'),
-    debtRemaining:
-      summary.finalKick?.auction?.debtToCover ?? summary.borrower.debt ?? '0',
-    collateralRemaining: summary.borrower.collateral ?? '0',
-    neutralPrice:
-      summary.finalKick?.auction?.neutralPrice ?? summary.borrower.neutralPrice,
-    debt: summary.borrower.debt ?? '0',
-    collateral: summary.borrower.collateral ?? '0',
-    pool: {
-      id: summary.pool.address.toLowerCase(),
-    },
-  };
-}
-
 async function startFixtureSubgraphStub(params) {
+  // Accept either a single `summary` (existing single-pool legs) or a
+  // `summaries` array (multi-pool enumeration). The auction set is static, so
+  // build it once; only `_meta` (live block) is recomputed per request.
+  const summaries = params.summaries ?? [params.summary];
+  const auctions = getFixtureAuctions(summaries);
   const server = http.createServer(async (request, response) => {
     try {
       if (request.method !== 'POST') {
@@ -81,43 +72,20 @@ async function startFixtureSubgraphStub(params) {
           'eth_getBlockByNumber',
           ['latest', false]
         );
-        const auction = getFixtureAuction(params.summary);
-        let data;
-        if (query.includes('_meta')) {
-          data = {
-            _meta: {
-              block: {
-                number: Number.parseInt(latestBlock.number, 16),
-                timestamp: Number.parseInt(latestBlock.timestamp, 16),
-              },
-              deployment: 'fixture-local',
-              hasIndexingErrors: false,
-            },
-          };
-        } else if (query.includes('bucketTakes')) {
-          data = { bucketTakes: [] };
-        } else if (query.includes('loans')) {
-          data = { loans: [] };
-        } else if (query.includes('pool(')) {
-          data = {
-            pool: {
-              hpb: 0,
-              hpbIndex: 0,
-              liquidationAuctions:
-                variables.afterBorrower && variables.afterBorrower.length > 0
-                  ? []
-                  : [{ borrower: auction.borrower }],
-            },
-          };
-        } else if (query.includes('liquidationAuctions')) {
-          const after = variables.afterId ?? variables.afterBorrower ?? '';
-          data = {
-            liquidationAuctions:
-              typeof after === 'string' && after.length > 0 ? [] : [auction],
-          };
-        } else {
-          data = {};
-        }
+        const meta = {
+          block: {
+            number: Number.parseInt(latestBlock.number, 16),
+            timestamp: Number.parseInt(latestBlock.timestamp, 16),
+          },
+          deployment: 'fixture-local',
+          hasIndexingErrors: false,
+        };
+        const data = buildFixtureSubgraphData({
+          query,
+          variables,
+          auctions,
+          meta,
+        });
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({ data }));
       });
@@ -153,6 +121,14 @@ function buildDaemonConfig(params) {
   if (!uniswap) {
     throw new Error('Fixture summary missing uniswapV3ExternalTake');
   }
+  // Single-pool legs pass nothing and discovery ranges over just this pool.
+  // The multi-pool leg passes `allowPools` (the discovered pools to enumerate)
+  // and `manualPools` (full PoolConfig entries the manual loop owns — discovery
+  // must SKIP these, proving manual-take precedence). `params.summary` still
+  // supplies the SHARED deployment/router config, so the multi-pool fixture
+  // must reuse one KeeperTakerRouter + taker set across every pool.
+  const allowPools = params.allowPools ?? [params.summary.pool.address];
+  const manualPools = params.manualPools ?? [];
   return {
     network: {
       rpcUrl: params.rpcUrl,
@@ -175,14 +151,14 @@ function buildDaemonConfig(params) {
     },
     ajna: BASE_AJNA_CONFIG,
     manual: {
-      pools: [],
+      pools: manualPools,
     },
     discovery: {
       enabled: true,
       dryRunNewPools: false,
       hydrateCooldownSec: 30,
       logSkips: true,
-      allowPools: [params.summary.pool.address],
+      allowPools,
       denyPools: [],
       defaults: {
         take: {
@@ -824,6 +800,173 @@ export async function runDaemonLifecycle(params) {
       gasSpikeShutdownCleanOnSigterm: artifact.gasSpike.shutdownCleanOnSigterm,
     })) {
       requireNoSpendInvariant(value === true, `daemon lifecycle ${field}`);
+    }
+    return artifact;
+  } finally {
+    await subgraph.close();
+  }
+}
+
+// Build a manual-take PoolConfig entry for the precedence pool. A POOL-reference
+// price derives the market price from the pool's own LUP on the fork (no
+// external API, no spend) — the same family of price the discovery defaults
+// resolve. The take settings mirror the discovery `direct_dex` path so the
+// manual loop and discovery exercise the same shared takers/dex config.
+//
+// DRAFT: the exact manual TakeSettings field set must be confirmed against the
+// schema on a funded fork run (see docs/multi-pool-enumeration-scenario.md).
+function buildManualPoolConfig(summary) {
+  return {
+    address: summary.pool.address,
+    price: { source: 'pool', reference: 'lup' },
+    take: {
+      liquiditySource: 2, // UNISWAPV3
+      marketPriceFactor: 0.98,
+      minCollateral: 0.01,
+      allowedExternalTakePaths: ['direct_dex'],
+      defaultDirectDexLiquiditySource: 2,
+      allowedLiquiditySources: [2],
+      externalTakeRouteSelectionMode: 'maximize_profit',
+      hybridGasQuoteFailureFallbackMode: 'disabled',
+    },
+  };
+}
+
+/**
+ * Multi-pool enumeration scenario (the fidelity complement to the single-auction
+ * lifecycle leg). Proves the REAL persistent keeper enumerates auctions across
+ * SEVERAL pools via the real chainwide subgraph query, ranks/acts on all of the
+ * DISCOVERED pools, and that a pool placed under `manual.pools` is handled by the
+ * manual loop and SKIPPED by discovery (manual-take precedence).
+ *
+ * Inputs (params):
+ *   - discoveredSummaries: fixture summaries for pools discovery should take
+ *   - manualSummary:       one fixture summary for the manual-precedence pool
+ *   - rpcUrl, tempDir, allowedHosts, egressReportPath
+ *
+ * PREREQUISITE (DRAFT — needs a funded-fork run to validate end-to-end): all
+ * summaries MUST share ONE deployed KeeperTakerRouter + taker set + dex router,
+ * because the keeper config has a single `takers`/`dex` block. The fixture
+ * multiplication driver must deploy once and reuse those addresses across every
+ * pool (the fixture supports reuse via env). discoveredSummaries[0] supplies the
+ * shared deployment/router config here.
+ */
+export async function runDaemonMultipool(params) {
+  const discoveredSummaries = params.discoveredSummaries ?? [];
+  const manualSummary = params.manualSummary;
+  if (discoveredSummaries.length < 1 || !manualSummary) {
+    throw new Error(
+      'runDaemonMultipool requires >=1 discoveredSummaries and a manualSummary'
+    );
+  }
+  const discoveredCount = discoveredSummaries.length;
+  const totalAuctions = discoveredCount + 1; // discovered + the manual pool
+  // The chainwide enumeration is a real query of ALL unsettled auctions, so the
+  // stub serves every pool's auction (including the manual one). Discovery then
+  // SKIPS the manual pool; the manual loop owns it.
+  const allSummaries = [...discoveredSummaries, manualSummary];
+
+  const subgraph = await startFixtureSubgraphStub({
+    summaries: allSummaries,
+    rpcUrl: params.rpcUrl,
+  });
+  try {
+    const { passwordPath, keystorePath, wallet } = await setupDaemonKeystore(
+      params.tempDir
+    );
+    const configPath = path.join(
+      params.tempDir,
+      'daemon-multipool-execution-config.json'
+    );
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        buildDaemonConfig({
+          summary: discoveredSummaries[0], // shared deployment/router/weth
+          rpcUrl: params.rpcUrl,
+          subgraphUrl: subgraph.url,
+          keystorePath,
+          dryRun: false,
+          allowPools: discoveredSummaries.map((s) => s.pool.address),
+          manualPools: [buildManualPoolConfig(manualSummary)],
+        }),
+        null,
+        2
+      )}\n`
+    );
+    const env = daemonChildEnv({
+      allowedHosts: params.allowedHosts,
+      egressReportPath: params.egressReportPath,
+      passwordFile: passwordPath,
+    });
+
+    const snapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
+    await warpLocalTakeWindow(params.rpcUrl);
+    const startBlock = await readBlockNumber(params.rpcUrl);
+    const execution = await spawnPersistentDaemon({
+      configPath,
+      env,
+      logPath: path.join(params.tempDir, 'daemon-multipool-execution.log'),
+      rpcUrl: params.rpcUrl,
+      keeperAddress: wallet.address,
+      startBlock,
+      pollIntervalMs: 1_500,
+      maxWatchMs: 180_000,
+      graceMs: 20_000,
+      // Done once it has looped >=2 cycles, taken at least the discovered pools,
+      // and the tx count has stabilized (idempotent re-entry without re-taking).
+      isDone: (s) =>
+        s.cycles >= 2 && s.txCount >= discoveredCount && s.stablePolls >= 2,
+    });
+    await requestJsonRpc(params.rpcUrl, 'evm_revert', [snapshot]);
+
+    const num = (value) => Number(value ?? 0);
+    const artifact = {
+      enabled: true,
+      subgraphUrl: subgraph.url,
+      discoveredPoolCount: discoveredCount,
+      manualPool: manualSummary.pool.address,
+      cyclesObserved: execution.cyclesObserved,
+      loopedMultipleCycles: execution.cyclesObserved >= 2,
+      // Real enumeration saw EVERY pool's auction (discovered + manual), not one.
+      enumeratedAllPools: execution.summaries.some(
+        (s) => num(s.auctionCount) >= totalAuctions
+      ),
+      // Discovery produced a target for each discovered pool...
+      discoveredAllPools: execution.summaries.some(
+        (s) => num(s.discoveredTargets) >= discoveredCount
+      ),
+      // ...the manual pool was a MANUAL target (handled by the manual loop)...
+      manualPoolHandledByManualLoop: execution.summaries.some(
+        (s) => num(s.manualTargets) >= 1
+      ),
+      // ...and NEVER leaked into discovery (precedence): discoveredTargets never
+      // exceeds the discovered-pool count in any cycle.
+      manualPrecedenceHeld: execution.summaries.every(
+        (s) => num(s.discoveredTargets) <= discoveredCount
+      ),
+      allDiscoveredTaken:
+        execution.txCount >= discoveredCount &&
+        execution.summaries.some((s) => num(s.targetSuccesses) >= discoveredCount),
+      takeTxCount: execution.txCount,
+      idempotentNoDuplicateTake: execution.reachedDone,
+      shutdownCleanOnSigterm:
+        execution.shutdownClean && execution.sigtermHandled,
+      exit: execution.exit,
+      logPath: execution.logPath,
+    };
+
+    for (const [field, value] of Object.entries({
+      multipoolLoopedMultipleCycles: artifact.loopedMultipleCycles,
+      multipoolEnumeratedAllPools: artifact.enumeratedAllPools,
+      multipoolDiscoveredAllPools: artifact.discoveredAllPools,
+      multipoolManualHandledByManualLoop: artifact.manualPoolHandledByManualLoop,
+      multipoolManualPrecedenceHeld: artifact.manualPrecedenceHeld,
+      multipoolAllDiscoveredTaken: artifact.allDiscoveredTaken,
+      multipoolIdempotentNoDuplicateTake: artifact.idempotentNoDuplicateTake,
+      multipoolShutdownCleanOnSigterm: artifact.shutdownCleanOnSigterm,
+    })) {
+      requireNoSpendInvariant(value === true, `daemon multipool ${field}`);
     }
     return artifact;
   } finally {
