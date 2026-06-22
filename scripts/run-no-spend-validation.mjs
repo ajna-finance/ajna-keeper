@@ -849,10 +849,10 @@ function fixtureEnv(params) {
  * those contracts are factory-scoped so they serve every pool. Each run uses a
  * unique token symbol pair, so the fixture creates a fresh, distinct pool.
  *
- * DRAFT: needs a funded-fork run to validate that reuse keeps the run-0
- * aggregator takers registered for runs 1..N (see
- * docs/multi-pool-enumeration-scenario.md). Returns an array of summaries; the
- * caller treats the last as the manual-precedence pool.
+ * Fork-validated: run-1 reuse of run-0's router + UniswapV3 taker works, and the
+ * reuse path is read-only so run-0's aggregator-taker registrations persist on
+ * the shared router (see docs/multi-pool-enumeration-scenario.md). Returns an
+ * array of summaries; the caller treats the last as the manual-precedence pool.
  */
 async function buildMultipoolFixtures(baseParams, discoveredCount) {
   const total = discoveredCount + 1; // discovered pools + 1 manual pool
@@ -1138,6 +1138,7 @@ async function main() {
         harnessMode: options.harnessMode,
         daemonSmokeOnly: options.daemonSmokeOnly === true,
         daemonLifecycleOnly: options.daemonLifecycleOnly === true,
+        daemonMultipoolOnly: options.daemonMultipoolOnly === true,
         command: ['npm', 'run', 'no-spend-validation'],
         replayCommand,
         requestedForkBlock: resolvedForkBlock.requested,
@@ -1166,8 +1167,13 @@ async function main() {
         validationReportPath,
         `${JSON.stringify(validationReport, null, 2)}\n`
       );
+      const onlyLabel = options.daemonMultipoolOnly
+        ? 'daemon multipool'
+        : options.daemonLifecycleOnly
+          ? 'daemon lifecycle'
+          : 'daemon smoke';
       process.stdout.write(
-        `[no-spend] daemon smoke passed\n` +
+        `[no-spend] ${onlyLabel} passed\n` +
           `[no-spend] validationReport=${validationReportPath}\n` +
           `[no-spend] fixtureSummary=${summaryPath}\n` +
           `[no-spend] fixtureLog=${fixtureLogPath}\n` +

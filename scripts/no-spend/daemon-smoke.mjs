@@ -812,9 +812,8 @@ export async function runDaemonLifecycle(params) {
 // external API, no spend) — the same family of price the discovery defaults
 // resolve. The take settings mirror the discovery `direct_dex` path so the
 // manual loop and discovery exercise the same shared takers/dex config.
-//
-// DRAFT: the exact manual TakeSettings field set must be confirmed against the
-// schema on a funded fork run (see docs/multi-pool-enumeration-scenario.md).
+// Fork-validated (manual pool taken via the manual loop; see
+// docs/multi-pool-enumeration-scenario.md).
 function buildManualPoolConfig(summary) {
   return {
     address: summary.pool.address,
@@ -844,12 +843,12 @@ function buildManualPoolConfig(summary) {
  *   - manualSummary:       one fixture summary for the manual-precedence pool
  *   - rpcUrl, tempDir, allowedHosts, egressReportPath
  *
- * PREREQUISITE (DRAFT — needs a funded-fork run to validate end-to-end): all
- * summaries MUST share ONE deployed KeeperTakerRouter + taker set + dex router,
- * because the keeper config has a single `takers`/`dex` block. The fixture
- * multiplication driver must deploy once and reuse those addresses across every
- * pool (the fixture supports reuse via env). discoveredSummaries[0] supplies the
- * shared deployment/router config here.
+ * PREREQUISITE: all summaries MUST share ONE deployed KeeperTakerRouter + taker
+ * set + dex router, because the keeper config has a single `takers`/`dex` block.
+ * The fixture multiplication driver (buildMultipoolFixtures) deploys once and
+ * reuses those addresses across every pool. discoveredSummaries[0] supplies the
+ * shared deployment/router config here. Fork-validated for direct_dex (see
+ * docs/multi-pool-enumeration-scenario.md).
  */
 export async function runDaemonMultipool(params) {
   const discoveredSummaries = params.discoveredSummaries ?? [];

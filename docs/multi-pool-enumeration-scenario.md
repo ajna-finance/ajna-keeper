@@ -17,10 +17,10 @@ manual loop and **skipped** by discovery (manual-take precedence).
 | Unit test for the stub (enumeration, cursoring, per-pool isolation) | `tests/unit/fixture-subgraph-stub.test.ts` | ✅ passing |
 | `startFixtureSubgraphStub` refactor to serve `summaries[]` | `scripts/no-spend/daemon-smoke.mjs` | ✅ (single-pool legs unchanged: 1-element list) |
 | `buildDaemonConfig` accepts `allowPools` + `manualPools` | `scripts/no-spend/daemon-smoke.mjs` | ✅ backward-compatible |
-| `runDaemonMultipool` leg + assertions | `scripts/no-spend/daemon-smoke.mjs` | 🟡 draft — needs a funded-fork run |
-| Shared-deployment fixture multiplication driver (`buildMultipoolFixtures`) | `scripts/run-no-spend-validation.mjs` | 🟡 draft — wired, needs a funded-fork run |
-| Orchestrator leg: `--run-daemon-multipool` / `--daemon-multipool-only` | `scripts/run-no-spend-validation.mjs` | 🟡 draft — wired (flag/env/call-site/guard/report) |
-| Aggregator-in-daemon entrypoint (installs the env-gated injector) | `scripts/no-spend/daemon-harness-entry.ts` | 🟡 draft — tsc-clean, needs fork |
+| `runDaemonMultipool` leg + assertions | `scripts/no-spend/daemon-smoke.mjs` | ✅ **fork-validated** (see below) |
+| Shared-deployment fixture multiplication driver (`buildMultipoolFixtures`) | `scripts/run-no-spend-validation.mjs` | ✅ **fork-validated** (reuse confirmed) |
+| Orchestrator leg: `--run-daemon-multipool` / `--daemon-multipool-only` | `scripts/run-no-spend-validation.mjs` | ✅ **fork-validated** |
+| Aggregator-in-daemon entrypoint (installs the env-gated injector) | `scripts/no-spend/daemon-harness-entry.ts` | 🟡 draft — tsc-clean; not yet spawned by a leg (aggregator-reuse risk retired by code, see below) |
 
 **Flags / env:** `--run-daemon-multipool` (env `AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL=1`)
 or `--daemon-multipool-only` (env `…_MULTIPOOL_ONLY=1`, implies the run + early-exits
@@ -86,23 +86,45 @@ aggregator takers + `MockLifiSwapTarget`; runs 1..N **reuse** them by passing
 `AJNA_AGENT_QUOTE/COLLATERAL_TOKEN_SYMBOL` per run forces a fresh distinct pool.
 The last fixture is the manual-precedence pool.
 
-## Remaining validation (needs a funded Base fork)
+## Fork validation result ✅
 
-1. **Confirm aggregator-taker reuse stays registered.** The fixture's reuse path
-   resolves only the router + UniswapV3 taker and emits no aggregator takers, so
-   the driver grafts run 0's full deployment onto runs 1..N. Verify on a fork
-   that run 0's aggregator takers remain registered on the shared (factory-scoped)
-   router for the later pools — if not, the aggregator daemon variant needs the
-   reuse path extended to re-register them.
-2. **Confirm the manual `PoolConfig.take` field set** against the schema (the
-   draft mirrors the discovery `direct_dex` settings).
-3. **Size the aggregator payout** so the mock's quote-token payout exceeds the
-   on-chain amount-due (`AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW`), and spawn the
-   harness daemon entry (`daemon-harness-entry.ts`) instead of `src/index.ts` for
-   the aggregator variant.
-4. **Token distinctness** depends on the external token-deployer's address scheme
-   (create2 vs nonce); unique symbols per run are used, but confirm two runs don't
-   collide on a deployed token address.
+Ran `AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT=1 node scripts/run-no-spend-validation.mjs
+--scenario take-settlement-run-once --daemon-multipool-only` against a pinned Base
+fork (block 30000000). Both multipool fixtures built — **fixture 2/2 reused run 0's
+deployment with no error**, confirming the reuse env contract — and the
+`runDaemonMultipool` artifact passed every invariant:
+
+```
+cyclesObserved: 3, loopedMultipleCycles: true,
+enumeratedAllPools: true, discoveredAllPools: true,
+manualPoolHandledByManualLoop: true, manualPrecedenceHeld: true,
+allDiscoveredTaken: true, takeTxCount: 2,
+idempotentNoDuplicateTake: true, shutdownCleanOnSigterm: true, exit.code: 0
+```
+
+So the real persistent keeper enumerated both pools via the real chainwide query,
+took both (1 discovered + 1 manual = 2 real fork takes), kept the manual pool out
+of discovery (precedence), looped idempotently, and exited cleanly on SIGTERM —
+all `direct_dex`. The shared-deployment reuse, the multipool stub, the multipool
+`buildDaemonConfig`, and the manual `PoolConfig` are all validated. (Bump
+`AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT` to scale the discovered-pool count.)
+
+**Aggregator-reuse risk retired by code:** the fixture's reuse path
+(`resolveExisting`) is read-only — it *validates* the existing router + UniswapV3
+taker and returns the addresses; it never calls `setTaker`. Run 0's `setTaker`
+registrations (including the aggregator takers) are permanent on the shared router,
+so they persist for runs 1..N; the driver's graft of run 0's deployment mirrors
+that on-chain reality.
+
+## Remaining (aggregator-in-daemon variant only)
+
+The core scenario is fork-validated for `direct_dex`. The only unvalidated piece is
+the **aggregator** execution path in the daemon, which needs:
+
+1. A leg variant that spawns `daemon-harness-entry.ts` (installs the env-gated
+   injector) instead of `src/index.ts`, with a `calldata_aggregator` config.
+2. **Size the aggregator payout** so the mock's quote-token payout exceeds the
+   on-chain amount-due (`AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW`).
 
 > Note: `--daemon-multipool-only` still builds the orchestrator's single fixture
 > first (that build is unconditional in `main()`); the multipool leg then builds
