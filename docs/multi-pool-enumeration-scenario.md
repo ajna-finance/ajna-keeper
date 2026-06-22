@@ -24,6 +24,7 @@ manual loop and **skipped** by discovery (manual-take precedence).
 | Aggregator daemon leg `--run-daemon-aggregator` / `--daemon-aggregator-only` | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** |
 | **Combined** aggregator × multipool leg `--daemon-aggregator-multipool-only` | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** (daemon takes N pools via LI.FI) |
 | **Sushi** aggregator daemon leg `--daemon-sushi-only` (provider-parameterized) | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** (daemon take via Sushi) |
+| Subgraph-failover daemon leg `--daemon-failover-only` (primary down → fallbackUrls) | `scripts/no-spend/daemon-smoke.mjs` + orchestrator | ✅ **fork-validated** |
 
 **Flags / env:** `--run-daemon-multipool` (env `AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL=1`)
 or `--daemon-multipool-only` (env `…_MULTIPOOL_ONLY=1`, implies the run + early-exits
@@ -112,6 +113,11 @@ all `direct_dex`. The shared-deployment reuse, the multipool stub, the multipool
 `buildDaemonConfig`, and the manual `PoolConfig` are all validated. (Bump
 `AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT` to scale the discovered-pool count.)
 
+Also validated at **count=2** (2 discovered pools + 1 manual): `discoveredAllPools`
+(`discoveredTargets≥2`), `manualPrecedenceHeld` (the manual pool stayed out of
+discovery with multiple discovered pools coexisting), 2 discovered takes — so the
+enumeration is proven beyond the degenerate single-discovered-pool case.
+
 **Aggregator-reuse risk retired by code:** the fixture's reuse path
 (`resolveExisting`) is read-only — it *validates* the existing router + UniswapV3
 taker and returns the addresses; it never calls `setTaker`. Run 0's `setTaker`
@@ -181,6 +187,18 @@ clean SIGTERM, exit 0 — passed first try (the Sushi config shape was de-risked
 in-process against the validators before the fork run, and the Sushi allowlist
 preflight reconciles against the same shared-mock allowlist the fixture sets on
 every aggregator taker). 1inch stays daemon-skip (401); Curve is `direct_dex`.
+
+## Subgraph-failover daemon fork validation result ✅
+
+`--daemon-failover-only` drives real `fallbackUrls` failover in the spawned daemon:
+the stub `503`s the PRIMARY endpoint (path `/`) and serves only the fallback (path
+`/fallback`), so the keeper's subgraph reader (`src/subgraph.ts` iterates
+`[primary, ...fallbacks]`, failing over on any error) must use the fallback for
+every query. Functional proof: with the primary permanently down, discovery could
+only have succeeded via the fallback. Fork run: `usedFallbackEndpoint:true` (the
+`subgraph failover:` log marker fired), `discoveredViaFallback:true`,
+`tookViaFallback:true`, `takeTxCount:1`, `cyclesObserved:3`, idempotent, clean
+SIGTERM, exit 0. Closes the "`fallbackUrls` failover only unit-tested" gap.
 
 > Note: `--daemon-multipool-only` still builds the orchestrator's single fixture
 > first (that build is unconditional in `main()`); the multipool leg then builds

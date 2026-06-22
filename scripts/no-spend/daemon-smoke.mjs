@@ -63,6 +63,20 @@ async function startFixtureSubgraphStub(params) {
         response.end('method not allowed');
         return;
       }
+      // Failover injection: when `failPrimary` is set, the PRIMARY endpoint (path
+      // `/`) returns 503 so the keeper's subgraph reader fails over to the
+      // configured fallbackUrls (path `/fallback`, served normally below). Drives
+      // real in-daemon `fallbackUrls` failover end-to-end.
+      const isFallbackEndpoint = (request.url ?? '').startsWith('/fallback');
+      if (params.failPrimary && !isFallbackEndpoint) {
+        response.writeHead(503, { 'Content-Type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            errors: [{ message: 'primary subgraph unavailable (failover test)' }],
+          })
+        );
+        return;
+      }
       let body = '';
       request.setEncoding('utf8');
       request.on('data', (chunk) => {
@@ -1270,6 +1284,108 @@ export async function runDaemonAggregator(params) {
       aggregatorShutdownCleanOnSigterm: artifact.shutdownCleanOnSigterm,
     })) {
       requireNoSpendInvariant(value === true, `daemon aggregator ${field}`);
+    }
+    return artifact;
+  } finally {
+    await subgraph.close();
+  }
+}
+
+/**
+ * Subgraph-failover-in-daemon scenario: the PRIMARY subgraph endpoint is down
+ * (the stub 503s the primary path), so the real persistent keeper must fail over
+ * to the configured fallbackUrls and keep discovering + taking. Closes the
+ * "fallbackUrls failover is only unit-tested" gap end-to-end. Functional proof:
+ * with the primary permanently 503, discovery could only have succeeded via the
+ * fallback; corroborated by the `subgraph failover:` log marker.
+ */
+export async function runDaemonFailover(params) {
+  const subgraph = await startFixtureSubgraphStub({
+    summary: params.summary,
+    rpcUrl: params.rpcUrl,
+    failPrimary: true,
+  });
+  try {
+    const { passwordPath, keystorePath, wallet } = await setupDaemonKeystore(
+      params.tempDir
+    );
+    const configPath = path.join(
+      params.tempDir,
+      'daemon-failover-execution-config.json'
+    );
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        buildDaemonConfig({
+          summary: params.summary,
+          rpcUrl: params.rpcUrl,
+          subgraphUrl: subgraph.url,
+          keystorePath,
+          dryRun: false,
+        }),
+        null,
+        2
+      )}\n`
+    );
+    const env = daemonChildEnv({
+      allowedHosts: params.allowedHosts,
+      egressReportPath: params.egressReportPath,
+      passwordFile: passwordPath,
+    });
+
+    const snapshot = await requestJsonRpc(params.rpcUrl, 'evm_snapshot');
+    await warpLocalTakeWindow(params.rpcUrl);
+    const startBlock = await readBlockNumber(params.rpcUrl);
+    const execution = await spawnPersistentDaemon({
+      configPath,
+      env,
+      logPath: path.join(params.tempDir, 'daemon-failover-execution.log'),
+      rpcUrl: params.rpcUrl,
+      keeperAddress: wallet.address,
+      startBlock,
+      pollIntervalMs: 1_500,
+      maxWatchMs: 150_000,
+      graceMs: 20_000,
+      isDone: (s) => s.cycles >= 2 && s.txCount >= 1 && s.stablePolls >= 2,
+    });
+    await requestJsonRpc(params.rpcUrl, 'evm_revert', [snapshot]);
+
+    const num = (value) => Number(value ?? 0);
+    // Corroborating proof that the keeper actually failed over (the primary is
+    // permanently down, so discovery succeeding already implies the fallback).
+    const logText = fs.readFileSync(execution.logPath, 'utf8');
+    const usedFallbackEndpoint = logText.includes('subgraph failover:');
+
+    const artifact = {
+      enabled: true,
+      subgraphUrl: subgraph.url,
+      cyclesObserved: execution.cyclesObserved,
+      loopedMultipleCycles: execution.cyclesObserved >= 2,
+      usedFallbackEndpoint,
+      // Discovered + took DESPITE the primary subgraph being permanently 503.
+      discoveredViaFallback: execution.summaries.some(
+        (s) => num(s.discoveredTargets) >= 1
+      ),
+      tookViaFallback:
+        execution.txCount >= 1 &&
+        execution.summaries.some((s) => num(s.targetSuccesses) >= 1),
+      takeTxCount: execution.txCount,
+      idempotentNoDuplicateTake: execution.reachedDone,
+      shutdownCleanOnSigterm:
+        execution.shutdownClean && execution.sigtermHandled,
+      exit: execution.exit,
+      logPath: execution.logPath,
+    };
+
+    for (const [field, value] of Object.entries({
+      failoverLoopedMultipleCycles: artifact.loopedMultipleCycles,
+      failoverUsedFallbackEndpoint: artifact.usedFallbackEndpoint,
+      failoverDiscoveredViaFallback: artifact.discoveredViaFallback,
+      failoverTookViaFallback: artifact.tookViaFallback,
+      failoverIdempotentNoDuplicateTake: artifact.idempotentNoDuplicateTake,
+      failoverShutdownCleanOnSigterm: artifact.shutdownCleanOnSigterm,
+    })) {
+      requireNoSpendInvariant(value === true, `daemon failover ${field}`);
     }
     return artifact;
   } finally {
