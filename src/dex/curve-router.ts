@@ -169,7 +169,6 @@ export async function swapWithCurveRouter(
     // paths — surfaced-defects #1/#2 siblings).
     const minAmountOutWithSlippage = deriveSwapMinimumOut({
       expectedOutputRaw: minAmountOut,
-      inputRaw: amount,
       slippagePercent: slippagePercentage,
     });
     const minAmountOutWithSlippageFormatted = weiToDecimaled(

@@ -241,7 +241,6 @@ export async function swapWithUniversalRouter(
     const quotedOut = BigNumber.from(quoteResult.amountOut ?? quoteResult[0]);
     const amountOutMin = deriveSwapMinimumOut({
       expectedOutputRaw: quotedOut,
-      inputRaw: amount,
       slippagePercent: slippageBasisPoints / 100,
     });
 

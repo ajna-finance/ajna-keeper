@@ -13,8 +13,6 @@ import { BigNumber, constants } from 'ethers';
 export function deriveSwapMinimumOut(params: {
   /** The quoted output amount, in OUTPUT-token raw units. */
   expectedOutputRaw: BigNumber;
-  /** The swap input amount, in INPUT-token raw units (for diagnostics only). */
-  inputRaw: BigNumber;
   /** Operator slippage tolerance as a percentage (1 = 1%, 0.5 = 0.5%). */
   slippagePercent: number;
 }): BigNumber {

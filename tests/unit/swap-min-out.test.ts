@@ -15,7 +15,6 @@ describe('deriveSwapMinimumOut — reward-swap min-out (defects #1/#2)', () => {
     expect(
       deriveSwapMinimumOut({
         expectedOutputRaw,
-        inputRaw,
         slippagePercent: 1,
       }).toString()
     ).to.equal('990');
@@ -23,7 +22,6 @@ describe('deriveSwapMinimumOut — reward-swap min-out (defects #1/#2)', () => {
     expect(
       deriveSwapMinimumOut({
         expectedOutputRaw,
-        inputRaw,
         slippagePercent: 0.1,
       }).toString()
     ).to.equal('999');
@@ -33,7 +31,6 @@ describe('deriveSwapMinimumOut — reward-swap min-out (defects #1/#2)', () => {
     const expectedOutputRaw = BigNumber.from('100');
     const minOut = deriveSwapMinimumOut({
       expectedOutputRaw,
-      inputRaw,
       slippagePercent: 1,
     });
     expect(minOut.toString()).to.equal('99'); // 100 * (1 - 1%)
@@ -45,7 +42,6 @@ describe('deriveSwapMinimumOut — reward-swap min-out (defects #1/#2)', () => {
     expect(() =>
       deriveSwapMinimumOut({
         expectedOutputRaw: BigNumber.from('0'),
-        inputRaw,
         slippagePercent: 1,
       })
     ).to.throw(/non-positive|fail closed|quote/i);

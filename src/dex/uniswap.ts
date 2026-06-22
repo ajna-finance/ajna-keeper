@@ -207,7 +207,6 @@ export async function swapToWeth(
   // (was hardcoded 0.5% + a 0.01%-of-input near-zero floor — surfaced-defects #1).
   const minOut = deriveSwapMinimumOut({
     expectedOutputRaw: BigNumber.from(expectedOutputAmount.quotient.toString()),
-    inputRaw: amount,
     slippagePercent,
   });
 
