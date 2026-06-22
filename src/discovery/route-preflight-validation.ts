@@ -451,6 +451,40 @@ async function validateOneInchAggregatorAllowlistPreflight(params: {
     );
     return;
   }
+  // Mirror LI.FI: every allowlisted call target + approval spender must have
+  // on-chain code, else the taker reverts CallTargetHasNoCode at take time.
+  for (const target of policy.callTargets) {
+    await requireContractCode({
+      provider: params.provider,
+      label: `1inch call target ${target}`,
+      address: target,
+      errors: params.errors,
+    });
+  }
+  for (const spender of policy.approvalSpenders) {
+    await requireContractCode({
+      provider: params.provider,
+      label: `1inch approval spender ${spender}`,
+      address: spender,
+      errors: params.errors,
+    });
+  }
+  // The 1inch take encodes approvalSpender = the configured router for the
+  // chain; if that router is not in the approval-spender allowlist the taker
+  // reverts ApprovalSpenderNotAllowed on-chain. Catch it here at startup.
+  const configuredRouter = oneInch!.routers?.[params.chainId];
+  if (
+    configuredRouter &&
+    !policy.approvalSpenders.some(
+      (s) => s.toLowerCase() === configuredRouter.toLowerCase()
+    )
+  ) {
+    params.errors.push(
+      `1inch router ${configuredRouter} for chain ${params.chainId} is not in ` +
+        `dex.oneInch.approvalSpenderAllowlist; takes set approvalSpender to it and ` +
+        `would revert on-chain (ApprovalSpenderNotAllowed)`
+    );
+  }
   // Mirrors LI.FI: read selectors for the call targets AND any extra
   // selectorAllowlist keys, retrying only on classified-retryable RPC errors.
   await reconcileTakerAllowlistSnapshot({

@@ -111,6 +111,22 @@ export async function validateSushiAggregatorAllowlistPreflight(params: {
       fieldName: 'dex.sushiAggregator',
       chainId: params.chainId,
     });
+    // Mirror LI.FI/1inch: every allowlisted call target + approval spender must
+    // have on-chain code, else the taker reverts CallTargetHasNoCode at take
+    // time. Caught here at startup rather than only on the first live take.
+    for (const address of Array.from(
+      new Set([...policy.callTargets, ...policy.approvalSpenders])
+    )) {
+      const code = await readWithRetries({
+        label: `Sushi aggregator code at ${address}`,
+        operation: () => params.provider.getCode(address),
+      });
+      if (!code || code === '0x') {
+        params.errors.push(
+          `Sushi aggregator preflight: allowlisted address ${address} has no contract code on chain ${params.chainId}`
+        );
+      }
+    }
     // Sushi reads selectors only for its configured call targets (no extra
     // selectorAllowlist keys) and retries on any read error.
     await reconcileTakerAllowlistSnapshot({

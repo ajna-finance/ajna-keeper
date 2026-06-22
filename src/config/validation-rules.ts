@@ -429,14 +429,26 @@ function requireRegisteredTakerContract(params: {
       `TakeSettings: liquiditySource ${sourceName} does not use a registered taker contract`
     );
   }
-  if (!params.keeperConfig.takers?.router) {
+  const router = params.keeperConfig.takers?.router;
+  if (!router) {
     throw new Error(
       `TakeSettings: takers.router required when liquiditySource is ${sourceName}`
     );
   }
-  if (!params.keeperConfig.takers.contracts?.[contractKey]) {
+  if (!ethers.utils.isAddress(router)) {
+    throw new Error(
+      `TakeSettings: takers.router must be a valid address (got "${router}")`
+    );
+  }
+  const takerContract = params.keeperConfig.takers?.contracts?.[contractKey];
+  if (!takerContract) {
     throw new Error(
       `TakeSettings: takers.contracts.${contractKey} required when liquiditySource is ${sourceName}`
+    );
+  }
+  if (!ethers.utils.isAddress(takerContract)) {
+    throw new Error(
+      `TakeSettings: takers.contracts.${contractKey} must be a valid address (got "${takerContract}")`
     );
   }
 }

@@ -62,7 +62,14 @@ export async function swapWithCurveRouter(
     throw new Error('Pool type must be provided via configuration');
   }
   if (slippagePercentage === undefined) {
-    throw new Error('Slippage must be provided via configuration');
+    // Fall back to the operator's configured curve defaultSlippage rather than
+    // silently dropping it (audit Pass-1: the param was passed but never used).
+    if (defaultSlippage === undefined) {
+      throw new Error(
+        'Slippage must be provided via configuration (per-pool slippage or curve defaultSlippage)'
+      );
+    }
+    slippagePercentage = defaultSlippage;
   }
   if (!signer || !tokenAddress || !amount) {
     throw new Error('Invalid parameters provided to swap');
@@ -195,11 +202,14 @@ export async function swapWithCurveRouter(
     if (currentAllowance.lt(amount)) {
       logger.info(`Approving Curve pool to spend ${tokenToSwap.symbol}`);
       await NonceTracker.queueTransaction(signer, async (nonce) => {
-        const approveTx = await tokenContract.approve(
-          poolAddress,
-          ethers.constants.MaxUint256,
-          { nonce }
-        );
+        // Bound the approval to the exact swap `amount` rather than MaxUint256:
+        // the configured Curve pool is NOT a trusted singleton, and the
+        // exact-input exchange() pulls exactly `amount`, so this leaves ~0
+        // residual allowance instead of a persistent unlimited one
+        // (audit defect #5 / Codex Pass-1 MEDIUM).
+        const approveTx = await tokenContract.approve(poolAddress, amount, {
+          nonce,
+        });
         logger.info(`Curve approval transaction sent: ${approveTx.hash}`);
         const receipt = await approveTx.wait();
         logger.info(`Curve approval confirmed!`);

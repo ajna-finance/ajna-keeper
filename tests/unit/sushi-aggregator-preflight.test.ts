@@ -89,6 +89,9 @@ describe('Sushi aggregator route preflight', () => {
       provider: {
         _isProvider: true,
         resolveName: sinon.stub().callsFake(async (name: string) => name),
+        // Allowlisted call targets / approval spenders are code-existence checked
+        // by the preflight (mirrors LI.FI/1inch); return non-empty bytecode.
+        getCode: sinon.stub().resolves('0x6000'),
         call: sinon.stub().callsFake(async (tx: { data: string }) => {
           const selector = tx.data.slice(0, 10);
           if (selector === routerIface.getSighash('getConfiguredTakers')) {

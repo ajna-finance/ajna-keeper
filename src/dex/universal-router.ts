@@ -151,7 +151,38 @@ export async function swapWithUniversalRouter(
       );
     }
 
-    // STEP 2: Check and approve Permit2 allowance (same as current but with better logging)
+    // STEP 2: derive amountOutMin from a REAL output quote + operator slippage,
+    // and FAIL CLOSED before granting ANY approval. A missing or reverting
+    // quoter must abort here, never AFTER a Permit2/router approval is already
+    // mined (which would leave a persistent allowance with no swap). The old
+    // ordering granted approvals first; surfaced-defects #2: the prior floor was
+    // derived from the INPUT amount (wrong units), making the guard illusory.
+    if (!quoterV2Address) {
+      throw new Error(
+        'Universal Router reward swap requires uniswap.quoterV2Address to derive a safe minimum-out from a real output quote; refusing to swap without one (fail closed).'
+      );
+    }
+    const quoter = new Contract(quoterV2Address, QUOTER_V2_ABI, provider);
+    const quoteResult = await quoter.callStatic.quoteExactInputSingle({
+      tokenIn: tokenAddress,
+      tokenOut: targetTokenAddress,
+      amountIn: amount,
+      fee: feeTier,
+      sqrtPriceLimitX96: 0,
+    });
+    const quotedOut = BigNumber.from(quoteResult.amountOut ?? quoteResult[0]);
+    const amountOutMin = deriveSwapMinimumOut({
+      expectedOutputRaw: quotedOut,
+      slippagePercent: slippageBasisPoints / 100,
+    });
+    logger.info(
+      `Input ${weiToDecimaled(amount, inputDecimals)} ${tokenToSwap.symbol}; quoted out ${weiToDecimaled(quotedOut, outputDecimals)} ${targetToken.symbol}; minOut (${slippageBasisPoints / 100}% slippage) ${weiToDecimaled(amountOutMin, outputDecimals)}`
+    );
+
+    // STEP 3: Check and approve Permit2 allowance. MaxUint256 here is the
+    // canonical Permit2 pattern: Permit2 is an immutable, audited singleton and
+    // the actual pull authority is the BOUNDED per-router allowance + expiration
+    // granted in STEP 4 below, not this token->Permit2 approval.
     const permit2Allowance = await tokenContract.allowance(
       signerAddress,
       permit2Address
@@ -179,7 +210,8 @@ export async function swapWithUniversalRouter(
       );
     }
 
-    // STEP 3: Check and approve Universal Router via Permit2 (same as current)
+    // STEP 4: Check and approve Universal Router via Permit2 (bounded to `amount`
+    // with a 24h expiration — this is the real spend authority).
     const { amount: routerAllowance, expiration } =
       await permit2Contract.allowance(
         tokenAddress,
@@ -221,34 +253,8 @@ export async function swapWithUniversalRouter(
       );
     }
 
-    // STEP 4: derive amountOutMin from a REAL output quote and the operator
-    // slippage. surfaced-defects #2: the previous computation derived the floor
-    // from the INPUT amount (wrong units), so the slippage guard was illusory.
-    // Fail closed if no quoter is configured rather than swap unprotected.
-    if (!quoterV2Address) {
-      throw new Error(
-        'Universal Router reward swap requires uniswap.quoterV2Address to derive a safe minimum-out from a real output quote; refusing to swap without one (fail closed).'
-      );
-    }
-    const quoter = new Contract(quoterV2Address, QUOTER_V2_ABI, provider);
-    const quoteResult = await quoter.callStatic.quoteExactInputSingle({
-      tokenIn: tokenAddress,
-      tokenOut: targetTokenAddress,
-      amountIn: amount,
-      fee: feeTier,
-      sqrtPriceLimitX96: 0,
-    });
-    const quotedOut = BigNumber.from(quoteResult.amountOut ?? quoteResult[0]);
-    const amountOutMin = deriveSwapMinimumOut({
-      expectedOutputRaw: quotedOut,
-      slippagePercent: slippageBasisPoints / 100,
-    });
-
-    logger.info(
-      `Input ${weiToDecimaled(amount, inputDecimals)} ${tokenToSwap.symbol}; quoted out ${weiToDecimaled(quotedOut, outputDecimals)} ${targetToken.symbol}; minOut (${slippageBasisPoints / 100}% slippage) ${weiToDecimaled(amountOutMin, outputDecimals)}`
-    );
-
-    // STEP 5: Prepare the swap command (same as current)
+    // STEP 5: Prepare the swap command. amountOutMin was derived fail-closed in
+    // STEP 2, before any approval was granted.
     logger.debug(
       `Swapping token: ${tokenToSwap.symbol}, amount: ${weiToDecimaled(amount, inputDecimals)} to ${targetToken.symbol}`
     );
