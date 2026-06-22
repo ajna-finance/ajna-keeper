@@ -69,7 +69,7 @@ The production guide covers the recommended approach using hosted services:
 - Hosted RPC setup (Alchemy/QuickNode) vs local nodes
 - Hosted subgraph deployment (BuiltByMom fork + Goldsky) vs local Graph Node
 - Verified contract addresses for major chains (Avalanche, Hemi, Base, Arbitrum)
-- Multiple external-take liquidity options: 1inch single-contract aggregation, LI.FI same-chain aggregation through a factory-registered taker after production canary gates pass, and direct DEX adapters for Uniswap V3 and Curve
+- Multiple external-take liquidity options: same-chain calldata-aggregator paths for 1inch, LI.FI, and Sushi (each a factory-registered taker; LI.FI is gated behind production canary gates), plus direct DEX adapters for Uniswap V3 and Curve
 - API rate limits and service tier recommendations
 - Real-world configuration examples
 - Production monitoring and troubleshooting
@@ -112,7 +112,7 @@ Then edit `.env` to add your API keys:
 
 #### Optional API Keys
 
-**4. 1inch API Key** (Optional - for 1inch single-contract aggregation)
+**4. 1inch API Key** (Optional - for 1inch aggregation)
 
 - Get from [1inch Developer Portal](https://portal.1inch.dev/)
 - Add to `.env`: `ONEINCH_API_KEY="your_key_here"`
@@ -220,7 +220,10 @@ make start config.ts
 # Or use a specific config
 make start examples/example-base-config.ts
 
-# Dry-run mode (no transactions)
+# Dry-run mode — set `runtime.dryRun: true` in your config to suppress transactions.
+# NOTE: `make start-dry` does NOT by itself force dry-run (the keeper CLI has no
+# --dry-run flag); it runs the same command as `make start`. It only suppresses
+# transactions if your config has runtime.dryRun: true.
 make start-dry config.ts
 
 # Alternative syntax (also works)
@@ -246,6 +249,18 @@ make keystore       # Create new keystore
 make format         # Format code
 ```
 
+### Process lifecycle / shutdown
+
+The keeper installs process-level safety handlers at startup. `SIGTERM` and
+`SIGINT` (container stop / Ctrl-C) shut the keeper down **immediately** without
+draining in-flight work; an unhandled promise rejection is logged but does not
+terminate the daemon (the supervised loops self-recover), while an uncaught
+synchronous exception is fatal. There is a small unprotected window between
+dispatching a take transaction and its acceptance being persisted to the durable
+nonce floor — a signal landing in that window can leave a maybe-accepted
+transaction whose nonce a restart could collide on (wasted/stranded tx, not fund
+loss). Prefer stopping the keeper between auction cycles when practical.
+
 ## Requirements
 
 For each desired chain:
@@ -263,7 +278,7 @@ Starts a liquidation when a loan's threshold price exceeds the lowest utilized p
 
 ### Take
 
-When auction price drops below a configured external-price threshold, the keeper can execute an external take by swapping collateral for quote token and repaying debt. External-take paths include the 1inch single-contract aggregator path, direct DEX adapters for Uniswap V3 and Curve, and a LI.FI same-chain aggregator path through a factory-registered taker. LI.FI production support is claimed only for chain/pair configs that pass the required LI.FI production canary gates.
+When auction price drops below a configured external-price threshold, the keeper can execute an external take by swapping collateral for quote token and repaying debt. External-take paths include same-chain **calldata-aggregator** paths for 1inch, LI.FI, and Sushi — each a factory-registered taker built on `BaseAggregatorCalldataTaker` — and **direct-DEX** adapters for Uniswap V3 and Curve. LI.FI production support is claimed only for chain/pair configs that pass the required LI.FI production canary gates. The atomic take callback is authenticated by a transient pool + calldata-hash binding shared across all five takers.
 
 External takes usually require contract deployment. Take submission can also be routed through an optional dedicated private/write transport. See the contract deployment section below.
 
@@ -417,8 +432,9 @@ The keeper supports separate external-take liquidity providers and LP reward swa
 
 | Integration    | External Takes | LP Rewards | Contract Required              | Best For                                              |
 | -------------- | -------------- | ---------- | ------------------------------ | ----------------------------------------------------- |
-| **1inch**      | ✅             | ✅         | Yes (Single-contract taker)    | Major chains (Ethereum, Avalanche, Base, Arbitrum)    |
+| **1inch**      | ✅             | ✅         | Yes (Factory-registered taker) | Major chains (Ethereum, Avalanche, Base, Arbitrum)    |
 | **LI.FI**      | Gated          | ❌         | Yes (Factory-registered taker) | Same-chain aggregator routes with reviewed allowlists |
+| **Sushi**      | ✅             | ❌         | Yes (Factory-registered taker) | Same-chain Sushi aggregator routes with reviewed allowlists |
 | **Uniswap V3** | ✅             | ✅         | Yes (Factory direct-DEX taker) | All chains with Uniswap V3                            |
 | **Curve**      | ✅             | ✅         | Yes (Factory direct-DEX taker) | Chains with Curve pools (stablecoin/crypto pairs)     |
 
@@ -501,11 +517,12 @@ For Uniswap V3 external takes, the deployed taker contracts accept the fee tier 
 - Skips unavailable pools before applying `takeRouteQuoteBudgetPerCandidate`, so missing fee tiers do not consume quote budget
 - Quotes budget-approved direct DEX routes with bounded parallelism, then ranks them deterministically by expected net profit
 - Treats `allowedLiquiditySources`, when set, as the complete direct DEX route allowlist. Include the default source in that list if it should remain eligible.
-- Can compare the best direct DEX route against calldata aggregator routes when `discovery.take.allowedExternalTakePaths` includes `direct_dex` and `calldata_aggregator`; use `discovery.take.allowedCalldataAggregatorProviders` to choose providers such as `oneinch` and `lifi`.
+- Can compare the best direct DEX route against calldata aggregator routes when `discovery.take.allowedExternalTakePaths` includes `direct_dex` and `calldata_aggregator`; use `discovery.take.allowedCalldataAggregatorProviders` to choose providers such as `oneinch`, `lifi`, and `sushi_aggregator`.
 - In hybrid mode, `externalTakeProbeTimeoutMs` bounds each enabled path probe so one slow route cannot block another viable route. When unset, it defaults to `oneInchQuoteTimeoutMs + 1000ms`, capped at 5000ms. Explicit values from 1ms to 10000ms are allowed for slow infrastructure, but values above 5000ms directly trade hot-auction latency for provider tolerance.
 - Hybrid mode defaults to `externalTakeRouteSelectionMode: 'maximize_profit'`, which probes all enabled paths and ranks by expected net profit. Use `'direct_dex_first'` to probe direct DEX first and skip aggregators when the direct DEX path is approved without subsidy; subsidized direct DEX approvals keep probing so a self-funding aggregator path can still win.
 - `hybridGasQuoteFailureFallbackMode: 'direct_dex_first'` is an explicit opt-in escape hatch for hybrid `maximize_profit` when the direct DEX route quotes but native gas cannot be converted into the pool quote token. It requires `maxGasCostNative`, is skipped when quote-denominated gas/profit fields are configured, and only approves non-subsidized direct DEX routes.
 - `npm run oneinch-route-canary` is an env-gated, no-broadcast route check for Base CADC/USDC and WETH/USDC. It loads `.env` and uses `AJNA_AGENT_RPC_URL`, `AJNA_RPC_URL_BASE`, `BASE_RPC_URL`, or `ALCHEMY_API_KEY` for Base RPC. With RPC access, it validates Uniswap V3 WETH/USDC QuoterV2 coverage across the configured fee tiers. With 1inch credentials and `AJNA_AGENT_ONEINCH_CANARY_TAKER_ADDRESS`, it also validates CADC/USDC 1inch quotes, WETH/USDC 1inch gas conversion, and decoded CADC/USDC swap-data shape.
+- `npm run verify:routes` is the one-shot, no-broadcast route-shape verification gate to run before enabling external takes: it runs `lifi-route-canary`, `sushi-aggregator-route-canary`, and `curve-selector-canary` in sequence and fails closed if any does.
 - `npm run lifi-route-canary` is an env-gated, no-broadcast LI.FI route-shape check. Local exploratory runs can load policy from `-- --config <path>` or from `AJNA_AGENT_LIFI_CANARY_*` environment variables, validate configured exchange filters against `GET /v1/tools`, fetch same-chain quotes, and locally enforce target, spender, selector, token, chain, amount, and zero-value route shape. LI.FI production enablement gate runs must set `AJNA_AGENT_LIFI_CANARY_REQUIRE_LIVE=true` and provide `-- --config <path>` with a reviewed production keeper config containing production `dex.lifi` and `takers.contracts.Lifi`; required-live mode rejects incomplete production chain policy, custom API base URLs, LI.FI policy env overrides including API-base overrides, and route-level taker-address overrides, then exits non-zero instead of treating missing production config as an optional skip. If `AJNA_AGENT_LIFI_CANARY_CHAIN_ID` is unset, a single-chain production `dex.lifi` allowlist selects that chain; multi-chain configs must set the target chain explicitly. Non-Base runs must provide `AJNA_AGENT_LIFI_CANARY_ROUTES_JSON` with reviewed token pairs and raw input amounts. A successful required-live no-broadcast route-shape canary using the reviewed production keeper config is the first LI.FI production enablement gate for the target chain; it does not replace the callback-path fork execution canary.
 - `npm run lifi-fork-execution-canary` is an opt-in Base fork execution canary. It refuses non-Hardhat networks, non-Base forks, non-8453 chain IDs, custom or mocked LI.FI API base URLs, and LI.FI policy env overrides. Set `AJNA_AGENT_LIFI_FORK_CANARY_CONFIG` or `AJNA_AGENT_LIFI_CANARY_CONFIG` to the reviewed production keeper config so the fork verifies the configured production factory and `takers.contracts.Lifi` are deployed and registered, then reuses the same `dex.lifi` allowlists for an isolated local callback harness. It uses `AJNA_AGENT_RPC_URL`, `AJNA_RPC_URL_BASE`, `BASE_RPC_URL`, or `ALCHEMY_API_KEY` for the local Base fork, fetches fresh same-chain LI.FI calldata from the default LI.FI API for the local harness taker address, then executes it through `LifiKeeperTaker` from the Ajna callback path while enforcing an approved min-out equal to route min-out plus the configured raw-unit surplus floor. A successful callback-path fork execution canary using the reviewed production config policy, verified production registration, and the default LI.FI API is the second LI.FI production enablement gate for Base; the required-live route-shape canary remains the gate that proves default-API calldata for the production `takers.contracts.Lifi` receiver. Non-Base LI.FI production support requires an equivalent reviewed chain-specific fork canary before live use. It is not part of routine local tests and never broadcasts to Base.
 - `npm run hybrid-fork-loop` is an opt-in Base fork harness that runs the real keeper discovery loop (`handleDiscoveredTakeTarget`) end to end with `direct_dex` and `calldata_aggregator` enabled, with 1inch and LI.FI selected through `allowedCalldataAggregatorProviders`, so direct DEX adapters and calldata aggregators compete and fall back against real aggregator routes and real on-chain liquidity. Unlike the other fork tests, which drive lower-level functions directly and disable the aggregators, this is the only test that exercises the hybrid ranking/fallback against live quotes. It refuses non-Hardhat networks, non-Base forks, and non-8453 chain IDs, deploys a fresh factory + Uniswap/Curve/LI.FI takers + a signer-owned 1inch taker, configures the LI.FI taker allowlists from the reviewed production config, constructs a real liquidatable WETH/USDC position via whale impersonation, and warps the auction down until a route clears. Required env: a Base RPC (`AJNA_AGENT_RPC_URL`/`AJNA_RPC_URL_BASE`/`BASE_RPC_URL`/`ALCHEMY_API_KEY`), `AJNA_AGENT_HYBRID_FORK_CONFIG` (a reviewed production keeper config enabling both top-level paths with production `dex.lifi` — `examples/example-base-hybrid-fork-config.ts` is a ready Base starting point whose LI.FI allowlist was confirmed against the live API and passes `npm run lifi-route-canary`), and Base whales (`AJNA_AGENT_HYBRID_LENDER_WHALE`, `AJNA_AGENT_HYBRID_BORROWER_WHALE`). It defaults to dry-run (evaluates + ranks all three providers without submitting); set `AJNA_AGENT_HYBRID_FORK_LIVE_TAKE=true` for a real on-chain take with balance-delta assertions. The position-construction and warp amounts are tunable economic knobs (`AJNA_AGENT_HYBRID_*`) and will likely need adjustment for the pinned `BASE_FORK_BLOCK`. It is not part of routine local tests and skips cleanly without `RUN_HYBRID_FORK_LOOP=true`. Validated reference run (Base WETH/USDC pool, recent fork block; executes a real Uniswap-V3 take after direct DEX wins the 1inch/direct DEX/LI.FI net-profit ranking — 1inch participates only with a valid `ONEINCH_API_KEY`):
@@ -566,20 +583,22 @@ Plan: Keep the candidate list small enough for quote latency; LP rewards can sti
 
 ### Choose Your Deployment Approach
 
-**Option A: 1inch Single-Contract Aggregator (Major Chains)**
+**Option A: 1inch Same-Chain Aggregator (Major Chains)**
 
 - For chains with 1inch support (Ethereum, Avalanche, Base, Arbitrum)
-- Single-contract taker deployment
+- Factory-registered calldata-aggregator taker (`OneInchAggregatorKeeperTaker`) — the same family as LI.FI and Sushi, built on `BaseAggregatorCalldataTaker`
 - Uses 1inch aggregation for dynamic route pricing
+- Registered automatically by the factory deploy when `dex.oneInch` carries a production allowlist policy
 
 ```bash
 # Compile contracts first
 yarn compile
 
-# Deploy 1inch single-contract taker
-yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
+# Deploy the factory + every configured aggregator/direct-DEX taker
+# (1inch auto-enrolls when dex.oneInch has a production allowlist policy)
+yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
-# Update your config with the deployed address
+# Update your config with the deployed router address
 # takers: { router: '0x[router-address]', contracts: { OneInchAggregator: '0x[deployed-address]' } }
 ```
 
@@ -598,7 +617,7 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 
 # Update your config with deployed addresses:
 # takers: {
-#   factory: '0x[factory-address]',
+#   router: '0x[router-address]',
 #   contracts: { UniswapV3: '0x[taker-address]' },
 # }
 ```
@@ -624,7 +643,7 @@ AJNA_AGENT_LIFI_FORK_CANARY_CONFIG=your-config.ts npm run lifi-fork-execution-ca
 const config: KeeperConfig = {
   // Required for LI.FI external takes after the factory and LifiKeeperTaker are deployed and registered
   takers: {
-    factory: '0x[factory-address]',
+    router: '0x[router-address]',
     contracts: { Lifi: '0x[lifi-taker-address]' },
   },
   dex: {
@@ -644,7 +663,39 @@ const config: KeeperConfig = {
 };
 ```
 
-**Option D: No External Takes**
+**Option D: Sushi Same-Chain Aggregator**
+
+- A second calldata-aggregator path (alongside 1inch and LI.FI), factory-registered as `SushiAggregatorKeeperTaker`
+- Uses the Sushi route processor for same-chain quotes; configured via `dex.sushiAggregator` with the same allowlist-policy shape as LI.FI
+- Deployed by the same factory deploy when `dex.sushiAggregator` is configured (`takers.contracts.SushiAggregator`). Sushi is supported **only** as a calldata aggregator — the legacy direct-SushiSwap taker was removed and its enum slot is reserved/deprecated.
+
+```bash
+# Deployed by the factory deploy alongside the other configured takers
+yarn ts-node scripts/deploy-factory-system.ts your-config.ts
+```
+
+```typescript
+const config: KeeperConfig = {
+  takers: {
+    router: '0x[router-address]',
+    contracts: { SushiAggregator: '0x[sushi-taker-address]' },
+  },
+  dex: {
+    sushiAggregator: {
+      mode: 'production',
+      callTargetAllowlist: { 8453: ['0x[reviewed-sushi-target]'] },
+      approvalSpenderAllowlist: { 8453: ['0x[reviewed-approval-spender]'] },
+      selectorAllowlist: {
+        8453: {
+          '0x[reviewed-sushi-target]': ['0x[reviewed-selector]'],
+        },
+      },
+    },
+  },
+};
+```
+
+**Option E: No External Takes**
 
 - Skip contract deployment
 - Use arbTake and settlement only
@@ -664,8 +715,8 @@ V1 can auto-discover `take` and `settlement` opportunities across a chain while 
 - `manual.pools[]` still works for manual `kick`, LP collection, bond collection, and per-action overrides.
 - If a pool has a manual `take`, that whole `take` block wins over discovery defaults.
 - If a pool has a manual `settlement`, that whole `settlement` block wins over discovery defaults.
-- `allowedExternalTakePaths` enables top-level comparison between enabled external-take paths. Use `['direct_dex', 'calldata_aggregator']` when direct DEX routes should compete with aggregator providers, and use `allowedCalldataAggregatorProviders` to allow providers such as `oneinch` and `lifi`. If `allowedExternalTakePaths` is omitted, autodiscover preserves the single-path behavior from `discovery.defaults.take.liquiditySource` unless `allowedCalldataAggregatorProviders` explicitly lists multiple providers for the derived `calldata_aggregator` family; that multi-provider list engages provider selection and net-profit ranking within the family.
-- `allowedLiquiditySources` remains direct DEX-only. Use it to restrict direct DEX route selection to `UNISWAPV3` and/or `CURVE`; when set, it is the complete direct DEX route allowlist and cannot include `ONEINCH` or `LIFI`.
+- `allowedExternalTakePaths` enables top-level comparison between enabled external-take paths. Use `['direct_dex', 'calldata_aggregator']` when direct DEX routes should compete with aggregator providers, and use `allowedCalldataAggregatorProviders` to allow providers such as `oneinch`, `lifi`, and `sushi_aggregator`. If `allowedExternalTakePaths` is omitted, autodiscover preserves the single-path behavior from `discovery.defaults.take.liquiditySource` unless `allowedCalldataAggregatorProviders` explicitly lists multiple providers for the derived `calldata_aggregator` family; that multi-provider list engages provider selection and net-profit ranking within the family.
+- `allowedLiquiditySources` remains direct DEX-only. Use it to restrict direct DEX route selection to `UNISWAPV3` and/or `CURVE`; when set, it is the complete direct DEX route allowlist and cannot include calldata-aggregator sources (`ONEINCH`, `LIFI`, `SUSHI_AGGREGATOR`).
 - If `allowedExternalTakePaths` includes both `direct_dex` and `calldata_aggregator`, set `defaultDirectDexLiquiditySource` and `validateRouteDeployments: true` so the direct DEX selector has a default source and startup verifies the direct DEX taker path before hot loops begin. LI.FI paths also require `validateRouteDeployments: true`.
 - Hybrid route ranking requires a configured native-to-quote gas conversion path and wrapped native token address, because the keeper compares route net profit instead of gross quote output.
 - Set `hybridGasQuoteFailureFallbackMode: 'direct_dex_first'` only when you intentionally want a viable direct DEX route to execute after strict hybrid ranking fails solely because native-to-quote gas conversion is unavailable. The fallback is disabled by default, requires `maxGasCostNative`, does not run with `maxGasCostQuote`, `minExpectedProfitQuote`, or `minProfitNative`, and rejects subsidized direct DEX routes.
@@ -770,14 +821,14 @@ Prefer `maxGasCostNative` on L2s and mixed-quote deployments. It uses the RPC ga
 
 External takes require contract deployment and specific configuration:
 
-#### 1inch Single-Contract Aggregator
+#### 1inch Same-Chain Aggregator
 
-**IMPORTANT:** 1inch contract deployment is required for 1inch external takes only. LP reward swaps that use `PostAuctionDex.ONEINCH` use `dex.oneInch.routers` and the 1inch API directly; they do not require `takers.contracts.OneInchAggregator`.
+**IMPORTANT:** 1inch is a factory-registered calldata-aggregator taker (`OneInchAggregatorKeeperTaker`), deployed by the factory deploy below — not a standalone single-contract taker. Contract deployment is required for 1inch external takes only. LP reward swaps that use `PostAuctionDex.ONEINCH` use `dex.oneInch.routers` and the 1inch API directly; they do not require `takers.contracts.OneInchAggregator`.
 
 **Contract Deployment:**
 
 ```bash
-yarn ts-node scripts/query-1inch.ts --config your-config.ts --action deploy
+yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 ```
 
 **Config.ts Setup:**
@@ -832,7 +883,7 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 const config: KeeperConfig = {
   // Required for Uniswap V3 external takes
   takers: {
-    factory: '0x[factory-address]',
+    router: '0x[router-address]',
     contracts: {
       UniswapV3: '0x[taker-address]',
     },
@@ -896,7 +947,7 @@ yarn ts-node scripts/deploy-factory-system.ts your-config.ts
 const config: KeeperConfig = {
   // Required for Curve external takes
   takers: {
-    factory: '0x[factory-address]',
+    router: '0x[router-address]',
     contracts: {
       Curve: '0x[curve-taker-address]',
     },
@@ -1249,6 +1300,11 @@ dex: {
       wethAddress: "0x4200000000000000000000000000000000000006",
       permit2Address: "0xB952578f3520EE8Ea45b7914994dcf4702cEe578",
       poolFactoryAddress: "0x346239972d1fa486FC4a521031BC81bFB7D6e8a4",
+      // REQUIRED for Universal Router LP-reward swaps: the Uniswap V3 QuoterV2,
+      // used to derive a real reward-swap minimum-out. PostAuctionDex.UNISWAP_V3
+      // fails closed at startup without it (it may also be set under
+      // dex.uniswapV3.router.quoterV2Address). Base QuoterV2 shown.
+      quoterV2Address: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
       defaultFeeTier: 3000,
       defaultSlippage: 0.5,
     },
