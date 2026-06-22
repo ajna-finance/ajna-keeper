@@ -18,7 +18,14 @@ manual loop and **skipped** by discovery (manual-take precedence).
 | `startFixtureSubgraphStub` refactor to serve `summaries[]` | `scripts/no-spend/daemon-smoke.mjs` | ✅ (single-pool legs unchanged: 1-element list) |
 | `buildDaemonConfig` accepts `allowPools` + `manualPools` | `scripts/no-spend/daemon-smoke.mjs` | ✅ backward-compatible |
 | `runDaemonMultipool` leg + assertions | `scripts/no-spend/daemon-smoke.mjs` | 🟡 draft — needs a funded-fork run |
+| Shared-deployment fixture multiplication driver (`buildMultipoolFixtures`) | `scripts/run-no-spend-validation.mjs` | 🟡 draft — wired, needs a funded-fork run |
+| Orchestrator leg: `--run-daemon-multipool` / `--daemon-multipool-only` | `scripts/run-no-spend-validation.mjs` | 🟡 draft — wired (flag/env/call-site/guard/report) |
 | Aggregator-in-daemon entrypoint (installs the env-gated injector) | `scripts/no-spend/daemon-harness-entry.ts` | 🟡 draft — tsc-clean, needs fork |
+
+**Flags / env:** `--run-daemon-multipool` (env `AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL=1`)
+or `--daemon-multipool-only` (env `…_MULTIPOOL_ONLY=1`, implies the run + early-exits
+after it). Discovered-pool count via `AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT` (default
+2); a manual-precedence pool is always added on top.
 
 ## How the real enumeration is driven (the keystone)
 
@@ -68,28 +75,39 @@ So a richer leg can mix execution paths across pools: some pools `direct_dex`,
 others `calldata_aggregator` (LI.FI / Sushi / 1inch) — proving the daemon
 enumerates and acts via **different** real execution paths in one run.
 
-## Remaining integration work (needs a funded Base fork)
+## Implemented wiring (`buildMultipoolFixtures` in the orchestrator)
 
-1. **Fixture multiplication with a SHARED deployment.** The keeper config has a
-   single `takers`/`dex` block, so every pool must register against **one**
-   `KeeperTakerRouter` + taker set. Drive `create-liquidatable-ajna-fixture-cli.ts`
-   M times: run 1 deploys the router + takers + `MockLifiSwapTarget`; runs 2..M
-   **reuse** those addresses (the fixture supports reuse via env) and create a
-   fresh pool + kicked auction each. Collect the M `FixtureSummary` JSONs.
-2. **Orchestrator wiring** in `scripts/run-no-spend-validation.mjs` (mechanical,
-   mirrors `--daemon-lifecycle-only`):
-   - flags `--run-daemon-multipool` / `--daemon-multipool-only` + envs
-     `AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL[_ONLY]`
-   - read the M summary paths (e.g. `AJNA_AGENT_NO_SPEND_FIXTURE_SUMMARIES`),
-     split into `discoveredSummaries` (all but one) + `manualSummary` (one)
-   - call `runDaemonMultipool({ discoveredSummaries, manualSummary, rpcUrl,
-     tempDir, allowedHosts, egressReportPath })`
-   - add the `*-only` early-exit guard requiring the artifact (so it can't pass
-     without running), and include the artifact in the validation report
-3. **Confirm the manual `PoolConfig.take` field set** against the schema on the
-   fork (the draft mirrors the discovery `direct_dex` settings).
-4. **Size the aggregator payout** so the mock's quote-token payout exceeds the
-   on-chain amount-due (`AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW`).
+The fixture multiplication + orchestrator leg are now wired (draft).
+`buildMultipoolFixtures` drives `create-liquidatable-ajna-fixture.ts` N+1 times on
+the shared fork: run 0 deploys the `KeeperTakerRouter` + UniswapV3 taker +
+aggregator takers + `MockLifiSwapTarget`; runs 1..N **reuse** them by passing
+`AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS` + `AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS`
+(from run 0's summary) and `AJNA_AGENT_DEPLOY_EXTERNAL_TAKE=no`, while a unique
+`AJNA_AGENT_QUOTE/COLLATERAL_TOKEN_SYMBOL` per run forces a fresh distinct pool.
+The last fixture is the manual-precedence pool.
+
+## Remaining validation (needs a funded Base fork)
+
+1. **Confirm aggregator-taker reuse stays registered.** The fixture's reuse path
+   resolves only the router + UniswapV3 taker and emits no aggregator takers, so
+   the driver grafts run 0's full deployment onto runs 1..N. Verify on a fork
+   that run 0's aggregator takers remain registered on the shared (factory-scoped)
+   router for the later pools — if not, the aggregator daemon variant needs the
+   reuse path extended to re-register them.
+2. **Confirm the manual `PoolConfig.take` field set** against the schema (the
+   draft mirrors the discovery `direct_dex` settings).
+3. **Size the aggregator payout** so the mock's quote-token payout exceeds the
+   on-chain amount-due (`AJNA_AGENT_HARNESS_AGGREGATOR_PAYOUT_RAW`), and spawn the
+   harness daemon entry (`daemon-harness-entry.ts`) instead of `src/index.ts` for
+   the aggregator variant.
+4. **Token distinctness** depends on the external token-deployer's address scheme
+   (create2 vs nonce); unique symbols per run are used, but confirm two runs don't
+   collide on a deployed token address.
+
+> Note: `--daemon-multipool-only` still builds the orchestrator's single fixture
+> first (that build is unconditional in `main()`); the multipool leg then builds
+> its own N+1 fixtures. A future optimization could reuse the single fixture as
+> run 0 to save one deploy.
 
 ## Scope note
 

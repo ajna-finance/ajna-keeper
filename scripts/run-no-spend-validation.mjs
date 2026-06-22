@@ -29,6 +29,7 @@ import {
 import {
   runDaemonSmoke,
   runDaemonLifecycle,
+  runDaemonMultipool,
 } from './no-spend/daemon-smoke.mjs';
 import {
   buildReplayCommand,
@@ -129,6 +130,16 @@ function parseArgs(argv) {
       process.env.AJNA_AGENT_NO_SPEND_DAEMON_LIFECYCLE_ONLY === '1',
     daemonLifecycleOnly:
       process.env.AJNA_AGENT_NO_SPEND_DAEMON_LIFECYCLE_ONLY === '1',
+    runDaemonMultipool:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL_ONLY === '1',
+    daemonMultipoolOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL_ONLY === '1',
+    // Number of DISCOVERED pools for the multipool leg (a manual-precedence pool
+    // is always added on top, so total fixtures = count + 1).
+    multipoolDiscoveredCount: process.env.AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT
+      ? Number(process.env.AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT)
+      : 2,
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
       ? Number(process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER)
       : undefined,
@@ -195,6 +206,15 @@ function parseArgs(argv) {
     if (arg === '--daemon-lifecycle-only') {
       options.runDaemonLifecycle = true;
       options.daemonLifecycleOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-multipool') {
+      options.runDaemonMultipool = true;
+      continue;
+    }
+    if (arg === '--daemon-multipool-only') {
+      options.runDaemonMultipool = true;
+      options.daemonMultipoolOnly = true;
       continue;
     }
     if (arg === '--expected-fee-tier') {
@@ -818,6 +838,77 @@ function fixtureEnv(params) {
   return env;
 }
 
+/**
+ * Build N+1 liquidatable fixtures across distinct pools on the SHARED fork for
+ * the multipool enumeration leg (N discovered pools + 1 manual-precedence pool).
+ *
+ * Run 0 DEPLOYS the external-take contracts (KeeperTakerRouter + UniswapV3 taker
+ * + the aggregator takers + MockLifiSwapTarget). Runs 1..N REUSE that deployment
+ * (the keeper config has a single takers/dex block): setting the taker addresses
+ * makes the fixture resolve the existing contracts instead of redeploying, and
+ * those contracts are factory-scoped so they serve every pool. Each run uses a
+ * unique token symbol pair, so the fixture creates a fresh, distinct pool.
+ *
+ * DRAFT: needs a funded-fork run to validate that reuse keeps the run-0
+ * aggregator takers registered for runs 1..N (see
+ * docs/multi-pool-enumeration-scenario.md). Returns an array of summaries; the
+ * caller treats the last as the manual-precedence pool.
+ */
+async function buildMultipoolFixtures(baseParams, discoveredCount) {
+  const total = discoveredCount + 1; // discovered pools + 1 manual pool
+  const summaries = [];
+  let sharedDeployment;
+  for (let i = 0; i < total; i += 1) {
+    const summaryPath = path.join(
+      baseParams.tempDir,
+      `multipool-fixture-summary-${i}.json`
+    );
+    const env = fixtureEnv({
+      rpcUrl: baseParams.rpcUrl,
+      keyFilePath: path.join(baseParams.tempDir, `multipool-fixture-keys-${i}.json`),
+      summaryPath,
+      allowedHosts: baseParams.allowedHosts,
+      egressReportPath: baseParams.egressReportPath,
+      expectedFeeTier: baseParams.expectedFeeTier,
+    });
+    // Distinct token symbols => fresh, distinct pool per run.
+    env.AJNA_AGENT_QUOTE_TOKEN_SYMBOL = `QTEST${i}`;
+    env.AJNA_AGENT_COLLATERAL_TOKEN_SYMBOL = `CTEST${i}`;
+    if (sharedDeployment) {
+      env.AJNA_AGENT_DEPLOY_EXTERNAL_TAKE = 'no';
+      env.AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS =
+        sharedDeployment.keeperTakerRouter;
+      env.AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS = sharedDeployment.uniswapV3Taker;
+    }
+    await runNodeScript(
+      `creating multipool fixture ${i + 1}/${total}`,
+      path.join(ROOT, 'scripts', 'create-liquidatable-ajna-fixture.ts'),
+      ['--with-uniswap-v3-external-take', '--allow-evm-time-travel', '--final-kick'],
+      env,
+      path.join(baseParams.tempDir, `multipool-fixture-${i}.log`),
+      FIXTURE_CREATION_TIMEOUT_MS
+    );
+    const summary = readJson(summaryPath, `multipool fixture ${i} summary`);
+    if (i === 0) {
+      sharedDeployment = summary.uniswapV3ExternalTake?.deployment;
+      if (!sharedDeployment?.keeperTakerRouter || !sharedDeployment?.uniswapV3Taker) {
+        throw new Error(
+          'Multipool run 0 did not emit a shareable external-take deployment'
+        );
+      }
+    } else {
+      // Reuse runs emit mode:'reused' without aggregator takers; graft run-0's
+      // full deployment so any per-summary deployment read sees the full set.
+      summary.uniswapV3ExternalTake = {
+        ...summary.uniswapV3ExternalTake,
+        deployment: sharedDeployment,
+      };
+    }
+    summaries.push(summary);
+  }
+  return summaries;
+}
+
 function harnessEnv(params) {
   const scenarioEnv = {};
   for (const name of [
@@ -995,7 +1086,35 @@ async function main() {
       });
     }
 
-    if (options.daemonSmokeOnly || options.daemonLifecycleOnly) {
+    let daemonMultipoolArtifact;
+    if (options.runDaemonMultipool) {
+      // The multipool leg builds its OWN N+1 shared-deployment fixtures (the
+      // single fixture above is independent and unused here).
+      const multipoolFixtures = await buildMultipoolFixtures(
+        {
+          rpcUrl,
+          tempDir,
+          allowedHosts,
+          egressReportPath,
+          expectedFeeTier: options.expectedFeeTier,
+        },
+        options.multipoolDiscoveredCount
+      );
+      daemonMultipoolArtifact = await runDaemonMultipool({
+        discoveredSummaries: multipoolFixtures.slice(0, -1),
+        manualSummary: multipoolFixtures[multipoolFixtures.length - 1],
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
+    if (
+      options.daemonSmokeOnly ||
+      options.daemonLifecycleOnly ||
+      options.daemonMultipoolOnly
+    ) {
       // Guard against a false pass: the *-only early-exit must not report
       // success unless the scenario it names actually produced an artifact.
       requireInvariant(
@@ -1005,6 +1124,10 @@ async function main() {
       requireInvariant(
         !options.daemonLifecycleOnly || daemonLifecycleArtifact !== undefined,
         'daemon-lifecycle-only ran the daemon lifecycle scenario'
+      );
+      requireInvariant(
+        !options.daemonMultipoolOnly || daemonMultipoolArtifact !== undefined,
+        'daemon-multipool-only ran the daemon multipool scenario'
       );
       await stopHardhatNode();
       hardhatStopped = true;
@@ -1036,6 +1159,7 @@ async function main() {
         },
         daemon: daemonArtifact,
         daemonLifecycle: daemonLifecycleArtifact,
+        daemonMultipool: daemonMultipoolArtifact,
       };
       fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
       fs.writeFileSync(
@@ -1212,6 +1336,7 @@ async function main() {
       stateIntegrity,
       daemon: daemonArtifact,
       daemonLifecycle: daemonLifecycleArtifact,
+      daemonMultipool: daemonMultipoolArtifact,
     };
     fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
     fs.writeFileSync(
