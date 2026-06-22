@@ -5,6 +5,7 @@ import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import { weiToDecimaled } from '../utils';
 import { getTokenFromAddress } from './uniswap';
+import { deriveSwapMinimumOut } from './swap-min-out';
 import { CurvePoolType } from '../config';
 
 // ABIs - Based on working test scripts
@@ -61,7 +62,14 @@ export async function swapWithCurveRouter(
     throw new Error('Pool type must be provided via configuration');
   }
   if (slippagePercentage === undefined) {
-    throw new Error('Slippage must be provided via configuration');
+    // Fall back to the operator's configured curve defaultSlippage rather than
+    // silently dropping it (audit Pass-1: the param was passed but never used).
+    if (defaultSlippage === undefined) {
+      throw new Error(
+        'Slippage must be provided via configuration (per-pool slippage or curve defaultSlippage)'
+      );
+    }
+    slippagePercentage = defaultSlippage;
   }
   if (!signer || !tokenAddress || !amount) {
     throw new Error('Invalid parameters provided to swap');
@@ -162,12 +170,14 @@ export async function swapWithCurveRouter(
       targetToken.decimals
     );
 
-    // STEP 3: Conservative slippage calculation (same as SushiSwap pattern)
-    const slippageBasisPoints = slippagePercentage * 100;
-    const conservativeOutputRatio = (10000 - slippageBasisPoints) / 10000;
-    const minAmountOutWithSlippage = minAmountOut
-      .mul(Math.floor(conservativeOutputRatio * 10000))
-      .div(10000);
+    // STEP 3: derive the output floor from the get_dy quote + operator slippage
+    // via the shared helper, so a zero/degenerate quote fails closed and the
+    // slippage is range-checked (parity with the Uniswap/Universal Router reward
+    // paths — surfaced-defects #1/#2 siblings).
+    const minAmountOutWithSlippage = deriveSwapMinimumOut({
+      expectedOutputRaw: minAmountOut,
+      slippagePercent: slippagePercentage,
+    });
     const minAmountOutWithSlippageFormatted = weiToDecimaled(
       minAmountOutWithSlippage,
       targetToken.decimals
@@ -189,14 +199,32 @@ export async function swapWithCurveRouter(
       `Current Curve pool allowance: ${weiToDecimaled(currentAllowance, tokenToSwap.decimals)} ${tokenToSwap.symbol}`
     );
 
-    if (currentAllowance.lt(amount)) {
+    if (!currentAllowance.eq(amount)) {
       logger.info(`Approving Curve pool to spend ${tokenToSwap.symbol}`);
+      // Reconcile the allowance to EXACTLY `amount` whenever it differs — both
+      // when it is too LOW and when a prior swap that did not pull left a stale
+      // LARGER allowance to this untrusted pool (Codex Pass-3 MEDIUM: the old
+      // `lt(amount)` guard skipped the over-allowance case). USDT-safe:
+      // approval-strict tokens revert on a non-zero -> non-zero approve, so reset
+      // a residual non-zero allowance to 0 first. Mirrors the take-path
+      // _safeApproveWithReset (audit Pass-2/3 / Codex).
+      if (currentAllowance.gt(0)) {
+        await NonceTracker.queueTransaction(signer, async (nonce) => {
+          const resetTx = await tokenContract.approve(poolAddress, 0, { nonce });
+          const receipt = await resetTx.wait();
+          logger.info(`Curve allowance reset to 0 before re-approval`);
+          return receipt;
+        });
+      }
       await NonceTracker.queueTransaction(signer, async (nonce) => {
-        const approveTx = await tokenContract.approve(
-          poolAddress,
-          ethers.constants.MaxUint256,
-          { nonce }
-        );
+        // Bound the approval to the exact swap `amount` rather than MaxUint256:
+        // the configured Curve pool is NOT a trusted singleton, and the
+        // exact-input exchange() pulls exactly `amount`, so this leaves ~0
+        // residual allowance instead of a persistent unlimited one
+        // (audit defect #5 / Codex Pass-1 MEDIUM).
+        const approveTx = await tokenContract.approve(poolAddress, amount, {
+          nonce,
+        });
         logger.info(`Curve approval transaction sent: ${approveTx.hash}`);
         const receipt = await approveTx.wait();
         logger.info(`Curve approval confirmed!`);
@@ -204,7 +232,7 @@ export async function swapWithCurveRouter(
       });
     } else {
       logger.info(
-        `Curve pool already has sufficient allowance for ${tokenToSwap.symbol}`
+        `Curve pool already approved for exactly the ${tokenToSwap.symbol} swap amount`
       );
     }
 

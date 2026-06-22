@@ -384,6 +384,18 @@ export function validatePostAuctionDex(
           'PostAuctionDex.UNISWAP_V3 requires dex.uniswapV3.universalRouter configuration'
         );
       }
+      // The Universal Router reward swap derives its slippage floor from a live
+      // QuoterV2 output quote and fails closed without one. Require it up front
+      // (from either documented location) so a misconfig surfaces here rather
+      // than as a cryptic throw deep inside the LP-reward loop's swap.
+      if (
+        !config.dex.uniswapV3.universalRouter.quoterV2Address &&
+        !config.dex.uniswapV3.router?.quoterV2Address
+      ) {
+        throw new Error(
+          'PostAuctionDex.UNISWAP_V3 requires a QuoterV2 address (dex.uniswapV3.universalRouter.quoterV2Address or dex.uniswapV3.router.quoterV2Address) to derive a safe reward-swap minimum-out'
+        );
+      }
       return;
     case PostAuctionDex.CURVE:
       if (!config.dex?.curve) {
@@ -417,14 +429,26 @@ function requireRegisteredTakerContract(params: {
       `TakeSettings: liquiditySource ${sourceName} does not use a registered taker contract`
     );
   }
-  if (!params.keeperConfig.takers?.router) {
+  const router = params.keeperConfig.takers?.router;
+  if (!router) {
     throw new Error(
       `TakeSettings: takers.router required when liquiditySource is ${sourceName}`
     );
   }
-  if (!params.keeperConfig.takers.contracts?.[contractKey]) {
+  if (!ethers.utils.isAddress(router)) {
+    throw new Error(
+      `TakeSettings: takers.router must be a valid address (got "${router}")`
+    );
+  }
+  const takerContract = params.keeperConfig.takers?.contracts?.[contractKey];
+  if (!takerContract) {
     throw new Error(
       `TakeSettings: takers.contracts.${contractKey} required when liquiditySource is ${sourceName}`
+    );
+  }
+  if (!ethers.utils.isAddress(takerContract)) {
+    throw new Error(
+      `TakeSettings: takers.contracts.${contractKey} must be a valid address (got "${takerContract}")`
     );
   }
 }

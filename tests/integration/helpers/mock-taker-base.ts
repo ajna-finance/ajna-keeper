@@ -13,6 +13,7 @@ import {
   MockAtomicSwapPool__factory,
   MockCurveSwapPool__factory,
   MockERC20__factory,
+  MockFeeOnTransferERC20__factory,
   MockLifiSwapTarget__factory,
   MockMinOutBypassSwap__factory,
   MockPoolDeployer__factory,
@@ -96,6 +97,9 @@ export async function deployMockTakerBase(
     collateralDecimals?: number;
     quoteDecimals?: number;
     quoteTokenScale?: BigNumber;
+    // When set, the quote token charges this fee (bps) on every transfer, so the
+    // pool receives less than is repaid — exercises the exact-fill backstop.
+    feeOnTransferQuoteBps?: number;
   } = {}
 ) {
   const owner = Wallet.createRandom().connect(getProvider());
@@ -108,11 +112,24 @@ export async function deployMockTakerBase(
   );
   await collateralToken.deployed();
 
-  const quoteToken = await new MockERC20__factory(owner).deploy(
-    'Mock Quote',
-    'MQUOTE',
-    options.quoteDecimals ?? 18
-  );
+  const quoteToken = options.feeOnTransferQuoteBps
+    ? ((await (async () => {
+        const fee = await new MockFeeOnTransferERC20__factory(owner).deploy(
+          'Mock Quote',
+          'MQUOTE',
+          options.quoteDecimals ?? 18,
+          options.feeOnTransferQuoteBps!
+        );
+        await fee.deployed();
+        return fee;
+      })()) as unknown as Awaited<
+        ReturnType<MockERC20__factory['deploy']>
+      >)
+    : await new MockERC20__factory(owner).deploy(
+        'Mock Quote',
+        'MQUOTE',
+        options.quoteDecimals ?? 18
+      );
   await quoteToken.deployed();
 
   const poolDeployer = await new MockPoolDeployer__factory(owner).deploy();
@@ -234,8 +251,11 @@ export async function executeAggregatorTake<
   outputAmount?: BigNumber;
   quoteAmountDue?: BigNumber;
   amountOutMinimum?: BigNumber;
+  feeOnTransferQuoteBps?: number;
 }) {
-  const base = await deployMockTakerBase();
+  const base = await deployMockTakerBase({
+    feeOnTransferQuoteBps: params.feeOnTransferQuoteBps,
+  });
   const fixture = await deployAggregatorTaker(base, {
     Factory: params.Factory,
     source: params.source,

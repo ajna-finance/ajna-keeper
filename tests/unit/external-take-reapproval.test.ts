@@ -132,4 +132,69 @@ describe('external take reapproval', () => {
         .approvalContext
     ).to.equal(approvalContext);
   });
+
+  // P2-1 multi-auction: a single discovered target can hold several auctions
+  // (candidates). The executor must take more than one per cycle, bounded by
+  // maxExecutions (the rest carry to a later cycle).
+  it('processes multiple discovered candidates in one cycle and respects the maxExecutions cap', async () => {
+    const evaluation: BoundExternalTakeRouteEvaluation = {
+      isTakeable: true,
+      externalTakePath: 'calldata_aggregator',
+      providerId: 'oneinch',
+      selectedLiquiditySource: LiquiditySource.ONEINCH,
+      takeablePrice: 1.2,
+      quoteAmountRaw: BigNumber.from(100),
+      routeExecutionFloorRaw: BigNumber.from(90),
+      calldataQuote: buildOneInchCalldataQuote(BigNumber.from(100)),
+    };
+    const auctionPrice = ethers.utils.parseEther('1');
+    const collateral = ethers.utils.parseEther('1');
+
+    const runWithCap = async (maxExecutions: number) => {
+      const executeExternalTake = sinon.stub().resolves(true);
+      await processTakeCandidates({
+        pool: {
+          name: 'Multi-Auction Pool',
+          poolAddress: '0x3333333333333333333333333333333333333333',
+        } as any,
+        signer: {} as any,
+        poolConfig: {
+          name: 'Multi-Auction Pool',
+          take: {
+            liquiditySource: LiquiditySource.ONEINCH,
+            marketPriceFactor: 0.99,
+          },
+        } as any,
+        candidates: [{ borrower: '0xBorrowerA' }, { borrower: '0xBorrowerB' }],
+        subgraph: { cacheKey: 'test-subgraph' } as any,
+        externalTakeAdapter: {
+          kind: 'oneinch',
+          evaluateExternalTake: sinon.stub().resolves({
+            takeable: true,
+            executionPlan: singleExternalTakeExecutionPlan(evaluation, {
+              source: 'ctx',
+            }),
+          }),
+          executeExternalTake,
+        } as any,
+        arbTakeStrategy: createArbTakeStrategy(),
+        externalExecutionConfig: {} as any,
+        dryRun: false,
+        maxExecutions,
+        takeAuctionStatusReader: {
+          read: sinon.stub().resolves({ collateral, auctionPrice }),
+        } as any,
+      });
+      return executeExternalTake;
+    };
+
+    // maxExecutions=2: BOTH auctions are taken in the one cycle.
+    const both = await runWithCap(2);
+    expect(both.callCount).to.equal(2);
+
+    // maxExecutions=1: the cap stops after the first; the second is left for a
+    // later cycle (not double-processed, not dropped).
+    const capped = await runWithCap(1);
+    expect(capped.callCount).to.equal(1);
+  });
 });

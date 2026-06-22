@@ -93,6 +93,14 @@ export class RewardActionTracker {
       uniswap: {
         ...this.config.dex?.uniswapV3?.legacy,
         ...this.config.dex?.uniswapV3?.universalRouter,
+        // The Universal Router reward path requires quoterV2Address to derive a
+        // real min-out (it fails closed otherwise). The documented config places
+        // it under `uniswapV3.router`, so resolve from either location here —
+        // set explicitly rather than spreading `...router` to avoid clobbering
+        // the universalRouter address/gating fields above.
+        quoterV2Address:
+          this.config.dex?.uniswapV3?.universalRouter?.quoterV2Address ??
+          this.config.dex?.uniswapV3?.router?.quoterV2Address,
       },
       curve: this.config.dex?.curve,
     };

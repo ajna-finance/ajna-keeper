@@ -461,6 +461,10 @@ export interface UniversalRouterOverrides {
   poolFactoryAddress?: string;
   defaultFeeTier?: number;
   defaultSlippage?: number;
+  // QuoterV2 used to derive a real output quote (and thus a safe slippage floor)
+  // for Universal Router reward swaps. May also be supplied under
+  // `uniswapV3.router.quoterV2Address`; the reward path resolves from either.
+  quoterV2Address?: string;
 }
 
 export interface UniswapV3RouterOverrides {

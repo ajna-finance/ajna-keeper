@@ -122,7 +122,8 @@ describe('swapToWeth', () => {
         null as any,
         '',
         ethers.utils.parseUnits('100', 8),
-        FeeAmount.MEDIUM
+        FeeAmount.MEDIUM,
+        1
       )
     ).to.be.rejectedWith('Invalid parameters provided to swapToWeth');
   });
@@ -136,6 +137,7 @@ describe('swapToWeth', () => {
       '0x964d9D1A532B5a5DaeacBAc71d46320DE313AE9C',
       ethers.utils.parseUnits('100', 8),
       FeeAmount.MEDIUM,
+      1,
       { uniswapV3Router: mockSwapRouter.address }
     );
     expect(swapWethPromise).to.be.rejectedWith(

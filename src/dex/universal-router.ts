@@ -12,6 +12,7 @@ import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import { weiToDecimaled } from '../utils';
 import { getTokenFromAddress } from './uniswap';
+import { deriveSwapMinimumOut } from './swap-min-out';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
 
 // ABIs
@@ -36,6 +37,10 @@ const POOL_FACTORY_ABI = [
   'function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)',
 ];
 
+const QUOTER_V2_ABI = [
+  'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
+];
+
 // Command constants
 const V3_SWAP_EXACT_IN = '0x00';
 
@@ -52,7 +57,8 @@ export async function swapWithUniversalRouter(
   universalRouterAddress: string,
   permit2Address: string,
   feeTier: number,
-  poolFactoryAddress: string
+  poolFactoryAddress: string,
+  quoterV2Address?: string
 ) {
   // VALIDATION: Same as SushiSwap with additional factory validation
   if (!universalRouterAddress) {
@@ -145,7 +151,38 @@ export async function swapWithUniversalRouter(
       );
     }
 
-    // STEP 2: Check and approve Permit2 allowance (same as current but with better logging)
+    // STEP 2: derive amountOutMin from a REAL output quote + operator slippage,
+    // and FAIL CLOSED before granting ANY approval. A missing or reverting
+    // quoter must abort here, never AFTER a Permit2/router approval is already
+    // mined (which would leave a persistent allowance with no swap). The old
+    // ordering granted approvals first; surfaced-defects #2: the prior floor was
+    // derived from the INPUT amount (wrong units), making the guard illusory.
+    if (!quoterV2Address) {
+      throw new Error(
+        'Universal Router reward swap requires uniswap.quoterV2Address to derive a safe minimum-out from a real output quote; refusing to swap without one (fail closed).'
+      );
+    }
+    const quoter = new Contract(quoterV2Address, QUOTER_V2_ABI, provider);
+    const quoteResult = await quoter.callStatic.quoteExactInputSingle({
+      tokenIn: tokenAddress,
+      tokenOut: targetTokenAddress,
+      amountIn: amount,
+      fee: feeTier,
+      sqrtPriceLimitX96: 0,
+    });
+    const quotedOut = BigNumber.from(quoteResult.amountOut ?? quoteResult[0]);
+    const amountOutMin = deriveSwapMinimumOut({
+      expectedOutputRaw: quotedOut,
+      slippagePercent: slippageBasisPoints / 100,
+    });
+    logger.info(
+      `Input ${weiToDecimaled(amount, inputDecimals)} ${tokenToSwap.symbol}; quoted out ${weiToDecimaled(quotedOut, outputDecimals)} ${targetToken.symbol}; minOut (${slippageBasisPoints / 100}% slippage) ${weiToDecimaled(amountOutMin, outputDecimals)}`
+    );
+
+    // STEP 3: Check and approve Permit2 allowance. MaxUint256 here is the
+    // canonical Permit2 pattern: Permit2 is an immutable, audited singleton and
+    // the actual pull authority is the BOUNDED per-router allowance + expiration
+    // granted in STEP 4 below, not this token->Permit2 approval.
     const permit2Allowance = await tokenContract.allowance(
       signerAddress,
       permit2Address
@@ -173,7 +210,8 @@ export async function swapWithUniversalRouter(
       );
     }
 
-    // STEP 3: Check and approve Universal Router via Permit2 (same as current)
+    // STEP 4: Check and approve Universal Router via Permit2 (bounded to `amount`
+    // with a 24h expiration — this is the real spend authority).
     const { amount: routerAllowance, expiration } =
       await permit2Contract.allowance(
         tokenAddress,
@@ -215,21 +253,8 @@ export async function swapWithUniversalRouter(
       );
     }
 
-    // STEP 4: FIXED: Conservative slippage calculation (mirrors SushiSwap pattern)
-    // For LP reward swaps without quotes, use conservative approach
-    const conservativeOutputRatio = (10000 - slippageBasisPoints) / 10000;
-    const amountOutMin = amount
-      .mul(Math.floor(conservativeOutputRatio * 10000))
-      .div(10000);
-
-    logger.info(
-      `Input amount: ${weiToDecimaled(amount, inputDecimals)} ${tokenToSwap.symbol}`
-    );
-    logger.info(
-      `Minimum output with ${slippageBasisPoints / 100}% slippage: ${weiToDecimaled(amountOutMin, outputDecimals)} ${targetToken.symbol} (conservative estimate)`
-    );
-
-    // STEP 5: Prepare the swap command (same as current)
+    // STEP 5: Prepare the swap command. amountOutMin was derived fail-closed in
+    // STEP 2, before any approval was granted.
     logger.debug(
       `Swapping token: ${tokenToSwap.symbol}, amount: ${weiToDecimaled(amount, inputDecimals)} to ${targetToken.symbol}`
     );

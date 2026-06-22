@@ -304,21 +304,53 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     discoverySnapshotState,
   });
 
-  kickPoolsLoop({ poolMap, config, signer, chainId, subgraph });
+  superviseDaemonLoop(
+    'Kick',
+    kickPoolsLoop({ poolMap, config, signer, chainId, subgraph })
+  );
   if (takeLoopEnabled) {
-    takePoolsLoop({ config, signer, poolMap, discoveryRuntime });
+    superviseDaemonLoop(
+      'Take',
+      takePoolsLoop({ config, signer, poolMap, discoveryRuntime })
+    );
   }
   if (shouldRunSettlementLoop(config)) {
-    settlementLoop({ config, signer, poolMap, discoveryRuntime });
+    superviseDaemonLoop(
+      'Settlement',
+      settlementLoop({ config, signer, poolMap, discoveryRuntime })
+    );
   }
-  collectBondLoop({ poolMap, config, signer, subgraph });
-  collectLpRewardsLoop({
-    poolMap,
-    config,
-    signer,
-    subgraph,
-    ajna,
-    hydrationCooldowns,
+  superviseDaemonLoop(
+    'Bond',
+    collectBondLoop({ poolMap, config, signer, subgraph })
+  );
+  superviseDaemonLoop(
+    'LpRewards',
+    collectLpRewardsLoop({
+      poolMap,
+      config,
+      signer,
+      subgraph,
+      ajna,
+      hydrationCooldowns,
+    })
+  );
+}
+
+/**
+ * Attach a fatal-rejection guard to a fire-and-forget daemon loop launcher
+ * (surfaced-defects #4 follow-up). Each loop is infinite and self-recovering
+ * (runResilientLoop catches per-iteration crashes), so a rejection that escapes
+ * here is NOT a recoverable cycle error — it is a fatal startup/structural
+ * failure (e.g. a throw in a loop's pre-loop setup). Escalate to a loud exit(1)
+ * so the operator/container notices and restarts, instead of leaving the
+ * installed log-only `unhandledRejection` handler to silently swallow it and run
+ * the daemon with one loop (e.g. LP-reward collection) permanently dead.
+ */
+function superviseDaemonLoop(name: string, loop: Promise<void>): void {
+  loop.catch((error) => {
+    logger.error(`${name} daemon loop terminated unexpectedly; exiting.`, error);
+    process.exit(1);
   });
 }
 
@@ -424,10 +456,11 @@ async function kickPoolsLoop({
   chainId,
   subgraph,
 }: KickLoopParams) {
-  while (true) {
-    await processKickCycle({ poolMap, config, signer, chainId, subgraph });
-    await delay(config.runtime.delayBetweenRuns);
-  }
+  await runResilientLoop(
+    'Kick',
+    () => processKickCycle({ poolMap, config, signer, chainId, subgraph }),
+    () => config.runtime.delayBetweenRuns
+  );
 }
 
 export async function processKickCycle({
@@ -467,31 +500,11 @@ function hasKickSettings(
 }
 
 async function takePoolsLoop(params: DiscoveryLoopParams) {
-  while (true) {
-    const result = await runTakeLoopIteration(params);
-    await delay(result.delaySeconds);
-    if (result.recovered) {
-      logger.info(`Restarting take loop after crash recovery delay`);
-    }
-  }
-}
-
-export async function runTakeLoopIteration(
-  params: DiscoveryLoopParams
-): Promise<LoopIterationResult> {
-  try {
-    await params.discoveryRuntime.runTakeCycle();
-    return {
-      delaySeconds: params.config.runtime.delayBetweenRuns,
-      recovered: false,
-    };
-  } catch (outerError) {
-    logLoopCrash('Take', outerError);
-    return {
-      delaySeconds: LOOP_CRASH_RECOVERY_DELAY_SECONDS,
-      recovered: true,
-    };
-  }
+  await runResilientLoop(
+    'Take',
+    () => params.discoveryRuntime.runTakeCycle(),
+    () => params.config.runtime.delayBetweenRuns
+  );
 }
 
 async function collectBondLoop({
@@ -503,49 +516,50 @@ async function collectBondLoop({
   const poolsWithCollectBondSettings = getManualPools(config).filter(
     ({ collectBond }) => !!collectBond
   );
-  while (true) {
-    for (const poolConfig of poolsWithCollectBondSettings) {
-      const pool = getAddressInsensitiveMapValue(poolMap, poolConfig.address)!;
-      try {
-        await collectBondFromPool({
-          pool,
-          signer,
-          poolConfig,
-          config: {
-            dryRun: config.runtime.dryRun,
-            subgraph,
-          },
-        });
-      } catch (error) {
-        logger.error(`Failed to collect bond from pool: ${pool.name}.`, error);
+  await runResilientLoop(
+    'Bond',
+    async () => {
+      for (const poolConfig of poolsWithCollectBondSettings) {
+        const pool = getAddressInsensitiveMapValue(
+          poolMap,
+          poolConfig.address
+        )!;
+        try {
+          await collectBondFromPool({
+            pool,
+            signer,
+            poolConfig,
+            config: {
+              dryRun: config.runtime.dryRun,
+              subgraph,
+            },
+          });
+        } catch (error) {
+          logger.error(
+            `Failed to collect bond from pool: ${pool.name}.`,
+            error
+          );
+        }
       }
-    }
-    await delay(config.runtime.delayBetweenRuns);
-  }
+    },
+    () => config.runtime.delayBetweenRuns
+  );
 }
 
 async function settlementLoop(params: DiscoveryLoopParams) {
-  while (true) {
-    try {
-      const startTime = new Date().toISOString();
-      logger.debug(`Settlement loop iteration starting at ${startTime}`);
-      await params.discoveryRuntime.runSettlementCycle();
-
-      const settlementCheckIntervalSeconds =
-        params.discoveryRuntime.getSettlementCheckIntervalSeconds();
-      const nextCheck = new Date(
-        Date.now() + settlementCheckIntervalSeconds * 1000
-      ).toISOString();
+  await runResilientLoop(
+    'Settlement',
+    async () => {
       logger.debug(
-        `Settlement loop completed, sleeping for ${settlementCheckIntervalSeconds}s until ${nextCheck}`
+        `Settlement loop iteration starting at ${new Date().toISOString()}`
       );
-      await delay(settlementCheckIntervalSeconds);
-    } catch (outerError) {
-      logLoopCrash('Settlement', outerError);
-      await delay(LOOP_CRASH_RECOVERY_DELAY_SECONDS);
-      logger.info(`Restarting settlement loop after crash recovery delay`);
-    }
-  }
+      await params.discoveryRuntime.runSettlementCycle();
+      logger.debug(
+        `Settlement loop completed, sleeping for ${params.discoveryRuntime.getSettlementCheckIntervalSeconds()}s`
+      );
+    },
+    () => params.discoveryRuntime.getSettlementCheckIntervalSeconds()
+  );
 }
 
 function logLoopCrash(loopName: string, outerError: unknown): void {
@@ -558,6 +572,48 @@ function logLoopCrash(loopName: string, outerError: unknown): void {
   );
   if (errorStack) {
     logger.error(`Stack trace:`, errorStack);
+  }
+}
+
+/**
+ * Run one loop iteration with crash recovery (surfaced-defects #4): an error
+ * escaping the iteration is logged and recovered from instead of rejecting the
+ * (un-awaited) loop promise and silently killing it. All five daemon loops route
+ * through this single wrapper, so their crash-recovery behavior is identical.
+ */
+export async function runResilientLoopIteration(
+  loopName: string,
+  iteration: () => Promise<void>,
+  successDelaySeconds: number
+): Promise<LoopIterationResult> {
+  try {
+    await iteration();
+    return { delaySeconds: successDelaySeconds, recovered: false };
+  } catch (outerError) {
+    logLoopCrash(loopName, outerError);
+    return { delaySeconds: LOOP_CRASH_RECOVERY_DELAY_SECONDS, recovered: true };
+  }
+}
+
+// Exported for crash-recovery testing: all five daemon loops (Kick / Take /
+// Settlement / Bond / LpRewards) route through this while(true) wrapper so a
+// crashing iteration is caught, delayed, and re-entered rather than silently
+// killing the loop (defect #4).
+export async function runResilientLoop(
+  loopName: string,
+  iteration: () => Promise<void>,
+  successDelaySeconds: () => number
+): Promise<void> {
+  while (true) {
+    const result = await runResilientLoopIteration(
+      loopName,
+      iteration,
+      successDelaySeconds()
+    );
+    await delay(result.delaySeconds);
+    if (result.recovered) {
+      logger.info(`Restarting ${loopName} loop after crash recovery delay`);
+    }
   }
 }
 
@@ -641,119 +697,125 @@ async function collectLpRewardsLoop({
 
   const manager = new LpManager(ingester, resolveRedeemer);
 
-  while (true) {
-    try {
-      await manager.ingestAndDispatch();
-    } catch (ingestError) {
-      // A failed subgraph fetch shouldn't kill the loop — next cycle
-      // retries. The cursor hasn't advanced (ingest throws before cursor
-      // commit), so nothing is lost.
-      logger.error('LP ingest cycle failed; retrying next cycle', ingestError);
-    }
-
-    // Sweep every redeemer with a non-empty lpMap, not just pools that
-    // received new events this cycle. Partial redemptions (e.g. residual
-    // below minAmount thresholds) leave an entry in lpMap; without this,
-    // that entry would sit until the next BucketTake touched the same
-    // pool — potentially never — and the LP would strand between restarts.
-    const toSweep: LpRedeemer[] = [];
-    for (const redeemer of Array.from(redeemers.values())) {
-      if (redeemer.lpMap.size > 0) toSweep.push(redeemer);
-    }
-
-    for (const redeemer of toSweep) {
-      const pool = redeemer.pool;
-      const normalized = normalizeAddress(pool.poolAddress);
-      const poolConfig = poolConfigByAddress.get(normalized);
-
+  await runResilientLoop(
+    'LpRewards',
+    async () => {
       try {
-        await redeemer.sweep();
-      } catch (error) {
-        const errorMessage = getErrorMessage(error);
+        await manager.ingestAndDispatch();
+      } catch (ingestError) {
+        // A failed subgraph fetch shouldn't kill the loop — next cycle
+        // retries. The cursor hasn't advanced (ingest throws before cursor
+        // commit), so nothing is lost.
+        logger.error(
+          'LP ingest cycle failed; retrying next cycle',
+          ingestError
+        );
+      }
 
-        if (errorMessage.includes('AuctionNotCleared')) {
-          logger.info(
-            `AuctionNotCleared detected - attempting settlement for ${pool.name}`
-          );
+      // Sweep every redeemer with a non-empty lpMap, not just pools that
+      // received new events this cycle. Partial redemptions (e.g. residual
+      // below minAmount thresholds) leave an entry in lpMap; without this,
+      // that entry would sit until the next BucketTake touched the same
+      // pool — potentially never — and the LP would strand between restarts.
+      const toSweep: LpRedeemer[] = [];
+      for (const redeemer of Array.from(redeemers.values())) {
+        if (redeemer.lpMap.size > 0) toSweep.push(redeemer);
+      }
 
-          if (!poolConfig) {
-            // Auto-discovered pool without an explicit config entry has
-            // no settlement policy. Log and skip — the bucket stays in
-            // lpMap; next cycle retries (maybe the auction clears in
-            // the meantime).
-            logger.warn(
-              `Settlement skipped for ${pool.name}: no config entry (auto-discovered pool). LP remains pending.`
+      for (const redeemer of toSweep) {
+        const pool = redeemer.pool;
+        const normalized = normalizeAddress(pool.poolAddress);
+        const poolConfig = poolConfigByAddress.get(normalized);
+
+        try {
+          await redeemer.sweep();
+        } catch (error) {
+          const errorMessage = getErrorMessage(error);
+
+          if (errorMessage.includes('AuctionNotCleared')) {
+            logger.info(
+              `AuctionNotCleared detected - attempting settlement for ${pool.name}`
             );
-            continue;
-          }
 
-          try {
-            const settled = await tryReactiveSettlement({
-              pool,
-              poolConfig,
-              signer,
-              config: {
-                dryRun: config.runtime.dryRun,
-                subgraph,
-              },
-            });
-
-            if (settled) {
-              logger.info(
-                `Retrying LP collection after settlement in ${pool.name}`
-              );
-              try {
-                await redeemer.sweep();
-              } catch (retryError) {
-                const retryMessage =
-                  retryError instanceof Error
-                    ? retryError.message
-                    : String(retryError);
-                if (retryMessage.includes('AuctionNotCleared')) {
-                  // Pool has a SECOND jammed auction on a different bucket.
-                  // Next cycle will re-attempt settlement for that one;
-                  // this cycle's work stops here.
-                  logger.warn(
-                    `Pool ${pool.name} has a second auction still jammed after settling the first; next cycle will re-attempt settlement.`
-                  );
-                } else {
-                  logger.error(
-                    `LP sweep retry after settlement still failed for ${pool.name}`,
-                    retryError
-                  );
-                }
-              }
-            } else {
+            if (!poolConfig) {
+              // Auto-discovered pool without an explicit config entry has
+              // no settlement policy. Log and skip — the bucket stays in
+              // lpMap; next cycle retries (maybe the auction clears in
+              // the meantime).
               logger.warn(
-                `Settlement attempted but bonds still locked in ${pool.name}`
+                `Settlement skipped for ${pool.name}: no config entry (auto-discovered pool). LP remains pending.`
+              );
+              continue;
+            }
+
+            try {
+              const settled = await tryReactiveSettlement({
+                pool,
+                poolConfig,
+                signer,
+                config: {
+                  dryRun: config.runtime.dryRun,
+                  subgraph,
+                },
+              });
+
+              if (settled) {
+                logger.info(
+                  `Retrying LP collection after settlement in ${pool.name}`
+                );
+                try {
+                  await redeemer.sweep();
+                } catch (retryError) {
+                  const retryMessage =
+                    retryError instanceof Error
+                      ? retryError.message
+                      : String(retryError);
+                  if (retryMessage.includes('AuctionNotCleared')) {
+                    // Pool has a SECOND jammed auction on a different bucket.
+                    // Next cycle will re-attempt settlement for that one;
+                    // this cycle's work stops here.
+                    logger.warn(
+                      `Pool ${pool.name} has a second auction still jammed after settling the first; next cycle will re-attempt settlement.`
+                    );
+                  } else {
+                    logger.error(
+                      `LP sweep retry after settlement still failed for ${pool.name}`,
+                      retryError
+                    );
+                  }
+                }
+              } else {
+                logger.warn(
+                  `Settlement attempted but bonds still locked in ${pool.name}`
+                );
+              }
+            } catch (settlementError) {
+              logger.error(
+                `Settlement failed for ${pool.name}:`,
+                settlementError
               );
             }
-          } catch (settlementError) {
+          } else {
             logger.error(
-              `Settlement failed for ${pool.name}:`,
-              settlementError
+              `Failed to collect LP reward from pool: ${pool.name}.`,
+              error
             );
           }
-        } else {
-          logger.error(
-            `Failed to collect LP reward from pool: ${pool.name}.`,
-            error
-          );
         }
       }
-    }
 
-    try {
-      await exchangeTracker.handleAllTokens();
-    } catch (error) {
-      // A swap/transfer failure in one cycle must not kill the whole LP
-      // collection loop — next cycle will re-queue and retry any
-      // unprocessed tokens that are still sitting in the tracker.
-      logger.error(
-        'Failed to process queued reward-action tokens; continuing.',
-        error
-      );
-    }
-    await delay(config.runtime.delayBetweenRuns);
-  }
+      try {
+        await exchangeTracker.handleAllTokens();
+      } catch (error) {
+        // A swap/transfer failure in one cycle must not kill the whole LP
+        // collection loop — next cycle will re-queue and retry any
+        // unprocessed tokens that are still sitting in the tracker.
+        logger.error(
+          'Failed to process queued reward-action tokens; continuing.',
+          error
+        );
+      }
+    },
+    () => config.runtime.delayBetweenRuns
+  );
 }

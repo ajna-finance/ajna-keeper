@@ -531,7 +531,16 @@ export class LpRedeemer {
     let reedemed = constants.Zero;
 
     if (redeemFirst === TokenToCollect.COLLATERAL) {
-      const collateralToWithdraw = min(collateralRedeemable, collateral);
+      // Money-safety: bound the first leg to the REWARD's collateral-equivalent,
+      // not the signer's full redeemable position. Without this, a signer that
+      // also holds principal LP in this bucket would have its principal swept to
+      // satisfy a (smaller) reward claim. The second (quote) leg below is
+      // already bounded via `remainingLp = rewardLp - reedemed`.
+      const rewardCollateral = await bucket.lpToCollateral(rewardLp);
+      const collateralToWithdraw = min(
+        rewardCollateral,
+        min(collateralRedeemable, collateral)
+      );
       if (collateralToWithdraw.gt(decimaledToWei(minAmountCollateral))) {
         reedemed = reedemed.add(
           await this.redeemCollateral(
@@ -556,7 +565,13 @@ export class LpRedeemer {
         );
       }
     } else {
-      const quoteToWithdraw = min(depositRedeemable, deposit);
+      // Money-safety: bound the first leg to the REWARD's quote-equivalent, not
+      // the signer's full redeemable deposit — otherwise a signer that also
+      // holds principal LP here would have its principal swept to satisfy a
+      // (smaller) reward claim. The second (collateral) leg below is already
+      // bounded via `remainingLp = rewardLp - reedemed`.
+      const rewardQuote = await bucket.lpToQuoteTokens(rewardLp);
+      const quoteToWithdraw = min(rewardQuote, min(depositRedeemable, deposit));
       if (quoteToWithdraw.gt(decimaledToWei(minAmountQuote))) {
         reedemed = reedemed.add(
           await this.redeemQuote(bucket, quoteToWithdraw, rewardActionQuote)

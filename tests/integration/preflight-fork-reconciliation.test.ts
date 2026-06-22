@@ -120,14 +120,20 @@ describe('Startup preflight reconciliation on a Base fork (LI.FI)', function () 
       ...baseConfig,
       takers: {
         ...baseConfig.takers,
-        factory: factoryAddress,
-        contracts: { ...baseConfig.takers?.contracts, Lifi: lifiTakerAddress },
+        router: factoryAddress,
+        // LI.FI-only: do NOT spread baseConfig.takers.contracts — the example
+        // config carries OneInchAggregator/UniswapV3 placeholder addresses, and
+        // the preflight validates every configured taker contract for code +
+        // registry membership, which would fail on those undeployed placeholders.
+        contracts: { Lifi: lifiTakerAddress },
       },
+      // Self-contained LI.FI-only discovery: do NOT spread baseConfig.discovery.
+      // The example config's discovery.take (direct_dex + UNISWAPV3) and
+      // discovery.defaults.take.liquiditySource (UNISWAPV3) would otherwise make
+      // the preflight require an undeployed UNISWAPV3 taker — masking the LI.FI
+      // assertions these tests exist to make.
       discovery: {
-        ...baseConfig.discovery,
         enabled: true,
-        // LI.FI-only path so the preflight exercises just the LI.FI +
-        // factory-registration branches (no oneinch/uniswap deployments needed).
         take: {
           enabled: true,
           allowedExternalTakePaths: ['calldata_aggregator'],

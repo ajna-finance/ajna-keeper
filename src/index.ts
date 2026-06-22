@@ -9,6 +9,7 @@ import {
   startKeeperRunOnceFromConfig,
 } from './run';
 import { logger, setLoggerConfig } from './logging';
+import { installProcessSafetyHandlers } from './process-safety';
 
 const argv = yargs(process.argv.slice(2))
   .options({
@@ -52,4 +53,8 @@ async function main() {
   await startKeeperFromConfig(config);
 }
 
-main();
+installProcessSafetyHandlers();
+main().catch((error) => {
+  logger.error('Fatal keeper error; exiting.', error);
+  process.exit(1);
+});

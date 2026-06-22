@@ -63,8 +63,6 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
     address[] private _callTargetList;
     address[] private _approvalSpenderList;
     mapping(address => bytes4[]) private _callSelectorList;
-    address private _activeCallbackPool;
-    bytes32 private _activeCallbackDataHash;
 
     event CallTargetUpdated(address indexed target, bool allowed);
     event ApprovalSpenderUpdated(address indexed spender, bool allowed);
@@ -88,13 +86,18 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
     error ApprovalSpenderNotAllowed();
     error SelectorNotAllowed();
     error UnexpectedSourceBalance();
-    error UnexpectedCallback();
 
     /// @param ajnaErc20PoolFactory Ajna ERC20 pool factory for the deployment.
     /// @param authorizedRouter_ Router contract address that can also call functions.
-    ///        Unlike the direct-DEX takers, calldata-aggregator takers are
-    ///        router-only by design and refuse standalone (zero router)
-    ///        deployment.
+    ///        Unlike the direct-DEX takers, calldata-aggregator takers refuse a
+    ///        zero-router DEPLOYMENT (the require below). This constrains
+    ///        deployment, not execution: takeWithAtomicSwap is onlyOwnerOrRouter,
+    ///        so the owner may still execute directly without going through the
+    ///        router. Deregistering this taker in TakerRouter therefore stops
+    ///        router-mediated takes but is NOT an execution kill switch — the
+    ///        owner key retains direct execution either way (and owner compromise
+    ///        is already total). Treat router registration as routing/monitoring
+    ///        state, not as an authorization gate that can disable a taker.
     /// @param source_ The single liquidity source this taker serves.
     constructor(PoolDeployer ajnaErc20PoolFactory, address authorizedRouter_, LiquiditySource source_)
         KeeperTakerBase(ajnaErc20PoolFactory, authorizedRouter_)
@@ -130,18 +133,13 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
 
         AggregatorSwapDetails memory details = abi.decode(swapDetails, (AggregatorSwapDetails));
         _validateSwapDetails(pool, swapRouter, details);
-        if (_activeCallbackPool != address(0)) {
-            revert UnexpectedCallback();
-        }
 
         bytes memory data = abi.encode(details, swapRouter);
         _approveQuoteForTake(pool, maxAmount, auctionPrice);
 
-        _activeCallbackPool = address(pool);
-        _activeCallbackDataHash = keccak256(data);
+        _beginCallbackBinding(address(pool), data);
         pool.take(borrowerAddress, maxAmount, address(this), data);
-        _activeCallbackPool = address(0);
-        _activeCallbackDataHash = bytes32(0);
+        _endCallbackBinding();
 
         // srcToken is validated equal to the pool collateral, so the standard
         // settle sweep covers both the quote profit and any unconsumed source.
@@ -156,9 +154,7 @@ abstract contract BaseAggregatorCalldataTaker is KeeperTakerBase {
     ) external override nonReentrant {
         IERC20Pool pool = IERC20Pool(msg.sender);
         if (!_validatePool(pool)) revert InvalidPool();
-        if (msg.sender != _activeCallbackPool || keccak256(data) != _activeCallbackDataHash) {
-            revert UnexpectedCallback();
-        }
+        _requireActiveCallback(data);
 
         (AggregatorSwapDetails memory details, address swapRouter) = abi.decode(data, (AggregatorSwapDetails, address));
         _validateSwapDetails(pool, swapRouter, details);

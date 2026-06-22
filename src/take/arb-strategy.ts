@@ -70,6 +70,17 @@ export function createArbTakeStrategy<
 
       const prices = await pool.getPrices();
       const hpb = Number(weiToDecimaled(prices.hpb));
+      // Guard hpb=0 (degenerate/empty pool) so minDeposit is never Infinity
+      // (which would otherwise be stringified into the subgraph query). An arb
+      // take needs a meaningful highest bucket to deposit into; without one,
+      // skip explicitly rather than relying on the Infinity floor.
+      if (!Number.isFinite(hpb) || hpb <= 0) {
+        return {
+          isArbTakeable: false,
+          hpbIndex: 0,
+          reason: 'pool has no highest meaningful bucket (hpb <= 0)',
+        };
+      }
       const minDeposit = poolConfig.take.minCollateral
         ? poolConfig.take.minCollateral / hpb
         : 0;

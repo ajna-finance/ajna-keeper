@@ -9,7 +9,6 @@ import {
   deployMockTakerBase,
   deployUniswapTaker,
   encodeCurveKeeperDetails,
-  encodeUniswapCallbackData,
   encodeUniswapDetails,
   expectRevertContaining,
 } from './helpers/mock-taker-base';
@@ -224,61 +223,13 @@ describe('Taker partial-fill min-out scaling', () => {
       expect((await pool.takeCount()).eq(1)).to.equal(true);
     });
 
-    it('rounds the pro-rated floor up', async () => {
-      const base = await deployMockTakerBase();
-      const { collateralToken, quoteToken, pool } = base;
-
-      // planned 3, taken 1, full floor 10 => scaled floor ceil(10/3) = 4.
-      const plannedAmountIn = BigNumber.from(3);
-      const takenAmountIn = BigNumber.from(1);
-      const fullMinOut = BigNumber.from(10);
-      const due = BigNumber.from(1);
-
-      const underRouter = await deployMinOutBypassSwap(
-        base,
-        BigNumber.from(3),
-        fullMinOut
-      );
-      const underTaker = await deployUniswapTaker(base);
-      await collateralToken.mint(underTaker.address, takenAmountIn);
-      await expectRevertContaining(
-        pool.callAtomicSwapCallback(
-          underTaker.address,
-          takenAmountIn,
-          due,
-          encodeUniswapCallbackData({
-            routerAddress: underRouter.address,
-            targetToken: quoteToken.address,
-            amountOutMinimum: fullMinOut,
-            plannedAmountIn,
-          })
-        ),
-        'InsufficientQuoteReceived'
-      );
-
-      const exactRouter = await deployMinOutBypassSwap(
-        base,
-        BigNumber.from(4),
-        fullMinOut
-      );
-      const exactTaker = await deployUniswapTaker(base);
-      await collateralToken.mint(exactTaker.address, takenAmountIn);
-      await pool.callAtomicSwapCallback(
-        exactTaker.address,
-        takenAmountIn,
-        due,
-        encodeUniswapCallbackData({
-          routerAddress: exactRouter.address,
-          targetToken: quoteToken.address,
-          amountOutMinimum: fullMinOut,
-          plannedAmountIn,
-        })
-      );
-
-      expect((await quoteToken.balanceOf(exactTaker.address)).eq(4)).to.equal(
-        true
-      );
-    });
+    // The pro-rated-floor CEIL ROUNDING (planned 3, taken 1, floor 10 => 4) is
+    // now unit-tested directly against the library in taker-take-scaling-lib.test
+    // ('scaleAmountOutMinimum'); reaching it through a direct callback is no
+    // longer possible now that the active-callback binding gates atomicSwapCallback.
+    // The balance-delta enforcement of the scaled floor stays covered by
+    // 'enforces the pro-rated floor on balance deltas when a router bypasses
+    // min-out' (take() path) below.
 
     it('scales across mixed token decimals', async () => {
       const base = await deployMockTakerBase({ collateralDecimals: 6 });
@@ -348,29 +299,12 @@ describe('Taker partial-fill min-out scaling', () => {
       expect((await pool.takeCount()).eq(0)).to.equal(true);
     });
 
-    it('rejects crafted callbacks with a zero planned amount', async () => {
-      const base = await deployMockTakerBase();
-      const { collateralToken, quoteToken, pool } = base;
-      const taker = await deployUniswapTaker(base);
-
-      await collateralToken.mint(taker.address, TAKEN_PARTIAL);
-      const router = await deployFundedSwapRouter02(base, FULL_MIN_OUT);
-
-      await expectRevertContaining(
-        pool.callAtomicSwapCallback(
-          taker.address,
-          TAKEN_PARTIAL,
-          DUE_PARTIAL,
-          encodeUniswapCallbackData({
-            routerAddress: router.address,
-            targetToken: quoteToken.address,
-            amountOutMinimum: FULL_MIN_OUT,
-            plannedAmountIn: BigNumber.from(0),
-          })
-        ),
-        'InvalidSwapDetails'
-      );
-    });
+    // A crafted callback with a zero planned amount can no longer reach the
+    // callback's plannedAmountIn==0 guard: the active-callback binding rejects any
+    // out-of-band callback first (see taker-hardening 'active-callback binding').
+    // The take()-path zero-truncation is covered by 'rejects takes whose planned
+    // amount truncates to zero' above, and the library guard directly in
+    // taker-take-scaling-lib.test ('plannedTakeAmount').
   });
 
   // Direct-Sushi partial-fill scaling cases removed with the direct Sushi path;

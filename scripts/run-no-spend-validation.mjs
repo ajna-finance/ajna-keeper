@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import process from 'process';
+import { fileURLToPath } from 'url';
 import {
   ROOT,
   assertLocalRpcUrl,
@@ -25,7 +26,13 @@ import {
   runNoEgressRequirePositiveControl,
   withNoEgressGuard,
 } from './no-spend/egress.mjs';
-import { runDaemonSmoke } from './no-spend/daemon-smoke.mjs';
+import {
+  runDaemonSmoke,
+  runDaemonLifecycle,
+  runDaemonMultipool,
+  runDaemonAggregator,
+  runDaemonFailover,
+} from './no-spend/daemon-smoke.mjs';
 import {
   buildReplayCommand,
   buildStateIntegrityArtifact,
@@ -42,12 +49,29 @@ const HARDHAT_BIN = path.join(
   'bootstrap.js'
 );
 const DEFAULT_RPC_TIMEOUT_MS = 120_000;
-const DEFAULT_BASE_FORK_BLOCK = 'latest';
+// Pin to a known-warm Base block instead of `latest`. Forking at the moving tip
+// leaves Alchemy's upstream state cache cold, so the first `eth_estimateGas`
+// during fixture creation triggers a slow lazy-state fetch and times out. 30M is
+// the same block `hardhat.config.ts` defaults the Base fork to (and that the
+// base-fork integration tests use), so the Ajna ERC20PoolFactory + Uniswap V3
+// infra the synthetic fixture needs is present and the state is warm/cacheable.
+// Override with --base-fork-block / BASE_FORK_BLOCK / AJNA_AGENT_NO_SPEND_BASE_FORK_BLOCK.
+const DEFAULT_BASE_FORK_BLOCK = '30000000';
+// Hard ceiling for the fixture-creation child (runNodeScript otherwise resolves
+// only on `close`, so a hung cold call would block indefinitely). This is a
+// backstop against a true hang, not a perf target: the FIRST run against a
+// never-fetched pinned block pays the full upstream lazy-state cost (observed
+// multiple minutes) before Alchemy caches it; warm subsequent runs finish in
+// ~1 min. The default is generous so a cold first run completes; override via
+// AJNA_AGENT_NO_SPEND_FIXTURE_TIMEOUT_MS in a colder/CI environment.
+const FIXTURE_CREATION_TIMEOUT_MS = Number(
+  process.env.AJNA_AGENT_NO_SPEND_FIXTURE_TIMEOUT_MS ?? 600_000
+);
 
 let hardhatNode;
 
 function usage() {
-  return `Usage: node scripts/run-no-spend-validation.mjs [--port N] [--base-fork-block N|latest] [--scenario NAME] [--mode discovery|manual] [--expect success|skip] [--dry-run-only] [--hybrid-gas-quote-fallback disabled|direct_dex_first] [--run-config-smoke] [--run-daemon-smoke] [--daemon-smoke-only] [--expected-fee-tier N] [--output /path/report.json]
+  return `Usage: node scripts/run-no-spend-validation.mjs [--port N] [--base-fork-block N|latest] [--scenario NAME] [--mode discovery|manual] [--expect success|skip] [--dry-run-only] [--hybrid-gas-quote-fallback disabled|direct_dex_first] [--run-config-smoke] [--run-daemon-smoke] [--daemon-smoke-only] [--run-daemon-lifecycle] [--daemon-lifecycle-only] [--expected-fee-tier N] [--output /path/report.json]
 
 Runs a no-spend Base fork replay:
 1. starts a local Base fork
@@ -85,8 +109,62 @@ function parseArgs(argv) {
       process.env.AJNA_AGENT_NO_SPEND_HYBRID_GAS_QUOTE_FALLBACK ??
       'direct_dex_first',
     runConfigSmoke: process.env.AJNA_AGENT_NO_SPEND_CONFIG_SMOKE === '1',
+    // P0-4: drive + assert an on-chain settlement after the take.
+    // P1-4 bond withdrawal builds on settlement (the bond unlocks there), so it
+    // implies driveSettlement.
+    driveSettlement:
+      process.env.AJNA_AGENT_NO_SPEND_SETTLEMENT === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_BOND_WITHDRAWAL === '1',
+    // P1-4: after settlement unlocks the keeper's kick bond, withdraw it and
+    // assert the keeper is paid (claimable -> 0, balance up; dry-run no-op).
+    driveBondWithdrawal:
+      process.env.AJNA_AGENT_NO_SPEND_BOND_WITHDRAWAL === '1',
+    // P0-3/P1-1: create an unkicked fixture so the KEEPER's own kick decision
+    // (handleKicks) runs, and assert it kicked + bonded.
+    driveKeeperKick: process.env.AJNA_AGENT_NO_SPEND_KEEPER_KICK === '1',
     runDaemonSmoke: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE === '1',
     daemonSmokeOnly: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SMOKE_ONLY === '1',
+    // The *_ONLY env implies the run too, so setting it alone is sufficient
+    // (otherwise the daemonLifecycleOnly early-exit could "pass" without ever
+    // running the daemon).
+    runDaemonLifecycle:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_LIFECYCLE === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_LIFECYCLE_ONLY === '1',
+    daemonLifecycleOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_LIFECYCLE_ONLY === '1',
+    runDaemonMultipool:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL_ONLY === '1',
+    daemonMultipoolOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_MULTIPOOL_ONLY === '1',
+    // Number of DISCOVERED pools for the multipool leg (a manual-precedence pool
+    // is always added on top, so total fixtures = count + 1).
+    multipoolDiscoveredCount: process.env.AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT
+      ? Number(process.env.AJNA_AGENT_NO_SPEND_MULTIPOOL_COUNT)
+      : 2,
+    runDaemonAggregator:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_ONLY === '1',
+    daemonAggregatorOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_ONLY === '1',
+    // Combined leg: the daemon enumerates SEVERAL pools and takes each via the
+    // calldata_aggregator path (joins the multipool + aggregator scenarios).
+    runDaemonAggregatorMultipool:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_MULTIPOOL === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_MULTIPOOL_ONLY === '1',
+    daemonAggregatorMultipoolOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_AGGREGATOR_MULTIPOOL_ONLY === '1',
+    // Sushi aggregator daemon leg (the other calldata_aggregator provider).
+    runDaemonSushi:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_SUSHI === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_SUSHI_ONLY === '1',
+    daemonSushiOnly: process.env.AJNA_AGENT_NO_SPEND_DAEMON_SUSHI_ONLY === '1',
+    // Subgraph-failover-in-daemon leg (primary down -> fallbackUrls).
+    runDaemonFailover:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_FAILOVER === '1' ||
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_FAILOVER_ONLY === '1',
+    daemonFailoverOnly:
+      process.env.AJNA_AGENT_NO_SPEND_DAEMON_FAILOVER_ONLY === '1',
     expectedFeeTier: process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER
       ? Number(process.env.AJNA_AGENT_NO_SPEND_EXPECTED_FEE_TIER)
       : undefined,
@@ -144,6 +222,60 @@ function parseArgs(argv) {
     if (arg === '--daemon-smoke-only') {
       options.runDaemonSmoke = true;
       options.daemonSmokeOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-lifecycle') {
+      options.runDaemonLifecycle = true;
+      continue;
+    }
+    if (arg === '--daemon-lifecycle-only') {
+      options.runDaemonLifecycle = true;
+      options.daemonLifecycleOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-multipool') {
+      options.runDaemonMultipool = true;
+      continue;
+    }
+    if (arg === '--daemon-multipool-only') {
+      options.runDaemonMultipool = true;
+      options.daemonMultipoolOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-aggregator') {
+      options.runDaemonAggregator = true;
+      continue;
+    }
+    if (arg === '--daemon-aggregator-only') {
+      options.runDaemonAggregator = true;
+      options.daemonAggregatorOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-aggregator-multipool') {
+      options.runDaemonAggregatorMultipool = true;
+      continue;
+    }
+    if (arg === '--daemon-aggregator-multipool-only') {
+      options.runDaemonAggregatorMultipool = true;
+      options.daemonAggregatorMultipoolOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-sushi') {
+      options.runDaemonSushi = true;
+      continue;
+    }
+    if (arg === '--daemon-sushi-only') {
+      options.runDaemonSushi = true;
+      options.daemonSushiOnly = true;
+      continue;
+    }
+    if (arg === '--run-daemon-failover') {
+      options.runDaemonFailover = true;
+      continue;
+    }
+    if (arg === '--daemon-failover-only') {
+      options.runDaemonFailover = true;
+      options.daemonFailoverOnly = true;
       continue;
     }
     if (arg === '--expected-fee-tier') {
@@ -302,7 +434,7 @@ function requireInvariant(condition, message) {
   }
 }
 
-function assertFixtureSummary(summary) {
+function assertFixtureSummary(summary, options = {}) {
   requireInvariant(summary.network === 'base', 'fixture network is base');
   requireInvariant(
     typeof summary.rpcUrl === 'string' && isLocalhostUrl(summary.rpcUrl),
@@ -326,10 +458,23 @@ function assertFixtureSummary(summary) {
     ['deployed', 'reused'].includes(summary.stages?.deployExternalTake?.mode),
     'external-take router/taker deployed or reused'
   );
-  requireInvariant(
-    ['kicked', 'already_active'].includes(summary.finalKick?.status),
-    'final kick status is kicked or already_active'
-  );
+  if (options.driveKeeperKick) {
+    // Keeper-kick mode: the fixture is intentionally kick-ELIGIBLE-but-unkicked
+    // (the keeper does the kick), so assert eligibility instead of a fixture kick.
+    requireInvariant(
+      summary.liquidationCheck?.keeperKickEligibleByCurrentCode === true,
+      'fixture borrower is keeper-kick-eligible'
+    );
+    requireInvariant(
+      summary.finalKick?.status !== 'kicked',
+      'fixture did not pre-kick the borrower (keeper-kick mode)'
+    );
+  } else {
+    requireInvariant(
+      ['kicked', 'already_active'].includes(summary.finalKick?.status),
+      'final kick status is kicked or already_active'
+    );
+  }
   requireInvariant(
     summary.uniswapV3ExternalTake?.routeShapeVerification?.status === 'passed',
     'route-shape verification passed'
@@ -375,6 +520,50 @@ function assertRouteFee(report, expectedFeeTier, label) {
   }
 }
 
+// P0-3: when an aggregator provider is driven, the flagship asserts the
+// aggregator path/source instead of direct_dex/UNISWAPV3.
+function aggregatorExpectedSourceFromEnv() {
+  // The expected winner is AGGREGATOR_WINNER (competition) or AGGREGATOR_PROVIDER
+  // (single). Either way the route artifact must report that source as selected.
+  const provider =
+    process.env.AJNA_AGENT_HARNESS_AGGREGATOR_WINNER ??
+    process.env.AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER;
+  if (!provider) return undefined;
+  const source = {
+    Lifi: 'LIFI',
+    SushiAggregator: 'SUSHI_AGGREGATOR',
+    OneInchAggregator: 'ONEINCH',
+  }[provider];
+  if (!source) {
+    throw new Error(`Unknown aggregator provider "${provider}"`);
+  }
+  return source;
+}
+
+// In competition mode (AGGREGATOR_WINNER set, vs AGGREGATOR_PROVIDER for a
+// single provider) the harness wires ALL aggregators as competitors. Return the
+// full roster of liquidity-source labels that must therefore appear in the route
+// artifact's competingProviders — i.e. each one produced an approved, ranked
+// quote. If route selection regressed to probing only the designated winner, the
+// runner-ups would be missing and this assertion fails. Undefined outside
+// competition mode (single-provider / direct-DEX runs make no such claim).
+function aggregatorCompetitionRosterFromEnv() {
+  if (!process.env.AJNA_AGENT_HARNESS_AGGREGATOR_WINNER) return undefined;
+  return ['LIFI', 'SUSHI_AGGREGATOR', 'ONEINCH'];
+}
+
+function assertCompetitionRoster(report, options, leg) {
+  if (!options.competitionRoster) return;
+  const competing = report.routeArtifact?.competingProviders ?? [];
+  for (const source of options.competitionRoster) {
+    requireInvariant(
+      competing.includes(source),
+      `${leg} routeArtifact.competingProviders must include competitor ${source} ` +
+        `(all wired aggregators must compete); got [${competing.join(', ') || 'none'}]`
+    );
+  }
+}
+
 function assertSuccessfulDryRunReport(report, options) {
   if (report.mode !== options.mode) {
     throw new Error(
@@ -386,26 +575,41 @@ function assertSuccessfulDryRunReport(report, options) {
       report,
       'dryRunExternalTakes'
     );
-    const dryRunDirectDexPathTakes = sumPathCounter(
-      report,
-      'direct_dex',
-      'dryRun'
-    );
-    if (dryRunExternalTakes < 1 || dryRunDirectDexPathTakes < 1) {
-      throw new Error(
-        `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} directDexDryRuns=${dryRunDirectDexPathTakes}`
+    if (options.aggregatorExpectedSource) {
+      // Aggregator scenario: the take runs the calldata_aggregator path, not
+      // direct_dex, so only require an external take to have been reached.
+      if (dryRunExternalTakes < 1) {
+        throw new Error(
+          `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes}`
+        );
+      }
+    } else {
+      const dryRunDirectDexPathTakes = sumPathCounter(
+        report,
+        'direct_dex',
+        'dryRun'
       );
+      if (dryRunExternalTakes < 1 || dryRunDirectDexPathTakes < 1) {
+        throw new Error(
+          `Dry-run did not reach the discovered external-take path. dryRunExternalTakes=${dryRunExternalTakes} directDexDryRuns=${dryRunDirectDexPathTakes}`
+        );
+      }
     }
   }
   requireInvariant(
-    report.routeArtifact?.selectedPath === 'direct_dex',
-    'dry-run routeArtifact selected direct_dex path'
+    report.routeArtifact?.selectedPath ===
+      (options.aggregatorExpectedSource ? 'calldata_aggregator' : 'direct_dex'),
+    `dry-run routeArtifact selected ${options.aggregatorExpectedSource ? 'calldata_aggregator' : 'direct_dex'} path`
   );
   requireInvariant(
-    report.routeArtifact?.selectedLiquiditySource === 'UNISWAPV3',
-    'dry-run routeArtifact selected UNISWAPV3'
+    report.routeArtifact?.selectedLiquiditySource ===
+      (options.aggregatorExpectedSource ?? 'UNISWAPV3'),
+    `dry-run routeArtifact selected ${options.aggregatorExpectedSource ?? 'UNISWAPV3'}`
   );
-  assertRouteFee(report, options.expectedFeeTier, 'dry-run');
+  assertCompetitionRoster(report, options, 'dry-run');
+  if (!options.aggregatorExpectedSource) {
+    assertRouteFee(report, options.expectedFeeTier, 'dry-run');
+  }
   requireInvariant(
     report.txArtifact?.transactions?.length === 0,
     'dry-run records no broadcast transactions'
@@ -458,26 +662,39 @@ function assertExecutionReport(report, options) {
       report,
       'executedExternalTakes'
     );
-    const executedDirectDexPathTakes = sumPathCounter(
-      report,
-      'direct_dex',
-      'executed'
-    );
-    if (executedExternalTakes < 1 || executedDirectDexPathTakes < 1) {
-      throw new Error(
-        `Execution did not record a direct DEX external take. executedExternalTakes=${executedExternalTakes} directDexExecutions=${executedDirectDexPathTakes}`
+    if (options.aggregatorExpectedSource) {
+      if (executedExternalTakes < 1) {
+        throw new Error(
+          `Execution did not record an external take. executedExternalTakes=${executedExternalTakes}`
+        );
+      }
+    } else {
+      const executedDirectDexPathTakes = sumPathCounter(
+        report,
+        'direct_dex',
+        'executed'
       );
+      if (executedExternalTakes < 1 || executedDirectDexPathTakes < 1) {
+        throw new Error(
+          `Execution did not record a direct DEX external take. executedExternalTakes=${executedExternalTakes} directDexExecutions=${executedDirectDexPathTakes}`
+        );
+      }
     }
   }
   requireInvariant(
-    report.routeArtifact?.selectedPath === 'direct_dex',
-    'execution routeArtifact selected direct_dex path'
+    report.routeArtifact?.selectedPath ===
+      (options.aggregatorExpectedSource ? 'calldata_aggregator' : 'direct_dex'),
+    `execution routeArtifact selected ${options.aggregatorExpectedSource ? 'calldata_aggregator' : 'direct_dex'} path`
   );
   requireInvariant(
-    report.routeArtifact?.selectedLiquiditySource === 'UNISWAPV3',
-    'execution routeArtifact selected UNISWAPV3'
+    report.routeArtifact?.selectedLiquiditySource ===
+      (options.aggregatorExpectedSource ?? 'UNISWAPV3'),
+    `execution routeArtifact selected ${options.aggregatorExpectedSource ?? 'UNISWAPV3'}`
   );
-  assertRouteFee(report, options.expectedFeeTier, 'execution');
+  assertCompetitionRoster(report, options, 'execution');
+  if (!options.aggregatorExpectedSource) {
+    assertRouteFee(report, options.expectedFeeTier, 'execution');
+  }
   requireInvariant(
     options.mode !== 'discovery' ||
       (report.routeArtifact?.counters?.preBroadcastFailures === 0 &&
@@ -494,7 +711,13 @@ function assertExecutionReport(report, options) {
     'execution receipt gas used recorded'
   );
   requireInvariant(
-    report.balanceArtifact?.positiveDelta === true,
+    // The mock aggregator keeps swap profit in the taker contract, not the
+    // keeper wallet, so the keeper quote-balance delta is not a faithful signal
+    // for the aggregator scenario (real-Ajna-vs-mock divergence). Assert the
+    // on-chain auction state + approvals reset instead (below).
+    options.aggregatorExpectedSource
+      ? true
+      : report.balanceArtifact?.positiveDelta === true,
     'keeper quote-token balance delta is positive'
   );
   requireInvariant(
@@ -524,6 +747,59 @@ function assertExecutionReport(report, options) {
     requireInvariant(
       report.manualArtifact?.lifiNoBroadcastPolicyContextResolved === true,
       'manual LI.FI no-broadcast policy/context resolution recorded'
+    );
+  }
+  if (options.driveKeeperKick) {
+    requireInvariant(
+      report.kickArtifact?.kickTimeTransitionedToNonZero === true,
+      'keeper kicked an eligible loan on-chain (kickTime_ 0 -> non-zero)'
+    );
+    requireInvariant(
+      report.kickArtifact?.bondPosted === true,
+      'keeper posted a liquidation bond (kicker locked increased)'
+    );
+  }
+  if (options.driveSettlement) {
+    requireInvariant(
+      report.settlementArtifact?.collateralZeroDebtPositiveReached === true,
+      'settlement precondition reached: zero collateral with residual debt'
+    );
+    requireInvariant(
+      report.settlementArtifact?.kickTimeTransitionedToZero === true,
+      'settlement cleared the auction on-chain (kickTime_ -> 0)'
+    );
+    // Require a bond was actually locked before settling, so bondsUnlocked
+    // (locked -> 0) cannot pass trivially on a keeper that held no bond.
+    requireInvariant(
+      BigInt(report.settlementArtifact?.lockedBefore ?? '0') > 0n,
+      'settlement had a locked kicker bond to unlock (lockedBefore > 0)'
+    );
+    requireInvariant(
+      report.settlementArtifact?.bondsUnlocked === true,
+      'settlement unlocked kicker bonds (locked -> 0)'
+    );
+  }
+  if (options.driveBondWithdrawal) {
+    const bond = report.bondArtifact;
+    requireInvariant(bond?.driven === true, 'bond-withdrawal stage ran');
+    // Precondition: settlement actually left a claimable bond to withdraw, so
+    // the assertions below cannot pass trivially on a zero bond.
+    requireInvariant(
+      BigInt(bond?.claimableBefore ?? '0') > 0n,
+      'bond withdrawal had a claimable bond after settlement (claimableBefore > 0)'
+    );
+    requireInvariant(
+      bond?.dryRunClaimableUnchanged === true &&
+        bond?.dryRunBalanceUnchanged === true,
+      'bond dry-run withdrew nothing (claimable + keeper balance unchanged)'
+    );
+    requireInvariant(
+      bond?.claimableTransitionedToZero === true,
+      'real bond withdrawal zeroed claimable (claimable -> 0)'
+    );
+    requireInvariant(
+      bond?.bondWithdrawn === true,
+      'real bond withdrawal paid the keeper (quote balance increased)'
     );
   }
 }
@@ -623,6 +899,77 @@ function fixtureEnv(params) {
   return env;
 }
 
+/**
+ * Build N+1 liquidatable fixtures across distinct pools on the SHARED fork for
+ * the multipool enumeration leg (N discovered pools + 1 manual-precedence pool).
+ *
+ * Run 0 DEPLOYS the external-take contracts (KeeperTakerRouter + UniswapV3 taker
+ * + the aggregator takers + MockLifiSwapTarget). Runs 1..N REUSE that deployment
+ * (the keeper config has a single takers/dex block): setting the taker addresses
+ * makes the fixture resolve the existing contracts instead of redeploying, and
+ * those contracts are factory-scoped so they serve every pool. Each run uses a
+ * unique token symbol pair, so the fixture creates a fresh, distinct pool.
+ *
+ * Fork-validated: run-1 reuse of run-0's router + UniswapV3 taker works, and the
+ * reuse path is read-only so run-0's aggregator-taker registrations persist on
+ * the shared router (see docs/multi-pool-enumeration-scenario.md). Returns an
+ * array of summaries; the caller treats the last as the manual-precedence pool.
+ */
+async function buildMultipoolFixtures(baseParams, discoveredCount) {
+  const total = discoveredCount + 1; // discovered pools + 1 manual pool
+  const summaries = [];
+  let sharedDeployment;
+  for (let i = 0; i < total; i += 1) {
+    const summaryPath = path.join(
+      baseParams.tempDir,
+      `multipool-fixture-summary-${i}.json`
+    );
+    const env = fixtureEnv({
+      rpcUrl: baseParams.rpcUrl,
+      keyFilePath: path.join(baseParams.tempDir, `multipool-fixture-keys-${i}.json`),
+      summaryPath,
+      allowedHosts: baseParams.allowedHosts,
+      egressReportPath: baseParams.egressReportPath,
+      expectedFeeTier: baseParams.expectedFeeTier,
+    });
+    // Distinct token symbols => fresh, distinct pool per run.
+    env.AJNA_AGENT_QUOTE_TOKEN_SYMBOL = `QTEST${i}`;
+    env.AJNA_AGENT_COLLATERAL_TOKEN_SYMBOL = `CTEST${i}`;
+    if (sharedDeployment) {
+      env.AJNA_AGENT_DEPLOY_EXTERNAL_TAKE = 'no';
+      env.AJNA_AGENT_KEEPER_TAKER_FACTORY_ADDRESS =
+        sharedDeployment.keeperTakerRouter;
+      env.AJNA_AGENT_UNISWAP_V3_TAKER_ADDRESS = sharedDeployment.uniswapV3Taker;
+    }
+    await runNodeScript(
+      `creating multipool fixture ${i + 1}/${total}`,
+      path.join(ROOT, 'scripts', 'create-liquidatable-ajna-fixture.ts'),
+      ['--with-uniswap-v3-external-take', '--allow-evm-time-travel', '--final-kick'],
+      env,
+      path.join(baseParams.tempDir, `multipool-fixture-${i}.log`),
+      FIXTURE_CREATION_TIMEOUT_MS
+    );
+    const summary = readJson(summaryPath, `multipool fixture ${i} summary`);
+    if (i === 0) {
+      sharedDeployment = summary.uniswapV3ExternalTake?.deployment;
+      if (!sharedDeployment?.keeperTakerRouter || !sharedDeployment?.uniswapV3Taker) {
+        throw new Error(
+          'Multipool run 0 did not emit a shareable external-take deployment'
+        );
+      }
+    } else {
+      // Reuse runs emit mode:'reused' without aggregator takers; graft run-0's
+      // full deployment so any per-summary deployment read sees the full set.
+      summary.uniswapV3ExternalTake = {
+        ...summary.uniswapV3ExternalTake,
+        deployment: sharedDeployment,
+      };
+    }
+    summaries.push(summary);
+  }
+  return summaries;
+}
+
 function harnessEnv(params) {
   const scenarioEnv = {};
   for (const name of [
@@ -636,6 +983,12 @@ function harnessEnv(params) {
     'AJNA_AGENT_HARNESS_MAX_EXECUTIONS_PER_POOL_PER_RUN',
     'AJNA_AGENT_HARNESS_TAKE_ROUTE_QUOTE_BUDGET_PER_CANDIDATE',
     'AJNA_AGENT_HARNESS_TAKE_QUOTE_BUDGET_PER_RUN',
+    // P0-2/P0-3: select an aggregator provider (Lifi|SushiAggregator|
+    // OneInchAggregator) to drive a real mock aggregator calldata-take, or set
+    // AGGREGATOR_WINNER to drive ALL providers as competitors with that winner.
+    'AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER',
+    'AJNA_AGENT_HARNESS_AGGREGATOR_WINNER',
+    'AJNA_AGENT_HARNESS_AGGREGATOR_QUOTE_MOCK',
   ]) {
     if (process.env[name]) {
       scenarioEnv[name] = process.env[name];
@@ -643,6 +996,19 @@ function harnessEnv(params) {
   }
   if (params.configSmoke) {
     scenarioEnv.AJNA_AGENT_HARNESS_CONFIG_SMOKE = '1';
+  }
+  // P0-4: drive the settlement stage in the execution leg only (the dry-run leg
+  // must not, since a dry-run take never reduces collateral so it can't reach
+  // the zero-collateral precondition).
+  if (params.settlementStage) {
+    scenarioEnv.AJNA_AGENT_HARNESS_SETTLEMENT_STAGE = '1';
+  }
+  if (params.keeperKick) {
+    scenarioEnv.AJNA_AGENT_HARNESS_KEEPER_KICK = '1';
+  }
+  // P1-4: bond withdrawal runs after the settlement stage in the execution leg.
+  if (params.bondWithdrawal) {
+    scenarioEnv.AJNA_AGENT_HARNESS_BOND_WITHDRAWAL = '1';
   }
   return withNoEgressGuard(
     baseChildEnv({
@@ -739,7 +1105,9 @@ async function main() {
       [
         '--with-uniswap-v3-external-take',
         '--allow-evm-time-travel',
-        '--final-kick',
+        // Keeper-kick coverage needs an eligible-but-UNKICKED borrower so the
+        // keeper's own handleKicks does the kick; otherwise the fixture kicks.
+        options.driveKeeperKick ? '--no-final-kick' : '--final-kick',
       ],
       fixtureEnv({
         rpcUrl,
@@ -749,10 +1117,13 @@ async function main() {
         egressReportPath,
         expectedFeeTier: options.expectedFeeTier,
       }),
-      fixtureLogPath
+      fixtureLogPath,
+      FIXTURE_CREATION_TIMEOUT_MS
     );
     const fixtureSummary = readJson(summaryPath, 'fixture summary');
-    assertFixtureSummary(fixtureSummary);
+    assertFixtureSummary(fixtureSummary, {
+      driveKeeperKick: options.driveKeeperKick,
+    });
     let daemonArtifact;
     if (options.runDaemonSmoke) {
       daemonArtifact = await runDaemonSmoke({
@@ -764,8 +1135,149 @@ async function main() {
         egressReportPath,
       });
     }
+    let daemonLifecycleArtifact;
+    if (options.runDaemonLifecycle) {
+      daemonLifecycleArtifact = await runDaemonLifecycle({
+        summary: fixtureSummary,
+        summaryPath,
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
 
-    if (options.daemonSmokeOnly) {
+    let daemonMultipoolArtifact;
+    if (options.runDaemonMultipool) {
+      // The multipool leg builds its OWN N+1 shared-deployment fixtures (the
+      // single fixture above is independent and unused here).
+      const multipoolFixtures = await buildMultipoolFixtures(
+        {
+          rpcUrl,
+          tempDir,
+          allowedHosts,
+          egressReportPath,
+          expectedFeeTier: options.expectedFeeTier,
+        },
+        options.multipoolDiscoveredCount
+      );
+      daemonMultipoolArtifact = await runDaemonMultipool({
+        discoveredSummaries: multipoolFixtures.slice(0, -1),
+        manualSummary: multipoolFixtures[multipoolFixtures.length - 1],
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
+    let daemonAggregatorArtifact;
+    if (options.runDaemonAggregator) {
+      // Uses the single fixture (which deploys the aggregator takers + mock
+      // target); spawns the harness daemon entry to exercise the LI.FI path.
+      daemonAggregatorArtifact = await runDaemonAggregator({
+        summary: fixtureSummary,
+        summaryPath,
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
+    let daemonAggregatorMultipoolArtifact;
+    if (options.runDaemonAggregatorMultipool) {
+      // Build the shared-deployment multipool fixtures, then run the aggregator
+      // daemon across ALL of them: enumerate several pools + take each via LI.FI.
+      const aggregatorMultipoolFixtures = await buildMultipoolFixtures(
+        {
+          rpcUrl,
+          tempDir,
+          allowedHosts,
+          egressReportPath,
+          expectedFeeTier: options.expectedFeeTier,
+        },
+        options.multipoolDiscoveredCount
+      );
+      daemonAggregatorMultipoolArtifact = await runDaemonAggregator({
+        summaries: aggregatorMultipoolFixtures,
+        // run-0's summary carries the shared deployment the harness entry reads.
+        summaryPath: path.join(tempDir, 'multipool-fixture-summary-0.json'),
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
+    let daemonSushiArtifact;
+    if (options.runDaemonSushi) {
+      // Same single fixture (deploys all aggregator takers + the shared mock);
+      // exercises the Sushi calldata_aggregator path in the spawned daemon.
+      daemonSushiArtifact = await runDaemonAggregator({
+        summary: fixtureSummary,
+        summaryPath,
+        provider: 'sushi_aggregator',
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
+    let daemonFailoverArtifact;
+    if (options.runDaemonFailover) {
+      // Primary subgraph endpoint is down; the daemon must fail over to the
+      // configured fallbackUrls and keep discovering + taking.
+      daemonFailoverArtifact = await runDaemonFailover({
+        summary: fixtureSummary,
+        rpcUrl,
+        tempDir,
+        allowedHosts,
+        egressReportPath,
+      });
+    }
+
+    if (
+      options.daemonSmokeOnly ||
+      options.daemonLifecycleOnly ||
+      options.daemonMultipoolOnly ||
+      options.daemonAggregatorOnly ||
+      options.daemonAggregatorMultipoolOnly ||
+      options.daemonSushiOnly ||
+      options.daemonFailoverOnly
+    ) {
+      // Guard against a false pass: the *-only early-exit must not report
+      // success unless the scenario it names actually produced an artifact.
+      requireInvariant(
+        !options.daemonSmokeOnly || daemonArtifact !== undefined,
+        'daemon-smoke-only ran the daemon smoke scenario'
+      );
+      requireInvariant(
+        !options.daemonLifecycleOnly || daemonLifecycleArtifact !== undefined,
+        'daemon-lifecycle-only ran the daemon lifecycle scenario'
+      );
+      requireInvariant(
+        !options.daemonMultipoolOnly || daemonMultipoolArtifact !== undefined,
+        'daemon-multipool-only ran the daemon multipool scenario'
+      );
+      requireInvariant(
+        !options.daemonAggregatorOnly || daemonAggregatorArtifact !== undefined,
+        'daemon-aggregator-only ran the daemon aggregator scenario'
+      );
+      requireInvariant(
+        !options.daemonAggregatorMultipoolOnly ||
+          daemonAggregatorMultipoolArtifact !== undefined,
+        'daemon-aggregator-multipool-only ran the combined scenario'
+      );
+      requireInvariant(
+        !options.daemonSushiOnly || daemonSushiArtifact !== undefined,
+        'daemon-sushi-only ran the daemon sushi scenario'
+      );
+      requireInvariant(
+        !options.daemonFailoverOnly || daemonFailoverArtifact !== undefined,
+        'daemon-failover-only ran the daemon failover scenario'
+      );
       await stopHardhatNode();
       hardhatStopped = true;
       const egress = assertEgressReport(egressReportPath, 'daemon smoke');
@@ -773,7 +1285,14 @@ async function main() {
         status: 'passed',
         scenario: options.scenarioName,
         harnessMode: options.harnessMode,
-        daemonSmokeOnly: true,
+        daemonSmokeOnly: options.daemonSmokeOnly === true,
+        daemonLifecycleOnly: options.daemonLifecycleOnly === true,
+        daemonMultipoolOnly: options.daemonMultipoolOnly === true,
+        daemonAggregatorOnly: options.daemonAggregatorOnly === true,
+        daemonAggregatorMultipoolOnly:
+          options.daemonAggregatorMultipoolOnly === true,
+        daemonSushiOnly: options.daemonSushiOnly === true,
+        daemonFailoverOnly: options.daemonFailoverOnly === true,
         command: ['npm', 'run', 'no-spend-validation'],
         replayCommand,
         requestedForkBlock: resolvedForkBlock.requested,
@@ -794,14 +1313,33 @@ async function main() {
           hardhat: nodeLogPath,
         },
         daemon: daemonArtifact,
+        daemonLifecycle: daemonLifecycleArtifact,
+        daemonMultipool: daemonMultipoolArtifact,
+        daemonAggregator: daemonAggregatorArtifact,
+        daemonAggregatorMultipool: daemonAggregatorMultipoolArtifact,
+        daemonSushi: daemonSushiArtifact,
+        daemonFailover: daemonFailoverArtifact,
       };
       fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
       fs.writeFileSync(
         validationReportPath,
         `${JSON.stringify(validationReport, null, 2)}\n`
       );
+      const onlyLabel = options.daemonFailoverOnly
+        ? 'daemon failover'
+        : options.daemonSushiOnly
+          ? 'daemon sushi'
+          : options.daemonAggregatorMultipoolOnly
+          ? 'daemon aggregator multipool'
+          : options.daemonAggregatorOnly
+            ? 'daemon aggregator'
+            : options.daemonMultipoolOnly
+              ? 'daemon multipool'
+              : options.daemonLifecycleOnly
+                ? 'daemon lifecycle'
+                : 'daemon smoke';
       process.stdout.write(
-        `[no-spend] daemon smoke passed\n` +
+        `[no-spend] ${onlyLabel} passed\n` +
           `[no-spend] validationReport=${validationReportPath}\n` +
           `[no-spend] fixtureSummary=${summaryPath}\n` +
           `[no-spend] fixtureLog=${fixtureLogPath}\n` +
@@ -810,6 +1348,9 @@ async function main() {
       return;
     }
 
+    // Keeper-kick mode has no auction until the keeper kicks (execution leg
+    // only), so the take-focused dry-run leg does not apply — skip it.
+    if (!options.driveKeeperKick) {
     const snapshotId = await requestJsonRpc(rpcUrl, 'evm_snapshot');
     try {
       await runNodeScript(
@@ -844,6 +1385,8 @@ async function main() {
         assertSuccessfulDryRunReport(dryRunReport, {
           mode: options.harnessMode,
           expectedFeeTier: options.expectedFeeTier,
+          aggregatorExpectedSource: aggregatorExpectedSourceFromEnv(),
+          competitionRoster: aggregatorCompetitionRosterFromEnv(),
         });
       }
       if (options.runConfigSmoke && options.harnessMode === 'discovery') {
@@ -852,8 +1395,11 @@ async function main() {
     } finally {
       await requestJsonRpc(rpcUrl, 'evm_revert', [snapshotId]);
     }
+    }
 
-    const dryRunReport = readJson(dryRunReportPath, 'dry-run report');
+    const dryRunReport = options.driveKeeperKick
+      ? undefined
+      : readJson(dryRunReportPath, 'dry-run report');
     let executionReport;
     if (!options.dryRunOnly && options.expectedResult === 'success') {
       await runNodeScript(
@@ -867,6 +1413,9 @@ async function main() {
           '--hybrid-gas-quote-fallback',
           options.hybridGasQuoteFallback,
           '--auto-warp-to-take',
+          // P0-4: settlement needs the take loop to drive collateral to ZERO,
+          // which takes many warps — raise the budget for the settlement run.
+          ...(options.driveSettlement ? ['--max-take-warps', '80'] : []),
         ],
         harnessEnv({
           rpcUrl,
@@ -874,6 +1423,9 @@ async function main() {
           allowedHosts,
           egressReportPath,
           configSmoke: false,
+          settlementStage: options.driveSettlement,
+          keeperKick: options.driveKeeperKick,
+          bondWithdrawal: options.driveBondWithdrawal,
         }),
         executionLogPath
       );
@@ -881,6 +1433,11 @@ async function main() {
       assertExecutionReport(executionReport, {
         mode: options.harnessMode,
         expectedFeeTier: options.expectedFeeTier,
+        aggregatorExpectedSource: aggregatorExpectedSourceFromEnv(),
+        competitionRoster: aggregatorCompetitionRosterFromEnv(),
+        driveSettlement: options.driveSettlement,
+        driveKeeperKick: options.driveKeeperKick,
+        driveBondWithdrawal: options.driveBondWithdrawal,
       });
     }
 
@@ -932,22 +1489,30 @@ async function main() {
         execution: executionReport ? executionLogPath : undefined,
         hardhat: nodeLogPath,
       },
-      dryRun: {
-        route: dryRunReport.routeArtifact,
-        skip: dryRunReport.skipArtifact,
-        config: dryRunReport.configArtifact,
-        policy: dryRunReport.policyArtifact,
-      },
-      route: (executionReport ?? dryRunReport).routeArtifact,
+      dryRun: dryRunReport
+        ? {
+            route: dryRunReport.routeArtifact,
+            skip: dryRunReport.skipArtifact,
+            config: dryRunReport.configArtifact,
+            policy: dryRunReport.policyArtifact,
+          }
+        : undefined,
+      route: (executionReport ?? dryRunReport)?.routeArtifact,
       receipt: executionReport?.receiptArtifact,
-      balance: executionReport?.balanceArtifact ?? dryRunReport.balanceArtifact,
+      balance: executionReport?.balanceArtifact ?? dryRunReport?.balanceArtifact,
       approval:
-        executionReport?.approvalArtifact ?? dryRunReport.approvalArtifact,
+        executionReport?.approvalArtifact ?? dryRunReport?.approvalArtifact,
       transport:
-        executionReport?.transportArtifact ?? dryRunReport.transportArtifact,
-      env: executionReport?.envArtifact ?? dryRunReport.envArtifact,
+        executionReport?.transportArtifact ?? dryRunReport?.transportArtifact,
+      env: executionReport?.envArtifact ?? dryRunReport?.envArtifact,
       stateIntegrity,
       daemon: daemonArtifact,
+      daemonLifecycle: daemonLifecycleArtifact,
+      daemonMultipool: daemonMultipoolArtifact,
+      daemonAggregator: daemonAggregatorArtifact,
+      daemonAggregatorMultipool: daemonAggregatorMultipoolArtifact,
+      daemonSushi: daemonSushiArtifact,
+      daemonFailover: daemonFailoverArtifact,
     };
     fs.mkdirSync(path.dirname(validationReportPath), { recursive: true });
     fs.writeFileSync(
@@ -982,12 +1547,21 @@ process.once('SIGTERM', async () => {
   process.exit(143);
 });
 
-main().catch(async (error) => {
-  await stopHardhatNode();
-  process.stderr.write(
-    `[no-spend] validation failed: ${
-      error instanceof Error ? (error.stack ?? error.message) : String(error)
-    }\n`
-  );
-  process.exitCode = 1;
-});
+// Only run the full validation when invoked directly (not when imported by a
+// test that exercises the exported assertion helpers).
+const isDirectInvocation =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectInvocation) {
+  main().catch(async (error) => {
+    await stopHardhatNode();
+    process.stderr.write(
+      `[no-spend] validation failed: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }\n`
+    );
+    process.exitCode = 1;
+  });
+}
+
+export { assertExecutionReport, assertSuccessfulDryRunReport };

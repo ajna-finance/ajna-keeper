@@ -326,7 +326,7 @@ export function runCommandWithTimeout(
   });
 }
 
-export function runNodeScript(label, scriptPath, args, env, logPath) {
+export function runNodeScript(label, scriptPath, args, env, logPath, timeoutMs) {
   return new Promise((resolve, reject) => {
     process.stdout.write(`[no-spend] ${label}\n`);
     const logStream = fs.createWriteStream(logPath, { flags: 'a' });
@@ -335,13 +335,42 @@ export function runNodeScript(label, scriptPath, args, env, logPath) {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    // A hung cold `eth_estimateGas` would otherwise block on `close` forever.
+    // Mirror runLoggedCommand: SIGTERM at the budget, SIGKILL 5s later.
+    let timedOut = false;
+    const timeout =
+      timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill('SIGTERM');
+            setTimeout(() => {
+              if (child.exitCode === null) {
+                child.kill('SIGKILL');
+              }
+            }, 5_000).unref();
+          }, timeoutMs);
     child.stdout.on('data', (chunk) => logStream.write(chunk));
     child.stderr.on('data', (chunk) => logStream.write(chunk));
-    child.on('error', reject);
+    child.on('error', (error) => {
+      if (timeout) clearTimeout(timeout);
+      reject(error);
+    });
     child.on('close', (code, signal) => {
+      if (timeout) clearTimeout(timeout);
       logStream.end(() => {
-        if (code === 0) {
+        if (code === 0 && !timedOut) {
           resolve();
+          return;
+        }
+        if (timedOut) {
+          reject(
+            new Error(
+              `${label} timed out after ${timeoutMs}ms (killed${
+                signal ? ` via ${signal}` : ''
+              })\n${readTail(logPath)}`
+            )
+          );
           return;
         }
         reject(

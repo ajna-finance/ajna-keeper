@@ -189,12 +189,23 @@ type FixtureStageSummary = {
   };
 };
 
+type AggregatorTakerDeployment = {
+  key: 'Lifi' | 'SushiAggregator' | 'OneInchAggregator';
+  source: number;
+  takerAddress: string;
+  targetAddress: string;
+};
+
 type ExternalTakeDeploymentSummary = {
   mode: 'deployed' | 'reused';
   owner: string;
   ajnaPoolFactory: string;
   keeperTakerRouter: string;
   uniswapV3Taker: string;
+  // P0-2: LI.FI/Sushi/1inch aggregator takers + the shared MockLifiSwapTarget,
+  // each registered on the same TakerRouter and allowlisted on the taker, so the
+  // harness can drive a real aggregator calldata-take no-spend.
+  aggregatorTakers?: AggregatorTakerDeployment[];
 };
 
 type ExternalTakeSnippetSummary = {
@@ -364,6 +375,14 @@ const AJNA_POOL_TOKEN_ABI = [
   'function quoteTokenAddress() view returns (address)',
 ];
 const UNISWAP_V3_LIQUIDITY_SOURCE = 2;
+// LiquiditySource enum (contracts/interfaces/IAjnaKeeperTaker.sol): OneInch=1,
+// UniswapV3=2, Curve=4, Lifi=5, SushiAggregator=6. Sushi MUST register at 6
+// (SushiSwap=3 is deprecated and TakerRouter.setTaker reverts on it).
+const AGGREGATOR_TAKER_DESCRIPTORS = [
+  { key: 'Lifi', source: 5, artifact: 'LifiKeeperTaker' },
+  { key: 'SushiAggregator', source: 6, artifact: 'SushiAggregatorKeeperTaker' },
+  { key: 'OneInchAggregator', source: 1, artifact: 'OneInchAggregatorKeeperTaker' },
+] as const;
 
 // Ajna pool interest rates in 1e18-fixed WAD form.
 //   1e17 = 0.1 = 10% APR (the factory maximum at time of writing; the
@@ -2519,12 +2538,108 @@ async function deployUniswapV3ExternalTakeContracts(params: {
   );
   await setTakerTx.wait();
 
+  // P0-2: deploy a single shared MockLifiSwapTarget, then each aggregator taker,
+  // register it on the same TakerRouter, and allowlist the mock (call-target +
+  // approval-spender + mockSwap selector) so a real calldata-take can execute
+  // against the mock no-spend. Same readArtifact/ContractFactory/withGasBuffer
+  // pattern as the Uniswap deploy above.
+  const mockTargetArtifact = readArtifact(
+    path.join(
+      'artifacts',
+      'contracts',
+      'mocks',
+      'MockLifiSwapTarget.sol',
+      'MockLifiSwapTarget.json'
+    )
+  );
+  const mockTargetFactory = new ContractFactory(
+    mockTargetArtifact.abi,
+    mockTargetArtifact.bytecode,
+    params.ownerSigner
+  );
+  const mockTargetDeployGasEstimate = await params.ownerSigner.estimateGas(
+    mockTargetFactory.getDeployTransaction()
+  );
+  const mockTarget = await mockTargetFactory.deploy({
+    gasLimit: withGasBuffer(mockTargetDeployGasEstimate, 750_000),
+  });
+  await mockTarget.deployed();
+  const mockSwapSelector = mockTarget.interface.getSighash('mockSwap');
+
+  const aggregatorTakers: AggregatorTakerDeployment[] = [];
+  for (const descriptor of AGGREGATOR_TAKER_DESCRIPTORS) {
+    const takerArtifactJson = readArtifact(
+      path.join(
+        'artifacts',
+        'contracts',
+        'takers',
+        `${descriptor.artifact}.sol`,
+        `${descriptor.artifact}.json`
+      )
+    );
+    const aggregatorTakerFactory = new ContractFactory(
+      takerArtifactJson.abi,
+      takerArtifactJson.bytecode,
+      params.ownerSigner
+    );
+    const aggregatorTakerDeployTx = aggregatorTakerFactory.getDeployTransaction(
+      params.ajnaPoolFactoryAddress,
+      keeperTakerRouter.address
+    );
+    const aggregatorTakerGasEstimate = await params.ownerSigner.estimateGas(
+      aggregatorTakerDeployTx
+    );
+    const aggregatorTaker = await aggregatorTakerFactory.deploy(
+      params.ajnaPoolFactoryAddress,
+      keeperTakerRouter.address,
+      { gasLimit: withGasBuffer(aggregatorTakerGasEstimate, 1_500_000) }
+    );
+    await aggregatorTaker.deployed();
+
+    const registerGasEstimate = await keeperTakerRouter.estimateGas.setTaker(
+      descriptor.source,
+      aggregatorTaker.address
+    );
+    await (
+      await keeperTakerRouter.setTaker(descriptor.source, aggregatorTaker.address, {
+        gasLimit: withGasBuffer(registerGasEstimate, 250_000),
+      })
+    ).wait();
+
+    await (
+      await aggregatorTaker.setCallTarget(mockTarget.address, true, {
+        gasLimit: 250_000,
+      })
+    ).wait();
+    await (
+      await aggregatorTaker.setApprovalSpender(mockTarget.address, true, {
+        gasLimit: 250_000,
+      })
+    ).wait();
+    await (
+      await aggregatorTaker.setCallSelector(
+        mockTarget.address,
+        mockSwapSelector,
+        true,
+        { gasLimit: 250_000 }
+      )
+    ).wait();
+
+    aggregatorTakers.push({
+      key: descriptor.key,
+      source: descriptor.source,
+      takerAddress: aggregatorTaker.address,
+      targetAddress: mockTarget.address,
+    });
+  }
+
   return {
     mode: 'deployed',
     owner: await params.ownerSigner.getAddress(),
     ajnaPoolFactory: params.ajnaPoolFactoryAddress,
     keeperTakerRouter: keeperTakerRouter.address,
     uniswapV3Taker: uniswapV3Taker.address,
+    aggregatorTakers,
   };
 }
 

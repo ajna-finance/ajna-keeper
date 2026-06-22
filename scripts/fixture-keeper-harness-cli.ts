@@ -10,13 +10,24 @@ import type { DiscoveredTakeTargetStats } from '../src/discovery/take-executor';
 import type { ResolvedTakeTarget } from '../src/discovery/targets';
 import { handleKicks } from '../src/kick';
 import { handleTakes } from '../src/take';
+import { handleSettlements } from '../src/settlement';
+import {
+  collectBondFromPool,
+  clearIdleBondCache,
+} from '../src/rewards/collect-bond';
+import { clearSharedSettlementScannerCache } from '../src/settlement/scanner';
 import type { DiscoveryReadTransports } from '../src/read-transports';
 import {
   LiquiditySource,
   PriceOriginSource,
   configureAjna,
+  resolveCalldataAggregatorProviderForSource,
 } from '../src/config';
-import { getBalanceOfErc20 } from '../src/erc20';
+import { getBalanceOfErc20, transferErc20 } from '../src/erc20';
+import {
+  installAggregatorQuoteInjector,
+  type AggregatorQuoteInjector,
+} from '../src/take/aggregator-calldata/quote-injection';
 import { isBenignNoLiquidationError } from './no-spend-harness-helpers';
 import {
   BASE_AJNA_CONFIG,
@@ -90,6 +101,14 @@ type FixtureSummary = {
     deployment: {
       keeperTakerRouter: string;
       uniswapV3Taker: string;
+      // P0-2: LI.FI/Sushi/1inch takers + shared MockLifiSwapTarget, registered on
+      // the same TakerRouter. P0-3 consumes these to drive the aggregator/hybrid path.
+      aggregatorTakers?: Array<{
+        key: 'Lifi' | 'SushiAggregator' | 'OneInchAggregator';
+        source: number;
+        takerAddress: string;
+        targetAddress: string;
+      }>;
     };
   };
   finalKick?: {
@@ -288,11 +307,215 @@ async function tryGetLiquidationStatus(
   }
 }
 
+// P0-2/P0-3: drive a real aggregator calldata-take no-spend. When
+// AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER is set, point the take at the matching
+// deployed aggregator taker, pre-fund the shared MockLifiSwapTarget with quote,
+// and install the env-gated quote injector so the REAL probe/execution pipeline
+// runs against the mock with zero live-API egress.
+const AGGREGATOR_PROVIDER_SOURCES = {
+  Lifi: LiquiditySource.LIFI,
+  SushiAggregator: LiquiditySource.SUSHI_AGGREGATOR,
+  OneInchAggregator: LiquiditySource.ONEINCH,
+} as const;
+type AggregatorProviderKey = keyof typeof AGGREGATOR_PROVIDER_SOURCES;
+
+const MOCK_SWAP_ABI = [
+  'function mockSwap(address tokenIn, address tokenOut, address recipient, uint256 amountIn, uint256 amountOut)',
+];
+
+type ResolvedAggregatorProviderId = NonNullable<
+  ReturnType<typeof resolveCalldataAggregatorProviderForSource>
+>;
+
+const AGGREGATOR_CONFIG_FIELD: Record<AggregatorProviderKey, string> = {
+  Lifi: 'lifiTaker',
+  SushiAggregator: 'sushiAggregatorTaker',
+  OneInchAggregator: 'oneInchAggregatorTaker',
+};
+
+interface AggregatorDriveContext {
+  // Winner (single mode) / intended-winner (competition) source — drives the
+  // discovered-take target's liquiditySource + the orchestrator's assertion.
+  liquiditySource: LiquiditySource;
+  // All aggregator taker addresses wired into config.{lifiTaker,...}.
+  takerConfig: Record<string, string>;
+  // Provider IDs to actually probe. Without this the policy defaults to a SINGLE
+  // provider (from defaultLiquiditySource), so competition needs all of them.
+  aggregatorProviderIds: ResolvedAggregatorProviderId[];
+  // True when driving >1 provider as competitors (don't force-disable 1inch).
+  competition: boolean;
+}
+
+interface AggregatorTakerQuoteSpec {
+  providerId: ResolvedAggregatorProviderId;
+  targetAddress: string;
+  quoteAmountRaw: ReturnType<typeof ethers.BigNumber.from>;
+}
+
+// P0-3: support both single-provider (AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER) and
+// multi-provider competition (AJNA_AGENT_HARNESS_AGGREGATOR_WINNER). In
+// competition mode ALL deployed aggregator takers are wired + probed, each
+// injected with a DISTINCT quoteAmountRaw so the real ranking has an
+// unambiguous winner (the designated one), which the orchestrator then asserts.
+async function setupAggregatorInjection(params: {
+  summary: FixtureSummary;
+  pool: FungiblePool;
+  keeper: Wallet;
+}): Promise<AggregatorDriveContext | null> {
+  const singleProvider = process.env
+    .AJNA_AGENT_HARNESS_AGGREGATOR_PROVIDER as AggregatorProviderKey | undefined;
+  const winnerProvider = process.env
+    .AJNA_AGENT_HARNESS_AGGREGATOR_WINNER as AggregatorProviderKey | undefined;
+  if (!singleProvider && !winnerProvider) {
+    return null;
+  }
+  const competition = Boolean(winnerProvider);
+  const winnerKey = (winnerProvider ?? singleProvider) as AggregatorProviderKey;
+  if (!(winnerKey in AGGREGATOR_PROVIDER_SOURCES)) {
+    throw new Error(
+      `Unknown aggregator provider "${winnerKey}" (expected Lifi|SushiAggregator|OneInchAggregator)`
+    );
+  }
+
+  const allTakers =
+    params.summary.uniswapV3ExternalTake?.deployment?.aggregatorTakers ?? [];
+  const driveKeys: AggregatorProviderKey[] = competition
+    ? allTakers.map((taker) => taker.key)
+    : [winnerKey];
+  if (!driveKeys.includes(winnerKey)) {
+    throw new Error(
+      `Winner ${winnerKey} is not among the deployed aggregatorTakers (re-run fixture creation)`
+    );
+  }
+
+  const collateralAddress = params.pool.collateralAddress;
+  const quoteAddress = params.pool.quoteAddress;
+  const keeperQuoteBalance = await getBalanceOfErc20(
+    params.keeper,
+    quoteAddress
+  );
+  if (keeperQuoteBalance.lte(0)) {
+    throw new Error(
+      'Keeper holds no quote token to pre-fund the mock aggregator target'
+    );
+  }
+  // Tiered payouts: winner highest, others descending, all comfortably above
+  // the debt-scale floor (~10 quote) so losers are not floor-rejected — only
+  // their rank loses. Only the winning provider executes (transfers its
+  // payout), so the premint (90% of the buffer) covers it across the take loop.
+  const tierAmounts = [
+    keeperQuoteBalance.div(20),
+    keeperQuoteBalance.div(30),
+    keeperQuoteBalance.div(40),
+  ];
+  const orderedKeys = [
+    winnerKey,
+    ...driveKeys.filter((key) => key !== winnerKey),
+  ];
+
+  const specsByTaker = new Map<string, AggregatorTakerQuoteSpec>();
+  const takerConfig: Record<string, string> = {};
+  const aggregatorProviderIds: ResolvedAggregatorProviderId[] = [];
+  let sharedTargetAddress: string | undefined;
+  orderedKeys.forEach((key, index) => {
+    const entry = allTakers.find((taker) => taker.key === key);
+    if (!entry) {
+      throw new Error(`Missing aggregatorTakers entry for ${key}`);
+    }
+    const source = AGGREGATOR_PROVIDER_SOURCES[key];
+    const providerId = resolveCalldataAggregatorProviderForSource(source);
+    if (!providerId) {
+      throw new Error(`No providerId for ${key}`);
+    }
+    specsByTaker.set(entry.takerAddress.toLowerCase(), {
+      providerId,
+      targetAddress: entry.targetAddress,
+      quoteAmountRaw: tierAmounts[Math.min(index, tierAmounts.length - 1)],
+    });
+    takerConfig[AGGREGATOR_CONFIG_FIELD[key]] = entry.takerAddress;
+    aggregatorProviderIds.push(providerId);
+    sharedTargetAddress = entry.targetAddress;
+  });
+  if (!sharedTargetAddress) {
+    throw new Error('No aggregator mock target resolved');
+  }
+
+  // All takers share one MockLifiSwapTarget; fund it once.
+  await transferErc20(
+    params.keeper,
+    quoteAddress,
+    sharedTargetAddress,
+    keeperQuoteBalance.mul(9).div(10)
+  );
+
+  const mockSwapInterface = new ethers.utils.Interface(MOCK_SWAP_ABI);
+  const selector = mockSwapInterface.getSighash('mockSwap');
+
+  // Enable the env-gated injector (install throws unless this is set). Only
+  // reached via the harness-only AGGREGATOR_* envs, so the seam stays inert in
+  // any production config.
+  process.env.AJNA_AGENT_HARNESS_AGGREGATOR_QUOTE_MOCK = '1';
+  const injector: AggregatorQuoteInjector = ({
+    takerAddress,
+    chainId,
+    collateralInTokenDecimals,
+  }) => {
+    const spec = specsByTaker.get(takerAddress.toLowerCase());
+    if (!spec) {
+      throw new Error(
+        `No mock aggregator quote spec for taker ${takerAddress}`
+      );
+    }
+    const callData = mockSwapInterface.encodeFunctionData('mockSwap', [
+      collateralAddress,
+      quoteAddress,
+      takerAddress,
+      collateralInTokenDecimals,
+      spec.quoteAmountRaw,
+    ]);
+    return {
+      providerId: spec.providerId,
+      quotedAtMs: Date.now(),
+      chainId,
+      srcToken: collateralAddress,
+      dstToken: quoteAddress,
+      dstReceiver: takerAddress,
+      amountInTokenUnits: collateralInTokenDecimals,
+      quoteAmountRaw: spec.quoteAmountRaw,
+      routeMinOutRaw: spec.quoteAmountRaw,
+      transactionTarget: spec.targetAddress,
+      approvalSpender: spec.targetAddress,
+      callData,
+      selector,
+      txValue: '0',
+      routeSummary: {
+        providerId: spec.providerId,
+        tool: 'mock-aggregator',
+        feeCosts: [],
+      },
+    };
+  };
+  installAggregatorQuoteInjector(injector);
+
+  process.stdout.write(
+    `[harness] aggregator injection active: ${
+      competition ? 'competition' : 'single'
+    } winner=${winnerKey} providers=[${orderedKeys.join(',')}] target=${sharedTargetAddress}\n`
+  );
+  return {
+    liquiditySource: AGGREGATOR_PROVIDER_SOURCES[winnerKey],
+    takerConfig,
+    aggregatorProviderIds,
+    competition,
+  };
+}
+
 async function buildDiscoveredTakeTarget(params: {
   pool: FungiblePool;
   summary: FixtureSummary;
   dryRun: boolean;
   liquidationStatus?: Awaited<ReturnType<typeof getLiquidationStatus>> | null;
+  liquiditySource?: LiquiditySource;
 }): Promise<ResolvedTakeTarget> {
   const { pool, summary, dryRun, liquidationStatus } = params;
   const debt = liquidationStatus?.debtToCover ?? summary.borrower.debt ?? '0';
@@ -307,7 +530,7 @@ async function buildDiscoveredTakeTarget(params: {
     dryRun,
     take: {
       minCollateral: 0.01,
-      liquiditySource: LiquiditySource.UNISWAPV3,
+      liquiditySource: params.liquiditySource ?? LiquiditySource.UNISWAPV3,
       marketPriceFactor: 0.98,
     },
     candidates: [
@@ -340,6 +563,7 @@ async function runDiscoveredTakeAttempt(params: {
   routeDecisionEvents: RouteDecisionEvent[];
   routeSkipEvents: RouteSkipEvent[];
   targetOverride?: ResolvedTakeTarget;
+  aggregator?: AggregatorDriveContext | null;
 }): Promise<{
   stats: DiscoveredTakeTargetStats;
   rpcCacheStats?: Record<string, unknown>;
@@ -364,7 +588,16 @@ async function runDiscoveredTakeAttempt(params: {
     readRpc,
     includeDirectDexQuoteProviders: true,
   });
-  if (rpcCache) {
+  const oneInchActive =
+    params.aggregator !== null &&
+    params.aggregator !== undefined &&
+    (params.aggregator.competition ||
+      params.aggregator.liquiditySource === LiquiditySource.ONEINCH);
+  if (rpcCache && !oneInchActive) {
+    // Force-disable the live 1inch circuit so the default Uniswap/aggregator
+    // path never reaches the 401-keyed 1inch API — UNLESS we are explicitly
+    // driving a mock-1inch take or a competition that includes it (the injector
+    // then serves 1inch).
     const cooldownUntilMs = Date.now() + 60 * 60 * 1000;
     rpcCache.providerCircuits ??= {};
     rpcCache.providerCircuits.oneinch = {
@@ -384,6 +617,7 @@ async function runDiscoveredTakeAttempt(params: {
         summary,
         dryRun: params.dryRun,
         liquidationStatus: params.liquidationStatus,
+        liquiditySource: params.aggregator?.liquiditySource,
       })),
     transports,
     rpcCache,
@@ -400,6 +634,14 @@ async function runDiscoveredTakeAttempt(params: {
           allowedLiquiditySources: liquiditySourceLabelsToValues(
             params.policyArtifact.allowedLiquiditySources
           ),
+          // Probe ALL wired aggregator providers (otherwise the policy defaults
+          // to a single provider from defaultLiquiditySource — no competition).
+          ...(params.aggregator
+            ? {
+                allowedCalldataAggregatorProviders:
+                  params.aggregator.aggregatorProviderIds,
+              }
+            : {}),
           externalTakeRouteSelectionMode:
             params.policyArtifact.externalTakeRouteSelectionMode,
           hybridGasQuoteFailureFallbackMode:
@@ -419,6 +661,7 @@ async function runDiscoveredTakeAttempt(params: {
         },
       },
       keeperTakerRouter: uniswapV3ExternalTake.deployment.keeperTakerRouter,
+      ...(params.aggregator ? params.aggregator.takerConfig : {}),
       uniswapV3RouterOverrides: uniswapV3ExternalTake.routerConfig,
       tokenAddresses: {
         weth: uniswapV3ExternalTake.routerConfig.wethAddress,
@@ -471,6 +714,20 @@ export async function main() {
     takeWarpSeconds,
     maxTakeWarps,
   } = parseArgs(process.argv.slice(2));
+  // P0-4: when set, drive the take loop to ZERO collateral with residual debt,
+  // then run a real settlement stage and assert the auction clears. Gated so
+  // take-only runs are byte-identical.
+  const settlementStage =
+    process.env.AJNA_AGENT_HARNESS_SETTLEMENT_STAGE === '1';
+  // P0-3/P1-1: assert the KEEPER's own kick decision. Requires the fixture to be
+  // created kick-eligible-but-unkicked (--no-final-kick), so handleKicks below
+  // actually exercises getLoansToKick + poolKick + bond posting.
+  const keeperKickMode =
+    process.env.AJNA_AGENT_HARNESS_KEEPER_KICK === '1';
+  // P1-4: after the settlement stage unlocks the keeper's kick bond, withdraw it
+  // via the REAL collectBondFromPool and assert claimable -> 0 + keeper paid.
+  const bondWithdrawalStage =
+    process.env.AJNA_AGENT_HARNESS_BOND_WITHDRAWAL === '1';
   const keeperKey = process.env.AJNA_AGENT_KEEPER_KEY;
   if (!keeperKey) {
     throw new Error('Missing AJNA_AGENT_KEEPER_KEY');
@@ -516,6 +773,15 @@ export async function main() {
       liquiditySource: LiquiditySource.UNISWAPV3,
       marketPriceFactor: 0.98,
     },
+    // P0-4: minAuctionAge cannot be 0 (|| 3600-floored); use a small positive
+    // value. The age gate compares wall-clock Date.now()-kickTime, satisfied by
+    // real elapsed runtime (fork warping does not move Date.now()).
+    settlement: {
+      enabled: true,
+      minAuctionAge: 1,
+      maxBucketDepth: 50,
+      maxIterations: 10,
+    },
   } as const;
 
   const undoLoans = overrideGetLoans(
@@ -539,6 +805,14 @@ export async function main() {
     const policyArtifact = buildPolicyArtifact({
       hybridGasQuoteFailureFallbackMode,
     });
+
+    // P0-2/P0-3: when an aggregator provider is selected, pre-fund the mock
+    // target + install the quote injector so the discovery take runs the real
+    // aggregator taker against the mock. No-op (returns null) otherwise.
+    const aggregatorContext =
+      mode === 'discovery'
+        ? await setupAggregatorInjection({ summary, pool, keeper })
+        : null;
 
     if (stateOnly) {
       const blockNumber = await provider.getBlockNumber();
@@ -631,6 +905,15 @@ export async function main() {
       return;
     }
 
+    // Capture the keeper's own kick: kickTime_ 0 -> non-zero and a posted bond.
+    const kickBorrower = summary.borrower.owner;
+    const auctionBeforeKick = keeperKickMode
+      ? await pool.contract.auctionInfo(kickBorrower)
+      : undefined;
+    const kickerLockedBefore = keeperKickMode
+      ? (await pool.kickerInfo(keeper.address)).locked
+      : undefined;
+
     await handleKicks({
       pool,
       poolConfig,
@@ -646,6 +929,32 @@ export async function main() {
       },
       chainId: 8453,
     });
+
+    let kickArtifact: HarnessReport['kickArtifact'];
+    if (
+      keeperKickMode &&
+      auctionBeforeKick &&
+      kickerLockedBefore !== undefined
+    ) {
+      const auctionAfterKick = await pool.contract.auctionInfo(kickBorrower);
+      const kickerLockedAfter = (await pool.kickerInfo(keeper.address)).locked;
+      const kickTimeBefore = auctionBeforeKick.kickTime_;
+      const kickTimeAfter = auctionAfterKick.kickTime_;
+      kickArtifact = {
+        driven: true,
+        kickTimeBefore: kickTimeBefore.toString(),
+        kickTimeAfter: kickTimeAfter.toString(),
+        kickTimeTransitionedToNonZero:
+          kickTimeBefore.eq(0) && kickTimeAfter.gt(0),
+        lockedBefore: kickerLockedBefore.toString(),
+        lockedAfter: kickerLockedAfter.toString(),
+        bondPosted: kickerLockedAfter.gt(kickerLockedBefore),
+        kicker: auctionAfterKick.kicker_,
+      };
+      process.stdout.write(
+        `[harness] keeper kick: kickTime_ ${kickTimeBefore.toString()} -> ${kickTimeAfter.toString()}, locked ${kickerLockedBefore.toString()} -> ${kickerLockedAfter.toString()}\n`
+      );
+    }
 
     const liquidationStatusAfterKick = await tryGetLiquidationStatus(
       pool,
@@ -703,6 +1012,7 @@ export async function main() {
           routeDecisionEvents,
           routeSkipEvents,
           targetOverride: configTargetOverride,
+          aggregator: aggregatorContext,
         });
         discoveryStats.push(attempt.stats);
         lastRpcCacheStats = attempt.rpcCacheStats;
@@ -746,8 +1056,18 @@ export async function main() {
           : collateralBeforeTake !== undefined &&
             liquidationStatusAfterTake === null;
 
+      // P0-4: needsSettlement requires collateral==0 && debt>0, and a single
+      // partial take leaves residual collateral. When settling, keep
+      // warping+re-taking until on-chain collateral reaches 0; otherwise stop at
+      // the first reduction (existing take-only behavior).
+      const collateralIsZero =
+        liquidationStatusAfterTake === null ||
+        ethers.BigNumber.from(liquidationStatusAfterTake.collateral).eq(0);
+      const takeLoopGoalReached = settlementStage
+        ? collateralIsZero
+        : collateralReducedByTake;
       if (
-        collateralReducedByTake ||
+        takeLoopGoalReached ||
         !autoWarpToTake ||
         takeWarpCount >= maxTakeWarps
       ) {
@@ -792,6 +1112,140 @@ export async function main() {
       after: keeperQuoteBalanceAfter,
     });
 
+    // P0-4: run a real settlement AFTER all take-artifact collection (settle is
+    // irreversible and emits keeper txs; running it earlier would pollute the
+    // take tx/approval/balance reads above).
+    let settlementArtifact: HarnessReport['settlementArtifact'] | undefined;
+    if (settlementStage) {
+      const settleBorrower = summary.borrower.owner;
+      const auctionBeforeSettle =
+        await pool.contract.auctionInfo(settleBorrower);
+      const kickTimeBefore = auctionBeforeSettle.kickTime_;
+      const { locked: lockedBefore } = await pool.kickerInfo(keeper.address);
+      const collateralZero =
+        liquidationStatusAfterTake === null ||
+        ethers.BigNumber.from(liquidationStatusAfterTake.collateral).eq(0);
+      // Precondition: an ACTIVE auction (kickTime_ != 0 => residual debt) with
+      // zero collateral. Fail loudly if not reached, else settlement finds
+      // nothing and the test silently passes proving nothing.
+      const collateralZeroDebtPositiveReached =
+        !kickTimeBefore.eq(0) && collateralZero;
+      if (!collateralZeroDebtPositiveReached) {
+        throw new Error(
+          `Settlement precondition not reached (need an active auction with zero collateral): ` +
+            `kickTime_=${kickTimeBefore.toString()} collateral=${
+              liquidationStatusAfterTake?.collateral ?? 'null'
+            } (raise --max-take-warps or check the fixture debt/collateral economics)`
+        );
+      }
+      // The age gate compares wall-clock Date.now()-kickTime (seconds).
+      const auctionAgeSecondsAtCheck = Math.floor(
+        Date.now() / 1000 - Number(kickTimeBefore.toString())
+      );
+
+      clearSharedSettlementScannerCache();
+      await handleSettlements({
+        pool,
+        poolConfig: poolConfig as never,
+        signer: keeper,
+        config: {
+          dryRun: false,
+          subgraph: makeFixtureSubgraphReader(pool, settleBorrower, provider),
+        },
+      });
+
+      const auctionAfterSettle = await pool.contract.auctionInfo(settleBorrower);
+      const kickTimeAfter = auctionAfterSettle.kickTime_;
+      const { locked: lockedAfter } = await pool.kickerInfo(keeper.address);
+      settlementArtifact = {
+        driven: true,
+        collateralZeroDebtPositiveReached,
+        kickTimeBefore: kickTimeBefore.toString(),
+        kickTimeAfter: kickTimeAfter.toString(),
+        kickTimeTransitionedToZero:
+          !kickTimeBefore.eq(0) && kickTimeAfter.eq(0),
+        lockedBefore: lockedBefore.toString(),
+        lockedAfter: lockedAfter.toString(),
+        bondsUnlocked: lockedAfter.eq(0),
+        auctionAgeSecondsAtCheck,
+        minAuctionAge: poolConfig.settlement.minAuctionAge,
+      };
+      process.stdout.write(
+        `[harness] settlement: kickTime_ ${kickTimeBefore.toString()} -> ${kickTimeAfter.toString()}, locked ${lockedBefore.toString()} -> ${lockedAfter.toString()}\n`
+      );
+    }
+
+    // P1-4: withdraw the keeper's settlement-unlocked kick bond. Runs only after
+    // the settlement stage (which unlocked it: locked -> 0 => claimable). Proves
+    // a dry-run withdraws nothing, then a real collectBondFromPool pays the
+    // keeper and zeroes claimable.
+    let bondArtifact: HarnessReport['bondArtifact'] | undefined;
+    if (bondWithdrawalStage && settlementStage) {
+      const bondBorrower = summary.borrower.owner;
+      const bondSubgraph = makeFixtureSubgraphReader(
+        pool,
+        bondBorrower,
+        provider
+      );
+      const { claimable: claimableBefore, locked: lockedBeforeBond } =
+        await pool.kickerInfo(keeper.address);
+      const keeperQuoteBeforeBond = await getBalanceOfErc20(
+        keeper,
+        pool.quoteAddress
+      );
+
+      // (a) Dry-run must withdraw NOTHING.
+      clearIdleBondCache();
+      await collectBondFromPool({
+        pool,
+        signer: keeper,
+        poolConfig: poolConfig as never,
+        config: { dryRun: true, subgraph: bondSubgraph },
+      });
+      const { claimable: claimableAfterDryRun } = await pool.kickerInfo(
+        keeper.address
+      );
+      const keeperQuoteAfterDryRun = await getBalanceOfErc20(
+        keeper,
+        pool.quoteAddress
+      );
+
+      // (b) Real withdrawal: claimable -> 0, keeper paid the bond.
+      clearIdleBondCache();
+      await collectBondFromPool({
+        pool,
+        signer: keeper,
+        poolConfig: poolConfig as never,
+        config: { dryRun: false, subgraph: bondSubgraph },
+      });
+      const { claimable: claimableAfter, locked: lockedAfterBond } =
+        await pool.kickerInfo(keeper.address);
+      const keeperQuoteAfterBond = await getBalanceOfErc20(
+        keeper,
+        pool.quoteAddress
+      );
+
+      bondArtifact = {
+        driven: true,
+        claimableBefore: claimableBefore.toString(),
+        lockedBefore: lockedBeforeBond.toString(),
+        dryRunClaimableUnchanged: claimableAfterDryRun.eq(claimableBefore),
+        dryRunBalanceUnchanged: keeperQuoteAfterDryRun.eq(keeperQuoteBeforeBond),
+        claimableAfter: claimableAfter.toString(),
+        lockedAfter: lockedAfterBond.toString(),
+        claimableTransitionedToZero:
+          claimableBefore.gt(0) && claimableAfter.eq(0),
+        bondWithdrawn:
+          claimableBefore.gt(0) &&
+          keeperQuoteAfterBond.gt(keeperQuoteBeforeBond),
+        keeperQuoteBalanceBeforeBond: keeperQuoteBeforeBond.toString(),
+        keeperQuoteBalanceAfterBond: keeperQuoteAfterBond.toString(),
+      };
+      process.stdout.write(
+        `[harness] bond withdrawal: claimable ${claimableBefore.toString()} -> ${claimableAfter.toString()}, keeper quote ${keeperQuoteBeforeBond.toString()} -> ${keeperQuoteAfterBond.toString()}\n`
+      );
+    }
+
     const report: HarnessReport = {
       mode,
       hybridGasQuoteFailureFallbackMode:
@@ -810,6 +1264,7 @@ export async function main() {
           ? false
           : liquidationStatusAfterKick !== undefined &&
             liquidationStatusAfterKick.collateral !== '0',
+      kickArtifact,
       liquidationStatusAfterKick,
       takeExecuted: collateralReducedByTake,
       liquidationStatusAfterTake,
@@ -857,6 +1312,8 @@ export async function main() {
         blockBeforeTake,
         blockAfterTake,
       },
+      settlementArtifact,
+      bondArtifact,
     };
 
     const outputPath = process.env.AJNA_AGENT_HARNESS_OUTPUT_PATH;

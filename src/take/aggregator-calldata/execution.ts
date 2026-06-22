@@ -15,6 +15,7 @@ import {
 } from '../../utils';
 import { logTakeExecutionTelemetry } from '../execution-telemetry';
 import { getCachedTokenDecimals } from '../external-take/chain';
+import { getAggregatorQuoteInjector } from './quote-injection';
 import { getDebtConstrainedTakeCollateralWad } from '../take-sizing';
 import {
   ApprovedCalldataAggregatorQuoteEvaluation,
@@ -368,24 +369,37 @@ export async function prepareCalldataAggregatorExecution<
   }
 
   let freshQuote: ApprovedCalldataAggregatorQuote;
-  try {
-    freshQuote = await params.requestValidatedQuote({
+  // No-spend seam: see quote-injection.ts. When installed (harness only,
+  // env-gated), the injector replaces the live provider quote so the real
+  // fresh-quote floor/age checks + on-chain take run against the mock target.
+  const quoteInjector = getAggregatorQuoteInjector();
+  if (quoteInjector) {
+    freshQuote = quoteInjector({
       pool,
-      signer,
-      config,
       takerAddress,
       chainId,
       collateralInTokenDecimals,
     });
-  } catch (error) {
-    const failure = params.getFailureMetadata(error);
-    config.onCalldataAggregatorQuoteResult?.({
-      success: false,
-      retryable: failure.retryable,
-      errorCode: failure.code,
-      error: getErrorMessage(error),
-    });
-    throw error;
+  } else {
+    try {
+      freshQuote = await params.requestValidatedQuote({
+        pool,
+        signer,
+        config,
+        takerAddress,
+        chainId,
+        collateralInTokenDecimals,
+      });
+    } catch (error) {
+      const failure = params.getFailureMetadata(error);
+      config.onCalldataAggregatorQuoteResult?.({
+        success: false,
+        retryable: failure.retryable,
+        errorCode: failure.code,
+        error: getErrorMessage(error),
+      });
+      throw error;
+    }
   }
   const floorError = getAggregatorFreshQuoteFloorError({
     freshQuote,
@@ -400,7 +414,13 @@ export async function prepareCalldataAggregatorExecution<
     };
   }
 
-  const maxQuoteAgeMs = params.getMaxQuoteAgeMs(config);
+  // params.getMaxQuoteAgeMs re-runs the provider production-config guard for
+  // some providers (e.g. LI.FI), which the injected no-spend path does not
+  // supply. The injector stamps quotedAtMs fresh per call, so a generous
+  // default age window is correct when injecting.
+  const maxQuoteAgeMs = quoteInjector
+    ? 5 * 60_000
+    : params.getMaxQuoteAgeMs(config);
   const ageError = getAggregatorQuoteAgeError({
     quote: freshQuote,
     maxQuoteAgeMs,

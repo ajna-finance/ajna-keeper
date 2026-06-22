@@ -222,7 +222,11 @@ describe('route deployment preflight', () => {
     const callTarget = '0x3333333333333333333333333333333333333333';
     const spender = '0x4444444444444444444444444444444444444444';
     config.dex!.oneInch!.callTargetAllowlist = { 1: [callTarget] };
-    config.dex!.oneInch!.approvalSpenderAllowlist = { 1: [spender] };
+    // The 1inch take sets approvalSpender = the configured router (callTarget
+    // here, = routers[1]), so the router must itself be an allowed approval
+    // spender; the preflight now asserts this. Keep the extra spender too to
+    // preserve the independent-allowlist coverage.
+    config.dex!.oneInch!.approvalSpenderAllowlist = { 1: [spender, callTarget] };
     config.dex!.oneInch!.selectorAllowlist = params?.invalidPolicy
       ? // selector targets an address NOT in the call-target allowlist: the
         // normalizer rejects it fail-closed before any on-chain read.
@@ -240,7 +244,9 @@ describe('route deployment preflight', () => {
     const registeredTaker =
       params?.registeredTaker ?? config.takers!.contracts!.OneInchAggregator;
     const allowedTargets = params?.allowedTargets ?? [callTarget];
-    const allowedSpenders = params?.allowedSpenders ?? [spender];
+    // On-chain allowlist mirrors the config (which now also lists the router
+    // callTarget as an approval spender — see approvalSpenderAllowlist above).
+    const allowedSpenders = params?.allowedSpenders ?? [spender, callTarget];
     const allowedSelectors = params?.allowedSelectors ?? ['0xabcdef12'];
 
     return {

@@ -8,6 +8,7 @@ import { convertWadToTokenDecimals } from '../../erc20';
 import { logger } from '../../logging';
 import { getErrorMessage } from '../../utils';
 import { getCachedTokenDecimals } from '../external-take/chain';
+import { getAggregatorQuoteInjector } from './quote-injection';
 import {
   EXTERNAL_TAKE_REJECTION_REASONS,
   ExternalTakeRoutePolicyResult,
@@ -125,9 +126,15 @@ export async function evaluateCalldataAggregatorPathQuote<
   }
 
   try {
-    const preparedConfig = params.prepareConfig
-      ? await params.prepareConfig(params.config)
-      : (undefined as TPreparedConfig);
+    // No-spend seam: when an aggregator quote injector is installed (harness
+    // only, env-gated), skip the provider's production-config guard
+    // (prepareConfig) — the injected quote bypasses the live fetch that guard
+    // protects, and getTakerAddress reads the configured taker directly.
+    const injector = getAggregatorQuoteInjector();
+    const preparedConfig =
+      !injector && params.prepareConfig
+        ? await params.prepareConfig(params.config)
+        : (undefined as TPreparedConfig);
     const takerAddress = params.getTakerAddress(params.config, preparedConfig);
     if (!takerAddress) {
       return rejected(params.takerMissingReason);
@@ -148,16 +155,29 @@ export async function evaluateCalldataAggregatorPathQuote<
       return rejected(params.tokenRoundedToZeroReason);
     }
 
-    const providerQuote = await params.requestValidatedQuote({
-      pool: params.pool,
-      signer: params.signer,
-      config: params.config,
-      preparedConfig,
-      takerAddress,
-      chainId,
-      collateralInTokenDecimals,
-    });
-    const calldataQuote = params.normalizeQuote(providerQuote, chainId);
+    // Same injector (resolved above): use it instead of the live provider
+    // fetch+normalize so the rest of the evaluate->approve->rank pipeline runs.
+    let providerQuote: TProviderQuote | undefined;
+    let calldataQuote: ApprovedCalldataAggregatorQuote;
+    if (injector) {
+      calldataQuote = injector({
+        pool: params.pool,
+        takerAddress,
+        chainId,
+        collateralInTokenDecimals,
+      });
+    } else {
+      providerQuote = await params.requestValidatedQuote({
+        pool: params.pool,
+        signer: params.signer,
+        config: params.config,
+        preparedConfig,
+        takerAddress,
+        chainId,
+        collateralInTokenDecimals,
+      });
+      calldataQuote = params.normalizeQuote(providerQuote, chainId);
+    }
     const expectedProviderId = resolveCalldataAggregatorProviderForSource(
       params.liquiditySource
     );
@@ -191,17 +211,18 @@ export async function evaluateCalldataAggregatorPathQuote<
       allowSubsidy: params.poolConfig.take.allowSubsidy,
     });
     const policy = economics.policy;
-    const providerLogFields =
-      params.formatLogFields?.({
-        pool: params.pool,
-        poolConfig: params.poolConfig,
-        price: params.price,
-        preparedConfig,
-        providerQuote,
-        calldataQuote,
-        economics,
-        policy,
-      }) ?? [];
+    const providerLogFields = providerQuote
+      ? (params.formatLogFields?.({
+          pool: params.pool,
+          poolConfig: params.poolConfig,
+          price: params.price,
+          preparedConfig,
+          providerQuote,
+          calldataQuote,
+          economics,
+          policy,
+        }) ?? [])
+      : [];
 
     logger.info(
       `${params.label} take check for pool ${params.pool.name}: ${[
@@ -211,8 +232,8 @@ export async function evaluateCalldataAggregatorPathQuote<
         `collateral=${economics.collateralAmount}`,
         `factor=${params.poolConfig.take.marketPriceFactor}`,
         ...providerLogFields,
-        `expectedOutputRaw=${providerQuote.quoteAmountRaw.toString()}`,
-        `routeMinOutRaw=${providerQuote.routeMinOutRaw.toString()}`,
+        `expectedOutputRaw=${calldataQuote.quoteAmountRaw.toString()}`,
+        `routeMinOutRaw=${calldataQuote.routeMinOutRaw.toString()}`,
         `approvedMinOutRaw=${policy.approvedMinOutRaw.toString()}`,
         `target=${calldataQuote.transactionTarget}`,
         `approvalSpender=${calldataQuote.approvalSpender}`,

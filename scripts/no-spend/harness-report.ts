@@ -1,7 +1,10 @@
 import { FungiblePool } from '@ajna-finance/sdk';
 import { ethers } from 'ethers';
 import type { DiscoveredTakeTargetStats } from '../../src/discovery/take-executor';
-import { getExternalTakeExecutionPlanPrimaryEvaluation } from '../../src/take/external-take/execution-plan';
+import {
+  getExternalTakeExecutionPlanPrimaryEvaluation,
+  resolveExternalTakeExecutionCandidates,
+} from '../../src/take/external-take/execution-plan';
 import type {
   ExternalTakeQuoteEvaluation,
   TakeDecision,
@@ -43,8 +46,23 @@ type FixtureSummary = {
     deployment: {
       keeperTakerRouter: string;
       uniswapV3Taker: string;
+      aggregatorTakers?: Array<{
+        key: 'Lifi' | 'SushiAggregator' | 'OneInchAggregator';
+        source: number;
+        takerAddress: string;
+        targetAddress: string;
+      }>;
     };
   };
+};
+
+// Map a selected-source label (formatLiquiditySource output) to the
+// aggregatorTakers descriptor key, so the route artifact can report the taker
+// that actually executed instead of the hardcoded Uniswap one.
+const AGGREGATOR_LABEL_TO_KEY: Record<string, string> = {
+  LIFI: 'Lifi',
+  SUSHI_AGGREGATOR: 'SushiAggregator',
+  ONEINCH: 'OneInchAggregator',
 };
 
 export type HarnessReport = {
@@ -78,6 +96,55 @@ export type HarnessReport = {
   skipArtifact: SkipArtifact;
   configArtifact?: ConfigArtifact;
   manualArtifact?: ManualArtifact;
+  settlementArtifact?: SettlementArtifact;
+  kickArtifact?: KickArtifact;
+  bondArtifact?: BondArtifact;
+};
+
+// P0-3/P1-1: the result of the KEEPER's own kick decision — proves the keeper
+// kicked an eligible loan on-chain (kickTime_ 0 -> non-zero) and posted a bond.
+export type KickArtifact = {
+  driven: boolean;
+  kickTimeTransitionedToNonZero: boolean;
+  bondPosted: boolean;
+  kickTimeBefore: string;
+  kickTimeAfter: string;
+  lockedBefore: string;
+  lockedAfter: string;
+  kicker: string;
+};
+
+// P1-4: the result of the harness bond-withdrawal stage — proves the keeper's
+// settlement-unlocked kick bond is withdrawn to its wallet (claimable -> 0,
+// quote balance up) by the REAL collectBondFromPool, and that a dry-run first
+// withdraws nothing (no tx, claimable + balance unchanged).
+export type BondArtifact = {
+  driven: boolean;
+  claimableBefore: string;
+  lockedBefore: string;
+  dryRunClaimableUnchanged: boolean;
+  dryRunBalanceUnchanged: boolean;
+  claimableAfter: string;
+  lockedAfter: string;
+  claimableTransitionedToZero: boolean;
+  bondWithdrawn: boolean;
+  keeperQuoteBalanceBeforeBond: string;
+  keeperQuoteBalanceAfterBond: string;
+};
+
+// P0-4: the result of the harness settlement stage — proves bad debt was
+// cleared on-chain (kickTime_ -> 0) and kicker bonds were unlocked.
+export type SettlementArtifact = {
+  driven: boolean;
+  collateralZeroDebtPositiveReached: boolean;
+  kickTimeTransitionedToZero: boolean;
+  bondsUnlocked: boolean;
+  kickTimeBefore: string;
+  kickTimeAfter: string;
+  lockedBefore: string;
+  lockedAfter: string;
+  auctionAgeSecondsAtCheck?: number;
+  minAuctionAge?: number;
 };
 
 type SerializedRouteEvaluation = {
@@ -102,6 +169,12 @@ export type RouteDecisionEvent = {
   executedArbTake?: boolean;
   borrower: string;
   route?: SerializedRouteEvaluation;
+  // Distinct liquidity sources that produced an approved, ranked quote for this
+  // decision — the execution plan's primary plus its fallbacks (ranking order,
+  // winner first). This is the per-decision roster of providers that actually
+  // *competed*: a provider only appears here if it was probed AND its quote
+  // passed approval and was ranked. Absent for non-approved decisions.
+  candidateProviders?: string[];
 };
 
 export type RouteSkipEvent = {
@@ -121,6 +194,12 @@ export type RouteArtifact = {
   expectedExecutionFeeTier?: number;
   factoryRegistryAddress?: string;
   selectedTakerAddress?: string;
+  // Distinct union (ranking order) of every provider that produced an approved,
+  // ranked quote across all decision events in the run. In competition mode this
+  // makes "all wired aggregators actually competed" falsifiable from the JSON:
+  // if route selection regressed to probing only the winner, the runner-ups
+  // would be absent here. Omitted when no approved decision was recorded.
+  competingProviders?: string[];
   decisions: RouteDecisionEvent[];
   counters?: {
     approvedDirectDexPathTakes: number;
@@ -298,6 +377,13 @@ function parseLiquiditySourceLabel(raw: string): LiquiditySource {
   if (value === 'LIFI' || value === 'LI.FI' || value === '5') {
     return LiquiditySource.LIFI;
   }
+  if (
+    value === 'SUSHI_AGGREGATOR' ||
+    value === 'SUSHIAGGREGATOR' ||
+    value === '6'
+  ) {
+    return LiquiditySource.SUSHI_AGGREGATOR;
+  }
   throw new Error(
     `Unsupported AJNA_AGENT_HARNESS_ALLOWED_LIQUIDITY_SOURCES entry: ${raw}`
   );
@@ -375,6 +461,31 @@ export function liquiditySourceLabelsToValues(
   return labels.map(parseLiquiditySourceLabel);
 }
 
+function dedupePreserveOrder(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+// The distinct, ranking-ordered roster of liquidity sources that produced an
+// approved quote for this decision (execution plan primary + fallbacks). For an
+// aggregator winner the fallbacks include the runner-up aggregators plus the
+// direct-DEX gas-quote fallback, so this is the falsifiable "who competed" list.
+function resolveCandidateProviders(decision: TakeDecision): string[] | undefined {
+  if (!decision.approvedTake) {
+    return undefined;
+  }
+  const candidates = resolveExternalTakeExecutionCandidates({
+    executionPlan: decision.externalTakeExecutionPlan,
+  });
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  return dedupePreserveOrder(
+    candidates.map((candidate) =>
+      formatLiquiditySource(candidate.evaluation.selectedLiquiditySource)
+    )
+  );
+}
+
 function bnString(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (ethers.BigNumber.isBigNumber(value)) {
@@ -431,6 +542,7 @@ export function serializeDecisionEvent(
     approvedArbTake: decision.approvedArbTake,
     borrower: decision.borrower,
     route,
+    candidateProviders: resolveCandidateProviders(decision),
     ...executed,
   };
 }
@@ -494,6 +606,11 @@ export function buildRouteArtifact(params: {
   const lastRouteEvent = [...params.routeDecisionEvents]
     .reverse()
     .find((event) => event.route?.selectedLiquiditySource);
+  const competingProviders = dedupePreserveOrder(
+    params.routeDecisionEvents.flatMap(
+      (event) => event.candidateProviders ?? []
+    )
+  );
   const uniswapV3ExternalTake = params.summary.uniswapV3ExternalTake;
   const expectedSource = formatLiquiditySource(LiquiditySource.UNISWAPV3);
   return {
@@ -510,7 +627,23 @@ export function buildRouteArtifact(params: {
     expectedExecutionFeeTier: uniswapV3ExternalTake?.expectedExecutionFeeTier,
     factoryRegistryAddress:
       uniswapV3ExternalTake?.deployment.keeperTakerRouter,
-    selectedTakerAddress: uniswapV3ExternalTake?.deployment.uniswapV3Taker,
+    // Derive the executed taker from the selected source: for an aggregator
+    // winner, resolve its taker from aggregatorTakers; otherwise the Uniswap
+    // taker (the shared TakerRouter, factoryRegistryAddress, is correct as-is).
+    selectedTakerAddress: (() => {
+      const label = lastRouteEvent?.route?.selectedLiquiditySource;
+      const aggregatorKey = label ? AGGREGATOR_LABEL_TO_KEY[label] : undefined;
+      const aggregatorTaker = aggregatorKey
+        ? uniswapV3ExternalTake?.deployment.aggregatorTakers?.find(
+            (taker) => taker.key === aggregatorKey
+          )
+        : undefined;
+      return (
+        aggregatorTaker?.takerAddress ??
+        uniswapV3ExternalTake?.deployment.uniswapV3Taker
+      );
+    })(),
+    ...(competingProviders.length > 0 ? { competingProviders } : {}),
     decisions: params.routeDecisionEvents,
     counters:
       params.mode === 'discovery'
