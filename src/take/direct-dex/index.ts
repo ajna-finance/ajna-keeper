@@ -535,8 +535,19 @@ export async function getDirectDexTakeQuoteEvaluation(
   }
 }
 
-function failDirectDexTakeExecution(message: string): false {
+function failDirectDexTakeExecution(
+  message: string,
+  onDirectDexExecutionFailure?: (result: {
+    preBroadcast: boolean;
+    error?: string;
+  }) => void
+): false {
   logger.error(message);
+  // These are pre-broadcast rejections (approval/config gates) — no tx was sent.
+  // Signal preBroadcast=true so a hybrid orchestrator runs the fallback path
+  // instead of treating the primary as a hard stop (audit Pass-2 / Codex: the
+  // fallback was otherwise suppressed because the callback was never invoked).
+  onDirectDexExecutionFailure?.({ preBroadcast: true, error: message });
   return false;
 }
 
@@ -643,7 +654,10 @@ export async function takeLiquidationDirectDex({
     borrower,
   });
   if (!approval.approved) {
-    return failDirectDexTakeExecution(approval.reason);
+    return failDirectDexTakeExecution(
+      approval.reason,
+      config.onDirectDexExecutionFailure
+    );
   }
   const approvedQuoteEvaluation = approval.quoteEvaluation;
 
@@ -656,7 +670,8 @@ export async function takeLiquidationDirectDex({
 
   if (!keeperTakerRouter) {
     return failDirectDexTakeExecution(
-      'Direct DEX: keeperTakerRouter address not configured'
+      'Direct DEX: keeperTakerRouter address not configured',
+      config.onDirectDexExecutionFailure
     );
   }
 

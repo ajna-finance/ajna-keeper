@@ -201,6 +201,19 @@ export async function swapWithCurveRouter(
 
     if (currentAllowance.lt(amount)) {
       logger.info(`Approving Curve pool to spend ${tokenToSwap.symbol}`);
+      // USDT-safe: approval-strict tokens revert on a non-zero -> non-zero
+      // approve, so reset a residual non-zero allowance to 0 first (a partial or
+      // failed prior swap can leave one now that the approval is bounded to the
+      // exact amount rather than MaxUint256). Mirrors the take-path
+      // _safeApproveWithReset (audit Pass-2 / Codex).
+      if (currentAllowance.gt(0)) {
+        await NonceTracker.queueTransaction(signer, async (nonce) => {
+          const resetTx = await tokenContract.approve(poolAddress, 0, { nonce });
+          const receipt = await resetTx.wait();
+          logger.info(`Curve allowance reset to 0 before re-approval`);
+          return receipt;
+        });
+      }
       await NonceTracker.queueTransaction(signer, async (nonce) => {
         // Bound the approval to the exact swap `amount` rather than MaxUint256:
         // the configured Curve pool is NOT a trusted singleton, and the

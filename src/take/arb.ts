@@ -5,6 +5,7 @@ import { logger } from '../logging';
 import { SubgraphReader } from '../read-transports';
 import { ArbTakeEvaluation, TakeActionConfig } from './types';
 import { liquidationArbTake } from '../transactions';
+import { isNonceConsumedTransactionError } from '../nonce';
 import { TakeWriteTransport } from './write-transport';
 import { decimaledToWei, weiToDecimaled } from '../utils';
 
@@ -130,6 +131,14 @@ export async function arbTakeLiquidation({
       `${logPrefix}Failed to ArbTake. pool: ${pool.name}, borrower: ${borrower}`,
       error
     );
+    // A nonce-consumed error means the arbTake tx may have broadcast (the nonce
+    // was consumed) even though the receipt wait failed. Propagate it so the
+    // engine treats it as an attempted submission and invalidates stale auction
+    // state, rather than swallowing it as a clean no-op (audit Pass-2 HIGH). The
+    // calldata path classifies the same error as preBroadcast=false.
+    if (isNonceConsumedTransactionError(error)) {
+      throw error;
+    }
     return false;
   }
 }

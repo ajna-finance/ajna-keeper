@@ -15,6 +15,11 @@ type SignalTarget = {
 export function installProcessSafetyHandlers(
   target: SignalTarget = process
 ): void {
+  // Intentional asymmetry (audit Pass-2): unhandledRejection is NON-fatal while
+  // uncaughtException exits. The whole point of this handler is that a transient
+  // rejection escaping a fire-and-forget loop must NOT terminate the daemon —
+  // the supervised loops self-recover next iteration. A synchronous
+  // uncaughtException is a harder failure (corrupt sync state) and is fatal.
   target.on('unhandledRejection', (reason: unknown) => {
     logger.error('Unhandled promise rejection in keeper process', reason);
   });

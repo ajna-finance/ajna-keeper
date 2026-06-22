@@ -8,6 +8,7 @@ import {
   weiToDecimaled,
 } from '../utils';
 import { ArbTakeStrategy } from './arb-strategy';
+import { isNonceConsumedTransactionError } from '../nonce';
 import { TakeWriteTransport } from './write-transport';
 import {
   AuctionTakeFacts,
@@ -709,17 +710,35 @@ export async function executeTakeDecision<
   }
 
   if (approvedArbTake) {
-    executedArbTake = await arbTakeStrategy.executeArbTake({
-      pool,
-      signer,
-      borrower: decision.borrower,
-      hpbIndex,
-      dryRun,
-      takeWriteTransport,
-    });
-    if (executedArbTake && !dryRun) {
-      submittedTransaction = true;
-      poolStateMayHaveChanged = true;
+    try {
+      executedArbTake = await arbTakeStrategy.executeArbTake({
+        pool,
+        signer,
+        borrower: decision.borrower,
+        hpbIndex,
+        dryRun,
+        takeWriteTransport,
+      });
+      if (executedArbTake && !dryRun) {
+        submittedTransaction = true;
+        poolStateMayHaveChanged = true;
+      }
+    } catch (error) {
+      // A nonce-consumed error means the arbTake tx may have broadcast even
+      // though the receipt wait failed (arb.ts re-throws it). Treat it as an
+      // attempted submission: invalidate stale auction state so the candidate
+      // loop does not keep evaluating against it (mirrors the calldata path's
+      // preBroadcast=false handling). Anything else propagates.
+      if (!dryRun && isNonceConsumedTransactionError(error)) {
+        submittedTransaction = true;
+        poolStateMayHaveChanged = true;
+        executedArbTake = false;
+        logger.warn(
+          `ArbTake for ${pool.name}/${decision.borrower} consumed its nonce but the receipt wait failed; treating it as an attempted submission and invalidating pool state.`
+        );
+      } else {
+        throw error;
+      }
     }
   }
 
