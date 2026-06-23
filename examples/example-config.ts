@@ -58,6 +58,18 @@ const config: KeeperConfig = {
         poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD', // Base pool factory
         quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a', // QuoterV2 for accurate pricing
       },
+      // REQUIRED for UNISWAP_V3 LP-reward swaps: the reward actions below use
+      // PostAuctionDex.UNISWAP_V3, which fails closed at reward time without a
+      // universalRouter block. Supply your chain's Universal Router address.
+      universalRouter: {
+        universalRouterAddress: '0x[your-chain-universal-router-address]',
+        permit2Address: '0x000000000022D473030F116dDEE9F6B43aC78BA3', // canonical Permit2 (same on all chains)
+        wethAddress: '0x4200000000000000000000000000000000000006', // WETH on Base
+        poolFactoryAddress: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD', // Base pool factory
+        quoterV2Address: '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a', // Base QuoterV2
+        defaultFeeTier: 3000,
+        defaultSlippage: 0.5,
+      },
     },
   },
   // External-take taker contracts. Required whenever a pool's `take` sets a

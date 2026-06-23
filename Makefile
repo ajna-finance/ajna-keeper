@@ -57,7 +57,7 @@ start:
 	echo "Starting keeper with $$config..."; \
 	yarn start --config $$config
 
-## start-dry: Start keeper in dry-run mode (e.g., make start-dry examples/example-base-config.ts)
+## start-dry: Start keeper (dry-run ONLY if runtime.dryRun: true is set in the config; this target does not force it)
 start-dry:
 	@config="$(CONFIG)$(filter-out $@,$(MAKECMDGOALS))"; \
 	if [ -z "$$config" ]; then \
@@ -66,8 +66,8 @@ start-dry:
 		echo "     or: make start-dry CONFIG=examples/example-base-config.ts"; \
 		exit 1; \
 	fi; \
-	echo "Starting keeper in DRY-RUN mode with $$config..."; \
-	echo "Note: No transactions will be submitted"; \
+	echo "Starting keeper with $$config..."; \
+	echo "Note: dry-run is config-driven — transactions are suppressed ONLY if runtime.dryRun: true is set in your config; this target does not force it."; \
 	yarn start --config $$config
 
 # Allow config file to be passed as argument without error
