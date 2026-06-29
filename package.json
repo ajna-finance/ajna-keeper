@@ -15,12 +15,15 @@
     "start": "./node_modules/ts-node/dist/bin.js src/index.ts",
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint 'src/**/*.ts' 'scripts/**/*.ts'",
     "slither": "slither . --filter-paths \"node_modules|mocks\" --exclude-informational --exclude-optimization",
     "curve-selector-canary": "./node_modules/ts-node/dist/bin.js scripts/curve-pool-selector-canary.ts",
     "check-hot-file-growth": "./node_modules/ts-node/dist/bin.js scripts/check-hot-file-growth.ts",
     "sushi-aggregator-route-canary": "./node_modules/ts-node/dist/bin.js scripts/sushi-aggregator-route-canary.ts",
     "compile": "npx hardhat compile",
-    "unit-tests": "npx mocha --require ts-node/register 'tests/unit/**/*.test.ts'",
+    "test": "npm run typecheck && npm run unit-tests",
+    "unit-tests": "TS_NODE_TRANSPILE_ONLY=true npx mocha --require ts-node/register 'tests/unit/**/*.test.ts'",
+    "coverage": "TS_NODE_TRANSPILE_ONLY=true c8 npx mocha --require ts-node/register 'tests/unit/**/*.test.ts'",
     "integration-tests": "npx hardhat test",
     "production-verification:mainnet": "FORK_NETWORK=mainnet npx hardhat test tests/integration/production-route-selection.test.ts",
     "production-verification:base": "FORK_NETWORK=base npx hardhat test tests/integration/production-route-selection.test.ts",
@@ -45,11 +48,16 @@
     "no-spend-validation:config-smoke": "node scripts/run-no-spend-validation.mjs --scenario config-loaded-discovery --run-config-smoke",
     "no-spend-validation:manual-smoke": "node scripts/run-no-spend-validation.mjs --scenario manual-direct-dex --mode manual",
     "no-spend-validation:daemon-smoke": "node scripts/run-no-spend-validation.mjs --scenario take-settlement-run-once --run-daemon-smoke --daemon-smoke-only",
+    "no-spend-validation:daemon-lifecycle": "node scripts/run-no-spend-validation.mjs --scenario daemon-lifecycle --daemon-lifecycle-only",
     "high-confidence-validation": "node scripts/run-high-confidence-validation.mjs",
     "run-fixture-keeper-harness": "./node_modules/ts-node/dist/bin.js scripts/run-fixture-keeper-harness.ts"
   },
   "author": "Ajna Finance contributors",
   "license": "MIT",
+  "packageManager": "yarn@1.22.22",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@ajna-finance/sdk": "^0.4.7",
     "@ethersproject/abstract-provider": "^5.7.0",
@@ -80,13 +88,16 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.10.10",
     "@types/sinon": "^17.0.3",
+    "c8": "^11.0.0",
     "chai": "^4.5.0",
     "chai-as-promised": "^7.1.2",
     "dotenv": "^16.4.7",
+    "eslint": "^9",
     "hardhat": "^2.22.18",
     "prettier": "^3.4.2",
     "sinon": "^19.0.2",
-    "typechain": "^8.1.0"
+    "typechain": "^8.1.0",
+    "typescript-eslint": "^8"
   },
   "resolutions": {
     "elliptic": "^6.6.1",

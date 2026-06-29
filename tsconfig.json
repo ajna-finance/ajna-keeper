@@ -1,13 +1,21 @@
 {
   "compilerOptions": {
     "strict": true,
-    "target": "es5",
+    // es2022 matches the Node v22 runtime this daemon targets. es5 down-levels
+    // `class X extends Error`, which silently breaks `instanceof` on Error
+    // subclasses (e.g. SushiAggregatorRouteValidationError / NonceConsumed-
+    // TransactionError) and forced per-class Object.setPrototypeOf workarounds.
+    "target": "es2022",
+    // Pinned explicitly: tsc defaults `module` to CommonJS only while target is
+    // es3/es5. Bumping target would otherwise flip the default to ESM and break
+    // the CommonJS ts-node `start` path. Keep CommonJS emit unchanged.
+    "module": "commonjs",
     "sourceMap": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     // Check project code fully but skip dependency .d.ts type-checking:
     // @nomicfoundation/hardhat-ethers ships ethers-v6 types that do not
-    // typecheck against this repo's pinned ethers v5 (see docs/adr/0001).
+    // typecheck against this repo's pinned ethers v5.
     "skipLibCheck": true
   }
 }

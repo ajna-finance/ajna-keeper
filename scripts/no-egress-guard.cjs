@@ -6,68 +6,120 @@ const https = require('https');
 const LOCALHOST_NAMES = new Set(['127.0.0.1', 'localhost', '::1']);
 const INSTALL_MARK = Symbol.for('ajna.noEgressGuard.installed');
 
+function canonicalizeHost(host) {
+  if (typeof host !== 'string') {
+    return undefined;
+  }
+  let normalized = host.trim().toLowerCase();
+  // URL.hostname and bracketed authorities surround IPv6 literals with [ ];
+  // strip them so '[::1]' compares equal to the '::1' in the allowlist.
+  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+    normalized = normalized.slice(1, -1);
+  }
+  return normalized;
+}
+
+// Extract the host from a `host[:port]` authority. Bracket-aware so an IPv6
+// literal like '[::1]:8545' yields '::1' rather than '[' (the old
+// split(':')[0] that fail-closed-blocked a legitimate localhost-IPv6 target).
+function extractHostFromAuthority(authority) {
+  if (typeof authority !== 'string') {
+    return undefined;
+  }
+  const value = authority.trim();
+  if (value.startsWith('[')) {
+    const end = value.indexOf(']');
+    return canonicalizeHost(end === -1 ? value : value.slice(0, end + 1));
+  }
+  const colon = value.indexOf(':');
+  return canonicalizeHost(colon === -1 ? value : value.slice(0, colon));
+}
+
 function parseAllowedHosts(raw) {
   const allowed = new Set(LOCALHOST_NAMES);
   for (const entry of String(raw || '')
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean)) {
-    allowed.add(entry.toLowerCase());
+    const canonical = canonicalizeHost(entry);
+    if (canonical) {
+      allowed.add(canonical);
+    }
   }
   return allowed;
 }
 
-function getHostnameFromOptions(options) {
+// The host an http(s) options object resolves to. `hostname` (bare host, no
+// port) takes precedence over `host` (may include a port) — the same
+// precedence Node's ClientRequest uses.
+function hostFromOptions(options) {
   if (!options || typeof options !== 'object') {
     return undefined;
   }
-  const hostname = options.hostname || options.host;
-  if (typeof hostname !== 'string') {
-    return undefined;
+  if (typeof options.hostname === 'string') {
+    return canonicalizeHost(options.hostname);
   }
-  return hostname.split(':')[0];
+  if (typeof options.host === 'string') {
+    return extractHostFromAuthority(options.host);
+  }
+  return undefined;
 }
 
-function normalizeTarget(input, options, protocolHint) {
+// Every host the call could actually contact. For the two-arg
+// http.request(url, options) form Node assigns `options` over the parsed URL,
+// so an options.host/hostname override redirects the real connection: it is
+// collected as an additional candidate so it cannot slip past the allowlist
+// while the URL host looks benign (the old fail-OPEN bypass). Fails closed
+// (hostname 'unparseable'/'unknown', never in the allowlist) when no host is
+// determinable.
+function collectTargets(input, options, protocolHint) {
+  const targets = [];
   try {
     if (typeof input === 'string' || input instanceof URL) {
       const url = new URL(input);
-      return {
+      targets.push({
         protocol: url.protocol || protocolHint,
-        hostname: url.hostname,
+        hostname: canonicalizeHost(url.hostname),
         port: url.port,
-      };
-    }
-    if (input && typeof input === 'object') {
-      const hostname = getHostnameFromOptions(input);
+      });
+    } else if (input && typeof input === 'object') {
+      const hostname = hostFromOptions(input);
       if (hostname) {
-        return {
+        targets.push({
           protocol: input.protocol || protocolHint,
           hostname,
           port: input.port ? String(input.port) : '',
-        };
+        });
       }
     }
-    const hostname = getHostnameFromOptions(options);
-    if (hostname) {
-      return {
-        protocol: options.protocol || protocolHint,
-        hostname,
-        port: options.port ? String(options.port) : '',
-      };
+    const overrideHost = hostFromOptions(options);
+    if (overrideHost) {
+      targets.push({
+        protocol: (options && options.protocol) || protocolHint,
+        hostname: overrideHost,
+        port: options && options.port ? String(options.port) : '',
+      });
     }
   } catch {
-    return {
-      protocol: protocolHint,
-      hostname: 'unparseable',
-      port: '',
-    };
+    return [{ protocol: protocolHint, hostname: 'unparseable', port: '' }];
   }
-  return {
-    protocol: protocolHint,
-    hostname: 'unknown',
-    port: '',
-  };
+  if (targets.length === 0) {
+    return [{ protocol: protocolHint, hostname: 'unknown', port: '' }];
+  }
+  return targets;
+}
+
+// The first candidate target whose host is not allow-listed, or null if every
+// candidate is allowed. Pure (allowlist passed in) so it is unit-testable
+// without monkeypatching global http.
+function findBlockedTarget(targets, allowedHosts) {
+  for (const target of targets) {
+    const hostname = String(target.hostname || '').toLowerCase();
+    if (!allowedHosts.has(hostname)) {
+      return target;
+    }
+  }
+  return null;
 }
 
 function redactTarget(target) {
@@ -134,19 +186,20 @@ function installNoEgressGuard(options = {}) {
       fs.appendFileSync(reportPath, `${JSON.stringify(metadata)}\n`);
     });
 
-  function assertAllowed(target) {
-    const hostname = String(target.hostname || '').toLowerCase();
-    if (allowedHosts.has(hostname)) {
-      return;
+  function assertAllowed(input, options, protocolHint) {
+    const blocked = findBlockedTarget(
+      collectTargets(input, options, protocolHint),
+      allowedHosts
+    );
+    if (blocked) {
+      recordBlockedTarget(blocked, reporter);
+      throw buildBlockedEgressError(blocked);
     }
-    recordBlockedTarget(target, reporter);
-    throw buildBlockedEgressError(target);
   }
 
   function wrapRequest(original, protocolHint) {
     return function guardedRequest(input, options, callback) {
-      const target = normalizeTarget(input, options, protocolHint);
-      assertAllowed(target);
+      assertAllowed(input, options, protocolHint);
       return original.apply(this, arguments);
     };
   }
@@ -159,8 +212,7 @@ function installNoEgressGuard(options = {}) {
   if (typeof globalThis.fetch === 'function') {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async function guardedFetch(input, init) {
-      const target = normalizeTarget(input, init, 'https:');
-      assertAllowed(target);
+      assertAllowed(input, init, 'https:');
       return await originalFetch.apply(this, arguments);
     };
   }
@@ -177,4 +229,11 @@ if (process.env.AJNA_NO_EGRESS_GUARD_ENABLED === '1') {
 
 module.exports = {
   installNoEgressGuard,
+  // Exported for unit testing the allowlist decision without monkeypatching
+  // global http/https/fetch.
+  parseAllowedHosts,
+  canonicalizeHost,
+  extractHostFromAuthority,
+  collectTargets,
+  findBlockedTarget,
 };

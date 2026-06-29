@@ -252,9 +252,17 @@ export async function executeAggregatorTake<
   quoteAmountDue?: BigNumber;
   amountOutMinimum?: BigNumber;
   feeOnTransferQuoteBps?: number;
+  // Non-18-decimal quote support, so the aggregator base can be exercised at
+  // quoteTokenScale > 1 (the +1 quoteAmountDueCeiling backstop). quotePullOverride
+  // models real Ajna pulling ceil(quoteWad/scale) while reporting the floored due.
+  quoteDecimals?: number;
+  quoteTokenScale?: BigNumber;
+  quotePullOverride?: BigNumber;
 }) {
   const base = await deployMockTakerBase({
     feeOnTransferQuoteBps: params.feeOnTransferQuoteBps,
+    quoteDecimals: params.quoteDecimals,
+    quoteTokenScale: params.quoteTokenScale,
   });
   const fixture = await deployAggregatorTaker(base, {
     Factory: params.Factory,
@@ -273,6 +281,9 @@ export async function executeAggregatorTake<
     .connect(fixture.owner)
     .approve(fixture.pool.address, constants.MaxUint256);
   await fixture.pool.setQuoteAmountDue(quoteAmountDue);
+  if (params.quotePullOverride !== undefined) {
+    await fixture.pool.setQuotePullOverride(params.quotePullOverride);
+  }
 
   const callData = fixture.target.interface.encodeFunctionData('mockSwap', [
     fixture.collateral.address,

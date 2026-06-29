@@ -1,6 +1,10 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { runResilientLoop, runResilientLoopIteration } from '../../src/run';
+import {
+  runResilientLoop,
+  runResilientLoopIteration,
+  superviseDaemonLoop,
+} from '../../src/run';
 import { logger } from '../../src/logging';
 
 // Reproducer for surfaced-defects #4: the Kick / Bond / LP loops lacked the
@@ -99,5 +103,49 @@ describe('runResilientLoop — re-enters the loop after a crashed iteration', ()
           )
         )
     ).to.equal(true);
+  });
+});
+
+// runResilientLoop recovers per-iteration crashes; superviseDaemonLoop is the
+// OTHER half of the supervision story — it catches a rejection that escapes the
+// loop entirely (e.g. a throw in a loop's pre-loop setup, like `new DexRouter` /
+// `new RewardActionTracker` before runResilientLoop in collectLpRewardsLoop) and
+// escalates it to a loud fatal exit so the operator/container restarts, instead
+// of the daemon running on with one subsystem permanently dead. Without this,
+// that regression would be silent.
+describe('superviseDaemonLoop — fatal-rejection escalation', () => {
+  const flushMicrotasks = () =>
+    new Promise<void>((resolve) => setImmediate(resolve));
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  it('escalates a rejecting loop to onFatal(1) and logs the error', async () => {
+    const onFatal = sinon.spy();
+    const errorLog = sinon.stub(logger, 'error');
+
+    superviseDaemonLoop(
+      'LpRewards',
+      Promise.reject(new Error('pre-loop setup boom')),
+      onFatal
+    );
+    await flushMicrotasks();
+
+    expect(onFatal.calledOnceWithExactly(1)).to.equal(true);
+    expect(errorLog.calledOnce).to.equal(true);
+    expect(String(errorLog.firstCall.args[0])).to.include(
+      'LpRewards daemon loop terminated unexpectedly'
+    );
+  });
+
+  it('does not escalate when the loop resolves (e.g. an early-return loop)', async () => {
+    const onFatal = sinon.spy();
+    sinon.stub(logger, 'error');
+
+    superviseDaemonLoop('LpRewards', Promise.resolve(), onFatal);
+    await flushMicrotasks();
+
+    expect(onFatal.called).to.equal(false);
   });
 });

@@ -50,6 +50,7 @@ import {
 } from './read-transports';
 import {
   createTakeWriteTransport,
+  PermanentTakeTransportError,
   TakeWriteTransport,
 } from './take/write-transport';
 
@@ -167,17 +168,15 @@ export async function assertSubgraphChainConsistency(params: {
   }
 }
 
-function isPermanentTakeWriteTransportInitializationError(
+// Structural take-write init failures (chainId mismatch, missing relay
+// provider, unknown mode) are thrown as PermanentTakeTransportError and are
+// fatal; everything else (transient RPC failures) keeps the take loop enabled
+// to retry in-cycle. Type-based, not message-based, so a producer-side message
+// reword can never silently downgrade a fatal misconfig to a transient retry.
+export function isPermanentTakeWriteTransportInitializationError(
   error: unknown
 ): boolean {
-  const message = getErrorMessage(error);
-  return (
-    message.includes('does not match keeper chainId') ||
-    message.includes(
-      'requires the keeper signer to be connected to a provider'
-    ) ||
-    message.includes('Unsupported take write transport mode')
-  );
+  return error instanceof PermanentTakeTransportError;
 }
 
 export function shouldRunTakeLoop(config: KeeperConfig): boolean {
@@ -198,6 +197,40 @@ export function shouldRunSettlementLoop(config: KeeperConfig): boolean {
     !!config.discovery?.enabled &&
     !!getAutoDiscoverSettlementPolicy(config.discovery);
   return hasManualSettlementTargets || hasDiscoveredSettlementTargets;
+}
+
+export type DaemonLoopName =
+  | 'Kick'
+  | 'Take'
+  | 'Settlement'
+  | 'Bond'
+  | 'LpRewards';
+
+/**
+ * The exact, ordered set of daemon loops startKeeperFromConfig launches for a
+ * given config. Kick / Bond / LpRewards are unconditional (each self-guards and
+ * no-ops when unconfigured); Take and Settlement are gated on takeLoopEnabled
+ * and shouldRunSettlementLoop respectively. Extracted as a pure function so the
+ * loop-launch wiring is unit-testable without standing up the whole daemon
+ * (which does real provider/subgraph I/O before reaching the launch site).
+ * startKeeperFromConfig drives its launches from this list, so it is the single
+ * source of truth for "which loops run" — a mis-wire (e.g. gating Bond behind
+ * takeLoopEnabled, or swapping the Take/Settlement gates) changes this list and
+ * fails the planner test.
+ */
+export function planDaemonLoops(
+  config: KeeperConfig,
+  flags: { takeLoopEnabled: boolean }
+): DaemonLoopName[] {
+  const loops: DaemonLoopName[] = ['Kick'];
+  if (flags.takeLoopEnabled) {
+    loops.push('Take');
+  }
+  if (shouldRunSettlementLoop(config)) {
+    loops.push('Settlement');
+  }
+  loops.push('Bond', 'LpRewards');
+  return loops;
 }
 
 export function assertRunOnceLiveAcknowledged(
@@ -304,37 +337,28 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     discoverySnapshotState,
   });
 
-  superviseDaemonLoop(
-    'Kick',
-    kickPoolsLoop({ poolMap, config, signer, chainId, subgraph })
-  );
-  if (takeLoopEnabled) {
-    superviseDaemonLoop(
-      'Take',
-      takePoolsLoop({ config, signer, poolMap, discoveryRuntime })
-    );
+  // Launch exactly the loops the planner selects, so the set that runs in
+  // production is the same set planDaemonLoops (and its unit test) describes.
+  // The launchers are thunks; only the planned ones are invoked.
+  const loopLaunchers: Record<DaemonLoopName, () => Promise<void>> = {
+    Kick: () => kickPoolsLoop({ poolMap, config, signer, chainId, subgraph }),
+    Take: () => takePoolsLoop({ config, signer, poolMap, discoveryRuntime }),
+    Settlement: () =>
+      settlementLoop({ config, signer, poolMap, discoveryRuntime }),
+    Bond: () => collectBondLoop({ poolMap, config, signer, subgraph }),
+    LpRewards: () =>
+      collectLpRewardsLoop({
+        poolMap,
+        config,
+        signer,
+        subgraph,
+        ajna,
+        hydrationCooldowns,
+      }),
+  };
+  for (const name of planDaemonLoops(config, { takeLoopEnabled })) {
+    superviseDaemonLoop(name, loopLaunchers[name]());
   }
-  if (shouldRunSettlementLoop(config)) {
-    superviseDaemonLoop(
-      'Settlement',
-      settlementLoop({ config, signer, poolMap, discoveryRuntime })
-    );
-  }
-  superviseDaemonLoop(
-    'Bond',
-    collectBondLoop({ poolMap, config, signer, subgraph })
-  );
-  superviseDaemonLoop(
-    'LpRewards',
-    collectLpRewardsLoop({
-      poolMap,
-      config,
-      signer,
-      subgraph,
-      ajna,
-      hydrationCooldowns,
-    })
-  );
 }
 
 /**
@@ -347,10 +371,17 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
  * installed log-only `unhandledRejection` handler to silently swallow it and run
  * the daemon with one loop (e.g. LP-reward collection) permanently dead.
  */
-function superviseDaemonLoop(name: string, loop: Promise<void>): void {
+// `onFatal` is injectable for testing; it defaults to the real process.exit so
+// production behavior is unchanged (a rejecting daemon loop is a structural
+// failure that must escalate to a loud exit(1), not be swallowed).
+export function superviseDaemonLoop(
+  name: string,
+  loop: Promise<void>,
+  onFatal: (code: number) => void = (code) => process.exit(code)
+): void {
   loop.catch((error) => {
     logger.error(`${name} daemon loop terminated unexpectedly; exiting.`, error);
-    process.exit(1);
+    onFatal(1);
   });
 }
 
@@ -617,6 +648,98 @@ export async function runResilientLoop(
   }
 }
 
+/**
+ * Sweep one redeemer's pending LP, recovering from a jammed auction. Extracted
+ * from collectLpRewardsLoop so the AuctionNotCleared reactive-settlement retry
+ * branching is unit-testable: a clean sweep, the auto-discovered-pool skip, the
+ * settle-then-retry path (incl. a second still-jammed auction), a
+ * settlement-attempted-but-bonds-locked outcome, a thrown settlement, and a
+ * non-AuctionNotCleared sweep error each take a different branch and only log —
+ * none rethrow, so one redeemer's failure never aborts the cycle.
+ */
+export async function sweepRedeemerWithReactiveSettlement(params: {
+  redeemer: LpRedeemer;
+  poolConfig: PoolConfig | undefined;
+  signer: Signer;
+  // Mirrors config.runtime.dryRun (optional), passed straight through to
+  // tryReactiveSettlement exactly as the inlined code did.
+  dryRun: boolean | undefined;
+  subgraph: SubgraphReader;
+}): Promise<void> {
+  const { redeemer, poolConfig, signer, dryRun, subgraph } = params;
+  const pool = redeemer.pool;
+
+  try {
+    await redeemer.sweep();
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+
+    if (errorMessage.includes('AuctionNotCleared')) {
+      logger.info(
+        `AuctionNotCleared detected - attempting settlement for ${pool.name}`
+      );
+
+      if (!poolConfig) {
+        // Auto-discovered pool without an explicit config entry has no
+        // settlement policy. Log and skip — the bucket stays in lpMap; next
+        // cycle retries (maybe the auction clears in the meantime).
+        logger.warn(
+          `Settlement skipped for ${pool.name}: no config entry (auto-discovered pool). LP remains pending.`
+        );
+        return;
+      }
+
+      try {
+        const settled = await tryReactiveSettlement({
+          pool,
+          poolConfig,
+          signer,
+          config: {
+            dryRun,
+            subgraph,
+          },
+        });
+
+        if (settled) {
+          logger.info(`Retrying LP collection after settlement in ${pool.name}`);
+          try {
+            await redeemer.sweep();
+          } catch (retryError) {
+            const retryMessage =
+              retryError instanceof Error
+                ? retryError.message
+                : String(retryError);
+            if (retryMessage.includes('AuctionNotCleared')) {
+              // Pool has a SECOND jammed auction on a different bucket.
+              // Next cycle will re-attempt settlement for that one;
+              // this cycle's work stops here.
+              logger.warn(
+                `Pool ${pool.name} has a second auction still jammed after settling the first; next cycle will re-attempt settlement.`
+              );
+            } else {
+              logger.error(
+                `LP sweep retry after settlement still failed for ${pool.name}`,
+                retryError
+              );
+            }
+          }
+        } else {
+          logger.warn(
+            `Settlement attempted but bonds still locked in ${pool.name}`
+          );
+        }
+      } catch (settlementError) {
+        logger.error(`Settlement failed for ${pool.name}:`, settlementError);
+      }
+    } else {
+      logger.error(
+        `Failed to collect LP reward from pool: ${pool.name}.`,
+        error
+      );
+    }
+  }
+}
+
 async function collectLpRewardsLoop({
   poolMap,
   config,
@@ -723,85 +846,14 @@ async function collectLpRewardsLoop({
       }
 
       for (const redeemer of toSweep) {
-        const pool = redeemer.pool;
-        const normalized = normalizeAddress(pool.poolAddress);
-        const poolConfig = poolConfigByAddress.get(normalized);
-
-        try {
-          await redeemer.sweep();
-        } catch (error) {
-          const errorMessage = getErrorMessage(error);
-
-          if (errorMessage.includes('AuctionNotCleared')) {
-            logger.info(
-              `AuctionNotCleared detected - attempting settlement for ${pool.name}`
-            );
-
-            if (!poolConfig) {
-              // Auto-discovered pool without an explicit config entry has
-              // no settlement policy. Log and skip — the bucket stays in
-              // lpMap; next cycle retries (maybe the auction clears in
-              // the meantime).
-              logger.warn(
-                `Settlement skipped for ${pool.name}: no config entry (auto-discovered pool). LP remains pending.`
-              );
-              continue;
-            }
-
-            try {
-              const settled = await tryReactiveSettlement({
-                pool,
-                poolConfig,
-                signer,
-                config: {
-                  dryRun: config.runtime.dryRun,
-                  subgraph,
-                },
-              });
-
-              if (settled) {
-                logger.info(
-                  `Retrying LP collection after settlement in ${pool.name}`
-                );
-                try {
-                  await redeemer.sweep();
-                } catch (retryError) {
-                  const retryMessage =
-                    retryError instanceof Error
-                      ? retryError.message
-                      : String(retryError);
-                  if (retryMessage.includes('AuctionNotCleared')) {
-                    // Pool has a SECOND jammed auction on a different bucket.
-                    // Next cycle will re-attempt settlement for that one;
-                    // this cycle's work stops here.
-                    logger.warn(
-                      `Pool ${pool.name} has a second auction still jammed after settling the first; next cycle will re-attempt settlement.`
-                    );
-                  } else {
-                    logger.error(
-                      `LP sweep retry after settlement still failed for ${pool.name}`,
-                      retryError
-                    );
-                  }
-                }
-              } else {
-                logger.warn(
-                  `Settlement attempted but bonds still locked in ${pool.name}`
-                );
-              }
-            } catch (settlementError) {
-              logger.error(
-                `Settlement failed for ${pool.name}:`,
-                settlementError
-              );
-            }
-          } else {
-            logger.error(
-              `Failed to collect LP reward from pool: ${pool.name}.`,
-              error
-            );
-          }
-        }
+        const normalized = normalizeAddress(redeemer.pool.poolAddress);
+        await sweepRedeemerWithReactiveSettlement({
+          redeemer,
+          poolConfig: poolConfigByAddress.get(normalized),
+          signer,
+          dryRun: config.runtime.dryRun,
+          subgraph,
+        });
       }
 
       try {

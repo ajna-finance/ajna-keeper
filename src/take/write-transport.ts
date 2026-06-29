@@ -12,6 +12,18 @@ import { JsonRpcProvider } from '../provider';
 import { NonceConsumedTransactionError, NonceTracker } from '../nonce';
 import { withTimeout } from '../utils';
 
+/**
+ * A take-write transport initialization failure that is STRUCTURAL (a
+ * misconfiguration that can never succeed on retry): a chainId mismatch, a
+ * relay signer with no provider, or an unknown transport mode. run.ts treats
+ * these as fatal (rethrow, crash) vs. transient RPC failures (keep the take loop
+ * enabled and retry in-cycle). Classified by `instanceof` rather than by error
+ * message, so a reworded message can never silently reclassify a fatal
+ * misconfig as transient. (instanceof across modules relies on a non-es5
+ * tsconfig target — see tsconfig.json.)
+ */
+export class PermanentTakeTransportError extends Error {}
+
 const DEFAULT_RELAY_SEND_METHOD = 'eth_sendPrivateTransaction';
 const DEFAULT_RELAY_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_RELAY_RECEIPT_TIMEOUT_MS = 120_000;
@@ -121,7 +133,7 @@ export async function createTakeWriteTransport(params: {
         defaultReceiptTimeoutMs: normalizedConfig.receiptTimeoutMs,
       });
     default:
-      throw new Error(
+      throw new PermanentTakeTransportError(
         `Unsupported take write transport mode: ${String(normalizedConfig.mode)}`
       );
   }
@@ -204,7 +216,7 @@ async function createPrivateRpcTakeWriteTransport(params: {
     `takeWrite private_rpc getNetwork for ${params.rpcUrl}`
   );
   if (network.chainId !== params.expectedChainId) {
-    throw new Error(
+    throw new PermanentTakeTransportError(
       `Configured take write rpc chainId ${network.chainId} does not match keeper chainId ${params.expectedChainId}`
     );
   }
@@ -283,13 +295,13 @@ async function createRelayTakeWriteTransport(params: {
 }): Promise<TakeWriteTransport> {
   const chainId = await params.signer.getChainId();
   if (chainId !== params.expectedChainId) {
-    throw new Error(
+    throw new PermanentTakeTransportError(
       `Configured relay signer chainId ${chainId} does not match keeper chainId ${params.expectedChainId}`
     );
   }
 
   if (!params.signer.provider) {
-    throw new Error(
+    throw new PermanentTakeTransportError(
       'Relay take write transport requires the keeper signer to be connected to a provider for tx population and receipt tracking'
     );
   }

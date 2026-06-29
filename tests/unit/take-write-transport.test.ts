@@ -7,6 +7,7 @@ import { JsonRpcProvider } from '../../src/provider';
 import { TakeWriteTransportMode } from '../../src/config';
 import {
   createTakeWriteTransport,
+  PermanentTakeTransportError,
   resolveTakeWriteConfig,
   submitTakeTransaction,
 } from '../../src/take/write-transport';
@@ -64,8 +65,34 @@ describe('take write transport', () => {
       });
       expect.fail('Expected unknown take write mode to throw');
     } catch (error) {
+      // Real-producer contract: the structural failure carries the typed error
+      // run.ts classifies via instanceof (and propagates unwrapped).
+      expect(error).to.be.instanceOf(PermanentTakeTransportError);
       expect((error as Error).message).to.include(
         'Unsupported take write transport mode: private-rpc'
+      );
+    }
+  });
+
+  it('throws a PermanentTakeTransportError when the private_rpc chainId mismatches', async () => {
+    const signer = Wallet.createRandom();
+
+    try {
+      // detectNetwork is stubbed to chainId 1 in beforeEach; expecting 8453
+      // triggers the real chainId-mismatch producer.
+      await createTakeWriteTransport({
+        signer,
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.PRIVATE_RPC,
+          rpcUrl: 'http://private-rpc',
+        }) as any,
+        expectedChainId: 8453,
+      });
+      expect.fail('Expected chainId mismatch to throw');
+    } catch (error) {
+      expect(error).to.be.instanceOf(PermanentTakeTransportError);
+      expect((error as Error).message).to.include(
+        'does not match keeper chainId'
       );
     }
   });

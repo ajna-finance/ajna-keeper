@@ -1,0 +1,124 @@
+name: CI
+
+# Two lanes:
+#   * unit  — hermetic, NO secrets. Runs on every PR/push as the merge gate:
+#             typecheck + the full unit suite + the egress-guard self-test +
+#             syntax-check of the .mjs orchestrators. All of this is network-free
+#             (the unit suite is egress-guarded) and deterministic.
+#   * fork  — credentialed, MANUAL-ONLY (workflow_dispatch). Needs repo secret
+#             ALCHEMY_API_KEY and the token-deployer/ajna-skills sibling repos the
+#             no-spend fixture pipeline shells out to, so it cannot run unattended
+#             on a stock runner. Deliberately NOT on a schedule: an unattended run
+#             would just fail and burn Alchemy quota. Trigger it on demand with
+#             `gh workflow run CI --ref <branch>` once the secret/repos are wired.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Supersede in-progress runs on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit + typecheck (hermetic)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20.x', '22.x']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: yarn
+
+      # Honor the packageManager pin (yarn@1.22.22) for a reproducible install.
+      - name: Enable corepack
+        run: corepack enable
+
+      # @ajna-finance/sdk pulls `ethcall` from the public imbaniac/ethcall fork as
+      # a git dependency, which yarn classic clones over SSH. CI runners have no
+      # SSH key, so force HTTPS (the fork is public) to install keylessly.
+      - name: Use HTTPS for GitHub git dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Generates typechain-types, an implicit prerequisite of both typecheck
+      # and the unit suite. Downloads solc (no secret required).
+      - name: Compile contracts
+        run: yarn compile
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint (no-floating-promises / no-misused-promises)
+        run: npm run lint
+
+      # Runs the full unit suite under c8 and enforces the coverage thresholds in
+      # .c8rc.json (a conservative ratchet below the current baseline).
+      - name: Unit tests + coverage
+        run: npm run coverage
+
+      - name: Egress-guard self-test
+        run: npm run no-spend-validation:egress-guard-self-test
+
+      - name: Syntax-check orchestrator scripts
+        run: |
+          node --check scripts/run-no-spend-validation.mjs
+          node --check scripts/run-no-spend-scenario-matrix.mjs
+          node --check scripts/run-high-confidence-validation.mjs
+          node --check scripts/no-egress-self-test.mjs
+
+  fork:
+    name: Fork + high-confidence validation (manual)
+    # Never runs on PR/push — only manual dispatch, so nothing heavy runs
+    # unattended and a flaky live-RPC dependency or missing secret can't block
+    # merges. Run on demand: gh workflow run CI --ref <branch>.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: yarn
+
+      - name: Enable corepack
+        run: corepack enable
+
+      # @ajna-finance/sdk pulls `ethcall` from the public imbaniac/ethcall fork as
+      # a git dependency, which yarn classic clones over SSH. CI runners have no
+      # SSH key, so force HTTPS (the fork is public) to install keylessly.
+      - name: Use HTTPS for GitHub git dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Compile contracts
+        run: yarn compile
+
+      # run-high-confidence-validation.mjs requires a Base archive RPC. It runs
+      # the required deterministic gates (unit, no-spend, scenario matrix, daemon
+      # smoke, preflight reconciliation) and records external-service canaries
+      # (LI.FI / hybrid) as skips when their env is absent.
+      - name: High-confidence validation
+        env:
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          GRAPH_API_KEY: ${{ secrets.GRAPH_API_KEY }}
+          AJNA_AGENT_LIFI_API_KEY: ${{ secrets.AJNA_AGENT_LIFI_API_KEY }}
+        run: npm run high-confidence-validation

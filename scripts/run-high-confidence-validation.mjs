@@ -11,12 +11,21 @@ import {
   runLoggedCommand,
 } from './no-spend/runtime.mjs';
 
+// Default Base fork block. Pinned (NOT 'latest') so high-confidence runs are
+// reproducible and avoid the cold upstream-state eth_estimateGas timeout that
+// forking the moving head triggers (see run-no-spend-validation.mjs). Kept
+// aligned with hardhat.config.ts and run-no-spend-validation.mjs
+// DEFAULT_BASE_FORK_BLOCK.
+const DEFAULT_BASE_FORK_BLOCK = '30000000';
+
 function usage() {
-  return `Usage: node scripts/run-high-confidence-validation.mjs [--runtime-only] [--output /path/report.json]
+  return `Usage: node scripts/run-high-confidence-validation.mjs [--runtime-only] [--base-fork-block N|latest] [--output /path/report.json]
 
 Runs deterministic local Ajna keeper validation gates and records optional
 external-provider-dependent fork checks as explicit skips when their env is
-missing.
+missing. The Base fork block defaults to ${DEFAULT_BASE_FORK_BLOCK} (pinned for
+reproducibility); pass --base-fork-block latest only when a live-head run is
+intended.
 `;
 }
 
@@ -24,11 +33,17 @@ function parseArgs(argv) {
   const options = {
     runtimeOnly: false,
     outputPath: undefined,
+    baseForkBlock: DEFAULT_BASE_FORK_BLOCK,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--runtime-only') {
       options.runtimeOnly = true;
+      continue;
+    }
+    if (arg === '--base-fork-block') {
+      options.baseForkBlock = argv[i + 1];
+      i += 1;
       continue;
     }
     if (arg === '--output') {
@@ -112,7 +127,10 @@ async function main() {
       'Base RPC is required for high-confidence validation. Set BASE_RPC_URL, AJNA_RPC_URL_BASE, AJNA_AGENT_RPC_URL, AJNA_AGENT_NO_SPEND_FORK_RPC_URL, or ALCHEMY_API_KEY.'
     );
   }
-  const resolvedForkBlock = await resolveForkBlock(forkRpc.forkRpcUrl);
+  const resolvedForkBlock = await resolveForkBlock({
+    forkRpcUrl: forkRpc.forkRpcUrl,
+    requested: options.baseForkBlock,
+  });
   const commonEnv = {
     BASE_FORK_BLOCK: String(resolvedForkBlock.number),
     AJNA_AGENT_NO_SPEND_BASE_FORK_BLOCK: String(resolvedForkBlock.number),
@@ -196,6 +214,23 @@ async function main() {
         'npm',
         'run',
         'no-spend-validation:daemon-smoke',
+        '--',
+        '--base-fork-block',
+        String(resolvedForkBlock.number),
+      ],
+    },
+    {
+      // The run-once daemon-smoke above exercises startKeeperRunOnceFromConfig
+      // (one take/settlement cycle). This leg runs the PERSISTENT daemon via
+      // startKeeperFromConfig: it starts all five supervised loops, loops
+      // multiple cycles, takes a real auction, and asserts a clean SIGTERM
+      // shutdown — the only gate that covers the long-running daemon path.
+      name: 'no-spend-daemon-lifecycle',
+      classification: 'required',
+      command: [
+        'npm',
+        'run',
+        'no-spend-validation:daemon-lifecycle',
         '--',
         '--base-fork-block',
         String(resolvedForkBlock.number),
