@@ -44,6 +44,14 @@ jobs:
       - name: Enable corepack
         run: corepack enable
 
+      # @ajna-finance/sdk pulls `ethcall` from the public imbaniac/ethcall fork as
+      # a git dependency, which yarn classic clones over SSH. CI runners have no
+      # SSH key, so force HTTPS (the fork is public) to install keylessly.
+      - name: Use HTTPS for GitHub git dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
+
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
@@ -89,6 +97,14 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      # @ajna-finance/sdk pulls `ethcall` from the public imbaniac/ethcall fork as
+      # a git dependency, which yarn classic clones over SSH. CI runners have no
+      # SSH key, so force HTTPS (the fork is public) to install keylessly.
+      - name: Use HTTPS for GitHub git dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://github.com/".insteadOf "git@github.com:"
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
