@@ -12,6 +12,10 @@
 # logging
 /logs
 
+# coverage
+/coverage
+/.nyc_output
+
 # misc
 .DS_Store
 # Operator working-config files live at the repo ROOT (see README: `cp
