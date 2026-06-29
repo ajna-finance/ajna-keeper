@@ -200,6 +200,40 @@ export function shouldRunSettlementLoop(config: KeeperConfig): boolean {
   return hasManualSettlementTargets || hasDiscoveredSettlementTargets;
 }
 
+export type DaemonLoopName =
+  | 'Kick'
+  | 'Take'
+  | 'Settlement'
+  | 'Bond'
+  | 'LpRewards';
+
+/**
+ * The exact, ordered set of daemon loops startKeeperFromConfig launches for a
+ * given config. Kick / Bond / LpRewards are unconditional (each self-guards and
+ * no-ops when unconfigured); Take and Settlement are gated on takeLoopEnabled
+ * and shouldRunSettlementLoop respectively. Extracted as a pure function so the
+ * loop-launch wiring is unit-testable without standing up the whole daemon
+ * (which does real provider/subgraph I/O before reaching the launch site).
+ * startKeeperFromConfig drives its launches from this list, so it is the single
+ * source of truth for "which loops run" — a mis-wire (e.g. gating Bond behind
+ * takeLoopEnabled, or swapping the Take/Settlement gates) changes this list and
+ * fails the planner test.
+ */
+export function planDaemonLoops(
+  config: KeeperConfig,
+  flags: { takeLoopEnabled: boolean }
+): DaemonLoopName[] {
+  const loops: DaemonLoopName[] = ['Kick'];
+  if (flags.takeLoopEnabled) {
+    loops.push('Take');
+  }
+  if (shouldRunSettlementLoop(config)) {
+    loops.push('Settlement');
+  }
+  loops.push('Bond', 'LpRewards');
+  return loops;
+}
+
 export function assertRunOnceLiveAcknowledged(
   config: KeeperConfig,
   liveAcknowledged: boolean
@@ -304,37 +338,28 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
     discoverySnapshotState,
   });
 
-  superviseDaemonLoop(
-    'Kick',
-    kickPoolsLoop({ poolMap, config, signer, chainId, subgraph })
-  );
-  if (takeLoopEnabled) {
-    superviseDaemonLoop(
-      'Take',
-      takePoolsLoop({ config, signer, poolMap, discoveryRuntime })
-    );
+  // Launch exactly the loops the planner selects, so the set that runs in
+  // production is the same set planDaemonLoops (and its unit test) describes.
+  // The launchers are thunks; only the planned ones are invoked.
+  const loopLaunchers: Record<DaemonLoopName, () => Promise<void>> = {
+    Kick: () => kickPoolsLoop({ poolMap, config, signer, chainId, subgraph }),
+    Take: () => takePoolsLoop({ config, signer, poolMap, discoveryRuntime }),
+    Settlement: () =>
+      settlementLoop({ config, signer, poolMap, discoveryRuntime }),
+    Bond: () => collectBondLoop({ poolMap, config, signer, subgraph }),
+    LpRewards: () =>
+      collectLpRewardsLoop({
+        poolMap,
+        config,
+        signer,
+        subgraph,
+        ajna,
+        hydrationCooldowns,
+      }),
+  };
+  for (const name of planDaemonLoops(config, { takeLoopEnabled })) {
+    superviseDaemonLoop(name, loopLaunchers[name]());
   }
-  if (shouldRunSettlementLoop(config)) {
-    superviseDaemonLoop(
-      'Settlement',
-      settlementLoop({ config, signer, poolMap, discoveryRuntime })
-    );
-  }
-  superviseDaemonLoop(
-    'Bond',
-    collectBondLoop({ poolMap, config, signer, subgraph })
-  );
-  superviseDaemonLoop(
-    'LpRewards',
-    collectLpRewardsLoop({
-      poolMap,
-      config,
-      signer,
-      subgraph,
-      ajna,
-      hydrationCooldowns,
-    })
-  );
 }
 
 /**
@@ -347,10 +372,17 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
  * installed log-only `unhandledRejection` handler to silently swallow it and run
  * the daemon with one loop (e.g. LP-reward collection) permanently dead.
  */
-function superviseDaemonLoop(name: string, loop: Promise<void>): void {
+// `onFatal` is injectable for testing; it defaults to the real process.exit so
+// production behavior is unchanged (a rejecting daemon loop is a structural
+// failure that must escalate to a loud exit(1), not be swallowed).
+export function superviseDaemonLoop(
+  name: string,
+  loop: Promise<void>,
+  onFatal: (code: number) => void = (code) => process.exit(code)
+): void {
   loop.catch((error) => {
     logger.error(`${name} daemon loop terminated unexpectedly; exiting.`, error);
-    process.exit(1);
+    onFatal(1);
   });
 }
 

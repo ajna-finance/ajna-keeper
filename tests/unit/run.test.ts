@@ -8,6 +8,7 @@ import {
 import {
   assertRunOnceLiveAcknowledged,
   initializeTakeLoop,
+  planDaemonLoops,
   shouldRunSettlementLoop,
   shouldRunTakeLoop,
 } from '../../src/run';
@@ -367,5 +368,38 @@ describe('run startup gating', () => {
     }
 
     expect(createTakeWriteTransportStub.called).to.equal(false);
+  });
+});
+
+// startKeeperFromConfig drives its loop launches from planDaemonLoops, so this
+// pins the exact set + order of daemon loops that start for a given config. The
+// gating helpers (shouldRunTakeLoop / shouldRunSettlementLoop) are tested above
+// in isolation; this guards the WIRING — that Kick/Bond/LpRewards always launch
+// and only Take/Settlement are gated — which nothing else covers.
+describe('planDaemonLoops wiring', () => {
+  it('launches Kick/Bond/LpRewards unconditionally and gates Take/Settlement in order', () => {
+    // Manual-only base config: neither take nor settlement configured.
+    expect(
+      planDaemonLoops(BASE_CONFIG, { takeLoopEnabled: false })
+    ).to.deep.equal(['Kick', 'Bond', 'LpRewards']);
+
+    // takeLoopEnabled inserts Take after Kick.
+    expect(
+      planDaemonLoops(BASE_CONFIG, { takeLoopEnabled: true })
+    ).to.deep.equal(['Kick', 'Take', 'Bond', 'LpRewards']);
+
+    // Discovery settlement makes shouldRunSettlementLoop true -> inserts Settlement.
+    const withSettlement: KeeperConfig = {
+      ...BASE_CONFIG,
+      discovery: { enabled: true, settlement: true },
+    };
+    expect(
+      planDaemonLoops(withSettlement, { takeLoopEnabled: false })
+    ).to.deep.equal(['Kick', 'Settlement', 'Bond', 'LpRewards']);
+
+    // Both gates open -> Kick, Take, Settlement, Bond, LpRewards in that order.
+    expect(
+      planDaemonLoops(withSettlement, { takeLoopEnabled: true })
+    ).to.deep.equal(['Kick', 'Take', 'Settlement', 'Bond', 'LpRewards']);
   });
 });
