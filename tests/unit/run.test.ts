@@ -8,12 +8,14 @@ import {
 import {
   assertRunOnceLiveAcknowledged,
   initializeTakeLoop,
+  isPermanentTakeWriteTransportInitializationError,
   planDaemonLoops,
   shouldRunSettlementLoop,
   shouldRunTakeLoop,
 } from '../../src/run';
 
 import * as takeWriteTransportModule from '../../src/take/write-transport';
+import { PermanentTakeTransportError } from '../../src/take/write-transport';
 
 const BASE_CONFIG: KeeperConfig = {
   network: {
@@ -215,7 +217,7 @@ describe('run startup gating', () => {
     const createTakeWriteTransportStub = sinon
       .stub(takeWriteTransportModule, 'createTakeWriteTransport')
       .rejects(
-        new Error(
+        new PermanentTakeTransportError(
           'Configured take write rpc chainId 8453 does not match keeper chainId 1'
         )
       );
@@ -401,5 +403,45 @@ describe('planDaemonLoops wiring', () => {
     expect(
       planDaemonLoops(withSettlement, { takeLoopEnabled: true })
     ).to.deep.equal(['Kick', 'Take', 'Settlement', 'Bond', 'LpRewards']);
+  });
+});
+
+// The fatal-vs-transient transport-init classification is now type-based
+// (PermanentTakeTransportError), not error-message-substring-based, so a
+// producer-side message reword can no longer silently downgrade a fatal
+// misconfig (wrong-chain private RPC) to an infinite in-cycle retry.
+describe('isPermanentTakeWriteTransportInitializationError (typed, not message-matched)', () => {
+  it('classifies a PermanentTakeTransportError as fatal regardless of message', () => {
+    expect(
+      isPermanentTakeWriteTransportInitializationError(
+        new PermanentTakeTransportError('an entirely reworded message')
+      )
+    ).to.equal(true);
+  });
+
+  it('no longer matches on the legacy magic-substring messages', () => {
+    // A plain Error carrying the old substrings is NOT permanent anymore;
+    // permanence is the error TYPE. This is what makes a producer reword safe.
+    expect(
+      isPermanentTakeWriteTransportInitializationError(
+        new Error('chainId 8453 does not match keeper chainId 1')
+      )
+    ).to.equal(false);
+    expect(
+      isPermanentTakeWriteTransportInitializationError(
+        new Error('Unsupported take write transport mode: foo')
+      )
+    ).to.equal(false);
+  });
+
+  it('treats transient (non-typed) errors as not permanent', () => {
+    expect(
+      isPermanentTakeWriteTransportInitializationError(
+        new Error('ECONNRESET: socket hang up')
+      )
+    ).to.equal(false);
+    expect(
+      isPermanentTakeWriteTransportInitializationError(undefined)
+    ).to.equal(false);
   });
 });

@@ -50,6 +50,7 @@ import {
 } from './read-transports';
 import {
   createTakeWriteTransport,
+  PermanentTakeTransportError,
   TakeWriteTransport,
 } from './take/write-transport';
 
@@ -167,17 +168,15 @@ export async function assertSubgraphChainConsistency(params: {
   }
 }
 
-function isPermanentTakeWriteTransportInitializationError(
+// Structural take-write init failures (chainId mismatch, missing relay
+// provider, unknown mode) are thrown as PermanentTakeTransportError and are
+// fatal; everything else (transient RPC failures) keeps the take loop enabled
+// to retry in-cycle. Type-based, not message-based, so a producer-side message
+// reword can never silently downgrade a fatal misconfig to a transient retry.
+export function isPermanentTakeWriteTransportInitializationError(
   error: unknown
 ): boolean {
-  const message = getErrorMessage(error);
-  return (
-    message.includes('does not match keeper chainId') ||
-    message.includes(
-      'requires the keeper signer to be connected to a provider'
-    ) ||
-    message.includes('Unsupported take write transport mode')
-  );
+  return error instanceof PermanentTakeTransportError;
 }
 
 export function shouldRunTakeLoop(config: KeeperConfig): boolean {
