@@ -2,7 +2,7 @@
 /node_modules
 
 .env
-base-config.ts
+/base-config.ts
 
 # Hardhat
 /artifacts
@@ -14,8 +14,12 @@ base-config.ts
 
 # misc
 .DS_Store
-config*.json
-config*.ts
+# Operator working-config files live at the repo ROOT (see README: `cp
+# examples/example-base-config.ts config.ts`). Anchor with a leading slash so
+# these patterns do NOT silently swallow source files named config*.ts under
+# src/ or scripts/ (e.g. scripts/no-spend/config-smoke.ts was lost this way).
+/config*.json
+/config*.ts
 # ajna-audit / cross-review skill output artifacts (never commit; a `git add -A`
 # previously swept these in by accident)
 .ajna-audit/
