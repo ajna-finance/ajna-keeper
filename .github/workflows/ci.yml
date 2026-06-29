@@ -5,18 +5,17 @@ name: CI
 #             typecheck + the full unit suite + the egress-guard self-test +
 #             syntax-check of the .mjs orchestrators. All of this is network-free
 #             (the unit suite is egress-guarded) and deterministic.
-#   * fork  — credentialed, needs repo secret ALCHEMY_API_KEY (and optionally
-#             GRAPH_API_KEY / AJNA_AGENT_LIFI_API_KEY). Runs only nightly and on
-#             manual dispatch so it never blocks a PR. Drives the repo's own
-#             run-high-confidence-validation.mjs manifest, which itself records
-#             missing-credential canaries as explicit skips rather than failing.
+#   * fork  — credentialed, MANUAL-ONLY (workflow_dispatch). Needs repo secret
+#             ALCHEMY_API_KEY and the token-deployer/ajna-skills sibling repos the
+#             no-spend fixture pipeline shells out to, so it cannot run unattended
+#             on a stock runner. Deliberately NOT on a schedule: an unattended run
+#             would just fail and burn Alchemy quota. Trigger it on demand with
+#             `gh workflow run CI --ref <branch>` once the secret/repos are wired.
 
 on:
   pull_request:
   push:
     branches: [master]
-  schedule:
-    - cron: '0 7 * * *' # 07:00 UTC nightly
   workflow_dispatch:
 
 # Supersede in-progress runs on the same ref.
@@ -82,10 +81,11 @@ jobs:
           node --check scripts/no-egress-self-test.mjs
 
   fork:
-    name: Fork + high-confidence validation (nightly)
-    # Never runs on PR/push — only nightly schedule and manual dispatch, so a
-    # flaky live-RPC dependency or a missing secret can't block merges.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Fork + high-confidence validation (manual)
+    # Never runs on PR/push — only manual dispatch, so nothing heavy runs
+    # unattended and a flaky live-RPC dependency or missing secret can't block
+    # merges. Run on demand: gh workflow run CI --ref <branch>.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
