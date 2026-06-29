@@ -260,7 +260,9 @@ function startDirectDexTokenDecimalsChainIdResolutionIfPossible(params: {
   ) {
     return;
   }
-  startDirectDexTokenDecimalsChainIdResolution({
+  // Fire-and-forget: the resolution stores itself in chainIdInflight and
+  // self-handles errors (debug log + undefined); this wrapper only kicks it off.
+  void startDirectDexTokenDecimalsChainIdResolution({
     signer: params.signer,
     runtimeCache,
   });

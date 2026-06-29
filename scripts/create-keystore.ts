@@ -48,4 +48,7 @@ async function createKeystoreJson() {
   );
 }
 
-createKeystoreJson();
+createKeystoreJson().catch((error) => {
+  console.error('Failed to create keystore:', error);
+  process.exitCode = 1;
+});

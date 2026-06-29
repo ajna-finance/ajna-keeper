@@ -198,7 +198,9 @@ export class NonceTracker {
     // Clean up the entry when it settles to prevent unbounded growth.
     const caught = done.catch(() => {});
     this.queues.set(address, caught);
-    caught.then(() => {
+    // Fire-and-forget cleanup: `caught` never rejects and the callback is a
+    // synchronous map delete, so voiding is safe and intentional.
+    void caught.then(() => {
       if (this.queues.get(address) === caught) {
         this.queues.delete(address);
       }

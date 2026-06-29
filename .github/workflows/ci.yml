@@ -55,6 +55,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint (no-floating-promises / no-misused-promises)
+        run: npm run lint
+
       - name: Unit tests
         run: npm run unit-tests
 
