@@ -46,6 +46,7 @@
     "no-spend-validation:config-smoke": "node scripts/run-no-spend-validation.mjs --scenario config-loaded-discovery --run-config-smoke",
     "no-spend-validation:manual-smoke": "node scripts/run-no-spend-validation.mjs --scenario manual-direct-dex --mode manual",
     "no-spend-validation:daemon-smoke": "node scripts/run-no-spend-validation.mjs --scenario take-settlement-run-once --run-daemon-smoke --daemon-smoke-only",
+    "no-spend-validation:daemon-lifecycle": "node scripts/run-no-spend-validation.mjs --scenario daemon-lifecycle --daemon-lifecycle-only",
     "high-confidence-validation": "node scripts/run-high-confidence-validation.mjs",
     "run-fixture-keeper-harness": "./node_modules/ts-node/dist/bin.js scripts/run-fixture-keeper-harness.ts"
   },

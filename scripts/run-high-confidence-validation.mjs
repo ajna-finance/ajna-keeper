@@ -202,6 +202,23 @@ async function main() {
       ],
     },
     {
+      // The run-once daemon-smoke above exercises startKeeperRunOnceFromConfig
+      // (one take/settlement cycle). This leg runs the PERSISTENT daemon via
+      // startKeeperFromConfig: it starts all five supervised loops, loops
+      // multiple cycles, takes a real auction, and asserts a clean SIGTERM
+      // shutdown — the only gate that covers the long-running daemon path.
+      name: 'no-spend-daemon-lifecycle',
+      classification: 'required',
+      command: [
+        'npm',
+        'run',
+        'no-spend-validation:daemon-lifecycle',
+        '--',
+        '--base-fork-block',
+        String(resolvedForkBlock.number),
+      ],
+    },
+    {
       name: 'preflight-fork-reconciliation',
       classification: 'required',
       command: ['npm', 'run', 'preflight-fork-reconciliation'],
