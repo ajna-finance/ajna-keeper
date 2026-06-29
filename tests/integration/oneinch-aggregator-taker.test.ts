@@ -248,3 +248,51 @@ describe('OneInchAggregatorKeeperTaker (Packet 5)', () => {
     expect(expectedPoolReceipt.lt(quoteAmountDue)).to.equal(true);
   });
 });
+
+describe('aggregator-base quote pull ceiling for non-18-decimal quote tokens', () => {
+  // The +1 quoteAmountDueCeiling backstop -- the merged-audited PR #17
+  // non-18-decimal invariant the BaseAggregatorCalldataTaker natspec calls out --
+  // is exercised for the direct-DEX takers (Uniswap/Curve in
+  // taker-hardening.test.ts) but never for the aggregator base at
+  // quoteTokenScale > 1, which is the production LI.FI/1inch path. Real Ajna
+  // passes floor(quoteWad/scale) to the callback but pulls ceil(quoteWad/scale),
+  // so the base must demand one extra token-wei or the pool's pull fails deep in
+  // the take. Exercised here against the 1inch base (the surviving production
+  // path); all three providers share BaseAggregatorCalldataTaker.
+  const QUOTE_SCALE = BigNumber.from(10).pow(12);
+  const DUE_RAW = BigNumber.from(5_000_000); // 5 USDC at 6 decimals
+
+  const scaledTake = (outputAmount: BigNumber) =>
+    executeAggregatorTake({
+      Factory: OneInchAggregatorKeeperTaker__factory,
+      source: LiquiditySource.ONEINCH,
+      quoteDecimals: 6,
+      quoteTokenScale: QUOTE_SCALE,
+      quoteAmountDue: DUE_RAW,
+      quotePullOverride: DUE_RAW.add(1),
+      outputAmount,
+      // The pool's quote allowance is sized off maxAmount * auctionPrice (which
+      // executeAggregatorTake fixes at 1.0), scaled down by quoteTokenScale. Take
+      // 6 collateral so that implied max-quote (6e18 WAD -> 6e6 raw) comfortably
+      // covers the 5e6 due + 1 ceil pull; otherwise the approval, not the
+      // ceiling, would be the limiting factor.
+      amountIn: utils.parseEther('6'),
+      // Keep the ceiling (not amountOutMinimum) the binding constraint.
+      amountOutMinimum: BigNumber.from(1),
+    });
+
+  it('rejects an aggregator swap that only covers the floored quote due', async () => {
+    const fixture = await scaledTake(DUE_RAW);
+    await expectRevertContaining(fixture.send(), 'InsufficientQuoteReceived');
+  });
+
+  it('accepts an aggregator swap that covers the ceil-rounded pull', async () => {
+    const fixture = await scaledTake(DUE_RAW.add(1));
+    await (await fixture.send()).wait();
+
+    expect((await fixture.pool.takeCount()).eq(1)).to.equal(true);
+    expect(
+      (await fixture.quote.balanceOf(fixture.pool.address)).gte(DUE_RAW.add(1))
+    ).to.equal(true);
+  });
+});
