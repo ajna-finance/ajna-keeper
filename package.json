@@ -20,7 +20,8 @@
     "check-hot-file-growth": "./node_modules/ts-node/dist/bin.js scripts/check-hot-file-growth.ts",
     "sushi-aggregator-route-canary": "./node_modules/ts-node/dist/bin.js scripts/sushi-aggregator-route-canary.ts",
     "compile": "npx hardhat compile",
-    "unit-tests": "npx mocha --require ts-node/register 'tests/unit/**/*.test.ts'",
+    "test": "npm run typecheck && npm run unit-tests",
+    "unit-tests": "TS_NODE_TRANSPILE_ONLY=true npx mocha --require ts-node/register 'tests/unit/**/*.test.ts'",
     "integration-tests": "npx hardhat test",
     "production-verification:mainnet": "FORK_NETWORK=mainnet npx hardhat test tests/integration/production-route-selection.test.ts",
     "production-verification:base": "FORK_NETWORK=base npx hardhat test tests/integration/production-route-selection.test.ts",
@@ -50,6 +51,10 @@
   },
   "author": "Ajna Finance contributors",
   "license": "MIT",
+  "packageManager": "yarn@1.22.22",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@ajna-finance/sdk": "^0.4.7",
     "@ethersproject/abstract-provider": "^5.7.0",
