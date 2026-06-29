@@ -649,6 +649,98 @@ export async function runResilientLoop(
   }
 }
 
+/**
+ * Sweep one redeemer's pending LP, recovering from a jammed auction. Extracted
+ * from collectLpRewardsLoop so the AuctionNotCleared reactive-settlement retry
+ * branching is unit-testable: a clean sweep, the auto-discovered-pool skip, the
+ * settle-then-retry path (incl. a second still-jammed auction), a
+ * settlement-attempted-but-bonds-locked outcome, a thrown settlement, and a
+ * non-AuctionNotCleared sweep error each take a different branch and only log —
+ * none rethrow, so one redeemer's failure never aborts the cycle.
+ */
+export async function sweepRedeemerWithReactiveSettlement(params: {
+  redeemer: LpRedeemer;
+  poolConfig: PoolConfig | undefined;
+  signer: Signer;
+  // Mirrors config.runtime.dryRun (optional), passed straight through to
+  // tryReactiveSettlement exactly as the inlined code did.
+  dryRun: boolean | undefined;
+  subgraph: SubgraphReader;
+}): Promise<void> {
+  const { redeemer, poolConfig, signer, dryRun, subgraph } = params;
+  const pool = redeemer.pool;
+
+  try {
+    await redeemer.sweep();
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+
+    if (errorMessage.includes('AuctionNotCleared')) {
+      logger.info(
+        `AuctionNotCleared detected - attempting settlement for ${pool.name}`
+      );
+
+      if (!poolConfig) {
+        // Auto-discovered pool without an explicit config entry has no
+        // settlement policy. Log and skip — the bucket stays in lpMap; next
+        // cycle retries (maybe the auction clears in the meantime).
+        logger.warn(
+          `Settlement skipped for ${pool.name}: no config entry (auto-discovered pool). LP remains pending.`
+        );
+        return;
+      }
+
+      try {
+        const settled = await tryReactiveSettlement({
+          pool,
+          poolConfig,
+          signer,
+          config: {
+            dryRun,
+            subgraph,
+          },
+        });
+
+        if (settled) {
+          logger.info(`Retrying LP collection after settlement in ${pool.name}`);
+          try {
+            await redeemer.sweep();
+          } catch (retryError) {
+            const retryMessage =
+              retryError instanceof Error
+                ? retryError.message
+                : String(retryError);
+            if (retryMessage.includes('AuctionNotCleared')) {
+              // Pool has a SECOND jammed auction on a different bucket.
+              // Next cycle will re-attempt settlement for that one;
+              // this cycle's work stops here.
+              logger.warn(
+                `Pool ${pool.name} has a second auction still jammed after settling the first; next cycle will re-attempt settlement.`
+              );
+            } else {
+              logger.error(
+                `LP sweep retry after settlement still failed for ${pool.name}`,
+                retryError
+              );
+            }
+          }
+        } else {
+          logger.warn(
+            `Settlement attempted but bonds still locked in ${pool.name}`
+          );
+        }
+      } catch (settlementError) {
+        logger.error(`Settlement failed for ${pool.name}:`, settlementError);
+      }
+    } else {
+      logger.error(
+        `Failed to collect LP reward from pool: ${pool.name}.`,
+        error
+      );
+    }
+  }
+}
+
 async function collectLpRewardsLoop({
   poolMap,
   config,
@@ -755,85 +847,14 @@ async function collectLpRewardsLoop({
       }
 
       for (const redeemer of toSweep) {
-        const pool = redeemer.pool;
-        const normalized = normalizeAddress(pool.poolAddress);
-        const poolConfig = poolConfigByAddress.get(normalized);
-
-        try {
-          await redeemer.sweep();
-        } catch (error) {
-          const errorMessage = getErrorMessage(error);
-
-          if (errorMessage.includes('AuctionNotCleared')) {
-            logger.info(
-              `AuctionNotCleared detected - attempting settlement for ${pool.name}`
-            );
-
-            if (!poolConfig) {
-              // Auto-discovered pool without an explicit config entry has
-              // no settlement policy. Log and skip — the bucket stays in
-              // lpMap; next cycle retries (maybe the auction clears in
-              // the meantime).
-              logger.warn(
-                `Settlement skipped for ${pool.name}: no config entry (auto-discovered pool). LP remains pending.`
-              );
-              continue;
-            }
-
-            try {
-              const settled = await tryReactiveSettlement({
-                pool,
-                poolConfig,
-                signer,
-                config: {
-                  dryRun: config.runtime.dryRun,
-                  subgraph,
-                },
-              });
-
-              if (settled) {
-                logger.info(
-                  `Retrying LP collection after settlement in ${pool.name}`
-                );
-                try {
-                  await redeemer.sweep();
-                } catch (retryError) {
-                  const retryMessage =
-                    retryError instanceof Error
-                      ? retryError.message
-                      : String(retryError);
-                  if (retryMessage.includes('AuctionNotCleared')) {
-                    // Pool has a SECOND jammed auction on a different bucket.
-                    // Next cycle will re-attempt settlement for that one;
-                    // this cycle's work stops here.
-                    logger.warn(
-                      `Pool ${pool.name} has a second auction still jammed after settling the first; next cycle will re-attempt settlement.`
-                    );
-                  } else {
-                    logger.error(
-                      `LP sweep retry after settlement still failed for ${pool.name}`,
-                      retryError
-                    );
-                  }
-                }
-              } else {
-                logger.warn(
-                  `Settlement attempted but bonds still locked in ${pool.name}`
-                );
-              }
-            } catch (settlementError) {
-              logger.error(
-                `Settlement failed for ${pool.name}:`,
-                settlementError
-              );
-            }
-          } else {
-            logger.error(
-              `Failed to collect LP reward from pool: ${pool.name}.`,
-              error
-            );
-          }
-        }
+        const normalized = normalizeAddress(redeemer.pool.poolAddress);
+        await sweepRedeemerWithReactiveSettlement({
+          redeemer,
+          poolConfig: poolConfigByAddress.get(normalized),
+          signer,
+          dryRun: config.runtime.dryRun,
+          subgraph,
+        });
       }
 
       try {
