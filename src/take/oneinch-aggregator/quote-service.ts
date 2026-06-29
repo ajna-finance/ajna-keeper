@@ -21,7 +21,6 @@ export class OneInchAggregatorQuoteError extends Error {
   ) {
     super(message);
     this.name = 'OneInchAggregatorQuoteError';
-    Object.setPrototypeOf(this, OneInchAggregatorQuoteError.prototype);
     this.retryable = options.retryable;
     this.errorCode = options.errorCode;
   }
