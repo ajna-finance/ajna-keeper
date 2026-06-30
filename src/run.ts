@@ -2,6 +2,7 @@ import { AjnaSDK, Signer } from '@ajna-finance/sdk';
 import { providers, Wallet } from 'ethers';
 import {
   configureAjna,
+  getAutoDiscoverKickPolicy,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   getManualPools,
@@ -18,8 +19,15 @@ import {
   getErrorMessage,
   getProviderAndSigner,
   overrideMulticall,
+  weiToDecimaled,
 } from './utils';
-import { handleKicks } from './kick';
+import { handleKicks, kick } from './kick';
+import { runDiscoveredKickCycle } from './kick-cycle';
+import { getPoolPriceFromAlchemy } from './pricing/alchemy';
+import {
+  assertFinitePositivePrice,
+  PriceUnavailableError,
+} from './pricing/price-guard';
 import { logger } from './logging';
 import {
   collectBondFromPool,
@@ -67,6 +75,10 @@ interface DiscoveryLoopParams extends KeepPoolParams {
 interface KickLoopParams extends KeepPoolParams {
   chainId?: number;
   subgraph: SubgraphReader;
+  // Present only on the daemon launcher: enable the chain-wide discovered kick
+  // step. Omitted by callers (e.g. tests) that only exercise manual kicks.
+  ajna?: AjnaSDK;
+  hydrationCooldowns?: PoolHydrationCooldowns;
 }
 
 interface LoopIterationResult {
@@ -341,7 +353,16 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   // production is the same set planDaemonLoops (and its unit test) describes.
   // The launchers are thunks; only the planned ones are invoked.
   const loopLaunchers: Record<DaemonLoopName, () => Promise<void>> = {
-    Kick: () => kickPoolsLoop({ poolMap, config, signer, chainId, subgraph }),
+    Kick: () =>
+      kickPoolsLoop({
+        poolMap,
+        config,
+        signer,
+        chainId,
+        subgraph,
+        ajna,
+        hydrationCooldowns,
+      }),
     Take: () => takePoolsLoop({ config, signer, poolMap, discoveryRuntime }),
     Settlement: () =>
       settlementLoop({ config, signer, poolMap, discoveryRuntime }),
@@ -486,10 +507,21 @@ async function kickPoolsLoop({
   signer,
   chainId,
   subgraph,
+  ajna,
+  hydrationCooldowns,
 }: KickLoopParams) {
   await runResilientLoop(
     'Kick',
-    () => processKickCycle({ poolMap, config, signer, chainId, subgraph }),
+    () =>
+      processKickCycle({
+        poolMap,
+        config,
+        signer,
+        chainId,
+        subgraph,
+        ajna,
+        hydrationCooldowns,
+      }),
     () => config.runtime.delayBetweenRuns
   );
 }
@@ -500,6 +532,8 @@ export async function processKickCycle({
   signer,
   chainId,
   subgraph,
+  ajna,
+  hydrationCooldowns,
 }: KickLoopParams): Promise<void> {
   const poolsWithKickSettings = getManualPools(config).filter(hasKickSettings);
   for (const poolConfig of poolsWithKickSettings) {
@@ -522,6 +556,178 @@ export async function processKickCycle({
       logger.error(`Failed to handle kicks for pool: ${pool.name}.`, error);
     }
   }
+
+  // Chain-wide discovered kicks (Option 1): kickable loans in pools the keeper
+  // is NOT manually configured for, each gated on a live arb take path. The
+  // loader deps are only supplied by the daemon launcher.
+  const kickPolicy = getAutoDiscoverKickPolicy(config.discovery);
+  if (kickPolicy && ajna && hydrationCooldowns) {
+    try {
+      await runDiscoveredKickStep({
+        ajna,
+        poolMap,
+        config,
+        signer,
+        chainId,
+        subgraph,
+        hydrationCooldowns,
+      });
+    } catch (error) {
+      logger.error('Failed to run the discovered kick cycle.', error);
+    }
+  }
+}
+
+async function runDiscoveredKickStep({
+  ajna,
+  poolMap,
+  config,
+  signer,
+  chainId,
+  subgraph,
+  hydrationCooldowns,
+}: {
+  ajna: AjnaSDK;
+  poolMap: PoolMap;
+  config: KeeperConfig;
+  signer: Signer;
+  chainId?: number;
+  subgraph: SubgraphReader;
+  hydrationCooldowns: PoolHydrationCooldowns;
+}): Promise<void> {
+  const kickPolicy = getAutoDiscoverKickPolicy(config.discovery);
+  const kickDefaults = config.discovery?.defaults?.kick;
+  const takeDefaults = config.discovery?.defaults?.take ?? {};
+  if (!kickPolicy || !kickDefaults || kickDefaults.enabled !== true) {
+    return;
+  }
+
+  const signerAddress = await signer.getAddress();
+  const rpcUrl = config.network.rpcUrl;
+  // Discovered pools post real bond, so default to dry-run until the operator
+  // clears dryRunNewPools (and global dryRun).
+  const discoveredDryRun =
+    config.runtime.dryRun || (config.discovery?.dryRunNewPools ?? false);
+  // Manual-wins dedup: pools the keeper is configured for are handled by the
+  // manual loop above; the discovered cycle covers only the rest.
+  const manualPools = new Set(
+    getManualPools(config).map((pool) => pool.address.toLowerCase())
+  );
+
+  const report = await runDiscoveredKickCycle({
+    subgraph,
+    kickPolicy,
+    kickDefaults: {
+      minDebt: kickDefaults.minDebt,
+      priceFactor: kickDefaults.priceFactor,
+    },
+    takeDefaults: { hpbPriceFactor: takeDefaults.hpbPriceFactor },
+    hydratePool: async (poolAddress) => {
+      if (manualPools.has(poolAddress.toLowerCase())) {
+        return undefined; // manual-wins dedup
+      }
+      const pool = await ensurePoolLoaded({
+        ajna,
+        poolMap,
+        poolAddress,
+        config,
+        hydrationCooldowns,
+      });
+      if (!pool) {
+        return undefined;
+      }
+      const [prices, kickerInfo] = await Promise.all([
+        pool.getPrices(),
+        pool.kickerInfo(signerAddress),
+      ]);
+      const hpbDecimaled = weiToDecimaled(prices.hpb);
+      let hmbPrice: number | undefined;
+      if (takeDefaults.minCollateral !== undefined && hpbDecimaled > 0) {
+        try {
+          const minDeposit = String(takeDefaults.minCollateral / hpbDecimaled);
+          const { buckets } = await subgraph.getHighestMeaningfulBucket(
+            poolAddress,
+            minDeposit
+          );
+          if (buckets.length > 0) {
+            hmbPrice = Number(
+              weiToDecimaled(pool.getBucketByIndex(buckets[0].bucketIndex).price)
+            );
+          }
+        } catch (error) {
+          logger.debug(
+            `Could not resolve HMB for discovered kick pool ${poolAddress}: ${getErrorMessage(error)}`
+          );
+        }
+      }
+      return {
+        poolAddress,
+        lup: prices.lup,
+        hpb: prices.hpb,
+        hmbPrice,
+        lockedBondQuote: weiToDecimaled(kickerInfo.locked),
+      };
+    },
+    hydrateLoan: async (pool, borrower) => {
+      const fungiblePool = getAddressInsensitiveMapValue(
+        poolMap,
+        pool.poolAddress
+      );
+      if (!fungiblePool || chainId === undefined) {
+        return undefined;
+      }
+      const loanDetails = await fungiblePool.getLoan(borrower);
+      let marketPrice: number;
+      try {
+        marketPrice = assertFinitePositivePrice(
+          await getPoolPriceFromAlchemy(
+            fungiblePool.quoteAddress,
+            fungiblePool.collateralAddress,
+            chainId,
+            rpcUrl
+          ),
+          `discovered kick pool ${pool.poolAddress}`
+        );
+      } catch (error) {
+        logger.debug(
+          `Skipping discovered kick (no market price) for ${pool.poolAddress}/${borrower}: ${
+            error instanceof PriceUnavailableError
+              ? error.message
+              : getErrorMessage(error)
+          }`
+        );
+        return undefined;
+      }
+      return {
+        thresholdPrice: loanDetails.thresholdPrice,
+        debt: loanDetails.debt,
+        neutralPrice: loanDetails.neutralPrice,
+        liquidationBond: loanDetails.liquidationBond,
+        marketPrice,
+      };
+    },
+    kickLoan: async (pool, borrower, liquidationBond, marginPrice) => {
+      const fungiblePool = getAddressInsensitiveMapValue(
+        poolMap,
+        pool.poolAddress
+      )!;
+      await kick({
+        signer,
+        pool: fungiblePool,
+        config: { dryRun: discoveredDryRun },
+        loanToKick: {
+          borrower,
+          liquidationBond,
+          estimatedRemainingBond: liquidationBond,
+          limitPrice: marginPrice,
+        },
+      });
+    },
+  });
+  logger.info(
+    `Discovered kick cycle done (dryRun=${discoveredDryRun}): kicked ${report.kicked}, ` +
+      `${report.candidatesConsidered} candidates across ${report.poolsConsidered} pools`
+  );
 }
 
 function hasKickSettings(
