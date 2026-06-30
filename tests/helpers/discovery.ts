@@ -14,6 +14,7 @@ export function createDiscoveryTransports(
       getChainwideLiquidationAuctions: sinon
         .stub()
         .rejects(new Error('unused')),
+      getChainwideKickableLoans: sinon.stub().rejects(new Error('unused')),
       getBucketTakeLPAwards: sinon.stub().rejects(new Error('unused')),
       getSubgraphMeta: sinon.stub().rejects(new Error('unused')),
     },

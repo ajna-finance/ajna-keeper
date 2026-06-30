@@ -479,6 +479,98 @@ async function getChainwideLiquidationAuctions(
   return { liquidationAuctions };
 }
 
+export interface ChainwideKickableLoan {
+  id: string;
+  borrower: string;
+  thresholdPrice: number;
+  pool: {
+    id: string;
+  };
+}
+
+export interface GetChainwideKickableLoansResponse {
+  loans: ChainwideKickableLoan[];
+}
+
+// Chain-wide kick DISCOVERY signal: pre-auction loans across all pools. Required
+// because take discovery is auction-driven (getChainwideLiquidationAuctions) and
+// cannot surface pre-auction kickable loans. The thresholdPrice_gt cut is a
+// COARSE subgraph-side pre-filter; the precise TP > LUP gate is per-pool and runs
+// on-chain at hydration (LUP is pool-level and not expressible in this query).
+const getChainwideKickableLoansQuery = gql`
+  query GetChainwideKickableLoans(
+    $first: Int!
+    $afterId: String!
+    $minThresholdPrice: BigDecimal!
+  ) {
+    loans(
+      first: $first
+      orderBy: id
+      orderDirection: asc
+      where: {
+        inLiquidation: false
+        thresholdPrice_gt: $minThresholdPrice
+        id_gt: $afterId
+      }
+    ) {
+      id
+      borrower
+      thresholdPrice
+      pool {
+        id
+      }
+    }
+  }
+`;
+
+async function getChainwideKickableLoansPage(
+  subgraphUrl: string,
+  first: number = 100,
+  afterId: string = '',
+  minThresholdPrice: string = '0',
+  options?: SubgraphRequestOptions
+) {
+  const result = await requestSubgraph<
+    GetChainwideKickableLoansResponse,
+    { first: number; afterId: string; minThresholdPrice: string }
+  >({
+    subgraphUrl,
+    document: getChainwideKickableLoansQuery,
+    variables: { first, afterId, minThresholdPrice },
+    options,
+  });
+  return result;
+}
+
+async function getChainwideKickableLoans(
+  subgraphUrl: string,
+  pageSize: number = 100,
+  maxPages: number = 100,
+  minThresholdPrice: string = '0',
+  options?: SubgraphRequestOptions
+) {
+  const loans = await paginateSubgraphCursor({
+    pageSize,
+    maxPages,
+    truncationWarning: `Chain-wide kickable-loan discovery reached maxPages=${maxPages} with pageSize=${pageSize}; results may be truncated`,
+    fetchPage: async (afterId) => {
+      const pageResult = await getChainwideKickableLoansPage(
+        subgraphUrl,
+        pageSize,
+        afterId,
+        minThresholdPrice,
+        options
+      );
+      return pageResult.loans;
+    },
+    getCursor: (loan) => loan.id,
+    missingCursorWarning:
+      'Chain-wide kickable-loan discovery response omitted loan id; stopping pagination early to avoid unstable cursors',
+  });
+
+  return { loans };
+}
+
 export interface BucketTakeLPAwardItem {
   id: string;
   index: number;
@@ -679,6 +771,8 @@ export default {
   getUnsettledAuctions,
   getChainwideLiquidationAuctionsPage,
   getChainwideLiquidationAuctions,
+  getChainwideKickableLoansPage,
+  getChainwideKickableLoans,
   getBucketTakeLPAwards,
   getSubgraphMeta,
 };

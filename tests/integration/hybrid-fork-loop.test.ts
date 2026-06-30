@@ -210,6 +210,9 @@ function makeFixtureSubgraphReader(
     async getChainwideLiquidationAuctions() {
       return { liquidationAuctions: [] } as never;
     },
+    async getChainwideKickableLoans() {
+      return { loans: [] } as never;
+    },
     async getBucketTakeLPAwards() {
       return { bucketTakeLPAwards: [] } as never;
     },
