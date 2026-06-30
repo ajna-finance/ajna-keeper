@@ -401,6 +401,7 @@ describe('Run Loop Discovery Integration', () => {
       .resolves({
         liquidationAuctions: [
           {
+            // Positive collateral -> the take candidate.
             borrower: '0xBorrowerA',
             kickTime: '1',
             debtRemaining: '3',
@@ -408,6 +409,17 @@ describe('Run Loop Discovery Integration', () => {
             neutralPrice: '4',
             debt: '3',
             collateral: '2',
+            pool: { id: '0x4444444444444444444444444444444444444444' },
+          },
+          {
+            // Fully auctioned (collateral 0) -> the settlement candidate.
+            borrower: '0xBorrowerASettle',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '0',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '0',
             pool: { id: '0x4444444444444444444444444444444444444444' },
           },
         ],
