@@ -1,13 +1,6 @@
 // src/dex/universal-router.ts
 // FIXED: Now mirrors working SushiSwap patterns for decimal handling and conservative approach
-import {
-  Contract,
-  BigNumber,
-  Signer,
-  providers,
-  constants,
-  ethers,
-} from 'ethers';
+import { BigNumber, Signer, providers, constants, ethers } from 'ethers';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import { weiToDecimaled } from '../utils';
@@ -43,6 +36,21 @@ const QUOTER_V2_ABI = [
 
 // Command constants
 const V3_SWAP_EXACT_IN = '0x00';
+
+/**
+ * Contract-construction seam. A bare `new ethers.Contract(...)` is not reliably
+ * stubbable from unit tests under the suite's module loader (the test's `ethers`
+ * binding can resolve to a different object than this module's), so every contract
+ * here is built through this exported object. Tests stub
+ * `universalRouterDeps.makeContract`; production behaviour is unchanged.
+ */
+export const universalRouterDeps = {
+  makeContract: (
+    address: string,
+    abi: ethers.ContractInterface,
+    signerOrProvider: Signer | providers.Provider
+  ) => new ethers.Contract(address, abi, signerOrProvider),
+};
 
 /**
  * FIXED: Swaps tokens using Uniswap's Universal Router with proper decimal handling
@@ -120,14 +128,14 @@ export async function swapWithUniversalRouter(
   );
 
   // Get contract instances
-  const tokenContract = new Contract(tokenAddress, ERC20_ABI, signer);
-  const permit2Contract = new Contract(permit2Address, PERMIT2_ABI, signer);
-  const universalRouter = new Contract(
+  const tokenContract = universalRouterDeps.makeContract(tokenAddress, ERC20_ABI, signer);
+  const permit2Contract = universalRouterDeps.makeContract(permit2Address, PERMIT2_ABI, signer);
+  const universalRouter = universalRouterDeps.makeContract(
     universalRouterAddress,
     UNIVERSAL_ROUTER_ABI,
     signer
   );
-  const factoryContract = new Contract(
+  const factoryContract = universalRouterDeps.makeContract(
     poolFactoryAddress,
     POOL_FACTORY_ABI,
     provider
@@ -162,7 +170,7 @@ export async function swapWithUniversalRouter(
         'Universal Router reward swap requires uniswap.quoterV2Address to derive a safe minimum-out from a real output quote; refusing to swap without one (fail closed).'
       );
     }
-    const quoter = new Contract(quoterV2Address, QUOTER_V2_ABI, provider);
+    const quoter = universalRouterDeps.makeContract(quoterV2Address, QUOTER_V2_ABI, provider);
     const quoteResult = await quoter.callStatic.quoteExactInputSingle({
       tokenIn: tokenAddress,
       tokenOut: targetTokenAddress,
