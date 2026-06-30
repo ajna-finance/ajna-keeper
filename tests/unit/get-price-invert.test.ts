@@ -22,13 +22,20 @@ describe('getPrice — source dispatch, inversion, and fail-closed', () => {
     expect(price).to.equal(0.01);
   });
 
-  it('guards against division-by-zero when inverting a zero price', async () => {
-    const price = await getPrice({
-      source: PriceOriginSource.FIXED,
-      value: 0,
-      invert: true,
-    });
-    expect(price).to.equal(0); // not Infinity
+  it('rejects a zero price (the old invert guard returned 0; now it fails closed)', async () => {
+    let thrown: Error | undefined;
+    try {
+      await getPrice({
+        source: PriceOriginSource.FIXED,
+        value: 0,
+        invert: true,
+      });
+    } catch (error) {
+      thrown = error as Error;
+    }
+    // A zero price would invert to a degenerate value and mis-gate every
+    // kick/take decision, so the boundary throws instead of returning 0.
+    expect(thrown?.name).to.equal('PriceUnavailableError');
   });
 
   it('resolves a POOL reference and applies invert on the WAD-decoded price', async () => {

@@ -47,7 +47,13 @@ function extractCoinGeckoPrice(response: unknown): number | undefined {
   const firstEntry = Object.values(response)[0];
   if (!firstEntry || typeof firstEntry !== 'object') return undefined;
   const firstValue = Object.values(firstEntry)[0];
-  return typeof firstValue === 'number' && Number.isFinite(firstValue)
+  // Require a strictly positive number: CoinGecko can return 0 for an unknown
+  // or unpriced token, which is invalid as a price and would later produce a
+  // divide-by-zero (Infinity) in getPoolPrice. Treat 0/negative as "no price"
+  // so the Alchemy fallback (or a fail-closed throw) takes over.
+  return typeof firstValue === 'number' &&
+    Number.isFinite(firstValue) &&
+    firstValue > 0
     ? firstValue
     : undefined;
 }
@@ -268,6 +274,14 @@ async function getPoolPrice(
         rpcUrl,
         tokenAddresses
       );
+      // Guard the divisor: a non-positive quote price would yield Infinity/NaN.
+      // Throwing here drops to the Alchemy fallback below rather than returning
+      // a degenerate pool price.
+      if (!(quotePrice > 0)) {
+        throw new Error(
+          `CoinGecko quote price for "${quoteId}" is not positive (${quotePrice}); cannot derive pool price`
+        );
+      }
       return collateralPrice / quotePrice;
     } catch (error) {
       logger.warn(
