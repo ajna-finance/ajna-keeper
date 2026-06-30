@@ -24,6 +24,42 @@ interface ArbTakeExecutionParams {
   logPrefix?: string;
 }
 
+export interface ArbProfitability {
+  takeable: boolean;
+  maxArbTakePrice: number;
+  reason?: string;
+}
+
+/**
+ * Pure arb-take profitability core (no I/O). Given the auction/take price and
+ * the pool's highest-meaningful-bucket price, decides whether an arbTake clears.
+ * Shared by the take path (checkIfArbTakeable, which fetches the HMB live) and
+ * the kick liveness gate (which batches the HMB per pool), so both agree on
+ * exactly which bucket an arbTake would use.
+ *
+ * `npCeiling` caps the eligible bucket at the auction's neutralPrice: a
+ * bucketTake above NP penalizes the kicker, so the caller — which owns kicker
+ * identity — passes neutralPrice when the keeper kicked this auction and
+ * undefined otherwise, keeping this function (and arb.ts) ignorant of who kicked.
+ */
+export function isArbProfitable(params: {
+  price: number;
+  hmbPrice: number;
+  hpbPriceFactor: number;
+  npCeiling?: number;
+}): ArbProfitability {
+  const { price, hmbPrice, hpbPriceFactor, npCeiling } = params;
+  const maxArbPrice = hmbPrice * hpbPriceFactor;
+  const ceiling =
+    npCeiling === undefined ? maxArbPrice : Math.min(maxArbPrice, npCeiling);
+  const takeable = price < ceiling;
+  return {
+    takeable,
+    maxArbTakePrice: ceiling,
+    reason: takeable ? undefined : 'auction price above arbTake threshold',
+  };
+}
+
 export async function checkIfArbTakeable(
   pool: FungiblePool,
   price: number,
@@ -31,7 +67,10 @@ export async function checkIfArbTakeable(
   poolConfig: TakeActionConfig,
   subgraph: SubgraphReader,
   minDeposit: string,
-  signer: Signer
+  signer: Signer,
+  // NP ceiling for self-kicked auctions; undefined (default) preserves the
+  // uncapped arbTake threshold for auctions this keeper did not kick.
+  npCeiling?: number
 ): Promise<ArbTakeEvaluation> {
   if (!poolConfig.take.minCollateral || !poolConfig.take.hpbPriceFactor) {
     return {
@@ -79,18 +118,26 @@ export async function checkIfArbTakeable(
   const hmbPrice = Number(
     weiToDecimaled(pool.getBucketByIndex(hmbIndex).price)
   );
-  const maxArbPrice = hmbPrice * poolConfig.take.hpbPriceFactor;
-  const arbTakeable = price < maxArbPrice;
+  const profitability = isArbProfitable({
+    price,
+    hmbPrice,
+    hpbPriceFactor: poolConfig.take.hpbPriceFactor,
+    npCeiling,
+  });
 
   logger.info(
-    `ArbTake check for pool ${pool.name}: hmbPrice=${hmbPrice.toFixed(6)}, maxArbPrice=${maxArbPrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, factor=${poolConfig.take.hpbPriceFactor} -> ${arbTakeable ? 'ARB-TAKEABLE' : 'skip'}`
+    `ArbTake check for pool ${pool.name}: hmbPrice=${hmbPrice.toFixed(6)}, ` +
+      `maxArbPrice=${profitability.maxArbTakePrice.toFixed(6)}, auctionPrice=${price.toFixed(6)}, ` +
+      `factor=${poolConfig.take.hpbPriceFactor}` +
+      `${npCeiling !== undefined ? `, npCeiling=${npCeiling.toFixed(6)}` : ''} -> ` +
+      `${profitability.takeable ? 'ARB-TAKEABLE' : 'skip'}`
   );
 
   return {
-    isArbTakeable: arbTakeable,
+    isArbTakeable: profitability.takeable,
     hpbIndex: hmbIndex,
-    maxArbTakePrice: maxArbPrice,
-    reason: arbTakeable ? undefined : 'auction price above arbTake threshold',
+    maxArbTakePrice: profitability.maxArbTakePrice,
+    reason: profitability.reason,
   };
 }
 
