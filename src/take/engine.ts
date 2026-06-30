@@ -420,6 +420,7 @@ export async function evaluateTakeDecision<
       price,
       auctionPrice,
       collateral,
+      borrower: candidate.borrower,
     });
 
     if (!arbEvaluation.isArbTakeable) {

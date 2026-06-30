@@ -110,6 +110,7 @@ export async function revalidateTakeDecision<
       price: currentPrice,
       auctionPrice: liquidationStatus.auctionPrice,
       collateral,
+      borrower: params.borrower,
     });
 
     approvedArbTake = arbEvaluation.isArbTakeable;

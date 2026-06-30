@@ -1,7 +1,8 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber } from 'ethers';
 import { SubgraphReader } from '../read-transports';
-import { weiToDecimaled } from '../utils';
+import { getErrorMessage, weiToDecimaled } from '../utils';
+import { logger } from '../logging';
 import { arbTakeLiquidation, checkIfArbTakeable } from './arb';
 import { TakeWriteTransport } from './write-transport';
 import { ArbTakeEvaluation, TakeActionConfig } from './types';
@@ -21,6 +22,7 @@ export interface ArbTakeStrategy<
     price: number;
     auctionPrice: BigNumber;
     collateral: BigNumber;
+    borrower: string;
   }) => Promise<ArbTakeEvaluation>;
   executeArbTake: (params: {
     pool: FungiblePool;
@@ -41,6 +43,37 @@ export function isArbTakeStrategyEnabled(
   );
 }
 
+/**
+ * For a self-kicked auction the keeper's own arbTake reward keys off the bucket
+ * price vs the auction neutralPrice: a bucketTake above NP penalizes the bond.
+ * Resolve the NP ceiling that caps the arb bucket at NP when THIS keeper is the
+ * kicker (read on-chain from auctionInfo — kicker + neutralPrice in one call, no
+ * side-table), and undefined for auctions kicked by anyone else (no cap — taking
+ * above their NP is their risk and our profit). Falls back to undefined
+ * (uncapped) when auctionInfo can't be read, preserving liveness.
+ */
+export async function resolveSelfKickNpCeiling(
+  pool: FungiblePool,
+  signer: Signer,
+  borrower: string
+): Promise<number | undefined> {
+  try {
+    const [botAddress, auctionInfo] = await Promise.all([
+      signer.getAddress(),
+      pool.contract.auctionInfo(borrower),
+    ]);
+    if (auctionInfo.kicker_.toLowerCase() !== botAddress.toLowerCase()) {
+      return undefined;
+    }
+    return Number(weiToDecimaled(auctionInfo.neutralPrice_));
+  } catch (error) {
+    logger.debug(
+      `Could not resolve self-kick NP ceiling for ${pool.name}/${borrower}; leaving arbTake uncapped: ${getErrorMessage(error)}`
+    );
+    return undefined;
+  }
+}
+
 export function createArbTakeStrategy<
   TPoolConfig extends TakeActionConfig = TakeActionConfig,
 >(params?: {
@@ -59,6 +92,7 @@ export function createArbTakeStrategy<
       subgraph,
       price,
       collateral,
+      borrower,
     }) => {
       if (!isArbTakeStrategyEnabled(poolConfig)) {
         return {
@@ -85,6 +119,10 @@ export function createArbTakeStrategy<
         ? poolConfig.take.minCollateral / hpb
         : 0;
 
+      // Cap the arb bucket at NP for auctions this keeper kicked, so its own
+      // bucketTake cannot clear above NP and penalize its bond.
+      const npCeiling = await resolveSelfKickNpCeiling(pool, signer, borrower);
+
       return checkIfArbTakeable(
         pool,
         price,
@@ -92,7 +130,8 @@ export function createArbTakeStrategy<
         poolConfig,
         subgraph,
         minDeposit.toString(),
-        signer
+        signer,
+        npCeiling
       );
     },
     executeArbTake: async ({

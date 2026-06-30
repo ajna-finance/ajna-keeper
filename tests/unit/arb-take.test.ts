@@ -138,6 +138,7 @@ describe('shared arbTake helpers', () => {
       price: 1,
       auctionPrice: ethers.utils.parseEther('1'),
       collateral: ethers.utils.parseEther('1'),
+      borrower: '0xBorrower',
     });
 
     expect(result).to.deep.include({
