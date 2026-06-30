@@ -13,6 +13,7 @@
   "homepage": "https://github.com/ajna-finance/ajna-keeper#readme",
   "scripts": {
     "start": "./node_modules/ts-node/dist/bin.js src/index.ts",
+    "summarize-kick-report": "TS_NODE_TRANSPILE_ONLY=true ./node_modules/ts-node/dist/bin.js scripts/summarize-kick-report.ts",
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit",
     "lint": "eslint 'src/**/*.ts' 'scripts/**/*.ts'",

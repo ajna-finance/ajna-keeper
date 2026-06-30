@@ -2,6 +2,7 @@ import { AjnaSDK, Signer } from '@ajna-finance/sdk';
 import { providers, Wallet } from 'ethers';
 import {
   configureAjna,
+  getAutoDiscoverKickPolicy,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   getManualPools,
@@ -18,8 +19,10 @@ import {
   getErrorMessage,
   getProviderAndSigner,
   overrideMulticall,
+  weiToDecimaled,
 } from './utils';
-import { handleKicks } from './kick';
+import { handleKicks, kick } from './kick';
+import { runDiscoveredKickStep } from './kick/discovered-step';
 import { logger } from './logging';
 import {
   collectBondFromPool,
@@ -67,6 +70,10 @@ interface DiscoveryLoopParams extends KeepPoolParams {
 interface KickLoopParams extends KeepPoolParams {
   chainId?: number;
   subgraph: SubgraphReader;
+  // Present only on the daemon launcher: enable the chain-wide discovered kick
+  // step. Omitted by callers (e.g. tests) that only exercise manual kicks.
+  ajna?: AjnaSDK;
+  hydrationCooldowns?: PoolHydrationCooldowns;
 }
 
 interface LoopIterationResult {
@@ -341,7 +348,16 @@ export async function startKeeperFromConfig(config: KeeperConfig) {
   // production is the same set planDaemonLoops (and its unit test) describes.
   // The launchers are thunks; only the planned ones are invoked.
   const loopLaunchers: Record<DaemonLoopName, () => Promise<void>> = {
-    Kick: () => kickPoolsLoop({ poolMap, config, signer, chainId, subgraph }),
+    Kick: () =>
+      kickPoolsLoop({
+        poolMap,
+        config,
+        signer,
+        chainId,
+        subgraph,
+        ajna,
+        hydrationCooldowns,
+      }),
     Take: () => takePoolsLoop({ config, signer, poolMap, discoveryRuntime }),
     Settlement: () =>
       settlementLoop({ config, signer, poolMap, discoveryRuntime }),
@@ -486,10 +502,21 @@ async function kickPoolsLoop({
   signer,
   chainId,
   subgraph,
+  ajna,
+  hydrationCooldowns,
 }: KickLoopParams) {
   await runResilientLoop(
     'Kick',
-    () => processKickCycle({ poolMap, config, signer, chainId, subgraph }),
+    () =>
+      processKickCycle({
+        poolMap,
+        config,
+        signer,
+        chainId,
+        subgraph,
+        ajna,
+        hydrationCooldowns,
+      }),
     () => config.runtime.delayBetweenRuns
   );
 }
@@ -500,6 +527,8 @@ export async function processKickCycle({
   signer,
   chainId,
   subgraph,
+  ajna,
+  hydrationCooldowns,
 }: KickLoopParams): Promise<void> {
   const poolsWithKickSettings = getManualPools(config).filter(hasKickSettings);
   for (const poolConfig of poolsWithKickSettings) {
@@ -520,6 +549,26 @@ export async function processKickCycle({
       });
     } catch (error) {
       logger.error(`Failed to handle kicks for pool: ${pool.name}.`, error);
+    }
+  }
+
+  // Chain-wide discovered kicks (Option 1): kickable loans in pools the keeper
+  // is NOT manually configured for, each gated on a live arb take path. The
+  // loader deps are only supplied by the daemon launcher.
+  const kickPolicy = getAutoDiscoverKickPolicy(config.discovery);
+  if (kickPolicy && ajna && hydrationCooldowns) {
+    try {
+      await runDiscoveredKickStep({
+        ajna,
+        poolMap,
+        config,
+        signer,
+        chainId,
+        subgraph,
+        hydrationCooldowns,
+      });
+    } catch (error) {
+      logger.error('Failed to run the discovered kick cycle.', error);
     }
   }
 }

@@ -927,6 +927,15 @@ export async function buildDiscoveredSettlementTargets(
       .filter((candidate) => poolAllowed(config, candidate.pool.id))
       .filter((candidate) => hasValidCandidateNumericFields(config, candidate))
       .filter((candidate) => isPositiveDecimalString(candidate.debtRemaining))
+      // needsSettlement only approves fully-auctioned auctions (on-chain
+      // collateral == 0, bad debt); a still-collateralized auction always
+      // returns needs:false. Drop those here instead of probing each on-chain
+      // (auctionInfo + getStatus). The on-chain check stays authoritative for
+      // the survivors, so subgraph lag only costs a one-cycle delay — the same
+      // tradeoff the take path's positive-collateral filter already accepts.
+      .filter(
+        (candidate) => !isPositiveDecimalString(candidate.collateralRemaining)
+      )
       .filter((candidate) => {
         const normalizedPool = normalizeAddress(candidate.pool.id);
         if (manualSettlementPools.has(normalizedPool)) {

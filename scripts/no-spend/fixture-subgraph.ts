@@ -187,6 +187,9 @@ export function makeFixtureSubgraphReader(
     async getChainwideLiquidationAuctions() {
       return { liquidationAuctions: await getChainwideAuction() };
     },
+    async getChainwideKickableLoans() {
+      return { loans: [] };
+    },
     async getBucketTakeLPAwards() {
       return { bucketTakeLPAwards: [] } as any;
     },

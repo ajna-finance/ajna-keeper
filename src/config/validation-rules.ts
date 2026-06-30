@@ -111,7 +111,7 @@ export function validateDecimalStringBigInt(
   }
 }
 
-function requirePositive(value: unknown, message: string): void {
+export function requirePositive(value: unknown, message: string): void {
   if (!isFiniteNumber(value) || value <= 0) {
     throw new Error(message);
   }
@@ -582,6 +582,48 @@ function validateExternalTakeSourceRequirements(params: {
     keeperConfig: params.keeperConfig,
     chainId: params.chainId,
   });
+}
+
+export function validateKickSettings(settings: unknown, path: string): void {
+  if (settings === undefined) {
+    return;
+  }
+  if (
+    typeof settings !== 'object' ||
+    settings === null ||
+    Array.isArray(settings)
+  ) {
+    throw new Error(`${path} must be an object`);
+  }
+  const kick = settings as {
+    enabled?: unknown;
+    minDebt?: unknown;
+    priceFactor?: unknown;
+  };
+  if (kick.enabled !== true && kick.enabled !== false) {
+    throw new Error(`${path}.enabled must be explicitly true or false`);
+  }
+  if (kick.enabled === true) {
+    if (!isFiniteNumber(kick.minDebt) || kick.minDebt < 0) {
+      throw new Error(
+        `${path}.minDebt must be a non-negative number when kick is enabled`
+      );
+    }
+    if (!isFiniteNumber(kick.priceFactor) || kick.priceFactor <= 0) {
+      throw new Error(
+        `${path}.priceFactor must be a positive number when kick is enabled`
+      );
+    }
+    // Option 1 reward margin: the kick gate is NP * priceFactor >= market, so
+    // priceFactor < 1 forces NP to exceed market (by 1/priceFactor). A
+    // priceFactor >= 1 gives no margin (or kicks more aggressively than market),
+    // which would let the keeper's own take penalize the bond.
+    if (kick.priceFactor >= 1) {
+      throw new Error(
+        `${path}.priceFactor must be less than 1 (Option-1 reward margin)`
+      );
+    }
+  }
 }
 
 export function validateTakeSettings(

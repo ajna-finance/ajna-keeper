@@ -153,16 +153,19 @@ describe('Discovery Target Resolution', () => {
     sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
       liquidationAuctions: [
         {
+          // Fully auctioned (collateral 0) -> settleable; manual take pool, so
+          // excluded from discovered take but covered by discovered settlement.
           borrower: '0xBorrowerA',
           kickTime: '1',
           debtRemaining: '2',
-          collateralRemaining: '3',
+          collateralRemaining: '0',
           neutralPrice: '4',
           debt: '2',
-          collateral: '3',
+          collateral: '0',
           pool: { id: '0x1111111111111111111111111111111111111111' },
         },
         {
+          // Positive collateral -> takeable, NOT settleable.
           borrower: '0xBorrowerB',
           kickTime: '1',
           debtRemaining: '2',
@@ -194,13 +197,13 @@ describe('Discovery Target Resolution', () => {
     );
     expect(takeTargets[0].name).to.equal('Kick Only Pool');
 
-    expect(settlementTargets).to.have.length(2);
-    expect(
-      settlementTargets.some(
-        (target) =>
-          target.poolAddress === '0x2222222222222222222222222222222222222222'
-      )
-    ).to.be.true;
+    // Settlement covers only fully-auctioned auctions (collateral 0): the take
+    // pool's auction (0x1111) qualifies; the take target (0x2222, positive
+    // collateral) does not; the manual settlement pool (0x3333) is excluded.
+    expect(settlementTargets).to.have.length(1);
+    expect(settlementTargets[0].poolAddress).to.equal(
+      '0x1111111111111111111111111111111111111111'
+    );
     expect(
       settlementTargets.some(
         (target) =>
@@ -254,6 +257,28 @@ describe('Discovery Target Resolution', () => {
           neutralPrice: '4',
           debt: '2',
           collateral: '3',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+        // Fully-auctioned (collateral 0) variants so each pool also has a
+        // settlement candidate alongside its takeable one.
+        {
+          borrower: '0xBorrowerASettle',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '0',
+          pool: { id: '0x2222222222222222222222222222222222222222' },
+        },
+        {
+          borrower: '0xBorrowerBSettle',
+          kickTime: '1',
+          debtRemaining: '2',
+          collateralRemaining: '0',
+          neutralPrice: '4',
+          debt: '2',
+          collateral: '0',
           pool: { id: '0x4444444444444444444444444444444444444444' },
         },
       ],
@@ -468,6 +493,17 @@ describe('Discovery Target Resolution', () => {
             neutralPrice: '4',
             debt: '2',
             collateral: '3',
+            pool: { id: '0x1111111111111111111111111111111111111111' },
+          },
+          {
+            // Fully auctioned (collateral 0) -> the settlement candidate.
+            borrower: '0xBorrowerASettle',
+            kickTime: '1',
+            debtRemaining: '2',
+            collateralRemaining: '0',
+            neutralPrice: '4',
+            debt: '2',
+            collateral: '0',
             pool: { id: '0x1111111111111111111111111111111111111111' },
           },
         ],

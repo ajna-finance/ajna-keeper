@@ -1,4 +1,5 @@
 import { logger } from '../logging';
+import { alchemyPriceCache } from './price-cache';
 
 interface AlchemyPriceRequest {
   network: string;
@@ -47,94 +48,89 @@ function extractAlchemyKey(rpcUrl: string): string | null {
 }
 
 /**
- * Fetch token price from Alchemy Prices API
- * @param tokenAddress - Contract address of the token
- * @param chainId - Chain ID (e.g., 8453 for Base)
- * @param rpcUrl - The RPC URL containing the Alchemy API key
- * @returns Price in USD
+ * Standalone Alchemy Prices fetch primitive: resolve many token addresses in ONE
+ * request and return a keyed `lowercased-address -> USD price` map (addresses
+ * Alchemy can't price are absent). A single lookup is just
+ * fetchPricesFromAlchemy([addr]); a pool price passes both legs.
+ */
+async function fetchPricesFromAlchemy(
+  addresses: string[],
+  chainId: number,
+  rpcUrl: string
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (addresses.length === 0) {
+    return result;
+  }
+  // Serve fresh-enough addresses from the shared TTL cache; only fetch the rest.
+  const missing: string[] = [];
+  for (const address of addresses) {
+    const lower = address.toLowerCase();
+    const cached = alchemyPriceCache.get(`${chainId}:${lower}`);
+    if (cached !== undefined) {
+      result.set(lower, cached);
+    } else {
+      missing.push(address);
+    }
+  }
+  if (missing.length === 0) {
+    return result;
+  }
+
+  const apiKey = extractAlchemyKey(rpcUrl);
+  if (!apiKey) {
+    throw new Error('Could not extract Alchemy API key from RPC URL');
+  }
+  const network = getAlchemyNetwork(chainId);
+  const url = `https://api.g.alchemy.com/prices/v1/${apiKey}/tokens/by-address`;
+  const requestBody: { addresses: AlchemyPriceRequest[] } = {
+    addresses: missing.map((address) => ({ network, address })),
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Alchemy API request failed: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const data: AlchemyPriceResponse = await response.json();
+  for (const tokenData of data.data ?? []) {
+    if (tokenData.error) {
+      continue; // missing from the map -> the caller fails closed
+    }
+    const usd = tokenData.prices?.find(
+      (p) => p.currency.toLowerCase() === 'usd'
+    );
+    const price = usd ? parseFloat(usd.value) : NaN;
+    if (Number.isFinite(price)) {
+      const lower = tokenData.address.toLowerCase();
+      alchemyPriceCache.set(`${chainId}:${lower}`, price);
+      result.set(lower, price);
+    }
+  }
+  return result;
+}
+
+/**
+ * Fetch a single token's USD price from the Alchemy Prices API.
  */
 export async function getPriceFromAlchemy(
   tokenAddress: string,
   chainId: number,
   rpcUrl: string
 ): Promise<number> {
-  const apiKey = extractAlchemyKey(rpcUrl);
-  if (!apiKey) {
-    throw new Error('Could not extract Alchemy API key from RPC URL');
+  const prices = await fetchPricesFromAlchemy([tokenAddress], chainId, rpcUrl);
+  const price = prices.get(tokenAddress.toLowerCase());
+  if (price === undefined) {
+    throw new Error(`No USD price available from Alchemy for ${tokenAddress}`);
   }
-
-  const network = getAlchemyNetwork(chainId);
-  const url = `https://api.g.alchemy.com/prices/v1/${apiKey}/tokens/by-address`;
-
-  const requestBody: { addresses: AlchemyPriceRequest[] } = {
-    addresses: [
-      {
-        network,
-        address: tokenAddress,
-      },
-    ],
-  };
-
-  try {
-    logger.debug(
-      `Fetching price from Alchemy for ${tokenAddress} on ${network}`
-    );
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Alchemy API request failed: ${response.status} ${response.statusText}`
-      );
-    }
-
-    const data: AlchemyPriceResponse = await response.json();
-
-    if (!data.data || data.data.length === 0) {
-      throw new Error('No price data returned from Alchemy');
-    }
-
-    const tokenData = data.data[0];
-
-    if (tokenData.error) {
-      const errorMsg =
-        typeof tokenData.error === 'string'
-          ? tokenData.error
-          : JSON.stringify(tokenData.error);
-      throw new Error(`Alchemy API error: ${errorMsg}`);
-    }
-
-    if (!tokenData.prices || tokenData.prices.length === 0) {
-      throw new Error(
-        `No price information available from Alchemy for ${tokenAddress}`
-      );
-    }
-
-    // Get USD price
-    const usdPrice = tokenData.prices.find(
-      (p) => p.currency.toLowerCase() === 'usd'
-    );
-    if (!usdPrice) {
-      throw new Error('USD price not available from Alchemy');
-    }
-
-    const price = parseFloat(usdPrice.value);
-    logger.debug(`Alchemy price for ${tokenAddress}: $${price}`);
-
-    return price;
-  } catch (error) {
-    logger.error(
-      `Error fetching price from Alchemy for ${tokenAddress}:`,
-      error
-    );
-    throw error;
-  }
+  logger.debug(`Alchemy price for ${tokenAddress}: $${price}`);
+  return price;
 }
 
 /**
@@ -151,10 +147,18 @@ export async function getPoolPriceFromAlchemy(
   chainId: number,
   rpcUrl: string
 ): Promise<number> {
-  const [collateralPrice, quotePrice] = await Promise.all([
-    getPriceFromAlchemy(collateralAddress, chainId, rpcUrl),
-    getPriceFromAlchemy(quoteAddress, chainId, rpcUrl),
-  ]);
-
+  // One request for both legs (was two), keyed back by address.
+  const prices = await fetchPricesFromAlchemy(
+    [collateralAddress, quoteAddress],
+    chainId,
+    rpcUrl
+  );
+  const collateralPrice = prices.get(collateralAddress.toLowerCase());
+  const quotePrice = prices.get(quoteAddress.toLowerCase());
+  if (collateralPrice === undefined || quotePrice === undefined) {
+    throw new Error(
+      `No USD price available from Alchemy for pool ${collateralAddress}/${quoteAddress}`
+    );
+  }
   return collateralPrice / quotePrice;
 }

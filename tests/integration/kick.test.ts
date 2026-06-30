@@ -16,7 +16,11 @@ import {
   impersonateSigner,
   setBalance,
 } from './test-utils';
-import { depositQuoteToken, drawDebt } from './loan-helpers';
+import {
+  createFundedQuoteWallet,
+  depositQuoteToken,
+  drawDebt,
+} from './loan-helpers';
 import { makeGetLoansFromSdk, overrideGetLoans } from './subgraph-mock';
 import { expect } from 'chai';
 import {
@@ -24,28 +28,12 @@ import {
   decimaledToWei,
   weiToDecimaled,
 } from '../../src/utils';
-import { constants, Contract, Wallet } from 'ethers';
+import { constants, Wallet } from 'ethers';
 import { getAllowanceOfErc20, getBalanceOfErc20 } from '../../src/erc20';
 import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
 import { NonceTracker } from '../../src/nonce';
 import { clearIdleBondCache } from '../../src/rewards';
 
-const WETH_ABI = ['function deposit() payable'];
-
-async function createFundedQuoteWallet(
-  amount: ReturnType<typeof decimaledToWei>
-) {
-  const wallet = Wallet.createRandom().connect(getProvider());
-  await setBalance(wallet.address, decimaledToWei(100).toHexString());
-  const weth = new Contract(
-    MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress,
-    WETH_ABI,
-    wallet
-  );
-  const tx = await weth.deposit({ value: amount });
-  await tx.wait();
-  return wallet;
-}
 
 describe('getLoansToKick', function () {
   this.timeout(300000);
@@ -281,7 +269,10 @@ describe('kick', function () {
         },
       })
     );
-    const signer = await createFundedQuoteWallet(decimaledToWei(2));
+    const signer = await createFundedQuoteWallet(
+      decimaledToWei(2),
+      MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress
+    );
 
     await kick({
       pool,
@@ -386,7 +377,10 @@ describe('approveBalanceForLoanToKick', () => {
     const pool: FungiblePool = await ajna.fungiblePoolFactory.getPoolByAddress(
       MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
     );
-    const signer = await createFundedQuoteWallet(decimaledToWei(1));
+    const signer = await createFundedQuoteWallet(
+      decimaledToWei(1),
+      MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress
+    );
 
     const loanToKick = {
       borrower: '0x0000000000000000000000000000000000000000',
@@ -414,7 +408,10 @@ describe('approveBalanceForLoanToKick', () => {
     const pool: FungiblePool = await ajna.fungiblePoolFactory.getPoolByAddress(
       MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
     );
-    const signer = await createFundedQuoteWallet(decimaledToWei(20));
+    const signer = await createFundedQuoteWallet(
+      decimaledToWei(20),
+      MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress
+    );
 
     const loanToKick = {
       borrower: '0x0000000000000000000000000000000000000000',
@@ -448,7 +445,10 @@ describe('approveBalanceForLoanToKick', () => {
     const pool: FungiblePool = await ajna.fungiblePoolFactory.getPoolByAddress(
       MAINNET_CONFIG.SOL_WETH_POOL.poolConfig.address
     );
-    const signer = await createFundedQuoteWallet(decimaledToWei(60));
+    const signer = await createFundedQuoteWallet(
+      decimaledToWei(60),
+      MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress
+    );
 
     const loanToKick = {
       borrower: '0x0000000000000000000000000000000000000000',
@@ -505,7 +505,10 @@ describe('handleKicks (end-to-end)', function () {
       collateralToPledge: 14,
     });
     await increaseTime(SECONDS_PER_YEAR * 2);
-    const signer = await createFundedQuoteWallet(decimaledToWei(2));
+    const signer = await createFundedQuoteWallet(
+      decimaledToWei(2),
+      MAINNET_CONFIG.SOL_WETH_POOL.quoteAddress
+    );
 
     await handleKicks({
       pool,

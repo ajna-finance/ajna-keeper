@@ -1,9 +1,11 @@
 import {
+  AutoDiscoverKickPolicy,
   AutoDiscoverSettlementPolicy,
   AutoDiscoverTakePolicy,
   KeeperConfig,
   LiquiditySource,
   TakeSettings,
+  getAutoDiscoverKickPolicy,
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
 } from './schema';
@@ -33,6 +35,7 @@ import {
   requireOptionalNonNegative,
   requireOptionalPositive,
   requireOptionalPositiveInteger,
+  requirePositive,
   validateDecimalStringBigInt,
   validateExternalTakeRouteSelectionMode,
   validateExternalTakeTransportPolicy,
@@ -40,6 +43,7 @@ import {
   validateOneInchAggregationExecutorAllowlist,
   validateQuoteDenominatedGasPolicy,
   validateRouterFeeTiers,
+  validateKickSettings,
   validateSettlementSettings,
   validateTakeSettings,
 } from './validation-rules';
@@ -57,15 +61,17 @@ export function validateAutoDiscoverConfig(
   }
   const takePolicy = getAutoDiscoverTakePolicy(autoDiscover);
   const settlementPolicy = getAutoDiscoverSettlementPolicy(autoDiscover);
+  const kickPolicy = getAutoDiscoverKickPolicy(autoDiscover);
 
-  if (autoDiscover.kick) {
+  // Option 1 liveness coupling: only auto-kick pools the keeper can take.
+  if (kickPolicy && !takePolicy) {
     throw new Error(
-      'AutoDiscoverConfig: kick discovery is not supported in V1'
+      'AutoDiscoverConfig: kick discovery requires take discovery (Option 1: only auto-kick pools you can take)'
     );
   }
-  if (!takePolicy && !settlementPolicy) {
+  if (!takePolicy && !settlementPolicy && !kickPolicy) {
     throw new Error(
-      'AutoDiscoverConfig: enable at least one of take or settlement'
+      'AutoDiscoverConfig: enable at least one of take, settlement, or kick'
     );
   }
   requireOptionalNonNegative(
@@ -80,6 +86,45 @@ export function validateAutoDiscoverConfig(
   if (settlementPolicy) {
     validateAutoDiscoverSettlementPolicy(config, settlementPolicy, chainId);
   }
+
+  if (kickPolicy) {
+    validateAutoDiscoverKickPolicy(config, kickPolicy);
+  }
+}
+
+function validateAutoDiscoverKickPolicy(
+  config: KeeperConfig,
+  kickPolicy: AutoDiscoverKickPolicy
+): void {
+  requireOptionalPositiveInteger(
+    kickPolicy.maxPoolsPerRun,
+    'AutoDiscoverConfig.kick: maxPoolsPerRun must be a positive integer'
+  );
+  requireOptionalNonNegative(
+    kickPolicy.minThresholdPrice,
+    'AutoDiscoverConfig.kick: minThresholdPrice cannot be negative'
+  );
+  requireOptionalPositive(
+    kickPolicy.maxTotalBondExposure,
+    'AutoDiscoverConfig.kick: maxTotalBondExposure must be greater than 0'
+  );
+  // A per-pool bond cap is mandatory for live discovered kicks: it bounds the
+  // worst-case loss (one full bond) for every pool the keeper kicks in.
+  requirePositive(
+    kickPolicy.maxBondExposure,
+    'AutoDiscoverConfig.kick: maxBondExposure (per-pool bond cap) is required and must be greater than 0'
+  );
+
+  const discoveredKick = config.discovery?.defaults?.kick;
+  if (!discoveredKick?.enabled) {
+    throw new Error(
+      'AutoDiscoverConfig: enabled discovery.defaults.kick required when discovery.kick is enabled'
+    );
+  }
+  validateKickSettings(
+    discoveredKick,
+    'AutoDiscoverConfig.discovery.defaults.kick'
+  );
 }
 
 function validateAutoDiscoverTakePolicy(

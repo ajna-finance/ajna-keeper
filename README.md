@@ -8,9 +8,66 @@ A bot to automate liquidations on the Ajna platform.
 
 - Each instance of the keeper targets exactly one chain. The same keeper instance may interact with multiple pools on that chain.
 - Reads use a primary RPC plus optional read-RPC and subgraph failover endpoints. Take submission can optionally use a dedicated take-write transport.
-- Pools may be configured manually, and V1 autodiscovery can also discover chain-wide `take` and `settlement` targets. `kick` remains manual.
+- Pools may be configured manually, and autodiscovery can also discover chain-wide `take`, `settlement`, and `kick` targets. Discovered `kick` is coupled to take scope — the keeper only kicks where it can profitably take the auction it creates (see [Chain-wide kick discovery](#chain-wide-kick-discovery-auto-kick)).
 - Each instance of the keeper may unlock only a single wallet using a JSON keystore file. As such, if running multiple keepers on the same chain, different accounts should be used for each keeper to avoid nonce conflicts.
 - Kick, ArbTake, Take, Bond Collection, Reward LP Collection, and Settlement can all be enabled or disabled through the provided config. Manual per-pool config still overrides discovery defaults for the same action.
+
+## Chain-wide kick discovery (auto-kick)
+
+Beyond manual per-pool kicks, the keeper can discover and kick liquidatable loans across all pools on the chain. The model is **"kick to feed your own takes"**: the keeper only kicks a loan where it can profitably **arb-take** the auction it creates, so the kick bond is fed to its own take rather than orphaning.
+
+A discovered loan is kicked only when it passes, in order:
+
+1. **Reward gate** — `TP > LUP`, `debt >= minDebt`, `NP * priceFactor >= market` (neutral price exceeds market by a margin), and `NP >= HPB` (so a `bucketTake` can't penalize the bond).
+2. **Liveness gate** — the keeper's own arbTake into the pool's highest-meaningful bucket would clear **below NP** (rewarded, not penalized) with arb room vs market. Arb-only in v1: pools takeable solely via an external aggregator are not auto-kicked (their auctions are still taken if someone else kicks them).
+3. **Bond budget** — the bond fits under the per-pool `maxBondExposure` and the optional global `maxTotalBondExposure`.
+
+The kick bond is **real capital-at-risk** (returned in full at settle unless penalized), not a yield — the gates exist to avoid penalizing it. The discovered kick step runs after the manual kick loop and **skips manually configured pools** (manual config wins).
+
+### Enabling it
+
+Add a `kick` policy and `defaults.kick` under `discovery` — see [`examples/example-base-rollout-config.ts`](examples/example-base-rollout-config.ts). Validation requires take discovery enabled for the same scope, a per-pool `maxBondExposure`, and `priceFactor < 1`.
+
+```ts
+discovery: {
+  enabled: true,
+  take: { enabled: true, /* ... */ },          // required: only kick where you can take
+  kick: {
+    enabled: true,
+    maxPoolsPerRun: 3,
+    maxBondExposure: 50,                        // per-pool bond cap (quote token)
+    // maxTotalBondExposure: 200,               // optional global cap across pools
+  },
+  dryRunNewPools: true,                         // discovered kicks dry-run until cleared
+  defaults: {
+    take: { minCollateral: 0.01, hpbPriceFactor: 0.9 },  // arb settings the liveness gate reads
+    kick: { enabled: true, minDebt: 100, priceFactor: 0.9 },
+  },
+},
+```
+
+### Safety
+
+- **Dry-run by default.** Discovered kicks are suppressed while `runtime.dryRun` is true OR `discovery.dryRunNewPools` is true; going live requires both cleared. Watch the per-cycle kick-report (skip-reason histogram) in dry-run first.
+- **Bond caps.** `maxBondExposure` (per-pool, required) bounds the worst-case loss — a full bond — for every pool you kick in; `maxTotalBondExposure` caps the aggregate. Start small.
+- **Single process per signer.** The bond budget reads on-chain `kickerInfo.locked` as a baseline, so run only one keeper process per signer.
+- **Residual risk.** A third party can still `bucketTake` an auction you kicked at a bucket priced above NP and burn your bond, and a sharp market move after the kick can erode the margin. Size `priceFactor` and `maxBondExposure` conservatively and validate against real market data before scaling.
+- **Pricing reach.** Discovered pools are priced via Alchemy by token address; pools whose tokens Alchemy can't price are skipped (reported), not kicked.
+
+### Tuning in dry-run
+
+Before going live, observe what auto-kick *would* do against real data and size the knobs from the result:
+
+1. Run `examples/example-dry-run-kick-config.ts` — it is the rollout config with `runtime.dryRun` forced on, so every candidate is evaluated and logged but nothing executes:
+   ```
+   yarn start --config examples/example-dry-run-kick-config.ts | tee keeper-dryrun.log
+   ```
+2. Summarize the log into a would-kick count + the skip-reason histogram:
+   ```
+   npm run summarize-kick-report -- keeper-dryrun.log
+   ```
+
+The histogram tells you which gate to adjust: `neutral-below-market` dominating means `discovery.defaults.kick.priceFactor` is too wide (or the market sits above NP); `liveness-no-arb-room` means no arb profit at the current take config; `bond-budget-exceeded` means `maxBondExposure` / `maxTotalBondExposure` are too low. Adjust, re-observe, then graduate by clearing both `runtime.dryRun` and `discovery.dryRunNewPools`.
 
 ## Quick Setup
 

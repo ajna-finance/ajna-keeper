@@ -41,6 +41,7 @@ import {
   overrideGetLiquidations,
   overrideGetLoans,
 } from './no-spend/fixture-subgraph';
+import { runDiscoveredFixtureKick } from './no-spend/fixture-discovered-kick';
 import {
   runConfigLoadedDiscoverySmoke,
   type ConfigArtifact,
@@ -914,21 +915,40 @@ export async function main() {
       ? (await pool.kickerInfo(keeper.address)).locked
       : undefined;
 
-    await handleKicks({
-      pool,
-      poolConfig,
-      signer: keeper,
-      config: {
+    if (mode === 'discovery') {
+      // Exercise the chain-wide discovered (auto-)kick cycle against the fixture
+      // instead of the manual handleKicks path. Same dry-run flag; the cycle
+      // runs the reward + liveness + bond-budget gates and kicks if they pass.
+      // The on-chain effect is captured by the same kickArtifact reads below.
+      const discoveredKickReport = await runDiscoveredFixtureKick({
+        pool,
+        signer: keeper,
+        borrower: kickBorrower,
         dryRun,
-        coinGeckoApiKey: '',
-        subgraphUrl: FIXTURE_SUBGRAPH_SENTINEL_URL,
-        tokenAddresses: {
-          weth: summary.uniswapV3ExternalTake.routerConfig.wethAddress,
+        hpbPriceFactor: poolConfig.take.marketPriceFactor,
+      });
+      process.stdout.write(
+        `[harness] discovered kick cycle: kicked ${discoveredKickReport.kicked}, ` +
+          `${discoveredKickReport.candidatesConsidered} candidate(s); ` +
+          `skips ${JSON.stringify(discoveredKickReport.skippedByReason)}\n`
+      );
+    } else {
+      await handleKicks({
+        pool,
+        poolConfig,
+        signer: keeper,
+        config: {
+          dryRun,
+          coinGeckoApiKey: '',
+          subgraphUrl: FIXTURE_SUBGRAPH_SENTINEL_URL,
+          tokenAddresses: {
+            weth: summary.uniswapV3ExternalTake.routerConfig.wethAddress,
+          },
+          ethRpcUrl: summary.rpcUrl,
         },
-        ethRpcUrl: summary.rpcUrl,
-      },
-      chainId: 8453,
-    });
+        chainId: 8453,
+      });
+    }
 
     let kickArtifact: HarnessReport['kickArtifact'];
     if (

@@ -1,27 +1,28 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, constants } from 'ethers';
-import { EnabledKickSettings, PoolConfig, PriceOriginSource } from './config';
+import { EnabledKickSettings, PoolConfig, PriceOriginSource } from '../config';
 import {
   getAllowanceOfErc20,
   getBalanceOfErc20,
   getDecimalsErc20,
   convertWadToTokenDecimals,
-} from './erc20';
-import { logger } from './logging';
-import { getPrice } from './pricing';
+} from '../erc20';
+import { logger } from '../logging';
+import { getPrice, PriceUnavailableError } from '../pricing';
+import { evaluateKickEligibility } from './eligibility';
 import {
   decimaledToWei,
   RequireFields,
   tokenChangeDecimals,
   weiToDecimaled,
-} from './utils';
-import { poolKick, poolQuoteApprove } from './transactions';
+} from '../utils';
+import { poolKick, poolQuoteApprove } from '../transactions';
 import {
   resolveSubgraphConfig,
   SubgraphConfigInput,
   WithSubgraph,
-} from './read-transports';
-import { invalidateIdleBondCache } from './rewards/collect-bond';
+} from '../read-transports';
+import { invalidateIdleBondCache } from '../rewards/collect-bond';
 
 interface KickConfigBase {
   dryRun?: boolean;
@@ -103,6 +104,11 @@ interface LoanToKick {
   borrower: string;
   liquidationBond: BigNumber;
   estimatedRemainingBond: BigNumber;
+  /**
+   * Margin-adjusted price (market / priceFactor) used to derive the on-chain
+   * limitIndex floor, so `_kick`'s `NP >= _priceAt(limitIndex)` guard enforces
+   * the reward margin rather than just `NP >= market`.
+   */
   limitPrice: number;
 }
 
@@ -154,17 +160,30 @@ export async function* getLoansToKick({
       constants.Zero
     );
   // Fixed and CoinGecko kick references are pool-wide for the duration of a kick pass.
-  const staticLimitPrice =
-    poolConfig.price.source === PriceOriginSource.POOL
-      ? undefined
-      : await getPrice(
-          poolConfig.price,
-          resolvedConfig.coinGeckoApiKey,
-          undefined,
-          chainId,
-          resolvedConfig.ethRpcUrl,
-          resolvedConfig.tokenAddresses
-        );
+  let staticLimitPrice: number | undefined;
+  try {
+    staticLimitPrice =
+      poolConfig.price.source === PriceOriginSource.POOL
+        ? undefined
+        : await getPrice(
+            poolConfig.price,
+            resolvedConfig.coinGeckoApiKey,
+            undefined,
+            chainId,
+            resolvedConfig.ethRpcUrl,
+            resolvedConfig.tokenAddresses
+          );
+  } catch (error) {
+    // A pool-wide reference price that fails the price guard means the whole
+    // pass has no usable market reference; skip the pool rather than kick blind.
+    if (error instanceof PriceUnavailableError) {
+      logger.warn(
+        `Skipping kick pass for pool ${pool.name}: reference price unavailable: ${error.message}`
+      );
+      return;
+    }
+    throw error;
+  }
   let cachedPoolPrices: Awaited<ReturnType<typeof pool.getPrices>> | undefined;
   const getCachedPoolPrices = async () => {
     if (!cachedPoolPrices) {
@@ -173,11 +192,17 @@ export async function* getLoansToKick({
     return cachedPoolPrices;
   };
 
+  // Until a candidate is yielded (and possibly kicked by handleKicks before this
+  // generator resumes, advancing the inflator), reuse the batched pool.getLoans
+  // snapshot above instead of re-reading each loan on-chain.
+  let kickedThisPass = false;
   for (let i = 0; i < borrowersSortedByBond.length; i++) {
     const borrower = borrowersSortedByBond[i];
     const [poolPrices, loanDetails] = await Promise.all([
       getCachedPoolPrices(),
-      pool.getLoan(borrower),
+      kickedThisPass
+        ? pool.getLoan(borrower)
+        : Promise.resolve(loanMap.get(borrower)!),
     ]);
     const { lup, hpb } = poolPrices;
     const { thresholdPrice, liquidationBond, debt, neutralPrice } = loanDetails;
@@ -185,49 +210,49 @@ export async function* getLoansToKick({
       getSumEstimatedBond(borrowersSortedByBond.slice(i + 1))
     );
 
-    // If TP is lower than lup, the bond can not be kicked.
-    if (thresholdPrice.lt(lup)) {
-      logger.debug(
-        `Not kicking loan since TP is lower LUP. borrower: ${borrower}, TP: ${weiToDecimaled(thresholdPrice)}, LUP: ${weiToDecimaled(lup)}`
-      );
-      continue;
+    // Resolve the market reference. For FIXED/CoinGecko it is hoisted once per
+    // pass (staticLimitPrice); for POOL it is a cheap read of the cached pool
+    // prices. A price that fails the guard is a per-loan skip.
+    let marketPrice: number;
+    try {
+      marketPrice =
+        staticLimitPrice ??
+        (await getPrice(
+          poolConfig.price,
+          resolvedConfig.coinGeckoApiKey,
+          poolPrices,
+          chainId,
+          resolvedConfig.ethRpcUrl,
+          resolvedConfig.tokenAddresses
+        ));
+    } catch (error) {
+      if (error instanceof PriceUnavailableError) {
+        logger.debug(
+          `Not kicking loan (price-unavailable). pool: ${pool.name}, borrower: ${borrower}: ${error.message}`
+        );
+        continue;
+      }
+      throw error;
     }
 
-    // if loan debt is lower than configured fixed value (denominated in quote token), skip it
-    if (weiToDecimaled(debt) < poolConfig.kick.minDebt) {
+    // Single eligibility gate (TP>LUP, debt>=minDebt, NP reward margin, NP>=HPB
+    // floor) shared with the discovered kick path.
+    const evaluation = evaluateKickEligibility({
+      thresholdPrice,
+      lup,
+      hpb,
+      debt,
+      neutralPrice,
+      marketPrice,
+      minDebt: poolConfig.kick.minDebt,
+      priceFactor: poolConfig.kick.priceFactor,
+    });
+    if (!evaluation.eligible) {
       logger.debug(
-        `Not kicking loan since debt is too low. pool: ${pool.name}, borrower: ${borrower}, debt: ${weiToDecimaled(debt)}, minDebt: ${poolConfig.kick.minDebt}`
-      );
-      continue;
-    }
-
-    /*
-    // Only kick loans with a neutralPrice above hpb to ensure they are profitalbe.
-    if (neutralPrice.lt(hpb)) {
-      logger.debug(
-        `Not kicking loan since (NP < HPB). pool: ${pool.name}, borrower: ${borrower}, NP: ${neutralPrice}, hpb: ${hpb}`
-      );
-      continue;
-    }
-    */
-
-    // Only kick loans with a neutralPrice above price (with some margin) to ensure they are profitable.
-    const limitPrice =
-      staticLimitPrice ??
-      (await getPrice(
-        poolConfig.price,
-        resolvedConfig.coinGeckoApiKey,
-        poolPrices,
-        chainId,
-        resolvedConfig.ethRpcUrl,
-        resolvedConfig.tokenAddresses
-      ));
-    if (
-      weiToDecimaled(neutralPrice) * poolConfig.kick.priceFactor <
-      limitPrice
-    ) {
-      logger.debug(
-        `Not kicking loan since (NP * Factor < Price). pool: ${pool.name}, borrower: ${borrower}, NP: ${weiToDecimaled(neutralPrice)}, Price: ${limitPrice}`
+        `Not kicking loan (${evaluation.reason}). pool: ${pool.name}, borrower: ${borrower}, ` +
+          `TP: ${weiToDecimaled(thresholdPrice)}, LUP: ${weiToDecimaled(lup)}, ` +
+          `NP: ${weiToDecimaled(neutralPrice)}, HPB: ${weiToDecimaled(hpb)}, ` +
+          `debt: ${weiToDecimaled(debt)}, market: ${marketPrice}`
       );
       continue;
     }
@@ -236,11 +261,15 @@ export async function* getLoansToKick({
       borrower,
       liquidationBond,
       estimatedRemainingBond,
-      limitPrice,
+      // Margin-adjusted price (market / priceFactor): drives the on-chain
+      // limitIndex floor so the kick enforces the reward margin, not just
+      // NP >= market.
+      limitPrice: evaluation.marginPrice,
     };
     // A yielded candidate may be kicked before this generator resumes, which can
-    // move pool prices. Reuse cached prices only across skipped borrowers.
+    // move pool prices and accrue interest. Re-read fresh prices + loans after.
     cachedPoolPrices = undefined;
+    kickedThisPass = true;
   }
 }
 

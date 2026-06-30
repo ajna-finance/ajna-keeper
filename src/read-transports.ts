@@ -4,6 +4,7 @@ import { getResilientReadGasPrice } from './read-rpc';
 import subgraph, {
   GetBucketTakeLPAwardsResponse,
   GetChainwideLiquidationAuctionsResponse,
+  GetChainwideKickableLoansResponse,
   GetLiquidationResponse,
   GetLoanResponse,
   GetMeaningfulBucketResponse,
@@ -44,6 +45,11 @@ export interface SubgraphReader {
     pageSize?: number,
     maxPages?: number
   ): Promise<GetChainwideLiquidationAuctionsResponse>;
+  getChainwideKickableLoans(
+    pageSize?: number,
+    maxPages?: number,
+    minThresholdPrice?: string
+  ): Promise<GetChainwideKickableLoansResponse>;
   getBucketTakeLPAwards(
     signerAddress: string,
     cursorBlockTimestamp: string
@@ -139,6 +145,17 @@ export function createSubgraphReader(
         config.subgraphUrl,
         pageSize,
         maxPages,
+        {
+          fallbackUrls: config.subgraphFallbackUrls,
+        }
+      );
+    },
+    getChainwideKickableLoans(pageSize, maxPages, minThresholdPrice) {
+      return subgraph.getChainwideKickableLoans(
+        config.subgraphUrl,
+        pageSize,
+        maxPages,
+        minThresholdPrice,
         {
           fallbackUrls: config.subgraphFallbackUrls,
         }

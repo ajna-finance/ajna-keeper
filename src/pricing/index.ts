@@ -7,6 +7,7 @@ import { getPriceCoinGecko } from './coingecko';
 import { weiToDecimaled } from '../utils';
 import { PriceInfo } from '@ajna-finance/sdk';
 import { logger } from '../logging';
+import { assertFinitePositivePrice } from './price-guard';
 
 // Retrieves the market price using the configured source
 export async function getPrice(
@@ -40,16 +41,21 @@ export async function getPrice(
     default:
       throw new Error('Unknown price provider:' + (priceOrigin as any).source);
   }
-  if (priceOrigin.invert) {
-    const inverted = price !== 0 ? 1 / price : 0;
-    logger.debug(
-      `Price resolved: ${inverted} (source: ${priceOrigin.source}, inverted from ${price})`
-    );
-    return inverted;
-  } else {
-    logger.debug(`Price resolved: ${price} (source: ${priceOrigin.source})`);
-    return price;
-  }
+  // Single price-boundary guard: whatever the source/invert combination, the
+  // value that leaves getPrice must be finite and strictly positive, so a 0 /
+  // NaN / Infinity / negative can never silently drive a kick or take gate. The
+  // invert path keeps its divide-by-zero guard, but a 0 input now fails the
+  // assertion below rather than returning a degenerate 0.
+  const resolved = priceOrigin.invert ? (price !== 0 ? 1 / price : 0) : price;
+  logger.debug(
+    `Price resolved: ${resolved} (source: ${priceOrigin.source}${
+      priceOrigin.invert ? `, inverted from ${price}` : ''
+    })`
+  );
+  return assertFinitePositivePrice(
+    resolved,
+    `source=${priceOrigin.source}${priceOrigin.invert ? ' (inverted)' : ''}`
+  );
 }
 
 export async function getPoolPrice(
@@ -77,3 +83,4 @@ export async function getPoolPrice(
 }
 
 export { getPriceCoinGecko } from './coingecko';
+export { PriceUnavailableError } from './price-guard';

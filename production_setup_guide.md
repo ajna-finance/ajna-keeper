@@ -642,7 +642,7 @@ Universal Router remains optional for code paths that explicitly use Universal R
 
 - No API rate limits (direct pool contract interaction)
 - May have RPC rate limits depending on provider
-- V1 auto-discovery can find live `take` and `settlement` work chain-wide, but Curve routing still needs explicit `dex.curve.poolConfigs` and `network.tokenAddresses`
+- V1 auto-discovery can find live `take`, `settlement`, and (pre-auction) `kick` work chain-wide, but Curve routing still needs explicit `dex.curve.poolConfigs` and `network.tokenAddresses`
 
 **Goldsky:**
 
@@ -670,19 +670,23 @@ For discovered external takes, use `discovery.take.oneInchQuoteTimeoutMs`, `exte
 
 ### Auto-Discovery Rollout (V1)
 
-V1 auto-discovery is auction-first: the keeper scans chain-wide liquidation activity, hydrates only pools with live work, and then feeds discovered targets into the existing `take` and `settlement` execution paths. `kick` remains manual in V1.
+V1 auto-discovery is auction-first for `take` and `settlement`: the keeper scans chain-wide liquidation activity, hydrates only pools with live work, and feeds discovered targets into the existing `take` and `settlement` execution paths. Chain-wide `kick` discovery (`discovery.kick`) is also available, but it is **pre-auction**: it sources kickable loans directly and kicks only where the keeper can profitably arb-take the auction it creates (Option 1 — "kick to feed your own takes"). It is coupled to take scope, gated by a mandatory per-pool bond cap, and dry-run by default. See [Chain-wide kick discovery (auto-kick)](./README.md#chain-wide-kick-discovery-auto-kick).
 
 - `discovery` holds shared discovery controls such as allow/deny lists, `dryRunNewPools`, and hydration cooldowns.
 - `discovery.take` and `discovery.settlement` carry separate per-action limits.
+- `discovery.kick` carries the chain-wide kick limits (`maxBondExposure` is required; optional `maxTotalBondExposure`, `maxPoolsPerRun`, `minThresholdPrice`). It requires `discovery.take` and reads `discovery.defaults.take`'s arb settings (`minCollateral`, `hpbPriceFactor`) for the liveness gate.
 - `discovery.defaults.take` defines how newly discovered pools should run `take`.
 - `discovery.defaults.settlement` defines how newly discovered pools should run `settlement`.
-- `manual.pools[]` entries still control `kick`, LP reward collection, bond collection, and per-action overrides.
+- `discovery.defaults.kick` defines the per-pool reward gate (`minDebt`, `priceFactor` < 1) applied to every discovered kick candidate.
+- `manual.pools[]` entries still control per-pool `kick`, LP reward collection, bond collection, and per-action overrides. Discovered `kick` covers only pools that are NOT in `manual.pools[]` (manual-wins dedup).
 
 Operationally, discovered `take` refreshes one shared in-memory chain-wide auction snapshot when `discovery.take` is enabled. Discovered `settlement` reuses that snapshot instead of issuing its own chain-wide discovery scan, which keeps background subgraph traffic tied to the `take` cadence in the common case. If you run settlement-only discovery, the settlement loop refreshes the snapshot on its own slower cadence. The snapshot is not persisted across restarts; discovered settlement resumes after the next discovery refresh for the actions you enabled.
 
 Chain-wide discovery paginates automatically in 100-auction pages, up to 100 pages per refresh, so crossing 100 active auctions does not require any operator action.
 
 Use [`examples/example-base-rollout-config.ts`](./examples/example-base-rollout-config.ts) as the conservative starting point for the first live rollout.
+
+Discovered `kick` (auto-kick) is the highest-risk discovered action because it posts real bond. Enable it only after discovered `take` is working: keep `runtime.dryRun` / `discovery.dryRunNewPools` on, run [`examples/example-dry-run-kick-config.ts`](./examples/example-dry-run-kick-config.ts), and size `discovery.defaults.kick.priceFactor` and `discovery.kick.maxBondExposure` from `npm run summarize-kick-report` (the skip-reason histogram) before clearing both dry-run flags.
 
 Recommended rollout order:
 

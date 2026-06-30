@@ -361,11 +361,30 @@ export interface AutoDiscoverTakePolicy extends AutoDiscoverActionPolicy {
 export interface AutoDiscoverSettlementPolicy
   extends AutoDiscoverActionPolicy {}
 
+export interface AutoDiscoverKickPolicy extends AutoDiscoverActionPolicy {
+  /**
+   * Per-pool cap on bond at risk, in the pool's quote token (decimaled).
+   * Required for live discovered kicks — bounds worst-case loss per pool.
+   */
+  maxBondExposure?: number;
+  /**
+   * Optional global cap on total bond at risk across all discovered pools, in a
+   * single normalized unit (e.g. USD). When set, the kick cycle normalizes each
+   * pool's bond via its quote price before charging this cap.
+   */
+  maxTotalBondExposure?: number;
+  /**
+   * Coarse subgraph-side thresholdPrice floor for the chain-wide kickable-loans
+   * pre-filter. The precise TP > LUP gate is per-pool on-chain at hydration.
+   */
+  minThresholdPrice?: number;
+}
+
 export interface AutoDiscoverConfig {
   enabled: boolean;
   take?: boolean | AutoDiscoverTakePolicy;
   settlement?: boolean | AutoDiscoverSettlementPolicy;
-  kick?: boolean;
+  kick?: boolean | AutoDiscoverKickPolicy;
   allowPools?: Address[];
   denyPools?: Address[];
   dryRunNewPools?: boolean;
@@ -403,6 +422,12 @@ export function getAutoDiscoverSettlementPolicy(
   return normalizeAutoDiscoverActionPolicy(autoDiscover?.settlement);
 }
 
+export function getAutoDiscoverKickPolicy(
+  autoDiscover?: AutoDiscoverConfig
+): AutoDiscoverKickPolicy | undefined {
+  return normalizeAutoDiscoverActionPolicy(autoDiscover?.kick);
+}
+
 export function hasExternalTakeSettings(config: TakeSettings): boolean {
   return (
     config.liquiditySource !== undefined &&
@@ -419,6 +444,7 @@ export function hasNonEmptyObject(
 export interface DiscoveredDefaultsConfig {
   take?: TakeSettings;
   settlement?: SettlementConfig;
+  kick?: KickSettings;
 }
 
 export interface DiscoveryConfig extends AutoDiscoverConfig {
