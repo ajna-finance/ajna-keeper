@@ -57,6 +57,42 @@ async function resolveHmbPrice(
 }
 
 /**
+ * The pool's market price (collateral in quote units), resolved once per pool.
+ * Returns undefined when it cannot be priced (Alchemy gap or the price guard) so
+ * the caller skips the pool's loans. The price is pool-level, so resolving it
+ * here — once in hydratePool — avoids one Alchemy Prices call per kickable loan.
+ */
+async function resolvePoolMarketPrice(
+  pool: FungiblePool,
+  chainId: number | undefined,
+  rpcUrl: string
+): Promise<number | undefined> {
+  if (chainId === undefined) {
+    return undefined;
+  }
+  try {
+    return assertFinitePositivePrice(
+      await getPoolPriceFromAlchemy(
+        pool.quoteAddress,
+        pool.collateralAddress,
+        chainId,
+        rpcUrl
+      ),
+      `discovered kick pool ${pool.poolAddress}`
+    );
+  } catch (error) {
+    logger.debug(
+      `No market price for discovered kick pool ${pool.poolAddress}: ${
+        error instanceof PriceUnavailableError
+          ? error.message
+          : getErrorMessage(error)
+      }`
+    );
+    return undefined;
+  }
+}
+
+/**
  * The daemon's chain-wide discovered-kick step (Option 1): build the real
  * hydration + submit deps and run them through the shared kick cycle. Kept out
  * of run.ts so the daemon loop stays a thin dispatcher and this wiring lives
@@ -98,6 +134,10 @@ export async function runDiscoveredKickStep({
   const manualPools = new Set(
     getManualPools(config).map((pool) => pool.address.toLowerCase())
   );
+  // Per-pool market price, resolved once in hydratePool and read by hydrateLoan,
+  // so a pool with K kickable loans makes ONE Alchemy Prices call, not K.
+  // undefined => the pool could not be priced; its loans skip (price-unavailable).
+  const marketPriceByPool = new Map<string, number | undefined>();
 
   const report = await runDiscoveredKickCycle({
     subgraph,
@@ -121,10 +161,12 @@ export async function runDiscoveredKickStep({
       if (!pool) {
         return undefined;
       }
-      const [prices, kickerInfo] = await Promise.all([
+      const [prices, kickerInfo, marketPrice] = await Promise.all([
         pool.getPrices(),
         pool.kickerInfo(signerAddress),
+        resolvePoolMarketPrice(pool, chainId, rpcUrl),
       ]);
+      marketPriceByPool.set(poolAddress.toLowerCase(), marketPrice);
       const hmbPrice =
         takeDefaults.minCollateral !== undefined
           ? await resolveHmbPrice(
@@ -148,31 +190,13 @@ export async function runDiscoveredKickStep({
         poolMap,
         pool.poolAddress
       );
-      if (!fungiblePool || chainId === undefined) {
+      // Read the pool's market price resolved once in hydratePool. undefined =>
+      // the pool couldn't be priced, so its loans skip (price-unavailable).
+      const marketPrice = marketPriceByPool.get(pool.poolAddress.toLowerCase());
+      if (!fungiblePool || chainId === undefined || marketPrice === undefined) {
         return undefined;
       }
       const loanDetails = await fungiblePool.getLoan(borrower);
-      let marketPrice: number;
-      try {
-        marketPrice = assertFinitePositivePrice(
-          await getPoolPriceFromAlchemy(
-            fungiblePool.quoteAddress,
-            fungiblePool.collateralAddress,
-            chainId,
-            rpcUrl
-          ),
-          `discovered kick pool ${pool.poolAddress}`
-        );
-      } catch (error) {
-        logger.debug(
-          `Skipping discovered kick (no market price) for ${pool.poolAddress}/${borrower}: ${
-            error instanceof PriceUnavailableError
-              ? error.message
-              : getErrorMessage(error)
-          }`
-        );
-        return undefined;
-      }
       return {
         thresholdPrice: loanDetails.thresholdPrice,
         debt: loanDetails.debt,

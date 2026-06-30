@@ -81,24 +81,32 @@ async function setupUnkickedFixture(): Promise<{
 // SubgraphReader stub: only getChainwideKickableLoans (the discovery source) and
 // getHighestMeaningfulBucket (HMB, from the on-chain pool) are exercised by the
 // discovered kick step; the rest is unused on this path.
-function buildSubgraph(pool: FungiblePool): SubgraphReader {
+function buildSubgraph(
+  pool: FungiblePool,
+  borrowers: string[] = [BORROWER]
+): SubgraphReader {
   const hmb = makeGetHighestMeaningfulBucket(pool);
   return {
     getChainwideKickableLoans: async () => {
-      const loan = await pool.getLoan(BORROWER);
-      if (loan.isKicked) {
-        return { loans: [] };
+      const loans: Array<{
+        id: string;
+        borrower: string;
+        thresholdPrice: number;
+        pool: { id: string };
+      }> = [];
+      for (const borrower of borrowers) {
+        const loan = await pool.getLoan(borrower);
+        if (borrower === BORROWER && loan.isKicked) {
+          continue; // already in auction -> not kickable
+        }
+        loans.push({
+          id: `${pool.poolAddress}-${borrower}`,
+          borrower,
+          thresholdPrice: weiToDecimaled(loan.thresholdPrice),
+          pool: { id: pool.poolAddress },
+        });
       }
-      return {
-        loans: [
-          {
-            id: `${pool.poolAddress}-${BORROWER}`,
-            borrower: BORROWER,
-            thresholdPrice: weiToDecimaled(loan.thresholdPrice),
-            pool: { id: pool.poolAddress },
-          },
-        ],
-      };
+      return { loans };
     },
     getHighestMeaningfulBucket: (poolAddress: string, minDeposit: string) =>
       hmb('', poolAddress, minDeposit),
@@ -152,7 +160,8 @@ function buildConfig(opts: {
 async function runProcessKickCycle(
   pool: FungiblePool,
   kicker: Wallet,
-  config: KeeperConfig
+  config: KeeperConfig,
+  borrowers: string[] = [BORROWER]
 ): Promise<void> {
   // Pre-seed the pool so ensurePoolLoaded short-circuits (no factory check).
   const poolMap: PoolMap = new Map();
@@ -164,7 +173,7 @@ async function runProcessKickCycle(
     config,
     signer: kicker,
     chainId: 1,
-    subgraph: buildSubgraph(pool),
+    subgraph: buildSubgraph(pool, borrowers),
     ajna: new AjnaSDK(getProvider()),
     hydrationCooldowns,
   });
@@ -226,6 +235,29 @@ describe('processKickCycle discovered-step glue (fork)', function () {
 
     expect(await kickTimeOf(pool), 'manual pool should be skipped by discovery').to
       .be.false;
+  });
+
+  it('resolves the pool market price once per pool, not once per loan', async () => {
+    const { pool, kicker, np } = await setupUnkickedFixture();
+    let alchemyCalls = 0;
+    restoreAlchemy = stubAlchemyPrice(async () => {
+      alchemyCalls += 1;
+      return np * 0.25;
+    });
+
+    // Two kickable rows in the SAME pool (the real borrower + a dummy). The
+    // market price is pool-level, so it must be fetched once, not per loan.
+    const dummyBorrower = '0x000000000000000000000000000000000000dEaD';
+    await runProcessKickCycle(pool, kicker, buildConfig({ dryRun: false }), [
+      BORROWER,
+      dummyBorrower,
+    ]);
+
+    expect(
+      alchemyCalls,
+      'one Alchemy price per pool regardless of loan count'
+    ).to.equal(1);
+    expect(await kickTimeOf(pool), 'the real loan still kicks').to.be.true;
   });
 
   it('fails closed on an unavailable Alchemy price (no kick)', async () => {
