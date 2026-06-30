@@ -54,6 +54,21 @@ discovery: {
 - **Residual risk.** A third party can still `bucketTake` an auction you kicked at a bucket priced above NP and burn your bond, and a sharp market move after the kick can erode the margin. Size `priceFactor` and `maxBondExposure` conservatively and validate against real market data before scaling.
 - **Pricing reach.** Discovered pools are priced via Alchemy by token address; pools whose tokens Alchemy can't price are skipped (reported), not kicked.
 
+### Tuning in dry-run
+
+Before going live, observe what auto-kick *would* do against real data and size the knobs from the result:
+
+1. Run `examples/example-dry-run-kick-config.ts` — it is the rollout config with `runtime.dryRun` forced on, so every candidate is evaluated and logged but nothing executes:
+   ```
+   yarn start --config examples/example-dry-run-kick-config.ts | tee keeper-dryrun.log
+   ```
+2. Summarize the log into a would-kick count + the skip-reason histogram:
+   ```
+   npm run summarize-kick-report -- keeper-dryrun.log
+   ```
+
+The histogram tells you which gate to adjust: `neutral-below-market` dominating means `discovery.defaults.kick.priceFactor` is too wide (or the market sits above NP); `liveness-no-arb-room` means no arb profit at the current take config; `bond-budget-exceeded` means `maxBondExposure` / `maxTotalBondExposure` are too low. Adjust, re-observe, then graduate by clearing both `runtime.dryRun` and `discovery.dryRunNewPools`.
+
 ## Quick Setup
 
 You must setup one bot per-chain, per-signer.
