@@ -24,6 +24,11 @@
 # src/ or scripts/ (e.g. scripts/no-spend/config-smoke.ts was lost this way).
 /config*.json
 /config*.ts
+# Local-only configs that embed real deployed infra addresses (taker/router/
+# deployer). Keep on disk for convenience but NEVER commit — they fingerprint
+# operator infra. Use the `.local.config.ts` suffix, e.g.
+# examples/lifi-canary-base-production.local.config.ts
+*.local.config.ts
 # ajna-audit / cross-review skill output artifacts (never commit; a `git add -A`
 # previously swept these in by accident)
 .ajna-audit/
