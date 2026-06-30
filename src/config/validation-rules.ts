@@ -111,7 +111,7 @@ export function validateDecimalStringBigInt(
   }
 }
 
-function requirePositive(value: unknown, message: string): void {
+export function requirePositive(value: unknown, message: string): void {
   if (!isFiniteNumber(value) || value <= 0) {
     throw new Error(message);
   }

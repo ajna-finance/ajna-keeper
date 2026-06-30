@@ -35,6 +35,7 @@ import {
   requireOptionalNonNegative,
   requireOptionalPositive,
   requireOptionalPositiveInteger,
+  requirePositive,
   validateDecimalStringBigInt,
   validateExternalTakeRouteSelectionMode,
   validateExternalTakeTransportPolicy,
@@ -109,15 +110,10 @@ function validateAutoDiscoverKickPolicy(
   );
   // A per-pool bond cap is mandatory for live discovered kicks: it bounds the
   // worst-case loss (one full bond) for every pool the keeper kicks in.
-  requireOptionalPositive(
+  requirePositive(
     kickPolicy.maxBondExposure,
-    'AutoDiscoverConfig.kick: maxBondExposure must be greater than 0'
+    'AutoDiscoverConfig.kick: maxBondExposure (per-pool bond cap) is required and must be greater than 0'
   );
-  if (kickPolicy.maxBondExposure === undefined) {
-    throw new Error(
-      'AutoDiscoverConfig.kick: maxBondExposure (per-pool bond cap) is required'
-    );
-  }
 
   const discoveredKick = config.discovery?.defaults?.kick;
   if (!discoveredKick?.enabled) {
