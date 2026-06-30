@@ -5,6 +5,7 @@ import * as erc20 from '../../src/erc20';
 import {
   createArbTakeStrategy,
   resolveSelfKickNpCeiling,
+  resetSelfKickNpCeilingCache,
 } from '../../src/take/arb-strategy';
 
 // P2 self-penalty wiring: the take path caps its own arbTake bucket at the
@@ -12,6 +13,7 @@ import {
 // auctionInfo: kicker + neutralPrice), so a bucketTake can never clear above NP
 // and penalize the keeper's bond. Auctions kicked by others are uncapped.
 describe('resolveSelfKickNpCeiling', () => {
+  beforeEach(() => resetSelfKickNpCeilingCache());
   afterEach(() => sinon.restore());
 
   const makePool = (kicker: string, neutralPriceWad = ethers.utils.parseEther('7')) =>
@@ -57,9 +59,68 @@ describe('resolveSelfKickNpCeiling', () => {
     );
     expect(ceiling).to.equal(undefined);
   });
+
+  const makeCountedPool = () => {
+    const auctionInfo = sinon.stub().resolves({
+      kicker_: '0xbot',
+      neutralPrice_: ethers.utils.parseEther('7'),
+    });
+    return {
+      pool: { name: 'NP Pool', poolAddress: '0xPool', contract: { auctionInfo } } as any,
+      auctionInfo,
+    };
+  };
+
+  it('caches the per-auction ceiling while collateral is non-increasing', async () => {
+    const { pool, auctionInfo } = makeCountedPool();
+    const s = signer('0xbot');
+
+    const first = await resolveSelfKickNpCeiling(
+      pool,
+      s,
+      '0xBorrower',
+      ethers.utils.parseEther('100')
+    );
+    const second = await resolveSelfKickNpCeiling(
+      pool,
+      s,
+      '0xBorrower',
+      ethers.utils.parseEther('60') // collateral decreased -> same auction
+    );
+
+    expect(first).to.equal(7);
+    expect(second).to.equal(7);
+    expect(auctionInfo.calledOnce, 'second call served from cache').to.equal(
+      true
+    );
+  });
+
+  it('re-reads when collateral increases (settle + re-kick of the same borrower)', async () => {
+    const { pool, auctionInfo } = makeCountedPool();
+    const s = signer('0xbot');
+
+    await resolveSelfKickNpCeiling(
+      pool,
+      s,
+      '0xBorrower',
+      ethers.utils.parseEther('100')
+    );
+    await resolveSelfKickNpCeiling(
+      pool,
+      s,
+      '0xBorrower',
+      ethers.utils.parseEther('150') // collateral jumped up -> a new auction
+    );
+
+    expect(
+      auctionInfo.calledTwice,
+      'collateral increase invalidated the cache'
+    ).to.equal(true);
+  });
 });
 
 describe('evaluateArbTake applies the NP ceiling for self-kicked auctions', () => {
+  beforeEach(() => resetSelfKickNpCeilingCache());
   afterEach(() => sinon.restore());
 
   // hmbPrice=10, factor=0.9 -> uncapped threshold 9. Auction price 8 is below 9

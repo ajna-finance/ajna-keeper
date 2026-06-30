@@ -2,6 +2,8 @@ import { HARDHAT_RPC_URL, MAINNET_CONFIG } from './test-config';
 import { delay } from '../../src/utils';
 import { FeeData, JsonRpcProvider } from '../../src/provider';
 import { NonceTracker } from '../../src/nonce';
+import { resetSelfKickNpCeilingCache } from '../../src/take/arb-strategy';
+import { resetPriceCaches } from '../../src/pricing/price-cache';
 import { ethers, network } from 'hardhat';
 import { BigNumber, providers } from 'ethers';
 import { decimaledToWei } from '../../src/utils';
@@ -121,6 +123,10 @@ export const resetHardhat = async () => {
         await waitForBlockReset(provider, resetBlockNumber);
       }
       NonceTracker.clearNonces();
+      // The chain reset above invalidates any in-memory price / self-kick NP
+      // caches keyed by pool+borrower; clear them so a fresh fork starts clean.
+      resetSelfKickNpCeilingCache();
+      resetPriceCaches();
       return;
     } catch (error) {
       lastError = error;

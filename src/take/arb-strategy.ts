@@ -43,6 +43,27 @@ export function isArbTakeStrategyEnabled(
   );
 }
 
+// kicker_ and neutralPrice_ are immutable for an auction's whole life, yet the
+// take loop re-reads auctionInfo for the same auction every cycle for hours.
+// Cache the resolved ceiling per (pool, borrower) and reuse it while the auction
+// is unchanged. The ONLY way the values change is settle + re-kick (a new
+// auction reusing the same key); collateral is monotonically non-increasing
+// within an auction, so a collateral INCREASE is a reliable re-kick signal, and
+// a TTL backstop bounds the rare case where the reset is missed between cycles.
+const NP_CEILING_TTL_MS = 300_000; // 5 min backstop
+
+interface NpCeilingCacheEntry {
+  npCeiling: number | undefined; // number = self-kicked NP cap; undefined = not self-kicked
+  collateral: BigNumber; // last-seen auction collateral
+  expiresAt: number;
+}
+const npCeilingCache = new Map<string, NpCeilingCacheEntry>();
+
+/** Test helper: drop the cached self-kick NP ceilings (module-level state). */
+export function resetSelfKickNpCeilingCache(): void {
+  npCeilingCache.clear();
+}
+
 /**
  * For a self-kicked auction the keeper's own arbTake reward keys off the bucket
  * price vs the auction neutralPrice: a bucketTake above NP penalizes the bond.
@@ -51,21 +72,47 @@ export function isArbTakeStrategyEnabled(
  * side-table), and undefined for auctions kicked by anyone else (no cap — taking
  * above their NP is their risk and our profit). Falls back to undefined
  * (uncapped) when auctionInfo can't be read, preserving liveness.
+ *
+ * `collateral` (the candidate's current collateral) enables a per-auction cache:
+ * the immutable result is reused until the collateral increases (settle+re-kick)
+ * or the TTL elapses. Omit it to always read fresh.
  */
 export async function resolveSelfKickNpCeiling(
   pool: FungiblePool,
   signer: Signer,
-  borrower: string
+  borrower: string,
+  collateral?: BigNumber
 ): Promise<number | undefined> {
+  if (collateral !== undefined) {
+    const key = `${pool.poolAddress.toLowerCase()}:${borrower.toLowerCase()}`;
+    const cached = npCeilingCache.get(key);
+    if (
+      cached &&
+      Date.now() < cached.expiresAt &&
+      collateral.lte(cached.collateral)
+    ) {
+      cached.collateral = collateral; // track the auction's decreasing collateral
+      return cached.npCeiling;
+    }
+  }
   try {
     const [botAddress, auctionInfo] = await Promise.all([
       signer.getAddress(),
       pool.contract.auctionInfo(borrower),
     ]);
-    if (auctionInfo.kicker_.toLowerCase() !== botAddress.toLowerCase()) {
-      return undefined;
+    const npCeiling =
+      auctionInfo.kicker_.toLowerCase() === botAddress.toLowerCase()
+        ? Number(weiToDecimaled(auctionInfo.neutralPrice_))
+        : undefined;
+    if (collateral !== undefined) {
+      const key = `${pool.poolAddress.toLowerCase()}:${borrower.toLowerCase()}`;
+      npCeilingCache.set(key, {
+        npCeiling,
+        collateral,
+        expiresAt: Date.now() + NP_CEILING_TTL_MS,
+      });
     }
-    return Number(weiToDecimaled(auctionInfo.neutralPrice_));
+    return npCeiling;
   } catch (error) {
     logger.debug(
       `Could not resolve self-kick NP ceiling for ${pool.name}/${borrower}; leaving arbTake uncapped: ${getErrorMessage(error)}`
@@ -120,8 +167,15 @@ export function createArbTakeStrategy<
         : 0;
 
       // Cap the arb bucket at NP for auctions this keeper kicked, so its own
-      // bucketTake cannot clear above NP and penalize its bond.
-      const npCeiling = await resolveSelfKickNpCeiling(pool, signer, borrower);
+      // bucketTake cannot clear above NP and penalize its bond. Pass collateral
+      // so the immutable {kicker, NP} is cached per auction (re-read only on a
+      // collateral increase = re-kick, or the TTL backstop).
+      const npCeiling = await resolveSelfKickNpCeiling(
+        pool,
+        signer,
+        borrower,
+        collateral
+      );
 
       return checkIfArbTakeable(
         pool,
