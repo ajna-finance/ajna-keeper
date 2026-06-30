@@ -1,17 +1,6 @@
 import { BigNumber } from 'ethers';
 import { weiToDecimaled } from './utils';
-
-/**
- * Why a kickable-loan candidate was not kicked. Shared across the kick gates so
- * the kick cycle can aggregate a typed skip histogram instead of matching
- * free-form strings. The liveness (P3) and budget (P5) gates extend this union.
- */
-export type KickSkipReason =
-  | 'collateralized' // thresholdPrice <= LUP: loan is not yet liquidatable
-  | 'debt-below-min' // debt < configured minDebt
-  | 'neutral-below-market' // NP < market/priceFactor: reward margin not met
-  | 'neutral-below-hpb' // NP < HPB: a bucketTake could penalize the bond
-  | 'price-unavailable'; // the resolved market price failed the price guard
+import { KickSkipReason } from './kick-skip-reason';
 
 export interface KickEligibilityInput {
   /** loan thresholdPrice, WAD (quote per collateral). */
