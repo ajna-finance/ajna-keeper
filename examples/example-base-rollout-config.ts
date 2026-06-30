@@ -77,6 +77,25 @@ const config: KeeperConfig = {
         // native->quote conversion across mixed quote assets.
         // maxGasCostQuote: 1,
       },
+      // Chain-wide kick discovery ("kick to feed your own takes"). The keeper
+      // finds kickable loans across ALL pools and kicks only where it can
+      // profitably arb-take the auction it creates (the liveness gate), so the
+      // bond is fed to its own take rather than orphaning. Requires take
+      // discovery (above) plus discovery.defaults.take's arb settings
+      // (minCollateral + hpbPriceFactor) for the liveness check, and a per-pool
+      // bond cap below.
+      //
+      // SAFETY: the kick bond is real capital-at-risk (returned at settle unless
+      // penalized), NOT a yield. Discovered kicks are DRY-RUN by default
+      // (dryRunNewPools below) until you clear it AND set runtime.dryRun=false.
+      // Start with a small maxBondExposure and watch the kick-report skips.
+      kick: {
+        enabled: true,
+        maxPoolsPerRun: 3, // cap distinct pools kicked per cycle
+        maxBondExposure: 50, // REQUIRED: per-pool cap on bond at risk, in the pool's quote token
+        // maxTotalBondExposure: 200, // optional global cap across pools (normalized unit; coherent for single-quote-token setups)
+        // minThresholdPrice: 0, // coarse subgraph-side pre-filter for the chain-wide kickable query
+      },
       dryRunNewPools: true,
       logSkips: true,
       hydrateCooldownSec: 900,
@@ -101,6 +120,12 @@ const config: KeeperConfig = {
         maxBucketDepth: 25,
         maxIterations: 5,
         checkBotIncentive: true,
+      },
+      kick: {
+        // The per-pool reward gate applied to every discovered pool.
+        enabled: true,
+        minDebt: 100, // skip loans below this debt (quote token)
+        priceFactor: 0.9, // MUST be < 1: NP must exceed market by 1/priceFactor (the reward margin)
       },
     },
   },
