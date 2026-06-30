@@ -42,26 +42,43 @@ function getCoinGeckoErrorMessage(
   );
 }
 
-function extractCoinGeckoPrice(response: unknown): number | undefined {
-  if (!response || typeof response !== 'object') return undefined;
-  const firstEntry = Object.values(response)[0];
-  if (!firstEntry || typeof firstEntry !== 'object') return undefined;
-  const firstValue = Object.values(firstEntry)[0];
-  // Require a strictly positive number: CoinGecko can return 0 for an unknown
-  // or unpriced token, which is invalid as a price and would later produce a
-  // divide-by-zero (Infinity) in getPoolPrice. Treat 0/negative as "no price"
-  // so the Alchemy fallback (or a fail-closed throw) takes over.
-  return typeof firstValue === 'number' &&
-    Number.isFinite(firstValue) &&
-    firstValue > 0
-    ? firstValue
-    : undefined;
+/**
+ * Keyed extractor: map each requested CoinGecko id to its USD price. Unlike a
+ * positional read, this never mis-attributes a value when several ids share one
+ * response. A 0/negative/missing value (CoinGecko returns 0 for an unknown or
+ * unpriced token) is treated as "no price" — the id is simply absent from the
+ * map, so the Alchemy fallback (or a fail-closed throw) takes over for it.
+ */
+function extractCoinGeckoPricesByIds(
+  payload: unknown,
+  ids: string[]
+): Map<string, number> {
+  const prices = new Map<string, number>();
+  if (!payload || typeof payload !== 'object') return prices;
+  const byId = payload as Record<string, { usd?: unknown } | undefined>;
+  for (const id of ids) {
+    const usd = byId[id]?.usd;
+    if (typeof usd === 'number' && Number.isFinite(usd) && usd > 0) {
+      prices.set(id, usd);
+    }
+  }
+  return prices;
 }
 
-async function fetchCoinGeckoPrice(
-  query: string,
+/**
+ * Standalone CoinGecko fetch primitive: resolve many ids in ONE request and
+ * return a keyed `id -> USD price` map (ids CoinGecko can't price are absent).
+ * Tries each request variant (demo then pro); throws only if no variant returns
+ * a usable HTTP response. This is the batch building block — a single-id lookup
+ * is `fetchCoinGeckoPrices([id], key)`, and a future cross-pool batch passes the
+ * union of every pool's ids in one call.
+ */
+export async function fetchCoinGeckoPrices(
+  ids: string[],
   apiKey: string
-): Promise<number> {
+): Promise<Map<string, number>> {
+  if (ids.length === 0) return new Map();
+  const query = `price?ids=${ids.join(',')}&vs_currencies=usd`;
   let lastError = 'CoinGecko request failed';
 
   for (const variant of COINGECKO_REQUEST_VARIANTS) {
@@ -73,10 +90,12 @@ async function fetchCoinGeckoPrice(
       },
     });
     const payload = await response.json();
-    const price = extractCoinGeckoPrice(payload);
 
-    if (response.ok && price !== undefined) {
-      return price;
+    // A successful HTTP response is authoritative: return its keyed prices (ids
+    // it omits fall through to the caller's per-id fallback). Only HTTP failures
+    // advance to the next variant.
+    if (response.ok) {
+      return extractCoinGeckoPricesByIds(payload, ids);
     }
 
     lastError = getCoinGeckoErrorMessage(
@@ -192,8 +211,67 @@ export function getTokenAddress(
   return chainMap[tokenId] || null;
 }
 
-function buildCgQuery(tokenId: string): string {
-  return `price?ids=${tokenId}&vs_currencies=usd`;
+function isUsableApiKey(apiKey: string | undefined): apiKey is string {
+  return (
+    !!apiKey && apiKey.trim() !== '' && apiKey !== 'YOUR_COINGECKO_API_KEY_HERE'
+  );
+}
+
+// Configured queries are always "price?ids=<id>&vs_currencies=usd" (the only
+// shape the keeper builds and the Alchemy fallback understands).
+function extractTokenIdFromQuery(query: string): string {
+  const match = query.match(/ids=([^&]+)/);
+  if (!match) {
+    throw new Error(`Could not extract token ID from query: ${query}`);
+  }
+  return match[1];
+}
+
+/**
+ * Resolve USD prices for `ids`: one batched CoinGecko request, then a per-id
+ * Alchemy Prices fallback for any id CoinGecko couldn't price. Returns a map
+ * covering every requested id, or throws (fail closed) when an id resolves
+ * through neither source. The batch fetch is the shared building block; the
+ * per-id fallback keeps each id's resolution independent.
+ */
+async function resolveCoinGeckoPrices(
+  ids: string[],
+  apiKey: string | undefined,
+  chainId?: number,
+  rpcUrl?: string,
+  tokenAddresses?: { [key: string]: string }
+): Promise<Map<string, number>> {
+  const resolved = new Map<string, number>();
+  if (isUsableApiKey(apiKey)) {
+    try {
+      for (const [id, price] of await fetchCoinGeckoPrices(ids, apiKey)) {
+        resolved.set(id, price);
+      }
+    } catch (error) {
+      logger.warn(`CoinGecko fetch failed, trying Alchemy fallback: ${error}`);
+    }
+  } else {
+    logger.debug('CoinGecko API key not provided, using Alchemy fallback');
+  }
+
+  const missing = ids.filter((id) => !resolved.has(id));
+  if (missing.length > 0) {
+    if (!chainId || !rpcUrl) {
+      throw new Error('chainId and rpcUrl required for Alchemy price fallback');
+    }
+    for (const id of missing) {
+      const tokenAddress = getTokenAddress(id, chainId, tokenAddresses);
+      if (!tokenAddress) {
+        throw new Error(
+          `No token address mapping found for "${id}" on chain ${chainId}. ` +
+            `Add it to tokenAddresses config or update the token mapping in pricing/coingecko.ts`
+        );
+      }
+      logger.info(`Using Alchemy Prices API for ${id} (${tokenAddress})`);
+      resolved.set(id, await getPriceFromAlchemy(tokenAddress, chainId, rpcUrl));
+    }
+  }
+  return resolved;
 }
 
 async function getPrice(
@@ -203,46 +281,19 @@ async function getPrice(
   rpcUrl?: string,
   tokenAddresses?: { [key: string]: string }
 ): Promise<number> {
-  // Try CoinGecko first if API key is provided
-  if (
-    apiKey &&
-    apiKey.trim() !== '' &&
-    apiKey !== 'YOUR_COINGECKO_API_KEY_HERE'
-  ) {
-    try {
-      const price = await fetchCoinGeckoPrice(query, apiKey);
-      logger.debug(`CoinGecko price fetched successfully: $${price}`);
-      return price;
-    } catch (error) {
-      logger.warn(`CoinGecko fetch failed, trying Alchemy fallback: ${error}`);
-    }
-  } else {
-    logger.debug('CoinGecko API key not provided, using Alchemy fallback');
+  const tokenId = extractTokenIdFromQuery(query);
+  const prices = await resolveCoinGeckoPrices(
+    [tokenId],
+    apiKey,
+    chainId,
+    rpcUrl,
+    tokenAddresses
+  );
+  const price = prices.get(tokenId);
+  if (price === undefined) {
+    throw new Error(`Could not resolve a price for "${tokenId}"`);
   }
-
-  // Fallback to Alchemy
-  if (!chainId || !rpcUrl) {
-    throw new Error('chainId and rpcUrl required for Alchemy price fallback');
-  }
-
-  // Extract token ID from query (format: "price?ids=ethereum&vs_currencies=usd")
-  const tokenIdMatch = query.match(/ids=([^&]+)/);
-  if (!tokenIdMatch) {
-    throw new Error(`Could not extract token ID from query: ${query}`);
-  }
-
-  const tokenId = tokenIdMatch[1];
-  const tokenAddress = getTokenAddress(tokenId, chainId, tokenAddresses);
-
-  if (!tokenAddress) {
-    throw new Error(
-      `No token address mapping found for "${tokenId}" on chain ${chainId}. ` +
-        `Add it to tokenAddresses config or update the token mapping in pricing/coingecko.ts`
-    );
-  }
-
-  logger.info(`Using Alchemy Prices API for ${tokenId} (${tokenAddress})`);
-  return await getPriceFromAlchemy(tokenAddress, chainId, rpcUrl);
+  return price;
 }
 
 async function getPoolPrice(
@@ -254,32 +305,28 @@ async function getPoolPrice(
   tokenAddresses?: { [key: string]: string }
 ): Promise<number> {
   // Try CoinGecko first if API key is provided
-  if (
-    apiKey &&
-    apiKey.trim() !== '' &&
-    apiKey !== 'YOUR_COINGECKO_API_KEY_HERE'
-  ) {
+  if (isUsableApiKey(apiKey)) {
     try {
-      const collateralPrice = await getPrice(
-        buildCgQuery(collateralId),
+      // Both legs in ONE batched request (was two), with per-id Alchemy fallback.
+      const prices = await resolveCoinGeckoPrices(
+        [collateralId, quoteId],
         apiKey,
         chainId,
         rpcUrl,
         tokenAddresses
       );
-      const quotePrice = await getPrice(
-        buildCgQuery(quoteId),
-        apiKey,
-        chainId,
-        rpcUrl,
-        tokenAddresses
-      );
-      // Guard the divisor: a non-positive quote price would yield Infinity/NaN.
-      // Throwing here drops to the Alchemy fallback below rather than returning
-      // a degenerate pool price.
-      if (!(quotePrice > 0)) {
+      const collateralPrice = prices.get(collateralId);
+      const quotePrice = prices.get(quoteId);
+      // Guard the divisor: a non-positive/absent quote price would yield
+      // Infinity/NaN. Throwing here drops to the pool-level Alchemy fallback
+      // below rather than returning a degenerate pool price.
+      if (
+        collateralPrice === undefined ||
+        quotePrice === undefined ||
+        !(quotePrice > 0)
+      ) {
         throw new Error(
-          `CoinGecko quote price for "${quoteId}" is not positive (${quotePrice}); cannot derive pool price`
+          `Could not resolve a positive pool price for ${collateralId}/${quoteId}`
         );
       }
       return collateralPrice / quotePrice;
