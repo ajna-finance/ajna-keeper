@@ -83,3 +83,4 @@ export async function getPoolPrice(
 }
 
 export { getPriceCoinGecko } from './coingecko';
+export { PriceUnavailableError } from './price-guard';

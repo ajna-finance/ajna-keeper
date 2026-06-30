@@ -175,8 +175,12 @@ describe('kick', () => {
     }
 
     expect(loans).to.have.length(1);
+    // The network-backed pool-prices read is still hoisted/cached once across
+    // the skipped borrower (the point of this test). The POOL market reference
+    // is now resolved uniformly per loan from those cached prices (a free read,
+    // no network), so getPrice is consulted once per borrower.
     expect(pool.getPrices.calledOnce).to.be.true;
-    expect(getPriceStub.calledOnce).to.be.true;
+    expect(getPriceStub.callCount).to.equal(2);
   });
 
   it('invalidates cached pool prices after each yielded kick candidate', async () => {
