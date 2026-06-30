@@ -259,16 +259,23 @@ async function resolveCoinGeckoPrices(
     if (!chainId || !rpcUrl) {
       throw new Error('chainId and rpcUrl required for Alchemy price fallback');
     }
-    for (const id of missing) {
-      const tokenAddress = getTokenAddress(id, chainId, tokenAddresses);
-      if (!tokenAddress) {
-        throw new Error(
-          `No token address mapping found for "${id}" on chain ${chainId}. ` +
-            `Add it to tokenAddresses config or update the token mapping in pricing/coingecko.ts`
-        );
-      }
-      logger.info(`Using Alchemy Prices API for ${id} (${tokenAddress})`);
-      resolved.set(id, await getPriceFromAlchemy(tokenAddress, chainId, rpcUrl));
+    // The per-id Alchemy lookups are independent — resolve them concurrently so a
+    // multi-id fallback (e.g. a future cross-pool batch) doesn't serialize.
+    const fallbacks = await Promise.all(
+      missing.map(async (id): Promise<[string, number]> => {
+        const tokenAddress = getTokenAddress(id, chainId, tokenAddresses);
+        if (!tokenAddress) {
+          throw new Error(
+            `No token address mapping found for "${id}" on chain ${chainId}. ` +
+              `Add it to tokenAddresses config or update the token mapping in pricing/coingecko.ts`
+          );
+        }
+        logger.info(`Using Alchemy Prices API for ${id} (${tokenAddress})`);
+        return [id, await getPriceFromAlchemy(tokenAddress, chainId, rpcUrl)];
+      })
+    );
+    for (const [id, price] of fallbacks) {
+      resolved.set(id, price);
     }
   }
   return resolved;
