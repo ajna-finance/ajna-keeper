@@ -14,4 +14,6 @@ export type KickSkipReason =
   // Liveness gate (P3) — would this keeper's own arbTake clear profitably below NP?
   | 'no-meaningful-bucket' // no highest-meaningful bucket to arbTake into
   | 'liveness-hmb-above-np' // the HMB bucket price exceeds NP (self-take would penalize)
-  | 'liveness-no-arb-room'; // market is not below the HMB arb threshold (no arb profit)
+  | 'liveness-no-arb-room' // market is not below the HMB arb threshold (no arb profit)
+  // Bond budget gate (P5)
+  | 'bond-budget-exceeded'; // the bond would exceed a per-pool or global exposure cap
