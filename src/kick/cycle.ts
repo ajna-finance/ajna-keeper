@@ -42,13 +42,14 @@ export interface DiscoveredKickCycleParams {
    */
   hydratePool: (poolAddress: string) => Promise<KickPoolHydration | undefined>;
   /**
-   * Hydrate one loan + its market price. Return undefined to skip the loan
-   * (e.g. the resolved price failed the finite/positive guard).
+   * Hydrate every kickable loan in a pool in one batch (a single getLoans
+   * multicall in the daemon, vs one getLoan per loan). Borrowers absent from the
+   * returned map are skipped (e.g. the pool's market price failed the guard).
    */
-  hydrateLoan: (
+  hydrateLoans: (
     pool: KickPoolHydration,
-    borrower: string
-  ) => Promise<KickLoanHydration | undefined>;
+    borrowers: string[]
+  ) => Promise<Map<string, KickLoanHydration>>;
   /** Submit (or dry-run) the kick. */
   kickLoan: (
     pool: KickPoolHydration,
@@ -143,10 +144,11 @@ export async function runDiscoveredKickCycle(
     }
     report.poolsConsidered++;
 
+    const loanByBorrower = await params.hydrateLoans(pool, borrowers);
     let kickedInThisPool = false;
     for (const borrower of borrowers) {
       report.candidatesConsidered++;
-      const loan = await params.hydrateLoan(pool, borrower);
+      const loan = loanByBorrower.get(borrower);
       if (!loan) {
         bump('price-unavailable');
         continue;

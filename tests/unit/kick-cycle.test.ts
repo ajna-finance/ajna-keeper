@@ -35,6 +35,12 @@ const loanHydration = (
   ...overrides,
 });
 
+const loansFor = (
+  borrowers: string[],
+  overrides: Partial<KickLoanHydration> = {}
+): Map<string, KickLoanHydration> =>
+  new Map(borrowers.map((b) => [b, loanHydration(overrides)] as const));
+
 function makeParams(
   loans: { borrower: string; pool: string }[],
   overrides: Partial<DiscoveredKickCycleParams> = {}
@@ -55,7 +61,7 @@ function makeParams(
     kickDefaults: { minDebt: 1, priceFactor: 0.9 },
     takeDefaults: { hpbPriceFactor: 0.9 },
     hydratePool: async (poolAddress) => poolHydration(poolAddress),
-    hydrateLoan: async () => loanHydration(),
+    hydrateLoans: async (_pool, borrowers) => loansFor(borrowers),
     kickLoan,
     ...overrides,
   };
@@ -107,7 +113,7 @@ describe('runDiscoveredKickCycle', () => {
 
   it('records a typed skip reason when a loan cannot be priced', async () => {
     const { params } = makeParams([{ borrower: '0xa', pool: '0xpool1' }], {
-      hydrateLoan: async () => undefined,
+      hydrateLoans: async () => new Map(),
     });
     const report = await runDiscoveredKickCycle(params);
     expect(report.kicked).to.equal(0);
@@ -117,7 +123,8 @@ describe('runDiscoveredKickCycle', () => {
   it('records the gate skip reason from the executor', async () => {
     const { params } = makeParams([{ borrower: '0xa', pool: '0xpool1' }], {
       // collateralized: TP <= LUP
-      hydrateLoan: async () => loanHydration({ thresholdPrice: wad('0.5') }),
+      hydrateLoans: async (_pool, borrowers) =>
+        loansFor(borrowers, { thresholdPrice: wad('0.5') }),
     });
     const report = await runDiscoveredKickCycle(params);
     expect(report.kicked).to.equal(0);

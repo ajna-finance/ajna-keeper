@@ -1,5 +1,9 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { runDiscoveredKickCycle, KickReport } from '../../src/kick/cycle';
+import {
+  runDiscoveredKickCycle,
+  KickReport,
+  KickLoanHydration,
+} from '../../src/kick/cycle';
 import { SubgraphReader } from '../../src/read-transports';
 import { kick } from '../../src/kick';
 import { weiToDecimaled } from '../../src/utils';
@@ -92,15 +96,19 @@ export async function runDiscoveredFixtureKick(
         lockedBondQuote: weiToDecimaled(kickerInfo.locked),
       };
     },
-    hydrateLoan: async (_hydratedPool, loanBorrower) => {
-      const loan = await pool.getLoan(loanBorrower);
-      return {
-        thresholdPrice: loan.thresholdPrice,
-        debt: loan.debt,
-        neutralPrice: loan.neutralPrice,
-        liquidationBond: loan.liquidationBond,
-        marketPrice: weiToDecimaled(loan.neutralPrice) * marketPriceFactor,
-      };
+    hydrateLoans: async (_hydratedPool, borrowers) => {
+      const loans = new Map<string, KickLoanHydration>();
+      for (const loanBorrower of borrowers) {
+        const loan = await pool.getLoan(loanBorrower);
+        loans.set(loanBorrower, {
+          thresholdPrice: loan.thresholdPrice,
+          debt: loan.debt,
+          neutralPrice: loan.neutralPrice,
+          liquidationBond: loan.liquidationBond,
+          marketPrice: weiToDecimaled(loan.neutralPrice) * marketPriceFactor,
+        });
+      }
+      return loans;
     },
     kickLoan: async (
       _hydratedPool,

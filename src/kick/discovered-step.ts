@@ -6,7 +6,7 @@ import {
   weiToDecimaled,
 } from '../utils';
 import { kick } from '.';
-import { runDiscoveredKickCycle } from './cycle';
+import { runDiscoveredKickCycle, KickLoanHydration } from './cycle';
 import { getPoolPriceFromAlchemy } from '../pricing/alchemy';
 import {
   assertFinitePositivePrice,
@@ -185,25 +185,34 @@ export async function runDiscoveredKickStep({
         lockedBondQuote: weiToDecimaled(kickerInfo.locked),
       };
     },
-    hydrateLoan: async (pool, borrower) => {
+    hydrateLoans: async (pool, borrowers) => {
+      const result = new Map<string, KickLoanHydration>();
       const fungiblePool = getAddressInsensitiveMapValue(
         poolMap,
         pool.poolAddress
       );
       // Read the pool's market price resolved once in hydratePool. undefined =>
-      // the pool couldn't be priced, so its loans skip (price-unavailable).
+      // the pool couldn't be priced, so all its loans skip (price-unavailable).
       const marketPrice = marketPriceByPool.get(pool.poolAddress.toLowerCase());
       if (!fungiblePool || chainId === undefined || marketPrice === undefined) {
-        return undefined;
+        return result;
       }
-      const loanDetails = await fungiblePool.getLoan(borrower);
-      return {
-        thresholdPrice: loanDetails.thresholdPrice,
-        debt: loanDetails.debt,
-        neutralPrice: loanDetails.neutralPrice,
-        liquidationBond: loanDetails.liquidationBond,
-        marketPrice,
-      };
+      // One getLoans multicall for the whole pool instead of one getLoan per loan.
+      const loanMap = await fungiblePool.getLoans(borrowers);
+      for (const borrower of borrowers) {
+        const loan = loanMap.get(borrower);
+        if (!loan) {
+          continue;
+        }
+        result.set(borrower, {
+          thresholdPrice: loan.thresholdPrice,
+          debt: loan.debt,
+          neutralPrice: loan.neutralPrice,
+          liquidationBond: loan.liquidationBond,
+          marketPrice,
+        });
+      }
+      return result;
     },
     kickLoan: async (pool, borrower, liquidationBond, marginPrice) => {
       const fungiblePool = getAddressInsensitiveMapValue(

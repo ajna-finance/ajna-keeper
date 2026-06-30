@@ -22,6 +22,7 @@ import { kick } from '../../src/kick';
 import {
   runDiscoveredKickCycle,
   KickPoolHydration,
+  KickLoanHydration,
 } from '../../src/kick/cycle';
 import { decimaledToWei, weiToDecimaled } from '../../src/utils';
 import { SECONDS_PER_YEAR } from '../../src/constants';
@@ -133,15 +134,19 @@ describe('runDiscoveredKickCycle on a fork', function () {
         hpbPriceFactor: POOL.poolConfig.take.hpbPriceFactor ?? 0.99,
       },
       hydratePool,
-      hydrateLoan: async () => {
-        const l = await pool.getLoan(borrower);
-        return {
-          thresholdPrice: l.thresholdPrice,
-          debt: l.debt,
-          neutralPrice: l.neutralPrice,
-          liquidationBond: l.liquidationBond,
-          marketPrice,
-        };
+      hydrateLoans: async (_pool, borrowers) => {
+        const loans = new Map<string, KickLoanHydration>();
+        for (const b of borrowers) {
+          const l = await pool.getLoan(b);
+          loans.set(b, {
+            thresholdPrice: l.thresholdPrice,
+            debt: l.debt,
+            neutralPrice: l.neutralPrice,
+            liquidationBond: l.liquidationBond,
+            marketPrice,
+          });
+        }
+        return loans;
       },
       kickLoan: async (_pool, b, liquidationBond, marginPrice) => {
         await kick({
