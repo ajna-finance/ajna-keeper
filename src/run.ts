@@ -22,7 +22,7 @@ import {
   weiToDecimaled,
 } from './utils';
 import { handleKicks, kick } from './kick';
-import { runDiscoveredKickStep } from './run-discovered-kick';
+import { runDiscoveredKickStep } from './kick/discovered-step';
 import { logger } from './logging';
 import {
   collectBondFromPool,

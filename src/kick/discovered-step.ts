@@ -1,24 +1,24 @@
 import { AjnaSDK, FungiblePool, Signer } from '@ajna-finance/sdk';
-import { getAutoDiscoverKickPolicy, getManualPools, KeeperConfig } from './config';
+import { getAutoDiscoverKickPolicy, getManualPools, KeeperConfig } from '../config';
 import {
   getAddressInsensitiveMapValue,
   getErrorMessage,
   weiToDecimaled,
-} from './utils';
-import { kick } from './kick';
-import { runDiscoveredKickCycle } from './kick-cycle';
-import { getPoolPriceFromAlchemy } from './pricing/alchemy';
+} from '../utils';
+import { kick } from '.';
+import { runDiscoveredKickCycle } from './cycle';
+import { getPoolPriceFromAlchemy } from '../pricing/alchemy';
 import {
   assertFinitePositivePrice,
   PriceUnavailableError,
-} from './pricing/price-guard';
-import { logger } from './logging';
+} from '../pricing/price-guard';
+import { logger } from '../logging';
 import {
   ensurePoolLoaded,
   PoolHydrationCooldowns,
   PoolMap,
-} from './discovery/targets';
-import { SubgraphReader } from './read-transports';
+} from '../discovery/targets';
+import { SubgraphReader } from '../read-transports';
 
 /**
  * Price of the pool's highest-meaningful bucket (deposit >= minDeposit), the

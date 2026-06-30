@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { BondBudget } from '../../src/kick-bond-budget';
+import { BondBudget } from '../../src/kick/bond-budget';
 
 const POOL_A = '0xAAAa000000000000000000000000000000000001';
 const POOL_B = '0xBBBb000000000000000000000000000000000002';

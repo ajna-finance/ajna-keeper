@@ -6,7 +6,7 @@ import {
   DiscoveredKickCycleParams,
   KickPoolHydration,
   KickLoanHydration,
-} from '../../src/kick-cycle';
+} from '../../src/kick/cycle';
 
 const wad = (v: string) => ethers.utils.parseEther(v);
 

@@ -1,28 +1,28 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, constants } from 'ethers';
-import { EnabledKickSettings, PoolConfig, PriceOriginSource } from './config';
+import { EnabledKickSettings, PoolConfig, PriceOriginSource } from '../config';
 import {
   getAllowanceOfErc20,
   getBalanceOfErc20,
   getDecimalsErc20,
   convertWadToTokenDecimals,
-} from './erc20';
-import { logger } from './logging';
-import { getPrice, PriceUnavailableError } from './pricing';
-import { evaluateKickEligibility } from './kick-eligibility';
+} from '../erc20';
+import { logger } from '../logging';
+import { getPrice, PriceUnavailableError } from '../pricing';
+import { evaluateKickEligibility } from './eligibility';
 import {
   decimaledToWei,
   RequireFields,
   tokenChangeDecimals,
   weiToDecimaled,
-} from './utils';
-import { poolKick, poolQuoteApprove } from './transactions';
+} from '../utils';
+import { poolKick, poolQuoteApprove } from '../transactions';
 import {
   resolveSubgraphConfig,
   SubgraphConfigInput,
   WithSubgraph,
-} from './read-transports';
-import { invalidateIdleBondCache } from './rewards/collect-bond';
+} from '../read-transports';
+import { invalidateIdleBondCache } from '../rewards/collect-bond';
 
 interface KickConfigBase {
   dryRun?: boolean;

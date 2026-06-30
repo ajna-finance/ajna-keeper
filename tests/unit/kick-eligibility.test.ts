@@ -3,7 +3,7 @@ import { ethers } from 'ethers';
 import {
   evaluateKickEligibility,
   KickEligibilityInput,
-} from '../../src/kick-eligibility';
+} from '../../src/kick/eligibility';
 
 const wad = (v: string) => ethers.utils.parseEther(v);
 

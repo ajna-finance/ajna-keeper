@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { evaluateKickLiveness } from '../../src/kick-liveness';
+import { evaluateKickLiveness } from '../../src/kick/liveness';
 
 // P3 kick liveness gate (arb-only): under Option 1 the keeper only kicks where
 // it can profitably take the auction it creates. Live iff a meaningful bucket

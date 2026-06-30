@@ -1,5 +1,5 @@
-import { isArbProfitable } from './take/arb';
-import { KickSkipReason } from './kick-skip-reason';
+import { isArbProfitable } from '../take/arb';
+import { KickSkipReason } from './skip-reason';
 
 export interface KickLivenessInput {
   /** resolved market price (collateral in quote units), decimaled. */

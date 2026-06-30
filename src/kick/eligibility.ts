@@ -1,6 +1,6 @@
 import { BigNumber } from 'ethers';
-import { weiToDecimaled } from './utils';
-import { KickSkipReason } from './kick-skip-reason';
+import { weiToDecimaled } from '../utils';
+import { KickSkipReason } from './skip-reason';
 
 export interface KickEligibilityInput {
   /** loan thresholdPrice, WAD (quote per collateral). */

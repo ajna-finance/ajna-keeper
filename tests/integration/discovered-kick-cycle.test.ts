@@ -22,7 +22,7 @@ import { kick } from '../../src/kick';
 import {
   runDiscoveredKickCycle,
   KickPoolHydration,
-} from '../../src/kick-cycle';
+} from '../../src/kick/cycle';
 import { decimaledToWei, weiToDecimaled } from '../../src/utils';
 import { SECONDS_PER_YEAR } from '../../src/constants';
 import { NonceTracker } from '../../src/nonce';

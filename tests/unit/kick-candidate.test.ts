@@ -3,8 +3,8 @@ import { ethers } from 'ethers';
 import {
   evaluateKickCandidate,
   KickCandidateInput,
-} from '../../src/kick-candidate';
-import { BondBudget } from '../../src/kick-bond-budget';
+} from '../../src/kick/candidate';
+import { BondBudget } from '../../src/kick/bond-budget';
 
 const wad = (v: string) => ethers.utils.parseEther(v);
 

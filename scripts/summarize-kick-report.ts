@@ -13,7 +13,7 @@
  *   yarn ts-node scripts/summarize-kick-report.ts keeper.log
  */
 import { readFileSync } from 'fs';
-import type { KickSkipReason } from '../src/kick-skip-reason';
+import type { KickSkipReason } from '../src/kick/skip-reason';
 
 // Which config knob each skip reason points at. Typed by KickSkipReason so
 // adding or renaming a reason is a compile error here until the guide is updated.
@@ -45,10 +45,10 @@ interface CycleRecord {
   skips: Partial<Record<KickSkipReason, number>>;
 }
 
-// Matches kick-cycle.ts's per-cycle summary line (the skip histogram is JSON).
+// Matches kick/cycle.ts's per-cycle summary line (the skip histogram is JSON).
 const CYCLE_RE =
   /Discovered kick cycle: kicked (\d+) across (\d+) pools \((\d+) candidates, (\d+) pools skipped\); skips: (\{.*\})/;
-// Matches kick.ts's dry-run line (shared by manual + discovered kicks).
+// Matches kick/index.ts's dry-run line (shared by manual + discovered kicks).
 const WOULD_KICK_RE =
   /DryRun - Would kick loan - pool: (.+?), borrower: (0x[0-9a-fA-F]+)/;
 const TS_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;

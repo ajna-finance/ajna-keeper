@@ -1,4 +1,4 @@
-import { logger } from './logging';
+import { logger } from '../logging';
 
 export interface BondBudgetLimits {
   /** Per-pool cap on bond at risk, in that pool's quote token (decimaled). */

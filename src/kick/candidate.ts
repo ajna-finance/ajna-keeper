@@ -1,9 +1,9 @@
 import { BigNumber } from 'ethers';
-import { weiToDecimaled } from './utils';
-import { evaluateKickEligibility } from './kick-eligibility';
-import { evaluateKickLiveness } from './kick-liveness';
-import { BondBudget } from './kick-bond-budget';
-import { KickSkipReason } from './kick-skip-reason';
+import { weiToDecimaled } from '../utils';
+import { evaluateKickEligibility } from './eligibility';
+import { evaluateKickLiveness } from './liveness';
+import { BondBudget } from './bond-budget';
+import { KickSkipReason } from './skip-reason';
 
 export interface KickCandidateInput {
   poolAddress: string;

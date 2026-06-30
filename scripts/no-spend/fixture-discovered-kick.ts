@@ -1,5 +1,5 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
-import { runDiscoveredKickCycle, KickReport } from '../../src/kick-cycle';
+import { runDiscoveredKickCycle, KickReport } from '../../src/kick/cycle';
 import { SubgraphReader } from '../../src/read-transports';
 import { kick } from '../../src/kick';
 import { weiToDecimaled } from '../../src/utils';
@@ -28,7 +28,7 @@ export interface FixtureDiscoveredKickOptions {
 }
 
 /**
- * Run the chain-wide discovered (auto-)kick cycle (src/kick-cycle.ts) against the
+ * Run the chain-wide discovered (auto-)kick cycle (src/kick/cycle.ts) against the
  * local fixture pool, exercising the auto-kick gates — reward + liveness + bond
  * budget — and the real kick submission end-to-end.
  *

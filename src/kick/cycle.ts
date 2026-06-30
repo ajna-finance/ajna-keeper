@@ -1,11 +1,11 @@
 import { BigNumber } from 'ethers';
-import { weiToDecimaled } from './utils';
-import { SubgraphReader } from './read-transports';
-import { AutoDiscoverKickPolicy } from './config';
-import { evaluateKickCandidate } from './kick-candidate';
-import { BondBudget } from './kick-bond-budget';
-import { KickSkipReason } from './kick-skip-reason';
-import { logger } from './logging';
+import { weiToDecimaled } from '../utils';
+import { SubgraphReader } from '../read-transports';
+import { AutoDiscoverKickPolicy } from '../config';
+import { evaluateKickCandidate } from './candidate';
+import { BondBudget } from './bond-budget';
+import { KickSkipReason } from './skip-reason';
+import { logger } from '../logging';
 
 export interface KickPoolHydration {
   poolAddress: string;
