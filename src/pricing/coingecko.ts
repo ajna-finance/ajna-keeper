@@ -1,6 +1,7 @@
 import { logger } from '../logging';
 import { PriceOriginCoinGecko, PriceOriginCoinGeckoQuery } from '../config';
 import { getPriceFromAlchemy, getPoolPriceFromAlchemy } from './alchemy';
+import { coinGeckoPriceCache } from './price-cache';
 
 interface CoinGeckoResponse {
   [coinName: string]: {
@@ -77,8 +78,22 @@ export async function fetchCoinGeckoPrices(
   ids: string[],
   apiKey: string
 ): Promise<Map<string, number>> {
-  if (ids.length === 0) return new Map();
-  const query = `price?ids=${ids.join(',')}&vs_currencies=usd`;
+  // Serve fresh-enough ids from the shared TTL cache; only fetch the rest.
+  const result = new Map<string, number>();
+  const missing: string[] = [];
+  for (const id of ids) {
+    const cached = coinGeckoPriceCache.get(id);
+    if (cached !== undefined) {
+      result.set(id, cached);
+    } else {
+      missing.push(id);
+    }
+  }
+  if (missing.length === 0) {
+    return result;
+  }
+
+  const query = `price?ids=${missing.join(',')}&vs_currencies=usd`;
   let lastError = 'CoinGecko request failed';
 
   for (const variant of COINGECKO_REQUEST_VARIANTS) {
@@ -95,7 +110,11 @@ export async function fetchCoinGeckoPrices(
     // it omits fall through to the caller's per-id fallback). Only HTTP failures
     // advance to the next variant.
     if (response.ok) {
-      return extractCoinGeckoPricesByIds(payload, ids);
+      for (const [id, price] of extractCoinGeckoPricesByIds(payload, missing)) {
+        coinGeckoPriceCache.set(id, price);
+        result.set(id, price);
+      }
+      return result;
     }
 
     lastError = getCoinGeckoErrorMessage(

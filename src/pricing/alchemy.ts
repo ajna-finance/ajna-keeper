@@ -1,4 +1,5 @@
 import { logger } from '../logging';
+import { alchemyPriceCache } from './price-cache';
 
 interface AlchemyPriceRequest {
   network: string;
@@ -61,6 +62,21 @@ async function fetchPricesFromAlchemy(
   if (addresses.length === 0) {
     return result;
   }
+  // Serve fresh-enough addresses from the shared TTL cache; only fetch the rest.
+  const missing: string[] = [];
+  for (const address of addresses) {
+    const lower = address.toLowerCase();
+    const cached = alchemyPriceCache.get(`${chainId}:${lower}`);
+    if (cached !== undefined) {
+      result.set(lower, cached);
+    } else {
+      missing.push(address);
+    }
+  }
+  if (missing.length === 0) {
+    return result;
+  }
+
   const apiKey = extractAlchemyKey(rpcUrl);
   if (!apiKey) {
     throw new Error('Could not extract Alchemy API key from RPC URL');
@@ -68,7 +84,7 @@ async function fetchPricesFromAlchemy(
   const network = getAlchemyNetwork(chainId);
   const url = `https://api.g.alchemy.com/prices/v1/${apiKey}/tokens/by-address`;
   const requestBody: { addresses: AlchemyPriceRequest[] } = {
-    addresses: addresses.map((address) => ({ network, address })),
+    addresses: missing.map((address) => ({ network, address })),
   };
 
   const response = await fetch(url, {
@@ -92,7 +108,9 @@ async function fetchPricesFromAlchemy(
     );
     const price = usd ? parseFloat(usd.value) : NaN;
     if (Number.isFinite(price)) {
-      result.set(tokenData.address.toLowerCase(), price);
+      const lower = tokenData.address.toLowerCase();
+      alchemyPriceCache.set(`${chainId}:${lower}`, price);
+      result.set(lower, price);
     }
   }
   return result;

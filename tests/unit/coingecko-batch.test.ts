@@ -5,6 +5,7 @@ import {
   getPriceCoinGecko,
 } from '../../src/pricing/coingecko';
 import { PriceOriginSource } from '../../src/config';
+import { resetPriceCaches } from '../../src/pricing/price-cache';
 
 // A minimal fetch Response stand-in (only .ok/.status/.json are read).
 function fakeResponse(body: unknown, ok = true, status = 200): Response {
@@ -12,6 +13,7 @@ function fakeResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 describe('fetchCoinGeckoPrices (batch primitive)', () => {
+  beforeEach(() => resetPriceCaches());
   afterEach(() => sinon.restore());
 
   it('resolves many ids in ONE request, keyed by id', async () => {
@@ -90,9 +92,23 @@ describe('fetchCoinGeckoPrices (batch primitive)', () => {
     }
     expect(thrown, 'should fail closed').to.not.equal(undefined);
   });
+
+  it('serves a cached price within the TTL without a second request', async () => {
+    const fetchStub = sinon
+      .stub(global as unknown as { fetch: typeof fetch }, 'fetch')
+      .resolves(fakeResponse({ ethereum: { usd: 3000 } }));
+
+    const first = await fetchCoinGeckoPrices(['ethereum'], 'key');
+    const second = await fetchCoinGeckoPrices(['ethereum'], 'key');
+
+    expect(fetchStub.calledOnce, 'second call served from cache').to.equal(true);
+    expect(first.get('ethereum')).to.equal(3000);
+    expect(second.get('ethereum')).to.equal(3000);
+  });
 });
 
 describe('getPriceCoinGecko pool price — one batched request', () => {
+  beforeEach(() => resetPriceCaches());
   afterEach(() => sinon.restore());
 
   it('fetches collateral + quote in a single request and returns the ratio', async () => {

@@ -4,6 +4,7 @@ import {
   getPoolPriceFromAlchemy,
   getPriceFromAlchemy,
 } from '../../src/pricing/alchemy';
+import { resetPriceCaches } from '../../src/pricing/price-cache';
 
 const RPC_URL = 'https://eth-mainnet.g.alchemy.com/v2/test-key';
 
@@ -16,6 +17,7 @@ function priceEntry(address: string, value: string) {
 }
 
 describe('Alchemy pool price — one batched request', () => {
+  beforeEach(() => resetPriceCaches());
   afterEach(() => sinon.restore());
 
   it('fetches collateral + quote in a single request and returns the ratio', async () => {
