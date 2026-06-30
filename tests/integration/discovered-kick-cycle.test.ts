@@ -1,17 +1,17 @@
 import './subgraph-mock';
 import subgraphModule from '../../src/subgraph';
 import { AjnaSDK, FungiblePool } from '@ajna-finance/sdk';
-import { constants, Contract, Wallet } from 'ethers';
+import { constants } from 'ethers';
 import { expect } from 'chai';
 import { configureAjna } from '../../src/config';
 import { MAINNET_CONFIG } from './test-config';
+import { getProvider, resetHardhat, increaseTime } from './test-utils';
 import {
-  getProvider,
-  resetHardhat,
-  increaseTime,
-  setBalance,
-} from './test-utils';
-import { depositQuoteToken, drawDebt } from './loan-helpers';
+  createFundedQuoteWallet,
+  depositQuoteToken,
+  drawDebt,
+} from './loan-helpers';
+import { SubgraphReader } from '../../src/read-transports';
 import {
   makeGetLoansFromSdk,
   overrideGetLoans,
@@ -28,17 +28,6 @@ import { SECONDS_PER_YEAR } from '../../src/constants';
 import { NonceTracker } from '../../src/nonce';
 
 const POOL = MAINNET_CONFIG.SOL_WETH_POOL;
-const WETH_ABI = ['function deposit() payable'];
-
-async function createFundedQuoteWallet(
-  amount: ReturnType<typeof decimaledToWei>
-): Promise<Wallet> {
-  const wallet = Wallet.createRandom().connect(getProvider());
-  await setBalance(wallet.address, decimaledToWei(100).toHexString());
-  const weth = new Contract(POOL.quoteAddress, WETH_ABI, wallet);
-  await (await weth.deposit({ value: amount })).wait();
-  return wallet;
-}
 
 // End-to-end discovered kick cycle on a mainnet fork: a real kickable loan is
 // hydrated from real on-chain pool reads and kicked through the shared executor
@@ -88,7 +77,10 @@ describe('runDiscoveredKickCycle on a fork', function () {
     // the arb-room check (market < hmb*hpbPriceFactor).
     const marketPrice = np * 0.25;
 
-    const kicker = await createFundedQuoteWallet(decimaledToWei(2));
+    const kicker = await createFundedQuoteWallet(
+      decimaledToWei(2),
+      POOL.quoteAddress
+    );
 
     // Real per-pool hydration (getPrices / kickerInfo / HMB), matching run.ts.
     const hydratePool = async (
@@ -119,20 +111,22 @@ describe('runDiscoveredKickCycle on a fork', function () {
       };
     };
 
+    const subgraph: Pick<SubgraphReader, 'getChainwideKickableLoans'> = {
+      getChainwideKickableLoans: async () => ({
+        loans: [
+          {
+            id: `${pool.poolAddress}-${borrower}`,
+            borrower,
+            thresholdPrice: weiToDecimaled(loan.thresholdPrice),
+            pool: { id: pool.poolAddress },
+          },
+        ],
+      }),
+    };
+
     let kicked = 0;
     const report = await runDiscoveredKickCycle({
-      subgraph: {
-        getChainwideKickableLoans: async () => ({
-          loans: [
-            {
-              id: `${pool.poolAddress}-${borrower}`,
-              borrower,
-              thresholdPrice: weiToDecimaled(loan.thresholdPrice),
-              pool: { id: pool.poolAddress },
-            },
-          ],
-        }),
-      } as any,
+      subgraph,
       kickPolicy: { enabled: true, maxBondExposure: 100 },
       kickDefaults: { minDebt: 0, priceFactor: 0.9 },
       takeDefaults: {

@@ -1,15 +1,34 @@
-import { Signer, Contract, BigNumber } from 'ethers';
+import { Signer, Contract, BigNumber, Wallet } from 'ethers';
 import { FungiblePool } from '@ajna-finance/sdk';
 import { addQuoteToken } from '@ajna-finance/sdk/dist/contracts/pool';
 import Erc20PoolAbi from '@ajna-finance/sdk/dist/abis/ERC20Pool.json';
 import Erc20Abi from '../../src/abis/erc20.abi.json';
 import { decimaledToWei } from '../../src/utils';
 import {
+  getProvider,
   impersonateSigner,
   latestBlockTimestamp,
   setBalance,
 } from './test-utils';
 import { NonceTracker } from '../../src/nonce';
+
+const WRAPPED_NATIVE_ABI = ['function deposit() payable'];
+
+/**
+ * A fresh random wallet funded with native ETH and `amount` of a wrapped-native
+ * quote token (e.g. WETH), so it can post a kick bond or take. `quoteAddress`
+ * must be a wrapped-native token exposing `deposit() payable`.
+ */
+export const createFundedQuoteWallet = async (
+  amount: BigNumber,
+  quoteAddress: string
+): Promise<Wallet> => {
+  const wallet = Wallet.createRandom().connect(getProvider());
+  await setBalance(wallet.address, decimaledToWei(100).toHexString());
+  const weth = new Contract(quoteAddress, WRAPPED_NATIVE_ABI, wallet);
+  await (await weth.deposit({ value: amount })).wait();
+  return wallet;
+};
 
 export const transferErc20 = async (
   signer: Signer,

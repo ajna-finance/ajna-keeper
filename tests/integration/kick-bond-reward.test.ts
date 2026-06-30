@@ -1,16 +1,15 @@
 import './subgraph-mock';
 import { AjnaSDK, ERC20Pool__factory, FungiblePool } from '@ajna-finance/sdk';
-import { constants, Contract, Wallet } from 'ethers';
+import { constants, Wallet } from 'ethers';
 import { expect } from 'chai';
 import { configureAjna } from '../../src/config';
 import { MAINNET_CONFIG } from './test-config';
+import { getProvider, resetHardhat, increaseTime } from './test-utils';
 import {
-  getProvider,
-  resetHardhat,
-  increaseTime,
-  setBalance,
-} from './test-utils';
-import { depositQuoteToken, drawDebt } from './loan-helpers';
+  createFundedQuoteWallet,
+  depositQuoteToken,
+  drawDebt,
+} from './loan-helpers';
 import {
   makeGetLoansFromSdk,
   overrideGetLoans,
@@ -28,18 +27,6 @@ import { SECONDS_PER_YEAR, SECONDS_PER_DAY } from '../../src/constants';
 import { NonceTracker } from '../../src/nonce';
 
 const POOL = MAINNET_CONFIG.SOL_WETH_POOL;
-const WETH_ABI = ['function deposit() payable'];
-
-// A fresh wallet funded with WETH (the quote token) so it can post the kick bond.
-async function createFundedQuoteWallet(
-  amount: ReturnType<typeof decimaledToWei>
-): Promise<Wallet> {
-  const wallet = Wallet.createRandom().connect(getProvider());
-  await setBalance(wallet.address, decimaledToWei(100).toHexString());
-  const weth = new Contract(POOL.quoteAddress, WETH_ABI, wallet);
-  await (await weth.deposit({ value: amount })).wait();
-  return wallet;
-}
 
 async function createKickedAuction(): Promise<{
   pool: FungiblePool;
@@ -78,7 +65,10 @@ async function createKickedAuction(): Promise<{
     })
   );
   expect(loanToKick, 'loan should be kickable').to.not.equal(undefined);
-  const kicker = await createFundedQuoteWallet(decimaledToWei(2));
+  const kicker = await createFundedQuoteWallet(
+    decimaledToWei(2),
+    POOL.quoteAddress
+  );
   await kick({ pool, signer: kicker, loanToKick, config: { dryRun: false } });
   NonceTracker.clearNonces();
   return { pool, kicker, borrower: POOL.collateralWhaleAddress };
@@ -142,7 +132,7 @@ async function arbTakeRelativeToNp(rewarded: boolean): Promise<void> {
     getProvider()
   );
   const awards = await poolContract.queryFilter(
-    poolContract.filters.BucketTakeLPAwarded(),
+    poolContract.filters.BucketTakeLPAwarded(null, kickerAddr),
     MAINNET_CONFIG.BLOCK_NUMBER
   );
   expect(awards.length, 'a BucketTakeLPAwarded event was emitted').to.be.greaterThan(
@@ -155,8 +145,10 @@ async function arbTakeRelativeToNp(rewarded: boolean): Promise<void> {
     // bucketPrice <= NP: kicker is rewarded with bucket LP and the bond is NOT
     // decremented (the reward is LP, not a locked-bond change).
     expect(lpAwardedKicker.gt(constants.Zero), 'kicker LP credited').to.be.true;
-    expect(lockedAfter.gte(lockedBefore), 'locked bond not decremented').to.be
-      .true;
+    expect(
+      lockedAfter.eq(lockedBefore),
+      'locked bond unchanged (reward is LP, not a bond change)'
+    ).to.be.true;
   } else {
     // bucketPrice > NP: no kicker reward and the locked bond is penalized.
     expect(lpAwardedKicker.eq(constants.Zero), 'no kicker LP reward').to.be.true;
