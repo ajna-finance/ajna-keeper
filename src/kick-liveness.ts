@@ -42,20 +42,24 @@ export function evaluateKickLiveness(input: KickLivenessInput): KickLiveness {
     return { live: false, reason: 'no-meaningful-bucket' };
   }
 
+  // The keeper's own bucketTake clears into the HMB bucket; if that bucket is
+  // priced above NP the take would penalize the bond. Decide this here — we hold
+  // both values — rather than recovering it from isArbProfitable's log string.
+  if (input.hmbPrice > input.neutralPrice) {
+    return { live: false, reason: 'liveness-hmb-above-np' };
+  }
+
+  // With the HMB bucket at/below NP, the only remaining question is arb room:
+  // the market must sit below the arb threshold so the auction decays into a
+  // take. npCeiling is redundant after the check above but kept so kick and take
+  // share the exact same isArbProfitable verdict.
   const arb = isArbProfitable({
     price: input.marketPrice,
     hmbPrice: input.hmbPrice,
     hpbPriceFactor: input.hpbPriceFactor,
     npCeiling: input.neutralPrice,
   });
-  if (arb.takeable) {
-    return { live: true };
-  }
-  return {
-    live: false,
-    reason:
-      arb.reason === 'hmb bucket price above neutralPrice'
-        ? 'liveness-hmb-above-np'
-        : 'liveness-no-arb-room',
-  };
+  return arb.takeable
+    ? { live: true }
+    : { live: false, reason: 'liveness-no-arb-room' };
 }
