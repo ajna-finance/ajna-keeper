@@ -15,6 +15,13 @@ function buildLoanDetails() {
   };
 }
 
+// A full Loan entry for the batched pool.getLoans map — getLoansToKick reads the
+// per-loan fields from this snapshot (until a candidate is yielded), so each
+// entry must carry the same fields pool.getLoan returns.
+const loanEntry = (
+  overrides: Partial<ReturnType<typeof buildLoanDetails>> = {}
+) => ({ ...buildLoanDetails(), ...overrides });
+
 describe('kick', () => {
   afterEach(() => {
     sinon.restore();
@@ -75,8 +82,8 @@ describe('kick', () => {
       poolAddress: '0x1111111111111111111111111111111111111111',
       getLoans: sinon.stub().resolves(
         new Map([
-          ['0xBorrowerA', { liquidationBond: ethers.utils.parseEther('2') }],
-          ['0xBorrowerB', { liquidationBond: ethers.utils.parseEther('1') }],
+          ['0xBorrowerA', loanEntry({ liquidationBond: ethers.utils.parseEther('2') })],
+          ['0xBorrowerB', loanEntry({ liquidationBond: ethers.utils.parseEther('1') })],
         ])
       ),
       getPrices: sinon.stub().resolves({
@@ -128,23 +135,22 @@ describe('kick', () => {
       poolAddress: '0x2222222222222222222222222222222222222222',
       getLoans: sinon.stub().resolves(
         new Map([
-          ['0xBorrowerA', { liquidationBond: ethers.utils.parseEther('2') }],
-          ['0xBorrowerB', { liquidationBond: ethers.utils.parseEther('1') }],
+          // BorrowerA is collateralized (TP < LUP) -> skipped; BorrowerB kicks.
+          [
+            '0xBorrowerA',
+            loanEntry({
+              liquidationBond: ethers.utils.parseEther('2'),
+              thresholdPrice: ethers.utils.parseEther('0.5'),
+            }),
+          ],
+          ['0xBorrowerB', loanEntry({ liquidationBond: ethers.utils.parseEther('1') })],
         ])
       ),
       getPrices: sinon.stub().resolves({
         lup: ethers.utils.parseEther('1'),
         hpb: ethers.utils.parseEther('1'),
       }),
-      getLoan: sinon
-        .stub()
-        .onFirstCall()
-        .resolves({
-          ...buildLoanDetails(),
-          thresholdPrice: ethers.utils.parseEther('0.5'),
-        })
-        .onSecondCall()
-        .resolves(buildLoanDetails()),
+      getLoan: sinon.stub().callsFake(async () => buildLoanDetails()),
     };
 
     const loans = [];
@@ -194,8 +200,8 @@ describe('kick', () => {
       poolAddress: '0x2222222222222222222222222222222222222222',
       getLoans: sinon.stub().resolves(
         new Map([
-          ['0xBorrowerA', { liquidationBond: ethers.utils.parseEther('2') }],
-          ['0xBorrowerB', { liquidationBond: ethers.utils.parseEther('1') }],
+          ['0xBorrowerA', loanEntry({ liquidationBond: ethers.utils.parseEther('2') })],
+          ['0xBorrowerB', loanEntry({ liquidationBond: ethers.utils.parseEther('1') })],
         ])
       ),
       getPrices: sinon.stub().resolves({

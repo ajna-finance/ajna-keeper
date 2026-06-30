@@ -192,11 +192,17 @@ export async function* getLoansToKick({
     return cachedPoolPrices;
   };
 
+  // Until a candidate is yielded (and possibly kicked by handleKicks before this
+  // generator resumes, advancing the inflator), reuse the batched pool.getLoans
+  // snapshot above instead of re-reading each loan on-chain.
+  let kickedThisPass = false;
   for (let i = 0; i < borrowersSortedByBond.length; i++) {
     const borrower = borrowersSortedByBond[i];
     const [poolPrices, loanDetails] = await Promise.all([
       getCachedPoolPrices(),
-      pool.getLoan(borrower),
+      kickedThisPass
+        ? pool.getLoan(borrower)
+        : Promise.resolve(loanMap.get(borrower)!),
     ]);
     const { lup, hpb } = poolPrices;
     const { thresholdPrice, liquidationBond, debt, neutralPrice } = loanDetails;
@@ -261,8 +267,9 @@ export async function* getLoansToKick({
       limitPrice: evaluation.marginPrice,
     };
     // A yielded candidate may be kicked before this generator resumes, which can
-    // move pool prices. Reuse cached prices only across skipped borrowers.
+    // move pool prices and accrue interest. Re-read fresh prices + loans after.
     cachedPoolPrices = undefined;
+    kickedThisPass = true;
   }
 }
 
