@@ -37,10 +37,14 @@ export interface ArbProfitability {
  * the kick liveness gate (which batches the HMB per pool), so both agree on
  * exactly which bucket an arbTake would use.
  *
- * `npCeiling` caps the eligible bucket at the auction's neutralPrice: a
- * bucketTake above NP penalizes the kicker, so the caller — which owns kicker
- * identity — passes neutralPrice when the keeper kicked this auction and
- * undefined otherwise, keeping this function (and arb.ts) ignorant of who kicked.
+ * Self-penalty avoidance: the keeper's arbTake deposits collateral into the HMB
+ * bucket, and a bucketTake is rewarded only if the BUCKET price <= NP
+ * (TakerActions._prepareTake feeds bucketPrice into _bpf; isRewarded <=>
+ * bucketPrice <= NP — NOT the auction price). So for a self-kicked auction the
+ * caller passes npCeiling = neutralPrice and we refuse when hmbPrice > NP: taking
+ * into HMB would penalize the keeper's own bond no matter how far the auction
+ * has decayed. undefined npCeiling (auctions kicked by others) leaves the arb
+ * uncapped, keeping this function ignorant of who kicked.
  */
 export function isArbProfitable(params: {
   price: number;
@@ -50,12 +54,17 @@ export function isArbProfitable(params: {
 }): ArbProfitability {
   const { price, hmbPrice, hpbPriceFactor, npCeiling } = params;
   const maxArbPrice = hmbPrice * hpbPriceFactor;
-  const ceiling =
-    npCeiling === undefined ? maxArbPrice : Math.min(maxArbPrice, npCeiling);
-  const takeable = price < ceiling;
+  if (npCeiling !== undefined && hmbPrice > npCeiling) {
+    return {
+      takeable: false,
+      maxArbTakePrice: maxArbPrice,
+      reason: 'hmb bucket price above neutralPrice',
+    };
+  }
+  const takeable = price < maxArbPrice;
   return {
     takeable,
-    maxArbTakePrice: ceiling,
+    maxArbTakePrice: maxArbPrice,
     reason: takeable ? undefined : 'auction price above arbTake threshold',
   };
 }
@@ -68,8 +77,9 @@ export async function checkIfArbTakeable(
   subgraph: SubgraphReader,
   minDeposit: string,
   signer: Signer,
-  // NP ceiling for self-kicked auctions; undefined (default) preserves the
-  // uncapped arbTake threshold for auctions this keeper did not kick.
+  // Auction neutralPrice for self-kicked auctions: the arbTake is refused when
+  // the HMB bucket price exceeds it (a bucketTake above NP penalizes the
+  // kicker's bond). undefined (default) leaves auctions kicked by others uncapped.
   npCeiling?: number
 ): Promise<ArbTakeEvaluation> {
   if (!poolConfig.take.minCollateral || !poolConfig.take.hpbPriceFactor) {

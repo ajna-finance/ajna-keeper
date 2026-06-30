@@ -62,8 +62,10 @@ describe('resolveSelfKickNpCeiling', () => {
 describe('evaluateArbTake applies the NP ceiling for self-kicked auctions', () => {
   afterEach(() => sinon.restore());
 
-  // hmbPrice=10, factor=0.9 -> uncapped threshold 9. Auction price 8 is below
-  // 9 (uncapped takeable), but a self-kick NP of 7 caps it below 8.
+  // hmbPrice=10, factor=0.9 -> uncapped threshold 9. Auction price 8 is below 9
+  // (uncapped takeable). A self-kick NP of 7 is below the HMB bucket price (10),
+  // so the keeper's bucketTake into HMB would clear above NP and penalize its
+  // bond -> refuse, regardless of the auction price.
   function makePool(kicker: string) {
     return {
       name: 'Test Pool',
@@ -107,8 +109,8 @@ describe('evaluateArbTake applies the NP ceiling for self-kicked auctions', () =
     const result = await createArbTakeStrategy().evaluateArbTake(
       evalArgs('0xBOT')
     );
-    expect(result.isArbTakeable).to.equal(false);
-    expect(result.maxArbTakePrice).to.equal(7); // capped at NP
+    expect(result.isArbTakeable).to.equal(false); // refused: hmbPrice(10) > NP(7)
+    expect(result.maxArbTakePrice).to.equal(9); // profitability threshold, hmb*factor
   });
 
   it('leaves an auction kicked by someone else uncapped', async () => {
