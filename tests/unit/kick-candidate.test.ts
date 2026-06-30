@@ -21,6 +21,7 @@ const base = (): KickCandidateInput => ({
   marketPrice: 0.5,
   minDebt: 1,
   priceFactor: 0.9,
+  requireLiveness: true,
   hmbPrice: 1,
   hpbPriceFactor: 0.9,
   bondQuote: 1,
@@ -46,7 +47,7 @@ describe('evaluateKickCandidate', () => {
     expect(decision).to.deep.equal({ kick: false, reason: 'collateralized' });
   });
 
-  it('skips on the liveness gate (no meaningful bucket)', () => {
+  it('skips on the liveness gate (no meaningful bucket) when required', () => {
     const decision = evaluateKickCandidate(
       { ...base(), hmbPrice: undefined },
       openBudget()
@@ -55,6 +56,21 @@ describe('evaluateKickCandidate', () => {
       kick: false,
       reason: 'no-meaningful-bucket',
     });
+  });
+
+  it('skips the liveness gate when not required (manual targets keep current behavior)', () => {
+    // No bucket / no arb config would fail liveness, but requireLiveness=false
+    // bypasses it so the manual reward+budget gates alone decide.
+    const decision = evaluateKickCandidate(
+      {
+        ...base(),
+        requireLiveness: false,
+        hmbPrice: undefined,
+        hpbPriceFactor: undefined,
+      },
+      openBudget()
+    );
+    expect(decision.kick).to.equal(true);
   });
 
   it('skips on the bond budget gate', () => {

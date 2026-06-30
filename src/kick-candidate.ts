@@ -18,10 +18,14 @@ export interface KickCandidateInput {
   marketPrice: number;
   minDebt: number;
   priceFactor: number;
-  // Liveness gate (P3)
+  // Liveness gate (P3) — applied only when requireLiveness is set. Discovered
+  // pools require it (Option 1: only kick where you can take); manual pools may
+  // opt in, but default off to preserve explicit operator intent.
+  requireLiveness: boolean;
   /** highest-meaningful bucket price (deposit >= minDeposit); undefined if none. */
-  hmbPrice: number | undefined;
-  hpbPriceFactor: number;
+  hmbPrice?: number;
+  /** the pool's arb hpbPriceFactor; undefined means no arb take config. */
+  hpbPriceFactor?: number;
   // Budget gate (P5)
   /** liquidationBond, the pool's quote token, decimaled. */
   bondQuote: number;
@@ -62,14 +66,20 @@ export function evaluateKickCandidate(
     return { kick: false, reason: eligibility.reason };
   }
 
-  const liveness = evaluateKickLiveness({
-    marketPrice: input.marketPrice,
-    hmbPrice: input.hmbPrice,
-    hpbPriceFactor: input.hpbPriceFactor,
-    neutralPrice: weiToDecimaled(input.neutralPrice),
-  });
-  if (!liveness.live) {
-    return { kick: false, reason: liveness.reason };
+  if (input.requireLiveness) {
+    if (input.hpbPriceFactor === undefined) {
+      // requireLiveness with no arb take config: there is no arb path to feed.
+      return { kick: false, reason: 'liveness-no-arb-room' };
+    }
+    const liveness = evaluateKickLiveness({
+      marketPrice: input.marketPrice,
+      hmbPrice: input.hmbPrice,
+      hpbPriceFactor: input.hpbPriceFactor,
+      neutralPrice: weiToDecimaled(input.neutralPrice),
+    });
+    if (!liveness.live) {
+      return { kick: false, reason: liveness.reason };
+    }
   }
 
   const reserved = budget.tryReserve({
