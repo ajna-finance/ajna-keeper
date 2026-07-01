@@ -23,7 +23,7 @@
     "sushi-aggregator-route-canary": "./node_modules/ts-node/dist/bin.js scripts/sushi-aggregator-route-canary.ts",
     "compile": "npx hardhat compile",
     "test": "npm run typecheck && npm run unit-tests",
-    "unit-tests": "TS_NODE_TRANSPILE_ONLY=true npx mocha --require ts-node/register 'tests/unit/**/*.test.ts'",
+    "unit-tests": "TS_NODE_TRANSPILE_ONLY=true npx mocha --exit --require ts-node/register 'tests/unit/**/*.test.ts'",
     "coverage": "TS_NODE_TRANSPILE_ONLY=true c8 --all --check-coverage=false npx mocha --exit --require ts-node/register 'tests/unit/**/*.test.ts'",
     "coverage:check": "TS_NODE_TRANSPILE_ONLY=true c8 --all --check-coverage=true npx mocha --exit --require ts-node/register 'tests/unit/**/*.test.ts'",
     "coverage:unit": "TS_NODE_TRANSPILE_ONLY=true c8 --temp-directory=coverage/tmp --clean=true --reporter=none --check-coverage=false npx mocha --exit --require ts-node/register 'tests/unit/**/*.test.ts'",

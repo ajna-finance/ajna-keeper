@@ -4,9 +4,9 @@
 
 import { ethers, BigNumber, Signer } from 'ethers';
 import { logger } from '../../logging';
-import { getDecimalsErc20 } from '../../erc20';
 import { CurvePoolType } from '../../config';
 import { pruneMapToMaxSize } from '../../utils';
+import { defaultDexContractServices, DexContractServices } from '../contracts';
 
 // StableSwap ABI (int128 indices) - from working test scripts
 const STABLESWAP_ABI = [
@@ -20,24 +20,6 @@ const MAX_CURVE_TOKEN_INDEX_PROBES = 16;
 const CURVE_POOL_SELECTION_CACHE_TTL_MS = 5 * 60 * 1000;
 const CURVE_POOL_SELECTION_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES = 512;
-
-export interface CurveQuoteProviderAdapters {
-  makeContract: (
-    address: string,
-    abi: ethers.ContractInterface,
-    signer: Signer
-  ) => ethers.Contract;
-  getDecimals: typeof getDecimalsErc20;
-}
-
-const defaultCurveQuoteProviderAdapters: CurveQuoteProviderAdapters = {
-  makeContract: (
-    address: string,
-    abi: ethers.ContractInterface,
-    signer: Signer
-  ) => new ethers.Contract(address, abi, signer),
-  getDecimals: getDecimalsErc20,
-};
 
 // CryptoSwap ABI (uint256 indices) - from working test scripts
 const CRYPTOSWAP_ABI = [
@@ -94,21 +76,18 @@ interface CurvePoolSelectionCacheEntry {
 export class CurveQuoteProvider {
   private signer: Signer;
   private config: CurveQuoteConfig;
-  private adapters: CurveQuoteProviderAdapters;
+  private contracts: DexContractServices;
   private isInitialized: boolean = false;
   private poolSelectionCache = new Map<string, CurvePoolSelectionCacheEntry>();
 
   constructor(
     signer: Signer,
     config: CurveQuoteConfig,
-    adapters: Partial<CurveQuoteProviderAdapters> = {}
+    contracts: DexContractServices = defaultDexContractServices
   ) {
     this.signer = signer;
     this.config = config;
-    this.adapters = {
-      ...defaultCurveQuoteProviderAdapters,
-      ...adapters,
-    };
+    this.contracts = contracts;
   }
 
   /**
@@ -413,7 +392,7 @@ export class CurveQuoteProvider {
 
     const poolAbi =
       poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-    const poolContract = this.adapters.makeContract(
+    const poolContract = this.contracts.makeContract(
       poolAddress,
       poolAbi,
       this.signer
@@ -468,7 +447,7 @@ export class CurveQuoteProvider {
         selectedPool.poolType === CurvePoolType.STABLE
           ? STABLESWAP_ABI
           : CRYPTOSWAP_ABI;
-      const poolContract = this.adapters.makeContract(
+      const poolContract = this.contracts.makeContract(
         selectedPool.address,
         poolAbi,
         this.signer
@@ -498,10 +477,10 @@ export class CurveQuoteProvider {
       // Get correct decimals for proper formatting
       const inputDecimals =
         decimals?.inputDecimals ??
-        (await this.adapters.getDecimals(this.signer, tokenIn));
+        (await this.contracts.getDecimals(this.signer, tokenIn));
       const outputDecimals =
         decimals?.outputDecimals ??
-        (await this.adapters.getDecimals(this.signer, tokenOut));
+        (await this.contracts.getDecimals(this.signer, tokenOut));
 
       logger.debug(
         `Curve quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`

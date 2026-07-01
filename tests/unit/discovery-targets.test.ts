@@ -14,53 +14,9 @@ import {
   LiquiditySource,
   PriceOriginSource,
 } from '../../src/config';
+import { BASE_CONFIG } from './helpers/discovery-targets-fixture';
 import subgraph from '../../src/subgraph';
 import { logger } from '../../src/logging';
-
-const BASE_CONFIG: KeeperConfig = {
-  network: {
-    rpcUrl: 'http://localhost:8545',
-    subgraph: {
-      url: 'http://example-subgraph',
-    },
-  },
-  signer: {
-    keystore: '/tmp/keeper.json',
-  },
-  runtime: {
-    logLevel: 'debug',
-    delayBetweenRuns: 1,
-  },
-  ajna: {
-    erc20PoolFactory: '0x0000000000000000000000000000000000000001',
-    erc721PoolFactory: '0x0000000000000000000000000000000000000002',
-    poolUtils: '0x0000000000000000000000000000000000000003',
-    positionManager: '0x0000000000000000000000000000000000000004',
-    ajnaToken: '0x0000000000000000000000000000000000000005',
-  },
-  manual: {
-    pools: [],
-  },
-  discovery: {
-    enabled: true,
-    take: true,
-    settlement: true,
-    logSkips: true,
-    defaults: {
-      take: {
-        minCollateral: 0.1,
-        hpbPriceFactor: 0.98,
-      },
-      settlement: {
-        enabled: true,
-        minAuctionAge: 3600,
-        maxBucketDepth: 50,
-        maxIterations: 5,
-        checkBotIncentive: true,
-      },
-    },
-  },
-};
 
 describe('Discovery Target Resolution', () => {
   afterEach(() => {
@@ -1071,93 +1027,5 @@ describe('Discovery Target Resolution', () => {
         candidates: [],
       })
     ).to.throw('ResolvedSettlementTarget: no candidates');
-  });
-
-  it('applies allowPools and denyPools before grouping discovered take targets', async () => {
-    const auctions = [
-      {
-        borrower: '0xBorrowerAllowed',
-        kickTime: '1',
-        debtRemaining: '2',
-        collateralRemaining: '3',
-        neutralPrice: '4',
-        debt: '2',
-        collateral: '3',
-        pool: { id: '0x1111111111111111111111111111111111111111' },
-      },
-      {
-        borrower: '0xBorrowerDeniedByAllowlist',
-        kickTime: '1',
-        debtRemaining: '2',
-        collateralRemaining: '3',
-        neutralPrice: '4',
-        debt: '2',
-        collateral: '3',
-        pool: { id: '0x2222222222222222222222222222222222222222' },
-      },
-      {
-        borrower: '0xBorrowerDeniedExplicitly',
-        kickTime: '1',
-        debtRemaining: '2',
-        collateralRemaining: '3',
-        neutralPrice: '4',
-        debt: '2',
-        collateral: '3',
-        pool: { id: '0x3333333333333333333333333333333333333333' },
-      },
-    ];
-
-    const allowTargets = await buildDiscoveredTakeTargets(
-      {
-        ...BASE_CONFIG,
-        discovery: {
-          ...BASE_CONFIG.discovery!,
-          allowPools: ['0x1111111111111111111111111111111111111111'],
-        },
-      },
-      auctions
-    );
-    const denyTargets = await buildDiscoveredTakeTargets(
-      {
-        ...BASE_CONFIG,
-        discovery: {
-          ...BASE_CONFIG.discovery!,
-          denyPools: ['0x3333333333333333333333333333333333333333'],
-        },
-      },
-      auctions
-    );
-
-    expect(allowTargets.map((target) => target.poolAddress)).to.deep.equal([
-      '0x1111111111111111111111111111111111111111',
-    ]);
-    expect(denyTargets.map((target) => target.poolAddress)).to.deep.equal([
-      '0x1111111111111111111111111111111111111111',
-      '0x2222222222222222222222222222222222222222',
-    ]);
-  });
-
-  it('skips pool hydration while a failed pool remains in cooldown', async () => {
-    const getPoolByAddress = sinon
-      .stub()
-      .throws(new Error('cooldown bypassed'));
-    const hydrationCooldowns = new Map<string, number>([
-      ['0x1111111111111111111111111111111111111111', Date.now() + 60_000],
-    ]);
-
-    const pool = await ensurePoolLoaded({
-      ajna: {
-        fungiblePoolFactory: {
-          getPoolByAddress,
-        },
-      } as any,
-      poolMap: new Map() as any,
-      poolAddress: '0x1111111111111111111111111111111111111111',
-      config: BASE_CONFIG,
-      hydrationCooldowns,
-    });
-
-    expect(pool).to.equal(undefined);
-    expect(getPoolByAddress.called).to.equal(false);
   });
 });

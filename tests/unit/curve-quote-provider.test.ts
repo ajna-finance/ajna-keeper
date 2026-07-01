@@ -1,11 +1,9 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import {
-  CurveQuoteProvider,
-  CurveQuoteProviderAdapters,
-} from '../../src/dex/providers/curve-quote-provider';
+import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
 import { CurvePoolType } from '../../src/config';
+import { DexContractServices } from '../../src/dex/contracts';
 
 describe('Curve Quote Provider', () => {
   let mockSigner: any;
@@ -33,7 +31,7 @@ describe('Curve Quote Provider', () => {
 
   function makeProvider(
     overrides: any = {},
-    adapters: Partial<CurveQuoteProviderAdapters> = {}
+    contracts?: DexContractServices
   ): CurveQuoteProvider {
     return new CurveQuoteProvider(
       mockSigner,
@@ -53,7 +51,7 @@ describe('Curve Quote Provider', () => {
         },
         ...overrides,
       },
-      adapters
+      contracts
     );
   }
 
@@ -67,15 +65,14 @@ describe('Curve Quote Provider', () => {
     };
   }
 
-  function curveContractAdapters(
-    contract: any
-  ): Partial<CurveQuoteProviderAdapters> {
+  function curveContractServices(contract: any): DexContractServices {
     return {
       makeContract: sinon
         .stub()
         .callsFake(
           (_address: string, _abi: any, _signer: any) => contract
         ) as any,
+      getDecimals: sinon.stub().resolves(18),
     };
   }
 
@@ -249,7 +246,7 @@ describe('Curve Quote Provider', () => {
       coins.withArgs(1).resolves(USDC);
       coins.rejects(new Error('index out of range'));
 
-      const provider: any = makeProvider({}, curveContractAdapters({ coins }));
+      const provider: any = makeProvider({}, curveContractServices({ coins }));
       const indices = await provider.discoverTokenIndices(
         POOL,
         CurvePoolType.STABLE,
@@ -267,7 +264,7 @@ describe('Curve Quote Provider', () => {
       coins.withArgs(1).resolves(USDC);
       coins.rejects(new Error('index out of range'));
 
-      const provider: any = makeProvider({}, curveContractAdapters({ coins }));
+      const provider: any = makeProvider({}, curveContractServices({ coins }));
       const indices = await provider.discoverTokenIndices(
         POOL,
         CurvePoolType.CRYPTO,
@@ -304,7 +301,7 @@ describe('Curve Quote Provider', () => {
       const getDy = sinon.stub().resolves(BigNumber.from(0));
       const zeroProvider: any = makeProvider(
         {},
-        curveContractAdapters({ get_dy: getDy })
+        curveContractServices({ get_dy: getDy })
       );
       sinon.stub(zeroProvider, 'resolvePoolSelection').resolves(
         selectedPool({
@@ -329,7 +326,7 @@ describe('Curve Quote Provider', () => {
       const getDy = sinon.stub().resolves(BigNumber.from(950));
       const provider: any = makeProvider(
         {},
-        curveContractAdapters({ get_dy: getDy })
+        curveContractServices({ get_dy: getDy })
       );
       const pool = selectedPool();
       sinon.stub(provider, 'resolvePoolSelection').resolves(pool);
@@ -351,7 +348,7 @@ describe('Curve Quote Provider', () => {
       const provider: any = makeProvider(
         {},
         {
-          ...curveContractAdapters({
+          ...curveContractServices({
             get_dy: sinon.stub().resolves(BigNumber.from(950)),
           }),
           getDecimals: getDecimals as any,
@@ -385,7 +382,7 @@ describe('Curve Quote Provider', () => {
         error.reason = reason;
         const provider: any = makeProvider(
           {},
-          curveContractAdapters({ get_dy: sinon.stub().rejects(error) })
+          curveContractServices({ get_dy: sinon.stub().rejects(error) })
         );
         sinon.stub(provider, 'resolvePoolSelection').resolves(selectedPool());
 

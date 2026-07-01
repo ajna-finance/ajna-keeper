@@ -767,7 +767,7 @@ export class DexRouter {
         ) {
           try {
             logger.info(`Using Universal Router for swap`);
-            await swapWithUniversalRouter(
+            const result = await swapWithUniversalRouter(
               this.signer,
               tokenIn,
               adjustedAmount,
@@ -779,6 +779,15 @@ export class DexRouter {
               combinedSettings.uniswap.poolFactoryAddress,
               combinedSettings.uniswap.quoterV2Address
             );
+            if (!result?.success) {
+              const error =
+                result?.error ??
+                'Universal Router swap returned an unsuccessful result';
+              logger.error(
+                `Universal Router swap failed for token: ${tokenIn}: ${error}`
+              );
+              return { success: false, error };
+            }
             logger.info(
               `Universal Router swap successful: ${adjustedAmount.toString()} ${tokenIn} -> ${tokenOut}`
             );

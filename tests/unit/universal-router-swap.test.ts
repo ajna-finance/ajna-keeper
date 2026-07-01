@@ -2,7 +2,10 @@ import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import { swapWithUniversalRouter } from '../../src/dex/universal-router';
+import {
+  createUniversalRouterSwapper,
+  swapWithUniversalRouter,
+} from '../../src/dex/universal-router';
 import { NonceTracker } from '../../src/nonce';
 import * as uniswap from '../../src/dex/uniswap';
 import * as erc20 from '../../src/erc20';
@@ -78,12 +81,10 @@ function installMocks(
       ? sinon.stub().rejects(new Error('execution reverted: UR'))
       : sinon.stub().resolves({
           hash: '0xswap',
-          wait: sinon
-            .stub()
-            .resolves({
-              transactionHash: '0xswap',
-              gasUsed: BigNumber.from(21000),
-            }),
+          wait: sinon.stub().resolves({
+            transactionHash: '0xswap',
+            gasUsed: BigNumber.from(21000),
+          }),
         }),
   };
 
@@ -122,7 +123,10 @@ function swap(
   quoterAddr: string | undefined = QUOTER,
   targetAddr: string = TARGET
 ): Promise<any> {
-  return swapWithUniversalRouter(
+  const testSwapper = createUniversalRouterSwapper({
+    makeContract: mocks.makeContract as any,
+  });
+  return testSwapper(
     makeSigner(),
     TOKEN,
     amount,
@@ -132,8 +136,7 @@ function swap(
     PERMIT2,
     FEE,
     FACTORY,
-    quoterAddr,
-    { makeContract: mocks.makeContract as any }
+    quoterAddr
   );
 }
 
@@ -171,7 +174,10 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
     const m = installMocks();
     // Call directly with an omitted quoter — passing `undefined` through the
     // `swap()` helper would trigger its default parameter value instead.
-    const result = await swapWithUniversalRouter(
+    const testSwapper = createUniversalRouterSwapper({
+      makeContract: m.makeContract as any,
+    });
+    const result = await testSwapper(
       makeSigner(),
       TOKEN,
       AMOUNT,
@@ -181,8 +187,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
       PERMIT2,
       FEE,
       FACTORY,
-      undefined,
-      { makeContract: m.makeContract as any }
+      undefined
     );
     expect(result.success).to.equal(false);
     expect(result.error).to.match(/quoterV2Address|fail closed/i);
