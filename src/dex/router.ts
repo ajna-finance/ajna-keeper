@@ -542,7 +542,6 @@ export class DexRouter {
     return { success: false, error: 'Max retries reached for 1inch swap' };
   }
 
-
   // CURVE INTEGRATION: Simplified helper to find pool config by token pair
   public getCurvePoolForTokenPair(
     tokenIn: string,
@@ -779,10 +778,8 @@ export class DexRouter {
               combinedSettings.uniswap.poolFactoryAddress,
               combinedSettings.uniswap.quoterV2Address
             );
-            if (!result?.success) {
-              const error =
-                result?.error ??
-                'Universal Router swap returned an unsuccessful result';
+            if (!result.success) {
+              const error = result.error;
               logger.error(
                 `Universal Router swap failed for token: ${tokenIn}: ${error}`
               );

@@ -5,6 +5,7 @@ import { BigNumber, ethers } from 'ethers';
 import {
   createUniversalRouterSwapper,
   swapWithUniversalRouter,
+  type UniversalRouterSwapResult,
 } from '../../src/dex/universal-router';
 import { NonceTracker } from '../../src/nonce';
 import * as uniswap from '../../src/dex/uniswap';
@@ -122,7 +123,7 @@ function swap(
   amount: BigNumber = AMOUNT,
   quoterAddr: string | undefined = QUOTER,
   targetAddr: string = TARGET
-): Promise<any> {
+): Promise<UniversalRouterSwapResult> {
   const testSwapper = createUniversalRouterSwapper({
     makeContract: mocks.makeContract as any,
   });
@@ -165,7 +166,8 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
     const m = installMocks();
     const result = await swap(m);
     expect(result.success).to.equal(true);
-    expect(result.receipt.transactionHash).to.equal('0xswap');
+    if (!result.success) expect.fail(result.error);
+    expect(result.receipt?.transactionHash).to.equal('0xswap');
     expect(m.factory.getPool.calledOnce).to.equal(true);
     expect(m.router.execute.calledOnce).to.equal(true);
   });
@@ -190,6 +192,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
       undefined
     );
     expect(result.success).to.equal(false);
+    if (result.success) expect.fail('Expected omitted quoter to fail');
     expect(result.error).to.match(/quoterV2Address|fail closed/i);
     expect(m.token.approve.called, 'Permit2 token approval').to.equal(false);
     expect(m.permit2.approve.called, 'router approval').to.equal(false);
@@ -313,6 +316,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
     const m = installMocks({ executeRejects: true });
     const result = await swap(m);
     expect(result.success).to.equal(false);
+    if (result.success) expect.fail('Expected swap execution to fail');
     expect(result.error)
       .to.be.a('string')
       .and.match(/execution reverted/);

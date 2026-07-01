@@ -1,6 +1,6 @@
 // src/dex/universal-router.ts
 // FIXED: Now mirrors working SushiSwap patterns for decimal handling and conservative approach
-import { BigNumber, Signer, ethers } from 'ethers';
+import { BigNumber, Signer, ethers, providers } from 'ethers';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import { weiToDecimaled } from '../utils';
@@ -43,6 +43,10 @@ export type UniversalRouterContractServices = Pick<
   'makeContract'
 >;
 
+export type UniversalRouterSwapResult =
+  | { success: true; receipt?: providers.TransactionReceipt }
+  | { success: false; error: string };
+
 export type UniversalRouterSwapper = (
   signer: Signer,
   tokenAddress: string,
@@ -54,7 +58,7 @@ export type UniversalRouterSwapper = (
   feeTier: number,
   poolFactoryAddress: string,
   quoterV2Address?: string
-) => Promise<any>;
+) => Promise<UniversalRouterSwapResult>;
 
 export function createUniversalRouterSwapper(
   contracts: UniversalRouterContractServices = defaultDexContractServices
@@ -103,7 +107,7 @@ async function swapWithUniversalRouterUsingContracts(
   feeTier: number,
   poolFactoryAddress: string,
   quoterV2Address?: string
-) {
+): Promise<UniversalRouterSwapResult> {
   // VALIDATION: Same as SushiSwap with additional factory validation
   if (!universalRouterAddress) {
     throw new Error(
