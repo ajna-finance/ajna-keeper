@@ -2,10 +2,7 @@ import chai, { expect } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
-import {
-  swapWithUniversalRouter,
-  universalRouterDeps,
-} from '../../src/dex/universal-router';
+import { swapWithUniversalRouter } from '../../src/dex/universal-router';
 import { NonceTracker } from '../../src/nonce';
 import * as uniswap from '../../src/dex/uniswap';
 import * as erc20 from '../../src/erc20';
@@ -18,12 +15,8 @@ chai.use(chaiAsPromised);
 // universal-router.test.ts sinon-stubs the function under test, so before this
 // suite the live Permit2 approval, the bounded-router approval, and the
 // fail-closed quoter min-out guard had never actually executed in a test.
-//
-// The five `new Contract(...)` instances (factory, quoter, token, permit2,
-// router) are intercepted via `sinon.stub(ethers, 'Contract')` — the same
-// pattern dex-router.test.ts uses — keyed by address so each returns a
-// purpose-built mock. Addresses are real 20-byte values because the function
-// abi-encodes them into the Universal Router calldata.
+// Addresses are real 20-byte values because the function abi-encodes them into
+// the Universal Router calldata.
 const TOKEN = '0x1111111111111111111111111111111111111111';
 const TARGET = '0x2222222222222222222222222222222222222222';
 const SIGNER_ADDR = '0x3333333333333333333333333333333333333333';
@@ -42,6 +35,7 @@ interface Mocks {
   token: any;
   permit2: any;
   router: any;
+  makeContract: sinon.SinonStub;
 }
 
 function installMocks(
@@ -86,29 +80,30 @@ function installMocks(
           hash: '0xswap',
           wait: sinon
             .stub()
-            .resolves({ transactionHash: '0xswap', gasUsed: BigNumber.from(21000) }),
+            .resolves({
+              transactionHash: '0xswap',
+              gasUsed: BigNumber.from(21000),
+            }),
         }),
   };
 
-  sinon
-    .stub(universalRouterDeps, 'makeContract')
-    .callsFake((address: string) => {
-      switch (address.toLowerCase()) {
-        case FACTORY:
-          return factory as any;
-        case QUOTER:
-          return quoter as any;
-        case TOKEN:
-          return token as any;
-        case PERMIT2:
-          return permit2 as any;
-        case ROUTER:
-          return router as any;
-        default:
-          throw new Error(`unexpected Contract address ${address}`);
-      }
-    });
-  return { factory, quoter, token, permit2, router };
+  const makeContract = sinon.stub().callsFake((address: string) => {
+    switch (address.toLowerCase()) {
+      case FACTORY:
+        return factory as any;
+      case QUOTER:
+        return quoter as any;
+      case TOKEN:
+        return token as any;
+      case PERMIT2:
+        return permit2 as any;
+      case ROUTER:
+        return router as any;
+      default:
+        throw new Error(`unexpected Contract address ${address}`);
+    }
+  });
+  return { factory, quoter, token, permit2, router, makeContract };
 }
 
 function makeSigner(): any {
@@ -122,6 +117,7 @@ function makeSigner(): any {
 }
 
 function swap(
+  mocks: Mocks,
   amount: BigNumber = AMOUNT,
   quoterAddr: string | undefined = QUOTER,
   targetAddr: string = TARGET
@@ -136,7 +132,8 @@ function swap(
     PERMIT2,
     FEE,
     FACTORY,
-    quoterAddr
+    quoterAddr,
+    { makeContract: mocks.makeContract as any }
   );
 }
 
@@ -163,7 +160,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
 
   it('returns success with the swap receipt on the happy path', async () => {
     const m = installMocks();
-    const result = await swap();
+    const result = await swap(m);
     expect(result.success).to.equal(true);
     expect(result.receipt.transactionHash).to.equal('0xswap');
     expect(m.factory.getPool.calledOnce).to.equal(true);
@@ -184,7 +181,8 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
       PERMIT2,
       FEE,
       FACTORY,
-      undefined
+      undefined,
+      { makeContract: m.makeContract as any }
     );
     expect(result.success).to.equal(false);
     expect(result.error).to.match(/quoterV2Address|fail closed/i);
@@ -199,7 +197,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
 
   it('fails closed (no approval, no swap) when the quoted output is non-positive', async () => {
     const m = installMocks({ quotedOut: BigNumber.from(0) });
-    const result = await swap();
+    const result = await swap(m);
     expect(result.success).to.equal(false);
     expect(m.token.approve.called).to.equal(false);
     expect(m.permit2.approve.called).to.equal(false);
@@ -210,12 +208,14 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
     const amount = BigNumber.from(1000);
     const quotedOut = BigNumber.from(500);
     const m = installMocks({ quotedOut });
-    const result = await swap(amount);
+    const result = await swap(m, amount);
     expect(result.success).to.equal(true);
 
     // the quoter is asked for the INPUT amount + configured fee tier
     const qArg = m.quoter.callStatic.quoteExactInputSingle.firstCall.args[0];
-    expect(BigNumber.from(qArg.amountIn).toString()).to.equal(amount.toString());
+    expect(BigNumber.from(qArg.amountIn).toString()).to.equal(
+      amount.toString()
+    );
     expect(Number(qArg.fee)).to.equal(FEE);
 
     // decode the V3_SWAP_EXACT_IN inputs and pull amountOutMin (index 2)
@@ -241,18 +241,20 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
 
   it('approves Permit2 with MaxUint256 when the token->Permit2 allowance is insufficient', async () => {
     const m = installMocks({ permit2TokenAllowance: BigNumber.from(0) });
-    await swap();
+    await swap(m);
     expect(m.token.approve.calledOnce).to.equal(true);
     const [spender, value] = m.token.approve.firstCall.args;
     expect(spender).to.equal(PERMIT2);
-    expect(BigNumber.from(value).eq(ethers.constants.MaxUint256)).to.equal(true);
+    expect(BigNumber.from(value).eq(ethers.constants.MaxUint256)).to.equal(
+      true
+    );
   });
 
   it('skips the Permit2 token approval when the existing allowance already covers the amount', async () => {
     const m = installMocks({
       permit2TokenAllowance: ethers.constants.MaxUint256,
     });
-    const result = await swap();
+    const result = await swap(m);
     expect(result.success).to.equal(true);
     expect(m.token.approve.called, 'token->Permit2 approval skipped').to.equal(
       false
@@ -267,13 +269,15 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
       routerAllowanceExpiration: 0,
     });
     const before = Math.floor(Date.now() / 1000);
-    await swap(amount);
+    await swap(m, amount);
     expect(m.permit2.approve.calledOnce).to.equal(true);
     const [tok, spender, approveAmount, expiration] =
       m.permit2.approve.firstCall.args;
     expect(tok.toLowerCase()).to.equal(TOKEN);
     expect(spender).to.equal(ROUTER);
-    expect(BigNumber.from(approveAmount).toString()).to.equal(amount.toString());
+    expect(BigNumber.from(approveAmount).toString()).to.equal(
+      amount.toString()
+    );
     expect(
       BigNumber.from(approveAmount).eq(ethers.constants.MaxUint256),
       'bounded, not MaxUint256'
@@ -287,7 +291,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
       routerAllowanceAmount: BigNumber.from('100000000000000'),
       routerAllowanceExpiration: Math.floor(Date.now() / 1000) + 3600,
     });
-    const result = await swap();
+    const result = await swap(m);
     expect(result.success).to.equal(true);
     expect(m.permit2.approve.called, 'router approval skipped').to.equal(false);
     expect(m.router.execute.calledOnce).to.equal(true);
@@ -295,21 +299,23 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
 
   it('continues (warns) when no direct pool exists for the fee tier', async () => {
     const m = installMocks({ poolAddress: ethers.constants.AddressZero });
-    const result = await swap();
+    const result = await swap(m);
     expect(result.success).to.equal(true);
     expect(m.router.execute.calledOnce).to.equal(true);
   });
 
   it('returns {success:false,error} when the swap execution reverts', async () => {
-    installMocks({ executeRejects: true });
-    const result = await swap();
+    const m = installMocks({ executeRejects: true });
+    const result = await swap(m);
     expect(result.success).to.equal(false);
-    expect(result.error).to.be.a('string').and.match(/execution reverted/);
+    expect(result.error)
+      .to.be.a('string')
+      .and.match(/execution reverted/);
   });
 
   it('returns early without swapping when input and target tokens are identical', async () => {
     const m = installMocks();
-    const result = await swap(AMOUNT, QUOTER, TOKEN); // target == input
+    const result = await swap(m, AMOUNT, QUOTER, TOKEN); // target == input
     expect(result.success).to.equal(true);
     expect(m.factory.getPool.called).to.equal(false);
     expect(m.router.execute.called).to.equal(false);

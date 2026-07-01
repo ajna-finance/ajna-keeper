@@ -21,7 +21,16 @@ const CURVE_POOL_SELECTION_CACHE_TTL_MS = 5 * 60 * 1000;
 const CURVE_POOL_SELECTION_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES = 512;
 
-export const curveQuoteProviderDeps = {
+export interface CurveQuoteProviderAdapters {
+  makeContract: (
+    address: string,
+    abi: ethers.ContractInterface,
+    signer: Signer
+  ) => ethers.Contract;
+  getDecimals: typeof getDecimalsErc20;
+}
+
+const defaultCurveQuoteProviderAdapters: CurveQuoteProviderAdapters = {
   makeContract: (
     address: string,
     abi: ethers.ContractInterface,
@@ -85,12 +94,21 @@ interface CurvePoolSelectionCacheEntry {
 export class CurveQuoteProvider {
   private signer: Signer;
   private config: CurveQuoteConfig;
+  private adapters: CurveQuoteProviderAdapters;
   private isInitialized: boolean = false;
   private poolSelectionCache = new Map<string, CurvePoolSelectionCacheEntry>();
 
-  constructor(signer: Signer, config: CurveQuoteConfig) {
+  constructor(
+    signer: Signer,
+    config: CurveQuoteConfig,
+    adapters: Partial<CurveQuoteProviderAdapters> = {}
+  ) {
     this.signer = signer;
     this.config = config;
+    this.adapters = {
+      ...defaultCurveQuoteProviderAdapters,
+      ...adapters,
+    };
   }
 
   /**
@@ -395,7 +413,7 @@ export class CurveQuoteProvider {
 
     const poolAbi =
       poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-    const poolContract = curveQuoteProviderDeps.makeContract(
+    const poolContract = this.adapters.makeContract(
       poolAddress,
       poolAbi,
       this.signer
@@ -450,7 +468,7 @@ export class CurveQuoteProvider {
         selectedPool.poolType === CurvePoolType.STABLE
           ? STABLESWAP_ABI
           : CRYPTOSWAP_ABI;
-      const poolContract = curveQuoteProviderDeps.makeContract(
+      const poolContract = this.adapters.makeContract(
         selectedPool.address,
         poolAbi,
         this.signer
@@ -480,10 +498,10 @@ export class CurveQuoteProvider {
       // Get correct decimals for proper formatting
       const inputDecimals =
         decimals?.inputDecimals ??
-        (await curveQuoteProviderDeps.getDecimals(this.signer, tokenIn));
+        (await this.adapters.getDecimals(this.signer, tokenIn));
       const outputDecimals =
         decimals?.outputDecimals ??
-        (await curveQuoteProviderDeps.getDecimals(this.signer, tokenOut));
+        (await this.adapters.getDecimals(this.signer, tokenOut));
 
       logger.debug(
         `Curve quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`

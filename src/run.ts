@@ -6,6 +6,7 @@ import {
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   getManualPools,
+  isLpCollectionEnabled,
   EnabledKickSettings,
   KeeperConfig,
   PoolConfig,
@@ -26,18 +27,17 @@ import { runDiscoveredKickStep } from './kick/discovered-step';
 import { logger } from './logging';
 import {
   collectBondFromPool,
+  buildPoolConfigByAddress,
+  createLpRedeemerResolver,
   LpIngester,
   LpManager,
   LpRedeemer,
-  LpRedeemerResolver,
   RewardActionTracker,
 } from './rewards';
-import { isLpCollectionEnabled, resolveCollectLpRewardForPool } from './config';
 import { DexRouter } from './dex/router';
 import { tryReactiveSettlement } from './settlement';
 import {
   cacheConfiguredPool,
-  ensurePoolLoaded,
   normalizeAddress,
   PoolHydrationCooldowns,
   PoolMap,
@@ -397,7 +397,10 @@ export function superviseDaemonLoop(
   onFatal: (code: number) => void = (code) => process.exit(code)
 ): void {
   loop.catch((error) => {
-    logger.error(`${name} daemon loop terminated unexpectedly; exiting.`, error);
+    logger.error(
+      `${name} daemon loop terminated unexpectedly; exiting.`,
+      error
+    );
     onFatal(1);
   });
 }
@@ -751,7 +754,9 @@ export async function sweepRedeemerWithReactiveSettlement(params: {
         });
 
         if (settled) {
-          logger.info(`Retrying LP collection after settlement in ${pool.name}`);
+          logger.info(
+            `Retrying LP collection after settlement in ${pool.name}`
+          );
           try {
             await redeemer.sweep();
           } catch (retryError) {
@@ -788,70 +793,6 @@ export async function sweepRedeemerWithReactiveSettlement(params: {
       );
     }
   }
-}
-
-export function buildPoolConfigByAddress(
-  config: KeeperConfig
-): Map<string, PoolConfig> {
-  const poolConfigByAddress = new Map<string, PoolConfig>();
-  for (const pool of getManualPools(config)) {
-    poolConfigByAddress.set(normalizeAddress(pool.address), pool);
-  }
-  return poolConfigByAddress;
-}
-
-export function createLpRedeemerResolver(params: {
-  ajna: AjnaSDK;
-  poolMap: PoolMap;
-  config: KeeperConfig;
-  signer: Signer;
-  exchangeTracker: RewardActionTracker;
-  hydrationCooldowns: PoolHydrationCooldowns;
-  poolConfigByAddress?: Map<string, PoolConfig>;
-  redeemers?: Map<string, LpRedeemer>;
-}): LpRedeemerResolver {
-  const poolConfigByAddress =
-    params.poolConfigByAddress ?? buildPoolConfigByAddress(params.config);
-  const redeemers = params.redeemers ?? new Map<string, LpRedeemer>();
-
-  return async (poolAddress: string): Promise<LpRedeemer | undefined> => {
-    const normalized = normalizeAddress(poolAddress);
-    const cached = redeemers.get(normalized);
-    if (cached) {
-      return cached;
-    }
-
-    const pool = await ensurePoolLoaded({
-      ajna: params.ajna,
-      poolMap: params.poolMap,
-      poolAddress: normalized,
-      config: params.config,
-      hydrationCooldowns: params.hydrationCooldowns,
-    });
-    if (!pool) {
-      return undefined;
-    }
-
-    const matchingConfig = poolConfigByAddress.get(normalized);
-    const settings = resolveCollectLpRewardForPool(
-      params.config.rewards?.defaultLpReward,
-      matchingConfig?.collectLpReward,
-      normalized
-    );
-    if (!settings) {
-      return undefined;
-    }
-
-    const redeemer = new LpRedeemer(
-      pool,
-      params.signer,
-      settings,
-      params.config,
-      params.exchangeTracker
-    );
-    redeemers.set(normalized, redeemer);
-    return redeemer;
-  };
 }
 
 async function collectLpRewardsLoop({

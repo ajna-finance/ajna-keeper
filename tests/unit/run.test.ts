@@ -8,8 +8,6 @@ import {
 } from '../../src/config';
 import {
   assertRunOnceLiveAcknowledged,
-  buildPoolConfigByAddress,
-  createLpRedeemerResolver,
   initializeTakeLoop,
   isPermanentTakeWriteTransportInitializationError,
   planDaemonLoops,
@@ -19,7 +17,11 @@ import {
 
 import * as takeWriteTransportModule from '../../src/take/write-transport';
 import { PermanentTakeTransportError } from '../../src/take/write-transport';
-import { LpRedeemer } from '../../src/rewards';
+import {
+  buildPoolConfigByAddress,
+  createLpRedeemerResolver,
+  LpRedeemer,
+} from '../../src/rewards';
 import { logger } from '../../src/logging';
 
 const BASE_CONFIG: KeeperConfig = {
@@ -583,9 +585,7 @@ describe('LP reward redeemer resolver', () => {
     const resolver = createLpRedeemerResolver({
       ajna: {
         fungiblePoolFactory: {
-          getPoolByAddress: sinon
-            .stub()
-            .rejects(new Error('pool unavailable')),
+          getPoolByAddress: sinon.stub().rejects(new Error('pool unavailable')),
           getPoolAddress: sinon.stub(),
         },
       } as any,

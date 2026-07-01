@@ -3,7 +3,7 @@ import sinon from 'sinon';
 import { BigNumber, ethers } from 'ethers';
 import {
   CurveQuoteProvider,
-  curveQuoteProviderDeps,
+  CurveQuoteProviderAdapters,
 } from '../../src/dex/providers/curve-quote-provider';
 import { CurvePoolType } from '../../src/config';
 
@@ -31,23 +31,30 @@ describe('Curve Quote Provider', () => {
     sinon.restore();
   });
 
-  function makeProvider(overrides: any = {}): CurveQuoteProvider {
-    return new CurveQuoteProvider(mockSigner, {
-      poolConfigs: {
-        'WETH-USDC': {
-          address: POOL,
-          poolType: CurvePoolType.STABLE,
+  function makeProvider(
+    overrides: any = {},
+    adapters: Partial<CurveQuoteProviderAdapters> = {}
+  ): CurveQuoteProvider {
+    return new CurveQuoteProvider(
+      mockSigner,
+      {
+        poolConfigs: {
+          'WETH-USDC': {
+            address: POOL,
+            poolType: CurvePoolType.STABLE,
+          },
         },
+        defaultSlippage: 1.0,
+        wethAddress: WETH,
+        tokenAddresses: {
+          WETH,
+          USDC,
+          DAI,
+        },
+        ...overrides,
       },
-      defaultSlippage: 1.0,
-      wethAddress: WETH,
-      tokenAddresses: {
-        WETH,
-        USDC,
-        DAI,
-      },
-      ...overrides,
-    });
+      adapters
+    );
   }
 
   function selectedPool(overrides: any = {}) {
@@ -60,10 +67,16 @@ describe('Curve Quote Provider', () => {
     };
   }
 
-  function stubCurveContract(contract: any) {
-    return sinon
-      .stub(curveQuoteProviderDeps, 'makeContract')
-      .callsFake((_address: string, _abi: any, _signer: any) => contract);
+  function curveContractAdapters(
+    contract: any
+  ): Partial<CurveQuoteProviderAdapters> {
+    return {
+      makeContract: sinon
+        .stub()
+        .callsFake(
+          (_address: string, _abi: any, _signer: any) => contract
+        ) as any,
+    };
   }
 
   describe('Real provider fail-closed behavior', () => {
@@ -235,9 +248,8 @@ describe('Curve Quote Provider', () => {
       coins.withArgs(0).resolves(WETH);
       coins.withArgs(1).resolves(USDC);
       coins.rejects(new Error('index out of range'));
-      stubCurveContract({ coins });
 
-      const provider: any = makeProvider();
+      const provider: any = makeProvider({}, curveContractAdapters({ coins }));
       const indices = await provider.discoverTokenIndices(
         POOL,
         CurvePoolType.STABLE,
@@ -254,9 +266,8 @@ describe('Curve Quote Provider', () => {
       coins.withArgs(0).resolves(WETH);
       coins.withArgs(1).resolves(USDC);
       coins.rejects(new Error('index out of range'));
-      stubCurveContract({ coins });
 
-      const provider: any = makeProvider();
+      const provider: any = makeProvider({}, curveContractAdapters({ coins }));
       const indices = await provider.discoverTokenIndices(
         POOL,
         CurvePoolType.CRYPTO,
@@ -273,9 +284,7 @@ describe('Curve Quote Provider', () => {
       expect(await provider.poolExists(WETH, USDC)).to.equal(true);
 
       const missingProvider: any = makeProvider();
-      sinon
-        .stub(missingProvider, 'resolvePoolSelection')
-        .resolves(undefined);
+      sinon.stub(missingProvider, 'resolvePoolSelection').resolves(undefined);
       expect(await missingProvider.poolExists(DAI, USDC)).to.equal(false);
 
       const failingProvider: any = makeProvider();
@@ -292,14 +301,16 @@ describe('Curve Quote Provider', () => {
       expect(noPool.success).to.equal(false);
       expect(noPool.error).to.match(/No Curve pool configured/);
 
-      const zeroProvider: any = makeProvider();
+      const getDy = sinon.stub().resolves(BigNumber.from(0));
+      const zeroProvider: any = makeProvider(
+        {},
+        curveContractAdapters({ get_dy: getDy })
+      );
       sinon.stub(zeroProvider, 'resolvePoolSelection').resolves(
         selectedPool({
           poolType: CurvePoolType.CRYPTO,
         })
       );
-      const getDy = sinon.stub().resolves(BigNumber.from(0));
-      stubCurveContract({ get_dy: getDy });
 
       const zeroQuote = await zeroProvider.getQuote(
         BigNumber.from(100),
@@ -315,11 +326,13 @@ describe('Curve Quote Provider', () => {
     });
 
     it('returns successful quotes with the selected pool attached', async () => {
-      const provider: any = makeProvider();
+      const getDy = sinon.stub().resolves(BigNumber.from(950));
+      const provider: any = makeProvider(
+        {},
+        curveContractAdapters({ get_dy: getDy })
+      );
       const pool = selectedPool();
       sinon.stub(provider, 'resolvePoolSelection').resolves(pool);
-      const getDy = sinon.stub().resolves(BigNumber.from(950));
-      stubCurveContract({ get_dy: getDy });
 
       const quote = await provider.getQuote(BigNumber.from(1000), WETH, USDC, {
         inputDecimals: 18,
@@ -332,12 +345,19 @@ describe('Curve Quote Provider', () => {
     });
 
     it('loads token decimals only when quote decimals are not supplied', async () => {
-      const provider: any = makeProvider();
-      sinon.stub(provider, 'resolvePoolSelection').resolves(selectedPool());
-      stubCurveContract({ get_dy: sinon.stub().resolves(BigNumber.from(950)) });
-      const getDecimals = sinon.stub(curveQuoteProviderDeps, 'getDecimals');
+      const getDecimals = sinon.stub();
       getDecimals.withArgs(mockSigner, WETH).resolves(18);
       getDecimals.withArgs(mockSigner, USDC).resolves(6);
+      const provider: any = makeProvider(
+        {},
+        {
+          ...curveContractAdapters({
+            get_dy: sinon.stub().resolves(BigNumber.from(950)),
+          }),
+          getDecimals: getDecimals as any,
+        }
+      );
+      sinon.stub(provider, 'resolvePoolSelection').resolves(selectedPool());
 
       const quote = await provider.getQuote(BigNumber.from(1000), WETH, USDC);
 
@@ -361,18 +381,18 @@ describe('Curve Quote Provider', () => {
         ['rpc unavailable', undefined, 'Curve quote error: rpc unavailable'],
       ]) {
         sinon.restore();
-        const provider: any = makeProvider();
-        sinon.stub(provider, 'resolvePoolSelection').resolves(selectedPool());
         const error: any = new Error(message);
         error.reason = reason;
-        stubCurveContract({ get_dy: sinon.stub().rejects(error) });
-
-        const quote = await provider.getQuote(
-          BigNumber.from(100),
-          WETH,
-          USDC,
-          { inputDecimals: 18, outputDecimals: 6 }
+        const provider: any = makeProvider(
+          {},
+          curveContractAdapters({ get_dy: sinon.stub().rejects(error) })
         );
+        sinon.stub(provider, 'resolvePoolSelection').resolves(selectedPool());
+
+        const quote = await provider.getQuote(BigNumber.from(100), WETH, USDC, {
+          inputDecimals: 18,
+          outputDecimals: 6,
+        });
         expect(quote).to.deep.equal({ success: false, error: expected });
       }
     });
