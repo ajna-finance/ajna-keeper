@@ -1,0 +1,454 @@
+{
+  "version": 1,
+  "coverageSource": "coverage/lcov.info after npm run coverage",
+  "targets": [
+    {
+      "id": "auto-discover-validation",
+      "tier": "A",
+      "sourceFiles": ["src/config/auto-discover-validation.ts"],
+      "testFiles": ["tests/unit/auto-discover-validation.test.ts"],
+      "workType": "complete",
+      "coverageSnapshot": [
+        {
+          "file": "src/config/auto-discover-validation.ts",
+          "branchPercent": 100,
+          "uncoveredBranches": 0
+        }
+      ],
+      "safetyInvariant": "Invalid auto-discovery config fails before keeper startup; partial kick/take config cannot silently enable unsafe discovery.",
+      "failureModes": [
+        "discovery disabled early return",
+        "no enabled discovery action",
+        "kick requires take",
+        "per-policy reject guards",
+        "warning branches that protect ambiguous config"
+      ],
+      "implementationNotes": "Completed with focused guard tests for disabled/no-action discovery, missing defaults, warning-only operator footguns, direct-DEX path/source controls, chain-specific 1inch executor allowlists, gas override keys and bounds, quote-normalized profit floor context, and settlement defaults/gas caps."
+    },
+    {
+      "id": "sushi-aggregator-route-validation",
+      "tier": "A",
+      "sourceFiles": ["src/dex/sushi-aggregator/validate-route.ts"],
+      "testFiles": ["tests/unit/sushi-aggregator-validation.test.ts"],
+      "workType": "complete",
+      "coverageSnapshot": [
+        {
+          "file": "src/dex/sushi-aggregator/validate-route.ts",
+          "branchPercent": 100,
+          "uncoveredBranches": 0
+        }
+      ],
+      "safetyInvariant": "Malformed Sushi routes fail closed before quote approval or execution calldata is trusted.",
+      "failureModes": [
+        "missing route fields",
+        "wrong token direction",
+        "invalid amount or recipient",
+        "unsupported pool/path shape"
+      ],
+      "implementationNotes": "Completed with table-driven route-shape mutations from a single valid fixture; keep future provider-response guards in this suite."
+    },
+    {
+      "id": "external-take-quote-approval",
+      "tier": "A",
+      "sourceFiles": [
+        "src/take/external-take/quote-approval-rules.ts",
+        "src/take/aggregator-calldata/quote-approval.ts"
+      ],
+      "testFiles": ["tests/unit/external-take-quote-approval.test.ts"],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/take/external-take/quote-approval-rules.ts",
+          "branchPercent": 98.1,
+          "uncoveredBranches": 1
+        },
+        {
+          "file": "src/take/aggregator-calldata/quote-approval.ts",
+          "branchPercent": 100,
+          "uncoveredBranches": 0
+        }
+      ],
+      "safetyInvariant": "Aggregator quotes cannot execute when provider identity, source, native value, route floor, or pool metadata is inconsistent.",
+      "failureModes": [
+        "wrong provider id or source",
+        "non-zero native value",
+        "missing approved floor",
+        "missing fee tier",
+        "missing Curve pool",
+        "missing min-out floor"
+      ],
+      "implementationNotes": "Hardened with nested approveCalldataAggregatorQuoteForExecution and direct DEX approval/binding tests. Remaining uncovered quote-approval-rules branch is the private unsupported-source fallback in resolveDirectDexRouteFields; exported route binding rejects unsupported sources before that fallback is reachable."
+    },
+    {
+      "id": "external-take-profitability-policy",
+      "tier": "A",
+      "sourceFiles": ["src/discovery/external-take/profitability-policy.ts"],
+      "testFiles": [
+        "tests/unit/external-take-profitability-policy.test.ts"
+      ],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/discovery/external-take/profitability-policy.ts",
+          "branchPercent": 96.1,
+          "uncoveredBranches": 2
+        }
+      ],
+      "safetyInvariant": "Discovery approval rejects external takes that do not clear route-derived profit floors or lack raw profitability context.",
+      "failureModes": [
+        "missing raw policy inputs",
+        "direct DEX source below profitability floor",
+        "aggregator quote below route min-out",
+        "stats not incremented on rejected profit floor"
+      ],
+      "implementationNotes": "Hardened with a focused pure-policy suite covering simple profitability telemetry, raw aggregator/direct-DEX profit-floor approvals and rejects, hybrid fallback missing gas cost, legacy quote-normalized floor rejects, stale floor handling, subsidy approvals, and stats counting. Remaining uncovered branches are defensive fallbacks unreachable through the public wrapper: the direct-DEX raw-context recheck after canApplyRawRoutePolicy, and the route-policy rejection-reason fallback when applyExternalTakeRoutePolicy rejects without a reason."
+    },
+    {
+      "id": "lifi-route-canary-env",
+      "tier": "A",
+      "sourceFiles": ["src/dex/lifi/route-canary-env.ts"],
+      "testFiles": ["tests/unit/lifi-route-canary.test.ts"],
+      "workType": "complete",
+      "coverageSnapshot": [
+        {
+          "file": "src/dex/lifi/route-canary-env.ts",
+          "branchPercent": 100,
+          "uncoveredBranches": 0
+        }
+      ],
+      "safetyInvariant": "LiFi canary env parsing rejects malformed live-check input instead of running with bad route or allowlist assumptions.",
+      "failureModes": [
+        "invalid positive integer env",
+        "invalid selector allowlist JSON",
+        "malformed route candidate",
+        "bad token or taker address",
+        "zero or non-decimal raw amount"
+      ],
+      "implementationNotes": "Completed with direct parser tests in the existing canary unit suite; keep live RPC checks out of this target."
+    },
+    {
+      "id": "dex-router-decomposition",
+      "tier": "B",
+      "sourceFiles": ["src/dex/router.ts"],
+      "testFiles": ["tests/unit/dex-router.test.ts"],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/dex/router.ts",
+          "branchPercent": 96.1,
+          "uncoveredBranches": 7
+        }
+      ],
+      "safetyInvariant": "DexRouter dispatches only supported liquidity sources, converts slippage consistently, rejects dust amounts, and cannot silently skip Curve or Universal Router error guards.",
+      "failureModes": [
+        "invalid swap parameters and no-op token pairs",
+        "dust amount fail-closed guard",
+        "unsupported DEX dispatch",
+        "missing 1inch router/config/env",
+        "1inch malformed amounts, native value, target, retryability, and patching flags",
+        "Universal Router slippage percent-to-bps conversion and failure without legacy fallback",
+        "legacy Uniswap V3 fallback and failure",
+        "Curve missing config/pool lookup and router failure"
+      ],
+      "implementationNotes": "Hardened with focused branch tests instead of adding a broad router deps bag. Remaining uncovered branches are low-value optional/default expression fallbacks or defensive BigNumber parse catches that are not reachable through realistic API payloads."
+    },
+    {
+      "id": "discovery-gas-policy",
+      "tier": "B",
+      "sourceFiles": ["src/discovery/gas-policy.ts"],
+      "testFiles": ["tests/unit/discovery-gas-policy.test.ts"],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/discovery/gas-policy.ts",
+          "branchPercent": 93.3,
+          "uncoveredBranches": 16
+        }
+      ],
+      "safetyInvariant": "Discovery rejects takes when gas cost cannot be priced or exceeds configured native/quote policy.",
+      "failureModes": [
+        "signer provider unavailable",
+        "gas price above cap",
+        "native gas cost above cap",
+        "wrapped native token unconfigured",
+        "1inch gas quote empty, retryable, no-route, or thrown failure",
+        "Uniswap direct DEX provider unavailable or zero/lower-output tiers",
+        "Curve native to quote conversion",
+        "Curve quote provider unavailable or no usable quote",
+        "missing gas telemetry requiring read transport"
+      ],
+      "implementationNotes": "Hardened with focused evaluateGasPolicy tests for provider/gas/native/quote cap rejects, no-quote approvals, zero-gas profit apportionment, wrapped-native direct pricing, 1inch circuit and failure telemetry, Uniswap fallback/direct-DEX quote selection, and cached Curve provider success/failure. Remaining uncovered branches are defensive/private helper fallbacks that public evaluateGasPolicy source selection prevents or low-value logging/cache-key branches."
+    },
+    {
+      "id": "take-write-transport",
+      "tier": "B",
+      "sourceFiles": ["src/take/write-transport.ts"],
+      "testFiles": [
+        "tests/unit/take-write-transport.test.ts",
+        "tests/unit/take-write-submission.test.ts"
+      ],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/take/write-transport.ts",
+          "branchPercent": 92,
+          "uncoveredBranches": 13
+        }
+      ],
+      "safetyInvariant": "Take writes choose the intended public/private/relay transport and fail closed on unsupported or unhealthy submission paths.",
+      "failureModes": [
+        "explicit transport override",
+        "missing private_rpc rpcUrl",
+        "missing relay url",
+        "relay signer chain mismatch",
+        "relay signer missing provider",
+        "public/private receipt failure after accepted submission",
+        "private durable nonce floor persistence failure",
+        "relay populated nonce missing",
+        "relay mode fallback",
+        "private RPC initialization",
+        "nonce-consumed classification",
+        "relay error response with accepted tx hash",
+        "relay explicit error without nonce preservation",
+        "relay null receipt after acceptance"
+      ],
+      "implementationNotes": "Hardened with startup/config guard tests, public/private receipt failure classification, private durable nonce floor failure handling, relay signer/nonce guards, relay object-form hashes and custom headers, relay error-response accepted-hash preservation, explicit relay error bubbling, and null receipt wrapping. Existing take-write-submission tests cover direct DEX write transport use and accepted-submission pre/post-broadcast classification. Remaining uncovered branches are mostly optional/default expression fallbacks and low-level relay response-shape noise."
+    },
+    {
+      "id": "reward-action-tracker",
+      "tier": "B",
+      "sourceFiles": ["src/rewards/action-tracker.ts"],
+      "testFiles": ["tests/unit/reward-action-tracker.test.ts"],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/rewards/action-tracker.ts",
+          "branchPercent": 100,
+          "uncoveredBranches": 0
+        }
+      ],
+      "safetyInvariant": "Reward action tracking refuses unsafe post-auction swaps when DEX config or target resolution is incomplete.",
+      "failureModes": [
+        "validatePostAuctionDex throw",
+        "missing dexProvider",
+        "unresolved swap target",
+        "fail-closed collateral swap guard",
+        "retry-ceiling cleanup",
+        "transfer dust and transfer failure retry handling",
+        "malformed queued reward key"
+      ],
+      "implementationNotes": "Hardened with focused RewardActionTracker tests for missing dexProvider, validatePostAuctionDex failure, unresolved target address, legacy/universal-router WETH target fallback, router-level QuoterV2 resolution, default exchange slippage/fee handling, transfer WAD-to-token conversion, dust-transfer removal, transfer failure retry cleanup, unsupported action queue behavior, retry-ceiling cleanup, malformed queue key rejection, and missing-entry removeToken accounting. The suite uses stubbed router/ERC20 boundaries and does not require live swap execution."
+    },
+    {
+      "id": "collect-lp-collateral-legs",
+      "tier": "B",
+      "sourceFiles": ["src/rewards/collect-lp.ts"],
+      "testFiles": [
+        "tests/unit/collect-lp-collector.test.ts",
+        "tests/unit/collect-lp-manager.test.ts"
+      ],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/rewards/collect-lp.ts",
+          "branchPercent": 85.3,
+          "uncoveredBranches": 19
+        }
+      ],
+      "safetyInvariant": "LP reward collection handles collateral withdrawal and redeemCollateral legs, not only 1:1 quote redemption fixtures.",
+      "failureModes": [
+        "collateral-first redemption branch",
+        "quote-to-collateral residual redemption",
+        "collateral-to-quote residual redemption",
+        "collateral principal over-redemption",
+        "reward action for collateral token",
+        "post-withdrawal read failure after collateral tx",
+        "stale collateral redemption rejection",
+        "collateral dry-run guard"
+      ],
+      "implementationNotes": "Hardened the bucket-level collector suite with fake-bucket tests for collateral-first reward-equivalent bounds, quote-to-collateral and collateral-to-quote residual legs, collateral reward-action enqueue before post-read, post-withdrawal read failure avoiding a redundant quote fallback, stale collateral redemption rejection cleanup, and dry-run no-submit behavior. Remaining uncovered branches are mostly ingester configuration/default fallbacks, advisory seen-id threshold logging, missing pool.id defense, below-threshold dust pruning, AuctionNotCleared rethrow, and negative-LP accounting guards."
+    },
+    {
+      "id": "aggregator-calldata-execution-guards",
+      "tier": "B",
+      "sourceFiles": ["src/take/aggregator-calldata/execution.ts"],
+      "testFiles": [
+        "tests/unit/aggregator-calldata-execution.test.ts"
+      ],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/take/aggregator-calldata/execution.ts",
+          "branchPercent": 93,
+          "uncoveredBranches": 5
+        }
+      ],
+      "safetyInvariant": "Aggregator calldata execution refuses stale, context-mismatched, or below-floor quotes before signing.",
+      "failureModes": [
+        "pre-broadcast approval rejection telemetry",
+        "approved floor calldata encoding",
+        "fresh quote floor error",
+        "route min-out floor error",
+        "quote age error",
+        "auction context price drift",
+        "dry-run preflight guard",
+        "missing router or taker guard",
+        "zero-rounded collateral guard",
+        "provider quote failure retry classification",
+        "fresh quote still-current assertion failure"
+      ],
+      "implementationNotes": "Hardened with pure-helper and prepared-execution tests for pre-broadcast approval rejection telemetry, approved-floor calldata encoding, quote age checks, auction-context drift, fresh-quote floor and route min-out rejects, dry-run preflight, missing router/taker guards, zero-rounded collateral rejection before quote-provider calls, provider quote failure retry metadata, stale quote rejection, ready execution wiring, and post-prepare still-current assertion failure notification. Remaining uncovered branches are optional/default expression fallbacks and low-value telemetry shape branches."
+    },
+    {
+      "id": "curve-quote-provider",
+      "tier": "B",
+      "sourceFiles": ["src/dex/providers/curve-quote-provider.ts"],
+      "testFiles": ["tests/unit/curve-quote-provider.test.ts"],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/dex/providers/curve-quote-provider.ts",
+          "branchPercent": 99,
+          "uncoveredBranches": 1
+        }
+      ],
+      "safetyInvariant": "Curve quote provider treats zero-output, cache, and quote errors as non-executable route signals.",
+      "failureModes": [
+        "unavailable provider initialization",
+        "positive and negative pool-selection cache",
+        "expired cache entries",
+        "symbol lookup and address fallback",
+        "token-index discovery and ETH/WETH normalization",
+        "zero-output quote",
+        "missing Curve pool",
+        "insufficient liquidity",
+        "pool revert",
+        "generic quote provider error",
+        "market-price quote and amount failures"
+      ],
+      "implementationNotes": "Hardened with a narrow exported deps seam for contract construction/decimals and focused real-provider tests covering initialization, configured-pool reporting, cache hit/miss/expiry, symbol lookup, address fallback checks, token-symbol misses, token-index discovery with ETH/WETH normalization, token-in-pool discovery errors, poolExists true/false/throw, no-pool quotes, zero-output quotes, successful quotes, decimals fallback, insufficient-liquidity/revert/generic quote errors, and market-price quote/amount/throw failures. The remaining missed branch is low-value optional-expression noise."
+    },
+    {
+      "id": "discovery-targets-runtime",
+      "tier": "C",
+      "sourceFiles": [
+        "src/discovery/targets.ts",
+        "src/discovery/runtime.ts"
+      ],
+      "testFiles": [
+        "tests/unit/discovery-targets.test.ts",
+        "tests/unit/discovery-runtime.test.ts"
+      ],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/discovery/targets.ts",
+          "branchPercent": 84.1,
+          "uncoveredBranches": 38
+        },
+        {
+          "file": "src/discovery/runtime.ts",
+          "branchPercent": 86.6,
+          "uncoveredBranches": 27
+        }
+      ],
+      "safetyInvariant": "Discovery cycle failures are classified and rethrown/logged without hiding broken target resolution.",
+      "failureModes": [
+        "discovered target handler failure containment",
+        "hot-cache chain id lookup failure",
+        "pool hydration unavailable",
+        "cached take snapshot target-resolution failure",
+        "cached settlement snapshot target-resolution failure",
+        "shared scan clearing"
+      ],
+      "implementationNotes": "Hardened with orchestration-boundary tests covering discovered take handler failure containment and summary accounting, hot auction cache chain-id lookup failure, pool hydration unavailability, and cached malformed take/settlement snapshots rethrowing with phase=targets failure logs. Existing target tests cover invalid discovered take/settlement targets and shared scan cache isolation. Remaining misses are lower-value optional/default branches, telemetry formatting, and hot-cache removal/debug paths."
+    },
+    {
+      "id": "take-engine-nonce-consumed",
+      "tier": "C",
+      "sourceFiles": ["src/take/engine.ts"],
+      "testFiles": ["tests/unit/external-take-reapproval.test.ts"],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/take/engine.ts",
+          "branchPercent": 87.2,
+          "uncoveredBranches": 15
+        }
+      ],
+      "safetyInvariant": "After external-take execution, nonce-consumed fallback cannot accidentally run or report an unsafe arbTake branch.",
+      "failureModes": [
+        "arbTake after external-take nonce consumed",
+        "execution callback classification",
+        "dry-run nonce-consumed propagation",
+        "attempted submission state invalidation"
+      ],
+      "implementationNotes": "Hardened with direct executeTakeDecision tests covering an external take followed by post-take arbTake revalidation, nonce-consumed arbTake receipt failure classification as submittedTransaction/poolStateMayHaveChanged with executedArbTake=false, execution callback classification, and dry-run propagation of nonce-consumed errors. Remaining uncovered branches are broader engine orchestration paths such as skip logging, candidate-loop stop options, and optional/default callback branches."
+    },
+    {
+      "id": "run-entrypoints",
+      "tier": "C",
+      "sourceFiles": ["src/run.ts"],
+      "testFiles": ["tests/unit/run.test.ts"],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/run.ts",
+          "branchPercent": 90.7,
+          "uncoveredBranches": 8
+        }
+      ],
+      "safetyInvariant": "Startup entrypoints resolve daemon loops, run-once mode, and LP reward collection through testable collaborators instead of hard imports.",
+      "failureModes": [
+        "startKeeperFromConfig branch",
+        "run-once branch",
+        "collect LP rewards loop",
+        "hard-imported redeemer"
+      ],
+      "implementationNotes": "Hardened with startup gating tests for no take work, successful/transient/permanent take write transport initialization, run-once live acknowledgement, daemon-loop launch planning, and an extracted LP redeemer resolver covering normalized cache hits, default LP settings, per-pool LP overrides, missing settings, and hydration failure. Remaining misses are mostly hard-imported infinite loop bodies and low-value optional/logging branches."
+    },
+    {
+      "id": "utils-provider-nonce",
+      "tier": "C",
+      "sourceFiles": [
+        "src/utils.ts",
+        "src/provider.ts",
+        "src/nonce.ts"
+      ],
+      "testFiles": [
+        "tests/unit/utils.test.ts",
+        "tests/unit/provider.test.ts",
+        "tests/unit/nonce.test.ts"
+      ],
+      "workType": "hardened",
+      "coverageSnapshot": [
+        {
+          "file": "src/utils.ts",
+          "branchPercent": 86.1,
+          "uncoveredBranches": 19
+        },
+        {
+          "file": "src/provider.ts",
+          "branchPercent": 100.0,
+          "uncoveredBranches": 0
+        },
+        {
+          "file": "src/nonce.ts",
+          "branchPercent": 92.3,
+          "uncoveredBranches": 6
+        }
+      ],
+      "safetyInvariant": "Utility, provider fee-data, and durable nonce fallbacks fail closed or recover deterministically under RPC errors.",
+      "failureModes": [
+        "provider priority-fee RPC method",
+        "provider EIP-1559 fee calculation",
+        "provider gas price and priority-fee fallback",
+        "provider legacy block fallback",
+        "durable nonce floor catch-up",
+        "durable nonce block-height lookup failure",
+        "low-value utility fallback branches"
+      ],
+      "implementationNotes": "Hardened with focused provider and durable nonce tests covering priority-fee RPC usage, EIP-1559 fee calculation, RPC fallback to default priority fee, legacy no-base-fee responses, provider-caught-up durable nonce clearing, and block-height lookup failure preservation. Remaining misses are low-value utility/default-expression branches and broader optional nonce paths."
+    }
+  ]
+}

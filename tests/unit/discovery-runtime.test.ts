@@ -300,6 +300,62 @@ describe('Run Loop Discovery Integration', () => {
     );
   });
 
+  it('skips take execution when a dedicated take write transport is configured with a non-wallet signer', async () => {
+    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
+    const createTakeWriteTransportStub = sinon.stub(
+      takeWriteTransportModule,
+      'createTakeWriteTransport'
+    );
+    const loggerErrorStub = sinon.stub(logger, 'error');
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      writes: {
+        take: {
+          mode: TakeWriteTransportMode.PRIVATE_RPC,
+          rpcUrl: 'http://127.0.0.1:1',
+        },
+      },
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0x1111111111111111111111111111111111111111',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        ],
+      },
+    };
+
+    await createTestDiscoveryRuntime({
+      config,
+      poolMap: new Map([
+        [
+          config.manual.pools[0].address,
+          {
+            name: 'Manual Take Pool',
+            poolAddress: config.manual.pools[0].address,
+          } as any,
+        ],
+      ]),
+      signer: {
+        getChainId: sinon.stub().resolves(1),
+      } as any,
+    }).runTakeCycle();
+
+    expect(handleTakesStub.called).to.equal(false);
+    expect(createTakeWriteTransportStub.called).to.equal(false);
+    expect(
+      loggerErrorStub.calledWithMatch(
+        sinon.match('requires a wallet-capable signer')
+      )
+    ).to.equal(true);
+  });
+
   it('keeps the manual-only settlement path unchanged when auto discovery is disabled', async () => {
     const handleSettlementsStub = sinon
       .stub(settlementModule, 'handleSettlements')
@@ -494,6 +550,200 @@ describe('Run Loop Discovery Integration', () => {
     ).to.have.length(1);
     expect(getPoolByAddressStub.calledOnce).to.be.true;
     expect(discoveryStub.calledOnce).to.be.true;
+  });
+
+  it('contains discovered take handler failures and reports them in the cycle summary', async () => {
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
+      .rejects(new Error('temporary take handler failure'));
+    const loggerErrorStub = sinon.stub(logger, 'error');
+    const loggerInfoStub = sinon.stub(logger, 'info');
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '2',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '2',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+
+    await createTestDiscoveryRuntime({
+      ajna: {
+        fungiblePoolFactory: {
+          getPoolByAddress: sinon.stub().resolves({
+            name: 'Discovered Pool',
+            poolAddress: '0x4444444444444444444444444444444444444444',
+            quoteAddress: '0x5555555555555555555555555555555555555555',
+            collateralAddress: '0x6666666666666666666666666666666666666666',
+          }),
+        },
+      } as any,
+      config: {
+        ...BASE_CONFIG,
+        discovery: {
+          enabled: true,
+          take: true,
+          defaults: {
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        },
+      },
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+      } as any,
+      discoverySnapshotState: {},
+    }).runTakeCycle();
+
+    expect(handleDiscoveredTakeTargetStub.calledOnce).to.be.true;
+    expect(
+      loggerErrorStub.calledWithMatch(
+        sinon.match('Failed to handle take for pool: Discovered Pool.')
+      )
+    ).to.be.true;
+    const summaryLog = loggerInfoStub
+      .getCalls()
+      .map((call) => call.args[0])
+      .find(
+        (message: any) =>
+          typeof message === 'string' &&
+          message.includes('Discovery take cycle summary:')
+      );
+    expect(summaryLog).to.include('targetSuccesses=0');
+    expect(summaryLog).to.include('targetFailures=1');
+  });
+
+  it('continues discovered take execution when hot-cache chain id lookup fails', async () => {
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
+      .resolves();
+    const loggerWarnStub = sinon.stub(logger, 'warn');
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '2',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '2',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+
+    await createTestDiscoveryRuntime({
+      ajna: {
+        fungiblePoolFactory: {
+          getPoolByAddress: sinon.stub().resolves({
+            name: 'Discovered Pool',
+            poolAddress: '0x4444444444444444444444444444444444444444',
+            quoteAddress: '0x5555555555555555555555555555555555555555',
+            collateralAddress: '0x6666666666666666666666666666666666666666',
+          }),
+        },
+      } as any,
+      config: {
+        ...BASE_CONFIG,
+        discovery: {
+          enabled: true,
+          take: true,
+          defaults: {
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        },
+      },
+      signer: {
+        getChainId: sinon.stub().rejects(new Error('chain id unavailable')),
+      } as any,
+      discoverySnapshotState: {},
+    }).runTakeCycle();
+
+    expect(handleDiscoveredTakeTargetStub.calledOnce).to.be.true;
+    expect(
+      loggerWarnStub.calledWithMatch(
+        sinon.match(
+          'Discovery runtime could not resolve chainId; hot auction cache will be skipped this cycle'
+        )
+      )
+    ).to.be.true;
+  });
+
+  it('skips discovered take execution when pool hydration is unavailable', async () => {
+    const handleDiscoveredTakeTargetStub = sinon
+      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
+      .resolves();
+    const loggerInfoStub = sinon.stub(logger, 'info');
+    sinon.stub(logger, 'error');
+    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
+      liquidationAuctions: [
+        {
+          borrower: '0xBorrowerA',
+          kickTime: '1',
+          debtRemaining: '3',
+          collateralRemaining: '2',
+          neutralPrice: '4',
+          debt: '3',
+          collateral: '2',
+          pool: { id: '0x4444444444444444444444444444444444444444' },
+        },
+      ],
+    });
+
+    await createTestDiscoveryRuntime({
+      ajna: {
+        fungiblePoolFactory: {
+          getPoolByAddress: sinon
+            .stub()
+            .rejects(new Error('pool hydration unavailable')),
+        },
+      } as any,
+      config: {
+        ...BASE_CONFIG,
+        discovery: {
+          enabled: true,
+          take: true,
+          defaults: {
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        },
+      },
+      signer: {
+        provider: {
+          getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
+        },
+      } as any,
+      discoverySnapshotState: {},
+    }).runTakeCycle();
+
+    expect(handleDiscoveredTakeTargetStub.called).to.be.false;
+    const summaryLog = loggerInfoStub
+      .getCalls()
+      .map((call) => call.args[0])
+      .find(
+        (message: any) =>
+          typeof message === 'string' &&
+          message.includes('Discovery take cycle summary:')
+      );
+    expect(summaryLog).to.include('poolsUnavailable=1');
+    expect(summaryLog).to.include('targetSuccesses=0');
   });
 
   it('reuses one gas price read across multiple discovered take targets in the same cycle', async () => {
@@ -1883,6 +2133,71 @@ describe('Run Loop Discovery Integration', () => {
     ).to.be.true;
   });
 
+  it('rethrows malformed cached settlement discovery data during target resolution', async () => {
+    const nowMs = 1_000;
+    sinon.stub(Date, 'now').callsFake(() => nowMs);
+    const loggerWarnStub = sinon.stub(logger, 'warn');
+    const loggerErrorStub = sinon.stub(logger, 'error');
+    sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .rejects(new Error('subgraph unavailable'));
+
+    const runtime = createTestDiscoveryRuntime({
+      config: {
+        ...BASE_CONFIG,
+        discovery: {
+          enabled: true,
+          take: false,
+          settlement: true,
+          defaults: {
+            settlement: {
+              enabled: true,
+              minAuctionAge: 60,
+              maxBucketDepth: 50,
+              maxIterations: 5,
+              checkBotIncentive: true,
+            },
+          },
+        },
+      },
+      discoverySnapshotState: {
+        fetchedAt: 0,
+        latestLiquidationAuctions: [
+          {
+            borrower: '0xBorrowerMalformed',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '0',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '0',
+          } as any,
+        ],
+      },
+    });
+
+    let thrown: unknown;
+    try {
+      await runtime.runSettlementCycle();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).to.be.instanceOf(TypeError);
+    expect(
+      loggerWarnStub.calledWithMatch(
+        sinon.match(
+          'Failed to refresh settlement discovery snapshot; continuing with cached discovery data'
+        )
+      )
+    ).to.be.true;
+    expect(
+      loggerErrorStub.calledWithMatch(
+        sinon.match('Discovery settlement cycle failed: phase=targets')
+      )
+    ).to.be.true;
+  });
+
   it('continues manual settlement targets when discovery rpc cache creation fails', async () => {
     const handleSettlementsStub = sinon
       .stub(settlementModule, 'handleSettlements')
@@ -2082,6 +2397,67 @@ describe('Run Loop Discovery Integration', () => {
     expect(
       loggerWarnStub.calledWithMatch(
         sinon.match('Failed to refresh take discovery snapshot')
+      )
+    ).to.be.true;
+  });
+
+  it('rethrows malformed cached take discovery data during target resolution', async () => {
+    const nowMs = 1_000;
+    sinon.stub(Date, 'now').callsFake(() => nowMs);
+    const loggerWarnStub = sinon.stub(logger, 'warn');
+    const loggerErrorStub = sinon.stub(logger, 'error');
+    sinon
+      .stub(subgraph, 'getChainwideLiquidationAuctions')
+      .rejects(new Error('subgraph unavailable'));
+
+    const runtime = createTestDiscoveryRuntime({
+      config: {
+        ...BASE_CONFIG,
+        discovery: {
+          enabled: true,
+          take: true,
+          defaults: {
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        },
+      },
+      discoverySnapshotState: {
+        fetchedAt: 0,
+        latestLiquidationAuctions: [
+          {
+            borrower: '0xBorrowerMalformed',
+            kickTime: '1',
+            debtRemaining: '3',
+            collateralRemaining: '2',
+            neutralPrice: '4',
+            debt: '3',
+            collateral: '2',
+          } as any,
+        ],
+      },
+    });
+
+    let thrown: unknown;
+    try {
+      await runtime.runTakeCycle();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).to.be.instanceOf(TypeError);
+    expect(
+      loggerWarnStub.calledWithMatch(
+        sinon.match(
+          'Failed to refresh take discovery snapshot; continuing with cached discovery data'
+        )
+      )
+    ).to.be.true;
+    expect(
+      loggerErrorStub.calledWithMatch(
+        sinon.match('Discovery take cycle failed: phase=targets')
       )
     ).to.be.true;
   });

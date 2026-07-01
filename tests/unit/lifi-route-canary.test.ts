@@ -3,10 +3,218 @@ import os from 'os';
 import path from 'path';
 import { expect } from 'chai';
 import {
+  DEFAULT_LIFI_CANARY_CHAIN_ID,
+  normalizeAddress,
+  optionalEnv,
+  parseBooleanEnv,
+  parseCsvEnv,
+  parsePositiveInteger,
+  parsePositiveIntegerEnv,
+  parseRoutesEnv,
+  parseSelectorAllowlistEnv,
+} from '../../src/dex/lifi/route-canary-env';
+import {
   runLifiRouteCanaryTest as runCanary,
   writeKeeperConfig,
   writeNoContactAxiosMock,
 } from './helpers/lifi-route-canary';
+
+describe('LI.FI route canary env parsing', () => {
+  const fromToken = '0x2222222222222222222222222222222222222222';
+  const toToken = '0x3333333333333333333333333333333333333333';
+  const takerAddress = '0x1111111111111111111111111111111111111111';
+
+  it('normalizes optional, boolean, integer, csv, and address env helpers', () => {
+    expect(optionalEnv({}, 'MISSING')).to.equal(undefined);
+    expect(optionalEnv({ EMPTY: '  ' }, 'EMPTY')).to.equal(undefined);
+    expect(optionalEnv({ VALUE: '  abc  ' }, 'VALUE')).to.equal('  abc  ');
+
+    expect(parseBooleanEnv({}, 'FLAG')).to.equal(false);
+    expect(parseBooleanEnv({ FLAG: 'YES' }, 'FLAG')).to.equal(true);
+    expect(parseBooleanEnv({ FLAG: 'false' }, 'FLAG')).to.equal(false);
+
+    expect(parsePositiveIntegerEnv({}, 'COUNT', '3')).to.equal(3);
+    expect(parsePositiveIntegerEnv({ COUNT: '4' }, 'COUNT', '1')).to.equal(4);
+    expect(() =>
+      parsePositiveIntegerEnv({ COUNT: '0' }, 'COUNT', '1')
+    ).to.throw('COUNT must be a positive integer');
+    expect(() =>
+      parsePositiveIntegerEnv({ COUNT: '1.5' }, 'COUNT', '1')
+    ).to.throw('COUNT must be a positive integer');
+
+    expect(parsePositiveInteger('2', 'limit')).to.equal(2);
+    expect(() => parsePositiveInteger('abc', 'limit')).to.throw(
+      'limit must be a positive integer'
+    );
+
+    expect(parseCsvEnv({}, 'TOOLS')).to.equal(undefined);
+    expect(parseCsvEnv({ TOOLS: ' , ' }, 'TOOLS')).to.equal(undefined);
+    expect(parseCsvEnv({ TOOLS: ' uniswap, ,sushi ' }, 'TOOLS')).to.deep.equal(
+      ['uniswap', 'sushi']
+    );
+
+    expect(normalizeAddress(fromToken, 'from')).to.equal(
+      '0x2222222222222222222222222222222222222222'
+    );
+    expect(() => normalizeAddress('not-address', 'from')).to.throw(
+      'from must be an address'
+    );
+  });
+
+  it('parses and rejects selector allowlist env values fail-closed', () => {
+    const target = '0x4444444444444444444444444444444444444444';
+    expect(parseSelectorAllowlistEnv({}, 'ALLOWLIST')).to.equal(undefined);
+    expect(
+      parseSelectorAllowlistEnv(
+        {
+          ALLOWLIST: JSON.stringify({
+            [target]: ['0xabcdef12'],
+          }),
+        },
+        'ALLOWLIST'
+      )
+    ).to.deep.equal({
+      [target]: ['0xabcdef12'],
+    });
+
+    for (const invalid of ['[]', 'null']) {
+      expect(() =>
+        parseSelectorAllowlistEnv({ ALLOWLIST: invalid }, 'ALLOWLIST')
+      ).to.throw('ALLOWLIST must be a JSON object of target to selectors');
+    }
+    expect(() =>
+      parseSelectorAllowlistEnv(
+        { ALLOWLIST: JSON.stringify({ [target]: '0xabcdef12' }) },
+        'ALLOWLIST'
+      )
+    ).to.throw(`ALLOWLIST.${target} must be an array of selectors`);
+    expect(() =>
+      parseSelectorAllowlistEnv(
+        { ALLOWLIST: JSON.stringify({ [target]: ['0xabcdef12', 1] }) },
+        'ALLOWLIST'
+      )
+    ).to.throw(`ALLOWLIST.${target} must be an array of selectors`);
+  });
+
+  it('parses default Base routes and custom route JSON', () => {
+    expect(parseRoutesEnv({}, DEFAULT_LIFI_CANARY_CHAIN_ID)).to.deep.equal([
+      {
+        label: 'CADC-USDC',
+        fromToken: '0x043eB4B75d0805c43D7C834902E335621983Cf03',
+        toToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        fromAmount: '4283573040064348752',
+      },
+    ]);
+
+    const routes = parseRoutesEnv(
+      {
+        AJNA_AGENT_LIFI_CANARY_ROUTES_JSON: JSON.stringify([
+          {
+            fromToken,
+            toToken,
+            fromAmount: '1000',
+            takerAddress,
+          },
+        ]),
+      },
+      DEFAULT_LIFI_CANARY_CHAIN_ID
+    );
+    expect(routes).to.deep.equal([
+      {
+        label: 'route-0',
+        fromToken,
+        toToken,
+        fromAmount: '1000',
+        takerAddress,
+      },
+    ]);
+  });
+
+  it('rejects malformed route env before live canary execution', () => {
+    expect(() => parseRoutesEnv({}, 1)).to.throw(
+      'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON is required when chainId is not Base'
+    );
+
+    for (const invalid of ['[]', '{}']) {
+      expect(() =>
+        parseRoutesEnv(
+          { AJNA_AGENT_LIFI_CANARY_ROUTES_JSON: invalid },
+          DEFAULT_LIFI_CANARY_CHAIN_ID
+        )
+      ).to.throw(
+        'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON must be a non-empty JSON array'
+      );
+    }
+
+    const invalidRoutes: Array<{
+      route: unknown;
+      message: string;
+    }> = [
+      {
+        route: null,
+        message: 'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0] must be an object',
+      },
+      {
+        route: [],
+        message: 'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0] must be an object',
+      },
+      {
+        route: { label: '', fromToken, toToken, fromAmount: '1' },
+        message:
+          'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0].label must be a non-empty string',
+      },
+      {
+        route: { fromToken, toToken },
+        message:
+          'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0] requires fromToken, toToken, and fromAmount',
+      },
+      {
+        route: { fromToken: 1, toToken, fromAmount: '1' },
+        message:
+          'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0].fromToken must be an address',
+      },
+      {
+        route: { fromToken, toToken: 1, fromAmount: '1' },
+        message:
+          'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0].toToken must be an address',
+      },
+      {
+        route: { fromToken, toToken, fromAmount: '0' },
+        message:
+          'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0].fromAmount must be greater than zero',
+      },
+      {
+        route: { fromToken, toToken, fromAmount: '-1' },
+        message:
+          'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0].fromAmount must be a decimal integer string',
+      },
+      {
+        route: { fromToken, toToken, fromAmount: '1', takerAddress: 1 },
+        message:
+          'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0].takerAddress must be an address',
+      },
+      {
+        route: {
+          fromToken,
+          toToken,
+          fromAmount: '1',
+          takerAddress: 'not-address',
+        },
+        message:
+          'AJNA_AGENT_LIFI_CANARY_ROUTES_JSON[0].takerAddress must be an address',
+      },
+    ];
+
+    for (const { route, message } of invalidRoutes) {
+      expect(() =>
+        parseRoutesEnv(
+          { AJNA_AGENT_LIFI_CANARY_ROUTES_JSON: JSON.stringify([route]) },
+          DEFAULT_LIFI_CANARY_CHAIN_ID
+        )
+      ).to.throw(message);
+    }
+  });
+});
 
 describe('LI.FI route canary', function () {
   this.timeout(60000);

@@ -9,6 +9,7 @@ import {
   createTakeWriteTransport,
   PermanentTakeTransportError,
   resolveTakeWriteConfig,
+  resolveTakeWriteTransport,
   submitTakeTransaction,
 } from '../../src/take/write-transport';
 import { NonceTracker, isNonceConsumedTransactionError } from '../../src/nonce';
@@ -17,6 +18,59 @@ const withTakeWrite = (take: any) => ({ writes: { take } });
 
 describe('take write transport', () => {
   let durableStatePath: string;
+
+  function relaySignerFixture(params: {
+    chainId?: number;
+    includeProvider?: boolean;
+    populateTransaction?: (tx: any) => any;
+    waitForTransaction?: sinon.SinonStub;
+    getBlockNumber?: sinon.SinonStub;
+  } = {}) {
+    const rawTx = '0x1234';
+    const localTxHash = ethers.utils.keccak256(rawTx);
+    const waitForTransaction =
+      params.waitForTransaction ??
+      sinon.stub().resolves({
+        transactionHash: localTxHash,
+      });
+    const getBlockNumber = params.getBlockNumber ?? sinon.stub().resolves(100);
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(params.chainId ?? 1),
+      getTransactionCount: sinon.stub().resolves(7),
+      populateTransaction: sinon.stub().callsFake(async (tx) => {
+        if (params.populateTransaction) {
+          return params.populateTransaction(tx);
+        }
+        return {
+          ...tx,
+          chainId: 1,
+          nonce: tx.nonce ?? 7,
+          gasLimit: tx.gasLimit ?? BigNumber.from(21000),
+          maxFeePerGas: BigNumber.from(1),
+          maxPriorityFeePerGas: BigNumber.from(1),
+        };
+      }),
+      signTransaction: sinon.stub().resolves(rawTx),
+      provider:
+        params.includeProvider === false
+          ? undefined
+          : {
+              getBlockNumber,
+              waitForTransaction,
+            },
+    } as any;
+
+    return {
+      signer,
+      rawTx,
+      localTxHash,
+      waitForTransaction,
+      getBlockNumber,
+    };
+  }
 
   beforeEach(() => {
     durableStatePath = path.join(
@@ -110,6 +164,98 @@ describe('take write transport', () => {
     expect(transport.signer).to.equal(signer);
   });
 
+  it('uses an explicitly supplied take write transport over the public fallback', () => {
+    const signer = Wallet.createRandom();
+    const configuredTransport = {
+      mode: TakeWriteTransportMode.RELAY,
+      signer,
+      submitTransaction: sinon.stub(),
+    } as any;
+
+    const resolved = resolveTakeWriteTransport(signer, {
+      takeWriteTransport: configuredTransport,
+    });
+
+    expect(resolved).to.equal(configuredTransport);
+  });
+
+  it('rejects incomplete private_rpc and relay take write configs before startup', async () => {
+    const signer = Wallet.createRandom();
+
+    try {
+      await createTakeWriteTransport({
+        signer,
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.PRIVATE_RPC,
+        }) as any,
+        expectedChainId: 1,
+      });
+      expect.fail('Expected missing private rpc url to throw');
+    } catch (error) {
+      expect((error as Error).message).to.equal(
+        'takeWrite.mode=private_rpc requires takeWrite.rpcUrl'
+      );
+    }
+
+    try {
+      await createTakeWriteTransport({
+        signer,
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {},
+        }) as any,
+        expectedChainId: 1,
+      });
+      expect.fail('Expected missing relay url to throw');
+    } catch (error) {
+      expect((error as Error).message).to.equal(
+        'takeWrite.mode=relay requires takeWrite.relay.url'
+      );
+    }
+  });
+
+  it('rejects relay transport startup on signer chain mismatch or missing provider', async () => {
+    const chainMismatch = relaySignerFixture({ chainId: 8453 }).signer;
+    try {
+      await createTakeWriteTransport({
+        signer: chainMismatch,
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+          },
+        }) as any,
+        expectedChainId: 1,
+      });
+      expect.fail('Expected relay chain mismatch to throw');
+    } catch (error) {
+      expect(error).to.be.instanceOf(PermanentTakeTransportError);
+      expect((error as Error).message).to.include(
+        'Configured relay signer chainId 8453 does not match keeper chainId 1'
+      );
+    }
+
+    const noProvider = relaySignerFixture({ includeProvider: false }).signer;
+    try {
+      await createTakeWriteTransport({
+        signer: noProvider,
+        config: withTakeWrite({
+          mode: TakeWriteTransportMode.RELAY,
+          relay: {
+            url: 'https://relay.example',
+          },
+        }) as any,
+        expectedChainId: 1,
+      });
+      expect.fail('Expected relay signer without provider to throw');
+    } catch (error) {
+      expect(error).to.be.instanceOf(PermanentTakeTransportError);
+      expect((error as Error).message).to.include(
+        'requires the keeper signer to be connected to a provider'
+      );
+    }
+  });
+
   it('wraps public rpc receipt wait failures as nonce-consumed errors', async () => {
     const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     try {
@@ -149,6 +295,40 @@ describe('take write transport', () => {
       await waitPromise;
     } finally {
       clock.restore();
+    }
+  });
+
+  it('wraps non-timeout public rpc receipt failures as nonce-consumed errors', async () => {
+    const signer = {
+      sendTransaction: sinon.stub().resolves({
+        hash: '0xpublic',
+        wait: sinon.stub().rejects(new Error('receipt reverted')),
+      }),
+    } as any;
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.PUBLIC_RPC,
+      }) as any,
+      expectedChainId: 1,
+    });
+
+    const submission = await transport.submitTransaction({
+      to: '0x00000000000000000000000000000000000000bb',
+      nonce: 7,
+    });
+
+    try {
+      await submission.wait();
+      expect.fail('Expected public rpc wait to fail');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
+      expect((error as Error).message).to.include(
+        'Public RPC submission 0xpublic was accepted but receipt wait failed'
+      );
+      expect(((error as Error & { cause?: Error }).cause as Error).message).to
+        .equal('receipt reverted');
     }
   });
 
@@ -202,6 +382,106 @@ describe('take write transport', () => {
 
     expect(transport.mode).to.equal(TakeWriteTransportMode.PRIVATE_RPC);
     expect(transport.signer).to.not.equal(signer);
+  });
+
+  it('wraps private rpc wait failures without a nonce without durable floor persistence', async () => {
+    const writeSigner = {
+      address: '0x00000000000000000000000000000000000000aa',
+      sendTransaction: sinon.stub().resolves({
+        hash: '0xprivate',
+        wait: sinon.stub().rejects(new Error('receipt failed')),
+      }),
+    };
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(1),
+      getTransactionCount: sinon.stub().resolves(7),
+      connect: sinon.stub().returns(writeSigner),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(100),
+      },
+    } as any;
+    sinon
+      .stub(JsonRpcProvider.prototype, 'getNetwork')
+      .resolves({ chainId: 1 } as any);
+    const durableFloorStub = sinon.stub(NonceTracker, 'markDurableNonceFloor');
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.PRIVATE_RPC,
+        rpcUrl: 'http://private-rpc',
+      }) as any,
+      expectedChainId: 1,
+    });
+
+    const submission = await transport.submitTransaction({
+      to: '0x00000000000000000000000000000000000000bb',
+    });
+
+    try {
+      await submission.wait();
+      expect.fail('Expected private rpc wait failure');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
+      expect((error as Error).message).to.include(
+        'Private RPC submission 0xprivate was accepted but receipt wait failed'
+      );
+    }
+    expect(durableFloorStub.called).to.equal(false);
+  });
+
+  it('wraps private rpc durable nonce persistence failures after accepted submissions', async () => {
+    const writeSigner = {
+      address: '0x00000000000000000000000000000000000000aa',
+      sendTransaction: sinon.stub().resolves({
+        hash: '0xprivate',
+        wait: sinon.stub().rejects(new Error('receipt failed')),
+      }),
+    };
+    const signer = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getChainId: sinon.stub().resolves(1),
+      getTransactionCount: sinon.stub().resolves(7),
+      connect: sinon.stub().returns(writeSigner),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(100),
+      },
+    } as any;
+    sinon
+      .stub(JsonRpcProvider.prototype, 'getNetwork')
+      .resolves({ chainId: 1 } as any);
+    sinon
+      .stub(NonceTracker, 'markDurableNonceFloor')
+      .rejects(new Error('disk full'));
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.PRIVATE_RPC,
+        rpcUrl: 'http://private-rpc',
+      }) as any,
+      expectedChainId: 1,
+    });
+
+    const submission = await transport.submitTransaction({
+      to: '0x00000000000000000000000000000000000000bb',
+      nonce: 7,
+    });
+
+    try {
+      await submission.wait();
+      expect.fail('Expected durable nonce persistence failure');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
+      expect((error as Error).message).to.include(
+        'Private RPC submission 0xprivate was accepted but durable nonce floor persistence failed'
+      );
+    }
   });
 
   it('persists a long-lived time-based durable nonce floor for private rpc receipt wait failures', async () => {
@@ -630,6 +910,45 @@ describe('take write transport', () => {
     }
   });
 
+  it('rejects relay submissions when transaction population drops the nonce', async () => {
+    const signer = relaySignerFixture({
+      populateTransaction: async (tx) => {
+        const { nonce: _nonce, ...withoutNonce } = tx;
+        return {
+          ...withoutNonce,
+          chainId: 1,
+          gasLimit: BigNumber.from(21000),
+          maxFeePerGas: BigNumber.from(1),
+          maxPriorityFeePerGas: BigNumber.from(1),
+        };
+      },
+    }).signer;
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
+        },
+      }) as any,
+      expectedChainId: 1,
+    });
+
+    try {
+      await transport.submitTransaction({
+        to: '0x00000000000000000000000000000000000000bb',
+        data: '0xdeadbeef',
+        nonce: 7,
+      });
+      expect.fail('Expected missing populated nonce to throw');
+    } catch (error) {
+      expect((error as Error).message).to.equal(
+        'Relay take submission requires a populated nonce'
+      );
+    }
+  });
+
   it('preserves the consumed nonce when relay acceptance is followed by durable floor persistence failure', async () => {
     const localTxHash = ethers.utils.keccak256('0x1234');
     const signer = {
@@ -688,6 +1007,173 @@ describe('take write transport', () => {
 
     const nextNonce = await NonceTracker.getNonce(signer);
     expect(nextNonce).to.equal(8);
+  });
+
+  it('preserves the consumed nonce when a relay error response contains an accepted tx hash', async () => {
+    const { signer, localTxHash } = relaySignerFixture();
+    sinon.stub(axios, 'post').rejects(
+      Object.assign(new Error('relay surfaced accepted tx as an error'), {
+        isAxiosError: true,
+        response: {
+          status: 500,
+          data: {
+            result: {
+              txHash: localTxHash,
+            },
+          },
+        },
+      })
+    );
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
+        },
+      }) as any,
+      expectedChainId: 1,
+    });
+
+    try {
+      await NonceTracker.queueTransaction(signer, async (nonce) => {
+        return await submitTakeTransaction(transport, {
+          to: '0x00000000000000000000000000000000000000bb',
+          data: '0xdeadbeef',
+          nonce,
+        });
+      });
+      expect.fail('Expected relay error response with tx hash to preserve nonce');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
+      expect((error as Error).message).to.equal(
+        `Relay accepted transaction ${localTxHash} but the submission response was surfaced as an error`
+      );
+    }
+
+    NonceTracker.clearNonces();
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(8);
+  });
+
+  it('includes custom relay headers and accepts object-form relay hashes', async () => {
+    const { signer, localTxHash } = relaySignerFixture();
+    sinon.stub(axios, 'post').resolves({
+      data: {
+        result: {
+          hash: localTxHash,
+        },
+      },
+    } as any);
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
+          headers: {
+            'X-Relay-Key': 'secret',
+          },
+        },
+      }) as any,
+      expectedChainId: 1,
+    });
+
+    const submission = await transport.submitTransaction({
+      to: '0x00000000000000000000000000000000000000bb',
+      data: '0xdeadbeef',
+      nonce: 7,
+    });
+
+    expect(submission.txHash).to.equal(localTxHash);
+    const axiosPostStub = axios.post as sinon.SinonStub;
+    expect(axiosPostStub.firstCall.args[2].headers).to.deep.include({
+      'Content-Type': 'application/json',
+      'X-Relay-Key': 'secret',
+    });
+  });
+
+  it('bubbles explicit relay errors without preserving the nonce', async () => {
+    const { signer } = relaySignerFixture();
+    sinon.stub(axios, 'post').resolves({
+      data: {
+        error: {
+          code: -32000,
+          message: 'relay rejected',
+        },
+      },
+    } as any);
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
+        },
+      }) as any,
+      expectedChainId: 1,
+    });
+
+    try {
+      await NonceTracker.queueTransaction(signer, async (nonce) => {
+        return await submitTakeTransaction(transport, {
+          to: '0x00000000000000000000000000000000000000bb',
+          data: '0xdeadbeef',
+          nonce,
+        });
+      });
+      expect.fail('Expected explicit relay error to bubble');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(false);
+      expect((error as Error).message).to.include('Relay submission failed');
+      expect((error as Error).message).to.include('relay rejected');
+    }
+
+    NonceTracker.clearNonces();
+    const nextNonce = await NonceTracker.getNonce(signer);
+    expect(nextNonce).to.equal(7);
+  });
+
+  it('wraps null relay receipts as nonce-consumed after acceptance', async () => {
+    const { signer, localTxHash } = relaySignerFixture({
+      waitForTransaction: sinon.stub().resolves(null),
+    });
+    sinon.stub(axios, 'post').resolves({
+      data: {
+        result: {
+          txHash: localTxHash,
+        },
+      },
+    } as any);
+
+    const transport = await createTakeWriteTransport({
+      signer,
+      config: withTakeWrite({
+        mode: TakeWriteTransportMode.RELAY,
+        relay: {
+          url: 'https://relay.example',
+        },
+      }) as any,
+      expectedChainId: 1,
+    });
+
+    const submission = await transport.submitTransaction({
+      to: '0x00000000000000000000000000000000000000bb',
+      data: '0xdeadbeef',
+      nonce: 7,
+    });
+
+    try {
+      await submission.wait();
+      expect.fail('Expected null relay receipt to be nonce-consumed');
+    } catch (error) {
+      expect(isNonceConsumedTransactionError(error)).to.equal(true);
+      expect(((error as Error & { cause?: Error }).cause as Error).message).to
+        .equal(`No receipt returned for accepted relay transaction ${localTxHash}`);
+    }
   });
 
   it('does not preserve the nonce for ordinary relay HTTP error bodies without a result payload', async () => {

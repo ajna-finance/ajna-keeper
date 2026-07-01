@@ -21,6 +21,15 @@ const CURVE_POOL_SELECTION_CACHE_TTL_MS = 5 * 60 * 1000;
 const CURVE_POOL_SELECTION_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES = 512;
 
+export const curveQuoteProviderDeps = {
+  makeContract: (
+    address: string,
+    abi: ethers.ContractInterface,
+    signer: Signer
+  ) => new ethers.Contract(address, abi, signer),
+  getDecimals: getDecimalsErc20,
+};
+
 // CryptoSwap ABI (uint256 indices) - from working test scripts
 const CRYPTOSWAP_ABI = [
   'function coins(uint256 i) external view returns (address)',
@@ -386,7 +395,11 @@ export class CurveQuoteProvider {
 
     const poolAbi =
       poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-    const poolContract = new ethers.Contract(poolAddress, poolAbi, this.signer);
+    const poolContract = curveQuoteProviderDeps.makeContract(
+      poolAddress,
+      poolAbi,
+      this.signer
+    );
 
     let tokenInIndex: number | undefined;
     let tokenOutIndex: number | undefined;
@@ -437,7 +450,7 @@ export class CurveQuoteProvider {
         selectedPool.poolType === CurvePoolType.STABLE
           ? STABLESWAP_ABI
           : CRYPTOSWAP_ABI;
-      const poolContract = new ethers.Contract(
+      const poolContract = curveQuoteProviderDeps.makeContract(
         selectedPool.address,
         poolAbi,
         this.signer
@@ -467,10 +480,10 @@ export class CurveQuoteProvider {
       // Get correct decimals for proper formatting
       const inputDecimals =
         decimals?.inputDecimals ??
-        (await getDecimalsErc20(this.signer, tokenIn));
+        (await curveQuoteProviderDeps.getDecimals(this.signer, tokenIn));
       const outputDecimals =
         decimals?.outputDecimals ??
-        (await getDecimalsErc20(this.signer, tokenOut));
+        (await curveQuoteProviderDeps.getDecimals(this.signer, tokenOut));
 
       logger.debug(
         `Curve quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`

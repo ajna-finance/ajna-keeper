@@ -1,6 +1,6 @@
 // src/dex/curve-router.ts
 // Simplified Curve integration for Base L2 - follows the V3 router-module pattern
-import { Contract, BigNumber, Signer, providers, ethers } from 'ethers';
+import { BigNumber, Signer, providers, ethers } from 'ethers';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
 import { weiToDecimaled } from '../utils';
@@ -109,12 +109,12 @@ export async function swapWithCurveRouter(
   const tokenOutForLookup = targetTokenAddress;
 
   // Get contract instances with ABI selection based on pool type
-  const tokenContract = new Contract(tokenAddress, ERC20_ABI, signer);
+  const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
 
   // ABI selection pattern from test scripts
   const poolAbi =
     poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-  const poolContract = new Contract(poolAddress, poolAbi, signer);
+  const poolContract = new ethers.Contract(poolAddress, poolAbi, signer);
 
   try {
     // STEP 1: Discover token indices (pattern from test scripts)
@@ -210,7 +210,9 @@ export async function swapWithCurveRouter(
       // _safeApproveWithReset (audit Pass-2/3 / Codex).
       if (currentAllowance.gt(0)) {
         await NonceTracker.queueTransaction(signer, async (nonce) => {
-          const resetTx = await tokenContract.approve(poolAddress, 0, { nonce });
+          const resetTx = await tokenContract.approve(poolAddress, 0, {
+            nonce,
+          });
           const receipt = await resetTx.wait();
           logger.info(`Curve allowance reset to 0 before re-approval`);
           return receipt;

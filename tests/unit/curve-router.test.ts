@@ -4,6 +4,7 @@ import { BigNumber, ethers } from 'ethers';
 import * as curveRouterModule from '../../src/dex/curve-router';
 import { NonceTracker } from '../../src/nonce';
 import { CurvePoolType } from '../../src/config';
+import * as uniswapModule from '../../src/dex/uniswap';
 
 describe('Curve Router Module', () => {
   let swapStub: sinon.SinonStub;
@@ -46,6 +47,87 @@ describe('Curve Router Module', () => {
   });
 
   describe('swapWithCurveRouter', () => {
+    function createRealContractHarness(params: {
+      tokenAddress: string;
+      targetTokenAddress: string;
+      poolAddress: string;
+      amount: BigNumber;
+      currentAllowance: BigNumber;
+    }) {
+      const provider = new ethers.providers.JsonRpcProvider();
+      sinon
+        .stub(provider, 'getNetwork')
+        .resolves({ chainId: 8453, name: 'base' } as any);
+      sinon
+        .stub(provider, 'getGasPrice')
+        .resolves(BigNumber.from('20000000000'));
+
+      const tokenInterface = new ethers.utils.Interface([
+        'function allowance(address,address) view returns (uint256)',
+      ]);
+      const poolInterface = new ethers.utils.Interface([
+        'function coins(uint256 i) external view returns (address)',
+        'function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256)',
+      ]);
+      const cryptoPoolInterface = new ethers.utils.Interface([
+        'function get_dy(uint256 i, uint256 j, uint256 dx) external view returns (uint256)',
+      ]);
+      const getDySelectors = new Set([
+        poolInterface.getSighash('get_dy'),
+        cryptoPoolInterface.getSighash('get_dy'),
+      ]);
+      sinon.stub(provider, 'call').callsFake(async (tx: any) => {
+        const to = String(tx.to).toLowerCase();
+        const data = String(tx.data);
+        if (to === params.tokenAddress.toLowerCase()) {
+          return tokenInterface.encodeFunctionResult('allowance', [
+            params.currentAllowance,
+          ]);
+        }
+        if (to !== params.poolAddress.toLowerCase()) {
+          throw new Error(`unexpected contract call to ${to}`);
+        }
+        if (data.startsWith(poolInterface.getSighash('coins'))) {
+          const [index] = poolInterface.decodeFunctionData('coins', data);
+          if (BigNumber.from(index).eq(0)) {
+            return poolInterface.encodeFunctionResult('coins', [
+              params.tokenAddress,
+            ]);
+          }
+          if (BigNumber.from(index).eq(1)) {
+            return poolInterface.encodeFunctionResult('coins', [
+              params.targetTokenAddress,
+            ]);
+          }
+          throw new Error('end of pool coins');
+        }
+        if (getDySelectors.has(data.slice(0, 10))) {
+          return poolInterface.encodeFunctionResult('get_dy', [
+            params.amount.mul(2),
+          ]);
+        }
+        throw new Error(`unexpected pool call ${data}`);
+      });
+
+      const signer = ethers.Wallet.createRandom().connect(provider);
+      const sentTransactions: any[] = [];
+      const sendTransactionStub = sinon
+        .stub(signer, 'sendTransaction')
+        .callsFake(async (tx) => {
+          sentTransactions.push(tx);
+          return {
+            hash: `0x${String(sentTransactions.length).padStart(64, '0')}`,
+            wait: sinon.stub().resolves({
+              transactionHash: `0x${String(sentTransactions.length).padStart(64, '0')}`,
+              gasUsed: BigNumber.from(1),
+              logs: [],
+            }),
+          } as any;
+        });
+
+      return { signer, sendTransactionStub, sentTransactions };
+    }
+
     it('should execute successful swap with STABLE pool type', async () => {
       // Return success to simulate a successful call
       swapStub.resolves({
@@ -187,6 +269,96 @@ describe('Curve Router Module', () => {
       } catch (error: any) {
         expect(error.message).to.equal('Transaction reverted');
       }
+    });
+
+    it('uses default slippage and skips approval when Curve allowance already equals the swap amount', async () => {
+      swapStub.restore();
+      const tokenAddress = '0x1111111111111111111111111111111111111111';
+      const targetTokenAddress = '0x2222222222222222222222222222222222222222';
+      const poolAddress = '0x3333333333333333333333333333333333333333';
+      const amount = BigNumber.from('1000000000000000000');
+      const { signer, sendTransactionStub, sentTransactions } =
+        createRealContractHarness({
+          tokenAddress,
+          targetTokenAddress,
+          poolAddress,
+          amount,
+          currentAllowance: amount,
+        });
+      sinon.stub(uniswapModule, 'getTokenFromAddress').callsFake(
+        async (_chainId, _provider, address) =>
+          ({
+            address,
+            symbol: address === tokenAddress ? 'IN' : 'OUT',
+            decimals: 18,
+          }) as any
+      );
+
+      const result = await curveRouterModule.swapWithCurveRouter(
+        signer as any,
+        tokenAddress,
+        amount,
+        targetTokenAddress,
+        undefined as any,
+        poolAddress,
+        CurvePoolType.STABLE,
+        1
+      );
+
+      expect(result.success).to.equal(true);
+      expect(sendTransactionStub.calledOnce).to.equal(true);
+      expect(String(sentTransactions[0].to).toLowerCase()).to.equal(
+        poolAddress.toLowerCase()
+      );
+      expect(queueTransactionStub.calledOnce).to.equal(true);
+    });
+
+    it('resets stale nonzero allowance before exact reapproval on crypto pools', async () => {
+      swapStub.restore();
+      const tokenAddress = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const targetTokenAddress = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      const poolAddress = '0xcccccccccccccccccccccccccccccccccccccccc';
+      const amount = BigNumber.from('1000000000000000000');
+      const { signer, sendTransactionStub, sentTransactions } =
+        createRealContractHarness({
+          tokenAddress,
+          targetTokenAddress,
+          poolAddress,
+          amount,
+          currentAllowance: amount.mul(2),
+        });
+      sinon.stub(uniswapModule, 'getTokenFromAddress').callsFake(
+        async (_chainId, _provider, address) =>
+          ({
+            address,
+            symbol: address === tokenAddress ? 'IN' : 'OUT',
+            decimals: 18,
+          }) as any
+      );
+
+      const result = await curveRouterModule.swapWithCurveRouter(
+        signer as any,
+        tokenAddress,
+        amount,
+        targetTokenAddress,
+        1,
+        poolAddress,
+        CurvePoolType.CRYPTO,
+        1
+      );
+
+      expect(result.success).to.equal(true);
+      expect(sendTransactionStub.calledThrice).to.equal(true);
+      expect(String(sentTransactions[0].to).toLowerCase()).to.equal(
+        tokenAddress.toLowerCase()
+      );
+      expect(String(sentTransactions[1].to).toLowerCase()).to.equal(
+        tokenAddress.toLowerCase()
+      );
+      expect(String(sentTransactions[2].to).toLowerCase()).to.equal(
+        poolAddress.toLowerCase()
+      );
+      expect(queueTransactionStub.callCount).to.equal(3);
     });
   });
 

@@ -29,6 +29,7 @@ import {
   LpIngester,
   LpManager,
   LpRedeemer,
+  LpRedeemerResolver,
   RewardActionTracker,
 } from './rewards';
 import { isLpCollectionEnabled, resolveCollectLpRewardForPool } from './config';
@@ -789,6 +790,70 @@ export async function sweepRedeemerWithReactiveSettlement(params: {
   }
 }
 
+export function buildPoolConfigByAddress(
+  config: KeeperConfig
+): Map<string, PoolConfig> {
+  const poolConfigByAddress = new Map<string, PoolConfig>();
+  for (const pool of getManualPools(config)) {
+    poolConfigByAddress.set(normalizeAddress(pool.address), pool);
+  }
+  return poolConfigByAddress;
+}
+
+export function createLpRedeemerResolver(params: {
+  ajna: AjnaSDK;
+  poolMap: PoolMap;
+  config: KeeperConfig;
+  signer: Signer;
+  exchangeTracker: RewardActionTracker;
+  hydrationCooldowns: PoolHydrationCooldowns;
+  poolConfigByAddress?: Map<string, PoolConfig>;
+  redeemers?: Map<string, LpRedeemer>;
+}): LpRedeemerResolver {
+  const poolConfigByAddress =
+    params.poolConfigByAddress ?? buildPoolConfigByAddress(params.config);
+  const redeemers = params.redeemers ?? new Map<string, LpRedeemer>();
+
+  return async (poolAddress: string): Promise<LpRedeemer | undefined> => {
+    const normalized = normalizeAddress(poolAddress);
+    const cached = redeemers.get(normalized);
+    if (cached) {
+      return cached;
+    }
+
+    const pool = await ensurePoolLoaded({
+      ajna: params.ajna,
+      poolMap: params.poolMap,
+      poolAddress: normalized,
+      config: params.config,
+      hydrationCooldowns: params.hydrationCooldowns,
+    });
+    if (!pool) {
+      return undefined;
+    }
+
+    const matchingConfig = poolConfigByAddress.get(normalized);
+    const settings = resolveCollectLpRewardForPool(
+      params.config.rewards?.defaultLpReward,
+      matchingConfig?.collectLpReward,
+      normalized
+    );
+    if (!settings) {
+      return undefined;
+    }
+
+    const redeemer = new LpRedeemer(
+      pool,
+      params.signer,
+      settings,
+      params.config,
+      params.exchangeTracker
+    );
+    redeemers.set(normalized, redeemer);
+    return redeemer;
+  };
+}
+
 async function collectLpRewardsLoop({
   poolMap,
   config,
@@ -820,52 +885,20 @@ async function collectLpRewardsLoop({
   // Memoized lowercase-address → PoolConfig lookup. Built once so both the
   // resolver and the AuctionNotCleared settlement-retry path do O(1) lookups
   // instead of repeated O(n) linear scans over `manual.pools`.
-  const poolConfigByAddress = new Map<string, PoolConfig>();
-  for (const p of getManualPools(config)) {
-    poolConfigByAddress.set(normalizeAddress(p.address), p);
-  }
+  const poolConfigByAddress = buildPoolConfigByAddress(config);
 
   const ingester = new LpIngester(signer, subgraph, config);
   const redeemers: Map<string, LpRedeemer> = new Map();
-
-  // Resolves (and lazily hydrates) the LpRedeemer for a pool address
-  // discovered in a subgraph event. Returns undefined if the pool can't
-  // be hydrated (ERC721, deployment mismatch, hydration cooldown) or if
-  // no LP settings apply — events for such pools are silently skipped.
-  const resolveRedeemer = async (
-    poolAddress: string
-  ): Promise<LpRedeemer | undefined> => {
-    const normalized = normalizeAddress(poolAddress);
-    const cached = redeemers.get(normalized);
-    if (cached) return cached;
-
-    const pool = await ensurePoolLoaded({
-      ajna,
-      poolMap,
-      poolAddress: normalized,
-      config,
-      hydrationCooldowns,
-    });
-    if (!pool) return undefined;
-
-    const matchingConfig = poolConfigByAddress.get(normalized);
-    const settings = resolveCollectLpRewardForPool(
-      config.rewards?.defaultLpReward,
-      matchingConfig?.collectLpReward,
-      normalized
-    );
-    if (!settings) return undefined;
-
-    const redeemer = new LpRedeemer(
-      pool,
-      signer,
-      settings,
-      config,
-      exchangeTracker
-    );
-    redeemers.set(normalized, redeemer);
-    return redeemer;
-  };
+  const resolveRedeemer = createLpRedeemerResolver({
+    ajna,
+    poolMap,
+    config,
+    signer,
+    exchangeTracker,
+    hydrationCooldowns,
+    poolConfigByAddress,
+    redeemers,
+  });
 
   const manager = new LpManager(ingester, resolveRedeemer);
 

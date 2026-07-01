@@ -13,7 +13,24 @@ function fakeResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 function priceEntry(address: string, value: string) {
-  return { network: 'eth-mainnet', address, prices: [{ currency: 'USD', value }] };
+  return {
+    network: 'eth-mainnet',
+    address,
+    prices: [{ currency: 'USD', value }],
+  };
+}
+
+async function expectRejects(
+  promise: Promise<unknown>,
+  message: string
+): Promise<void> {
+  let thrown: Error | undefined;
+  try {
+    await promise;
+  } catch (error) {
+    thrown = error as Error;
+  }
+  expect(thrown?.message).to.include(message);
 }
 
 describe('Alchemy pool price — one batched request', () => {
@@ -67,5 +84,48 @@ describe('Alchemy pool price — one batched request', () => {
 
     const price = await getPriceFromAlchemy('0xtoken', 1, RPC_URL);
     expect(price).to.equal(42);
+  });
+
+  it('serves repeated lookups from the shared cache without another fetch', async () => {
+    const fetchStub = sinon
+      .stub(global as unknown as { fetch: typeof fetch }, 'fetch')
+      .resolves(fakeResponse({ data: [priceEntry('0xToken', '42')] }));
+
+    expect(await getPriceFromAlchemy('0xtoken', 1, RPC_URL)).to.equal(42);
+    expect(await getPriceFromAlchemy('0xTOKEN', 1, RPC_URL)).to.equal(42);
+    expect(fetchStub.calledOnce).to.equal(true);
+  });
+
+  it('fails closed for unsupported chains, missing API keys, HTTP failures, and token-level errors', async () => {
+    await expectRejects(
+      getPriceFromAlchemy('0xToken', 999_999, RPC_URL),
+      'Unsupported chainId for Alchemy Prices API'
+    );
+
+    await expectRejects(
+      getPriceFromAlchemy('0xToken', 1, 'https://example.invalid/rpc'),
+      'Could not extract Alchemy API key from RPC URL'
+    );
+
+    const fetchStub = sinon.stub(
+      global as unknown as { fetch: typeof fetch },
+      'fetch'
+    );
+    fetchStub.resolves(fakeResponse({ data: [] }, false, 502));
+    await expectRejects(
+      getPriceFromAlchemy('0xToken', 1, RPC_URL),
+      'Alchemy API request failed: 502'
+    );
+
+    fetchStub.resetHistory();
+    fetchStub.resolves(
+      fakeResponse({
+        data: [{ address: '0xToken', error: { message: 'not indexed' } }],
+      })
+    );
+    await expectRejects(
+      getPriceFromAlchemy('0xToken', 1, RPC_URL),
+      'No USD price available from Alchemy'
+    );
   });
 });
