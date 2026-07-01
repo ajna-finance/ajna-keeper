@@ -30,7 +30,6 @@
     "coverage:integration": "c8 --temp-directory=coverage/tmp --clean=false --reporter=none --check-coverage=false npx hardhat test",
     "coverage:report": "c8 report --temp-directory=coverage/tmp --all --check-coverage=false",
     "coverage:merged": "npm run coverage:unit && npm run coverage:integration && npm run coverage:report",
-    "coverage:targets": "./node_modules/ts-node/dist/bin.js scripts/coverage-hardening-targets.ts",
     "integration-tests": "npx hardhat test",
     "production-verification:mainnet": "FORK_NETWORK=mainnet npx hardhat test tests/integration/production-route-selection.test.ts",
     "production-verification:base": "FORK_NETWORK=base npx hardhat test tests/integration/production-route-selection.test.ts",
