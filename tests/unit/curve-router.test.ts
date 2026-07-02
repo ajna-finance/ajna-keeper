@@ -150,6 +150,9 @@ describe('Curve Router Module', () => {
       // Verify the function was called
       expect(swapStub.calledOnce).to.be.true;
       expect(result.success).to.be.true;
+      if (!('receipt' in result) || !result.receipt) {
+        expect.fail('Expected successful swap to include receipt');
+      }
       expect(result.receipt.transactionHash).to.equal('0xSuccess');
     });
 
@@ -175,6 +178,9 @@ describe('Curve Router Module', () => {
       // Verify the function was called
       expect(swapStub.calledOnce).to.be.true;
       expect(result.success).to.be.true;
+      if (!('receipt' in result) || !result.receipt) {
+        expect.fail('Expected successful swap to include receipt');
+      }
       expect(result.receipt.transactionHash).to.equal('0xCryptoSuccess');
     });
 

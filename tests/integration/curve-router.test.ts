@@ -74,6 +74,9 @@ describe('Curve Router Module', () => {
 
     // Verify the result
     expect(result.success).to.be.true;
+    if (!('receipt' in result) || !result.receipt) {
+      expect.fail('Expected successful swap to include receipt');
+    }
     expect(result.receipt.transactionHash).to.equal('0xStableSuccess');
   });
 
@@ -111,6 +114,9 @@ describe('Curve Router Module', () => {
 
     // Verify the result
     expect(result.success).to.be.true;
+    if (!('receipt' in result) || !result.receipt) {
+      expect.fail('Expected successful swap to include receipt');
+    }
     expect(result.receipt.transactionHash).to.equal('0xCryptoSuccess');
   });
 

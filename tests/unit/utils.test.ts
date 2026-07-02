@@ -379,12 +379,9 @@ describe('estimateGasWithBuffer', () => {
 
   it('refuses fallback gas by default when estimation fails', async () => {
     await expect(
-      estimateGasWithBuffer(
-        async () => {
-          throw new Error('execution reverted');
-        },
-        'test tx'
-      )
+      estimateGasWithBuffer(async () => {
+        throw new Error('execution reverted');
+      }, 'test tx')
     ).to.be.rejectedWith('execution reverted');
   });
 
@@ -440,7 +437,7 @@ describe('waitForConditionToBeTrue', () => {
       0.1,
       1
     );
-    expect(waitForFn).to.be.rejectedWith(
+    await expect(waitForFn).to.be.rejectedWith(
       'Timed out before condition became true.'
     );
   });

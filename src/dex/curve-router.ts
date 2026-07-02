@@ -3,7 +3,7 @@
 import { BigNumber, Signer, providers, ethers } from 'ethers';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
-import { weiToDecimaled } from '../utils';
+import { weiToDecimaled, withTimeout } from '../utils';
 import { getTokenFromAddress } from './uniswap';
 import { deriveSwapMinimumOut } from './swap-min-out';
 import { CurvePoolType } from '../config';
@@ -249,60 +249,54 @@ export async function swapWithCurveRouter(
     );
 
     // Execute swap using NonceTracker (same pattern as SushiSwap)
-    const receipt = await NonceTracker.queueTransaction(
-      signer,
-      async (nonce) => {
-        let swapTx;
+    const receipt =
+      await NonceTracker.queueTransaction<providers.TransactionReceipt>(
+        signer,
+        async (nonce) => {
+          let swapTx;
 
-        if (poolType === CurvePoolType.STABLE) {
-          // StableSwap exchange: exchange(int128 i, int128 j, uint256 dx, uint256 min_dy)
-          swapTx = await poolContract.exchange(
-            tokenInIndex,
-            tokenOutIndex,
-            amount,
-            minAmountOutWithSlippage,
-            {
-              nonce,
-              gasLimit: 800000, // Conservative gas limit
-              gasPrice: highGasPrice,
-              // No value parameter needed on L2
-            }
-          );
-        } else {
-          // CryptoSwap exchange: 4-arg base form, exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy).
-          // use_eth defaults to false and receiver defaults to msg.sender (this signer),
-          // matching the explicit arguments the removed 6-arg call passed.
-          swapTx = await poolContract.exchange(
-            tokenInIndex,
-            tokenOutIndex,
-            amount,
-            minAmountOutWithSlippage,
-            {
-              nonce,
-              gasLimit: 800000, // Conservative gas limit
-              gasPrice: highGasPrice,
-              // No value parameter needed on L2
-            }
+          if (poolType === CurvePoolType.STABLE) {
+            // StableSwap exchange: exchange(int128 i, int128 j, uint256 dx, uint256 min_dy)
+            swapTx = await poolContract.exchange(
+              tokenInIndex,
+              tokenOutIndex,
+              amount,
+              minAmountOutWithSlippage,
+              {
+                nonce,
+                gasLimit: 800000, // Conservative gas limit
+                gasPrice: highGasPrice,
+                // No value parameter needed on L2
+              }
+            );
+          } else {
+            // CryptoSwap exchange: 4-arg base form, exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy).
+            // use_eth defaults to false and receiver defaults to msg.sender (this signer),
+            // matching the explicit arguments the removed 6-arg call passed.
+            swapTx = await poolContract.exchange(
+              tokenInIndex,
+              tokenOutIndex,
+              amount,
+              minAmountOutWithSlippage,
+              {
+                nonce,
+                gasLimit: 800000, // Conservative gas limit
+                gasPrice: highGasPrice,
+                // No value parameter needed on L2
+              }
+            );
+          }
+
+          logger.info(`Curve transaction sent: ${swapTx.hash}`);
+
+          logger.info(`Waiting for transaction confirmation...`);
+          return await withTimeout<providers.TransactionReceipt>(
+            swapTx.wait(),
+            120000,
+            'Transaction confirmation'
           );
         }
-
-        logger.info(`Curve transaction sent: ${swapTx.hash}`);
-
-        logger.info(`Waiting for transaction confirmation...`);
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error('Transaction confirmation timeout after 2 minutes')
-              ),
-            120000
-          )
-        );
-
-        // Race between confirmation and timeout (same pattern as SushiSwap)
-        return await Promise.race([swapTx.wait(), timeoutPromise]);
-      }
-    );
+      );
 
     logger.info(`Transaction confirmed: ${receipt.transactionHash}`);
     logger.info(`Gas used: ${receipt.gasUsed.toString()}`);

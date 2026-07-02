@@ -3,7 +3,7 @@
 import { BigNumber, Signer, ethers, providers } from 'ethers';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
-import { weiToDecimaled } from '../utils';
+import { weiToDecimaled, withTimeout } from '../utils';
 import { getTokenFromAddress } from './uniswap';
 import { deriveSwapMinimumOut } from './swap-min-out';
 import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
@@ -343,37 +343,31 @@ async function swapWithUniversalRouterUsingContracts(
     );
 
     // Execute the swap using our queued transaction system (same as SushiSwap)
-    const receipt = await NonceTracker.queueTransaction(
-      signer,
-      async (nonce) => {
-        const swapTx = await universalRouter.execute(
-          commands,
-          inputs,
-          deadline,
-          {
-            nonce,
-            gasLimit: 1000000, // Generous gas limit for Universal Router
-            gasPrice: highGasPrice,
-          }
-        );
+    const receipt =
+      await NonceTracker.queueTransaction<providers.TransactionReceipt>(
+        signer,
+        async (nonce) => {
+          const swapTx = await universalRouter.execute(
+            commands,
+            inputs,
+            deadline,
+            {
+              nonce,
+              gasLimit: 1000000, // Generous gas limit for Universal Router
+              gasPrice: highGasPrice,
+            }
+          );
 
-        logger.info(`Uniswap swap transaction sent: ${swapTx.hash}`);
+          logger.info(`Uniswap swap transaction sent: ${swapTx.hash}`);
 
-        logger.info(`Waiting for transaction confirmation...`);
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error('Transaction confirmation timeout after 2 minutes')
-              ),
-            120000
-          )
-        );
-
-        // Race between confirmation and timeout
-        return await Promise.race([swapTx.wait(), timeoutPromise]);
-      }
-    );
+          logger.info(`Waiting for transaction confirmation...`);
+          return await withTimeout<providers.TransactionReceipt>(
+            swapTx.wait(),
+            120000,
+            'Transaction confirmation'
+          );
+        }
+      );
 
     logger.info(`Transaction confirmed: ${receipt.transactionHash}`);
     logger.info(`Gas used: ${receipt.gasUsed.toString()}`);
