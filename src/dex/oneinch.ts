@@ -1,26 +1,28 @@
 import 'dotenv/config';
-import { BigNumber, Signer, constants, providers, utils } from 'ethers';
+import { BigNumber, Signer, providers } from 'ethers';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
-import { getErrorMessage } from '../utils';
+import { parseOneInchUint } from './oneinch-uint';
+import type { OneInchUintParseResult } from './oneinch-uint';
 
 export interface OneInchRequestOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
 }
 
-export interface OneInchTransactionData {
+export interface ValidatedOneInchTransaction {
   to: string;
   data: string;
-  value?: unknown;
-  gas?: string | number | BigNumber;
+  // Always zero: ERC20 swaps must not carry native value. Enforced by
+  // normalizeOneInchTransactionData and re-asserted before sending.
+  value: BigNumber;
 }
 
 export interface OneInchFailureResult {
   success: false;
   data?: undefined;
   dstAmount?: string;
-  error?: string;
+  error: string;
   retryable?: boolean;
   errorCode?: number | string;
 }
@@ -36,7 +38,7 @@ export interface OneInchQuoteSuccessResult {
 
 export interface OneInchSwapDataSuccessResult {
   success: true;
-  data: OneInchTransactionData;
+  data: ValidatedOneInchTransaction;
   dstAmount?: string;
   error?: undefined;
   retryable?: undefined;
@@ -50,8 +52,6 @@ export type OneInchQuoteResult =
 export type OneInchSwapDataResult =
   | OneInchSwapDataSuccessResult
   | OneInchFailureResult;
-
-export type OneInchApiResult = OneInchQuoteResult | OneInchSwapDataResult;
 
 export type OneInchSwapResult =
   | { success: true; receipt: providers.TransactionReceipt }
@@ -90,6 +90,10 @@ export interface OneInchSwapDeps {
   delayMs?(ms: number): Promise<void>;
 }
 
+type ValidationResult<T> =
+  | { success: true; value: T }
+  | { success: false; error: string };
+
 export function getOneInchAxiosOptions(
   params: Record<string, string | number | boolean | undefined>,
   options: OneInchRequestOptions
@@ -105,7 +109,11 @@ export function getOneInchAxiosOptions(
   };
 }
 
-export function validateOneInchApiEnv(): { baseUrl?: string; error?: string } {
+export type OneInchApiEnv =
+  | { baseUrl: string; error?: undefined }
+  | { baseUrl?: undefined; error: string };
+
+export function validateOneInchApiEnv(): OneInchApiEnv {
   if (!process.env.ONEINCH_API) {
     return { error: 'ONEINCH_API is not configured' };
   }
@@ -118,134 +126,83 @@ export function validateOneInchApiEnv(): { baseUrl?: string; error?: string } {
 export function normalizeOneInchUintAmount(
   value: unknown,
   fieldName: string
-): { value?: string; error?: string } {
-  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
-    return {
-      error: `1inch ${fieldName} is not a decimal uint string`,
-    };
+): ValidationResult<string> {
+  // 1inch serializes canonical decimals, but zero-padded strings were
+  // historically accepted (BigNumber.from('0123') → 123); strip the padding
+  // rather than failing the whole quote.
+  const canonicalValue =
+    typeof value === 'string' && /^\d+$/.test(value)
+      ? value.replace(/^0+(?=\d)/, '')
+      : value;
+  const parsed = parseOneInchUint(canonicalValue, {
+    fieldName: `1inch ${fieldName}`,
+    requireString: true,
+    invalidStringError: `1inch ${fieldName} is not a decimal uint string`,
+  });
+  if (!parsed.success) {
+    return parsed;
   }
-
-  try {
-    const parsed = BigNumber.from(value);
-    if (parsed.gt(constants.MaxUint256)) {
-      return {
-        error: `1inch ${fieldName} exceeds uint256`,
-      };
-    }
-    return { value: parsed.toString() };
-  } catch (error) {
-    return {
-      error: `1inch ${fieldName} is invalid: ${getErrorMessage(error)}`,
-    };
-  }
+  return { success: true, value: parsed.value.toString() };
 }
 
-export function normalizeOneInchTransactionData(value: unknown): {
-  value?: OneInchTransactionData;
-  error?: string;
-} {
+export function normalizeOneInchTransactionData(value: unknown):
+  | {
+      success: true;
+      value: ValidatedOneInchTransaction;
+    }
+  | {
+      success: false;
+      error: string;
+    } {
   if (!value || typeof value !== 'object') {
-    return { error: 'No valid transaction received from 1inch' };
+    return {
+      success: false,
+      error: 'No valid transaction received from 1inch',
+    };
   }
 
   const tx = value as {
     to?: unknown;
     data?: unknown;
     value?: unknown;
-    gas?: unknown;
   };
-  if (typeof tx.to !== 'string' || typeof tx.data !== 'string') {
-    return { error: 'No valid transaction received from 1inch' };
+  if (
+    typeof tx.to !== 'string' ||
+    tx.to.length === 0 ||
+    typeof tx.data !== 'string' ||
+    tx.data.length === 0
+  ) {
+    return {
+      success: false,
+      error: 'No valid transaction received from 1inch',
+    };
   }
 
-  const normalized: OneInchTransactionData = {
+  const parsedValue = parseOneInchTxValue(tx.value);
+  if (!parsedValue.success) {
+    return parsedValue;
+  }
+  if (!parsedValue.value.eq(0)) {
+    return {
+      success: false,
+      error: `unexpected non-zero 1inch tx.value ${parsedValue.value.toString()} for ERC20 swap`,
+    };
+  }
+
+  const normalized: ValidatedOneInchTransaction = {
     to: tx.to,
     data: tx.data,
+    value: parsedValue.value,
   };
-  if (tx.value !== undefined) {
-    normalized.value = tx.value;
-  }
-  if (tx.gas !== undefined) {
-    if (
-      typeof tx.gas !== 'string' &&
-      typeof tx.gas !== 'number' &&
-      !BigNumber.isBigNumber(tx.gas)
-    ) {
-      return { error: '1inch tx.gas must be a string, number, or BigNumber' };
-    }
-    normalized.gas = tx.gas;
-  }
 
-  return { value: normalized };
+  return { success: true, value: normalized };
 }
 
-export function normalizeAddressForComparison(
-  value: string
-): string | undefined {
-  try {
-    return utils.getAddress(value).toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
-export function parseOneInchTxValue(value: unknown): {
-  value?: BigNumber;
-  error?: string;
-} {
-  if (value === undefined || value === null || value === '') {
-    return { value: constants.Zero };
-  }
-  if (BigNumber.isBigNumber(value)) {
-    if (value.lt(0)) {
-      return {
-        error: '1inch tx.value must be a non-negative uint',
-      };
-    }
-    if (value.gt(constants.MaxUint256)) {
-      return {
-        error: '1inch tx.value exceeds uint256',
-      };
-    }
-    return { value };
-  }
-  if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      return {
-        error: '1inch tx.value must be a non-negative safe integer',
-      };
-    }
-    return { value: BigNumber.from(value) };
-  }
-  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
-    return {
-      error: '1inch tx.value must be a decimal uint string',
-    };
-  }
-  try {
-    const parsed = BigNumber.from(value);
-    if (parsed.gt(constants.MaxUint256)) {
-      return {
-        error: '1inch tx.value exceeds uint256',
-      };
-    }
-    return { value: parsed };
-  } catch (error) {
-    return {
-      error: `1inch tx.value is invalid: ${getErrorMessage(error)}`,
-    };
-  }
-}
-
-export function validateZeroOneInchTxValue(value: unknown): string | undefined {
-  const parsed = parseOneInchTxValue(value);
-  if (parsed.error) {
-    return parsed.error;
-  }
-  if (parsed.value && !parsed.value.eq(0)) {
-    return `unexpected non-zero 1inch tx.value ${parsed.value.toString()} for ERC20 swap`;
-  }
-  return undefined;
+function parseOneInchTxValue(value: unknown): OneInchUintParseResult {
+  return parseOneInchUint(value, {
+    fieldName: '1inch tx.value',
+    emptyAsZero: true,
+  });
 }
 
 interface OneInchRequestError {
@@ -268,7 +225,7 @@ function asOneInchRequestError(error: unknown): OneInchRequestError {
 
 export function getOneInchErrorMessage(error: unknown): string {
   const typed = asOneInchRequestError(error);
-  return typed.response?.data?.description ?? typed.message ?? String(error);
+  return typed.response?.data?.description || typed.message || String(error);
 }
 
 export function getOneInchErrorCode(
@@ -316,10 +273,7 @@ export async function executeOneInchSwap(
     params.tokenOut
   );
   if (!quoteResult.success) {
-    return {
-      success: false,
-      error: quoteResult.error ?? '1inch quote request failed',
-    };
+    return { success: false, error: quoteResult.error };
   }
   logger.info(
     `1inch quote: ${params.amount.toString()} ${params.tokenIn} -> ${quoteResult.dstAmount} ${params.tokenOut}`
@@ -348,34 +302,23 @@ export async function executeOneInchSwap(
           await delayMs(waitTime);
           continue;
         }
-        return {
-          success: false,
-          error: swapDataResult.error ?? '1inch swap data request failed',
-        };
+        return { success: false, error: swapDataResult.error };
       }
 
       const txFrom1inch = swapDataResult.data;
       logger.debug(`Transaction from 1inch: ${JSON.stringify(txFrom1inch)}`);
-      const parsedValue = parseOneInchTxValue(txFrom1inch.value);
-      if (parsedValue.error) {
-        return {
-          success: false,
-          error: parsedValue.error,
-        };
-      }
-      const txValue = parsedValue.value ?? constants.Zero;
-      if (!txValue.eq(0)) {
-        return {
-          success: false,
-          error: `unexpected non-zero 1inch tx.value ${txValue.toString()} for ERC20 swap`,
-        };
+
+      if (!txFrom1inch.value.isZero()) {
+        const error = `unexpected non-zero 1inch tx.value ${txFrom1inch.value.toString()} for ERC20 swap`;
+        logger.error(error);
+        return { success: false, error };
       }
 
       const tx = {
         to: txFrom1inch.to,
         data: txFrom1inch.data,
-        value: txValue,
-        gasLimit: txFrom1inch.gas ? BigNumber.from(txFrom1inch.gas) : undefined,
+        value: txFrom1inch.value,
+        gasLimit: undefined as BigNumber | undefined,
       };
 
       const provider = deps.signer.provider as providers.Provider;

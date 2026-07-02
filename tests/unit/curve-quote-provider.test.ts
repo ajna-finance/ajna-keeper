@@ -1,10 +1,13 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, ethers, Signer } from 'ethers';
+import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
 import {
-  CurvePoolSelection,
-  CurveQuoteProvider,
-} from '../../src/dex/providers/curve-quote-provider';
+  CURVE_NATIVE_ETH_ADDRESS,
+  CurvePoolSelector,
+  getCurveTokenSymbolFromAddress,
+} from '../../src/dex/curve-pool-selection';
+import type { CurvePoolSelection } from '../../src/dex/curve-pool-selection';
 import { CurvePoolType } from '../../src/config';
 import { DexContractServices } from '../../src/dex/contracts';
 
@@ -14,7 +17,7 @@ describe('Curve Quote Provider', () => {
   const USDC = '0x53Be558aF29cC65126ED0E585119FAC748FeB01B';
   const DAI = '0x1111111111111111111111111111111111111111';
   const POOL = '0x6e53131F68a034873b6bFA15502aF094Ef0c5854';
-  const ETH = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+  const ETH = CURVE_NATIVE_ETH_ADDRESS;
 
   beforeEach(() => {
     // Create basic mock signer - same pattern as other tests
@@ -133,7 +136,7 @@ describe('Curve Quote Provider', () => {
       expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
         selectedPool()
       );
-      expect(coins.callCount).to.equal(3);
+      expect(coins.callCount).to.equal(2);
 
       const negativeCoins = coinsFor(WETH, USDC);
       const negativeProvider = makeProvider(
@@ -161,13 +164,13 @@ describe('Curve Quote Provider', () => {
         expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
           selectedPool()
         );
-        expect(coins.callCount).to.equal(3);
+        expect(coins.callCount).to.equal(2);
 
         clock.tick(5 * 60 * 1000 + 1);
         expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
           selectedPool()
         );
-        expect(coins.callCount).to.equal(6);
+        expect(coins.callCount).to.equal(4);
       } finally {
         clock.restore();
       }
@@ -212,6 +215,74 @@ describe('Curve Quote Provider', () => {
       ).to.equal(undefined);
     });
 
+    it('skips a malformed pool entry and still selects a later valid pool', async () => {
+      const coins = coinsFor(WETH, USDC);
+      const services = curveContractServices({ coins });
+      const provider = makeProvider(
+        {
+          poolConfigs: {
+            'BAD-PAIR': {
+              address: '0x2222222222222222222222222222222222222222',
+              poolType: 'BOGUS' as unknown as CurvePoolType,
+            },
+            'WETH-USDC': {
+              address: POOL,
+              poolType: CurvePoolType.STABLE,
+            },
+          },
+          tokenAddresses: undefined,
+        },
+        services
+      );
+
+      expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+        selectedPool()
+      );
+      expect(
+        (services.makeContract as sinon.SinonStub).calledOnceWith(POOL)
+      ).to.equal(true);
+    });
+
+    it('rejects selections where both tokens resolve to the same coin slot', async () => {
+      const coins = coinsFor(WETH, USDC);
+      const provider = makeProvider(
+        { tokenAddresses: undefined },
+        curveContractServices({ coins })
+      );
+
+      expect(await provider.resolvePoolSelection(ETH, WETH)).to.equal(
+        undefined
+      );
+    });
+
+    it('keeps selector lookups fail-closed unless the fallback scan is enabled', async () => {
+      const coins = coinsFor(WETH, USDC);
+      const services = curveContractServices({ coins });
+      const selector = new CurvePoolSelector(
+        mockSigner,
+        {
+          poolConfigs: {
+            'WETH-USDC': { address: POOL, poolType: CurvePoolType.STABLE },
+          },
+          wethAddress: WETH,
+        },
+        services
+      );
+
+      expect(await selector.resolvePoolSelection(WETH, USDC)).to.equal(
+        undefined
+      );
+      expect((services.makeContract as sinon.SinonStub).called).to.equal(
+        false
+      );
+
+      expect(
+        await selector.resolvePoolSelection(WETH, USDC, {
+          allowFallbackPoolScan: true,
+        })
+      ).to.deep.equal(selectedPool());
+    });
+
     it('reports pool existence without throwing on lookup failures', async () => {
       const provider = makeProvider(
         {},
@@ -244,7 +315,7 @@ describe('Curve Quote Provider', () => {
       expect(await provider.resolvePoolSelection(ETH, USDC)).to.deep.equal(
         selectedPool()
       );
-      expect(coins.calledWith(2)).to.equal(true);
+      expect(coins.calledWith(2)).to.equal(false);
     });
 
     it('returns no-pool and zero-output quote failures before reporting success', async () => {
@@ -503,25 +574,36 @@ describe('Curve Quote Provider', () => {
         tbtc: '0x236aa50979D5f3De3Bd1Eeb40E81137F22ab794b',
       };
 
-      // Test symbol lookup logic
-      const findSymbolForAddress = (
-        targetAddress: string
-      ): string | undefined => {
-        for (const [symbol, address] of Object.entries(tokenAddresses)) {
-          if (address.toLowerCase() === targetAddress.toLowerCase()) {
-            return symbol;
-          }
-        }
-        return undefined;
+      expect(
+        getCurveTokenSymbolFromAddress(
+          '0x4200000000000000000000000000000000000006',
+          tokenAddresses
+        )
+      ).to.equal('weth');
+      expect(
+        getCurveTokenSymbolFromAddress(
+          '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
+          tokenAddresses
+        )
+      ).to.equal('usdc_t');
+      expect(getCurveTokenSymbolFromAddress('0xInvalidAddress', tokenAddresses))
+        .to.be.undefined;
+    });
+
+    it('skips non-string tokenAddresses values instead of throwing', () => {
+      const tokenAddresses = {
+        chainId: 8453 as unknown as string,
+        weth: '0x4200000000000000000000000000000000000006',
       };
 
       expect(
-        findSymbolForAddress('0x4200000000000000000000000000000000000006')
+        getCurveTokenSymbolFromAddress(
+          '0x4200000000000000000000000000000000000006',
+          tokenAddresses
+        )
       ).to.equal('weth');
-      expect(
-        findSymbolForAddress('0x53Be558aF29cC65126ED0E585119FAC748FeB01B')
-      ).to.equal('usdc_t');
-      expect(findSymbolForAddress('0xInvalidAddress')).to.be.undefined;
+      expect(getCurveTokenSymbolFromAddress('0xInvalidAddress', tokenAddresses))
+        .to.be.undefined;
     });
   });
 
@@ -550,59 +632,6 @@ describe('Curve Quote Provider', () => {
   });
 
   describe('Pool Discovery Logic', () => {
-    it('should identify valid token pair matching', () => {
-      const poolConfigs: {
-        [key: string]: { address: string; poolType: CurvePoolType };
-      } = {
-        'tbtc-weth': {
-          address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
-          poolType: CurvePoolType.CRYPTO,
-        },
-        'usdc_t-usd_t1': {
-          address: '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb',
-          poolType: CurvePoolType.STABLE,
-        },
-      };
-
-      // Test pool discovery logic (both directions)
-      const findPoolConfig = (tokenA: string, tokenB: string) => {
-        const key1 = `${tokenA}-${tokenB}`;
-        const key2 = `${tokenB}-${tokenA}`;
-        return poolConfigs[key1] || poolConfigs[key2];
-      };
-
-      const stablePool = findPoolConfig('usdc_t', 'usd_t1');
-      const stablePoolReverse = findPoolConfig('usd_t1', 'usdc_t');
-      const cryptoPool = findPoolConfig('tbtc', 'weth');
-      const noPool = findPoolConfig('invalid', 'tokens');
-
-      expect(stablePool?.poolType).to.equal(CurvePoolType.STABLE);
-      expect(stablePoolReverse?.poolType).to.equal(CurvePoolType.STABLE);
-      expect(cryptoPool?.poolType).to.equal(CurvePoolType.CRYPTO);
-      expect(noPool).to.be.undefined;
-    });
-
-    it('should handle ETH/WETH conversion in pool discovery', () => {
-      const ethAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-      const wethAddress = '0x4200000000000000000000000000000000000006';
-
-      // Test ETH/WETH conversion logic
-      const normalizeAddress = (address: string, wethAddr: string): string => {
-        return address.toLowerCase() === ethAddress.toLowerCase()
-          ? wethAddr
-          : address;
-      };
-
-      expect(normalizeAddress(ethAddress, wethAddress)).to.equal(wethAddress);
-      expect(normalizeAddress(wethAddress, wethAddress)).to.equal(wethAddress);
-      expect(
-        normalizeAddress(
-          '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
-          wethAddress
-        )
-      ).to.equal('0x53Be558aF29cC65126ED0E585119FAC748FeB01B');
-    });
-
     it('falls back to address-based matching when token symbol casing differs from pool config keys', async () => {
       const coins = coinsFor(WETH, USDC);
       const provider = makeProvider(
@@ -623,7 +652,7 @@ describe('Curve Quote Provider', () => {
         tokenInIndex: 0,
         tokenOutIndex: 1,
       });
-      expect(coins.calledWith(2)).to.equal(true);
+      expect(coins.calledWith(2)).to.equal(false);
     });
   });
 

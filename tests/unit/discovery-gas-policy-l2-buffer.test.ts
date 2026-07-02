@@ -4,8 +4,13 @@ import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../src/config';
 import { evaluateGasPolicy } from '../../src/discovery/gas-policy';
 import { DexRouter } from '../../src/dex/router';
-import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import * as erc20 from '../../src/erc20';
+import {
+  QUOTE_TOKEN_ADDRESS,
+  oneInchGasConfig,
+  readRpcWithGasPrice,
+  signerWithChain,
+} from './helpers/discovery-gas-policy-fixture';
 
 describe('Discovery Gas Policy L2 Buffer', () => {
   afterEach(() => {
@@ -31,36 +36,14 @@ describe('Discovery Gas Policy L2 Buffer', () => {
       }));
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 2,
-          },
-        },
-        oneInchRouters: {
-          8453: '0x1111111111111111111111111111111111111111',
-        },
-        connectorTokens: [],
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon.stub().resolves(gasPrice),
-        },
-      },
+      signer: signerWithChain(8453),
+      config: oneInchGasConfig({ maxGasCostQuote: 2 }, { chainId: 8453 }),
+      transports: readRpcWithGasPrice(gasPrice),
       policy: {
         maxGasCostQuote: 2,
       },
       gasLimit,
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice,
     });
@@ -90,37 +73,15 @@ describe('Discovery Gas Policy L2 Buffer', () => {
       }));
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 3,
-          },
-        },
-        oneInchRouters: {
-          8453: '0x1111111111111111111111111111111111111111',
-        },
-        connectorTokens: [],
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon.stub().resolves(gasPrice),
-        },
-      },
+      signer: signerWithChain(8453),
+      config: oneInchGasConfig({ maxGasCostQuote: 3 }, { chainId: 8453 }),
+      transports: readRpcWithGasPrice(gasPrice),
       policy: {
         maxGasCostQuote: 3,
         l2GasCostBufferBasisPoints: 20_000,
       },
       gasLimit,
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice,
     });

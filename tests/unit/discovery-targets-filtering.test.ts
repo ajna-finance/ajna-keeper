@@ -5,7 +5,7 @@ import {
   clearSharedDiscoveryScans,
   ensurePoolLoaded,
 } from '../../src/discovery/targets';
-import { BASE_CONFIG } from './helpers/discovery-targets-fixture';
+import { DISCOVERY_BASE_CONFIG } from './helpers/discovery-targets-fixture';
 
 describe('Discovery Target Filtering', () => {
   afterEach(() => {
@@ -49,9 +49,9 @@ describe('Discovery Target Filtering', () => {
 
     const allowTargets = await buildDiscoveredTakeTargets(
       {
-        ...BASE_CONFIG,
+        ...DISCOVERY_BASE_CONFIG,
         discovery: {
-          ...BASE_CONFIG.discovery!,
+          ...DISCOVERY_BASE_CONFIG.discovery!,
           allowPools: ['0x1111111111111111111111111111111111111111'],
         },
       },
@@ -59,9 +59,9 @@ describe('Discovery Target Filtering', () => {
     );
     const denyTargets = await buildDiscoveredTakeTargets(
       {
-        ...BASE_CONFIG,
+        ...DISCOVERY_BASE_CONFIG,
         discovery: {
-          ...BASE_CONFIG.discovery!,
+          ...DISCOVERY_BASE_CONFIG.discovery!,
           denyPools: ['0x3333333333333333333333333333333333333333'],
         },
       },
@@ -93,7 +93,7 @@ describe('Discovery Target Filtering', () => {
       } as any,
       poolMap: new Map() as any,
       poolAddress: '0x1111111111111111111111111111111111111111',
-      config: BASE_CONFIG,
+      config: DISCOVERY_BASE_CONFIG,
       hydrationCooldowns,
     });
 

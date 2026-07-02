@@ -1,6 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { DexRouter, OneInchRequestOptions } from '../../dex/router';
+import { DexRouter } from '../../dex/router';
+import { OneInchRequestOptions } from '../../dex/oneinch';
 import {
   convertSwapApiResponseToDetails,
   validateOneInchSwapDetailsForAtomicTake,
@@ -75,13 +76,6 @@ function requireOneInchRouter(params: {
     );
   }
   return router;
-}
-
-function normalizeTxValue(value: unknown): string {
-  if (value === undefined || value === null || value === '') {
-    return '0';
-  }
-  return BigNumber.from(value).toString();
 }
 
 /**
@@ -166,7 +160,7 @@ export async function requestValidatedOneInchAggregatorQuote(params: {
     approvalSpender: configuredRouter,
     callData,
     selector: ethers.utils.hexDataSlice(callData, 0, 4),
-    txValue: normalizeTxValue(swapData.data.value),
+    txValue: swapData.data.value.toString(),
     routeSummary: {
       providerId: 'oneinch',
       tool: '1inch',

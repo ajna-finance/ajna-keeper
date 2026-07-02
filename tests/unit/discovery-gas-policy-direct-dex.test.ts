@@ -6,6 +6,13 @@ import { evaluateGasPolicy } from '../../src/discovery/gas-policy';
 import { DexRouter } from '../../src/dex/router';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import * as erc20 from '../../src/erc20';
+import {
+  QUOTE_TOKEN_ADDRESS,
+  WETH_ADDRESS,
+  oneInchGasConfig,
+  readRpcWithGasPrice,
+  signerWithChain,
+} from './helpers/discovery-gas-policy-fixture';
 
 describe('Discovery Gas Policy Direct DEX Quotes', () => {
   afterEach(() => {
@@ -32,44 +39,34 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
       } as any);
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          settlement: {
-            enabled: true,
-            maxGasCostQuote: 5,
+      signer: signerWithChain(8453),
+      config: oneInchGasConfig(
+        {},
+        {
+          overrides: {
+            autoDiscover: {
+              enabled: true,
+              settlement: {
+                enabled: true,
+                maxGasCostQuote: 5,
+              },
+            },
+            uniswapV3RouterOverrides: {
+              poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+              quoterV2Address: '0x4444444444444444444444444444444444444444',
+              wethAddress: WETH_ADDRESS,
+              defaultFeeTier: 3000,
+              candidateFeeTiers: [3000],
+            },
           },
-        },
-        oneInchRouters: {
-          1: '0x1111111111111111111111111111111111111111',
-        },
-        uniswapV3RouterOverrides: {
-          poolFactoryAddress: '0x3333333333333333333333333333333333333333',
-          quoterV2Address: '0x4444444444444444444444444444444444444444',
-          wethAddress: '0x4200000000000000000000000000000000000006',
-          defaultFeeTier: 3000,
-          candidateFeeTiers: [3000],
-        },
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+        }
+      ),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {},
@@ -98,48 +95,34 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
       } as any);
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 5,
-            oneInchQuoteFailureCooldownMs: 30_000,
-            oneInchQuoteFailureThreshold: 2,
+      signer: signerWithChain(8453),
+      config: oneInchGasConfig(
+        {
+          maxGasCostQuote: 5,
+          oneInchQuoteFailureCooldownMs: 30_000,
+          oneInchQuoteFailureThreshold: 2,
+        },
+        {
+          chainId: 8453,
+          overrides: {
+            uniswapV3RouterOverrides: {
+              poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+              quoterV2Address: '0x4444444444444444444444444444444444444444',
+              wethAddress: WETH_ADDRESS,
+              defaultFeeTier: 3000,
+              candidateFeeTiers: [3000],
+            },
           },
-        },
-        oneInchRouters: {
-          8453: '0x1111111111111111111111111111111111111111',
-        },
-        uniswapV3RouterOverrides: {
-          poolFactoryAddress: '0x3333333333333333333333333333333333333333',
-          quoterV2Address: '0x4444444444444444444444444444444444444444',
-          wethAddress: '0x4200000000000000000000000000000000000006',
-          defaultFeeTier: 3000,
-          candidateFeeTiers: [3000],
-        },
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+        }
+      ),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
         oneInchQuoteFailureCooldownMs: 30_000,
         oneInchQuoteFailureThreshold: 2,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
@@ -187,44 +170,28 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
       } as any);
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 5,
+      signer: signerWithChain(8453),
+      config: oneInchGasConfig(
+        { maxGasCostQuote: 5 },
+        {
+          chainId: 8453,
+          overrides: {
+            uniswapV3RouterOverrides: {
+              poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+              quoterV2Address: '0x4444444444444444444444444444444444444444',
+              wethAddress: WETH_ADDRESS,
+              defaultFeeTier: 3000,
+              candidateFeeTiers: [3000],
+            },
           },
-        },
-        oneInchRouters: {
-          8453: '0x1111111111111111111111111111111111111111',
-        },
-        uniswapV3RouterOverrides: {
-          poolFactoryAddress: '0x3333333333333333333333333333333333333333',
-          quoterV2Address: '0x4444444444444444444444444444444444444444',
-          wethAddress: '0x4200000000000000000000000000000000000006',
-          defaultFeeTier: 3000,
-          candidateFeeTiers: [3000],
-        },
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+        }
+      ),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
@@ -261,10 +228,7 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
       );
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
+      signer: signerWithChain(8453),
       config: {
         autoDiscover: {
           enabled: true,
@@ -276,26 +240,20 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
         uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
-          wethAddress: '0x4200000000000000000000000000000000000006',
+          wethAddress: WETH_ADDRESS,
           defaultFeeTier: 3000,
           candidateFeeTiers: [500],
         },
         tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
+          weth: WETH_ADDRESS,
         },
       } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.UNISWAPV3,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
@@ -322,10 +280,7 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
       .resolves({ success: false } as any);
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
+      signer: signerWithChain(8453),
       config: {
         autoDiscover: {
           enabled: true,
@@ -337,25 +292,19 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
         uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
-          wethAddress: '0x4200000000000000000000000000000000000006',
+          wethAddress: WETH_ADDRESS,
           defaultFeeTier: 3000,
         },
         tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
+          weth: WETH_ADDRESS,
         },
       } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.UNISWAPV3,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
@@ -405,10 +354,7 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
       );
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
+      signer: signerWithChain(8453),
       config: {
         autoDiscover: {
           enabled: true,
@@ -420,25 +366,19 @@ describe('Discovery Gas Policy Direct DEX Quotes', () => {
         uniswapV3RouterOverrides: {
           poolFactoryAddress: '0x3333333333333333333333333333333333333333',
           quoterV2Address: '0x4444444444444444444444444444444444444444',
-          wethAddress: '0x4200000000000000000000000000000000000006',
+          wethAddress: WETH_ADDRESS,
           defaultFeeTier: 500,
         },
         tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
+          weth: WETH_ADDRESS,
         },
       } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.UNISWAPV3,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {

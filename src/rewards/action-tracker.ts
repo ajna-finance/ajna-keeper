@@ -280,6 +280,8 @@ export class RewardActionTracker {
     this.feeTokenAmountMap.set(key, currAmount.sub(amountWadToSub));
   }
 
+  // Read-only observation seam: no production caller yet — kept public so
+  // tests observe queue state without reaching into feeTokenAmountMap.
   getQueuedAmount(
     rewardAction: RewardAction,
     tokenCollected: string

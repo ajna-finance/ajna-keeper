@@ -8,31 +8,24 @@ import { swapToWeth } from './uniswap';
 import { tokenChangeDecimals } from '../utils';
 import { swapWithUniversalRouter } from './universal-router';
 import { swapWithCurveRouter } from './curve-router';
+import { CurvePoolSelector } from './curve-pool-selection';
 import {
   executeOneInchSwap,
   getOneInchAxiosOptions,
   getOneInchErrorCode,
   getOneInchErrorMessage,
   isRetryableOneInchError,
-  normalizeAddressForComparison,
   normalizeOneInchTransactionData,
   normalizeOneInchUintAmount,
   validateOneInchApiEnv,
-  validateZeroOneInchTxValue,
 } from './oneinch';
+import { normalizeAddressForComparison } from './oneinch-uint';
 import type {
   OneInchQuoteResult,
   OneInchRequestOptions,
   OneInchSwapDataResult,
 } from './oneinch';
-export type {
-  OneInchApiResult,
-  OneInchQuoteResult,
-  OneInchRequestOptions,
-  OneInchSwapDataResult,
-} from './oneinch';
 import {
-  CurvePoolType,
   CurveRouterOverrides,
   DEFAULT_FEE_TIER_BY_SOURCE,
   LiquiditySource,
@@ -44,6 +37,8 @@ export class DexRouter {
   private oneInchRouters: { [chainId: number]: string };
   private connectorTokens: string;
   private tokenAddresses: { [symbol: string]: string }; // CURVE INTEGRATION: Added for symbol lookup
+  private curvePoolSelector?: CurvePoolSelector;
+  private curvePoolSelectorSettings?: CurveRouterOverrides;
 
   constructor(
     signer: Signer,
@@ -76,7 +71,7 @@ export class DexRouter {
     options: OneInchRequestOptions = {}
   ): Promise<OneInchQuoteResult> {
     const apiEnv = validateOneInchApiEnv();
-    if (!apiEnv.baseUrl) {
+    if (apiEnv.error) {
       return {
         success: false,
         error: apiEnv.error,
@@ -114,7 +109,7 @@ export class DexRouter {
         response.data.dstAmount,
         'dstAmount'
       );
-      if (!normalizedDstAmount.value) {
+      if (!normalizedDstAmount.success) {
         logger.error(normalizedDstAmount.error);
         return {
           success: false,
@@ -152,7 +147,7 @@ export class DexRouter {
     options: OneInchRequestOptions = {}
   ): Promise<OneInchSwapDataResult> {
     const apiEnv = validateOneInchApiEnv();
-    if (!apiEnv.baseUrl) {
+    if (apiEnv.error) {
       return {
         success: false,
         error: apiEnv.error,
@@ -199,7 +194,7 @@ export class DexRouter {
       const normalizedTransaction = normalizeOneInchTransactionData(
         response.data.tx
       );
-      if (!normalizedTransaction.value) {
+      if (!normalizedTransaction.success) {
         logger.error(normalizedTransaction.error);
         return {
           success: false,
@@ -233,22 +228,11 @@ export class DexRouter {
           errorCode: 'invalid_response',
         };
       }
-      const valueValidationError = validateZeroOneInchTxValue(
-        normalizedTransaction.value.value
-      );
-      if (valueValidationError) {
-        return {
-          success: false,
-          error: valueValidationError,
-          retryable: true,
-          errorCode: 'invalid_response',
-        };
-      }
       const normalizedDstAmount =
         response.data.dstAmount !== undefined
           ? normalizeOneInchUintAmount(response.data.dstAmount, 'dstAmount')
-          : {};
-      if (response.data.dstAmount !== undefined && !normalizedDstAmount.value) {
+          : undefined;
+      if (normalizedDstAmount && !normalizedDstAmount.success) {
         return {
           success: false,
           error: normalizedDstAmount.error,
@@ -260,7 +244,7 @@ export class DexRouter {
       return {
         success: true,
         data: normalizedTransaction.value,
-        dstAmount: normalizedDstAmount.value,
+        dstAmount: normalizedDstAmount?.value,
       };
     } catch (error: unknown) {
       const errorMsg = getOneInchErrorMessage(error);
@@ -273,62 +257,32 @@ export class DexRouter {
     }
   }
 
-  // CURVE INTEGRATION: Simplified helper to find pool config by token pair
-  public getCurvePoolForTokenPair(
-    tokenIn: string,
-    tokenOut: string,
-    poolConfigs: any
-  ): { address: string; poolType: CurvePoolType } | undefined {
-    // Convert addresses to symbol names for lookup
-    const tokenInSymbol = this.getTokenSymbolFromAddress(tokenIn);
-    const tokenOutSymbol = this.getTokenSymbolFromAddress(tokenOut);
-
-    if (!tokenInSymbol || !tokenOutSymbol) {
-      logger.debug(
-        `Could not resolve token symbols for ${tokenIn}/${tokenOut}`
-      );
-      return undefined;
+  // Memoized per settings object so the selector's pool-selection cache
+  // survives across reward swaps instead of dying with a per-call instance.
+  private getCurvePoolSelector(
+    curveSettings: CurveRouterOverrides
+  ): CurvePoolSelector {
+    if (
+      !this.curvePoolSelector ||
+      this.curvePoolSelectorSettings !== curveSettings
+    ) {
+      this.curvePoolSelector = new CurvePoolSelector(this.signer, {
+        poolConfigs: curveSettings.poolConfigs ?? {},
+        wethAddress: curveSettings.wethAddress,
+        tokenAddresses: this.tokenAddresses,
+      });
+      this.curvePoolSelectorSettings = curveSettings;
     }
-
-    // Try both directions for the token pair
-    const key1 = `${tokenInSymbol}-${tokenOutSymbol}`;
-    const key2 = `${tokenOutSymbol}-${tokenInSymbol}`;
-
-    const poolConfig = poolConfigs[key1] || poolConfigs[key2];
-
-    if (poolConfig) {
-      logger.debug(
-        `Found Curve pool for ${tokenInSymbol}/${tokenOutSymbol}: ${poolConfig.address}`
-      );
-      return poolConfig;
-    }
-
-    logger.debug(
-      `No Curve pool configured for ${tokenInSymbol}/${tokenOutSymbol}`
-    );
-    return undefined;
-  }
-
-  // CURVE INTEGRATION: Helper to convert address to symbol using tokenAddresses from config
-  public getTokenSymbolFromAddress(address: string): string | undefined {
-    for (const [symbol, tokenAddress] of Object.entries(this.tokenAddresses)) {
-      if (tokenAddress.toString().toLowerCase() === address.toLowerCase()) {
-        return symbol;
-      }
-    }
-    return undefined;
+    return this.curvePoolSelector;
   }
 
   // CURVE INTEGRATION: Updated Curve swap method with simplified lookup
   private async swapWithCurve(
-    chainId: number,
     amount: BigNumber,
     tokenIn: string,
     tokenOut: string,
-    to: string,
     slippage: number,
-    feeAmount?: number,
-    curveSettings?: any
+    curveSettings?: CurveRouterOverrides
   ): Promise<{ success: boolean; error?: string }> {
     try {
       if (!curveSettings) {
@@ -341,18 +295,20 @@ export class DexRouter {
       if (!curveSettings.poolConfigs) {
         return {
           success: false,
-          error: 'Curve pool configurations not found',
+          error: 'Curve pool configuration not found',
         };
       }
 
-      // SIMPLIFIED: Use the new token pair lookup
-      const poolConfig = this.getCurvePoolForTokenPair(
+      const selector = this.getCurvePoolSelector(curveSettings);
+      // Execution stays fail-closed: only the symbol-keyed pool for this
+      // pair is eligible, never the fallback scan the quote path uses.
+      const selectedPool = await selector.resolvePoolSelection(
         tokenIn,
         tokenOut,
-        curveSettings.poolConfigs
+        { allowFallbackPoolScan: false }
       );
 
-      if (!poolConfig) {
+      if (!selectedPool) {
         return {
           success: false,
           error: `No Curve pool configured for ${tokenIn}/${tokenOut}`,
@@ -365,8 +321,7 @@ export class DexRouter {
         amount,
         tokenOut,
         slippage,
-        poolConfig.address,
-        poolConfig.poolType,
+        selectedPool,
         curveSettings.defaultSlippage
       );
 
@@ -561,13 +516,10 @@ export class DexRouter {
       case PostAuctionDex.CURVE:
         // CURVE INTEGRATION: New case for Curve post-auction swaps
         return await this.swapWithCurve(
-          chainId,
           adjustedAmount,
           tokenIn,
           tokenOut,
-          to,
           slippage,
-          feeAmount,
           combinedSettings?.curve
         );
 

@@ -6,6 +6,7 @@ import {
   CurveRouterSwapResult,
 } from '../../src/dex/curve-router';
 import { CurvePoolType } from '../../src/config';
+import { CurvePoolSelection } from '../../src/dex/curve-pool-selection';
 
 describe('Curve Router Module', () => {
   const TOKEN = '0x1111111111111111111111111111111111111111';
@@ -21,7 +22,6 @@ describe('Curve Router Module', () => {
       approve: sinon.SinonStub;
     };
     poolContract: {
-      coins: sinon.SinonStub;
       get_dy: sinon.SinonStub;
       exchange: sinon.SinonStub;
     };
@@ -57,7 +57,6 @@ describe('Curve Router Module', () => {
         .resolves({ hash: '0xapprove', wait: sinon.stub().resolves({}) }),
     };
     const poolContract = {
-      coins: sinon.stub(),
       get_dy: sinon.stub().resolves(opts.quoteOut ?? AMOUNT.mul(2)),
       exchange: opts.exchangeRejects
         ? sinon.stub().rejects(new Error('Transaction reverted'))
@@ -69,9 +68,6 @@ describe('Curve Router Module', () => {
             }),
           }),
     };
-    poolContract.coins.withArgs(0).resolves(tokenAddress);
-    poolContract.coins.withArgs(1).resolves(targetTokenAddress);
-    poolContract.coins.rejects(new Error('end of pool coins'));
 
     const makeContract = sinon.stub().callsFake((address: string) => {
       switch (address.toLowerCase()) {
@@ -121,14 +117,19 @@ describe('Curve Router Module', () => {
       getToken: mocks.getToken,
       queueTransaction: mocks.queueTransaction,
     });
+    const selectedPool: CurvePoolSelection = {
+      address: opts.poolAddress ?? POOL,
+      poolType: opts.poolType ?? CurvePoolType.STABLE,
+      tokenInIndex: 0,
+      tokenOutIndex: 1,
+    };
     return testSwapper(
       mocks.signer,
       opts.tokenAddress ?? TOKEN,
       AMOUNT,
       opts.targetTokenAddress ?? TARGET,
       opts.slippage as number,
-      opts.poolAddress ?? POOL,
-      opts.poolType ?? CurvePoolType.STABLE,
+      selectedPool,
       opts.defaultSlippage
     );
   }
@@ -226,8 +227,12 @@ describe('Curve Router Module', () => {
         AMOUNT,
         TARGET,
         1,
-        '',
-        CurvePoolType.STABLE,
+        {
+          address: '',
+          poolType: CurvePoolType.STABLE,
+          tokenInIndex: 0,
+          tokenOutIndex: 1,
+        },
         1
       );
     } catch (caught) {
@@ -236,7 +241,7 @@ describe('Curve Router Module', () => {
 
     expect(error).to.be.instanceOf(Error);
     expect((error as Error).message).to.equal(
-      'Curve pool address must be provided via configuration'
+      'Curve pool selection is missing address or pool type'
     );
     expect(mocks.makeContract.called).to.equal(false);
   });

@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import axios from 'axios';
-import { BigNumber, Wallet, ethers } from 'ethers';
+import { Wallet } from 'ethers';
 import { JsonRpcProvider } from '../../src/provider';
 import { TakeWriteTransportMode } from '../../src/config';
 import {
@@ -491,30 +491,7 @@ describe('take write transport', () => {
   });
 
   it('creates a relay transport and submits a private transaction with a durable nonce floor', async () => {
-    const localTxHash = ethers.utils.keccak256('0x1234');
-    const waitForTransactionStub = sinon.stub().resolves({
-      transactionHash: localTxHash,
-    });
-    const signer = {
-      getAddress: sinon
-        .stub()
-        .resolves('0x00000000000000000000000000000000000000aa'),
-      getChainId: sinon.stub().resolves(1),
-      getTransactionCount: sinon.stub().resolves(7),
-      populateTransaction: sinon.stub().callsFake(async (tx) => ({
-        ...tx,
-        chainId: 1,
-        nonce: tx.nonce ?? 7,
-        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
-        maxFeePerGas: BigNumber.from(1),
-        maxPriorityFeePerGas: BigNumber.from(1),
-      })),
-      signTransaction: sinon.stub().resolves('0x1234'),
-      provider: {
-        getBlockNumber: sinon.stub().resolves(100),
-        waitForTransaction: waitForTransactionStub,
-      },
-    } as any;
+    const { signer, localTxHash } = relaySignerFixture();
     sinon.stub(axios, 'post').resolves({
       data: {
         result: localTxHash,
@@ -568,31 +545,16 @@ describe('take write transport', () => {
   it('applies only a local durable nonce expiry for custom relay methods', async () => {
     const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
     try {
-      const getBlockNumberStub = sinon.stub().resolves(100);
-      const signer = {
-        getAddress: sinon
-          .stub()
-          .resolves('0x00000000000000000000000000000000000000aa'),
-        getChainId: sinon.stub().resolves(1),
-        getTransactionCount: sinon.stub().resolves(7),
-        populateTransaction: sinon.stub().callsFake(async (tx) => ({
-          ...tx,
-          chainId: 1,
-          nonce: tx.nonce ?? 7,
-          gasLimit: tx.gasLimit ?? BigNumber.from(21000),
-          maxFeePerGas: BigNumber.from(1),
-          maxPriorityFeePerGas: BigNumber.from(1),
-        })),
-        signTransaction: sinon.stub().resolves('0x1234'),
-        provider: {
-          getBlockNumber: getBlockNumberStub,
-          waitForTransaction: sinon.stub().resolves({
-            transactionHash:
-              '0x3333333333333333333333333333333333333333333333333333333333333333',
-          }),
-        },
-      } as any;
-      const localTxHash = ethers.utils.keccak256('0x1234');
+      const {
+        signer,
+        localTxHash,
+        getBlockNumber: getBlockNumberStub,
+      } = relaySignerFixture({
+        waitForTransaction: sinon.stub().resolves({
+          transactionHash:
+            '0x3333333333333333333333333333333333333333333333333333333333333333',
+        }),
+      });
       sinon.stub(axios, 'post').resolves({
         data: {
           result: localTxHash,
@@ -638,26 +600,9 @@ describe('take write transport', () => {
   });
 
   it('does not preserve a nonce when a relay explicitly returns a null result', async () => {
-    const signer = {
-      getAddress: sinon
-        .stub()
-        .resolves('0x00000000000000000000000000000000000000aa'),
-      getChainId: sinon.stub().resolves(1),
-      getTransactionCount: sinon.stub().resolves(7),
-      populateTransaction: sinon.stub().callsFake(async (tx) => ({
-        ...tx,
-        chainId: 1,
-        nonce: tx.nonce ?? 7,
-        gasLimit: tx.gasLimit ?? BigNumber.from(21000),
-        maxFeePerGas: BigNumber.from(1),
-        maxPriorityFeePerGas: BigNumber.from(1),
-      })),
-      signTransaction: sinon.stub().resolves('0x1234'),
-      provider: {
-        getBlockNumber: sinon.stub().resolves(100),
-        waitForTransaction: sinon.stub(),
-      },
-    } as any;
+    const { signer } = relaySignerFixture({
+      waitForTransaction: sinon.stub(),
+    });
     sinon.stub(axios, 'post').resolves({
       data: {
         result: null,

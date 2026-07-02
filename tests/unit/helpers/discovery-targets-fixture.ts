@@ -1,29 +1,10 @@
 import { KeeperConfig } from '../../../src/config';
+import { BASE_CONFIG } from './discovery-runtime-fixture';
 
-export const BASE_CONFIG: KeeperConfig = {
-  network: {
-    rpcUrl: 'http://localhost:8545',
-    subgraph: {
-      url: 'http://example-subgraph',
-    },
-  },
-  signer: {
-    keystore: '/tmp/keeper.json',
-  },
-  runtime: {
-    logLevel: 'debug',
-    delayBetweenRuns: 1,
-  },
-  ajna: {
-    erc20PoolFactory: '0x0000000000000000000000000000000000000001',
-    erc721PoolFactory: '0x0000000000000000000000000000000000000002',
-    poolUtils: '0x0000000000000000000000000000000000000003',
-    positionManager: '0x0000000000000000000000000000000000000004',
-    ajnaToken: '0x0000000000000000000000000000000000000005',
-  },
-  manual: {
-    pools: [],
-  },
+// Extends the shared BASE_CONFIG with a discovery block; renamed to avoid
+// mixing it up with the discovery-runtime-fixture export of the same shape.
+export const DISCOVERY_BASE_CONFIG: KeeperConfig = {
+  ...BASE_CONFIG,
   discovery: {
     enabled: true,
     take: true,

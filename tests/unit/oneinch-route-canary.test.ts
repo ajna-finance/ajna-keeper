@@ -80,6 +80,7 @@ function buildRuntime(
       dstAmount: amountRaw.toString(),
       data: {
         to: BASE_ONEINCH_ROUTER,
+        value: BigNumber.from(0),
         data: encodeOneInchSwapData({
           executor: AGGREGATION_EXECUTOR,
           srcToken: tokenIn,

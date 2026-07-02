@@ -48,8 +48,7 @@ describe('1inch swap executor', () => {
       data: {
         to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
         data: '0xdata',
-        value: '0',
-        gas: '100000',
+        value: BigNumber.from(0),
       },
     };
   }
@@ -90,6 +89,26 @@ describe('1inch swap executor', () => {
 
     expect(result.success).to.be.true;
     expect(getSwapData.callCount).to.equal(3);
+  });
+
+  it('refuses to send swap data carrying a non-zero native value', async () => {
+    getSwapData.resolves({
+      success: true,
+      data: {
+        to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+        data: '0xdata',
+        value: BigNumber.from(5),
+      },
+    });
+
+    const result = await runSwap();
+
+    expect(result).to.deep.equal({
+      success: false,
+      error: 'unexpected non-zero 1inch tx.value 5 for ERC20 swap',
+    });
+    expect((mockProvider.estimateGas as sinon.SinonStub).called).to.be.false;
+    expect(queueTransaction.called).to.be.false;
   });
 
   it('returns quote failures before requesting swap data', async () => {
@@ -150,14 +169,11 @@ describe('1inch swap executor', () => {
     expect((signer.sendTransaction as sinon.SinonStub).called).to.be.false;
   });
 
-  it('rejects 1inch swap-data with non-zero native value before signing', async () => {
+  it('returns validated swap-data failures before signing', async () => {
     getSwapData.resolves({
-      success: true,
-      data: {
-        to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
-        data: '0xdata',
-        value: '1',
-      },
+      success: false,
+      error: 'unexpected non-zero 1inch tx.value 1 for ERC20 swap',
+      retryable: false,
     });
 
     const result = await runSwap();
@@ -181,12 +197,13 @@ describe('1inch swap executor', () => {
     expect((signer.sendTransaction as sinon.SinonStub).called).to.be.false;
   });
 
-  it('uses zero value and estimated gas when 1inch omits tx.value and tx.gas', async () => {
+  it('uses the validated zero value and estimated gas', async () => {
     getSwapData.resolves({
       success: true,
       data: {
         to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
         data: '0xdata',
+        value: BigNumber.from(0),
       },
     });
 

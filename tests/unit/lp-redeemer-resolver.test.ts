@@ -1,42 +1,13 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import {
-  KeeperConfig,
-  PriceOriginSource,
-  TokenToCollect,
-} from '../../src/config';
+import { PriceOriginSource, TokenToCollect } from '../../src/config';
 import {
   buildPoolConfigByAddress,
   createLpRedeemerResolver,
   LpRedeemer,
 } from '../../src/rewards';
 import { logger } from '../../src/logging';
-
-const BASE_CONFIG: KeeperConfig = {
-  network: {
-    rpcUrl: 'http://localhost:8545',
-    subgraph: {
-      url: 'http://example-subgraph',
-    },
-  },
-  signer: {
-    keystore: '/tmp/keeper.json',
-  },
-  runtime: {
-    logLevel: 'debug',
-    delayBetweenRuns: 1,
-  },
-  ajna: {
-    erc20PoolFactory: '0x0000000000000000000000000000000000000001',
-    erc721PoolFactory: '0x0000000000000000000000000000000000000002',
-    poolUtils: '0x0000000000000000000000000000000000000003',
-    positionManager: '0x0000000000000000000000000000000000000004',
-    ajnaToken: '0x0000000000000000000000000000000000000005',
-  },
-  manual: {
-    pools: [],
-  },
-};
+import { BASE_CONFIG } from './helpers/discovery-runtime-fixture';
 
 function makeLpPool(poolAddress: string) {
   return {

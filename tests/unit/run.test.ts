@@ -16,6 +16,7 @@ import {
 
 import * as takeWriteTransportModule from '../../src/take/write-transport';
 import { PermanentTakeTransportError } from '../../src/take/write-transport';
+import { withTakeWrite } from './helpers/take-write-transport-fixture';
 
 const BASE_CONFIG: KeeperConfig = {
   network: {
@@ -42,10 +43,6 @@ const BASE_CONFIG: KeeperConfig = {
     pools: [],
   },
 };
-
-const withTakeWrite = (take: any): Pick<KeeperConfig, 'writes'> => ({
-  writes: { take },
-});
 
 const withRuntime = (
   runtime: Partial<KeeperConfig['runtime']>

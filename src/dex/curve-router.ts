@@ -6,8 +6,8 @@ import { NonceTracker } from '../nonce';
 import { getErrorMessage, weiToDecimaled, withTimeout } from '../utils';
 import { getTokenFromAddress } from './uniswap';
 import { deriveSwapMinimumOut } from './swap-min-out';
-import { CurvePoolType } from '../config';
 import { defaultDexContractServices, DexContractServices } from './contracts';
+import { CurvePoolSelection, getCurvePoolAbi } from './curve-pool-selection';
 
 // ABIs - Based on working test scripts
 const ERC20_ABI = [
@@ -16,29 +16,6 @@ const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function symbol() view returns (string)',
   'function decimals() view returns (uint8)',
-];
-
-// StableSwap ABI (int128 indices) - from curve-swap-base-4pool.ts
-const STABLESWAP_ABI = [
-  'function coins(uint256 i) external view returns (address)',
-  'function balances(uint256 i) external view returns (uint256)',
-  'function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256)',
-  'function exchange(int128 i, int128 j, uint256 dx, uint256 min_dy) external returns (uint256)',
-  'function fee() external view returns (uint256)',
-];
-
-// CryptoSwap ABI (uint256 indices) - from curve-swap-tricrypto.ts
-// AUDIT FIX: use the 4-arg base form of exchange (mirrors CurveKeeperTaker.sol).
-// Vyper emits one selector per default-argument arity, so the 4-arg form exists on
-// every CryptoSwap generation, while the previous 6-arg (use_eth, receiver) form is
-// absent on tricrypto2 and V2 factory crypto pools and made this path revert there.
-// Defaults are what we want: use_eth=false, receiver=msg.sender (the signer).
-const CRYPTOSWAP_ABI = [
-  'function coins(uint256 i) external view returns (address)',
-  'function balances(uint256 i) external view returns (uint256)',
-  'function get_dy(uint256 i, uint256 j, uint256 dx) external view returns (uint256)',
-  'function exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy) returns (uint256)',
-  'function fee() external view returns (uint256)',
 ];
 
 type TokenDetails = Awaited<ReturnType<typeof getTokenFromAddress>>;
@@ -66,8 +43,7 @@ export type CurveRouterSwapper = (
   amount: BigNumber,
   targetTokenAddress: string,
   slippagePercentage: number,
-  poolAddress: string,
-  poolType: CurvePoolType,
+  selectedPool: CurvePoolSelection,
   defaultSlippage?: number
 ) => Promise<CurveRouterSwapResult>;
 
@@ -92,8 +68,7 @@ export function createCurveRouterSwapper(
     amount,
     targetTokenAddress,
     slippagePercentage,
-    poolAddress,
-    poolType,
+    selectedPool,
     defaultSlippage
   ) {
     return await swapWithCurveRouterUsingContracts(
@@ -103,8 +78,7 @@ export function createCurveRouterSwapper(
       amount,
       targetTokenAddress,
       slippagePercentage,
-      poolAddress,
-      poolType,
+      selectedPool,
       defaultSlippage
     );
   };
@@ -121,16 +95,15 @@ async function swapWithCurveRouterUsingContracts(
   amount: BigNumber,
   targetTokenAddress: string,
   slippagePercentage: number, // dex-router passes percentage, not basis points
-  poolAddress: string,
-  poolType: CurvePoolType,
+  selectedPool: CurvePoolSelection,
   defaultSlippage?: number
 ): Promise<CurveRouterSwapResult> {
-  // VALIDATION: Same pattern as SushiSwap module
-  if (!poolAddress) {
-    throw new Error('Curve pool address must be provided via configuration');
-  }
-  if (!poolType) {
-    throw new Error('Pool type must be provided via configuration');
+  // Selections come from CurvePoolSelector with these fields populated; a
+  // firing guard indicates a selector/caller bug, not missing configuration.
+  const poolAddress = selectedPool?.address;
+  const poolType = selectedPool?.poolType;
+  if (!poolAddress || !poolType) {
+    throw new Error('Curve pool selection is missing address or pool type');
   }
   if (slippagePercentage === undefined) {
     // Fall back to the operator's configured curve defaultSlippage rather than
@@ -171,40 +144,16 @@ async function swapWithCurveRouterUsingContracts(
     return { success: true };
   }
 
-  // SIMPLIFIED: On Base L2, all tokens are ERC20s - no ETH/WETH conversion needed
-  const tokenInForLookup = tokenAddress;
-  const tokenOutForLookup = targetTokenAddress;
-
   // Get contract instances with ABI selection based on pool type
   const tokenContract = deps.makeContract(tokenAddress, ERC20_ABI, signer);
-
-  // ABI selection pattern from test scripts
-  const poolAbi =
-    poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-  const poolContract = deps.makeContract(poolAddress, poolAbi, signer);
+  const poolContract = deps.makeContract(
+    poolAddress,
+    getCurvePoolAbi(poolType),
+    signer
+  );
 
   try {
-    // STEP 1: Discover token indices (pattern from test scripts)
-    let tokenInIndex: number | undefined;
-    let tokenOutIndex: number | undefined;
-
-    for (let i = 0; i < 8; i++) {
-      try {
-        const tokenAddr = await poolContract.coins(i);
-        if (tokenAddr.toLowerCase() === tokenInForLookup.toLowerCase())
-          tokenInIndex = i;
-        if (tokenAddr.toLowerCase() === tokenOutForLookup.toLowerCase())
-          tokenOutIndex = i;
-      } catch (e) {
-        break; // No more tokens in pool
-      }
-    }
-
-    if (tokenInIndex === undefined || tokenOutIndex === undefined) {
-      throw new Error(
-        `Token indices not found in pool. Cannot proceed with swap.`
-      );
-    }
+    const { tokenInIndex, tokenOutIndex } = selectedPool;
 
     logger.info(
       `Found token indices: ${tokenToSwap.symbol}@${tokenInIndex}, ${targetToken.symbol}@${tokenOutIndex}`
@@ -215,22 +164,11 @@ async function swapWithCurveRouterUsingContracts(
       `Requesting quote for ${weiToDecimaled(amount, tokenToSwap.decimals)} ${tokenToSwap.symbol}...`
     );
 
-    let minAmountOut: BigNumber;
-    if (poolType === CurvePoolType.STABLE) {
-      // StableSwap uses int128 indices
-      minAmountOut = await poolContract.get_dy(
-        tokenInIndex,
-        tokenOutIndex,
-        amount
-      );
-    } else {
-      // CryptoSwap uses uint256 indices
-      minAmountOut = await poolContract.get_dy(
-        tokenInIndex,
-        tokenOutIndex,
-        amount
-      );
-    }
+    const minAmountOut: BigNumber = await poolContract.get_dy(
+      tokenInIndex,
+      tokenOutIndex,
+      amount
+    );
 
     const minAmountOutFormatted = weiToDecimaled(
       minAmountOut,
@@ -319,39 +257,17 @@ async function swapWithCurveRouterUsingContracts(
     const receipt = await deps.queueTransaction<providers.TransactionReceipt>(
       signer,
       async (nonce) => {
-        let swapTx;
-
-        if (poolType === CurvePoolType.STABLE) {
-          // StableSwap exchange: exchange(int128 i, int128 j, uint256 dx, uint256 min_dy)
-          swapTx = await poolContract.exchange(
-            tokenInIndex,
-            tokenOutIndex,
-            amount,
-            minAmountOutWithSlippage,
-            {
-              nonce,
-              gasLimit: 800000, // Conservative gas limit
-              gasPrice: highGasPrice,
-              // No value parameter needed on L2
-            }
-          );
-        } else {
-          // CryptoSwap exchange: 4-arg base form, exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy).
-          // use_eth defaults to false and receiver defaults to msg.sender (this signer),
-          // matching the explicit arguments the removed 6-arg call passed.
-          swapTx = await poolContract.exchange(
-            tokenInIndex,
-            tokenOutIndex,
-            amount,
-            minAmountOutWithSlippage,
-            {
-              nonce,
-              gasLimit: 800000, // Conservative gas limit
-              gasPrice: highGasPrice,
-              // No value parameter needed on L2
-            }
-          );
-        }
+        const swapTx = await poolContract.exchange(
+          tokenInIndex,
+          tokenOutIndex,
+          amount,
+          minAmountOutWithSlippage,
+          {
+            nonce,
+            gasLimit: 800000,
+            gasPrice: highGasPrice,
+          }
+        );
 
         logger.info(`Curve transaction sent: ${swapTx.hash}`);
 

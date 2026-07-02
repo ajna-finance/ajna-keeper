@@ -6,6 +6,13 @@ import { evaluateGasPolicy } from '../../src/discovery/gas-policy';
 import { DexRouter } from '../../src/dex/router';
 import { UniswapV3QuoteProvider } from '../../src/dex/providers/uniswap-quote-provider';
 import * as erc20 from '../../src/erc20';
+import {
+  QUOTE_TOKEN_ADDRESS,
+  WETH_ADDRESS,
+  oneInchGasConfig,
+  readRpcWithGasPrice,
+  signerWithChain,
+} from './helpers/discovery-gas-policy-fixture';
 
 describe('Discovery Gas Policy 1inch Conversion', () => {
   afterEach(() => {
@@ -22,40 +29,18 @@ describe('Discovery Gas Policy 1inch Conversion', () => {
       });
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(1),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 5,
-            oneInchQuoteTimeoutMs: 750,
-          },
-        },
-        oneInchRouters: {
-          1: '0x1111111111111111111111111111111111111111',
-        },
-        connectorTokens: [],
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+      signer: signerWithChain(1),
+      config: oneInchGasConfig({
+        maxGasCostQuote: 5,
+        oneInchQuoteTimeoutMs: 750,
+      }),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
         oneInchQuoteTimeoutMs: 750,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
@@ -88,38 +73,18 @@ describe('Discovery Gas Policy 1inch Conversion', () => {
       });
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(1),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 1,
-            minProfitNative: minProfitNativeRaw.toString(),
-          },
-        },
-        oneInchRouters: {
-          1: '0x1111111111111111111111111111111111111111',
-        },
-        connectorTokens: [],
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon.stub().resolves(gasPrice),
-        },
-      },
+      signer: signerWithChain(1),
+      config: oneInchGasConfig({
+        maxGasCostQuote: 1,
+        minProfitNative: minProfitNativeRaw.toString(),
+      }),
+      transports: readRpcWithGasPrice(gasPrice),
       policy: {
         maxGasCostQuote: 1,
         minProfitNative: minProfitNativeRaw.toString(),
       },
       gasLimit,
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice,
       rpcCache: {
@@ -143,38 +108,14 @@ describe('Discovery Gas Policy 1inch Conversion', () => {
       });
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(1),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 5,
-          },
-        },
-        oneInchRouters: {
-          1: '0x1111111111111111111111111111111111111111',
-        },
-        connectorTokens: [],
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+      signer: signerWithChain(1),
+      config: oneInchGasConfig({ maxGasCostQuote: 5 }),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
@@ -210,44 +151,28 @@ describe('Discovery Gas Policy 1inch Conversion', () => {
     );
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 5,
+      signer: signerWithChain(8453),
+      config: oneInchGasConfig(
+        { maxGasCostQuote: 5 },
+        {
+          chainId: 8453,
+          overrides: {
+            uniswapV3RouterOverrides: {
+              poolFactoryAddress: '0x3333333333333333333333333333333333333333',
+              quoterV2Address: '0x4444444444444444444444444444444444444444',
+              wethAddress: WETH_ADDRESS,
+              defaultFeeTier: 3000,
+              candidateFeeTiers: [500, 100, 10000],
+            },
           },
-        },
-        oneInchRouters: {
-          8453: '0x1111111111111111111111111111111111111111',
-        },
-        uniswapV3RouterOverrides: {
-          poolFactoryAddress: '0x3333333333333333333333333333333333333333',
-          quoterV2Address: '0x4444444444444444444444444444444444444444',
-          wethAddress: '0x4200000000000000000000000000000000000006',
-          defaultFeeTier: 3000,
-          candidateFeeTiers: [500, 100, 10000],
-        },
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+        }
+      ),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {
@@ -284,35 +209,17 @@ describe('Discovery Gas Policy 1inch Conversion', () => {
     sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(1),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 5,
-          },
-        },
-        oneInchRouters: {},
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+      signer: signerWithChain(1),
+      config: oneInchGasConfig(
+        { maxGasCostQuote: 5 },
+        { overrides: { oneInchRouters: {} } }
+      ),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {},
     });
@@ -333,38 +240,24 @@ describe('Discovery Gas Policy 1inch Conversion', () => {
       });
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(43114),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-            maxGasCostQuote: 5,
+      signer: signerWithChain(43114),
+      config: oneInchGasConfig(
+        { maxGasCostQuote: 5 },
+        {
+          chainId: 43114,
+          overrides: {
+            tokenAddresses: {
+              wavax: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7',
+            },
           },
-        },
-        oneInchRouters: {
-          43114: '0x1111111111111111111111111111111111111111',
-        },
-        connectorTokens: [],
-        tokenAddresses: {
-          wavax: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+        }
+      ),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         maxGasCostQuote: 5,
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),
       rpcCache: {},
@@ -397,37 +290,14 @@ describe('Discovery Gas Policy 1inch Conversion', () => {
       }));
 
     const result = await evaluateGasPolicy({
-      signer: {
-        provider: {},
-        getChainId: sinon.stub().resolves(8453),
-      } as any,
-      config: {
-        autoDiscover: {
-          enabled: true,
-          take: {
-            enabled: true,
-          },
-        },
-        oneInchRouters: {
-          8453: '0x1111111111111111111111111111111111111111',
-        },
-        connectorTokens: [],
-        tokenAddresses: {
-          weth: '0x4200000000000000000000000000000000000006',
-        },
-      } as any,
-      transports: {
-        readRpc: {
-          getGasPrice: sinon
-            .stub()
-            .resolves(ethers.utils.parseUnits('1', 'gwei')),
-        },
-      },
+      signer: signerWithChain(8453),
+      config: oneInchGasConfig({}, { chainId: 8453 }),
+      transports: readRpcWithGasPrice(ethers.utils.parseUnits('1', 'gwei')),
       policy: {
         minProfitNative: minProfitNative.toString(),
       },
       gasLimit: BigNumber.from(900000),
-      quoteTokenAddress: '0x9999999999999999999999999999999999999999',
+      quoteTokenAddress: QUOTE_TOKEN_ADDRESS,
       preferredLiquiditySource: LiquiditySource.ONEINCH,
       useProfitFloor: true,
       gasPrice: ethers.utils.parseUnits('1', 'gwei'),

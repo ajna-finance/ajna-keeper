@@ -1,4 +1,3 @@
-import axios from 'axios';
 import { expect } from 'chai';
 import { BigNumber, ethers, providers, Signer } from 'ethers';
 import sinon from 'sinon';
@@ -6,13 +5,15 @@ import { DexRouter } from '../../src/dex/router';
 import { CurvePoolType, PostAuctionDex } from '../../src/config';
 import * as erc20 from '../../src/erc20';
 import * as curveRouterModule from '../../src/dex/curve-router';
+import { CurvePoolSelector } from '../../src/dex/curve-pool-selection';
 import * as universalRouterModule from '../../src/dex/universal-router';
 import * as uniswapModule from '../../src/dex/uniswap';
-import { logger } from '../../src/logging';
-import { NonceTracker } from '../../src/nonce';
 import {
   CustomContract,
   DEX_ROUTER_FIXTURE,
+  installDexRouterFixture,
+  stubOneInchTokenReads,
+  tokenReadCallFake,
 } from './helpers/dex-router-fixture';
 
 describe('DexRouter', () => {
@@ -35,77 +36,14 @@ describe('DexRouter', () => {
   } = DEX_ROUTER_FIXTURE;
 
   beforeEach(() => {
-    process.env.ONEINCH_API = 'https://api.1inch.io/v5.0';
-    process.env.ONEINCH_API_KEY = 'api_key';
-
-    mockProvider = new providers.JsonRpcProvider();
-    mockProvider.estimateGas = sinon.stub().resolves(BigNumber.from('100000'));
-    mockProvider.getResolver = sinon.stub().resolves(null);
-    mockProvider.getNetwork = sinon
-      .stub()
-      .resolves({ chainId: chainId, name: 'mockNetwork' });
-
-    mockProvider.call = sinon.stub().callsFake((tx) => {
-      if (tx.data === '0x313ce567') {
-        return ethers.utils.defaultAbiCoder.encode(['uint8'], [8]);
-      }
-      if (
-        tx.data ===
-        '0x70a08231' +
-          ethers.utils.defaultAbiCoder
-            .encode(['address'], [fromAddress])
-            .slice(2)
-      ) {
-        return ethers.utils.defaultAbiCoder.encode(
-          ['uint256'],
-          [BigNumber.from('50000000')]
-        );
-      }
-      throw new Error('Unexpected call');
-    });
-
-    signer = {
-      provider: mockProvider,
-      getAddress: sinon.stub().resolves(fromAddress),
-      sendTransaction: sinon
-        .stub()
-        .resolves({ wait: sinon.stub().resolves({}) }),
-    } as unknown as Signer;
-
-    contractStub = new CustomContract(tokenIn, [], mockProvider);
-    sinon.stub(ethers, 'Contract').callsFake((address, abi, provider) => {
-      return contractStub;
-    });
-
-    sinon
-      .stub(NonceTracker, 'queueTransaction')
-      .callsFake(async (signer, txFunc) => {
-        // Simply execute the transaction function with a dummy nonce
-        return await txFunc(10);
-      });
-
-    dexRouter = new DexRouter(signer, {
-      oneInchRouters: {
-        1: '0x1111111254EEB25477B68fb85Ed929f73A960582',
-        8453: '0x1111111254EEB25477B68fb85Ed929f73A960582',
-        43114: '0x1111111254EEB25477B68fb85Ed929f73A960582',
-      },
-    });
-
-    sinon.stub(logger, 'info');
-    loggerErrorStub = sinon.stub(logger, 'error');
-    sinon.stub(logger, 'debug');
-
-    axiosGetStub = sinon.stub(axios, 'get').resolves({
-      data: {
-        tx: {
-          to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
-          data: '0xdata',
-          value: '0',
-          gas: '100000',
-        },
-      },
-    });
+    ({
+      contractStub,
+      signer,
+      mockProvider,
+      dexRouter,
+      axiosGetStub,
+      loggerErrorStub,
+    } = installDexRouterFixture());
   });
 
   afterEach(() => {
@@ -140,21 +78,9 @@ describe('DexRouter', () => {
       balance: BigNumber = amount
     ) {
       contractStub.balanceOf.withArgs(fromAddress).resolves(balance);
-      (mockProvider.call as sinon.SinonStub).callsFake((tx) => {
-        if (tx.data === '0x313ce567') {
-          return ethers.utils.defaultAbiCoder.encode(['uint8'], [decimals]);
-        }
-        if (
-          tx.data ===
-          '0x70a08231' +
-            ethers.utils.defaultAbiCoder
-              .encode(['address'], [fromAddress])
-              .slice(2)
-        ) {
-          return ethers.utils.defaultAbiCoder.encode(['uint256'], [balance]);
-        }
-        throw new Error('Unexpected call');
-      });
+      (mockProvider.call as sinon.SinonStub).callsFake(
+        tokenReadCallFake(fromAddress, decimals, balance)
+      );
       return sinon.stub(erc20, 'getDecimalsErc20').resolves(decimals);
     }
 
@@ -494,6 +420,7 @@ describe('DexRouter', () => {
         {
           curve: {
             poolConfigs: {},
+            wethAddress: tokenOut,
           },
         }
       );
@@ -504,6 +431,15 @@ describe('DexRouter', () => {
 
     it('routes Curve swaps through the configured pool for the token pair', async () => {
       stubSwapPreconditions(8, BigNumber.from('100000000'));
+      const selectedPool = {
+        address: '0x5555555555555555555555555555555555555555',
+        poolType: CurvePoolType.STABLE,
+        tokenInIndex: 0,
+        tokenOutIndex: 1,
+      };
+      sinon
+        .stub(CurvePoolSelector.prototype, 'resolvePoolSelection')
+        .resolves(selectedPool);
       const curveSwapStub = sinon
         .stub(curveRouterModule, 'swapWithCurveRouter')
         .resolves({ success: true } as any);
@@ -528,10 +464,11 @@ describe('DexRouter', () => {
             defaultSlippage: 0.5,
             poolConfigs: {
               'WBTC-WETH': {
-                address: '0x5555555555555555555555555555555555555555',
+                address: selectedPool.address,
                 poolType: CurvePoolType.STABLE,
               },
             },
+            wethAddress: tokenOut,
           },
         }
       );
@@ -544,8 +481,7 @@ describe('DexRouter', () => {
         BigNumber.from('100000000'),
         tokenOut,
         0.75,
-        '0x5555555555555555555555555555555555555555',
-        CurvePoolType.STABLE,
+        selectedPool,
         0.5,
       ]);
     });
@@ -569,15 +505,24 @@ describe('DexRouter', () => {
 
       expect(result).to.deep.equal({
         success: false,
-        error: 'Curve pool configurations not found',
+        error: 'Curve pool configuration not found',
       });
     });
 
-    it('surfaces Curve router execution failures', async () => {
+    it('swaps via Curve without a configured wethAddress (ERC20-only path)', async () => {
       stubSwapPreconditions(8, BigNumber.from('100000000'));
+      const selectedPool = {
+        address: '0x5555555555555555555555555555555555555555',
+        poolType: CurvePoolType.STABLE,
+        tokenInIndex: 0,
+        tokenOutIndex: 1,
+      };
+      const resolveStub = sinon
+        .stub(CurvePoolSelector.prototype, 'resolvePoolSelection')
+        .resolves(selectedPool);
       sinon
         .stub(curveRouterModule, 'swapWithCurveRouter')
-        .rejects(new Error('curve execution reverted'));
+        .resolves({ success: true });
       const curveRouter = new DexRouter(signer, {
         tokenAddresses: {
           WBTC: tokenIn,
@@ -606,20 +551,98 @@ describe('DexRouter', () => {
         }
       );
 
+      expect(result).to.deep.equal({ success: true });
+      expect(resolveStub.firstCall.args[2]).to.deep.equal({
+        allowFallbackPoolScan: false,
+      });
+    });
+
+    it('surfaces Curve router execution failures', async () => {
+      stubSwapPreconditions(8, BigNumber.from('100000000'));
+      const selectedPool = {
+        address: '0x5555555555555555555555555555555555555555',
+        poolType: CurvePoolType.STABLE,
+        tokenInIndex: 0,
+        tokenOutIndex: 1,
+      };
+      sinon
+        .stub(CurvePoolSelector.prototype, 'resolvePoolSelection')
+        .resolves(selectedPool);
+      sinon
+        .stub(curveRouterModule, 'swapWithCurveRouter')
+        .rejects(new Error('curve execution reverted'));
+      const curveRouter = new DexRouter(signer, {
+        tokenAddresses: {
+          WBTC: tokenIn,
+          WETH: tokenOut,
+        },
+      });
+
+      const result = await curveRouter.swap(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        to,
+        PostAuctionDex.CURVE,
+        slippage,
+        feeAmount,
+        {
+          curve: {
+            poolConfigs: {
+              'WBTC-WETH': {
+                address: selectedPool.address,
+                poolType: CurvePoolType.STABLE,
+              },
+            },
+            wethAddress: tokenOut,
+          },
+        }
+      );
+
       expect(result.success).to.be.false;
       expect(result.error).to.include('Curve swap failed');
     });
 
-    it('returns undefined when Curve token symbols cannot be resolved', () => {
-      expect(dexRouter.getTokenSymbolFromAddress(tokenIn)).to.be.undefined;
-      expect(
-        dexRouter.getCurvePoolForTokenPair(tokenIn, tokenOut, {
-          'WBTC-WETH': {
-            address: '0x5555555555555555555555555555555555555555',
-            poolType: CurvePoolType.STABLE,
+    it('returns a Curve failure when the shared selector cannot resolve a pool', async () => {
+      stubSwapPreconditions(8, BigNumber.from('100000000'));
+      sinon
+        .stub(CurvePoolSelector.prototype, 'resolvePoolSelection')
+        .resolves(undefined);
+
+      const curveRouter = new DexRouter(signer, {
+        tokenAddresses: {
+          WBTC: tokenIn,
+          WETH: tokenOut,
+        },
+      });
+
+      const result = await curveRouter.swap(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        to,
+        PostAuctionDex.CURVE,
+        slippage,
+        feeAmount,
+        {
+          curve: {
+            poolConfigs: {
+              'WBTC-WETH': {
+                address: '0x5555555555555555555555555555555555555555',
+                poolType: CurvePoolType.STABLE,
+              },
+            },
+            wethAddress: tokenOut,
           },
-        })
-      ).to.be.undefined;
+        }
+      );
+
+      expect(result).to.deep.equal({
+        success: false,
+        error: `No Curve pool configured for ${tokenIn}/${tokenOut}`,
+      });
     });
 
     it('surfaces legacy Uniswap V3 failures', async () => {
@@ -645,24 +668,7 @@ describe('DexRouter', () => {
 
     describe('useOneInch = true', () => {
       beforeEach(() => {
-        (mockProvider.call as sinon.SinonStub).callsFake((tx) => {
-          if (tx.data === '0x313ce567') {
-            return ethers.utils.defaultAbiCoder.encode(['uint8'], [8]);
-          }
-          if (
-            tx.data ===
-            '0x70a08231' +
-              ethers.utils.defaultAbiCoder
-                .encode(['address'], [fromAddress])
-                .slice(2)
-          ) {
-            return ethers.utils.defaultAbiCoder.encode(
-              ['uint256'],
-              [BigNumber.from('100000000')] // 1 WBTC
-            );
-          }
-          throw new Error('Unexpected call');
-        });
+        stubOneInchTokenReads(mockProvider, fromAddress);
       });
 
       it('should approve token if allowance is insufficient', async () => {

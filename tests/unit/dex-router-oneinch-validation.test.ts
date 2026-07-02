@@ -268,6 +268,10 @@ describe('DexRouter 1inch quote and swap-data validation', () => {
     );
 
     expect(result.success).to.be.true;
+    if (!result.success) {
+      expect.fail('Expected swap data to pass validation');
+    }
+    expect(result.data.value.eq(0)).to.equal(true);
     expect(axiosGetStub.firstCall.args[1].signal).to.equal(controller.signal);
     expect(axiosGetStub.firstCall.args[1].params).to.deep.include({
       connectorTokens: `${tokenOut},${to}`,
@@ -399,6 +403,73 @@ describe('DexRouter 1inch quote and swap-data validation', () => {
 
     expect(result.success).to.be.false;
     expect(result.error).to.equal('No valid transaction received from 1inch');
+  });
+
+  it('rejects 1inch swap data with empty-string to or data fields as retryable invalid responses', async () => {
+    const emptyFieldCases = [
+      { to: '', data: '0xdata' },
+      { to: '0x1111111254EEB25477B68fb85Ed929f73A960582', data: '' },
+    ];
+
+    for (const tx of emptyFieldCases) {
+      axiosGetStub.reset();
+      axiosGetStub.resolves({ data: { tx: { ...tx, value: '0' } } });
+
+      const result = await dexRouter.getSwapDataFromOneInch(
+        chainId,
+        amount,
+        tokenIn,
+        tokenOut,
+        slippage,
+        fromAddress
+      );
+
+      expect(result.success).to.be.false;
+      expect(result.error).to.equal('No valid transaction received from 1inch');
+      expect(result.retryable).to.equal(true);
+      expect(result.errorCode).to.equal('invalid_response');
+    }
+  });
+
+  it('normalizes zero-padded 1inch quote amounts instead of rejecting them', async () => {
+    axiosGetStub.resolves({
+      data: {
+        dstAmount: '0900000000000000000',
+      },
+    });
+
+    const result = await dexRouter.getQuoteFromOneInch(
+      chainId,
+      amount,
+      tokenIn,
+      tokenOut
+    );
+
+    expect(result.success).to.be.true;
+    if (!result.success) {
+      expect.fail('Expected zero-padded dstAmount to normalize');
+    }
+    expect(result.dstAmount).to.equal('900000000000000000');
+  });
+
+  it('falls back to the transport error message when the 1inch description is empty', async () => {
+    axiosGetStub.rejects({
+      response: {
+        status: 400,
+        data: { description: '' },
+      },
+      message: 'Request failed with status code 400',
+    });
+
+    const result = await dexRouter.getQuoteFromOneInch(
+      chainId,
+      amount,
+      tokenIn,
+      tokenOut
+    );
+
+    expect(result.success).to.be.false;
+    expect(result.error).to.equal('Request failed with status code 400');
   });
 
   it('rejects 1inch swap data when the configured router is missing or malformed', async () => {
@@ -544,6 +615,10 @@ describe('DexRouter 1inch quote and swap-data validation', () => {
       );
 
       expect(result.success).to.be.true;
+      if (!result.success) {
+        expect.fail('Expected zero native value to pass validation');
+      }
+      expect(result.data.value.eq(0)).to.equal(true);
     });
   }
 
@@ -659,7 +734,39 @@ describe('DexRouter 1inch quote and swap-data validation', () => {
     );
 
     expect(result.success).to.be.true;
+    if (!result.success) {
+      expect.fail('Expected swap data to pass validation');
+    }
     expect(result.dstAmount).to.equal('900000000000000000');
+    expect(result.data.value.eq(0)).to.equal(true);
+  });
+
+  it('ignores malformed gas from 1inch swap data', async () => {
+    axiosGetStub.resolves({
+      data: {
+        tx: {
+          to: '0x1111111254EEB25477B68fb85Ed929f73A960582',
+          data: '0xdata',
+          value: '0',
+          gas: '1.5',
+        },
+      },
+    });
+
+    const result = await dexRouter.getSwapDataFromOneInch(
+      chainId,
+      amount,
+      tokenIn,
+      tokenOut,
+      slippage,
+      fromAddress
+    );
+
+    expect(result.success).to.be.true;
+    if (!result.success) {
+      expect.fail('Expected swap data to pass validation');
+    }
+    expect(result.data.value.eq(0)).to.equal(true);
   });
 
   it('rejects malformed dstAmount from 1inch swap data', async () => {

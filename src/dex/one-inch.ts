@@ -5,7 +5,10 @@ import { BigNumber } from 'ethers';
 // duplicate definition - InvalidMsgValue()
 import genericRouterABI from '../abis/1inch-genericrouter.abi.json';
 import { logger } from '../logging';
-import { getErrorMessage } from '../utils';
+import {
+  normalizeAddressForComparison as normalizeAddress,
+  parseOneInchUint,
+} from './oneinch-uint';
 
 const ONE_INCH_ATOMIC_TAKE_ALLOWED_FLAGS = BigNumber.from(0);
 
@@ -56,17 +59,6 @@ export function convertSwapApiResponseToDetails(
   };
 }
 
-function normalizeAddress(value: unknown): string | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-  try {
-    return ethers.utils.getAddress(value).toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
 function formatAddressValidationError(fieldName: string): string {
   return `1inch swap description ${fieldName} is not a valid address`;
 }
@@ -75,51 +67,17 @@ function parseOneInchSwapDescriptionUint(
   value: unknown,
   fieldName: string
 ): { value?: BigNumber; error?: string } {
-  if (BigNumber.isBigNumber(value)) {
-    if (value.lt(0)) {
-      return {
-        error: `1inch swap description ${fieldName} is invalid: expected non-negative uint`,
-      };
-    }
-    if (value.gt(ethers.constants.MaxUint256)) {
-      return {
-        error: `1inch swap description ${fieldName} exceeds uint256`,
-      };
-    }
-    return { value };
+  const result = parseOneInchUint(value, {
+    fieldName: `1inch swap description ${fieldName}`,
+    allowHexString: true,
+    invalidStringError: `1inch swap description ${fieldName} is invalid: expected decimal or hex uint string`,
+    invalidNumberError: `1inch swap description ${fieldName} is invalid: expected non-negative safe integer`,
+    negativeBigNumberError: `1inch swap description ${fieldName} is invalid: expected non-negative uint`,
+  });
+  if (!result.success) {
+    return { error: result.error };
   }
-
-  if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      return {
-        error: `1inch swap description ${fieldName} is invalid: expected non-negative safe integer`,
-      };
-    }
-    return { value: BigNumber.from(value) };
-  }
-
-  if (
-    typeof value !== 'string' ||
-    !/^(0|[1-9]\d*)$|^0x[0-9a-fA-F]+$/.test(value)
-  ) {
-    return {
-      error: `1inch swap description ${fieldName} is invalid: expected decimal or hex uint string`,
-    };
-  }
-
-  try {
-    const parsed = BigNumber.from(value);
-    if (parsed.gt(ethers.constants.MaxUint256)) {
-      return {
-        error: `1inch swap description ${fieldName} exceeds uint256`,
-      };
-    }
-    return { value: parsed };
-  } catch (error) {
-    return {
-      error: `1inch swap description ${fieldName} is invalid: ${getErrorMessage(error)}`,
-    };
-  }
+  return { value: result.value };
 }
 
 export function validateOneInchSwapDetailsForAtomicTake(

@@ -65,8 +65,10 @@ jobs:
       - name: Lint (no-floating-promises / no-misused-promises)
         run: npm run lint
 
-      - name: Unit tests
-        run: npm run unit-tests
+      # Runs the full unit suite under c8 and enforces the coverage thresholds
+      # in .c8rc.json (a conservative ratchet below the current --all baseline).
+      - name: Unit tests + coverage ratchet
+        run: npm run coverage:check
 
       - name: Egress-guard self-test
         run: npm run no-spend-validation:egress-guard-self-test

@@ -6,11 +6,16 @@ export const QUOTE_TOKEN_ADDRESS = '0x9999999999999999999999999999999999999999';
 export const ONEINCH_ROUTER_ADDRESS =
   '0x1111111111111111111111111111111111111111';
 
-export function signerWithChain(chainId?: number): any {
+export function signerWithChain(chainIdOrError?: number | Error): any {
   return {
     provider: {},
-    ...(chainId !== undefined
-      ? { getChainId: sinon.stub().resolves(chainId) }
+    ...(chainIdOrError !== undefined
+      ? {
+          getChainId:
+            chainIdOrError instanceof Error
+              ? sinon.stub().rejects(chainIdOrError)
+              : sinon.stub().resolves(chainIdOrError),
+        }
       : {}),
   };
 }
@@ -24,7 +29,11 @@ export function readRpcWithGasPrice(gasPrice: BigNumber): any {
 }
 
 export function oneInchGasConfig(
-  takePolicy: Record<string, unknown> = {}
+  takePolicy: Record<string, unknown> = {},
+  options: {
+    chainId?: number;
+    overrides?: Record<string, unknown>;
+  } = {}
 ): any {
   return {
     autoDiscover: {
@@ -35,11 +44,12 @@ export function oneInchGasConfig(
       },
     },
     oneInchRouters: {
-      1: ONEINCH_ROUTER_ADDRESS,
+      [options.chainId ?? 1]: ONEINCH_ROUTER_ADDRESS,
     },
     connectorTokens: [],
     tokenAddresses: {
       weth: WETH_ADDRESS,
     },
+    ...options.overrides,
   };
 }

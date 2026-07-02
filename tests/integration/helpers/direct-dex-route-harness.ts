@@ -8,6 +8,7 @@ import {
   PoolConfig,
   PriceOriginSource,
 } from '../../../src/config';
+import type { CurvePoolSelection } from '../../../src/dex/curve-pool-selection';
 import {
   createDirectDexQuoteProviderRuntimeCache,
   DirectDexExecutionConfig,
@@ -262,7 +263,9 @@ export function buildApprovedDirectDexQuoteEvaluation(params: {
       profitMinOutRaw: params.profitMinOutRaw,
     });
   if (!approvedMinOutRaw) {
-    throw new Error('Test direct DEX quote evaluation missing approved min-out');
+    throw new Error(
+      'Test direct DEX quote evaluation missing approved min-out'
+    );
   }
 
   const base = {
@@ -308,13 +311,6 @@ export async function deployFundedSwapRouter02(
   await router.deployed();
   await harness.quoteToken.mint(router.address, amountOut);
   return router;
-}
-
-interface CurvePoolSelection {
-  address: string;
-  poolType: CurvePoolType;
-  tokenInIndex: number;
-  tokenOutIndex: number;
 }
 
 interface DirectDexRouteExecutionFixture {

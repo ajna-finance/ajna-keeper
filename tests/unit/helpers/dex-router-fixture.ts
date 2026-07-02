@@ -1,7 +1,6 @@
 import axios from 'axios';
 import { BigNumber, Contract, ethers, providers, Signer } from 'ethers';
 import sinon from 'sinon';
-import { PostAuctionDex } from '../../../src/config';
 import { DexRouter } from '../../../src/dex/router';
 import { logger } from '../../../src/logging';
 import { NonceTracker } from '../../../src/nonce';
@@ -37,6 +36,28 @@ export const DEX_ROUTER_FIXTURE = {
   feeAmount: 3000,
 };
 
+// Single source of truth for the fake ERC20 read protocol (decimals() and
+// balanceOf(fromAddress)) used across the DexRouter suites.
+export function tokenReadCallFake(
+  fromAddress: string,
+  decimals: number,
+  balance: BigNumber
+): (tx: { data?: string }) => string {
+  return (tx) => {
+    if (tx.data === '0x313ce567') {
+      return ethers.utils.defaultAbiCoder.encode(['uint8'], [decimals]);
+    }
+    if (
+      tx.data ===
+      '0x70a08231' +
+        ethers.utils.defaultAbiCoder.encode(['address'], [fromAddress]).slice(2)
+    ) {
+      return ethers.utils.defaultAbiCoder.encode(['uint256'], [balance]);
+    }
+    throw new Error('Unexpected call');
+  };
+}
+
 export interface DexRouterFixture {
   contractStub: CustomContract;
   signer: Signer;
@@ -58,22 +79,9 @@ export function installDexRouterFixture(): DexRouterFixture {
     .stub()
     .resolves({ chainId, name: 'mockNetwork' });
 
-  mockProvider.call = sinon.stub().callsFake((tx) => {
-    if (tx.data === '0x313ce567') {
-      return ethers.utils.defaultAbiCoder.encode(['uint8'], [8]);
-    }
-    if (
-      tx.data ===
-      '0x70a08231' +
-        ethers.utils.defaultAbiCoder.encode(['address'], [fromAddress]).slice(2)
-    ) {
-      return ethers.utils.defaultAbiCoder.encode(
-        ['uint256'],
-        [BigNumber.from('50000000')]
-      );
-    }
-    throw new Error('Unexpected call');
-  });
+  mockProvider.call = sinon
+    .stub()
+    .callsFake(tokenReadCallFake(fromAddress, 8, BigNumber.from('50000000')));
 
   const signer = {
     provider: mockProvider,
@@ -127,22 +135,7 @@ export function stubOneInchTokenReads(
   mockProvider: providers.JsonRpcProvider,
   fromAddress: string
 ): void {
-  (mockProvider.call as sinon.SinonStub).callsFake((tx) => {
-    if (tx.data === '0x313ce567') {
-      return ethers.utils.defaultAbiCoder.encode(['uint8'], [8]);
-    }
-    if (
-      tx.data ===
-      '0x70a08231' +
-        ethers.utils.defaultAbiCoder.encode(['address'], [fromAddress]).slice(2)
-    ) {
-      return ethers.utils.defaultAbiCoder.encode(
-        ['uint256'],
-        [BigNumber.from('100000000')]
-      );
-    }
-    throw new Error('Unexpected call');
-  });
+  (mockProvider.call as sinon.SinonStub).callsFake(
+    tokenReadCallFake(fromAddress, 8, BigNumber.from('100000000'))
+  );
 }
-
-export { PostAuctionDex };

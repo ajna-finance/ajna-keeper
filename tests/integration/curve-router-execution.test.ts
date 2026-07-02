@@ -80,8 +80,12 @@ describe('Curve router real execution', () => {
       AMOUNT_IN,
       tokenOut.address,
       2.0,
-      curvePool.address,
-      CurvePoolType.CRYPTO,
+      {
+        address: curvePool.address,
+        poolType: CurvePoolType.CRYPTO,
+        tokenInIndex: 0,
+        tokenOutIndex: 1,
+      },
       2.0
     );
 
