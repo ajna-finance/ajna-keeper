@@ -115,7 +115,7 @@ export async function requestValidatedOneInchAggregatorQuote(params: {
     true,
     getOneInchAggregatorRequestOptions(params.config)
   );
-  if (!swapData.success || !swapData.data) {
+  if (!swapData.success) {
     throw new OneInchAggregatorQuoteError(
       swapData.error ?? '1inch swap data request failed',
       {
@@ -132,18 +132,15 @@ export async function requestValidatedOneInchAggregatorQuote(params: {
   }
 
   const swapDetails = convertSwapApiResponseToDetails(swapData.data);
-  const validationError = validateOneInchSwapDetailsForAtomicTake(
-    swapDetails,
-    {
-      srcToken: params.pool.collateralAddress,
-      dstToken: params.pool.quoteAddress,
-      srcReceiver: configuredRouter,
-      dstReceiver: params.takerAddress,
-      amount: params.collateralInTokenDecimals,
-      aggregationExecutors:
-        params.config.oneInchAggregationExecutorAllowlist?.[params.chainId],
-    }
-  );
+  const validationError = validateOneInchSwapDetailsForAtomicTake(swapDetails, {
+    srcToken: params.pool.collateralAddress,
+    dstToken: params.pool.quoteAddress,
+    srcReceiver: configuredRouter,
+    dstReceiver: params.takerAddress,
+    amount: params.collateralInTokenDecimals,
+    aggregationExecutors:
+      params.config.oneInchAggregationExecutorAllowlist?.[params.chainId],
+  });
   if (validationError) {
     throw new OneInchAggregatorQuoteError(validationError, {
       retryable: false,

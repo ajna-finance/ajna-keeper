@@ -15,13 +15,22 @@ import {
   getOneInchErrorMessage,
   isRetryableOneInchError,
   normalizeAddressForComparison,
+  normalizeOneInchTransactionData,
   normalizeOneInchUintAmount,
-  OneInchApiResult,
-  OneInchRequestOptions,
   validateOneInchApiEnv,
   validateZeroOneInchTxValue,
 } from './oneinch';
-export type { OneInchApiResult, OneInchRequestOptions } from './oneinch';
+import type {
+  OneInchQuoteResult,
+  OneInchRequestOptions,
+  OneInchSwapDataResult,
+} from './oneinch';
+export type {
+  OneInchApiResult,
+  OneInchQuoteResult,
+  OneInchRequestOptions,
+  OneInchSwapDataResult,
+} from './oneinch';
 import {
   CurvePoolType,
   CurveRouterOverrides,
@@ -65,7 +74,7 @@ export class DexRouter {
     tokenIn: string,
     tokenOut: string,
     options: OneInchRequestOptions = {}
-  ): Promise<OneInchApiResult> {
+  ): Promise<OneInchQuoteResult> {
     const apiEnv = validateOneInchApiEnv();
     if (!apiEnv.baseUrl) {
       return {
@@ -120,7 +129,7 @@ export class DexRouter {
       );
 
       return { success: true, dstAmount: normalizedDstAmount.value };
-    } catch (error: Error | any) {
+    } catch (error: unknown) {
       const errorMsg = getOneInchErrorMessage(error);
       logger.error(`Failed to get quote from 1inch: ${errorMsg}`);
       return {
@@ -141,7 +150,7 @@ export class DexRouter {
     fromAddress: string,
     usePatching: boolean = false,
     options: OneInchRequestOptions = {}
-  ): Promise<OneInchApiResult> {
+  ): Promise<OneInchSwapDataResult> {
     const apiEnv = validateOneInchApiEnv();
     if (!apiEnv.baseUrl) {
       return {
@@ -187,11 +196,14 @@ export class DexRouter {
         getOneInchAxiosOptions(params, options)
       );
 
-      if (!response.data.tx || !response.data.tx.to || !response.data.tx.data) {
-        logger.error('No valid transaction received from 1inch');
+      const normalizedTransaction = normalizeOneInchTransactionData(
+        response.data.tx
+      );
+      if (!normalizedTransaction.value) {
+        logger.error(normalizedTransaction.error);
         return {
           success: false,
-          error: 'No valid transaction received from 1inch',
+          error: normalizedTransaction.error,
           retryable: true,
           errorCode: 'invalid_response',
         };
@@ -203,7 +215,7 @@ export class DexRouter {
           ? normalizeAddressForComparison(expectedRouter)
           : undefined;
       const normalizedTxTarget = normalizeAddressForComparison(
-        response.data.tx.to
+        normalizedTransaction.value.to
       );
       if (!normalizedExpectedRouter || !normalizedTxTarget) {
         return {
@@ -216,13 +228,13 @@ export class DexRouter {
       if (normalizedTxTarget !== normalizedExpectedRouter) {
         return {
           success: false,
-          error: `1inch tx target ${response.data.tx.to} does not match configured router ${expectedRouter}`,
+          error: `1inch tx target ${normalizedTransaction.value.to} does not match configured router ${expectedRouter}`,
           retryable: true,
           errorCode: 'invalid_response',
         };
       }
       const valueValidationError = validateZeroOneInchTxValue(
-        response.data.tx.value
+        normalizedTransaction.value.value
       );
       if (valueValidationError) {
         return {
@@ -247,10 +259,10 @@ export class DexRouter {
 
       return {
         success: true,
-        data: response.data.tx,
+        data: normalizedTransaction.value,
         dstAmount: normalizedDstAmount.value,
       };
-    } catch (error: Error | any) {
+    } catch (error: unknown) {
       const errorMsg = getOneInchErrorMessage(error);
       return {
         success: false,

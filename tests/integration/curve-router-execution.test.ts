@@ -6,27 +6,32 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { Contract, Wallet, utils } from 'ethers';
-import * as curveRouterModule from '../../src/dex/curve-router';
-import { NonceTracker } from '../../src/nonce';
+import { createCurveRouterSwapper } from '../../src/dex/curve-router';
 import { CurvePoolType } from '../../src/config';
 import {
   MockCurveTricryptoPool__factory,
   MockERC20__factory,
 } from '../../typechain-types/factories/contracts/mocks';
-import { fundSigner, getProvider } from './helpers/mock-taker-base';
+import { getProvider } from './helpers/mock-taker-base';
 
 const AMOUNT_IN = utils.parseEther('1');
 const FIXED_OUT = utils.parseEther('2');
+const DEFAULT_HARDHAT_PRIVATE_KEY =
+  '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 
 describe('Curve router real execution', () => {
   let queueTransactionStub: sinon.SinonStub;
 
   beforeEach(() => {
-    queueTransactionStub = sinon
-      .stub(NonceTracker, 'queueTransaction')
-      .callsFake(async (signer: any, txFunc: any) =>
-        txFunc(await signer.getTransactionCount())
-      );
+    const nextNonceByAddress = new Map<string, number>();
+    queueTransactionStub = sinon.stub().callsFake(async (signer, txFunc) => {
+      const address = await signer.getAddress();
+      const nonce =
+        nextNonceByAddress.get(address) ??
+        (await signer.getTransactionCount('pending'));
+      nextNonceByAddress.set(address, nonce + 1);
+      return await txFunc(nonce);
+    });
   });
 
   afterEach(() => {
@@ -34,8 +39,7 @@ describe('Curve router real execution', () => {
   });
 
   async function deployTricryptoFixture() {
-    const owner = Wallet.createRandom().connect(getProvider());
-    await fundSigner(owner.address);
+    const owner = new Wallet(DEFAULT_HARDHAT_PRIVATE_KEY, getProvider());
 
     const tokenIn = await new MockERC20__factory(owner).deploy(
       'Mock tBTC',
@@ -66,8 +70,11 @@ describe('Curve router real execution', () => {
   it('executes a CRYPTO swap against a pool that lacks the 6-arg exchange form', async () => {
     const { owner, tokenIn, tokenOut, curvePool } =
       await deployTricryptoFixture();
+    const swapWithCurveRouter = createCurveRouterSwapper({
+      queueTransaction: queueTransactionStub,
+    });
 
-    const result = await curveRouterModule.swapWithCurveRouter(
+    const result = await swapWithCurveRouter(
       owner,
       tokenIn.address,
       AMOUNT_IN,
@@ -78,16 +85,17 @@ describe('Curve router real execution', () => {
       2.0
     );
 
-    expect(result.success, `swap failed: ${result.error ?? ''}`).to.equal(
-      true
-    );
+    expect(
+      result.success,
+      `swap failed: ${result.success ? '' : result.error}`
+    ).to.equal(true);
     expect(queueTransactionStub.called).to.equal(true);
     expect((await tokenOut.balanceOf(owner.address)).eq(FIXED_OUT)).to.equal(
       true
     );
-    expect(
-      (await tokenIn.balanceOf(curvePool.address)).eq(AMOUNT_IN)
-    ).to.equal(true);
+    expect((await tokenIn.balanceOf(curvePool.address)).eq(AMOUNT_IN)).to.equal(
+      true
+    );
   });
 
   it('documents that the removed 6-arg form is genuinely absent on the tricrypto surface', async () => {
@@ -103,7 +111,14 @@ describe('Curve router real execution', () => {
 
     let error: unknown;
     try {
-      await sixArg.callStatic.exchange(0, 1, AMOUNT_IN, 0, false, owner.address);
+      await sixArg.callStatic.exchange(
+        0,
+        1,
+        AMOUNT_IN,
+        0,
+        false,
+        owner.address
+      );
     } catch (caught) {
       error = caught;
     }

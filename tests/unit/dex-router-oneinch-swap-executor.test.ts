@@ -1,7 +1,11 @@
 import { expect } from 'chai';
 import { BigNumber, providers, Signer } from 'ethers';
 import sinon from 'sinon';
-import { executeOneInchSwap, OneInchApiResult } from '../../src/dex/oneinch';
+import {
+  executeOneInchSwap,
+  OneInchQuoteResult,
+  OneInchSwapDataResult,
+} from '../../src/dex/oneinch';
 import {
   DEX_ROUTER_FIXTURE,
   installDexRouterFixture,
@@ -31,14 +35,14 @@ describe('1inch swap executor', () => {
     sinon.restore();
   });
 
-  function successfulQuote(): OneInchApiResult {
+  function successfulQuote(): OneInchQuoteResult {
     return {
       success: true,
       dstAmount: '900000000000000000',
     };
   }
 
-  function successfulSwapData(): OneInchApiResult {
+  function successfulSwapData(): OneInchSwapDataResult {
     return {
       success: true,
       data: {
@@ -88,8 +92,13 @@ describe('1inch swap executor', () => {
     expect(getSwapData.callCount).to.equal(3);
   });
 
-  it('fails before quote when the API env is missing', async () => {
-    delete process.env.ONEINCH_API;
+  it('returns quote failures before requesting swap data', async () => {
+    getQuote.resolves({
+      success: false,
+      error: 'ONEINCH_API is not configured',
+      retryable: false,
+      errorCode: 'missing_oneinch_env',
+    });
 
     const result = await runSwap();
 
@@ -97,20 +106,7 @@ describe('1inch swap executor', () => {
       success: false,
       error: 'ONEINCH_API is not configured',
     });
-    expect(getQuote.called).to.be.false;
-    expect(getSwapData.called).to.be.false;
-  });
-
-  it('fails before quote when the API key env is missing', async () => {
-    delete process.env.ONEINCH_API_KEY;
-
-    const result = await runSwap();
-
-    expect(result).to.deep.equal({
-      success: false,
-      error: 'ONEINCH_API_KEY is not configured',
-    });
-    expect(getQuote.called).to.be.false;
+    expect(getQuote.calledOnce).to.be.true;
     expect(getSwapData.called).to.be.false;
   });
 
@@ -167,6 +163,7 @@ describe('1inch swap executor', () => {
     const result = await runSwap();
 
     expect(result.success).to.be.false;
+    if (result.success) expect.fail('Expected non-zero value to fail');
     expect(result.error).to.include('unexpected non-zero 1inch tx.value');
     expect((signer.sendTransaction as sinon.SinonStub).called).to.be.false;
   });
@@ -179,6 +176,7 @@ describe('1inch swap executor', () => {
     const result = await runSwap();
 
     expect(result.success).to.be.false;
+    if (result.success) expect.fail('Expected gas estimation failure');
     expect(result.error).to.include('Gas estimation failed');
     expect((signer.sendTransaction as sinon.SinonStub).called).to.be.false;
   });

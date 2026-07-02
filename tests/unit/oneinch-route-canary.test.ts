@@ -1,7 +1,10 @@
 import { expect } from 'chai';
 import { BigNumber, ethers } from 'ethers';
 import genericRouterABI from '../../src/abis/1inch-genericrouter.abi.json';
-import { OneInchApiResult } from '../../src/dex/router';
+import {
+  OneInchQuoteResult,
+  OneInchSwapDataResult,
+} from '../../src/dex/oneinch';
 import {
   OneInchRouteCanaryDeps,
   OneInchRouteCanaryRuntime,
@@ -58,10 +61,12 @@ function encodeOneInchSwapData(params: {
 
 type RuntimeOverrides = Partial<OneInchRouteCanaryRuntime>;
 
-function buildRuntime(overrides: RuntimeOverrides = {}): OneInchRouteCanaryRuntime {
+function buildRuntime(
+  overrides: RuntimeOverrides = {}
+): OneInchRouteCanaryRuntime {
   return {
     getTokenDecimals: async () => 18,
-    getQuote: async ({ amountRaw }): Promise<OneInchApiResult> => ({
+    getQuote: async ({ amountRaw }): Promise<OneInchQuoteResult> => ({
       success: true,
       dstAmount: amountRaw.toString(),
     }),
@@ -70,10 +75,11 @@ function buildRuntime(overrides: RuntimeOverrides = {}): OneInchRouteCanaryRunti
       tokenIn,
       tokenOut,
       takerAddress,
-    }): Promise<OneInchApiResult> => ({
+    }): Promise<OneInchSwapDataResult> => ({
       success: true,
       dstAmount: amountRaw.toString(),
       data: {
+        to: BASE_ONEINCH_ROUTER,
         data: encodeOneInchSwapData({
           executor: AGGREGATION_EXECUTOR,
           srcToken: tokenIn,
@@ -86,8 +92,7 @@ function buildRuntime(overrides: RuntimeOverrides = {}): OneInchRouteCanaryRunti
         }),
       },
     }),
-    quoteUniswapV3ExactInputSingle: async ({ amountRaw }) =>
-      amountRaw.mul(2),
+    quoteUniswapV3ExactInputSingle: async ({ amountRaw }) => amountRaw.mul(2),
     ...overrides,
   };
 }
@@ -102,10 +107,9 @@ function depsWith(overrides: RuntimeOverrides = {}): OneInchRouteCanaryDeps {
  * Env that resolves an RPC URL (skip-gate satisfied) and enables 1inch checks
  * (ONEINCH_API + a usable ONEINCH_API_KEY + a taker address).
  */
-function liveEnv(extra: Record<string, string | undefined> = {}): Record<
-  string,
-  string | undefined
-> {
+function liveEnv(
+  extra: Record<string, string | undefined> = {}
+): Record<string, string | undefined> {
   return {
     AJNA_AGENT_RPC_URL: 'https://base.rpc.test/v2/key',
     ONEINCH_API: 'https://api.1inch.dev/swap/v6.0',
@@ -194,9 +198,7 @@ describe('1inch route canary', function () {
 
     const labels = summary.checks.map((check) => check.label);
     // Two default CADC quote amounts + WETH gas quote + swap validation.
-    expect(labels).to.include(
-      'CADC-USDC-quote-6750734311152542852'
-    );
+    expect(labels).to.include('CADC-USDC-quote-6750734311152542852');
     expect(labels).to.include('WETH-USDC-gas-conversion-quote');
     const swapCheck = summary.checks.find(
       (check) => check.label === 'CADC-USDC-swap-data-validation'

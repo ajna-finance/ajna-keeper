@@ -3,10 +3,11 @@
 import { BigNumber, Signer, providers, ethers } from 'ethers';
 import { logger } from '../logging';
 import { NonceTracker } from '../nonce';
-import { weiToDecimaled, withTimeout } from '../utils';
+import { getErrorMessage, weiToDecimaled, withTimeout } from '../utils';
 import { getTokenFromAddress } from './uniswap';
 import { deriveSwapMinimumOut } from './swap-min-out';
 import { CurvePoolType } from '../config';
+import { defaultDexContractServices, DexContractServices } from './contracts';
 
 // ABIs - Based on working test scripts
 const ERC20_ABI = [
@@ -40,11 +41,81 @@ const CRYPTOSWAP_ABI = [
   'function fee() external view returns (uint256)',
 ];
 
+type TokenDetails = Awaited<ReturnType<typeof getTokenFromAddress>>;
+
+export interface CurveRouterDeps
+  extends Pick<DexContractServices, 'makeContract'> {
+  getToken(
+    chainId: number,
+    provider: providers.Provider,
+    tokenAddress: string
+  ): Promise<TokenDetails>;
+  queueTransaction<T>(
+    signer: Signer,
+    txFunction: (nonce: number) => Promise<T>
+  ): Promise<T>;
+}
+
+export type CurveRouterSwapResult =
+  | { success: true; receipt?: providers.TransactionReceipt }
+  | { success: false; error: string };
+
+export type CurveRouterSwapper = (
+  signer: Signer,
+  tokenAddress: string,
+  amount: BigNumber,
+  targetTokenAddress: string,
+  slippagePercentage: number,
+  poolAddress: string,
+  poolType: CurvePoolType,
+  defaultSlippage?: number
+) => Promise<CurveRouterSwapResult>;
+
+const defaultCurveRouterDeps: CurveRouterDeps = {
+  makeContract: defaultDexContractServices.makeContract,
+  getToken: getTokenFromAddress,
+  queueTransaction: (signer, txFunction) =>
+    NonceTracker.queueTransaction(signer, txFunction),
+};
+
+export function createCurveRouterSwapper(
+  deps: Partial<CurveRouterDeps> = {}
+): CurveRouterSwapper {
+  const resolvedDeps: CurveRouterDeps = {
+    ...defaultCurveRouterDeps,
+    ...deps,
+  };
+
+  return async function swapWithCurveRouter(
+    signer,
+    tokenAddress,
+    amount,
+    targetTokenAddress,
+    slippagePercentage,
+    poolAddress,
+    poolType,
+    defaultSlippage
+  ) {
+    return await swapWithCurveRouterUsingContracts(
+      resolvedDeps,
+      signer,
+      tokenAddress,
+      amount,
+      targetTokenAddress,
+      slippagePercentage,
+      poolAddress,
+      poolType,
+      defaultSlippage
+    );
+  };
+}
+
 /**
  * Swaps tokens using Curve pools - Simplified for Base L2
  * Based on the V3 router-module pattern and working curve test scripts
  */
-export async function swapWithCurveRouter(
+async function swapWithCurveRouterUsingContracts(
+  deps: CurveRouterDeps,
   signer: Signer,
   tokenAddress: string,
   amount: BigNumber,
@@ -53,7 +124,7 @@ export async function swapWithCurveRouter(
   poolAddress: string,
   poolType: CurvePoolType,
   defaultSlippage?: number
-) {
+): Promise<CurveRouterSwapResult> {
   // VALIDATION: Same pattern as SushiSwap module
   if (!poolAddress) {
     throw new Error('Curve pool address must be provided via configuration');
@@ -88,12 +159,8 @@ export async function swapWithCurveRouter(
   logger.info(`Using Curve pool at: ${poolAddress} (type: ${poolType})`);
 
   // Get token details - same pattern as SushiSwap
-  const tokenToSwap = await getTokenFromAddress(
-    chainId,
-    provider,
-    tokenAddress
-  );
-  const targetToken = await getTokenFromAddress(
+  const tokenToSwap = await deps.getToken(chainId, provider, tokenAddress);
+  const targetToken = await deps.getToken(
     chainId,
     provider,
     targetTokenAddress
@@ -109,12 +176,12 @@ export async function swapWithCurveRouter(
   const tokenOutForLookup = targetTokenAddress;
 
   // Get contract instances with ABI selection based on pool type
-  const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+  const tokenContract = deps.makeContract(tokenAddress, ERC20_ABI, signer);
 
   // ABI selection pattern from test scripts
   const poolAbi =
     poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-  const poolContract = new ethers.Contract(poolAddress, poolAbi, signer);
+  const poolContract = deps.makeContract(poolAddress, poolAbi, signer);
 
   try {
     // STEP 1: Discover token indices (pattern from test scripts)
@@ -209,7 +276,7 @@ export async function swapWithCurveRouter(
       // a residual non-zero allowance to 0 first. Mirrors the take-path
       // _safeApproveWithReset (audit Pass-2/3 / Codex).
       if (currentAllowance.gt(0)) {
-        await NonceTracker.queueTransaction(signer, async (nonce) => {
+        await deps.queueTransaction(signer, async (nonce) => {
           const resetTx = await tokenContract.approve(poolAddress, 0, {
             nonce,
           });
@@ -218,7 +285,7 @@ export async function swapWithCurveRouter(
           return receipt;
         });
       }
-      await NonceTracker.queueTransaction(signer, async (nonce) => {
+      await deps.queueTransaction(signer, async (nonce) => {
         // Bound the approval to the exact swap `amount` rather than MaxUint256:
         // the configured Curve pool is NOT a trusted singleton, and the
         // exact-input exchange() pulls exactly `amount`, so this leaves ~0
@@ -249,54 +316,53 @@ export async function swapWithCurveRouter(
     );
 
     // Execute swap using NonceTracker (same pattern as SushiSwap)
-    const receipt =
-      await NonceTracker.queueTransaction<providers.TransactionReceipt>(
-        signer,
-        async (nonce) => {
-          let swapTx;
+    const receipt = await deps.queueTransaction<providers.TransactionReceipt>(
+      signer,
+      async (nonce) => {
+        let swapTx;
 
-          if (poolType === CurvePoolType.STABLE) {
-            // StableSwap exchange: exchange(int128 i, int128 j, uint256 dx, uint256 min_dy)
-            swapTx = await poolContract.exchange(
-              tokenInIndex,
-              tokenOutIndex,
-              amount,
-              minAmountOutWithSlippage,
-              {
-                nonce,
-                gasLimit: 800000, // Conservative gas limit
-                gasPrice: highGasPrice,
-                // No value parameter needed on L2
-              }
-            );
-          } else {
-            // CryptoSwap exchange: 4-arg base form, exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy).
-            // use_eth defaults to false and receiver defaults to msg.sender (this signer),
-            // matching the explicit arguments the removed 6-arg call passed.
-            swapTx = await poolContract.exchange(
-              tokenInIndex,
-              tokenOutIndex,
-              amount,
-              minAmountOutWithSlippage,
-              {
-                nonce,
-                gasLimit: 800000, // Conservative gas limit
-                gasPrice: highGasPrice,
-                // No value parameter needed on L2
-              }
-            );
-          }
-
-          logger.info(`Curve transaction sent: ${swapTx.hash}`);
-
-          logger.info(`Waiting for transaction confirmation...`);
-          return await withTimeout<providers.TransactionReceipt>(
-            swapTx.wait(),
-            120000,
-            'Transaction confirmation'
+        if (poolType === CurvePoolType.STABLE) {
+          // StableSwap exchange: exchange(int128 i, int128 j, uint256 dx, uint256 min_dy)
+          swapTx = await poolContract.exchange(
+            tokenInIndex,
+            tokenOutIndex,
+            amount,
+            minAmountOutWithSlippage,
+            {
+              nonce,
+              gasLimit: 800000, // Conservative gas limit
+              gasPrice: highGasPrice,
+              // No value parameter needed on L2
+            }
+          );
+        } else {
+          // CryptoSwap exchange: 4-arg base form, exchange(uint256 i, uint256 j, uint256 dx, uint256 min_dy).
+          // use_eth defaults to false and receiver defaults to msg.sender (this signer),
+          // matching the explicit arguments the removed 6-arg call passed.
+          swapTx = await poolContract.exchange(
+            tokenInIndex,
+            tokenOutIndex,
+            amount,
+            minAmountOutWithSlippage,
+            {
+              nonce,
+              gasLimit: 800000, // Conservative gas limit
+              gasPrice: highGasPrice,
+              // No value parameter needed on L2
+            }
           );
         }
-      );
+
+        logger.info(`Curve transaction sent: ${swapTx.hash}`);
+
+        logger.info(`Waiting for transaction confirmation...`);
+        return await withTimeout<providers.TransactionReceipt>(
+          swapTx.wait(),
+          120000,
+          'Transaction confirmation'
+        );
+      }
+    );
 
     logger.info(`Transaction confirmed: ${receipt.transactionHash}`);
     logger.info(`Gas used: ${receipt.gasUsed.toString()}`);
@@ -305,8 +371,10 @@ export async function swapWithCurveRouter(
     );
 
     return { success: true, receipt };
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error(`Curve swap failed for token: ${tokenAddress}: ${error}`);
-    return { success: false, error: error.toString() };
+    return { success: false, error: getErrorMessage(error) };
   }
 }
+
+export const swapWithCurveRouter = createCurveRouterSwapper();

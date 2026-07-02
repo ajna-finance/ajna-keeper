@@ -1,4 +1,3 @@
-import axios from 'axios';
 import 'dotenv/config';
 import { BigNumber, Signer, constants, providers, utils } from 'ethers';
 import { logger } from '../logging';
@@ -17,20 +16,46 @@ export interface OneInchTransactionData {
   gas?: string | number | BigNumber;
 }
 
-export interface OneInchApiResult {
-  success: boolean;
-  data?: any;
+export interface OneInchFailureResult {
+  success: false;
+  data?: undefined;
   dstAmount?: string;
   error?: string;
   retryable?: boolean;
   errorCode?: number | string;
 }
 
-export interface OneInchSwapResult {
-  success: boolean;
-  receipt?: providers.TransactionReceipt;
-  error?: string;
+export interface OneInchQuoteSuccessResult {
+  success: true;
+  data?: undefined;
+  dstAmount: string;
+  error?: undefined;
+  retryable?: undefined;
+  errorCode?: undefined;
 }
+
+export interface OneInchSwapDataSuccessResult {
+  success: true;
+  data: OneInchTransactionData;
+  dstAmount?: string;
+  error?: undefined;
+  retryable?: undefined;
+  errorCode?: undefined;
+}
+
+export type OneInchQuoteResult =
+  | OneInchQuoteSuccessResult
+  | OneInchFailureResult;
+
+export type OneInchSwapDataResult =
+  | OneInchSwapDataSuccessResult
+  | OneInchFailureResult;
+
+export type OneInchApiResult = OneInchQuoteResult | OneInchSwapDataResult;
+
+export type OneInchSwapResult =
+  | { success: true; receipt: providers.TransactionReceipt }
+  | { success: false; error: string };
 
 export interface OneInchSwapParams {
   chainId: number;
@@ -49,7 +74,7 @@ export interface OneInchSwapDeps {
     amount: BigNumber,
     tokenIn: string,
     tokenOut: string
-  ): Promise<OneInchApiResult>;
+  ): Promise<OneInchQuoteResult>;
   getSwapData(
     chainId: number,
     amount: BigNumber,
@@ -57,7 +82,7 @@ export interface OneInchSwapDeps {
     tokenOut: string,
     slippage: number,
     fromAddress: string
-  ): Promise<OneInchApiResult>;
+  ): Promise<OneInchSwapDataResult>;
   queueTransaction?<T>(
     signer: Signer,
     txFunction: (nonce: number) => Promise<T>
@@ -113,6 +138,45 @@ export function normalizeOneInchUintAmount(
       error: `1inch ${fieldName} is invalid: ${getErrorMessage(error)}`,
     };
   }
+}
+
+export function normalizeOneInchTransactionData(value: unknown): {
+  value?: OneInchTransactionData;
+  error?: string;
+} {
+  if (!value || typeof value !== 'object') {
+    return { error: 'No valid transaction received from 1inch' };
+  }
+
+  const tx = value as {
+    to?: unknown;
+    data?: unknown;
+    value?: unknown;
+    gas?: unknown;
+  };
+  if (typeof tx.to !== 'string' || typeof tx.data !== 'string') {
+    return { error: 'No valid transaction received from 1inch' };
+  }
+
+  const normalized: OneInchTransactionData = {
+    to: tx.to,
+    data: tx.data,
+  };
+  if (tx.value !== undefined) {
+    normalized.value = tx.value;
+  }
+  if (tx.gas !== undefined) {
+    if (
+      typeof tx.gas !== 'string' &&
+      typeof tx.gas !== 'number' &&
+      !BigNumber.isBigNumber(tx.gas)
+    ) {
+      return { error: '1inch tx.gas must be a string, number, or BigNumber' };
+    }
+    normalized.gas = tx.gas;
+  }
+
+  return { value: normalized };
 }
 
 export function normalizeAddressForComparison(
@@ -184,22 +248,43 @@ export function validateZeroOneInchTxValue(value: unknown): string | undefined {
   return undefined;
 }
 
-export function getOneInchErrorMessage(error: Error | any): string {
-  return error.response?.data?.description || error.message;
+interface OneInchRequestError {
+  response?: {
+    data?: {
+      description?: string;
+    };
+    status?: number;
+  };
+  code?: number | string;
+  message?: string;
+}
+
+function asOneInchRequestError(error: unknown): OneInchRequestError {
+  if (error && typeof error === 'object') {
+    return error as OneInchRequestError;
+  }
+  return { message: String(error) };
+}
+
+export function getOneInchErrorMessage(error: unknown): string {
+  const typed = asOneInchRequestError(error);
+  return typed.response?.data?.description ?? typed.message ?? String(error);
 }
 
 export function getOneInchErrorCode(
-  error: Error | any
+  error: unknown
 ): number | string | undefined {
-  if (error.response?.status !== undefined) {
-    return error.response.status;
+  const typed = asOneInchRequestError(error);
+  if (typed.response?.status !== undefined) {
+    return typed.response.status;
   }
-  return error.code;
+  return typed.code;
 }
 
-export function isRetryableOneInchError(error: Error | any): boolean {
-  const status = error.response?.status;
-  const code = error.code;
+export function isRetryableOneInchError(error: unknown): boolean {
+  const typed = asOneInchRequestError(error);
+  const status = typed.response?.status;
+  const code = typed.code;
   return (
     status === 429 ||
     status === undefined ||
@@ -217,12 +302,6 @@ export async function executeOneInchSwap(
   deps: OneInchSwapDeps,
   params: OneInchSwapParams
 ): Promise<OneInchSwapResult> {
-  const apiEnv = validateOneInchApiEnv();
-  if (!apiEnv.baseUrl) {
-    logger.error(apiEnv.error);
-    return { success: false, error: apiEnv.error };
-  }
-
   const fromAddress = await deps.signer.getAddress();
 
   if (params.slippage < 0 || params.slippage > 100) {
@@ -237,7 +316,10 @@ export async function executeOneInchSwap(
     params.tokenOut
   );
   if (!quoteResult.success) {
-    return { success: false, error: quoteResult.error };
+    return {
+      success: false,
+      error: quoteResult.error ?? '1inch quote request failed',
+    };
   }
   logger.info(
     `1inch quote: ${params.amount.toString()} ${params.tokenIn} -> ${quoteResult.dstAmount} ${params.tokenOut}`
@@ -266,10 +348,13 @@ export async function executeOneInchSwap(
           await delayMs(waitTime);
           continue;
         }
-        return { success: false, error: swapDataResult.error };
+        return {
+          success: false,
+          error: swapDataResult.error ?? '1inch swap data request failed',
+        };
       }
 
-      const txFrom1inch = swapDataResult.data!;
+      const txFrom1inch = swapDataResult.data;
       logger.debug(`Transaction from 1inch: ${JSON.stringify(txFrom1inch)}`);
       const parsedValue = parseOneInchTxValue(txFrom1inch.value);
       if (parsedValue.error) {
@@ -325,9 +410,9 @@ export async function executeOneInchSwap(
         `1inch swap successful: ${params.amount.toString()} ${params.tokenIn} -> ${params.tokenOut} | Tx Hash: ${receipt.transactionHash}`
       );
       return { success: true, receipt };
-    } catch (error: Error | any) {
-      const errorMsg = error.response?.data?.description || error.message;
-      const status = error.response?.status || 500;
+    } catch (error: unknown) {
+      const errorMsg = getOneInchErrorMessage(error);
+      const status = asOneInchRequestError(error).response?.status ?? 500;
       if (status === 429 && attempt < retries) {
         const waitTime = retryDelayMs * Math.pow(2, attempt - 1);
         logger.warn(`Attempt (${attempt}/${retries}) after ${waitTime}ms`);

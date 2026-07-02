@@ -1,5 +1,6 @@
 import { BigNumber, Wallet, ethers } from 'ethers';
-import { DexRouter, OneInchApiResult } from '../router';
+import { DexRouter } from '../router';
+import type { OneInchQuoteResult, OneInchSwapDataResult } from '../oneinch';
 import {
   convertSwapApiResponseToDetails,
   validateOneInchSwapDetailsForAtomicTake,
@@ -73,7 +74,7 @@ export type OneInchRouteCanaryRuntime = {
     tokenIn: string;
     tokenOut: string;
     timeoutMs: number;
-  }) => Promise<OneInchApiResult>;
+  }) => Promise<OneInchQuoteResult>;
   getSwapData: (params: {
     chainId: number;
     amountRaw: BigNumber;
@@ -82,7 +83,7 @@ export type OneInchRouteCanaryRuntime = {
     slippage: number;
     takerAddress: string;
     timeoutMs: number;
-  }) => Promise<OneInchApiResult>;
+  }) => Promise<OneInchSwapDataResult>;
   quoteUniswapV3ExactInputSingle: (params: {
     quoterV2Address: string;
     tokenIn: string;
@@ -125,8 +126,7 @@ function createDefaultRuntime(params: {
     oneInchRouters: { [params.chainId]: params.oneInchRouterAddress },
   });
   return {
-    getTokenDecimals: (tokenAddress) =>
-      getDecimalsErc20(signer, tokenAddress),
+    getTokenDecimals: (tokenAddress) => getDecimalsErc20(signer, tokenAddress),
     getQuote: ({ chainId, amountRaw, tokenIn, tokenOut, timeoutMs }) =>
       router.getQuoteFromOneInch(chainId, amountRaw, tokenIn, tokenOut, {
         timeoutMs,
@@ -235,7 +235,7 @@ async function runSwapDataValidation(params: {
     takerAddress: params.takerAddress,
     timeoutMs: params.timeoutMs,
   });
-  if (!result.success || !result.data) {
+  if (!result.success) {
     return {
       label: params.label,
       success: false,
@@ -383,7 +383,10 @@ export async function runOneInchRouteCanary(
     'AJNA_AGENT_ONEINCH_CANARY_UNISWAP_QUOTER_V2_ADDRESS',
     BASE_UNISWAP_V3_QUOTER_V2
   );
-  const takerAddress = optionalEnv(env, 'AJNA_AGENT_ONEINCH_CANARY_TAKER_ADDRESS');
+  const takerAddress = optionalEnv(
+    env,
+    'AJNA_AGENT_ONEINCH_CANARY_TAKER_ADDRESS'
+  );
   const oneInchMissingEnv = [
     !optionalEnv(env, 'ONEINCH_API') ? 'ONEINCH_API' : undefined,
     !usableSecretEnv(env, 'ONEINCH_API_KEY') ? 'ONEINCH_API_KEY' : undefined,
