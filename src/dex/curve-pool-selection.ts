@@ -1,4 +1,4 @@
-import { Signer } from 'ethers';
+import { errors as ethersErrors, Signer } from 'ethers';
 import { CurvePoolType } from '../config';
 import { logger } from '../logging';
 import { pruneMapToMaxSize } from '../utils';
@@ -98,6 +98,29 @@ function normalizeCurveLookupToken(tokenAddress: string, wethAddress?: string) {
     : tokenAddress;
 }
 
+// Probing past a pool's coin list surfaces as a revert (ethers maps node
+// "execution reverted" responses to CALL_EXCEPTION); the message patterns are
+// a belt for providers that surface raw revert text under a different code.
+function isCurveProbeRevert(error: unknown): boolean {
+  if (
+    (error as { code?: unknown } | null | undefined)?.code ===
+    ethersErrors.CALL_EXCEPTION
+  ) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /execution reverted|revert exception/i.test(message);
+}
+
+class CurvePoolProbeUnavailableError extends Error {
+  constructor(poolAddress: string, coinIndex: number, cause: unknown) {
+    super(
+      `Curve pool ${poolAddress} coins(${coinIndex}) probe failed before completing token discovery: ${cause}`
+    );
+    this.name = 'CurvePoolProbeUnavailableError';
+  }
+}
+
 async function discoverCurvePoolTokenIndices(params: {
   poolAddress: string;
   poolType: CurvePoolType;
@@ -138,8 +161,15 @@ async function discoverCurvePoolTokenIndices(params: {
       if (tokenInIndex !== undefined && tokenOutIndex !== undefined) {
         break;
       }
-    } catch {
-      break;
+    } catch (error) {
+      if (isCurveProbeRevert(error)) {
+        // Revert = probed past the pool's coin list; discovery is complete.
+        break;
+      }
+      // A transport error leaves the pool's contents unknown — abort the
+      // resolution rather than treating the pair as absent, which would let
+      // the fallback scan reroute to a different pool and cache it.
+      throw new CurvePoolProbeUnavailableError(params.poolAddress, i, error);
     }
   }
 
@@ -213,6 +243,12 @@ export class CurvePoolSelector {
           return selection;
         }
       } catch (error) {
+        if (error instanceof CurvePoolProbeUnavailableError) {
+          // Transport failure: the candidate's contents are unknown, so
+          // continuing the scan could select a pool the operator keyed for a
+          // different pair. Fail the whole lookup; nothing is cached.
+          throw error;
+        }
         logger.debug(
           `Error checking Curve pool ${poolConfig.address} for tokens ${tokenA}/${tokenB}: ${error}`
         );

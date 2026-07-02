@@ -77,12 +77,19 @@ describe('Curve Quote Provider', () => {
     };
   }
 
+  // Real pools surface end-of-coin-list probes as reverts (CALL_EXCEPTION).
+  function endOfCoinsRevert(): Error {
+    return Object.assign(new Error('call revert exception'), {
+      code: 'CALL_EXCEPTION',
+    });
+  }
+
   function coinsFor(...addresses: string[]): sinon.SinonStub {
     const coins = sinon.stub();
     addresses.forEach((address, index) => {
       coins.withArgs(index).resolves(address);
     });
-    coins.rejects(new Error('index out of range'));
+    coins.rejects(endOfCoinsRevert());
     return coins;
   }
 
@@ -255,6 +262,51 @@ describe('Curve Quote Provider', () => {
       );
     });
 
+    it('aborts on transport errors instead of falling back to another pool, without caching the failure', async () => {
+      const OTHER_POOL = '0x7777777777777777777777777777777777777777';
+      const keyedPoolCoins = sinon.stub().rejects(new Error('ETIMEDOUT'));
+      const otherPoolCoins = coinsFor(WETH, USDC);
+      const services: DexContractServices = {
+        makeContract: sinon.stub().callsFake(
+          (address: string) =>
+            ({
+              coins: address === POOL ? keyedPoolCoins : otherPoolCoins,
+            }) as unknown as ethers.Contract
+        ),
+        getDecimals: sinon
+          .stub<[Signer, string], Promise<number>>()
+          .resolves(18),
+      };
+      const provider = makeProvider(
+        {
+          poolConfigs: {
+            'WETH-USDC': { address: POOL, poolType: CurvePoolType.STABLE },
+            'OTHER-PAIR': {
+              address: OTHER_POOL,
+              poolType: CurvePoolType.STABLE,
+            },
+          },
+        },
+        services
+      );
+
+      const quote = await provider.getQuote(BigNumber.from(100), WETH, USDC);
+      expect(quote.success).to.equal(false);
+      expect(quote.error).to.match(/probe failed before completing/);
+      expect(otherPoolCoins.called).to.equal(false);
+
+      // The failure must not be cached: once the RPC heals, the same lookup
+      // resolves the keyed pool (a cached negative would return undefined
+      // for 30s).
+      keyedPoolCoins.reset();
+      keyedPoolCoins.withArgs(0).resolves(WETH);
+      keyedPoolCoins.withArgs(1).resolves(USDC);
+      keyedPoolCoins.rejects(endOfCoinsRevert());
+      expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+        selectedPool()
+      );
+    });
+
     it('keeps selector lookups fail-closed unless the fallback scan is enabled', async () => {
       const coins = coinsFor(WETH, USDC);
       const services = curveContractServices({ coins });
@@ -272,9 +324,7 @@ describe('Curve Quote Provider', () => {
       expect(await selector.resolvePoolSelection(WETH, USDC)).to.equal(
         undefined
       );
-      expect((services.makeContract as sinon.SinonStub).called).to.equal(
-        false
-      );
+      expect((services.makeContract as sinon.SinonStub).called).to.equal(false);
 
       expect(
         await selector.resolvePoolSelection(WETH, USDC, {
