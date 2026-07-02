@@ -1,13 +1,15 @@
 import { BigNumber } from 'ethers';
 import {
   CalldataAggregatorProviderId,
-  CurvePoolType,
   ExternalTakePathKind,
   LiquiditySource,
   TakeSettings,
 } from '../config';
 import type { CalldataAggregatorLiquiditySource } from '../config';
+import type { CurvePoolSelection } from '../dex/curve-pool-selection';
 import { ApprovedCalldataAggregatorQuote } from './aggregator-calldata/types';
+
+export type { CurvePoolSelection } from '../dex/curve-pool-selection';
 
 export type GasPolicyRejectCode =
   | 'gas_price_above_cap'
@@ -98,13 +100,6 @@ export interface ExternalTakeQuoteEvaluation {
   curvePool?: CurvePoolSelection;
   calldataQuote?: ApprovedCalldataAggregatorQuote;
   reason?: string;
-}
-
-export interface CurvePoolSelection {
-  address: string;
-  poolType: CurvePoolType;
-  tokenInIndex: number;
-  tokenOutIndex: number;
 }
 
 interface BoundExternalTakeRouteBase<TSource extends LiquiditySource>

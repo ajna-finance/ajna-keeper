@@ -292,6 +292,67 @@ describe('NonceTracker', () => {
     expect(nextNonce).to.equal(10);
   });
 
+  it('clears a durable relay nonce floor once the provider pending nonce catches up', async () => {
+    let pendingNonce = 11;
+    const relaySigner = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getTransactionCount: sinon.stub().callsFake(async () => pendingNonce),
+      getChainId: sinon.stub().resolves(1),
+      provider: {
+        getBlockNumber: sinon.stub().resolves(100),
+      },
+    } as unknown as Signer;
+
+    await NonceTracker.markDurableNonceFloor({
+      signer: relaySigner,
+      nonce: 10,
+      txHash:
+        '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      expiresAtBlock: 200,
+    });
+
+    NonceTracker.clearNonces();
+
+    const caughtUpNonce = await NonceTracker.getNonce(relaySigner);
+    expect(caughtUpNonce).to.equal(11);
+
+    pendingNonce = 9;
+    NonceTracker.clearNonces();
+
+    const nextNonceAfterFloorCleared = await NonceTracker.getNonce(relaySigner);
+    expect(nextNonceAfterFloorCleared).to.equal(9);
+  });
+
+  it('preserves a durable relay nonce floor when block-height expiry cannot be checked', async () => {
+    const getBlockNumber = sinon.stub().rejects(new Error('block rpc down'));
+    const relaySigner = {
+      getAddress: sinon
+        .stub()
+        .resolves('0x00000000000000000000000000000000000000aa'),
+      getTransactionCount: sinon.stub().resolves(10),
+      getChainId: sinon.stub().resolves(1),
+      provider: {
+        getBlockNumber,
+      },
+    } as unknown as Signer;
+
+    await NonceTracker.markDurableNonceFloor({
+      signer: relaySigner,
+      nonce: 10,
+      txHash:
+        '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+      expiresAtBlock: 200,
+    });
+
+    NonceTracker.clearNonces();
+
+    const nextNonce = await NonceTracker.getNonce(relaySigner);
+    expect(nextNonce).to.equal(11);
+    expect(getBlockNumber.calledOnce).to.equal(true);
+  });
+
   it('recovers correctly through success-failure-success sequence', async function () {
     this.timeout(10000);
     // Always return 10 — simulates pre-broadcast failures (nonce never consumed)

@@ -1,216 +1,248 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { BigNumber, ethers } from 'ethers';
-import * as curveRouterModule from '../../src/dex/curve-router';
-import { NonceTracker } from '../../src/nonce';
+import { BigNumber, Signer, ethers, providers } from 'ethers';
+import {
+  createCurveRouterSwapper,
+  CurveRouterSwapResult,
+} from '../../src/dex/curve-router';
 import { CurvePoolType } from '../../src/config';
+import { CurvePoolSelection } from '../../src/dex/curve-pool-selection';
 
 describe('Curve Router Module', () => {
-  let swapStub: sinon.SinonStub;
-  let mockSigner: any;
-  let queueTransactionStub: sinon.SinonStub;
+  const TOKEN = '0x1111111111111111111111111111111111111111';
+  const TARGET = '0x2222222222222222222222222222222222222222';
+  const SIGNER_ADDR = '0x3333333333333333333333333333333333333333';
+  const POOL = '0x4444444444444444444444444444444444444444';
+  const AMOUNT = BigNumber.from('1000000000000000000');
 
-  beforeEach(() => {
-    // Reset sinon after each test
-    sinon.restore();
+  interface Mocks {
+    signer: Signer;
+    tokenContract: {
+      allowance: sinon.SinonStub;
+      approve: sinon.SinonStub;
+    };
+    poolContract: {
+      get_dy: sinon.SinonStub;
+      exchange: sinon.SinonStub;
+    };
+    makeContract: sinon.SinonStub;
+    getToken: sinon.SinonStub;
+    queueTransaction: sinon.SinonStub;
+  }
 
-    // Create basic mocks - same pattern as the V3 router tests
-    mockSigner = {
-      getAddress: sinon.stub().resolves('0xTestAddress'),
-      getChainId: sinon.stub().resolves(8453), // Base chain ID
-      provider: {
-        getNetwork: sinon.stub().resolves({ chainId: 8453, name: 'base' }),
-        estimateGas: sinon.stub().resolves(BigNumber.from('100000')),
-        getGasPrice: sinon.stub().resolves(BigNumber.from('20000000000')),
-        getCode: sinon.stub().resolves('0x123456'), // Non-empty code
-      },
-      sendTransaction: sinon.stub().resolves({
-        hash: '0xTestHash',
-        wait: sinon.stub().resolves({ transactionHash: '0xTestHash' }),
-      }),
+  function installMocks(
+    opts: {
+      tokenAddress?: string;
+      targetTokenAddress?: string;
+      allowance?: BigNumber;
+      quoteOut?: BigNumber;
+      exchangeRejects?: boolean;
+    } = {}
+  ): Mocks {
+    const tokenAddress = opts.tokenAddress ?? TOKEN;
+    const targetTokenAddress = opts.targetTokenAddress ?? TARGET;
+    const provider = {
+      getNetwork: sinon.stub().resolves({ chainId: 8453, name: 'base' }),
+      getGasPrice: sinon.stub().resolves(BigNumber.from('20000000000')),
+    } as unknown as providers.Provider;
+    const signer = {
+      provider,
+      getAddress: sinon.stub().resolves(SIGNER_ADDR),
+    } as unknown as Signer;
+
+    const tokenContract = {
+      allowance: sinon.stub().resolves(opts.allowance ?? BigNumber.from(0)),
+      approve: sinon
+        .stub()
+        .resolves({ hash: '0xapprove', wait: sinon.stub().resolves({}) }),
+    };
+    const poolContract = {
+      get_dy: sinon.stub().resolves(opts.quoteOut ?? AMOUNT.mul(2)),
+      exchange: opts.exchangeRejects
+        ? sinon.stub().rejects(new Error('Transaction reverted'))
+        : sinon.stub().resolves({
+            hash: '0xswap',
+            wait: sinon.stub().resolves({
+              transactionHash: '0xswap',
+              gasUsed: BigNumber.from(21000),
+            }),
+          }),
     };
 
-    // Mock NonceTracker - same pattern as the V3 router tests
-    queueTransactionStub = sinon
-      .stub(NonceTracker, 'queueTransaction')
-      .callsFake(async (signer, txFunc) => {
-        return await txFunc(10);
-      });
+    const makeContract = sinon.stub().callsFake((address: string) => {
+      switch (address.toLowerCase()) {
+        case tokenAddress.toLowerCase():
+          return tokenContract as unknown as ethers.Contract;
+        case POOL.toLowerCase():
+          return poolContract as unknown as ethers.Contract;
+        default:
+          throw new Error(`unexpected contract address ${address}`);
+      }
+    });
+    const getToken = sinon
+      .stub()
+      .callsFake(async (_chainId, _provider, address: string) => ({
+        address,
+        symbol:
+          address.toLowerCase() === tokenAddress.toLowerCase() ? 'IN' : 'OUT',
+        decimals: 18,
+      }));
+    const queueTransaction = sinon
+      .stub()
+      .callsFake(async (_signer, txFunction) => await txFunction(7));
 
-    // Stub the actual exported function
-    swapStub = sinon.stub(curveRouterModule, 'swapWithCurveRouter');
-  });
+    return {
+      signer,
+      tokenContract,
+      poolContract,
+      makeContract,
+      getToken,
+      queueTransaction,
+    };
+  }
+
+  function swap(
+    mocks: Mocks,
+    opts: {
+      tokenAddress?: string;
+      targetTokenAddress?: string;
+      slippage?: number;
+      poolType?: CurvePoolType;
+      defaultSlippage?: number;
+      poolAddress?: string;
+    } = {}
+  ): Promise<CurveRouterSwapResult> {
+    const testSwapper = createCurveRouterSwapper({
+      makeContract: mocks.makeContract,
+      getToken: mocks.getToken,
+      queueTransaction: mocks.queueTransaction,
+    });
+    const selectedPool: CurvePoolSelection = {
+      address: opts.poolAddress ?? POOL,
+      poolType: opts.poolType ?? CurvePoolType.STABLE,
+      tokenInIndex: 0,
+      tokenOutIndex: 1,
+    };
+    return testSwapper(
+      mocks.signer,
+      opts.tokenAddress ?? TOKEN,
+      AMOUNT,
+      opts.targetTokenAddress ?? TARGET,
+      opts.slippage as number,
+      selectedPool,
+      opts.defaultSlippage
+    );
+  }
 
   afterEach(() => {
     sinon.restore();
   });
 
-  describe('swapWithCurveRouter', () => {
-    it('should execute successful swap with STABLE pool type', async () => {
-      // Return success to simulate a successful call
-      swapStub.resolves({
-        success: true,
-        receipt: { transactionHash: '0xSuccess' },
-      });
+  it('uses default slippage and skips approval when allowance already equals the swap amount', async () => {
+    const mocks = installMocks({ allowance: AMOUNT });
 
-      // Call the actual function with STABLE pool parameters
-      const result = await curveRouterModule.swapWithCurveRouter(
-        mockSigner,
-        '0x53Be558aF29cC65126ED0E585119FAC748FeB01B', // USDC_T from config
-        BigNumber.from('1000000'), // amount
-        '0xf0c44a9f24159E1f2A0D9Ba3203172f528d224CA', // USD_T1 from config
-        1.0, // slippagePercentage
-        '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb', // STABLE pool address from config
-        CurvePoolType.STABLE,
-        1.0 // defaultSlippage
-      );
+    const result = await swap(mocks, { defaultSlippage: 1 });
 
-      // Verify the function was called
-      expect(swapStub.calledOnce).to.be.true;
-      expect(result.success).to.be.true;
-      expect(result.receipt.transactionHash).to.equal('0xSuccess');
+    expect(result.success).to.equal(true);
+    if (!result.success || !result.receipt) {
+      expect.fail('Expected successful swap to include receipt');
+    }
+    expect(result.receipt.transactionHash).to.equal('0xswap');
+    expect(mocks.tokenContract.approve.called).to.equal(false);
+    expect(mocks.poolContract.exchange.calledOnce).to.equal(true);
+    expect(mocks.queueTransaction.calledOnce).to.equal(true);
+  });
+
+  it('resets stale nonzero allowance before exact reapproval on crypto pools', async () => {
+    const mocks = installMocks({ allowance: AMOUNT.mul(2) });
+
+    const result = await swap(mocks, {
+      slippage: 1,
+      poolType: CurvePoolType.CRYPTO,
+      defaultSlippage: 1,
     });
 
-    it('should execute successful swap with CRYPTO pool type', async () => {
-      // Return success to simulate a successful call
-      swapStub.resolves({
-        success: true,
-        receipt: { transactionHash: '0xCryptoSuccess' },
-      });
+    expect(result.success).to.equal(true);
+    expect(mocks.tokenContract.approve.callCount).to.equal(2);
+    expect(
+      mocks.tokenContract.approve.firstCall.args.slice(0, 2)
+    ).to.deep.equal([POOL, 0]);
+    expect(
+      mocks.tokenContract.approve.secondCall.args.slice(0, 2)
+    ).to.deep.equal([POOL, AMOUNT]);
+    expect(mocks.poolContract.exchange.calledOnce).to.equal(true);
+    expect(mocks.queueTransaction.callCount).to.equal(3);
+  });
 
-      // Call the actual function with CRYPTO pool parameters
-      const result = await curveRouterModule.swapWithCurveRouter(
-        mockSigner,
-        '0x236aa50979D5f3De3Bd1Eeb40E81137F22ab794b', // tBTC from config
-        BigNumber.from('100000000000000000'), // amount (0.1 tBTC)
-        '0x4200000000000000000000000000000000000006', // WETH from config
-        2.0, // slippagePercentage
-        '0x6e53131F68a034873b6bFA15502aF094Ef0c5854', // CRYPTO pool address from config
-        CurvePoolType.CRYPTO,
-        2.0 // defaultSlippage
-      );
+  it('fails closed without approvals when the Curve quote is non-positive', async () => {
+    const mocks = installMocks({ quoteOut: BigNumber.from(0) });
 
-      // Verify the function was called
-      expect(swapStub.calledOnce).to.be.true;
-      expect(result.success).to.be.true;
-      expect(result.receipt.transactionHash).to.equal('0xCryptoSuccess');
+    const result = await swap(mocks, { slippage: 1, defaultSlippage: 1 });
+
+    expect(result.success).to.equal(false);
+    expect(mocks.tokenContract.approve.called).to.equal(false);
+    expect(mocks.poolContract.exchange.called).to.equal(false);
+    expect(mocks.queueTransaction.called).to.equal(false);
+  });
+
+  it('returns no-op success without contracts when token addresses are identical', async () => {
+    const mocks = installMocks({ targetTokenAddress: TOKEN });
+
+    const result = await swap(mocks, {
+      tokenAddress: TOKEN,
+      targetTokenAddress: TOKEN,
+      slippage: 1,
+      defaultSlippage: 1,
     });
 
-    it('should handle missing pool address validation', async () => {
-      // Simulate a failed swap due to missing pool address
-      swapStub.resolves({
-        success: false,
-        error: 'Curve pool address must be provided via configuration',
-      });
+    expect(result).to.deep.equal({ success: true });
+    expect(mocks.makeContract.called).to.equal(false);
+    expect(mocks.queueTransaction.called).to.equal(false);
+  });
 
-      const result = await curveRouterModule.swapWithCurveRouter(
-        mockSigner,
-        '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
-        BigNumber.from('1000000'),
-        '0xf0c44a9f24159E1f2A0D9Ba3203172f528d224CA',
-        1.0,
-        '', // Empty pool address
-        CurvePoolType.STABLE,
-        1.0
-      );
+  it('returns a swap failure without leaking thrown transaction errors', async () => {
+    const mocks = installMocks({ exchangeRejects: true });
 
-      expect(result.success).to.be.false;
-      expect(result.error).to.equal(
-        'Curve pool address must be provided via configuration'
-      );
-    });
+    const result = await swap(mocks, { slippage: 1, defaultSlippage: 1 });
 
-    it('should handle missing pool type validation', async () => {
-      // Simulate a failed swap due to missing pool type
-      swapStub.resolves({
-        success: false,
-        error: 'Pool type must be provided via configuration',
-      });
-
-      const result = await curveRouterModule.swapWithCurveRouter(
-        mockSigner,
-        '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
-        BigNumber.from('1000000'),
-        '0xf0c44a9f24159E1f2A0D9Ba3203172f528d224CA',
-        1.0,
-        '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb',
-        undefined as any, // Missing pool type
-        1.0
-      );
-
-      expect(result.success).to.be.false;
-      expect(result.error).to.equal(
-        'Pool type must be provided via configuration'
-      );
-    });
-
-    it('should handle swap failure', async () => {
-      // Simulate a failed swap
-      swapStub.resolves({
-        success: false,
-        error: 'Token indices not found in pool. Cannot proceed with swap.',
-      });
-
-      const result = await curveRouterModule.swapWithCurveRouter(
-        mockSigner,
-        '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
-        BigNumber.from('1000000'),
-        '0xf0c44a9f24159E1f2A0D9Ba3203172f528d224CA',
-        1.0,
-        '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb',
-        CurvePoolType.STABLE,
-        1.0
-      );
-
-      expect(result.success).to.be.false;
-      expect(result.error).to.equal(
-        'Token indices not found in pool. Cannot proceed with swap.'
-      );
-    });
-
-    it('should handle exceptions during swap', async () => {
-      // Simulate an exception
-      swapStub.rejects(new Error('Transaction reverted'));
-
-      try {
-        await curveRouterModule.swapWithCurveRouter(
-          mockSigner,
-          '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
-          BigNumber.from('1000000'),
-          '0xf0c44a9f24159E1f2A0D9Ba3203172f528d224CA',
-          1.0,
-          '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb',
-          CurvePoolType.STABLE,
-          1.0
-        );
-        expect.fail('Should have thrown an error');
-      } catch (error: any) {
-        expect(error.message).to.equal('Transaction reverted');
-      }
+    expect(result).to.deep.equal({
+      success: false,
+      error: 'Transaction reverted',
     });
   });
 
-  // Test NonceTracker integration - same pattern as the V3 router tests
-  describe('Integration with NonceTracker', () => {
-    it('should use NonceTracker.queueTransaction for transactions', async () => {
-      // Restore the original method before this test
-      swapStub.restore();
-
-      // Test the interaction with NonceTracker
-      const dummyTxFunction = async (nonce: number) => {
-        return { success: true, transactionHash: '0xTest' };
-      };
-
-      // Call NonceTracker directly
-      const result = await NonceTracker.queueTransaction(
-        mockSigner,
-        dummyTxFunction
-      );
-
-      // Verify it was called and returned expected result
-      expect(queueTransactionStub.calledOnce).to.be.true;
-      expect(result.success).to.be.true;
-      expect(result.transactionHash).to.equal('0xTest');
+  it('throws configuration errors before touching chain dependencies', async () => {
+    const mocks = installMocks();
+    const testSwapper = createCurveRouterSwapper({
+      makeContract: mocks.makeContract,
+      getToken: mocks.getToken,
+      queueTransaction: mocks.queueTransaction,
     });
+
+    let error: unknown;
+    try {
+      await testSwapper(
+        mocks.signer,
+        TOKEN,
+        AMOUNT,
+        TARGET,
+        1,
+        {
+          address: '',
+          poolType: CurvePoolType.STABLE,
+          tokenInIndex: 0,
+          tokenOutIndex: 1,
+        },
+        1
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).to.be.instanceOf(Error);
+    expect((error as Error).message).to.equal(
+      'Curve pool selection is missing address or pool type'
+    );
+    expect(mocks.makeContract.called).to.equal(false);
   });
 });

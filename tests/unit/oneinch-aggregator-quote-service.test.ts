@@ -53,7 +53,7 @@ describe('1inch aggregator quote service', () => {
       data: {
         to: router,
         data: callData,
-        value: '0',
+        value: BigNumber.from(0),
       },
       dstAmount: dstAmount.toString(),
     });
@@ -98,7 +98,7 @@ describe('1inch aggregator quote service', () => {
       data: {
         to: router,
         data: callData,
-        value: '0',
+        value: BigNumber.from(0),
       },
     });
 
@@ -131,7 +131,7 @@ describe('1inch aggregator quote service', () => {
       data: {
         to: router,
         data: callData,
-        value: '0',
+        value: BigNumber.from(0),
       },
       dstAmount: dstAmount.toString(),
     });
@@ -186,7 +186,7 @@ describe('1inch aggregator quote service', () => {
         data: {
           to: router,
           data: callData,
-          value: '0',
+          value: BigNumber.from(0),
         },
         dstAmount: dstAmount.toString(),
       });

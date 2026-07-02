@@ -1,188 +1,44 @@
 import axios from 'axios';
 import 'dotenv/config';
-import {
-  BigNumber,
-  Contract,
-  Signer,
-  constants,
-  providers,
-  utils,
-} from 'ethers';
+import { BigNumber, Contract, Signer, providers } from 'ethers';
 import ERC20_ABI from '../abis/erc20.abi.json';
 import { approveErc20, getAllowanceOfErc20, getDecimalsErc20 } from '../erc20';
 import { logger } from '../logging';
 import { swapToWeth } from './uniswap';
-import { getErrorMessage, tokenChangeDecimals } from '../utils';
+import { tokenChangeDecimals } from '../utils';
 import { swapWithUniversalRouter } from './universal-router';
 import { swapWithCurveRouter } from './curve-router';
-import { NonceTracker } from '../nonce';
+import { CurvePoolSelector } from './curve-pool-selection';
 import {
-  CurvePoolType,
+  executeOneInchSwap,
+  getOneInchAxiosOptions,
+  getOneInchErrorCode,
+  getOneInchErrorMessage,
+  isRetryableOneInchError,
+  normalizeOneInchTransactionData,
+  normalizeOneInchUintAmount,
+  validateOneInchApiEnv,
+} from './oneinch';
+import { normalizeAddressForComparison } from './oneinch-uint';
+import type {
+  OneInchQuoteResult,
+  OneInchRequestOptions,
+  OneInchSwapDataResult,
+} from './oneinch';
+import {
   CurveRouterOverrides,
   DEFAULT_FEE_TIER_BY_SOURCE,
   LiquiditySource,
   PostAuctionDex,
 } from '../config';
 
-export interface OneInchRequestOptions {
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}
-
-export interface OneInchApiResult {
-  success: boolean;
-  data?: any;
-  dstAmount?: string;
-  error?: string;
-  retryable?: boolean;
-  errorCode?: number | string;
-}
-
-function getOneInchAxiosOptions(
-  params: Record<string, string | number | boolean | undefined>,
-  options: OneInchRequestOptions
-) {
-  return {
-    params,
-    timeout: options.timeoutMs,
-    ...(options.signal ? { signal: options.signal } : {}),
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${process.env.ONEINCH_API_KEY}`,
-    },
-  };
-}
-
-function validateOneInchApiEnv(): { baseUrl?: string; error?: string } {
-  if (!process.env.ONEINCH_API) {
-    return { error: 'ONEINCH_API is not configured' };
-  }
-  if (!process.env.ONEINCH_API_KEY) {
-    return { error: 'ONEINCH_API_KEY is not configured' };
-  }
-  return { baseUrl: process.env.ONEINCH_API };
-}
-
-function normalizeOneInchUintAmount(
-  value: unknown,
-  fieldName: string
-): { value?: string; error?: string } {
-  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
-    return {
-      error: `1inch ${fieldName} is not a decimal uint string`,
-    };
-  }
-
-  try {
-    const parsed = BigNumber.from(value);
-    if (parsed.gt(constants.MaxUint256)) {
-      return {
-        error: `1inch ${fieldName} exceeds uint256`,
-      };
-    }
-    return { value: parsed.toString() };
-  } catch (error) {
-    return {
-      error: `1inch ${fieldName} is invalid: ${getErrorMessage(error)}`,
-    };
-  }
-}
-
-function normalizeAddressForComparison(value: string): string | undefined {
-  try {
-    return utils.getAddress(value).toLowerCase();
-  } catch {
-    return undefined;
-  }
-}
-
-function parseOneInchTxValue(value: unknown): {
-  value?: BigNumber;
-  error?: string;
-} {
-  if (value === undefined || value === null || value === '') {
-    return { value: constants.Zero };
-  }
-  if (BigNumber.isBigNumber(value)) {
-    if (value.lt(0)) {
-      return {
-        error: '1inch tx.value must be a non-negative uint',
-      };
-    }
-    if (value.gt(constants.MaxUint256)) {
-      return {
-        error: '1inch tx.value exceeds uint256',
-      };
-    }
-    return { value };
-  }
-  if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      return {
-        error: '1inch tx.value must be a non-negative safe integer',
-      };
-    }
-    return { value: BigNumber.from(value) };
-  }
-  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) {
-    return {
-      error: '1inch tx.value must be a decimal uint string',
-    };
-  }
-  try {
-    const parsed = BigNumber.from(value);
-    if (parsed.gt(constants.MaxUint256)) {
-      return {
-        error: '1inch tx.value exceeds uint256',
-      };
-    }
-    return { value: parsed };
-  } catch (error) {
-    return {
-      error: `1inch tx.value is invalid: ${getErrorMessage(error)}`,
-    };
-  }
-}
-
-function validateZeroOneInchTxValue(value: unknown): string | undefined {
-  const parsed = parseOneInchTxValue(value);
-  if (parsed.error) {
-    return parsed.error;
-  }
-  if (parsed.value && !parsed.value.eq(0)) {
-    return `unexpected non-zero 1inch tx.value ${parsed.value.toString()} for ERC20 swap`;
-  }
-  return undefined;
-}
-
-function getOneInchErrorMessage(error: Error | any): string {
-  return error.response?.data?.description || error.message;
-}
-
-function getOneInchErrorCode(error: Error | any): number | string | undefined {
-  if (error.response?.status !== undefined) {
-    return error.response.status;
-  }
-  return error.code;
-}
-
-function isRetryableOneInchError(error: Error | any): boolean {
-  const status = error.response?.status;
-  const code = error.code;
-  return (
-    status === 429 ||
-    status === undefined ||
-    status >= 500 ||
-    code === 'ECONNABORTED' ||
-    code === 'ETIMEDOUT'
-  );
-}
-
 export class DexRouter {
   private signer: Signer;
   private oneInchRouters: { [chainId: number]: string };
   private connectorTokens: string;
   private tokenAddresses: { [symbol: string]: string }; // CURVE INTEGRATION: Added for symbol lookup
+  private curvePoolSelector?: CurvePoolSelector;
+  private curvePoolSelectorSettings?: CurveRouterOverrides;
 
   constructor(
     signer: Signer,
@@ -213,9 +69,9 @@ export class DexRouter {
     tokenIn: string,
     tokenOut: string,
     options: OneInchRequestOptions = {}
-  ): Promise<OneInchApiResult> {
+  ): Promise<OneInchQuoteResult> {
     const apiEnv = validateOneInchApiEnv();
-    if (!apiEnv.baseUrl) {
+    if (apiEnv.error) {
       return {
         success: false,
         error: apiEnv.error,
@@ -253,7 +109,7 @@ export class DexRouter {
         response.data.dstAmount,
         'dstAmount'
       );
-      if (!normalizedDstAmount.value) {
+      if (!normalizedDstAmount.success) {
         logger.error(normalizedDstAmount.error);
         return {
           success: false,
@@ -268,7 +124,7 @@ export class DexRouter {
       );
 
       return { success: true, dstAmount: normalizedDstAmount.value };
-    } catch (error: Error | any) {
+    } catch (error: unknown) {
       const errorMsg = getOneInchErrorMessage(error);
       logger.error(`Failed to get quote from 1inch: ${errorMsg}`);
       return {
@@ -289,9 +145,9 @@ export class DexRouter {
     fromAddress: string,
     usePatching: boolean = false,
     options: OneInchRequestOptions = {}
-  ): Promise<OneInchApiResult> {
+  ): Promise<OneInchSwapDataResult> {
     const apiEnv = validateOneInchApiEnv();
-    if (!apiEnv.baseUrl) {
+    if (apiEnv.error) {
       return {
         success: false,
         error: apiEnv.error,
@@ -335,11 +191,14 @@ export class DexRouter {
         getOneInchAxiosOptions(params, options)
       );
 
-      if (!response.data.tx || !response.data.tx.to || !response.data.tx.data) {
-        logger.error('No valid transaction received from 1inch');
+      const normalizedTransaction = normalizeOneInchTransactionData(
+        response.data.tx
+      );
+      if (!normalizedTransaction.success) {
+        logger.error(normalizedTransaction.error);
         return {
           success: false,
-          error: 'No valid transaction received from 1inch',
+          error: normalizedTransaction.error,
           retryable: true,
           errorCode: 'invalid_response',
         };
@@ -351,7 +210,7 @@ export class DexRouter {
           ? normalizeAddressForComparison(expectedRouter)
           : undefined;
       const normalizedTxTarget = normalizeAddressForComparison(
-        response.data.tx.to
+        normalizedTransaction.value.to
       );
       if (!normalizedExpectedRouter || !normalizedTxTarget) {
         return {
@@ -364,18 +223,7 @@ export class DexRouter {
       if (normalizedTxTarget !== normalizedExpectedRouter) {
         return {
           success: false,
-          error: `1inch tx target ${response.data.tx.to} does not match configured router ${expectedRouter}`,
-          retryable: true,
-          errorCode: 'invalid_response',
-        };
-      }
-      const valueValidationError = validateZeroOneInchTxValue(
-        response.data.tx.value
-      );
-      if (valueValidationError) {
-        return {
-          success: false,
-          error: valueValidationError,
+          error: `1inch tx target ${normalizedTransaction.value.to} does not match configured router ${expectedRouter}`,
           retryable: true,
           errorCode: 'invalid_response',
         };
@@ -383,8 +231,8 @@ export class DexRouter {
       const normalizedDstAmount =
         response.data.dstAmount !== undefined
           ? normalizeOneInchUintAmount(response.data.dstAmount, 'dstAmount')
-          : {};
-      if (response.data.dstAmount !== undefined && !normalizedDstAmount.value) {
+          : undefined;
+      if (normalizedDstAmount && !normalizedDstAmount.success) {
         return {
           success: false,
           error: normalizedDstAmount.error,
@@ -395,10 +243,10 @@ export class DexRouter {
 
       return {
         success: true,
-        data: response.data.tx,
-        dstAmount: normalizedDstAmount.value,
+        data: normalizedTransaction.value,
+        dstAmount: normalizedDstAmount?.value,
       };
-    } catch (error: Error | any) {
+    } catch (error: unknown) {
       const errorMsg = getOneInchErrorMessage(error);
       return {
         success: false,
@@ -409,196 +257,32 @@ export class DexRouter {
     }
   }
 
-  private async swapWithOneInch(
-    chainId: number,
-    amount: BigNumber,
-    tokenIn: string,
-    tokenOut: string,
-    slippage: number
-  ): Promise<{ success: boolean; receipt?: any; error?: string }> {
-    if (!process.env.ONEINCH_API) {
-      logger.error(
-        'ONEINCH_API is not configured in the environment variables'
-      );
-      return { success: false, error: 'ONEINCH_API is not configured' };
+  // Memoized per settings object so the selector's pool-selection cache
+  // survives across reward swaps instead of dying with a per-call instance.
+  private getCurvePoolSelector(
+    curveSettings: CurveRouterOverrides
+  ): CurvePoolSelector {
+    if (
+      !this.curvePoolSelector ||
+      this.curvePoolSelectorSettings !== curveSettings
+    ) {
+      this.curvePoolSelector = new CurvePoolSelector(this.signer, {
+        poolConfigs: curveSettings.poolConfigs ?? {},
+        wethAddress: curveSettings.wethAddress,
+        tokenAddresses: this.tokenAddresses,
+      });
+      this.curvePoolSelectorSettings = curveSettings;
     }
-    if (!process.env.ONEINCH_API_KEY) {
-      logger.error(
-        'ONEINCH_API_KEY is not configured in the environment variables'
-      );
-      return { success: false, error: 'ONEINCH_API_KEY is not configured' };
-    }
-
-    const fromAddress = await this.signer.getAddress();
-
-    if (slippage < 0 || slippage > 100) {
-      logger.error('Slippage must be between 0 and 100');
-      return { success: false, error: 'Slippage must be between 0 and 100' };
-    }
-
-    const quoteResult = await this.getQuoteFromOneInch(
-      chainId,
-      amount,
-      tokenIn,
-      tokenOut
-    );
-    if (!quoteResult.success) {
-      return { success: false, error: quoteResult.error };
-    }
-    logger.info(
-      `1inch quote: ${amount.toString()} ${tokenIn} -> ${quoteResult.dstAmount} ${tokenOut}`
-    );
-
-    const retries = 3;
-    const delayMs = 2000;
-
-    for (let attempt = 1; attempt <= retries; attempt++) {
-      try {
-        const swapDataResult = await this.getSwapDataFromOneInch(
-          chainId,
-          amount,
-          tokenIn,
-          tokenOut,
-          slippage,
-          fromAddress
-        );
-        if (!swapDataResult.success) {
-          if (swapDataResult.retryable && attempt < retries) {
-            const waitTime = delayMs * Math.pow(2, attempt - 1);
-            logger.warn(`Attempt (${attempt}/${retries}) after ${waitTime}ms`);
-            await new Promise((resolve) => setTimeout(resolve, waitTime));
-            continue;
-          }
-          return { success: false, error: swapDataResult.error };
-        }
-        const txFrom1inch = swapDataResult.data!;
-        logger.debug(`Transaction from 1inch: ${JSON.stringify(txFrom1inch)}`);
-        const valueValidationError = validateZeroOneInchTxValue(
-          txFrom1inch.value
-        );
-        if (valueValidationError) {
-          return {
-            success: false,
-            error: valueValidationError,
-          };
-        }
-
-        const tx = {
-          to: txFrom1inch.to,
-          data: txFrom1inch.data,
-          value: txFrom1inch.value || '0',
-          gasLimit: txFrom1inch.gas
-            ? BigNumber.from(txFrom1inch.gas)
-            : undefined,
-        };
-
-        const provider = this.signer.provider as providers.Provider;
-        let gasEstimate;
-        try {
-          gasEstimate = await provider.estimateGas({
-            to: tx.to,
-            data: tx.data,
-            value: tx.value || '0',
-            from: fromAddress,
-          });
-          tx.gasLimit = gasEstimate.add(gasEstimate.div(10));
-        } catch (gasError) {
-          logger.error(`Failed to estimate gas: ${gasError}`);
-          return {
-            success: false,
-            error: `Gas estimation failed: ${gasError}`,
-          };
-        }
-
-        const receipt = await NonceTracker.queueTransaction(
-          this.signer,
-          async (nonce: number) => {
-            const txWithNonce = {
-              ...tx,
-              nonce,
-            };
-            const txResponse = await this.signer.sendTransaction(txWithNonce);
-            return await txResponse.wait();
-          }
-        );
-
-        logger.info(
-          `1inch swap successful: ${amount.toString()} ${tokenIn} -> ${tokenOut} | Tx Hash: ${receipt.transactionHash}`
-        );
-        return { success: true, receipt };
-      } catch (error: Error | any) {
-        const errorMsg = error.response?.data?.description || error.message;
-        const status = error.response?.status || 500;
-        if (status === 429 && attempt < retries) {
-          const waitTime = delayMs * Math.pow(2, attempt - 1);
-          logger.warn(`Attempt (${attempt}/${retries}) after ${waitTime}ms`);
-          await new Promise((resolve) => setTimeout(resolve, waitTime));
-          continue;
-        }
-        logger.error(`Failed to swap with 1inch: ${errorMsg}`);
-        return { success: false, error: errorMsg };
-      }
-    }
-    return { success: false, error: 'Max retries reached for 1inch swap' };
-  }
-
-
-  // CURVE INTEGRATION: Simplified helper to find pool config by token pair
-  public getCurvePoolForTokenPair(
-    tokenIn: string,
-    tokenOut: string,
-    poolConfigs: any
-  ): { address: string; poolType: CurvePoolType } | undefined {
-    // Convert addresses to symbol names for lookup
-    const tokenInSymbol = this.getTokenSymbolFromAddress(tokenIn);
-    const tokenOutSymbol = this.getTokenSymbolFromAddress(tokenOut);
-
-    if (!tokenInSymbol || !tokenOutSymbol) {
-      logger.debug(
-        `Could not resolve token symbols for ${tokenIn}/${tokenOut}`
-      );
-      return undefined;
-    }
-
-    // Try both directions for the token pair
-    const key1 = `${tokenInSymbol}-${tokenOutSymbol}`;
-    const key2 = `${tokenOutSymbol}-${tokenInSymbol}`;
-
-    const poolConfig = poolConfigs[key1] || poolConfigs[key2];
-
-    if (poolConfig) {
-      logger.debug(
-        `Found Curve pool for ${tokenInSymbol}/${tokenOutSymbol}: ${poolConfig.address}`
-      );
-      return poolConfig;
-    }
-
-    logger.debug(
-      `No Curve pool configured for ${tokenInSymbol}/${tokenOutSymbol}`
-    );
-    return undefined;
-  }
-
-  // CURVE INTEGRATION: Helper to convert address to symbol using tokenAddresses from config
-  public getTokenSymbolFromAddress(address: string): string | undefined {
-    for (const [symbol, tokenAddress] of Object.entries(this.tokenAddresses)) {
-      if (tokenAddress.toString().toLowerCase() === address.toLowerCase()) {
-        return symbol;
-      }
-    }
-    return undefined;
+    return this.curvePoolSelector;
   }
 
   // CURVE INTEGRATION: Updated Curve swap method with simplified lookup
   private async swapWithCurve(
-    chainId: number,
     amount: BigNumber,
     tokenIn: string,
     tokenOut: string,
-    to: string,
     slippage: number,
-    feeAmount?: number,
-    curveSettings?: any
+    curveSettings?: CurveRouterOverrides
   ): Promise<{ success: boolean; error?: string }> {
     try {
       if (!curveSettings) {
@@ -611,18 +295,20 @@ export class DexRouter {
       if (!curveSettings.poolConfigs) {
         return {
           success: false,
-          error: 'Curve pool configurations not found',
+          error: 'Curve pool configuration not found',
         };
       }
 
-      // SIMPLIFIED: Use the new token pair lookup
-      const poolConfig = this.getCurvePoolForTokenPair(
+      const selector = this.getCurvePoolSelector(curveSettings);
+      // Execution stays fail-closed: only the symbol-keyed pool for this
+      // pair is eligible, never the fallback scan the quote path uses.
+      const selectedPool = await selector.resolvePoolSelection(
         tokenIn,
         tokenOut,
-        curveSettings.poolConfigs
+        { allowFallbackPoolScan: false }
       );
 
-      if (!poolConfig) {
+      if (!selectedPool) {
         return {
           success: false,
           error: `No Curve pool configured for ${tokenIn}/${tokenOut}`,
@@ -635,8 +321,7 @@ export class DexRouter {
         amount,
         tokenOut,
         slippage,
-        poolConfig.address,
-        poolConfig.poolType,
+        selectedPool,
         curveSettings.defaultSlippage
       );
 
@@ -750,12 +435,19 @@ export class DexRouter {
           }
         }
 
-        const result = await this.swapWithOneInch(
-          chainId,
-          adjustedAmount,
-          tokenIn,
-          tokenOut,
-          slippage
+        const result = await executeOneInchSwap(
+          {
+            signer: this.signer,
+            getQuote: this.getQuoteFromOneInch.bind(this),
+            getSwapData: this.getSwapDataFromOneInch.bind(this),
+          },
+          {
+            chainId,
+            amount: adjustedAmount,
+            tokenIn,
+            tokenOut,
+            slippage,
+          }
         );
         return result;
 
@@ -767,7 +459,7 @@ export class DexRouter {
         ) {
           try {
             logger.info(`Using Universal Router for swap`);
-            await swapWithUniversalRouter(
+            const result = await swapWithUniversalRouter(
               this.signer,
               tokenIn,
               adjustedAmount,
@@ -779,6 +471,13 @@ export class DexRouter {
               combinedSettings.uniswap.poolFactoryAddress,
               combinedSettings.uniswap.quoterV2Address
             );
+            if (!result.success) {
+              const error = result.error;
+              logger.error(
+                `Universal Router swap failed for token: ${tokenIn}: ${error}`
+              );
+              return { success: false, error };
+            }
             logger.info(
               `Universal Router swap successful: ${adjustedAmount.toString()} ${tokenIn} -> ${tokenOut}`
             );
@@ -817,13 +516,10 @@ export class DexRouter {
       case PostAuctionDex.CURVE:
         // CURVE INTEGRATION: New case for Curve post-auction swaps
         return await this.swapWithCurve(
-          chainId,
           adjustedAmount,
           tokenIn,
           tokenOut,
-          to,
           slippage,
-          feeAmount,
           combinedSettings?.curve
         );
 

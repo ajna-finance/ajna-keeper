@@ -6,6 +6,7 @@ import {
   getAutoDiscoverSettlementPolicy,
   getAutoDiscoverTakePolicy,
   getManualPools,
+  isLpCollectionEnabled,
   EnabledKickSettings,
   KeeperConfig,
   PoolConfig,
@@ -26,17 +27,17 @@ import { runDiscoveredKickStep } from './kick/discovered-step';
 import { logger } from './logging';
 import {
   collectBondFromPool,
+  buildPoolConfigByAddress,
+  createLpRedeemerResolver,
   LpIngester,
   LpManager,
   LpRedeemer,
   RewardActionTracker,
 } from './rewards';
-import { isLpCollectionEnabled, resolveCollectLpRewardForPool } from './config';
 import { DexRouter } from './dex/router';
 import { tryReactiveSettlement } from './settlement';
 import {
   cacheConfiguredPool,
-  ensurePoolLoaded,
   normalizeAddress,
   PoolHydrationCooldowns,
   PoolMap,
@@ -396,7 +397,10 @@ export function superviseDaemonLoop(
   onFatal: (code: number) => void = (code) => process.exit(code)
 ): void {
   loop.catch((error) => {
-    logger.error(`${name} daemon loop terminated unexpectedly; exiting.`, error);
+    logger.error(
+      `${name} daemon loop terminated unexpectedly; exiting.`,
+      error
+    );
     onFatal(1);
   });
 }
@@ -750,7 +754,9 @@ export async function sweepRedeemerWithReactiveSettlement(params: {
         });
 
         if (settled) {
-          logger.info(`Retrying LP collection after settlement in ${pool.name}`);
+          logger.info(
+            `Retrying LP collection after settlement in ${pool.name}`
+          );
           try {
             await redeemer.sweep();
           } catch (retryError) {
@@ -820,52 +826,20 @@ async function collectLpRewardsLoop({
   // Memoized lowercase-address → PoolConfig lookup. Built once so both the
   // resolver and the AuctionNotCleared settlement-retry path do O(1) lookups
   // instead of repeated O(n) linear scans over `manual.pools`.
-  const poolConfigByAddress = new Map<string, PoolConfig>();
-  for (const p of getManualPools(config)) {
-    poolConfigByAddress.set(normalizeAddress(p.address), p);
-  }
+  const poolConfigByAddress = buildPoolConfigByAddress(config);
 
   const ingester = new LpIngester(signer, subgraph, config);
   const redeemers: Map<string, LpRedeemer> = new Map();
-
-  // Resolves (and lazily hydrates) the LpRedeemer for a pool address
-  // discovered in a subgraph event. Returns undefined if the pool can't
-  // be hydrated (ERC721, deployment mismatch, hydration cooldown) or if
-  // no LP settings apply — events for such pools are silently skipped.
-  const resolveRedeemer = async (
-    poolAddress: string
-  ): Promise<LpRedeemer | undefined> => {
-    const normalized = normalizeAddress(poolAddress);
-    const cached = redeemers.get(normalized);
-    if (cached) return cached;
-
-    const pool = await ensurePoolLoaded({
-      ajna,
-      poolMap,
-      poolAddress: normalized,
-      config,
-      hydrationCooldowns,
-    });
-    if (!pool) return undefined;
-
-    const matchingConfig = poolConfigByAddress.get(normalized);
-    const settings = resolveCollectLpRewardForPool(
-      config.rewards?.defaultLpReward,
-      matchingConfig?.collectLpReward,
-      normalized
-    );
-    if (!settings) return undefined;
-
-    const redeemer = new LpRedeemer(
-      pool,
-      signer,
-      settings,
-      config,
-      exchangeTracker
-    );
-    redeemers.set(normalized, redeemer);
-    return redeemer;
-  };
+  const resolveRedeemer = createLpRedeemerResolver({
+    ajna,
+    poolMap,
+    config,
+    signer,
+    exchangeTracker,
+    hydrationCooldowns,
+    poolConfigByAddress,
+    redeemers,
+  });
 
   const manager = new LpManager(ingester, resolveRedeemer);
 

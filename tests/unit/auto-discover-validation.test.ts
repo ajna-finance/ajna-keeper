@@ -17,6 +17,31 @@ import {
 } from './auto-discover-validation-helpers';
 
 describe('auto-discover validation', () => {
+  it('returns when discovery is disabled and rejects enabled discovery without actions', () => {
+    const disabled = baseConfig();
+    disabled.discovery!.enabled = false;
+    disabled.discovery!.take = false;
+    disabled.discovery!.settlement = false;
+
+    expect(() => validateAutoDiscoverConfig(disabled)).to.not.throw();
+
+    const noActions = baseConfig();
+    noActions.discovery!.take = false;
+    noActions.discovery!.settlement = false;
+    noActions.discovery!.kick = false;
+
+    expect(() => validateAutoDiscoverConfig(noActions)).to.throw(
+      'AutoDiscoverConfig: enable at least one of take, settlement, or kick'
+    );
+
+    const missingTake = baseConfig();
+    delete missingTake.discovery!.defaults!.take;
+
+    expect(() => validateAutoDiscoverConfig(missingTake)).to.throw(
+      'AutoDiscoverConfig: discovery.defaults.take required when discovery.take is enabled'
+    );
+  });
+
   it('rejects 1inch gas overrides unless discovered takes use 1inch', () => {
     const config = baseConfig();
     config.discovery!.take = {
@@ -520,6 +545,45 @@ describe('auto-discover validation', () => {
     }
   });
 
+  it('warns for route-probe and quote-normalized profit-floor footguns', () => {
+    const config = baseConfig();
+    config.discovery!.take = {
+      enabled: true,
+      maxInFlightRouteProbes: 2,
+      minProfitNative: '0',
+      minExpectedProfitQuote: 1,
+      externalTakeRouteSelectionMode: 'direct_dex_first',
+    };
+    const warnStub = sinon.stub(logger, 'warn');
+
+    try {
+      expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'maxInFlightRouteProbes is configured but maxConcurrentCandidateEvaluations is 1'
+          )
+        )
+      ).to.equal(true);
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'minProfitNative is set to 0; this is equivalent to disabling the native profit floor'
+          )
+        )
+      ).to.equal(true);
+      expect(
+        warnStub.calledWithMatch(
+          sinon.match(
+            'externalTakeRouteSelectionMode=direct_dex_first stops after the first non-subsidized approved path'
+          )
+        )
+      ).to.equal(true);
+    } finally {
+      warnStub.restore();
+    }
+  });
+
   it('rejects malformed numeric auto-discover policy values', () => {
     const config = baseConfig();
     config.discovery!.take = {
@@ -722,6 +786,13 @@ describe('auto-discover validation', () => {
     } finally {
       warnStub.restore();
     }
+
+    config.discovery!.take = {
+      enabled: true,
+      maxExecutionsPerPoolPerRun: 2,
+    };
+
+    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
   });
 
   it('validates external take write transport policy', () => {
@@ -784,100 +855,6 @@ describe('auto-discover validation', () => {
 
     expect(() => validateAutoDiscoverConfig(config)).to.throw(
       'AutoDiscoverConfig.take: allowedExternalTakePaths cannot contain duplicates'
-    );
-  });
-
-  it('rejects non-string native profit and gas override integer values', () => {
-    const config = baseConfig();
-    config.discovery!.take = {
-      enabled: true,
-      minProfitNative: 1 as unknown as string,
-    };
-
-    expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: minProfitNative must be a non-negative decimal integer string'
-    );
-
-    config.discovery!.take = {
-      enabled: true,
-      dexGasOverrides: {
-        [LiquiditySource.UNISWAPV3]: 900000 as unknown as string,
-      },
-    };
-
-    expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: dexGasOverrides.2 must be a non-negative decimal integer string'
-    );
-  });
-
-  it('treats allowedLiquiditySources as authoritative for source validation', () => {
-    const config = baseConfig();
-    delete config.dex!.uniswapV3!.router;
-    config.takers!.contracts = {
-      Curve: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    };
-    config.dex!.curve = {
-      poolConfigs: {
-        'WETH-USDC': {
-          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          poolType: CurvePoolType.STABLE,
-        },
-      },
-      wethAddress: '0x4200000000000000000000000000000000000006',
-    };
-    config.network.tokenAddresses = {
-      WETH: '0x4200000000000000000000000000000000000006',
-      USDC: '0xcccccccccccccccccccccccccccccccccccccccc',
-    };
-    config.discovery!.take = {
-      enabled: true,
-      allowedLiquiditySources: [LiquiditySource.CURVE],
-    };
-
-    expect(() => validateAutoDiscoverConfig(config)).to.not.throw();
-  });
-
-  it('rejects gas overrides for direct DEX sources outside the explicit allowlist', () => {
-    const config = baseConfig();
-    config.takers!.contracts = {
-      UniswapV3: '0x3333333333333333333333333333333333333333',
-      Curve: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    };
-    config.dex!.curve = {
-      poolConfigs: {
-        'WETH-USDC': {
-          address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          poolType: CurvePoolType.STABLE,
-        },
-      },
-      wethAddress: '0x4200000000000000000000000000000000000006',
-    };
-    config.network.tokenAddresses = {
-      WETH: '0x4200000000000000000000000000000000000006',
-      USDC: '0xcccccccccccccccccccccccccccccccccccccccc',
-    };
-    config.discovery!.take = {
-      enabled: true,
-      allowedLiquiditySources: [LiquiditySource.CURVE],
-      dexGasOverrides: {
-        [LiquiditySource.UNISWAPV3]: '900000',
-      },
-    };
-
-    expect(() => validateAutoDiscoverConfig(config)).to.throw(
-      'AutoDiscoverConfig.take: dexGasOverrides.UNISWAPV3 is not enabled by the effective take liquidity sources'
-    );
-  });
-
-  it('rejects malformed numeric take-write timeouts', () => {
-    const config = baseConfig();
-    config.writes!.take = {
-      mode: TakeWriteTransportMode.PUBLIC_RPC,
-      receiptTimeoutMs: Number.POSITIVE_INFINITY,
-    };
-
-    expect(() => validateTakeWriteConfig(config)).to.throw(
-      'KeeperConfig.writes.take: receiptTimeoutMs must be greater than 0 when provided'
     );
   });
 });

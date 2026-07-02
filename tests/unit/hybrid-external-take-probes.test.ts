@@ -128,7 +128,10 @@ describe('hybrid external take probes', () => {
       externalTakePaths: ['calldata_aggregator'],
       calldataAggregatorProviders: ['lifi', 'sushi_aggregator'],
       routeSelectionMode: 'maximize_profit',
-      hybridGasQuoteFallbackPolicy: { eligible: false, reason: 'fallback disabled' },
+      hybridGasQuoteFallbackPolicy: {
+        eligible: false,
+        reason: 'fallback disabled',
+      },
       probeTimeoutMs: 1000,
       price: 1,
       auctionPrice: BigNumber.from(1),
@@ -235,7 +238,9 @@ describe('hybrid external take probes', () => {
 
       await clock.tickAsync(50);
       await handlePromise;
-      expect(rpcCache.providerCircuits?.oneinch?.route_quote?.failures).to.equal(1);
+      expect(
+        rpcCache.providerCircuits?.oneinch?.route_quote?.failures
+      ).to.equal(1);
       expect(takeLiquidationStub.called).to.be.false;
 
       oneInchDeferred.resolve(
@@ -254,7 +259,9 @@ describe('hybrid external take probes', () => {
         })
       );
       await clock.tickAsync(0);
-      expect(rpcCache.providerCircuits?.oneinch?.route_quote?.failures).to.equal(1);
+      expect(
+        rpcCache.providerCircuits?.oneinch?.route_quote?.failures
+      ).to.equal(1);
       expect(transports.readRpc.getGasPrice.called).to.be.false;
     } finally {
       clock.restore();
@@ -495,5 +502,98 @@ describe('hybrid external take probes', () => {
     } finally {
       clock.restore();
     }
+  });
+
+  it('continues direct_dex_first probing when the first route is subsidized', async () => {
+    const directDexProvider = {
+      path: 'direct_dex' as const,
+      quote: sinon.stub().resolves({
+        isTakeable: true,
+        externalTakePath: 'direct_dex',
+        selectedLiquiditySource: LiquiditySource.UNISWAPV3,
+        selectedFeeTier: 3000,
+        quoteAmountRaw: ethers.utils.parseUnits('100', 6),
+        routeExecutionFloorRaw: ethers.utils.parseUnits('100', 6),
+        routeProfitability: {
+          subsidyAllowed: true,
+          expectedSubsidyQuoteRaw: ethers.utils.parseUnits('5', 6),
+        },
+      }),
+      execute: async () => ({ succeeded: false, preBroadcastFailed: true }),
+    };
+    const oneInchProvider = {
+      path: 'calldata_aggregator' as const,
+      providerId: 'oneinch' as const,
+      quote: sinon.stub().resolves({
+        isTakeable: true,
+        externalTakePath: 'calldata_aggregator',
+        providerId: 'oneinch',
+        selectedLiquiditySource: LiquiditySource.ONEINCH,
+        quoteAmountRaw: ethers.utils.parseUnits('110', 6),
+        routeExecutionFloorRaw: ethers.utils.parseUnits('105', 6),
+        routeProfitability: {
+          expectedNetProfitQuoteRaw: ethers.utils.parseUnits('3', 6),
+        },
+      }),
+      execute: async () => ({ succeeded: false, preBroadcastFailed: true }),
+    };
+    const providerRegistry = {
+      listExternalTakeProbeProviders: () => [
+        directDexProvider,
+        oneInchProvider,
+      ],
+      selectExternalTakeProvider: ({
+        selectedPath,
+        providerId,
+      }: {
+        selectedPath: string;
+        providerId?: string;
+      }) => {
+        if (selectedPath === 'direct_dex') return directDexProvider;
+        if (
+          selectedPath === 'calldata_aggregator' &&
+          providerId === 'oneinch'
+        ) {
+          return oneInchProvider;
+        }
+        throw new Error(`Unsupported provider ${selectedPath}/${providerId}`);
+      },
+    };
+
+    const result = await evaluateHybridExternalTakeForDiscovery({
+      pool: { name: 'Subsidized Direct First Pool' } as any,
+      signer: {} as any,
+      poolConfig: { name: 'Subsidized Direct First Pool', take: {} } as any,
+      takePolicy: {},
+      externalTakePaths: ['direct_dex', 'calldata_aggregator'],
+      calldataAggregatorProviders: ['oneinch'],
+      routeSelectionMode: 'direct_dex_first',
+      hybridGasQuoteFallbackPolicy: {
+        eligible: false,
+        reason: 'fallback disabled',
+      },
+      probeTimeoutMs: 1000,
+      price: 1,
+      auctionPrice: BigNumber.from(1),
+      collateral: BigNumber.from(1),
+      providerRegistry: providerRegistry as any,
+      approveExternalTake: async ({ quoteEvaluation }) => ({
+        approved: true,
+        quoteEvaluation: quoteEvaluation as any,
+      }),
+      stats: { gasPolicyRejects: 0, profitFloorRejects: 0 },
+    });
+
+    expect(result.takeable).to.equal(true);
+    if (!result.takeable) throw new Error('expected hybrid route selection');
+    expect(result.executionPlan.primary.evaluation.externalTakePath).to.equal(
+      'calldata_aggregator'
+    );
+    expect(
+      result.executionPlan.primary.evaluation.selectedLiquiditySource
+    ).to.equal(LiquiditySource.ONEINCH);
+    expect(result.executionPlan.fallbacks).to.have.length(0);
+    expect(directDexProvider.quote.calledOnce).to.equal(true);
+    expect(oneInchProvider.quote.calledOnce).to.equal(true);
   });
 });

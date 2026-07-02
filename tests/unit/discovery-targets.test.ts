@@ -14,53 +14,9 @@ import {
   LiquiditySource,
   PriceOriginSource,
 } from '../../src/config';
+import { DISCOVERY_BASE_CONFIG } from './helpers/discovery-targets-fixture';
 import subgraph from '../../src/subgraph';
 import { logger } from '../../src/logging';
-
-const BASE_CONFIG: KeeperConfig = {
-  network: {
-    rpcUrl: 'http://localhost:8545',
-    subgraph: {
-      url: 'http://example-subgraph',
-    },
-  },
-  signer: {
-    keystore: '/tmp/keeper.json',
-  },
-  runtime: {
-    logLevel: 'debug',
-    delayBetweenRuns: 1,
-  },
-  ajna: {
-    erc20PoolFactory: '0x0000000000000000000000000000000000000001',
-    erc721PoolFactory: '0x0000000000000000000000000000000000000002',
-    poolUtils: '0x0000000000000000000000000000000000000003',
-    positionManager: '0x0000000000000000000000000000000000000004',
-    ajnaToken: '0x0000000000000000000000000000000000000005',
-  },
-  manual: {
-    pools: [],
-  },
-  discovery: {
-    enabled: true,
-    take: true,
-    settlement: true,
-    logSkips: true,
-    defaults: {
-      take: {
-        minCollateral: 0.1,
-        hpbPriceFactor: 0.98,
-      },
-      settlement: {
-        enabled: true,
-        minAuctionAge: 3600,
-        maxBucketDepth: 50,
-        maxIterations: 5,
-        checkBotIncentive: true,
-      },
-    },
-  },
-};
 
 describe('Discovery Target Resolution', () => {
   afterEach(() => {
@@ -104,7 +60,7 @@ describe('Discovery Target Resolution', () => {
       ],
     });
 
-    const targets = await buildDiscoveredTakeTargets(BASE_CONFIG);
+    const targets = await buildDiscoveredTakeTargets(DISCOVERY_BASE_CONFIG);
 
     expect(targets).to.have.length(1);
     expect(targets[0].candidates).to.have.length(2);
@@ -115,7 +71,7 @@ describe('Discovery Target Resolution', () => {
 
   it('respects per-action manual overrides while allowing missing actions to fall back to discovered defaults', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       manual: {
         pools: [
           {
@@ -214,10 +170,10 @@ describe('Discovery Target Resolution', () => {
 
   it('applies dryRunNewPools only to pools with no manual config entry', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
-      runtime: { ...BASE_CONFIG.runtime, dryRun: false },
+      ...DISCOVERY_BASE_CONFIG,
+      runtime: { ...DISCOVERY_BASE_CONFIG.runtime, dryRun: false },
       discovery: {
-        ...BASE_CONFIG.discovery,
+        ...DISCOVERY_BASE_CONFIG.discovery,
         enabled: true,
         dryRunNewPools: true,
       },
@@ -331,7 +287,7 @@ describe('Discovery Target Resolution', () => {
       } as any,
       poolMap: poolMap as any,
       poolAddress: '0x1111111111111111111111111111111111111111',
-      config: BASE_CONFIG,
+      config: DISCOVERY_BASE_CONFIG,
       hydrationCooldowns,
     });
 
@@ -350,9 +306,9 @@ describe('Discovery Target Resolution', () => {
       liquidationAuctions: [],
     });
 
-    const takeTargets = await buildDiscoveredTakeTargets(BASE_CONFIG);
+    const takeTargets = await buildDiscoveredTakeTargets(DISCOVERY_BASE_CONFIG);
     const settlementTargets =
-      await buildDiscoveredSettlementTargets(BASE_CONFIG);
+      await buildDiscoveredSettlementTargets(DISCOVERY_BASE_CONFIG);
 
     expect(takeTargets).to.deep.equal([]);
     expect(settlementTargets).to.deep.equal([]);
@@ -377,7 +333,7 @@ describe('Discovery Target Resolution', () => {
     ];
 
     const firstTargets = await buildDiscoveredTakeTargets(
-      BASE_CONFIG,
+      DISCOVERY_BASE_CONFIG,
       liquidationAuctions,
       undefined,
       {
@@ -387,7 +343,7 @@ describe('Discovery Target Resolution', () => {
       }
     );
     const hotTargets = await buildDiscoveredTakeTargets(
-      BASE_CONFIG,
+      DISCOVERY_BASE_CONFIG,
       [],
       undefined,
       {
@@ -397,7 +353,7 @@ describe('Discovery Target Resolution', () => {
       }
     );
     const expiredTargets = await buildDiscoveredTakeTargets(
-      BASE_CONFIG,
+      DISCOVERY_BASE_CONFIG,
       [],
       undefined,
       {
@@ -420,7 +376,7 @@ describe('Discovery Target Resolution', () => {
     });
 
     await buildDiscoveredTakeTargets(
-      BASE_CONFIG,
+      DISCOVERY_BASE_CONFIG,
       [
         {
           borrower: '0xBorrowerOld',
@@ -441,7 +397,7 @@ describe('Discovery Target Resolution', () => {
       }
     );
     await buildDiscoveredTakeTargets(
-      BASE_CONFIG,
+      DISCOVERY_BASE_CONFIG,
       [
         {
           borrower: '0xBorrowerNew',
@@ -463,7 +419,7 @@ describe('Discovery Target Resolution', () => {
     );
 
     const hotTargets = await buildDiscoveredTakeTargets(
-      BASE_CONFIG,
+      DISCOVERY_BASE_CONFIG,
       [],
       undefined,
       {
@@ -510,8 +466,8 @@ describe('Discovery Target Resolution', () => {
       });
 
     const [takeTargets, settlementTargets] = await Promise.all([
-      buildDiscoveredTakeTargets(BASE_CONFIG),
-      buildDiscoveredSettlementTargets(BASE_CONFIG),
+      buildDiscoveredTakeTargets(DISCOVERY_BASE_CONFIG),
+      buildDiscoveredSettlementTargets(DISCOVERY_BASE_CONFIG),
     ]);
 
     expect(discoveryStub.calledOnce).to.be.true;
@@ -538,21 +494,21 @@ describe('Discovery Target Resolution', () => {
       });
 
     await buildDiscoveredTakeTargets({
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       network: {
-        ...BASE_CONFIG.network,
+        ...DISCOVERY_BASE_CONFIG.network,
         subgraph: {
-          ...BASE_CONFIG.network.subgraph,
+          ...DISCOVERY_BASE_CONFIG.network.subgraph,
           fallbackUrls: ['http://fallback-a'],
         },
       },
     });
     await buildDiscoveredTakeTargets({
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       network: {
-        ...BASE_CONFIG.network,
+        ...DISCOVERY_BASE_CONFIG.network,
         subgraph: {
-          ...BASE_CONFIG.network.subgraph,
+          ...DISCOVERY_BASE_CONFIG.network.subgraph,
           fallbackUrls: ['http://fallback-b'],
         },
       },
@@ -563,9 +519,9 @@ describe('Discovery Target Resolution', () => {
 
   it('does not apply take quote budget to arb-only discovered take defaults', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       discovery: {
-        ...BASE_CONFIG.discovery!,
+        ...DISCOVERY_BASE_CONFIG.discovery!,
         take: {
           enabled: true,
           takeQuoteBudgetPerRun: 1,
@@ -629,7 +585,7 @@ describe('Discovery Target Resolution', () => {
       ],
     });
 
-    const targets = await buildDiscoveredTakeTargets(BASE_CONFIG);
+    const targets = await buildDiscoveredTakeTargets(DISCOVERY_BASE_CONFIG);
 
     expect(targets).to.have.length(1);
     expect(targets[0].poolAddress).to.equal(
@@ -642,9 +598,9 @@ describe('Discovery Target Resolution', () => {
 
   it('preserves negative signs when ranking discovered take candidates', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       discovery: {
-        ...BASE_CONFIG.discovery!,
+        ...DISCOVERY_BASE_CONFIG.discovery!,
         take: {
           enabled: true,
           takeQuoteBudgetPerRun: 1,
@@ -689,9 +645,9 @@ describe('Discovery Target Resolution', () => {
 
   it('treats zero kickTime as too new to bypass settlement age filtering', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       discovery: {
-        ...BASE_CONFIG.discovery!,
+        ...DISCOVERY_BASE_CONFIG.discovery!,
         take: false,
         settlement: {
           enabled: true,
@@ -735,9 +691,9 @@ describe('Discovery Target Resolution', () => {
 
   it('uses a deterministic fallback ordering for invalid discovered kickTime values', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       discovery: {
-        ...BASE_CONFIG.discovery!,
+        ...DISCOVERY_BASE_CONFIG.discovery!,
         take: false,
         settlement: {
           enabled: true,
@@ -787,19 +743,19 @@ describe('Discovery Target Resolution', () => {
 
   it('uses precise decimal ranking when enforcing discovered take quote budgets', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       takers: {
-        ...BASE_CONFIG.takers,
+        ...DISCOVERY_BASE_CONFIG.takers,
         router: '0x1234567890123456789012345678901234567890',
         contracts: {
-          ...BASE_CONFIG.takers?.contracts,
+          ...DISCOVERY_BASE_CONFIG.takers?.contracts,
           OneInchAggregator: '0x1234567890123456789012345678901234567890',
         },
       },
       dex: {
-        ...BASE_CONFIG.dex,
+        ...DISCOVERY_BASE_CONFIG.dex,
         oneInch: {
-          ...BASE_CONFIG.dex?.oneInch,
+          ...DISCOVERY_BASE_CONFIG.dex?.oneInch,
           routers: {
             1: '0x1111111111111111111111111111111111111111',
           },
@@ -817,7 +773,7 @@ describe('Discovery Target Resolution', () => {
         },
       },
       discovery: {
-        ...BASE_CONFIG.discovery!,
+        ...DISCOVERY_BASE_CONFIG.discovery!,
         take: {
           enabled: true,
           takeQuoteBudgetPerRun: 1,
@@ -825,7 +781,7 @@ describe('Discovery Target Resolution', () => {
         },
         settlement: false,
         defaults: {
-          ...BASE_CONFIG.discovery!.defaults!,
+          ...DISCOVERY_BASE_CONFIG.discovery!.defaults!,
           take: {
             liquiditySource: LiquiditySource.ONEINCH,
             marketPriceFactor: 0.99,
@@ -870,9 +826,9 @@ describe('Discovery Target Resolution', () => {
 
   it('prioritizes larger discovered settlement debt before auction age', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       discovery: {
-        ...BASE_CONFIG.discovery!,
+        ...DISCOVERY_BASE_CONFIG.discovery!,
         take: false,
         settlement: {
           enabled: true,
@@ -916,9 +872,9 @@ describe('Discovery Target Resolution', () => {
 
   it('uses older kickTime as the settlement tiebreaker when debt is equal', async () => {
     const config: KeeperConfig = {
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       discovery: {
-        ...BASE_CONFIG.discovery!,
+        ...DISCOVERY_BASE_CONFIG.discovery!,
         take: false,
         settlement: {
           enabled: true,
@@ -988,7 +944,7 @@ describe('Discovery Target Resolution', () => {
       ],
     });
 
-    const targets = await buildDiscoveredTakeTargets(BASE_CONFIG);
+    const targets = await buildDiscoveredTakeTargets(DISCOVERY_BASE_CONFIG);
 
     expect(targets).to.have.length(1);
     expect(targets[0].poolAddress).to.equal(
@@ -1026,9 +982,9 @@ describe('Discovery Target Resolution', () => {
     });
 
     const targets = await buildDiscoveredSettlementTargets({
-      ...BASE_CONFIG,
+      ...DISCOVERY_BASE_CONFIG,
       discovery: {
-        ...BASE_CONFIG.discovery!,
+        ...DISCOVERY_BASE_CONFIG.discovery!,
         take: false,
         settlement: true,
       },
@@ -1055,7 +1011,7 @@ describe('Discovery Target Resolution', () => {
           },
           candidates: [],
         },
-        BASE_CONFIG
+        DISCOVERY_BASE_CONFIG
       )
     ).to.throw('ResolvedTakeTarget: no candidates');
 

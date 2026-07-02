@@ -1,11 +1,23 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { BigNumber, ethers } from 'ethers';
+import { BigNumber, ethers, Signer } from 'ethers';
 import { CurveQuoteProvider } from '../../src/dex/providers/curve-quote-provider';
+import {
+  CURVE_NATIVE_ETH_ADDRESS,
+  CurvePoolSelector,
+  getCurveTokenSymbolFromAddress,
+} from '../../src/dex/curve-pool-selection';
+import type { CurvePoolSelection } from '../../src/dex/curve-pool-selection';
 import { CurvePoolType } from '../../src/config';
+import { DexContractServices } from '../../src/dex/contracts';
 
 describe('Curve Quote Provider', () => {
   let mockSigner: any;
+  const WETH = '0x4200000000000000000000000000000000000006';
+  const USDC = '0x53Be558aF29cC65126ED0E585119FAC748FeB01B';
+  const DAI = '0x1111111111111111111111111111111111111111';
+  const POOL = '0x6e53131F68a034873b6bFA15502aF094Ef0c5854';
+  const ETH = CURVE_NATIVE_ETH_ADDRESS;
 
   beforeEach(() => {
     // Create basic mock signer - same pattern as other tests
@@ -21,6 +33,498 @@ describe('Curve Quote Provider', () => {
 
   afterEach(() => {
     sinon.restore();
+  });
+
+  type CurveQuoteProviderConfig = ConstructorParameters<
+    typeof CurveQuoteProvider
+  >[1];
+
+  function makeProvider(
+    overrides: Partial<CurveQuoteProviderConfig> = {},
+    contracts?: DexContractServices
+  ): CurveQuoteProvider {
+    return new CurveQuoteProvider(
+      mockSigner,
+      {
+        poolConfigs: {
+          'WETH-USDC': {
+            address: POOL,
+            poolType: CurvePoolType.STABLE,
+          },
+        },
+        defaultSlippage: 1.0,
+        wethAddress: WETH,
+        tokenAddresses: {
+          WETH,
+          USDC,
+          DAI,
+        },
+        ...overrides,
+      },
+      contracts
+    );
+  }
+
+  function selectedPool(
+    overrides: Partial<CurvePoolSelection> = {}
+  ): CurvePoolSelection {
+    return {
+      address: POOL,
+      poolType: CurvePoolType.STABLE,
+      tokenInIndex: 0,
+      tokenOutIndex: 1,
+      ...overrides,
+    };
+  }
+
+  // Real pools surface end-of-coin-list probes as reverts (CALL_EXCEPTION).
+  function endOfCoinsRevert(): Error {
+    return Object.assign(new Error('call revert exception'), {
+      code: 'CALL_EXCEPTION',
+    });
+  }
+
+  function coinsFor(...addresses: string[]): sinon.SinonStub {
+    const coins = sinon.stub();
+    addresses.forEach((address, index) => {
+      coins.withArgs(index).resolves(address);
+    });
+    coins.rejects(endOfCoinsRevert());
+    return coins;
+  }
+
+  function curveContractServices(
+    contract: {
+      coins?: sinon.SinonStub;
+      get_dy?: sinon.SinonStub;
+    },
+    getDecimals: sinon.SinonStub<[Signer, string], Promise<number>> = sinon
+      .stub<[Signer, string], Promise<number>>()
+      .resolves(18)
+  ): DexContractServices {
+    return {
+      makeContract: sinon
+        .stub()
+        .returns(contract as unknown as ethers.Contract),
+      getDecimals,
+    };
+  }
+
+  describe('Real provider fail-closed behavior', () => {
+    it('reports initialization fast path and configured pools', async () => {
+      const provider = makeProvider();
+
+      expect(await provider.initialize()).to.equal(true);
+      expect(await provider.initialize()).to.equal(true);
+      expect(provider.isAvailable()).to.equal(true);
+      expect(provider.getConfiguredPools()).to.deep.equal([POOL]);
+    });
+
+    it('stays unavailable and refuses quotes when no pools are configured', async () => {
+      const provider = makeProvider({ poolConfigs: {} });
+
+      expect(await provider.initialize()).to.equal(false);
+      expect(provider.isAvailable()).to.equal(false);
+
+      const quote = await provider.getQuote(BigNumber.from(100), WETH, USDC);
+      expect(quote).to.deep.equal({
+        success: false,
+        error: 'Quote provider not available',
+      });
+    });
+
+    it('caches positive and negative pool selections', async () => {
+      const coins = coinsFor(WETH, USDC);
+      const provider = makeProvider({}, curveContractServices({ coins }));
+
+      expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+        selectedPool()
+      );
+      expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+        selectedPool()
+      );
+      expect(coins.callCount).to.equal(2);
+
+      const negativeCoins = coinsFor(WETH, USDC);
+      const negativeProvider = makeProvider(
+        {},
+        curveContractServices({ coins: negativeCoins })
+      );
+      expect(await negativeProvider.resolvePoolSelection(DAI, USDC)).to.equal(
+        undefined
+      );
+      expect(await negativeProvider.resolvePoolSelection(DAI, USDC)).to.equal(
+        undefined
+      );
+      expect(negativeCoins.callCount).to.equal(3);
+    });
+
+    it('expires stale pool-selection cache entries through public lookups', async () => {
+      const clock = sinon.useFakeTimers({ now: 1_000, toFake: ['Date'] });
+      try {
+        const coins = coinsFor(WETH, USDC);
+        const provider = makeProvider({}, curveContractServices({ coins }));
+
+        expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+          selectedPool()
+        );
+        expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+          selectedPool()
+        );
+        expect(coins.callCount).to.equal(2);
+
+        clock.tick(5 * 60 * 1000 + 1);
+        expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+          selectedPool()
+        );
+        expect(coins.callCount).to.equal(4);
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it('returns undefined when resolvePoolSelection cannot initialize', async () => {
+      const provider = makeProvider({ poolConfigs: {} });
+
+      expect(await provider.resolvePoolSelection(WETH, USDC)).to.equal(
+        undefined
+      );
+    });
+
+    it('resolves symbol lookup and address fallback through public selection', async () => {
+      const symbolCoins = coinsFor(WETH, USDC);
+      const symbolProvider = makeProvider(
+        {},
+        curveContractServices({ coins: symbolCoins })
+      );
+      expect(
+        await symbolProvider.resolvePoolSelection(WETH, USDC)
+      ).to.deep.equal(selectedPool());
+
+      const fallbackCoins = coinsFor(WETH, USDC);
+      const fallbackProvider = makeProvider(
+        { tokenAddresses: undefined },
+        curveContractServices({ coins: fallbackCoins })
+      );
+      expect(
+        await fallbackProvider.resolvePoolSelection(ETH, USDC)
+      ).to.deep.equal(selectedPool());
+    });
+
+    it('returns undefined when neither symbol lookup nor fallback discovery finds both tokens', async () => {
+      const coins = coinsFor(WETH, DAI);
+      const provider = makeProvider({}, curveContractServices({ coins }));
+      expect(
+        await provider.resolvePoolSelection(
+          '0x9999999999999999999999999999999999999999',
+          USDC
+        )
+      ).to.equal(undefined);
+    });
+
+    it('skips a malformed pool entry and still selects a later valid pool', async () => {
+      const coins = coinsFor(WETH, USDC);
+      const services = curveContractServices({ coins });
+      const provider = makeProvider(
+        {
+          poolConfigs: {
+            'BAD-PAIR': {
+              address: '0x2222222222222222222222222222222222222222',
+              poolType: 'BOGUS' as unknown as CurvePoolType,
+            },
+            'WETH-USDC': {
+              address: POOL,
+              poolType: CurvePoolType.STABLE,
+            },
+          },
+          tokenAddresses: undefined,
+        },
+        services
+      );
+
+      expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+        selectedPool()
+      );
+      expect(
+        (services.makeContract as sinon.SinonStub).calledOnceWith(POOL)
+      ).to.equal(true);
+    });
+
+    it('rejects selections where both tokens resolve to the same coin slot', async () => {
+      const coins = coinsFor(WETH, USDC);
+      const provider = makeProvider(
+        { tokenAddresses: undefined },
+        curveContractServices({ coins })
+      );
+
+      expect(await provider.resolvePoolSelection(ETH, WETH)).to.equal(
+        undefined
+      );
+    });
+
+    it('aborts on transport errors instead of falling back to another pool, without caching the failure', async () => {
+      const OTHER_POOL = '0x7777777777777777777777777777777777777777';
+      const keyedPoolCoins = sinon.stub().rejects(new Error('ETIMEDOUT'));
+      const otherPoolCoins = coinsFor(WETH, USDC);
+      const services: DexContractServices = {
+        makeContract: sinon.stub().callsFake(
+          (address: string) =>
+            ({
+              coins: address === POOL ? keyedPoolCoins : otherPoolCoins,
+            }) as unknown as ethers.Contract
+        ),
+        getDecimals: sinon
+          .stub<[Signer, string], Promise<number>>()
+          .resolves(18),
+      };
+      const provider = makeProvider(
+        {
+          poolConfigs: {
+            'WETH-USDC': { address: POOL, poolType: CurvePoolType.STABLE },
+            'OTHER-PAIR': {
+              address: OTHER_POOL,
+              poolType: CurvePoolType.STABLE,
+            },
+          },
+        },
+        services
+      );
+
+      const quote = await provider.getQuote(BigNumber.from(100), WETH, USDC);
+      expect(quote.success).to.equal(false);
+      expect(quote.error).to.match(/probe failed before completing/);
+      expect(otherPoolCoins.called).to.equal(false);
+
+      // The failure must not be cached: once the RPC heals, the same lookup
+      // resolves the keyed pool (a cached negative would return undefined
+      // for 30s).
+      keyedPoolCoins.reset();
+      keyedPoolCoins.withArgs(0).resolves(WETH);
+      keyedPoolCoins.withArgs(1).resolves(USDC);
+      keyedPoolCoins.rejects(endOfCoinsRevert());
+      expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal(
+        selectedPool()
+      );
+    });
+
+    it('keeps selector lookups fail-closed unless the fallback scan is enabled', async () => {
+      const coins = coinsFor(WETH, USDC);
+      const services = curveContractServices({ coins });
+      const selector = new CurvePoolSelector(
+        mockSigner,
+        {
+          poolConfigs: {
+            'WETH-USDC': { address: POOL, poolType: CurvePoolType.STABLE },
+          },
+          wethAddress: WETH,
+        },
+        services
+      );
+
+      expect(await selector.resolvePoolSelection(WETH, USDC)).to.equal(
+        undefined
+      );
+      expect((services.makeContract as sinon.SinonStub).called).to.equal(false);
+
+      expect(
+        await selector.resolvePoolSelection(WETH, USDC, {
+          allowFallbackPoolScan: true,
+        })
+      ).to.deep.equal(selectedPool());
+    });
+
+    it('reports pool existence without throwing on lookup failures', async () => {
+      const provider = makeProvider(
+        {},
+        curveContractServices({ coins: coinsFor(WETH, USDC) })
+      );
+      expect(await provider.poolExists(WETH, USDC)).to.equal(true);
+
+      const missingProvider = makeProvider(
+        {},
+        curveContractServices({ coins: coinsFor(WETH, DAI) })
+      );
+      expect(await missingProvider.poolExists(DAI, USDC)).to.equal(false);
+
+      const failingProvider = makeProvider(
+        {},
+        curveContractServices({
+          coins: sinon.stub().rejects(new Error('rpc down')),
+        })
+      );
+      expect(await failingProvider.poolExists(WETH, USDC)).to.equal(false);
+    });
+
+    it('discovers token indices and normalizes native ETH through fallback discovery', async () => {
+      const coins = coinsFor(WETH, USDC);
+      const provider = makeProvider(
+        { tokenAddresses: undefined },
+        curveContractServices({ coins })
+      );
+
+      expect(await provider.resolvePoolSelection(ETH, USDC)).to.deep.equal(
+        selectedPool()
+      );
+      expect(coins.calledWith(2)).to.equal(false);
+    });
+
+    it('returns no-pool and zero-output quote failures before reporting success', async () => {
+      const provider = makeProvider(
+        {},
+        curveContractServices({ coins: coinsFor(WETH, DAI) })
+      );
+      const noPool = await provider.getQuote(BigNumber.from(100), WETH, USDC);
+      expect(noPool.success).to.equal(false);
+      expect(noPool.error).to.match(/No Curve pool configured/);
+
+      const getDy = sinon.stub().resolves(BigNumber.from(0));
+      const zeroProvider = makeProvider(
+        {},
+        curveContractServices({ coins: coinsFor(WETH, USDC), get_dy: getDy })
+      );
+
+      const zeroQuote = await zeroProvider.getQuote(
+        BigNumber.from(100),
+        WETH,
+        USDC,
+        { inputDecimals: 18, outputDecimals: 6 }
+      );
+      expect(zeroQuote).to.deep.equal({
+        success: false,
+        error: 'Zero output from Curve pool',
+      });
+      expect(getDy.calledOnceWith(0, 1, BigNumber.from(100))).to.equal(true);
+    });
+
+    it('returns successful quotes with the selected pool attached', async () => {
+      const getDy = sinon.stub().resolves(BigNumber.from(950));
+      const provider = makeProvider(
+        {},
+        curveContractServices({ coins: coinsFor(WETH, USDC), get_dy: getDy })
+      );
+
+      const quote = await provider.getQuote(BigNumber.from(1000), WETH, USDC, {
+        inputDecimals: 18,
+        outputDecimals: 6,
+      });
+
+      expect(quote.success).to.equal(true);
+      if (!quote.dstAmount) {
+        expect.fail('Expected successful quote to include dstAmount');
+      }
+      expect(quote.dstAmount.toString()).to.equal('950');
+      expect(quote.selectedPool).to.deep.equal(selectedPool());
+    });
+
+    it('loads token decimals only when quote decimals are not supplied', async () => {
+      const getDecimals = sinon
+        .stub<[Signer, string], Promise<number>>()
+        .resolves(18);
+      getDecimals.withArgs(mockSigner as Signer, USDC).resolves(6);
+      const provider = makeProvider(
+        {},
+        curveContractServices(
+          {
+            coins: coinsFor(WETH, USDC),
+            get_dy: sinon.stub().resolves(BigNumber.from(950)),
+          },
+          getDecimals
+        )
+      );
+
+      const quote = await provider.getQuote(BigNumber.from(1000), WETH, USDC);
+
+      expect(quote.success).to.equal(true);
+      expect(getDecimals.calledTwice).to.equal(true);
+    });
+
+    it('classifies Curve quote contract errors', async () => {
+      for (const [message, reason, expected] of [
+        [
+          'INSUFFICIENT_LIQUIDITY',
+          undefined,
+          'Insufficient liquidity in Curve pool',
+        ],
+        ['execution reverted', 'bad pool', 'Curve pool reverted: bad pool'],
+        [
+          'execution reverted',
+          undefined,
+          'Curve pool reverted: execution reverted',
+        ],
+        ['rpc unavailable', undefined, 'Curve quote error: rpc unavailable'],
+      ]) {
+        sinon.restore();
+        const error = new Error(message) as Error & { reason?: string };
+        error.reason = reason;
+        const provider = makeProvider(
+          {},
+          curveContractServices({
+            coins: coinsFor(WETH, USDC),
+            get_dy: sinon.stub().rejects(error),
+          })
+        );
+
+        const quote = await provider.getQuote(BigNumber.from(100), WETH, USDC, {
+          inputDecimals: 18,
+          outputDecimals: 6,
+        });
+        expect(quote).to.deep.equal({ success: false, error: expected });
+      }
+    });
+
+    it('calculates market price and propagates quote/amount failures', async () => {
+      const getDecimals = sinon
+        .stub<[Signer, string], Promise<number>>()
+        .resolves(18);
+      getDecimals.withArgs(mockSigner as Signer, USDC).resolves(6);
+      const provider = makeProvider(
+        {},
+        curveContractServices(
+          {
+            coins: coinsFor(WETH, USDC),
+            get_dy: sinon.stub().resolves(ethers.utils.parseUnits('2', 6)),
+          },
+          getDecimals
+        )
+      );
+
+      const price = await provider.getMarketPrice(
+        ethers.utils.parseEther('1'),
+        WETH,
+        USDC,
+        18,
+        6
+      );
+      expect(price).to.deep.equal({ success: true, price: 2 });
+
+      const missingProvider = makeProvider(
+        {},
+        curveContractServices({ coins: coinsFor(WETH, DAI) })
+      );
+      const quoteFailure = await missingProvider.getMarketPrice(
+        BigNumber.from(100),
+        WETH,
+        USDC,
+        18,
+        6
+      );
+      expect(quoteFailure).to.deep.equal({
+        success: false,
+        error: `No Curve pool configured for ${WETH}/${USDC}`,
+      });
+
+      const amountFailure = await provider.getMarketPrice(
+        BigNumber.from(0),
+        WETH,
+        USDC,
+        18,
+        6
+      );
+      expect(amountFailure).to.deep.equal({
+        success: false,
+        error: 'Invalid amounts for price calculation',
+      });
+    });
   });
 
   describe('Class Import and Basic Functionality', () => {
@@ -120,25 +624,36 @@ describe('Curve Quote Provider', () => {
         tbtc: '0x236aa50979D5f3De3Bd1Eeb40E81137F22ab794b',
       };
 
-      // Test symbol lookup logic
-      const findSymbolForAddress = (
-        targetAddress: string
-      ): string | undefined => {
-        for (const [symbol, address] of Object.entries(tokenAddresses)) {
-          if (address.toLowerCase() === targetAddress.toLowerCase()) {
-            return symbol;
-          }
-        }
-        return undefined;
+      expect(
+        getCurveTokenSymbolFromAddress(
+          '0x4200000000000000000000000000000000000006',
+          tokenAddresses
+        )
+      ).to.equal('weth');
+      expect(
+        getCurveTokenSymbolFromAddress(
+          '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
+          tokenAddresses
+        )
+      ).to.equal('usdc_t');
+      expect(getCurveTokenSymbolFromAddress('0xInvalidAddress', tokenAddresses))
+        .to.be.undefined;
+    });
+
+    it('skips non-string tokenAddresses values instead of throwing', () => {
+      const tokenAddresses = {
+        chainId: 8453 as unknown as string,
+        weth: '0x4200000000000000000000000000000000000006',
       };
 
       expect(
-        findSymbolForAddress('0x4200000000000000000000000000000000000006')
+        getCurveTokenSymbolFromAddress(
+          '0x4200000000000000000000000000000000000006',
+          tokenAddresses
+        )
       ).to.equal('weth');
-      expect(
-        findSymbolForAddress('0x53Be558aF29cC65126ED0E585119FAC748FeB01B')
-      ).to.equal('usdc_t');
-      expect(findSymbolForAddress('0xInvalidAddress')).to.be.undefined;
+      expect(getCurveTokenSymbolFromAddress('0xInvalidAddress', tokenAddresses))
+        .to.be.undefined;
     });
   });
 
@@ -167,88 +682,27 @@ describe('Curve Quote Provider', () => {
   });
 
   describe('Pool Discovery Logic', () => {
-    it('should identify valid token pair matching', () => {
-      const poolConfigs: {
-        [key: string]: { address: string; poolType: CurvePoolType };
-      } = {
-        'tbtc-weth': {
-          address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
-          poolType: CurvePoolType.CRYPTO,
-        },
-        'usdc_t-usd_t1': {
-          address: '0x01C2c9f2C271ECEF81287B44FA6F813a1605F5Eb',
-          poolType: CurvePoolType.STABLE,
-        },
-      };
-
-      // Test pool discovery logic (both directions)
-      const findPoolConfig = (tokenA: string, tokenB: string) => {
-        const key1 = `${tokenA}-${tokenB}`;
-        const key2 = `${tokenB}-${tokenA}`;
-        return poolConfigs[key1] || poolConfigs[key2];
-      };
-
-      const stablePool = findPoolConfig('usdc_t', 'usd_t1');
-      const stablePoolReverse = findPoolConfig('usd_t1', 'usdc_t');
-      const cryptoPool = findPoolConfig('tbtc', 'weth');
-      const noPool = findPoolConfig('invalid', 'tokens');
-
-      expect(stablePool?.poolType).to.equal(CurvePoolType.STABLE);
-      expect(stablePoolReverse?.poolType).to.equal(CurvePoolType.STABLE);
-      expect(cryptoPool?.poolType).to.equal(CurvePoolType.CRYPTO);
-      expect(noPool).to.be.undefined;
-    });
-
-    it('should handle ETH/WETH conversion in pool discovery', () => {
-      const ethAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-      const wethAddress = '0x4200000000000000000000000000000000000006';
-
-      // Test ETH/WETH conversion logic
-      const normalizeAddress = (address: string, wethAddr: string): string => {
-        return address.toLowerCase() === ethAddress.toLowerCase()
-          ? wethAddr
-          : address;
-      };
-
-      expect(normalizeAddress(ethAddress, wethAddress)).to.equal(wethAddress);
-      expect(normalizeAddress(wethAddress, wethAddress)).to.equal(wethAddress);
-      expect(
-        normalizeAddress(
-          '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
-          wethAddress
-        )
-      ).to.equal('0x53Be558aF29cC65126ED0E585119FAC748FeB01B');
-    });
-
     it('falls back to address-based matching when token symbol casing differs from pool config keys', async () => {
-      const provider: any = new CurveQuoteProvider(mockSigner, {
-        poolConfigs: {
-          'weth-usdc': {
-            address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
-            poolType: CurvePoolType.CRYPTO,
+      const coins = coinsFor(WETH, USDC);
+      const provider = makeProvider(
+        {
+          poolConfigs: {
+            'weth-usdc': {
+              address: POOL,
+              poolType: CurvePoolType.CRYPTO,
+            },
           },
         },
-        defaultSlippage: 1.0,
-        wethAddress: '0x4200000000000000000000000000000000000006',
-        tokenAddresses: {
-          WETH: '0x4200000000000000000000000000000000000006',
-          USDC: '0x53Be558aF29cC65126ED0E585119FAC748FeB01B',
-        },
-      });
-      const checkTokensStub = sinon
-        .stub(provider, 'checkTokensInPool')
-        .resolves(true);
-
-      const poolConfig = await provider.findPoolForTokenPair(
-        '0x4200000000000000000000000000000000000006',
-        '0x53Be558aF29cC65126ED0E585119FAC748FeB01B'
+        curveContractServices({ coins })
       );
 
-      expect(poolConfig).to.deep.equal({
-        address: '0x6e53131F68a034873b6bFA15502aF094Ef0c5854',
+      expect(await provider.resolvePoolSelection(WETH, USDC)).to.deep.equal({
+        address: POOL,
         poolType: CurvePoolType.CRYPTO,
+        tokenInIndex: 0,
+        tokenOutIndex: 1,
       });
-      expect(checkTokensStub.calledOnce).to.be.true;
+      expect(coins.calledWith(2)).to.equal(false);
     });
   });
 

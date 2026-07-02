@@ -1,10 +1,9 @@
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { BigNumber, ethers } from 'ethers';
+import { BigNumber } from 'ethers';
 import { clearSharedDiscoveryScans } from '../../src/discovery/targets';
 import { clearSharedSettlementScannerCache } from '../../src/settlement/scanner';
-import { createDiscoveryRuntime } from '../../src/discovery/runtime';
-import { processKickCycle, runResilientLoopIteration } from '../../src/run';
+import { processKickCycle } from '../../src/run';
 import {
   KeeperConfig,
   PriceOriginSource,
@@ -15,7 +14,6 @@ import * as takeModule from '../../src/take';
 import * as settlementModule from '../../src/settlement';
 import * as kickModule from '../../src/kick';
 import * as discoveryHandlers from '../../src/discovery/handlers';
-import type { DiscoveredTakeTargetStats } from '../../src/discovery/take-executor';
 import * as takeWriteTransportModule from '../../src/take/write-transport';
 import subgraph from '../../src/subgraph';
 import { logger } from '../../src/logging';
@@ -23,123 +21,13 @@ import {
   createSubgraphReader,
   getSubgraphTransportConfig,
 } from '../../src/read-transports';
-
-const BASE_CONFIG: KeeperConfig = {
-  network: {
-    rpcUrl: 'http://localhost:8545',
-    subgraph: {
-      url: 'http://example-subgraph',
-    },
-  },
-  signer: {
-    keystore: '/tmp/keeper.json',
-  },
-  runtime: {
-    logLevel: 'debug',
-    delayBetweenRuns: 1,
-  },
-  ajna: {
-    erc20PoolFactory: '0x0000000000000000000000000000000000000001',
-    erc721PoolFactory: '0x0000000000000000000000000000000000000002',
-    poolUtils: '0x0000000000000000000000000000000000000003',
-    positionManager: '0x0000000000000000000000000000000000000004',
-    ajnaToken: '0x0000000000000000000000000000000000000005',
-  },
-  manual: {
-    pools: [],
-  },
-};
-
-function makeDiscoveredTakeTargetStats(
-  overrides: Partial<DiscoveredTakeTargetStats> = {}
-): DiscoveredTakeTargetStats {
-  return {
-    candidateCount: 0,
-    approvedTakeDecisions: 0,
-    approvedArbTakeDecisions: 0,
-    approvedUniswapV3TakeDecisions: 0,
-    approvedCurveTakeDecisions: 0,
-    evaluationSkips: 0,
-    revalidationSkips: 0,
-    executionSkips: 0,
-    gasPolicyRejects: 0,
-    profitFloorRejects: 0,
-    arbProfitUnavailableRejects: 0,
-    executedExternalTakes: 0,
-    executedArbTakes: 0,
-    executedUniswapV3Takes: 0,
-    executedCurveTakes: 0,
-    dryRunExternalTakes: 0,
-    dryRunArbTakes: 0,
-    dryRunUniswapV3Takes: 0,
-    dryRunCurveTakes: 0,
-    externalTakeByPath: {},
-    externalTakeByProvider: {},
-    hybridFallbackAttempts: 0,
-    hybridFallbackSuccesses: 0,
-    hybridGasQuoteFallbackAttempts: 0,
-    hybridGasQuoteFallbackSuccesses: 0,
-    hotAuctionCandidateRemovals: 0,
-    ...overrides,
-  };
-}
-
-function createTestDiscoveryRuntime(params: {
-  config: KeeperConfig;
-  ajna?: any;
-  poolMap?: Map<string, any>;
-  signer?: any;
-  takeWriteTransport?: any;
-  hydrationCooldowns?: any;
-  discoverySnapshotState?: any;
-}) {
-  const ajna = { ...(params.ajna ?? {}) } as any;
-  const factory = ajna.fungiblePoolFactory;
-  if (factory?.getPoolByAddress && !factory.getPoolAddress) {
-    const hydratedPoolAddresses = new Map<string, string>();
-    const originalGetPoolByAddress = factory.getPoolByAddress.bind(factory);
-    factory.getPoolByAddress = sinon
-      .stub()
-      .callsFake(async (poolAddress: string) => {
-        const pool = await originalGetPoolByAddress(poolAddress);
-        if (
-          pool?.collateralAddress &&
-          pool?.quoteAddress &&
-          pool?.poolAddress
-        ) {
-          hydratedPoolAddresses.set(
-            `${String(pool.collateralAddress).toLowerCase()}:${String(pool.quoteAddress).toLowerCase()}`,
-            String(pool.poolAddress)
-          );
-        }
-        return pool;
-      });
-    factory.getPoolAddress = sinon
-      .stub()
-      .callsFake(async (collateralAddress: string, quoteAddress: string) => {
-        return (
-          hydratedPoolAddresses.get(
-            `${String(collateralAddress).toLowerCase()}:${String(quoteAddress).toLowerCase()}`
-          ) ?? ethers.constants.AddressZero
-        );
-      });
-  }
-
-  const signer = {
-    getChainId: sinon.stub().resolves(1),
-    ...(params.signer ?? {}),
-  } as any;
-
-  return createDiscoveryRuntime({
-    ajna: ajna as any,
-    poolMap: (params.poolMap ?? new Map()) as any,
-    config: params.config,
-    signer,
-    takeWriteTransport: params.takeWriteTransport as any,
-    hydrationCooldowns: params.hydrationCooldowns ?? new Map(),
-    discoverySnapshotState: params.discoverySnapshotState,
-  });
-}
+import {
+  BASE_CONFIG,
+  createTestDiscoveryRuntime,
+  makeAjnaFactoryWithHydratedPools,
+  makeAjnaFactoryWithPoolLoader,
+  makeDiscoveredTakeTargetStats,
+} from './helpers/discovery-runtime-fixture';
 
 describe('Run Loop Discovery Integration', () => {
   afterEach(() => {
@@ -432,11 +320,9 @@ describe('Run Loop Discovery Integration', () => {
       collateralAddress: '0x6666666666666666666666666666666666666666',
     };
     const getPoolByAddressStub = sinon.stub().resolves(discoveredPool);
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: getPoolByAddressStub,
-      },
-    };
+    const ajna = makeAjnaFactoryWithPoolLoader(getPoolByAddressStub, [
+      discoveredPool,
+    ]);
     const signer = {
       provider: {
         getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
@@ -525,22 +411,26 @@ describe('Run Loop Discovery Integration', () => {
       ],
     });
 
-    const getPoolByAddressStub = sinon.stub();
-    getPoolByAddressStub
-      .withArgs('0x4444444444444444444444444444444444444444')
-      .resolves({
+    const discoveredPools = [
+      {
         name: 'Discovered Pool A',
         poolAddress: '0x4444444444444444444444444444444444444444',
         quoteAddress: '0x6666666666666666666666666666666666666666',
         collateralAddress: '0x7777777777777777777777777777777777777777',
-      })
-      .withArgs('0x5555555555555555555555555555555555555555')
-      .resolves({
+      },
+      {
         name: 'Discovered Pool B',
         poolAddress: '0x5555555555555555555555555555555555555555',
         quoteAddress: '0x8888888888888888888888888888888888888888',
         collateralAddress: '0x9999999999999999999999999999999999999999',
-      });
+      },
+    ];
+    const getPoolByAddressStub = sinon.stub();
+    getPoolByAddressStub
+      .withArgs('0x4444444444444444444444444444444444444444')
+      .resolves(discoveredPools[0])
+      .withArgs('0x5555555555555555555555555555555555555555')
+      .resolves(discoveredPools[1]);
 
     const gasPriceStub = sinon.stub().resolves(BigNumber.from(123));
     const signer = {
@@ -548,11 +438,10 @@ describe('Run Loop Discovery Integration', () => {
         getGasPrice: gasPriceStub,
       },
     };
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: getPoolByAddressStub,
-      },
-    };
+    const ajna = makeAjnaFactoryWithPoolLoader(
+      getPoolByAddressStub,
+      discoveredPools
+    );
     const config: KeeperConfig = {
       ...BASE_CONFIG,
       discovery: {
@@ -613,11 +502,7 @@ describe('Run Loop Discovery Integration', () => {
       quoteAddress: '0x5555555555555555555555555555555555555555',
       collateralAddress: '0x6666666666666666666666666666666666666666',
     };
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: sinon.stub().resolves(discoveredPool),
-      },
-    };
+    const ajna = makeAjnaFactoryWithHydratedPools([discoveredPool]);
     const gasPriceStub = sinon.stub();
     gasPriceStub.onCall(0).resolves(BigNumber.from(123));
     gasPriceStub.onCall(1).resolves(BigNumber.from(456));
@@ -727,22 +612,26 @@ describe('Run Loop Discovery Integration', () => {
       ],
     });
 
-    const getPoolByAddressStub = sinon.stub();
-    getPoolByAddressStub
-      .withArgs('0x4444444444444444444444444444444444444444')
-      .resolves({
+    const discoveredPools = [
+      {
         name: 'Discovered Pool A',
         poolAddress: '0x4444444444444444444444444444444444444444',
         quoteAddress: '0x6666666666666666666666666666666666666666',
         collateralAddress: '0x7777777777777777777777777777777777777777',
-      })
-      .withArgs('0x5555555555555555555555555555555555555555')
-      .resolves({
+      },
+      {
         name: 'Discovered Pool B',
         poolAddress: '0x5555555555555555555555555555555555555555',
         quoteAddress: '0x8888888888888888888888888888888888888888',
         collateralAddress: '0x9999999999999999999999999999999999999999',
-      });
+      },
+    ];
+    const getPoolByAddressStub = sinon.stub();
+    getPoolByAddressStub
+      .withArgs('0x4444444444444444444444444444444444444444')
+      .resolves(discoveredPools[0])
+      .withArgs('0x5555555555555555555555555555555555555555')
+      .resolves(discoveredPools[1]);
 
     const gasPriceStub = sinon.stub();
     gasPriceStub.onCall(0).resolves(BigNumber.from(123));
@@ -752,11 +641,10 @@ describe('Run Loop Discovery Integration', () => {
         getGasPrice: gasPriceStub,
       },
     };
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: getPoolByAddressStub,
-      },
-    };
+    const ajna = makeAjnaFactoryWithPoolLoader(
+      getPoolByAddressStub,
+      discoveredPools
+    );
     const config: KeeperConfig = {
       ...BASE_CONFIG,
       discovery: {
@@ -842,29 +730,34 @@ describe('Run Loop Discovery Integration', () => {
       ],
     });
 
-    const getPoolByAddressStub = sinon.stub();
-    getPoolByAddressStub
-      .withArgs('0x4444444444444444444444444444444444444444')
-      .resolves({
+    const discoveredPools = [
+      {
         name: 'Discovered Pool A',
         poolAddress: '0x4444444444444444444444444444444444444444',
         quoteAddress: '0x7777777777777777777777777777777777777777',
         collateralAddress: '0x8888888888888888888888888888888888888888',
-      })
-      .withArgs('0x5555555555555555555555555555555555555555')
-      .resolves({
+      },
+      {
         name: 'Discovered Pool B',
         poolAddress: '0x5555555555555555555555555555555555555555',
         quoteAddress: '0x9999999999999999999999999999999999999999',
         collateralAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      })
-      .withArgs('0x6666666666666666666666666666666666666666')
-      .resolves({
+      },
+      {
         name: 'Discovered Pool C',
         poolAddress: '0x6666666666666666666666666666666666666666',
         quoteAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         collateralAddress: '0xcccccccccccccccccccccccccccccccccccccccc',
-      });
+      },
+    ];
+    const getPoolByAddressStub = sinon.stub();
+    getPoolByAddressStub
+      .withArgs('0x4444444444444444444444444444444444444444')
+      .resolves(discoveredPools[0])
+      .withArgs('0x5555555555555555555555555555555555555555')
+      .resolves(discoveredPools[1])
+      .withArgs('0x6666666666666666666666666666666666666666')
+      .resolves(discoveredPools[2]);
 
     const gasPriceStub = sinon.stub();
     gasPriceStub.onCall(0).resolves(BigNumber.from(123));
@@ -876,11 +769,10 @@ describe('Run Loop Discovery Integration', () => {
         getGasPrice: gasPriceStub,
       },
     };
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: getPoolByAddressStub,
-      },
-    };
+    const ajna = makeAjnaFactoryWithPoolLoader(
+      getPoolByAddressStub,
+      discoveredPools
+    );
     const config: KeeperConfig = {
       ...BASE_CONFIG,
       discovery: {
@@ -942,11 +834,7 @@ describe('Run Loop Discovery Integration', () => {
       quoteAddress: '0x5555555555555555555555555555555555555555',
       collateralAddress: '0x6666666666666666666666666666666666666666',
     };
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: sinon.stub().resolves(discoveredPool),
-      },
-    };
+    const ajna = makeAjnaFactoryWithHydratedPools([discoveredPool]);
     const signer = {
       provider: {
         getGasPrice: sinon
@@ -1041,16 +929,14 @@ describe('Run Loop Discovery Integration', () => {
     };
 
     await createTestDiscoveryRuntime({
-      ajna: {
-        fungiblePoolFactory: {
-          getPoolByAddress: sinon.stub().resolves({
-            name: 'Discovered Pool',
-            poolAddress: '0x4444444444444444444444444444444444444444',
-            quoteAddress: '0x5555555555555555555555555555555555555555',
-            collateralAddress: '0x6666666666666666666666666666666666666666',
-          }),
+      ajna: makeAjnaFactoryWithHydratedPools([
+        {
+          name: 'Discovered Pool',
+          poolAddress: '0x4444444444444444444444444444444444444444',
+          quoteAddress: '0x5555555555555555555555555555555555555555',
+          collateralAddress: '0x6666666666666666666666666666666666666666',
         },
-      } as any,
+      ]),
       config,
       signer: {
         provider: {
@@ -1103,17 +989,16 @@ describe('Run Loop Discovery Integration', () => {
         ],
       });
 
-    const getPoolByAddressStub = sinon.stub().resolves({
+    const discoveredPool = {
       name: 'Discovered Settlement Pool',
       poolAddress: '0x4444444444444444444444444444444444444444',
       quoteAddress: '0x5555555555555555555555555555555555555555',
       collateralAddress: '0x6666666666666666666666666666666666666666',
-    });
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: getPoolByAddressStub,
-      },
     };
+    const getPoolByAddressStub = sinon.stub().resolves(discoveredPool);
+    const ajna = makeAjnaFactoryWithPoolLoader(getPoolByAddressStub, [
+      discoveredPool,
+    ]);
     const signer = {
       provider: {
         getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
@@ -1178,16 +1063,14 @@ describe('Run Loop Discovery Integration', () => {
         ],
       });
 
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: sinon.stub().resolves({
-          name: 'Fresh Settlement Pool',
-          poolAddress: '0x9999999999999999999999999999999999999999',
-          quoteAddress: '0x5555555555555555555555555555555555555555',
-          collateralAddress: '0x6666666666666666666666666666666666666666',
-        }),
+    const ajna = makeAjnaFactoryWithHydratedPools([
+      {
+        name: 'Fresh Settlement Pool',
+        poolAddress: '0x9999999999999999999999999999999999999999',
+        quoteAddress: '0x5555555555555555555555555555555555555555',
+        collateralAddress: '0x6666666666666666666666666666666666666666',
       },
-    };
+    ]);
     const signer = {
       provider: {
         getGasPrice: sinon.stub().resolves(BigNumber.from(1)),
@@ -1276,22 +1159,26 @@ describe('Run Loop Discovery Integration', () => {
       ],
     });
 
-    const getPoolByAddressStub = sinon.stub();
-    getPoolByAddressStub
-      .withArgs('0x4444444444444444444444444444444444444444')
-      .resolves({
+    const discoveredPools = [
+      {
         name: 'Discovered Settlement Pool A',
         poolAddress: '0x4444444444444444444444444444444444444444',
         quoteAddress: '0x6666666666666666666666666666666666666666',
         collateralAddress: '0x7777777777777777777777777777777777777777',
-      })
-      .withArgs('0x5555555555555555555555555555555555555555')
-      .resolves({
+      },
+      {
         name: 'Discovered Settlement Pool B',
         poolAddress: '0x5555555555555555555555555555555555555555',
         quoteAddress: '0x8888888888888888888888888888888888888888',
         collateralAddress: '0x9999999999999999999999999999999999999999',
-      });
+      },
+    ];
+    const getPoolByAddressStub = sinon.stub();
+    getPoolByAddressStub
+      .withArgs('0x4444444444444444444444444444444444444444')
+      .resolves(discoveredPools[0])
+      .withArgs('0x5555555555555555555555555555555555555555')
+      .resolves(discoveredPools[1]);
 
     const gasPriceStub = sinon.stub().resolves(BigNumber.from(456));
     const signer = {
@@ -1302,11 +1189,10 @@ describe('Run Loop Discovery Integration', () => {
         .stub()
         .resolves('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
     };
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: getPoolByAddressStub,
-      },
-    };
+    const ajna = makeAjnaFactoryWithPoolLoader(
+      getPoolByAddressStub,
+      discoveredPools
+    );
     const config: KeeperConfig = {
       ...BASE_CONFIG,
       discovery: {
@@ -1396,29 +1282,34 @@ describe('Run Loop Discovery Integration', () => {
       ],
     });
 
-    const getPoolByAddressStub = sinon.stub();
-    getPoolByAddressStub
-      .withArgs('0x4444444444444444444444444444444444444444')
-      .resolves({
+    const discoveredPools = [
+      {
         name: 'Discovered Settlement Pool A',
         poolAddress: '0x4444444444444444444444444444444444444444',
         quoteAddress: '0x7777777777777777777777777777777777777777',
         collateralAddress: '0x8888888888888888888888888888888888888888',
-      })
-      .withArgs('0x5555555555555555555555555555555555555555')
-      .resolves({
+      },
+      {
         name: 'Discovered Settlement Pool B',
         poolAddress: '0x5555555555555555555555555555555555555555',
         quoteAddress: '0x9999999999999999999999999999999999999999',
         collateralAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      })
-      .withArgs('0x6666666666666666666666666666666666666666')
-      .resolves({
+      },
+      {
         name: 'Discovered Settlement Pool C',
         poolAddress: '0x6666666666666666666666666666666666666666',
         quoteAddress: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         collateralAddress: '0xcccccccccccccccccccccccccccccccccccccccc',
-      });
+      },
+    ];
+    const getPoolByAddressStub = sinon.stub();
+    getPoolByAddressStub
+      .withArgs('0x4444444444444444444444444444444444444444')
+      .resolves(discoveredPools[0])
+      .withArgs('0x5555555555555555555555555555555555555555')
+      .resolves(discoveredPools[1])
+      .withArgs('0x6666666666666666666666666666666666666666')
+      .resolves(discoveredPools[2]);
 
     const gasPriceStub = sinon.stub();
     gasPriceStub.onCall(0).resolves(BigNumber.from(456));
@@ -1435,11 +1326,10 @@ describe('Run Loop Discovery Integration', () => {
         .stub()
         .resolves('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
     };
-    const ajna = {
-      fungiblePoolFactory: {
-        getPoolByAddress: getPoolByAddressStub,
-      },
-    };
+    const ajna = makeAjnaFactoryWithPoolLoader(
+      getPoolByAddressStub,
+      discoveredPools
+    );
     const config: KeeperConfig = {
       ...BASE_CONFIG,
       discovery: {
@@ -1537,16 +1427,14 @@ describe('Run Loop Discovery Integration', () => {
     };
 
     const discoveryRuntime = createTestDiscoveryRuntime({
-      ajna: {
-        fungiblePoolFactory: {
-          getPoolByAddress: sinon.stub().resolves({
-            name: 'Discovered Settlement Pool',
-            poolAddress: '0x4444444444444444444444444444444444444444',
-            quoteAddress: '0x5555555555555555555555555555555555555555',
-            collateralAddress: '0x6666666666666666666666666666666666666666',
-          }),
+      ajna: makeAjnaFactoryWithHydratedPools([
+        {
+          name: 'Discovered Settlement Pool',
+          poolAddress: '0x4444444444444444444444444444444444444444',
+          quoteAddress: '0x5555555555555555555555555555555555555555',
+          collateralAddress: '0x6666666666666666666666666666666666666666',
         },
-      } as any,
+      ]),
       config,
       signer: {
         provider: {
@@ -1644,16 +1532,14 @@ describe('Run Loop Discovery Integration', () => {
     };
 
     const discoveryRuntime = createTestDiscoveryRuntime({
-      ajna: {
-        fungiblePoolFactory: {
-          getPoolByAddress: sinon.stub().resolves({
-            name: 'Discovered Settlement Pool',
-            poolAddress: '0x4444444444444444444444444444444444444444',
-            quoteAddress: '0x5555555555555555555555555555555555555555',
-            collateralAddress: '0x6666666666666666666666666666666666666666',
-          }),
+      ajna: makeAjnaFactoryWithHydratedPools([
+        {
+          name: 'Discovered Settlement Pool',
+          poolAddress: '0x4444444444444444444444444444444444444444',
+          quoteAddress: '0x5555555555555555555555555555555555555555',
+          collateralAddress: '0x6666666666666666666666666666666666666666',
         },
-      } as any,
+      ]),
       config,
       signer: {
         provider: {
@@ -1752,16 +1638,14 @@ describe('Run Loop Discovery Integration', () => {
     };
 
     const discoveryRuntime = createTestDiscoveryRuntime({
-      ajna: {
-        fungiblePoolFactory: {
-          getPoolByAddress: sinon.stub().resolves({
-            name: 'Discovered Settlement Pool',
-            poolAddress: '0x4444444444444444444444444444444444444444',
-            quoteAddress: '0x5555555555555555555555555555555555555555',
-            collateralAddress: '0x6666666666666666666666666666666666666666',
-          }),
+      ajna: makeAjnaFactoryWithHydratedPools([
+        {
+          name: 'Discovered Settlement Pool',
+          poolAddress: '0x4444444444444444444444444444444444444444',
+          quoteAddress: '0x5555555555555555555555555555555555555555',
+          collateralAddress: '0x6666666666666666666666666666666666666666',
         },
-      } as any,
+      ]),
       config,
       signer: {
         provider: {
@@ -1881,321 +1765,5 @@ describe('Run Loop Discovery Integration', () => {
         sinon.match('Cached settlement discovery snapshot is too stale')
       )
     ).to.be.true;
-  });
-
-  it('continues manual settlement targets when discovery rpc cache creation fails', async () => {
-    const handleSettlementsStub = sinon
-      .stub(settlementModule, 'handleSettlements')
-      .resolves();
-    const handleDiscoveredSettlementTargetStub = sinon
-      .stub(discoveryHandlers, 'handleDiscoveredSettlementTarget')
-      .resolves();
-    sinon.stub(subgraph, 'getChainwideLiquidationAuctions').resolves({
-      liquidationAuctions: [
-        {
-          borrower: '0xBorrowerA',
-          kickTime: '1',
-          debtRemaining: '3',
-          collateralRemaining: '0',
-          neutralPrice: '4',
-          debt: '3',
-          collateral: '0',
-          pool: { id: '0x4444444444444444444444444444444444444444' },
-        },
-      ],
-    });
-    const loggerErrorStub = sinon.stub(logger, 'error');
-
-    const config: KeeperConfig = {
-      ...BASE_CONFIG,
-      manual: {
-        pools: [
-          {
-            name: 'Manual Settlement Pool',
-            address: '0x2222222222222222222222222222222222222222',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            settlement: {
-              enabled: true,
-              minAuctionAge: 60,
-            },
-          },
-        ],
-      },
-      discovery: {
-        enabled: true,
-        take: false,
-        settlement: true,
-        defaults: {
-          settlement: {
-            enabled: true,
-            minAuctionAge: 60,
-            maxBucketDepth: 50,
-            maxIterations: 5,
-            checkBotIncentive: true,
-          },
-        },
-      },
-    };
-
-    await createTestDiscoveryRuntime({
-      ajna: {
-        fungiblePoolFactory: {
-          getPoolByAddress: sinon.stub().resolves({
-            name: 'Discovered Settlement Pool',
-            poolAddress: '0x4444444444444444444444444444444444444444',
-            quoteAddress: '0x5555555555555555555555555555555555555555',
-            collateralAddress: '0x6666666666666666666666666666666666666666',
-          }),
-        },
-      } as any,
-      config,
-      signer: {
-        provider: {
-          getGasPrice: sinon.stub().rejects(new Error('read rpc unavailable')),
-        },
-        getAddress: sinon
-          .stub()
-          .resolves('0x7777777777777777777777777777777777777777'),
-      } as any,
-      poolMap: new Map([
-        [
-          config.manual.pools[0].address,
-          {
-            name: 'Manual Settlement Pool',
-            poolAddress: config.manual.pools[0].address,
-          } as any,
-        ],
-      ]),
-      discoverySnapshotState: {},
-    }).runSettlementCycle();
-
-    expect(handleSettlementsStub.calledOnce).to.be.true;
-    expect(handleDiscoveredSettlementTargetStub.called).to.be.false;
-    expect(
-      loggerErrorStub
-        .getCalls()
-        .some((call) =>
-          String(call.args[0]).includes(
-            'Failed to handle settlements for pool: Discovered Settlement Pool'
-          )
-        )
-    ).to.equal(true);
-  });
-
-  it('logs a take cycle summary with target counts and snapshot status', async () => {
-    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
-    const loggerInfoStub = sinon.stub(logger, 'info');
-
-    const config: KeeperConfig = {
-      ...BASE_CONFIG,
-      manual: {
-        pools: [
-          {
-            name: 'Manual Take Pool',
-            address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            take: {
-              minCollateral: 0.1,
-              hpbPriceFactor: 0.98,
-            },
-          },
-        ],
-      },
-    };
-    const pool = {
-      name: 'Manual Take Pool',
-      poolAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    };
-
-    await createTestDiscoveryRuntime({
-      config,
-      poolMap: new Map([[config.manual.pools[0].address, pool as any]]),
-    }).runTakeCycle();
-
-    expect(handleTakesStub.calledOnce).to.be.true;
-    const summaryLog = loggerInfoStub
-      .getCalls()
-      .map((call) => call.args[0])
-      .find(
-        (message: any) =>
-          typeof message === 'string' &&
-          message.includes('Discovery take cycle summary:')
-      );
-    expect(summaryLog).to.be.a('string');
-    expect(summaryLog).to.include('snapshotRefreshed=false');
-    expect(summaryLog).to.include('targets=1');
-    expect(summaryLog).to.include('manualTargets=1');
-    expect(summaryLog).to.include('discoveredTargets=0');
-    expect(summaryLog).to.include('targetSuccesses=1');
-    expect(summaryLog).to.include('targetFailures=0');
-  });
-
-  it('continues manual take targets when snapshot refresh fails', async () => {
-    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
-    const loggerWarnStub = sinon.stub(logger, 'warn');
-    sinon
-      .stub(subgraph, 'getChainwideLiquidationAuctions')
-      .rejects(new Error('subgraph unavailable'));
-
-    const config: KeeperConfig = {
-      ...BASE_CONFIG,
-      manual: {
-        pools: [
-          {
-            name: 'Manual Take Pool',
-            address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            take: {
-              minCollateral: 0.1,
-              hpbPriceFactor: 0.98,
-            },
-          },
-        ],
-      },
-      discovery: {
-        enabled: true,
-        take: true,
-        defaults: {
-          take: {
-            minCollateral: 0.1,
-            hpbPriceFactor: 0.98,
-          },
-        },
-      },
-    };
-
-    await createTestDiscoveryRuntime({
-      config,
-      poolMap: new Map([
-        [
-          config.manual.pools[0].address,
-          {
-            name: 'Manual Take Pool',
-            poolAddress: config.manual.pools[0].address,
-          } as any,
-        ],
-      ]),
-      discoverySnapshotState: {},
-    }).runTakeCycle();
-
-    expect(handleTakesStub.calledOnce).to.be.true;
-    expect(
-      loggerWarnStub.calledWithMatch(
-        sinon.match('Failed to refresh take discovery snapshot')
-      )
-    ).to.be.true;
-  });
-
-  it('does not reuse an overly stale cached take snapshot after refresh failures', async () => {
-    let nowMs = 300_000;
-    sinon.stub(Date, 'now').callsFake(() => nowMs);
-    const handleTakesStub = sinon.stub(takeModule, 'handleTakes').resolves();
-    const handleDiscoveredTakeTargetStub = sinon
-      .stub(discoveryHandlers, 'handleDiscoveredTakeTarget')
-      .resolves();
-    const loggerWarnStub = sinon.stub(logger, 'warn');
-    sinon
-      .stub(subgraph, 'getChainwideLiquidationAuctions')
-      .rejects(new Error('subgraph unavailable'));
-
-    const config: KeeperConfig = {
-      ...BASE_CONFIG,
-      manual: {
-        pools: [
-          {
-            name: 'Manual Take Pool',
-            address: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            price: { source: PriceOriginSource.FIXED, value: 1 },
-            take: {
-              minCollateral: 0.1,
-              hpbPriceFactor: 0.98,
-            },
-          },
-        ],
-      },
-      discovery: {
-        enabled: true,
-        take: true,
-        defaults: {
-          take: {
-            minCollateral: 0.1,
-            hpbPriceFactor: 0.98,
-          },
-        },
-      },
-    };
-
-    await createTestDiscoveryRuntime({
-      config,
-      poolMap: new Map([
-        [
-          config.manual.pools[0].address,
-          {
-            name: 'Manual Take Pool',
-            poolAddress: config.manual.pools[0].address,
-          } as any,
-        ],
-      ]),
-      discoverySnapshotState: {
-        fetchedAt: 0,
-        latestLiquidationAuctions: [
-          {
-            borrower: '0xBorrowerA',
-            kickTime: '1',
-            debtRemaining: '3',
-            collateralRemaining: '2',
-            neutralPrice: '4',
-            debt: '3',
-            collateral: '2',
-            pool: { id: '0x4444444444444444444444444444444444444444' },
-          },
-        ],
-      },
-    }).runTakeCycle();
-
-    expect(handleTakesStub.calledOnce).to.be.true;
-    expect(handleDiscoveredTakeTargetStub.called).to.be.false;
-    expect(
-      loggerWarnStub.calledWithMatch(
-        sinon.match('Cached take discovery snapshot is too stale')
-      )
-    ).to.be.true;
-  });
-
-  it('does not treat snapshot refresh failures as take loop crashes', async () => {
-    sinon
-      .stub(subgraph, 'getChainwideLiquidationAuctions')
-      .rejects(new Error('temporary discovery outage'));
-
-    const config: KeeperConfig = {
-      ...BASE_CONFIG,
-      discovery: {
-        enabled: true,
-        take: true,
-        defaults: {
-          take: {
-            minCollateral: 0.1,
-            hpbPriceFactor: 0.98,
-          },
-        },
-      },
-    };
-    // takePoolsLoop routes through runResilientLoop('Take', () => runTakeCycle(),
-    // () => delayBetweenRuns); a snapshot refresh failure is swallowed inside
-    // runTakeCycle, so the iteration succeeds (no crash recovery).
-    const runtime = createTestDiscoveryRuntime({
-      config,
-      discoverySnapshotState: {},
-    });
-    const result = await runResilientLoopIteration(
-      'Take',
-      () => runtime.runTakeCycle(),
-      config.runtime.delayBetweenRuns
-    );
-
-    expect(result).to.deep.equal({
-      delaySeconds: config.runtime.delayBetweenRuns,
-      recovered: false,
-    });
   });
 });

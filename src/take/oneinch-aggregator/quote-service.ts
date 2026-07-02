@@ -1,6 +1,7 @@
 import { FungiblePool, Signer } from '@ajna-finance/sdk';
 import { BigNumber, ethers } from 'ethers';
-import { DexRouter, OneInchRequestOptions } from '../../dex/router';
+import { DexRouter } from '../../dex/router';
+import { OneInchRequestOptions } from '../../dex/oneinch';
 import {
   convertSwapApiResponseToDetails,
   validateOneInchSwapDetailsForAtomicTake,
@@ -77,13 +78,6 @@ function requireOneInchRouter(params: {
   return router;
 }
 
-function normalizeTxValue(value: unknown): string {
-  if (value === undefined || value === null || value === '') {
-    return '0';
-  }
-  return BigNumber.from(value).toString();
-}
-
 /**
  * Fetches 1inch swap calldata for the calldata-aggregator taker and normalizes
  * it into the shared aggregator quote shape. Raw 1inch responses stay inside
@@ -115,7 +109,7 @@ export async function requestValidatedOneInchAggregatorQuote(params: {
     true,
     getOneInchAggregatorRequestOptions(params.config)
   );
-  if (!swapData.success || !swapData.data) {
+  if (!swapData.success) {
     throw new OneInchAggregatorQuoteError(
       swapData.error ?? '1inch swap data request failed',
       {
@@ -132,18 +126,15 @@ export async function requestValidatedOneInchAggregatorQuote(params: {
   }
 
   const swapDetails = convertSwapApiResponseToDetails(swapData.data);
-  const validationError = validateOneInchSwapDetailsForAtomicTake(
-    swapDetails,
-    {
-      srcToken: params.pool.collateralAddress,
-      dstToken: params.pool.quoteAddress,
-      srcReceiver: configuredRouter,
-      dstReceiver: params.takerAddress,
-      amount: params.collateralInTokenDecimals,
-      aggregationExecutors:
-        params.config.oneInchAggregationExecutorAllowlist?.[params.chainId],
-    }
-  );
+  const validationError = validateOneInchSwapDetailsForAtomicTake(swapDetails, {
+    srcToken: params.pool.collateralAddress,
+    dstToken: params.pool.quoteAddress,
+    srcReceiver: configuredRouter,
+    dstReceiver: params.takerAddress,
+    amount: params.collateralInTokenDecimals,
+    aggregationExecutors:
+      params.config.oneInchAggregationExecutorAllowlist?.[params.chainId],
+  });
   if (validationError) {
     throw new OneInchAggregatorQuoteError(validationError, {
       retryable: false,
@@ -169,7 +160,7 @@ export async function requestValidatedOneInchAggregatorQuote(params: {
     approvalSpender: configuredRouter,
     callData,
     selector: ethers.utils.hexDataSlice(callData, 0, 4),
-    txValue: normalizeTxValue(swapData.data.value),
+    txValue: swapData.data.value.toString(),
     routeSummary: {
       providerId: 'oneinch',
       tool: '1inch',

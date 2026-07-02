@@ -44,6 +44,7 @@ describe('Universal Router Module', () => {
     // Return success to simulate a successful call
     swapStub.resolves({
       success: true,
+      kind: 'executed',
       receipt: { transactionHash: '0xSuccess' },
     });
 
@@ -70,6 +71,11 @@ describe('Universal Router Module', () => {
 
     // Verify the result
     expect(result.success).to.be.true;
+    if (!result.success) expect.fail(result.error);
+    expect(result.kind).to.equal('executed');
+    if (result.kind !== 'executed') {
+      expect.fail('Expected executed swap result');
+    }
     expect(result.receipt.transactionHash).to.equal('0xSuccess');
   });
 
@@ -90,6 +96,7 @@ describe('Universal Router Module', () => {
     );
 
     expect(result.success).to.be.false;
+    if (result.success) expect.fail('Expected swap to fail');
     expect(result.error).to.equal('Swap failed');
   });
 

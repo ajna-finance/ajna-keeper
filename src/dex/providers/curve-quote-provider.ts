@@ -4,49 +4,16 @@
 
 import { ethers, BigNumber, Signer } from 'ethers';
 import { logger } from '../../logging';
-import { getDecimalsErc20 } from '../../erc20';
-import { CurvePoolType } from '../../config';
-import { pruneMapToMaxSize } from '../../utils';
+import { defaultDexContractServices, DexContractServices } from '../contracts';
+import {
+  CurvePoolSelection,
+  CurvePoolSelector,
+  CurvePoolSelectorConfig,
+  getCurvePoolAbi,
+} from '../curve-pool-selection';
 
-// StableSwap ABI (int128 indices) - from working test scripts
-const STABLESWAP_ABI = [
-  'function coins(uint256 i) external view returns (address)',
-  'function balances(uint256 i) external view returns (uint256)',
-  'function get_dy(int128 i, int128 j, uint256 dx) external view returns (uint256)',
-  'function fee() external view returns (uint256)',
-];
-
-const MAX_CURVE_TOKEN_INDEX_PROBES = 16;
-const CURVE_POOL_SELECTION_CACHE_TTL_MS = 5 * 60 * 1000;
-const CURVE_POOL_SELECTION_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
-const MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES = 512;
-
-// CryptoSwap ABI (uint256 indices) - from working test scripts
-const CRYPTOSWAP_ABI = [
-  'function coins(uint256 i) external view returns (address)',
-  'function balances(uint256 i) external view returns (uint256)',
-  'function get_dy(uint256 i, uint256 j, uint256 dx) external view returns (uint256)',
-  'function fee() external view returns (uint256)',
-];
-
-interface CurveQuoteConfig {
-  poolConfigs: {
-    [tokenPair: string]: {
-      address: string;
-      poolType: CurvePoolType;
-    };
-  };
+interface CurveQuoteConfig extends CurvePoolSelectorConfig {
   defaultSlippage: number;
-  wethAddress: string;
-  // FIXED: Add tokenAddresses mapping for reliable symbol lookup
-  tokenAddresses?: { [symbol: string]: string };
-}
-
-export interface CurvePoolSelection {
-  address: string;
-  poolType: CurvePoolType;
-  tokenInIndex: number;
-  tokenOutIndex: number;
 }
 
 interface QuoteResult {
@@ -62,11 +29,6 @@ interface QuoteDecimals {
   outputDecimals: number;
 }
 
-interface CurvePoolSelectionCacheEntry {
-  selection?: CurvePoolSelection;
-  expiresAt: number;
-}
-
 /**
  * Curve Quote Provider for External Take Profitability Analysis
  *
@@ -76,12 +38,19 @@ interface CurvePoolSelectionCacheEntry {
 export class CurveQuoteProvider {
   private signer: Signer;
   private config: CurveQuoteConfig;
+  private contracts: DexContractServices;
+  private selector: CurvePoolSelector;
   private isInitialized: boolean = false;
-  private poolSelectionCache = new Map<string, CurvePoolSelectionCacheEntry>();
 
-  constructor(signer: Signer, config: CurveQuoteConfig) {
+  constructor(
+    signer: Signer,
+    config: CurveQuoteConfig,
+    contracts: DexContractServices = defaultDexContractServices
+  ) {
     this.signer = signer;
     this.config = config;
+    this.contracts = contracts;
+    this.selector = new CurvePoolSelector(signer, config, contracts);
   }
 
   /**
@@ -92,10 +61,7 @@ export class CurveQuoteProvider {
       return true;
     }
 
-    if (
-      !this.config.poolConfigs ||
-      Object.keys(this.config.poolConfigs).length === 0
-    ) {
+    if (!this.config.poolConfigs || !this.selector.hasPoolConfigs()) {
       logger.warn(`Curve quote provider has no pool configurations`);
       return false;
     }
@@ -113,162 +79,7 @@ export class CurveQuoteProvider {
    * Check if quote provider is available and ready
    */
   isAvailable(): boolean {
-    return (
-      this.isInitialized && Object.keys(this.config.poolConfigs).length > 0
-    );
-  }
-
-  /**
-   * FIXED: Find pool configuration using reliable symbol-based lookup (same as DexRouter)
-   */
-  private async findPoolForTokenPair(
-    tokenA: string,
-    tokenB: string
-  ): Promise<{ address: string; poolType: CurvePoolType } | undefined> {
-    // FIXED: Use tokenAddresses mapping if available (same logic as DexRouter)
-    if (this.config.tokenAddresses) {
-      const tokenASymbol = this.getTokenSymbolFromAddress(tokenA);
-      const tokenBSymbol = this.getTokenSymbolFromAddress(tokenB);
-
-      if (tokenASymbol && tokenBSymbol) {
-        // Try both directions for the token pair (same as DexRouter)
-        const key1 = `${tokenASymbol}-${tokenBSymbol}`;
-        const key2 = `${tokenBSymbol}-${tokenASymbol}`;
-
-        const poolConfig =
-          this.config.poolConfigs[key1] || this.config.poolConfigs[key2];
-
-        if (poolConfig) {
-          logger.debug(
-            `Found Curve pool for ${tokenASymbol}/${tokenBSymbol}: ${poolConfig.address} (${poolConfig.poolType})`
-          );
-          return poolConfig;
-        }
-
-        logger.debug(
-          `No Curve pool configured for ${tokenASymbol}/${tokenBSymbol} via symbol lookup, falling back to address matching`
-        );
-      }
-    }
-
-    // FALLBACK: Direct address matching (less reliable but handles missing tokenAddresses)
-    logger.debug(
-      `Falling back to direct address matching for ${tokenA}/${tokenB}`
-    );
-
-    // Handle ETH/WETH conversion for lookup
-    const ethAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-    const tokenALookup =
-      tokenA.toLowerCase() === ethAddress.toLowerCase()
-        ? this.config.wethAddress.toLowerCase()
-        : tokenA.toLowerCase();
-    const tokenBLookup =
-      tokenB.toLowerCase() === ethAddress.toLowerCase()
-        ? this.config.wethAddress.toLowerCase()
-        : tokenB.toLowerCase();
-
-    // Search configured pools by checking actual pool contents
-    for (const [tokenPair, poolConfig] of Object.entries(
-      this.config.poolConfigs
-    )) {
-      try {
-        // Check if tokens actually exist in this pool by querying the pool contract
-        const poolExists = await this.checkTokensInPool(
-          poolConfig.address,
-          poolConfig.poolType,
-          tokenALookup,
-          tokenBLookup
-        );
-        if (poolExists) {
-          logger.debug(
-            `Found Curve pool for ${tokenA}/${tokenB}: ${poolConfig.address} (${poolConfig.poolType})`
-          );
-          return poolConfig;
-        }
-      } catch (error) {
-        logger.debug(
-          `Error checking pool ${tokenPair} for tokens ${tokenA}/${tokenB}: ${error}`
-        );
-      }
-    }
-
-    logger.debug(`No Curve pool configuration found for ${tokenA}/${tokenB}`);
-    return undefined;
-  }
-
-  /**
-   * FIXED: Helper to check if tokens actually exist in a pool contract
-   */
-  private async checkTokensInPool(
-    poolAddress: string,
-    poolType: CurvePoolType,
-    tokenA: string,
-    tokenB: string
-  ): Promise<boolean> {
-    try {
-      const { tokenInIndex, tokenOutIndex } = await this.discoverTokenIndices(
-        poolAddress,
-        poolType,
-        tokenA,
-        tokenB
-      );
-      return tokenInIndex !== undefined && tokenOutIndex !== undefined;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  /**
-   * FIXED: Get token symbol from address using tokenAddresses mapping (same as DexRouter)
-   */
-  private getTokenSymbolFromAddress(address: string): string | undefined {
-    if (!this.config.tokenAddresses) {
-      return undefined;
-    }
-
-    for (const [symbol, tokenAddress] of Object.entries(
-      this.config.tokenAddresses
-    )) {
-      if (tokenAddress.toString().toLowerCase() === address.toLowerCase()) {
-        return symbol;
-      }
-    }
-    return undefined;
-  }
-
-  private async resolvePoolSelectionFromConfig(
-    poolConfig: { address: string; poolType: CurvePoolType },
-    tokenIn: string,
-    tokenOut: string
-  ): Promise<CurvePoolSelection | undefined> {
-    const { tokenInIndex, tokenOutIndex } = await this.discoverTokenIndices(
-      poolConfig.address,
-      poolConfig.poolType,
-      tokenIn,
-      tokenOut
-    );
-
-    if (tokenInIndex === undefined || tokenOutIndex === undefined) {
-      return undefined;
-    }
-    if (
-      tokenInIndex < 0 ||
-      tokenOutIndex < 0 ||
-      tokenInIndex >= MAX_CURVE_TOKEN_INDEX_PROBES ||
-      tokenOutIndex >= MAX_CURVE_TOKEN_INDEX_PROBES
-    ) {
-      logger.warn(
-        `Curve pool ${poolConfig.address} returned out-of-range token indices ${tokenInIndex}/${tokenOutIndex}`
-      );
-      return undefined;
-    }
-
-    return {
-      address: poolConfig.address,
-      poolType: poolConfig.poolType,
-      tokenInIndex,
-      tokenOutIndex,
-    };
+    return this.isInitialized && this.selector.hasPoolConfigs();
   }
 
   async resolvePoolSelection(
@@ -282,63 +93,11 @@ export class CurveQuoteProvider {
       }
     }
 
-    const cacheKey = this.getPoolSelectionCacheKey(tokenIn, tokenOut);
-    const cachedSelection = this.getCachedPoolSelection(cacheKey);
-    if (cachedSelection.hit) {
-      return cachedSelection.selection;
-    }
-
-    const poolConfig = await this.findPoolForTokenPair(tokenIn, tokenOut);
-    if (!poolConfig) {
-      this.setCachedPoolSelection(cacheKey, undefined);
-      return undefined;
-    }
-
-    const selection = await this.resolvePoolSelectionFromConfig(
-      poolConfig,
-      tokenIn,
-      tokenOut
-    );
-    this.setCachedPoolSelection(cacheKey, selection);
-    return selection;
-  }
-
-  private getPoolSelectionCacheKey(tokenIn: string, tokenOut: string): string {
-    return `${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`;
-  }
-
-  private getCachedPoolSelection(cacheKey: string): {
-    hit: boolean;
-    selection?: CurvePoolSelection;
-  } {
-    const cached = this.poolSelectionCache.get(cacheKey);
-    if (!cached) {
-      return { hit: false };
-    }
-    if (cached.expiresAt <= Date.now()) {
-      this.poolSelectionCache.delete(cacheKey);
-      return { hit: false };
-    }
-    return { hit: true, selection: cached.selection };
-  }
-
-  private setCachedPoolSelection(
-    cacheKey: string,
-    selection: CurvePoolSelection | undefined
-  ): void {
-    this.poolSelectionCache.delete(cacheKey);
-    this.poolSelectionCache.set(cacheKey, {
-      selection,
-      expiresAt:
-        Date.now() +
-        (selection
-          ? CURVE_POOL_SELECTION_CACHE_TTL_MS
-          : CURVE_POOL_SELECTION_NEGATIVE_CACHE_TTL_MS),
+    // Quotes keep the historical fallback scan across all configured pools;
+    // swap execution (DexRouter) stays fail-closed on symbol-keyed lookups.
+    return await this.selector.resolvePoolSelection(tokenIn, tokenOut, {
+      allowFallbackPoolScan: true,
     });
-    pruneMapToMaxSize(
-      this.poolSelectionCache,
-      MAX_CURVE_POOL_SELECTION_CACHE_ENTRIES
-    );
   }
 
   /**
@@ -362,49 +121,6 @@ export class CurveQuoteProvider {
       logger.debug(`Error checking Curve pool existence: ${error}`);
       return false;
     }
-  }
-
-  /**
-   * Discover token indices in pool (pattern from test scripts)
-   */
-  private async discoverTokenIndices(
-    poolAddress: string,
-    poolType: CurvePoolType,
-    tokenIn: string,
-    tokenOut: string
-  ): Promise<{ tokenInIndex?: number; tokenOutIndex?: number }> {
-    // Handle ETH/WETH conversion for lookup
-    const ethAddress = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
-    const tokenInForLookup =
-      tokenIn.toLowerCase() === ethAddress.toLowerCase()
-        ? this.config.wethAddress
-        : tokenIn;
-    const tokenOutForLookup =
-      tokenOut.toLowerCase() === ethAddress.toLowerCase()
-        ? this.config.wethAddress
-        : tokenOut;
-
-    const poolAbi =
-      poolType === CurvePoolType.STABLE ? STABLESWAP_ABI : CRYPTOSWAP_ABI;
-    const poolContract = new ethers.Contract(poolAddress, poolAbi, this.signer);
-
-    let tokenInIndex: number | undefined;
-    let tokenOutIndex: number | undefined;
-
-    // Probe enough slots to handle larger metapools while still stopping on the first out-of-range revert.
-    for (let i = 0; i < MAX_CURVE_TOKEN_INDEX_PROBES; i++) {
-      try {
-        const tokenAddr = await poolContract.coins(i);
-        if (tokenAddr.toLowerCase() === tokenInForLookup.toLowerCase())
-          tokenInIndex = i;
-        if (tokenAddr.toLowerCase() === tokenOutForLookup.toLowerCase())
-          tokenOutIndex = i;
-      } catch (e) {
-        break; // No more tokens in pool
-      }
-    }
-
-    return { tokenInIndex, tokenOutIndex };
   }
 
   /**
@@ -432,33 +148,17 @@ export class CurveQuoteProvider {
         };
       }
 
-      // Get quote using pool-specific ABI (pattern from test scripts)
-      const poolAbi =
-        selectedPool.poolType === CurvePoolType.STABLE
-          ? STABLESWAP_ABI
-          : CRYPTOSWAP_ABI;
-      const poolContract = new ethers.Contract(
+      const poolContract = this.contracts.makeContract(
         selectedPool.address,
-        poolAbi,
+        getCurvePoolAbi(selectedPool.poolType),
         this.signer
       );
 
-      let amountOut: BigNumber;
-      if (selectedPool.poolType === CurvePoolType.STABLE) {
-        // StableSwap uses int128 indices
-        amountOut = await poolContract.get_dy(
-          selectedPool.tokenInIndex,
-          selectedPool.tokenOutIndex,
-          amountIn
-        );
-      } else {
-        // CryptoSwap uses uint256 indices
-        amountOut = await poolContract.get_dy(
-          selectedPool.tokenInIndex,
-          selectedPool.tokenOutIndex,
-          amountIn
-        );
-      }
+      const amountOut: BigNumber = await poolContract.get_dy(
+        selectedPool.tokenInIndex,
+        selectedPool.tokenOutIndex,
+        amountIn
+      );
 
       if (amountOut.isZero()) {
         return { success: false, error: 'Zero output from Curve pool' };
@@ -467,10 +167,10 @@ export class CurveQuoteProvider {
       // Get correct decimals for proper formatting
       const inputDecimals =
         decimals?.inputDecimals ??
-        (await getDecimalsErc20(this.signer, tokenIn));
+        (await this.contracts.getDecimals(this.signer, tokenIn));
       const outputDecimals =
         decimals?.outputDecimals ??
-        (await getDecimalsErc20(this.signer, tokenOut));
+        (await this.contracts.getDecimals(this.signer, tokenOut));
 
       logger.debug(
         `Curve quote success: ${ethers.utils.formatUnits(amountIn, inputDecimals)} in -> ${ethers.utils.formatUnits(amountOut, outputDecimals)} out`
@@ -553,8 +253,6 @@ export class CurveQuoteProvider {
    * Get configured pool addresses for debugging
    */
   getConfiguredPools(): string[] {
-    return Object.values(this.config.poolConfigs).map(
-      (config) => config.address
-    );
+    return this.selector.getConfiguredPools();
   }
 }

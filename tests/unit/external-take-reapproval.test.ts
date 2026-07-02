@@ -4,7 +4,8 @@ import { BigNumber, ethers } from 'ethers';
 import { LiquiditySource } from '../../src/config';
 import { createArbTakeStrategy } from '../../src/take/arb-strategy';
 import type { ApprovedCalldataAggregatorQuote } from '../../src/take/aggregator-calldata/types';
-import { processTakeCandidates } from '../../src/take/engine';
+import { executeTakeDecision, processTakeCandidates } from '../../src/take/engine';
+import { NonceConsumedTransactionError } from '../../src/nonce';
 import { BoundExternalTakeRouteEvaluation } from '../../src/take/types';
 import { singleExternalTakeExecutionPlan } from '../helpers/external-take-plan';
 
@@ -32,6 +33,24 @@ function buildOneInchCalldataQuote(
       feeCosts: [],
     },
   };
+}
+
+function oneInchEvaluation(
+  overrides: Partial<BoundExternalTakeRouteEvaluation> = {}
+): BoundExternalTakeRouteEvaluation {
+  const quoteAmountRaw = overrides.quoteAmountRaw ?? BigNumber.from(100);
+  const evaluation = {
+    isTakeable: true,
+    externalTakePath: 'calldata_aggregator',
+    providerId: 'oneinch',
+    selectedLiquiditySource: LiquiditySource.ONEINCH,
+    takeablePrice: 1.2,
+    quoteAmountRaw,
+    routeExecutionFloorRaw: BigNumber.from(90),
+    calldataQuote: buildOneInchCalldataQuote(quoteAmountRaw),
+    ...overrides,
+  };
+  return evaluation as BoundExternalTakeRouteEvaluation;
 }
 
 describe('external take reapproval', () => {
@@ -196,5 +215,148 @@ describe('external take reapproval', () => {
     // later cycle (not double-processed, not dropped).
     const capped = await runWithCap(1);
     expect(capped.callCount).to.equal(1);
+  });
+
+  it('treats nonce-consumed arbTake after external take as an attempted submission, not a successful arbTake', async () => {
+    const evaluation = oneInchEvaluation();
+    const auctionPrice = ethers.utils.parseEther('1');
+    const collateral = ethers.utils.parseEther('1');
+    const executeExternalTake = sinon.stub().resolves(true);
+    const executeArbTake = sinon
+      .stub()
+      .rejects(
+        new NonceConsumedTransactionError('arbTake receipt failed', {
+          txHash: '0xarb',
+        })
+      );
+    const evaluateArbTake = sinon.stub().resolves({
+      isArbTakeable: true,
+      hpbIndex: 88,
+      maxArbTakePrice: 1.5,
+    });
+    const onExecuted = sinon.stub();
+
+    const result = await executeTakeDecision({
+      pool: {
+        name: 'Nonce Consumed Pool',
+        poolAddress: '0x3333333333333333333333333333333333333333',
+      } as any,
+      signer: {} as any,
+      poolConfig: {
+        name: 'Nonce Consumed Pool',
+        take: {
+          minCollateral: 1,
+          hpbPriceFactor: 0.99,
+          liquiditySource: LiquiditySource.ONEINCH,
+          marketPriceFactor: 0.99,
+        },
+      } as any,
+      decision: {
+        approvedTake: true,
+        approvedArbTake: true,
+        borrower: '0xBorrower',
+        hpbIndex: 77,
+        collateral,
+        auctionPrice,
+        maxArbTakePrice: 1.5,
+        externalTakeExecutionPlan: singleExternalTakeExecutionPlan(evaluation, {
+          source: 'ctx',
+        }),
+      } as any,
+      externalTakeAdapter: {
+        kind: 'oneinch',
+        executeExternalTake,
+      } as any,
+      externalExecutionConfig: {} as any,
+      subgraph: { cacheKey: 'test-subgraph' } as any,
+      dryRun: false,
+      arbTakeStrategy: {
+        kind: 'arb',
+        isEnabled: sinon.stub().returns(true),
+        evaluateArbTake,
+        executeArbTake,
+      } as any,
+      takeAuctionStatusReader: {
+        read: sinon.stub().resolves({ collateral, auctionPrice }),
+      } as any,
+      onExecuted,
+    });
+
+    expect(executeExternalTake.calledOnce).to.equal(true);
+    expect(evaluateArbTake.calledOnce).to.equal(true);
+    expect(executeArbTake.calledOnce).to.equal(true);
+    expect(result).to.deep.equal({
+      executedTake: true,
+      executedArbTake: false,
+      submittedTransaction: true,
+      poolStateMayHaveChanged: true,
+    });
+    expect(onExecuted.calledOnce).to.equal(true);
+    expect(onExecuted.firstCall.args[0].executedTake).to.equal(true);
+    expect(onExecuted.firstCall.args[0].executedArbTake).to.equal(false);
+  });
+
+  it('rethrows nonce-consumed arbTake errors during dry runs', async () => {
+    const evaluation = oneInchEvaluation();
+    const auctionPrice = ethers.utils.parseEther('1');
+    const collateral = ethers.utils.parseEther('1');
+    const nonceConsumed = new NonceConsumedTransactionError(
+      'dry-run nonce should propagate'
+    );
+
+    try {
+      await executeTakeDecision({
+        pool: {
+          name: 'Dry Run Pool',
+          poolAddress: '0x3333333333333333333333333333333333333333',
+        } as any,
+        signer: {} as any,
+        poolConfig: {
+          name: 'Dry Run Pool',
+          take: {
+            minCollateral: 1,
+            hpbPriceFactor: 0.99,
+            liquiditySource: LiquiditySource.ONEINCH,
+            marketPriceFactor: 0.99,
+          },
+        } as any,
+        decision: {
+          approvedTake: true,
+          approvedArbTake: true,
+          borrower: '0xBorrower',
+          hpbIndex: 77,
+          collateral,
+          auctionPrice,
+          maxArbTakePrice: 1.5,
+          externalTakeExecutionPlan: singleExternalTakeExecutionPlan(
+            evaluation,
+            { source: 'ctx' }
+          ),
+        } as any,
+        externalTakeAdapter: {
+          kind: 'oneinch',
+          executeExternalTake: sinon.stub().resolves(true),
+        } as any,
+        externalExecutionConfig: {} as any,
+        subgraph: { cacheKey: 'test-subgraph' } as any,
+        dryRun: true,
+        arbTakeStrategy: {
+          kind: 'arb',
+          isEnabled: sinon.stub().returns(true),
+          evaluateArbTake: sinon.stub().resolves({
+            isArbTakeable: true,
+            hpbIndex: 88,
+            maxArbTakePrice: 1.5,
+          }),
+          executeArbTake: sinon.stub().rejects(nonceConsumed),
+        } as any,
+        takeAuctionStatusReader: {
+          read: sinon.stub().resolves({ collateral, auctionPrice }),
+        } as any,
+      });
+      expect.fail('expected dry-run nonce-consumed error to propagate');
+    } catch (error) {
+      expect(error).to.equal(nonceConsumed);
+    }
   });
 });

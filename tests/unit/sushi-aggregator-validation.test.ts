@@ -54,32 +54,42 @@ function scopedConfig(): SushiAggregatorDexConfig {
   return {
     mode: 'production',
     callTargetAllowlist: SUSHI_AGGREGATOR_SCOPED_CALL_TARGET_ALLOWLIST,
-    approvalSpenderAllowlist: SUSHI_AGGREGATOR_SCOPED_APPROVAL_SPENDER_ALLOWLIST,
+    approvalSpenderAllowlist:
+      SUSHI_AGGREGATOR_SCOPED_APPROVAL_SPENDER_ALLOWLIST,
     selectorAllowlist: SUSHI_AGGREGATOR_SCOPED_SELECTOR_ALLOWLIST,
   };
 }
 
 function validateFixture(params: {
-  response?: Record<string, unknown>;
+  response?: unknown;
   chainPolicyChainId?: number;
+  chainPolicy?: ReturnType<typeof normalizeSushiAggregatorChainPolicy>;
+  fromAmount?: BigNumber;
+  fromToken?: string;
+  toToken?: string;
   takerAddress?: string;
+  maxSlippage?: number;
   maxPriceImpact?: number;
 }) {
   const fixture = loadFixture();
+  const fromAmount =
+    params.fromAmount ?? BigNumber.from(fixture.request.amountIn);
   return validateSushiAggregatorQuote({
-    quote: params.response ?? fixture.response,
+    quote: 'response' in params ? params.response : fixture.response,
     chainId: BASE_CHAIN_ID,
-    fromToken: fixture.request.tokenIn,
-    toToken: fixture.request.tokenOut,
-    fromAmount: BigNumber.from(fixture.request.amountIn),
+    fromToken: params.fromToken ?? fixture.request.tokenIn,
+    toToken: params.toToken ?? fixture.request.tokenOut,
+    fromAmount,
     takerAddress: params.takerAddress ?? fixture.request.sender,
-    maxSlippage: fixture.request.maxSlippage,
+    maxSlippage: params.maxSlippage ?? fixture.request.maxSlippage,
     maxPriceImpact: params.maxPriceImpact ?? 0.05,
-    chainPolicy: normalizeSushiAggregatorChainPolicy({
-      config: scopedConfig(),
-      fieldName: 'test.dex.sushiAggregator',
-      chainId: params.chainPolicyChainId ?? BASE_CHAIN_ID,
-    }),
+    chainPolicy:
+      params.chainPolicy ??
+      normalizeSushiAggregatorChainPolicy({
+        config: scopedConfig(),
+        fieldName: 'test.dex.sushiAggregator',
+        chainId: params.chainPolicyChainId ?? BASE_CHAIN_ID,
+      }),
     quotedAtMs: Date.now(),
   });
 }
@@ -87,24 +97,29 @@ function validateFixture(params: {
 function mutateResponse(
   mutate: (response: Record<string, unknown>) => void
 ): Record<string, unknown> {
-  const response = JSON.parse(
-    JSON.stringify(loadFixture().response)
-  ) as Record<string, unknown>;
+  const response = JSON.parse(JSON.stringify(loadFixture().response)) as Record<
+    string,
+    unknown
+  >;
   mutate(response);
   return response;
 }
 
-function headWordReplaced(
-  data: string,
-  index: number,
-  word: string
-): string {
+function headWordReplaced(data: string, index: number, word: string): string {
   const start = 10 + index * 64;
   return data.slice(0, start) + word + data.slice(start + 64);
 }
 
 function addressWord(address: string): string {
   let hex = address.slice(2).toLowerCase();
+  while (hex.length < 64) {
+    hex = '0' + hex;
+  }
+  return hex;
+}
+
+function uintWord(value: BigNumber | number | string): string {
+  let hex = BigNumber.from(value).toHexString().slice(2);
   while (hex.length < 64) {
     hex = '0' + hex;
   }
@@ -125,9 +140,9 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
     expect(normalized.txValue).to.equal('0');
     expect(normalized.chainId).to.equal(BASE_CHAIN_ID);
     expect(normalized.routeMinOutRaw.gt(0)).to.equal(true);
-    expect(
-      normalized.routeMinOutRaw.lte(normalized.quoteAmountRaw)
-    ).to.equal(true);
+    expect(normalized.routeMinOutRaw.lte(normalized.quoteAmountRaw)).to.equal(
+      true
+    );
   });
 
   it('rejects a response routed for the wrong chain policy', () => {
@@ -137,7 +152,7 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
   });
 
   it('rejects an unallowlisted call target', () => {
-    const response = mutateResponse(r => {
+    const response = mutateResponse((r) => {
       (r.tx as Record<string, unknown>).to =
         '0x1111111111111111111111111111111111111111';
     });
@@ -147,7 +162,7 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
   });
 
   it('rejects an unallowlisted selector', () => {
-    const response = mutateResponse(r => {
+    const response = mutateResponse((r) => {
       const tx = r.tx as Record<string, unknown>;
       tx.data = '0xdeadbeef' + (tx.data as string).slice(10);
     });
@@ -165,7 +180,7 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
   });
 
   it('rejects a rewritten output token', () => {
-    const response = mutateResponse(r => {
+    const response = mutateResponse((r) => {
       const tx = r.tx as Record<string, unknown>;
       tx.data = headWordReplaced(
         tx.data as string,
@@ -179,7 +194,7 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
   });
 
   it('rejects a non-zero tx.value for ERC20 collateral routes', () => {
-    const response = mutateResponse(r => {
+    const response = mutateResponse((r) => {
       (r.tx as Record<string, unknown>).value = '1';
     });
     expect(() => validateFixture({ response, takerAddress: TAKER })).to.throw(
@@ -188,7 +203,7 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
   });
 
   it('rejects price impact above the configured maximum', () => {
-    const response = mutateResponse(r => {
+    const response = mutateResponse((r) => {
       r.priceImpact = -0.2;
     });
     expect(() =>
@@ -197,7 +212,7 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
   });
 
   it('rejects a minimum output below the slippage band', () => {
-    const response = mutateResponse(r => {
+    const response = mutateResponse((r) => {
       const tx = r.tx as Record<string, unknown>;
       const assumed = BigNumber.from(r.assumedAmountOut as string);
       let hex = assumed.div(2).toHexString().slice(2);
@@ -212,11 +227,225 @@ describe('Sushi aggregator route validation (Packet 3B)', () => {
   });
 
   it('rejects non-Success provider status', () => {
-    const response = mutateResponse(r => {
+    const response = mutateResponse((r) => {
       r.status = 'NoWay';
     });
     expect(() => validateFixture({ response, takerAddress: TAKER })).to.throw(
       'not Success'
+    );
+  });
+
+  it('rejects a response that is not an object', () => {
+    expect(() =>
+      validateFixture({ response: null, takerAddress: TAKER })
+    ).to.throw('response is not a JSON object');
+  });
+
+  it('rejects a non-positive requested exact-fill amount', () => {
+    expect(() =>
+      validateFixture({
+        fromAmount: BigNumber.from(0),
+        takerAddress: TAKER,
+      })
+    ).to.throw('requested amount is not a positive token-unit value');
+  });
+
+  it('rejects provider amount and quote output mismatches', () => {
+    const amountMismatch = mutateResponse((r) => {
+      r.amountIn = '1';
+    });
+    expect(() =>
+      validateFixture({ response: amountMismatch, takerAddress: TAKER })
+    ).to.throw('response amountIn "1" does not match requested');
+
+    for (const assumedAmountOut of [undefined, 'abc', '0']) {
+      const response = mutateResponse((r) => {
+        r.assumedAmountOut = assumedAmountOut;
+      });
+      expect(() => validateFixture({ response, takerAddress: TAKER })).to.throw(
+        'response assumedAmountOut is missing, non-decimal, or zero'
+      );
+    }
+  });
+
+  it('rejects missing or non-finite price impact', () => {
+    for (const priceImpact of [undefined, Number.POSITIVE_INFINITY]) {
+      const response = mutateResponse((r) => {
+        r.priceImpact = priceImpact;
+      });
+      expect(() => validateFixture({ response, takerAddress: TAKER })).to.throw(
+        'response priceImpact is missing or non-finite'
+      );
+    }
+  });
+
+  it('rejects missing or invalid transaction envelopes', () => {
+    const missingTx = mutateResponse((r) => {
+      delete r.tx;
+    });
+    expect(() =>
+      validateFixture({ response: missingTx, takerAddress: TAKER })
+    ).to.throw('response is missing the tx object');
+
+    const invalidTarget = mutateResponse((r) => {
+      (r.tx as Record<string, unknown>).to = 'not-address';
+    });
+    expect(() =>
+      validateFixture({ response: invalidTarget, takerAddress: TAKER })
+    ).to.throw('tx.to is not a valid execution target address');
+
+    const nonStringTarget = mutateResponse((r) => {
+      (r.tx as Record<string, unknown>).to = 1;
+    });
+    expect(() =>
+      validateFixture({ response: nonStringTarget, takerAddress: TAKER })
+    ).to.throw('tx.to is not a valid execution target address');
+  });
+
+  it('rejects an execution target that is not approved as the spender', () => {
+    const chainPolicy = normalizeSushiAggregatorChainPolicy({
+      config: scopedConfig(),
+      fieldName: 'test.dex.sushiAggregator',
+      chainId: BASE_CHAIN_ID,
+    });
+    expect(() =>
+      validateFixture({
+        chainPolicy: {
+          ...chainPolicy,
+          approvalSpenders: [],
+        },
+        takerAddress: TAKER,
+      })
+    ).to.throw('is not in the chain approval-spender allowlist');
+  });
+
+  it('allows absent, null, and zero-equivalent transaction values', () => {
+    for (const value of [undefined, null, '0x00']) {
+      const response = mutateResponse((r) => {
+        if (value === undefined) {
+          delete (r.tx as Record<string, unknown>).value;
+        } else {
+          (r.tx as Record<string, unknown>).value = value;
+        }
+      });
+      expect(() =>
+        validateFixture({ response, takerAddress: TAKER })
+      ).to.not.throw();
+    }
+  });
+
+  it('rejects missing, short, or malformed calldata', () => {
+    for (const data of [undefined, '0x1234', '0xzzzz']) {
+      const response = mutateResponse((r) => {
+        (r.tx as Record<string, unknown>).data = data;
+      });
+      expect(() => validateFixture({ response, takerAddress: TAKER })).to.throw(
+        'tx.data is missing or shorter than the proven calldata head'
+      );
+    }
+  });
+
+  it('rejects a selector absent from the target allowlist', () => {
+    const chainPolicy = normalizeSushiAggregatorChainPolicy({
+      config: scopedConfig(),
+      fieldName: 'test.dex.sushiAggregator',
+      chainId: BASE_CHAIN_ID,
+    });
+    expect(() =>
+      validateFixture({
+        chainPolicy: {
+          ...chainPolicy,
+          selectorAllowlist: {},
+        },
+        takerAddress: TAKER,
+      })
+    ).to.throw('is not allowlisted for target');
+  });
+
+  it('rejects decoded calldata that rewrites token or amount inputs', () => {
+    const wrongInputToken = mutateResponse((r) => {
+      const tx = r.tx as Record<string, unknown>;
+      tx.data = headWordReplaced(
+        tx.data as string,
+        0,
+        addressWord('0x6666666666666666666666666666666666666666')
+      );
+    });
+    expect(() =>
+      validateFixture({ response: wrongInputToken, takerAddress: TAKER })
+    ).to.throw('does not match pool collateral');
+
+    const wrongAmount = mutateResponse((r) => {
+      const tx = r.tx as Record<string, unknown>;
+      tx.data = headWordReplaced(tx.data as string, 1, uintWord(1));
+    });
+    expect(() =>
+      validateFixture({ response: wrongAmount, takerAddress: TAKER })
+    ).to.throw('does not match requested');
+  });
+
+  it('rejects decoded minimum output outside the provider quote bounds', () => {
+    const zeroMinOut = mutateResponse((r) => {
+      const tx = r.tx as Record<string, unknown>;
+      tx.data = headWordReplaced(tx.data as string, 4, uintWord(0));
+    });
+    expect(() =>
+      validateFixture({ response: zeroMinOut, takerAddress: TAKER })
+    ).to.throw('decoded minimum output is zero');
+
+    const aboveExpected = mutateResponse((r) => {
+      const tx = r.tx as Record<string, unknown>;
+      tx.data = headWordReplaced(
+        tx.data as string,
+        4,
+        uintWord(BigNumber.from(r.assumedAmountOut as string).add(1))
+      );
+    });
+    expect(() =>
+      validateFixture({ response: aboveExpected, takerAddress: TAKER })
+    ).to.throw('exceeds expected output');
+  });
+
+  it('rejects invalid slippage configuration before deriving floors', () => {
+    for (const maxSlippage of [0, 1]) {
+      expect(() =>
+        validateFixture({ maxSlippage, takerAddress: TAKER })
+      ).to.throw('maxSlippage is not a fraction in (0, 1)');
+    }
+  });
+
+  it('rejects malformed or contradictory token metadata', () => {
+    const malformed = mutateResponse((r) => {
+      r.tokens = [];
+    });
+    expect(() =>
+      validateFixture({ response: malformed, takerAddress: TAKER })
+    ).to.throw('response token metadata is missing or malformed');
+
+    const wrongInputMeta = mutateResponse((r) => {
+      const tokens = r.tokens as Array<Record<string, unknown>>;
+      const tokenFrom = r.tokenFrom as number;
+      tokens[tokenFrom] = {
+        ...tokens[tokenFrom],
+        address: '0x7777777777777777777777777777777777777777',
+      };
+    });
+    expect(() =>
+      validateFixture({ response: wrongInputMeta, takerAddress: TAKER })
+    ).to.throw('response token metadata contradicts the requested input token');
+
+    const wrongOutputMeta = mutateResponse((r) => {
+      const tokens = r.tokens as Array<Record<string, unknown>>;
+      const tokenTo = r.tokenTo as number;
+      tokens[tokenTo] = {
+        ...tokens[tokenTo],
+        address: '0x8888888888888888888888888888888888888888',
+      };
+    });
+    expect(() =>
+      validateFixture({ response: wrongOutputMeta, takerAddress: TAKER })
+    ).to.throw(
+      'response token metadata contradicts the requested output token'
     );
   });
 });
@@ -274,6 +503,45 @@ describe('Sushi aggregator config policy (Packet 3B)', () => {
         chainId: 43111,
       })
     ).to.throw('callTargetAllowlist[43111]');
+  });
+
+  it('rejects empty policy and out-of-range production guardrails', () => {
+    expect(() =>
+      assertValidSushiAggregatorDexConfig({
+        config: {
+          ...scopedConfig(),
+          callTargetAllowlist: {},
+        },
+        fieldName: 'KeeperConfig.dex.sushiAggregator',
+      })
+    ).to.throw('callTargetAllowlist must configure at least one chain');
+
+    expect(() =>
+      assertValidSushiAggregatorDexConfig({
+        config: {
+          ...scopedConfig(),
+          apiBaseUrl: 'http://aggregator.sushi.com',
+        },
+        fieldName: 'KeeperConfig.dex.sushiAggregator',
+      })
+    ).to.throw('must be HTTPS in production');
+
+    for (const config of [
+      { quoteTimeoutMs: 0 },
+      { maxQuoteAgeMs: 0 },
+      { defaultSlippage: 0 },
+      { maxPriceImpact: 0 },
+    ]) {
+      expect(() =>
+        assertValidSushiAggregatorDexConfig({
+          config: {
+            ...scopedConfig(),
+            ...config,
+          },
+          fieldName: 'KeeperConfig.dex.sushiAggregator',
+        })
+      ).to.throw();
+    }
   });
 });
 

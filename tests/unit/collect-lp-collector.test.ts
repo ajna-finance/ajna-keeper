@@ -2,101 +2,14 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { BigNumber, constants, utils } from 'ethers';
 import { LP_REWARD_LOOKBACK_SECONDS_DEFAULT } from '../../src/rewards/collect-lp';
-import { makeSinglePoolLpCollector } from '../helpers/rewards';
-import { TokenToCollect } from '../../src/config';
+import { RewardActionLabel, TokenToCollect } from '../../src/config';
 import * as transactions from '../../src/transactions';
-
-const FAKE_POOL_ADDRESS = '0xpool';
-
-function makeFakeBucket(position: {
-  lpBalance: BigNumber;
-  depositRedeemable?: BigNumber;
-  collateralRedeemable?: BigNumber;
-  deposit?: BigNumber;
-  collateral?: BigNumber;
-}) {
-  return {
-    getStatus: sinon.stub().resolves({
-      deposit: position.deposit ?? constants.Zero,
-      collateral: position.collateral ?? constants.Zero,
-    }),
-    getPosition: sinon.stub().resolves({
-      lpBalance: position.lpBalance,
-      depositRedeemable: position.depositRedeemable ?? constants.Zero,
-      collateralRedeemable: position.collateralRedeemable ?? constants.Zero,
-    }),
-    // These fakes model a 1:1 LP<->token bucket, matching how the fixtures
-    // construct positions (lpBalance == deposit == depositRedeemable). The
-    // redemption now bounds its first leg to the reward's token-equivalent
-    // (lpToQuoteTokens/lpToCollateral of rewardLp), so these must convert
-    // faithfully rather than collapse to zero (which would skip every redeem).
-    lpToQuoteTokens: sinon.stub().callsFake(async (lp: BigNumber) => lp),
-    lpToCollateral: sinon.stub().callsFake(async (lp: BigNumber) => lp),
-  };
-}
-
-/**
- * Test facade for a single fake pool. Wraps `makeSinglePoolLpCollector`
- * with the fake-pool / fake-signer construction and `pool.id`
- * auto-injection that unit-test fixtures need. Keeps the old
- * `LpCollector`-shaped API (`lpMap`, `ingestNewAwardsFromSubgraph`,
- * `collectLpRewards`) so existing tests need no per-test rewiring.
- */
-function makeCollector(opts: {
-  signerAddress: string;
-  getBucketTakeLPAwards: sinon.SinonStub;
-  bucket?: ReturnType<typeof makeFakeBucket>;
-}) {
-  const fakePool: any = {
-    poolAddress: FAKE_POOL_ADDRESS,
-    name: 'TEST',
-    quoteAddress: '0xquote',
-    collateralAddress: '0xcollat',
-    collateralSymbol: 'TCOL',
-    getBucketByIndex: sinon
-      .stub()
-      .returns(opts.bucket ?? makeFakeBucket({ lpBalance: constants.Zero })),
-  };
-  const fakeSigner: any = {
-    getAddress: sinon.stub().resolves(opts.signerAddress),
-  };
-  // Wrap the caller-supplied stub so events without `pool` get a synthetic
-  // `pool.id = FAKE_POOL_ADDRESS`. Production events always have `pool`;
-  // unit-test fixtures omit it for brevity.
-  const wrappedGetAwards = async (...args: any[]) => {
-    const result = await opts.getBucketTakeLPAwards(...args);
-    if (result && Array.isArray(result.bucketTakes)) {
-      return {
-        ...result,
-        bucketTakes: result.bucketTakes.map((t: any) =>
-          t && !t.pool ? { ...t, pool: { id: FAKE_POOL_ADDRESS } } : t
-        ),
-      };
-    }
-    return result;
-  };
-  const fakeSubgraph: any = { getBucketTakeLPAwards: wrappedGetAwards };
-  const fakeTracker: any = { addToken: sinon.stub() };
-
-  return makeSinglePoolLpCollector(
-    fakePool,
-    fakeSigner,
-    {
-      redeemFirst: TokenToCollect.QUOTE,
-      minAmountQuote: 0,
-      minAmountCollateral: 0,
-    },
-    {
-      runtime: {
-        logLevel: 'debug',
-        delayBetweenRuns: 0,
-        dryRun: false,
-      },
-    },
-    fakeTracker,
-    fakeSubgraph
-  );
-}
+import {
+  makeBucketPosition,
+  makeCollector,
+  makeFakeBucket,
+  setBucketPositionSequence,
+} from './helpers/lp-collector-fixture';
 
 describe('LpCollector stale-entry prune', () => {
   afterEach(() => sinon.restore());
@@ -189,6 +102,341 @@ describe('LpCollector principal preservation (defect #9)', () => {
     expect(removeQuoteStub.calledOnce).to.equal(true);
     const withdrawn = removeQuoteStub.firstCall.args[2] as BigNumber;
     expect(withdrawn.toString()).to.equal(rewardLp.toString());
+  });
+});
+
+describe('LpCollector collateral redemption legs', () => {
+  afterEach(() => sinon.restore());
+
+  it('redeems only the reward-equivalent collateral, not the full redeemable position', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = utils.parseUnits('1', 18);
+    const principal = utils.parseUnits('5', 18);
+    const bucket = makeFakeBucket({
+      lpBalance: principal,
+      collateral: principal,
+      collateralRedeemable: principal,
+    });
+    setBucketPositionSequence(bucket, [
+      { lpBalance: principal, collateralRedeemable: principal },
+      { lpBalance: principal, collateralRedeemable: principal },
+      {
+        lpBalance: principal.sub(rewardLp),
+        collateralRedeemable: principal.sub(rewardLp),
+      },
+      {
+        lpBalance: principal.sub(rewardLp),
+        collateralRedeemable: principal.sub(rewardLp),
+      },
+    ]);
+    const removeCollateralStub = sinon
+      .stub(transactions, 'bucketRemoveCollateralToken')
+      .resolves();
+    const exchangeTracker = { addToken: sinon.stub() };
+    const collateralRewardAction = {
+      action: RewardActionLabel.TRANSFER,
+      to: signer,
+    } as const;
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+      bucket,
+      exchangeTracker,
+      settings: {
+        redeemFirst: TokenToCollect.COLLATERAL,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
+        rewardActionCollateral: collateralRewardAction,
+      },
+    });
+
+    collector.lpMap.set(3100, rewardLp);
+    await collector.collectLpRewards();
+
+    expect(removeCollateralStub.calledOnce).to.equal(true);
+    const withdrawn = removeCollateralStub.firstCall.args[2] as BigNumber;
+    expect(withdrawn.toString()).to.equal(rewardLp.toString());
+    expect(exchangeTracker.addToken.calledOnce).to.equal(true);
+    expect(exchangeTracker.addToken.firstCall.args[0]).to.equal(
+      collateralRewardAction
+    );
+    expect(exchangeTracker.addToken.firstCall.args[1]).to.equal('0xcollat');
+    expect(exchangeTracker.addToken.firstCall.args[2].toString()).to.equal(
+      rewardLp.toString()
+    );
+  });
+
+  it('falls back from quote to collateral for the remaining reward LP only', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = utils.parseUnits('2', 18);
+    const oneLp = utils.parseUnits('1', 18);
+    const principal = utils.parseUnits('5', 18);
+    const bucket = makeFakeBucket({
+      lpBalance: rewardLp,
+      deposit: oneLp,
+      depositRedeemable: oneLp,
+      collateral: principal,
+      collateralRedeemable: principal,
+    });
+    setBucketPositionSequence(bucket, [
+      {
+        lpBalance: rewardLp,
+        depositRedeemable: oneLp,
+        collateralRedeemable: principal,
+      },
+      {
+        lpBalance: rewardLp,
+        depositRedeemable: oneLp,
+        collateralRedeemable: principal,
+      },
+      {
+        lpBalance: rewardLp.sub(oneLp),
+        depositRedeemable: constants.Zero,
+        collateralRedeemable: principal,
+      },
+      {
+        lpBalance: rewardLp.sub(oneLp),
+        depositRedeemable: constants.Zero,
+        collateralRedeemable: principal,
+      },
+      {
+        lpBalance: rewardLp.sub(oneLp),
+        depositRedeemable: constants.Zero,
+        collateralRedeemable: principal,
+      },
+      {
+        lpBalance: constants.Zero,
+        depositRedeemable: constants.Zero,
+        collateralRedeemable: principal.sub(oneLp),
+      },
+    ]);
+    const removeQuoteStub = sinon
+      .stub(transactions, 'bucketRemoveQuoteToken')
+      .resolves();
+    const removeCollateralStub = sinon
+      .stub(transactions, 'bucketRemoveCollateralToken')
+      .resolves();
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+      bucket,
+    });
+
+    collector.lpMap.set(3200, rewardLp);
+    await collector.collectLpRewards();
+
+    expect(removeQuoteStub.calledOnce).to.equal(true);
+    const quoteCall = removeQuoteStub.getCall(0)!;
+    const quoteWithdrawn = quoteCall.args[2] as BigNumber;
+    expect(quoteWithdrawn.toString()).to.equal(oneLp.toString());
+    expect(removeCollateralStub.calledOnce).to.equal(true);
+    const collateralCall = removeCollateralStub.getCall(0)!;
+    const collateralWithdrawn = collateralCall.args[2] as BigNumber;
+    expect(collateralWithdrawn.toString()).to.equal(oneLp.toString());
+    expect(collector.lpMap.has(3200)).to.equal(false);
+  });
+
+  it('falls back from collateral to quote for the remaining reward LP only', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = utils.parseUnits('2', 18);
+    const oneLp = utils.parseUnits('1', 18);
+    const principal = utils.parseUnits('5', 18);
+    const bucket = makeFakeBucket({
+      lpBalance: rewardLp,
+      deposit: principal,
+      depositRedeemable: principal,
+      collateral: oneLp,
+      collateralRedeemable: oneLp,
+    });
+    setBucketPositionSequence(bucket, [
+      {
+        lpBalance: rewardLp,
+        depositRedeemable: principal,
+        collateralRedeemable: oneLp,
+      },
+      {
+        lpBalance: rewardLp,
+        depositRedeemable: principal,
+        collateralRedeemable: oneLp,
+      },
+      {
+        lpBalance: rewardLp.sub(oneLp),
+        depositRedeemable: principal,
+        collateralRedeemable: constants.Zero,
+      },
+      {
+        lpBalance: rewardLp.sub(oneLp),
+        depositRedeemable: principal,
+        collateralRedeemable: constants.Zero,
+      },
+      {
+        lpBalance: rewardLp.sub(oneLp),
+        depositRedeemable: principal,
+        collateralRedeemable: constants.Zero,
+      },
+      {
+        lpBalance: constants.Zero,
+        depositRedeemable: principal.sub(oneLp),
+        collateralRedeemable: constants.Zero,
+      },
+    ]);
+    const removeQuoteStub = sinon
+      .stub(transactions, 'bucketRemoveQuoteToken')
+      .resolves();
+    const removeCollateralStub = sinon
+      .stub(transactions, 'bucketRemoveCollateralToken')
+      .resolves();
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+      bucket,
+      settings: {
+        redeemFirst: TokenToCollect.COLLATERAL,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
+      },
+    });
+
+    collector.lpMap.set(3300, rewardLp);
+    await collector.collectLpRewards();
+
+    expect(removeCollateralStub.calledOnce).to.equal(true);
+    const collateralCall = removeCollateralStub.getCall(0)!;
+    const collateralWithdrawn = collateralCall.args[2] as BigNumber;
+    expect(collateralWithdrawn.toString()).to.equal(oneLp.toString());
+    expect(removeQuoteStub.calledOnce).to.equal(true);
+    const quoteCall = removeQuoteStub.getCall(0)!;
+    const quoteWithdrawn = quoteCall.args[2] as BigNumber;
+    expect(quoteWithdrawn.toString()).to.equal(oneLp.toString());
+    expect(collector.lpMap.has(3300)).to.equal(false);
+  });
+
+  it('does not attempt quote fallback after collateral withdrawal succeeds but the post-read fails', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = utils.parseUnits('1', 18);
+    const bucket = makeFakeBucket({
+      lpBalance: rewardLp,
+      deposit: rewardLp,
+      depositRedeemable: rewardLp,
+      collateral: rewardLp,
+      collateralRedeemable: rewardLp,
+    });
+    bucket.getPosition.onCall(0).resolves(
+      makeBucketPosition({
+        lpBalance: rewardLp,
+        depositRedeemable: rewardLp,
+        collateralRedeemable: rewardLp,
+      })
+    );
+    bucket.getPosition.onCall(1).resolves(
+      makeBucketPosition({
+        lpBalance: rewardLp,
+        depositRedeemable: rewardLp,
+        collateralRedeemable: rewardLp,
+      })
+    );
+    bucket.getPosition.onCall(2).rejects(new Error('post-read failed'));
+    const removeCollateralStub = sinon
+      .stub(transactions, 'bucketRemoveCollateralToken')
+      .resolves();
+    const removeQuoteStub = sinon
+      .stub(transactions, 'bucketRemoveQuoteToken')
+      .resolves();
+    const exchangeTracker = { addToken: sinon.stub() };
+    const collateralRewardAction = {
+      action: RewardActionLabel.TRANSFER,
+      to: signer,
+    } as const;
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+      bucket,
+      exchangeTracker,
+      settings: {
+        redeemFirst: TokenToCollect.COLLATERAL,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
+        rewardActionCollateral: collateralRewardAction,
+      },
+    });
+
+    collector.lpMap.set(3400, rewardLp);
+    await collector.collectLpRewards();
+
+    expect(removeCollateralStub.calledOnce).to.equal(true);
+    expect(exchangeTracker.addToken.calledOnce).to.equal(true);
+    expect(removeQuoteStub.called).to.equal(false);
+    expect(collector.lpMap.has(3400)).to.equal(true);
+  });
+
+  it('drops stale LP entries when Ajna rejects collateral redemption amounts', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = utils.parseUnits('1', 18);
+    const bucket = makeFakeBucket({
+      lpBalance: rewardLp,
+      collateral: rewardLp,
+      collateralRedeemable: rewardLp,
+    });
+    sinon
+      .stub(transactions, 'bucketRemoveCollateralToken')
+      .rejects(new Error('execution reverted: InvalidAmount'));
+    const removeQuoteStub = sinon
+      .stub(transactions, 'bucketRemoveQuoteToken')
+      .resolves();
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+      bucket,
+      settings: {
+        redeemFirst: TokenToCollect.COLLATERAL,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
+      },
+    });
+
+    collector.lpMap.set(3500, rewardLp);
+    await collector.collectLpRewards();
+
+    expect(removeQuoteStub.called).to.equal(false);
+    expect(collector.lpMap.has(3500)).to.equal(false);
+  });
+
+  it('does not submit collateral withdrawals in dry-run mode', async () => {
+    const signer = '0xabc0000000000000000000000000000000000000';
+    const rewardLp = BigNumber.from(1);
+    const bucket = makeFakeBucket({
+      lpBalance: rewardLp,
+      collateral: rewardLp,
+      collateralRedeemable: rewardLp,
+    });
+    const removeCollateralStub = sinon
+      .stub(transactions, 'bucketRemoveCollateralToken')
+      .resolves();
+    const removeQuoteStub = sinon
+      .stub(transactions, 'bucketRemoveQuoteToken')
+      .resolves();
+    const collector = makeCollector({
+      signerAddress: signer,
+      getBucketTakeLPAwards: sinon.stub().resolves({ bucketTakes: [] }),
+      bucket,
+      runtime: {
+        logLevel: 'debug',
+        delayBetweenRuns: 0,
+        dryRun: true,
+      },
+      settings: {
+        redeemFirst: TokenToCollect.COLLATERAL,
+        minAmountQuote: 0,
+        minAmountCollateral: 0,
+      },
+    });
+
+    collector.lpMap.set(3600, rewardLp);
+    await collector.collectLpRewards();
+
+    expect(removeCollateralStub.called).to.equal(false);
+    expect(removeQuoteStub.called).to.equal(false);
+    expect(collector.lpMap.has(3600)).to.equal(true);
   });
 });
 
@@ -480,268 +728,5 @@ describe('LpCollector parse failure quarantine', () => {
         )
     ).to.equal(true);
     expect(collector.lpMap.size).to.equal(0);
-  });
-});
-
-describe('LpCollector null-field defense', () => {
-  afterEach(() => sinon.restore());
-
-  it('credits taker even when lpAwarded.kicker is null (best-effort non-fatal)', async () => {
-    const signer = '0xabc0000000000000000000000000000000000000';
-    const getAwards = sinon.stub().resolves({
-      bucketTakes: [
-        {
-          id: 'take-null-kicker-taker-is-signer',
-          index: 7000,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '1.0',
-            lpAwardedKicker: '0',
-            // Schema-drift simulation — guard must not drop the taker reward.
-            kicker: null as any,
-          },
-          blockTimestamp: '600',
-        },
-        {
-          id: 'take-ok',
-          index: 7001,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '2.0',
-            lpAwardedKicker: '0',
-            kicker: '0xdef',
-          },
-          blockTimestamp: '700',
-        },
-      ],
-    });
-
-    const collector = makeCollector({
-      signerAddress: signer,
-      getBucketTakeLPAwards: getAwards,
-    });
-
-    // Would throw on .toLowerCase() of null before the null-safe fix.
-    await collector.ingestNewAwardsFromSubgraph();
-
-    expect(collector.lpMap.get(7000)!.toString()).to.equal(
-      utils.parseUnits('1.0', 18).toString()
-    );
-    expect(collector.lpMap.get(7001)!.toString()).to.equal(
-      utils.parseUnits('2.0', 18).toString()
-    );
-  });
-
-  it('skips events with null kicker when signer is neither taker nor kicker', async () => {
-    const signer = '0xabc0000000000000000000000000000000000000';
-    const getAwards = sinon.stub().resolves({
-      bucketTakes: [
-        {
-          id: 'take-null-kicker-unrelated',
-          index: 7000,
-          taker: '0xstranger',
-          lpAwarded: {
-            lpAwardedTaker: '1.0',
-            lpAwardedKicker: '5.0',
-            kicker: null as any,
-          },
-          blockTimestamp: '600',
-        },
-      ],
-    });
-
-    const collector = makeCollector({
-      signerAddress: signer,
-      getBucketTakeLPAwards: getAwards,
-    });
-
-    await collector.ingestNewAwardsFromSubgraph();
-
-    // Null kicker + unrelated taker = no role match for signer; lpMap empty.
-    expect(collector.lpMap.size).to.equal(0);
-  });
-
-  it('skips events with out-of-range bucket index', async () => {
-    const signer = '0xabc0000000000000000000000000000000000000';
-    const getAwards = sinon.stub().resolves({
-      bucketTakes: [
-        {
-          id: 'take-bad-index-negative',
-          index: -1,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '1.0',
-            lpAwardedKicker: '0',
-            kicker: '0xdef',
-          },
-          blockTimestamp: '900',
-        },
-        {
-          id: 'take-bad-index-too-big',
-          index: 999_999,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '1.0',
-            lpAwardedKicker: '0',
-            kicker: '0xdef',
-          },
-          blockTimestamp: '901',
-        },
-        {
-          id: 'take-ok-index-0',
-          index: 0,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '1.0',
-            lpAwardedKicker: '0',
-            kicker: '0xdef',
-          },
-          blockTimestamp: '902',
-        },
-        {
-          id: 'take-ok-index-max',
-          index: 7388,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '2.0',
-            lpAwardedKicker: '0',
-            kicker: '0xdef',
-          },
-          blockTimestamp: '903',
-        },
-      ],
-    });
-
-    const collector = makeCollector({
-      signerAddress: signer,
-      getBucketTakeLPAwards: getAwards,
-    });
-
-    await collector.ingestNewAwardsFromSubgraph();
-
-    expect(collector.lpMap.has(-1)).to.be.false;
-    expect(collector.lpMap.has(999_999)).to.be.false;
-    expect(collector.lpMap.get(0)!.toString()).to.equal(
-      utils.parseUnits('1.0', 18).toString()
-    );
-    expect(collector.lpMap.get(7388)!.toString()).to.equal(
-      utils.parseUnits('2.0', 18).toString()
-    );
-  });
-
-  it('skips events with unparseable blockTimestamp without pinning the seen set', async () => {
-    const signer = '0xabc0000000000000000000000000000000000000';
-    const getAwards = sinon.stub().resolves({
-      bucketTakes: [
-        {
-          id: 'take-bad-ts',
-          index: 5000,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '1.0',
-            lpAwardedKicker: '0',
-            kicker: '0xdef',
-          },
-          blockTimestamp: 'not-a-number',
-        },
-        {
-          id: 'take-ok',
-          index: 5001,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '2.0',
-            lpAwardedKicker: '0',
-            kicker: '0xdef',
-          },
-          blockTimestamp: '800',
-        },
-      ],
-    });
-
-    const collector = makeCollector({
-      signerAddress: signer,
-      getBucketTakeLPAwards: getAwards,
-    });
-
-    await collector.ingestNewAwardsFromSubgraph();
-
-    // The malformed-ts event is skipped entirely (not seen, not credited).
-    // Without this guard the entry would land in `seenEventIds` with a junk
-    // ts that neither prune nor cap can evict.
-    expect(collector.lpMap.has(5000)).to.be.false;
-    expect(collector.lpMap.get(5001)!.toString()).to.equal(
-      utils.parseUnits('2.0', 18).toString()
-    );
-  });
-
-  it('skips events with missing lpAwarded without throwing', async () => {
-    const signer = '0xabc0000000000000000000000000000000000000';
-    const getAwards = sinon.stub().resolves({
-      bucketTakes: [
-        {
-          id: 'take-null',
-          index: 6000,
-          taker: signer,
-          lpAwarded: null as any,
-          blockTimestamp: '400',
-        },
-        {
-          id: 'take-ok',
-          index: 6001,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '3.0',
-            lpAwardedKicker: '0',
-            kicker: '0xdef',
-          },
-          blockTimestamp: '500',
-        },
-      ],
-    });
-
-    const collector = makeCollector({
-      signerAddress: signer,
-      getBucketTakeLPAwards: getAwards,
-    });
-
-    await collector.ingestNewAwardsFromSubgraph();
-
-    expect(collector.lpMap.has(6000)).to.be.false;
-    expect(collector.lpMap.get(6001)!.toString()).to.equal(
-      utils.parseUnits('3.0', 18).toString()
-    );
-  });
-});
-
-describe('LpCollector role handling', () => {
-  afterEach(() => sinon.restore());
-
-  it('sums taker and kicker awards when signer fills both roles on one take', async () => {
-    const signer = '0xabc0000000000000000000000000000000000000';
-    const getAwards = sinon.stub().resolves({
-      bucketTakes: [
-        {
-          id: 'take1',
-          index: 1234,
-          taker: signer,
-          lpAwarded: {
-            lpAwardedTaker: '1.0',
-            lpAwardedKicker: '2.5',
-            kicker: signer,
-          },
-          blockTimestamp: '100',
-        },
-      ],
-    });
-
-    const collector = makeCollector({
-      signerAddress: signer,
-      getBucketTakeLPAwards: getAwards,
-    });
-
-    await collector.ingestNewAwardsFromSubgraph();
-    expect(collector.lpMap.get(1234)!.toString()).to.equal(
-      utils.parseUnits('3.5', 18).toString()
-    );
   });
 });

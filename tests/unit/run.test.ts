@@ -16,6 +16,7 @@ import {
 
 import * as takeWriteTransportModule from '../../src/take/write-transport';
 import { PermanentTakeTransportError } from '../../src/take/write-transport';
+import { withTakeWrite } from './helpers/take-write-transport-fixture';
 
 const BASE_CONFIG: KeeperConfig = {
   network: {
@@ -42,10 +43,6 @@ const BASE_CONFIG: KeeperConfig = {
     pools: [],
   },
 };
-
-const withTakeWrite = (take: any): Pick<KeeperConfig, 'writes'> => ({
-  writes: { take },
-});
 
 const withRuntime = (
   runtime: Partial<KeeperConfig['runtime']>
@@ -178,6 +175,22 @@ describe('run startup gating', () => {
     ).to.not.throw();
   });
 
+  it('disables the take loop when no manual or discovered take work is configured', async () => {
+    const createTakeWriteTransportStub = sinon.stub(
+      takeWriteTransportModule,
+      'createTakeWriteTransport'
+    );
+
+    const result = await initializeTakeLoop({
+      config: BASE_CONFIG,
+      signer: {} as any,
+      chainId: 1,
+    });
+
+    expect(result).to.deep.equal({ takeLoopEnabled: false });
+    expect(createTakeWriteTransportStub.called).to.equal(false);
+  });
+
   it('keeps the take loop enabled when take write transport initialization fails', async () => {
     const createTakeWriteTransportStub = sinon
       .stub(takeWriteTransportModule, 'createTakeWriteTransport')
@@ -211,6 +224,49 @@ describe('run startup gating', () => {
     expect(createTakeWriteTransportStub.calledOnce).to.equal(true);
     expect(result.takeLoopEnabled).to.equal(true);
     expect(result.takeWriteTransport).to.equal(undefined);
+  });
+
+  it('returns the startup take write transport when initialization succeeds', async () => {
+    const takeWriteTransport = {
+      mode: TakeWriteTransportMode.PRIVATE_RPC,
+      submitTransaction: sinon.stub(),
+    };
+    const createTakeWriteTransportStub = sinon
+      .stub(takeWriteTransportModule, 'createTakeWriteTransport')
+      .resolves(takeWriteTransport as any);
+
+    const config: KeeperConfig = {
+      ...BASE_CONFIG,
+      ...withTakeWrite({
+        mode: TakeWriteTransportMode.PRIVATE_RPC,
+        rpcUrl: 'http://127.0.0.1:1',
+      }),
+      manual: {
+        pools: [
+          {
+            name: 'Manual Take Pool',
+            address: '0x1111111111111111111111111111111111111111',
+            price: { source: PriceOriginSource.FIXED, value: 1 },
+            take: {
+              minCollateral: 0.1,
+              hpbPriceFactor: 0.98,
+            },
+          },
+        ],
+      },
+    };
+
+    const result = await initializeTakeLoop({
+      config,
+      signer: {} as any,
+      chainId: 1,
+    });
+
+    expect(createTakeWriteTransportStub.calledOnce).to.equal(true);
+    expect(result).to.deep.equal({
+      takeLoopEnabled: true,
+      takeWriteTransport,
+    });
   });
 
   it('fails fast when take write transport initialization fails with a deterministic chain mismatch', async () => {
