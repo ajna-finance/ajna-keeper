@@ -7,9 +7,6 @@ import {
   swapWithUniversalRouter,
   type UniversalRouterSwapResult,
 } from '../../src/dex/universal-router';
-import { NonceTracker } from '../../src/nonce';
-import * as uniswap from '../../src/dex/uniswap';
-import * as erc20 from '../../src/erc20';
 import { deriveSwapMinimumOut } from '../../src/dex/swap-min-out';
 import { logger } from '../../src/logging';
 
@@ -40,6 +37,7 @@ interface Mocks {
   permit2: any;
   router: any;
   makeContract: sinon.SinonStub;
+  queueTransaction: sinon.SinonStub;
 }
 
 function installMocks(
@@ -105,7 +103,18 @@ function installMocks(
         throw new Error(`unexpected Contract address ${address}`);
     }
   });
-  return { factory, quoter, token, permit2, router, makeContract };
+  const queueTransaction = sinon
+    .stub()
+    .callsFake(async (_signer: any, fn: any) => fn(7));
+  return {
+    factory,
+    quoter,
+    token,
+    permit2,
+    router,
+    makeContract,
+    queueTransaction,
+  };
 }
 
 function makeSigner(): any {
@@ -126,6 +135,11 @@ function swap(
 ): Promise<UniversalRouterSwapResult> {
   const testSwapper = createUniversalRouterSwapper({
     makeContract: mocks.makeContract as any,
+    getToken: async (_chainId, _provider, addr) =>
+      ({ address: addr, symbol: `T${addr.slice(2, 4)}` }) as any,
+    getDecimals: async () => 18,
+    queueTransaction: mocks.queueTransaction as any,
+    nowMs: () => 1_700_000_000_000,
   });
   return testSwapper(
     makeSigner(),
@@ -148,16 +162,6 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
     sinon.stub(logger, 'debug');
     sinon.stub(logger, 'warn');
     sinon.stub(logger, 'error');
-    sinon
-      .stub(uniswap, 'getTokenFromAddress')
-      .callsFake(
-        async (_chainId: any, _provider: any, addr: string) =>
-          ({ address: addr, symbol: `T${addr.slice(2, 4)}` }) as any
-      );
-    sinon.stub(erc20, 'getDecimalsErc20').resolves(18);
-    sinon
-      .stub(NonceTracker, 'queueTransaction')
-      .callsFake(async (_signer: any, fn: any) => fn(7));
   });
 
   afterEach(() => sinon.restore());
@@ -167,7 +171,11 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
     const result = await swap(m);
     expect(result.success).to.equal(true);
     if (!result.success) expect.fail(result.error);
-    expect(result.receipt?.transactionHash).to.equal('0xswap');
+    expect(result.kind).to.equal('executed');
+    if (result.kind !== 'executed') {
+      expect.fail('Expected executed swap result');
+    }
+    expect(result.receipt.transactionHash).to.equal('0xswap');
     expect(m.factory.getPool.calledOnce).to.equal(true);
     expect(m.router.execute.calledOnce).to.equal(true);
   });
@@ -178,6 +186,11 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
     // `swap()` helper would trigger its default parameter value instead.
     const testSwapper = createUniversalRouterSwapper({
       makeContract: m.makeContract as any,
+      getToken: async (_chainId, _provider, addr) =>
+        ({ address: addr, symbol: `T${addr.slice(2, 4)}` }) as any,
+      getDecimals: async () => 18,
+      queueTransaction: m.queueTransaction as any,
+      nowMs: () => 1_700_000_000_000,
     });
     const result = await testSwapper(
       makeSigner(),
@@ -197,10 +210,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
     expect(m.token.approve.called, 'Permit2 token approval').to.equal(false);
     expect(m.permit2.approve.called, 'router approval').to.equal(false);
     expect(m.router.execute.called, 'swap execution').to.equal(false);
-    expect(
-      (NonceTracker.queueTransaction as sinon.SinonStub).called,
-      'no tx queued'
-    ).to.equal(false);
+    expect(m.queueTransaction.called, 'no tx queued').to.equal(false);
   });
 
   it('fails closed (no approval, no swap) when the quoted output is non-positive', async () => {
@@ -276,7 +286,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
       routerAllowanceAmount: BigNumber.from(0),
       routerAllowanceExpiration: 0,
     });
-    const before = Math.floor(Date.now() / 1000);
+    const before = 1_700_000_000;
     await swap(m, amount);
     expect(m.permit2.approve.calledOnce).to.equal(true);
     const [tok, spender, approveAmount, expiration] =
@@ -291,7 +301,7 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
       'bounded, not MaxUint256'
     ).to.equal(false);
     expect(expiration).to.be.greaterThan(before);
-    expect(expiration).to.be.at.most(Math.floor(Date.now() / 1000) + 86400 + 5);
+    expect(expiration).to.equal(before + 86400);
   });
 
   it('skips the router approval when a sufficient, unexpired Permit2 allowance already exists', async () => {
@@ -325,7 +335,11 @@ describe('swapWithUniversalRouter (real reward-swap path)', () => {
   it('returns early without swapping when input and target tokens are identical', async () => {
     const m = installMocks();
     const result = await swap(m, AMOUNT, QUOTER, TOKEN); // target == input
-    expect(result.success).to.equal(true);
+    expect(result).to.deep.equal({
+      success: true,
+      kind: 'noop',
+      reason: 'identical_tokens',
+    });
     expect(m.factory.getPool.called).to.equal(false);
     expect(m.router.execute.called).to.equal(false);
   });

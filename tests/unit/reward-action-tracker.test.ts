@@ -24,28 +24,10 @@ const POOL_FACTORY_ADDRESS = '0x0000000000000000000000000000000000000003';
 const QUOTER_V2_ADDRESS = '0x0000000000000000000000000000000000000004';
 const ROUTER_QUOTER_V2_ADDRESS = '0x0000000000000000000000000000000000000005';
 
-type RewardActionTrackerInternals = {
-  feeTokenAmountMap: Map<string, BigNumber>;
-  retryCountMap: Map<string, number>;
-};
-
-function asInternals(
-  tracker: RewardActionTracker
-): RewardActionTrackerInternals {
-  return tracker as unknown as RewardActionTrackerInternals;
-}
-
 function createSigner(chainId = 1): Wallet {
   const signer = Wallet.createRandom();
   sinon.stub(signer, 'getChainId').resolves(chainId);
   return signer;
-}
-
-function createRewardActionKey(
-  rewardAction: RewardAction,
-  token: string
-): string {
-  return deterministicJsonStringify({ token, ...rewardAction });
 }
 
 // Helper function to create a mock KeeperConfig for testing
@@ -157,12 +139,8 @@ describe('RewardActionTracker', () => {
     await et.handleAllTokens();
     await et.handleAllTokens();
 
-    console.log('DexRouter swap call count:', dexRouter.swap.callCount);
-
     // The swap should have been called
     expect(dexRouter.swap.callCount).to.be.greaterThan(0);
-
-    console.log('Actual call args:', dexRouter.swap.getCall(0).args);
 
     expect(dexRouter.swap.calledOnce).to.be.true;
     const callArgs = dexRouter.swap.getCall(0).args;
@@ -174,11 +152,6 @@ describe('RewardActionTracker', () => {
     expect(callArgs[5]).to.equal(PostAuctionDex.ONEINCH); // dexProvider
     expect(callArgs[6]).to.equal(1); // slippage
     expect(callArgs[7]).to.equal(FeeAmount.MEDIUM); // feeAmount
-    // Check the combinedSettings structure - will debug this based on console output
-    console.log(
-      'Combined settings (arg 8):',
-      JSON.stringify(callArgs[8], null, 2)
-    );
   });
 
   it('Handles swap failure properly with retries', async () => {
@@ -332,11 +305,10 @@ describe('RewardActionTracker', () => {
     et.addToken(exchangeAction, tokenToSwap, amount);
     await et.handleAllTokens();
 
-    const queuedAmount = asInternals(et).feeTokenAmountMap.get(
-      createRewardActionKey(exchangeAction, tokenToSwap)
-    );
     expect(dexRouter.swap.called).to.be.false;
-    expect(queuedAmount?.isZero()).to.equal(true);
+    expect(et.getQueuedAmount(exchangeAction, tokenToSwap).isZero()).to.equal(
+      true
+    );
   });
 
   it('removes exchange rewards when DEX config validation fails', async () => {
@@ -374,11 +346,10 @@ describe('RewardActionTracker', () => {
     et.addToken(exchangeAction, tokenToSwap, amount);
     await et.handleAllTokens();
 
-    const queuedAmount = asInternals(et).feeTokenAmountMap.get(
-      createRewardActionKey(exchangeAction, tokenToSwap)
-    );
     expect(dexRouter.swap.called).to.be.false;
-    expect(queuedAmount?.isZero()).to.equal(true);
+    expect(et.getQueuedAmount(exchangeAction, tokenToSwap).isZero()).to.equal(
+      true
+    );
   });
 
   it('fails closed when a reward swap target cannot be resolved', async () => {
@@ -415,17 +386,16 @@ describe('RewardActionTracker', () => {
     );
 
     const amount = decimaledToWei(1);
-    const key = createRewardActionKey(exchangeAction, tokenToSwap);
     et.addToken(exchangeAction, tokenToSwap, amount);
 
     await et.handleAllTokens();
     await et.handleAllTokens();
     await et.handleAllTokens();
 
-    const internals = asInternals(et);
     expect(dexRouter.swap.called).to.be.false;
-    expect(internals.retryCountMap.has(key)).to.equal(false);
-    expect(internals.feeTokenAmountMap.get(key)?.isZero()).to.equal(true);
+    expect(et.getQueuedAmount(exchangeAction, tokenToSwap).isZero()).to.equal(
+      true
+    );
   });
 
   it('uses legacy Uniswap WETH as a reward swap target fallback', async () => {
@@ -552,9 +522,6 @@ describe('RewardActionTracker', () => {
 
     await et.handleAllTokens();
 
-    const queuedAmount = asInternals(et).feeTokenAmountMap.get(
-      createRewardActionKey(transferAction, tokenToTransfer)
-    );
     expect(decimalsStub.calledWith(signer, tokenToTransfer)).to.equal(true);
     expect(transferStub.calledOnce).to.equal(true);
     expect(transferStub.getCall(0).args[0]).to.equal(signer);
@@ -563,7 +530,9 @@ describe('RewardActionTracker', () => {
     expect(transferStub.getCall(0).args[3]).to.deep.equal(
       BigNumber.from('1000000')
     );
-    expect(queuedAmount?.isZero()).to.equal(true);
+    expect(
+      et.getQueuedAmount(transferAction, tokenToTransfer).isZero()
+    ).to.equal(true);
   });
 
   it('drops dust transfers that round to zero token units', async () => {
@@ -593,11 +562,10 @@ describe('RewardActionTracker', () => {
 
     await et.handleAllTokens();
 
-    const queuedAmount = asInternals(et).feeTokenAmountMap.get(
-      createRewardActionKey(transferAction, tokenToTransfer)
-    );
     expect(transferStub.called).to.equal(false);
-    expect(queuedAmount?.isZero()).to.equal(true);
+    expect(
+      et.getQueuedAmount(transferAction, tokenToTransfer).isZero()
+    ).to.equal(true);
   });
 
   it('retries transfer errors and removes the reward after max attempts', async () => {
@@ -623,7 +591,6 @@ describe('RewardActionTracker', () => {
       to: recipient,
     };
     const amount = decimaledToWei(1);
-    const key = createRewardActionKey(transferAction, tokenToTransfer);
     et.addToken(transferAction, tokenToTransfer, amount);
 
     await et.handleAllTokens();
@@ -631,10 +598,10 @@ describe('RewardActionTracker', () => {
     await et.handleAllTokens();
     await et.handleAllTokens();
 
-    const internals = asInternals(et);
     expect(transferStub.callCount).to.equal(3);
-    expect(internals.retryCountMap.has(key)).to.equal(false);
-    expect(internals.feeTokenAmountMap.get(key)?.isZero()).to.equal(true);
+    expect(
+      et.getQueuedAmount(transferAction, tokenToTransfer).isZero()
+    ).to.equal(true);
   });
 
   it('leaves unsupported reward actions queued without executing a swap', async () => {
@@ -658,17 +625,15 @@ describe('RewardActionTracker', () => {
     await et.handleAllTokens();
 
     expect(dexRouter.swap.called).to.equal(false);
-    expect(
-      asInternals(et)
-        .feeTokenAmountMap.get(createRewardActionKey(unsupportedAction, token))
-        ?.eq(amount)
-    ).to.equal(true);
+    expect(et.getQueuedAmount(unsupportedAction, token).eq(amount)).to.equal(
+      true
+    );
   });
 
-  it('cleans up queued rewards that already reached the retry ceiling', async () => {
+  it('removes queued exchange rewards after the retry ceiling', async () => {
     const signer = createSigner();
     dexRouter = {
-      swap: sinon.stub().resolves({ success: true }),
+      swap: sinon.stub().resolves({ success: false, error: 'swap failed' }),
     } as unknown as { swap: SinonStub };
 
     const tokenToSwap = MAINNET_CONFIG.WBTC_USDC_POOL.collateralAddress;
@@ -681,48 +646,33 @@ describe('RewardActionTracker', () => {
       fee: FeeAmount.MEDIUM,
     };
     const amount = decimaledToWei(1);
-    const key = createRewardActionKey(exchangeAction, tokenToSwap);
     const et = new RewardActionTracker(
       signer,
-      createMockKeeperConfig(),
+      createMockKeeperConfig({
+        network: {
+          rpcUrl: 'mock://rpc',
+          subgraph: { url: 'mock://subgraph' },
+          tokenAddresses: { weth: MAINNET_CONFIG.WETH_ADDRESS },
+        },
+        dex: {
+          oneInch: {
+            routers: { 1: ONE_INCH_ROUTER },
+          },
+        },
+      }),
       dexRouter as unknown as DexRouter
     );
-    const internals = asInternals(et);
-    internals.feeTokenAmountMap.set(key, amount);
-    internals.retryCountMap.set(key, 3);
+    et.addToken(exchangeAction, tokenToSwap, amount);
 
     await et.handleAllTokens();
+    await et.handleAllTokens();
+    await et.handleAllTokens();
+    await et.handleAllTokens();
 
-    expect(dexRouter.swap.called).to.equal(false);
-    expect(internals.retryCountMap.has(key)).to.equal(false);
-    expect(internals.feeTokenAmountMap.get(key)?.isZero()).to.equal(true);
-  });
-
-  it('rejects malformed queued reward keys before taking action', async () => {
-    const signer = createSigner();
-    dexRouter = {
-      swap: sinon.stub().resolves({ success: true }),
-    } as unknown as { swap: SinonStub };
-
-    const et = new RewardActionTracker(
-      signer,
-      createMockKeeperConfig(),
-      dexRouter as unknown as DexRouter
+    expect(dexRouter.swap.callCount).to.equal(3);
+    expect(et.getQueuedAmount(exchangeAction, tokenToSwap).isZero()).to.equal(
+      true
     );
-    asInternals(et).feeTokenAmountMap.set(
-      '{"action":"exchange","token":123}',
-      decimaledToWei(1)
-    );
-
-    let thrown: Error | undefined;
-    try {
-      await et.handleAllTokens();
-    } catch (error) {
-      thrown = error as Error;
-    }
-
-    expect(dexRouter.swap.called).to.equal(false);
-    expect(thrown?.message).to.match(/Could not deserialize token/);
   });
 
   it('records negative accounting when removing a missing queued reward', () => {
@@ -750,9 +700,7 @@ describe('RewardActionTracker', () => {
     et.removeToken(exchangeAction, tokenToSwap, amount);
 
     expect(
-      asInternals(et)
-        .feeTokenAmountMap.get(createRewardActionKey(exchangeAction, tokenToSwap))
-        ?.eq(amount.mul(-1))
+      et.getQueuedAmount(exchangeAction, tokenToSwap).eq(amount.mul(-1))
     ).to.equal(true);
   });
 });

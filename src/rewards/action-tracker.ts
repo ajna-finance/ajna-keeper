@@ -76,8 +76,8 @@ export class RewardActionTracker {
     const targetAddress =
       targetToken in (this.config.network.tokenAddresses || {})
         ? this.config.network.tokenAddresses![targetToken]
-        : this.config.dex?.uniswapV3?.legacy?.wethAddress ??
-          this.config.dex?.uniswapV3?.universalRouter?.wethAddress;
+        : (this.config.dex?.uniswapV3?.legacy?.wethAddress ??
+          this.config.dex?.uniswapV3?.universalRouter?.wethAddress);
 
     if (!targetAddress) {
       logger.error(
@@ -278,6 +278,14 @@ export class RewardActionTracker {
     const key = serializeRewardAction(rewardAction, tokenCollected);
     const currAmount = this.feeTokenAmountMap.get(key) ?? constants.Zero;
     this.feeTokenAmountMap.set(key, currAmount.sub(amountWadToSub));
+  }
+
+  getQueuedAmount(
+    rewardAction: RewardAction,
+    tokenCollected: string
+  ): BigNumber {
+    const key = serializeRewardAction(rewardAction, tokenCollected);
+    return this.feeTokenAmountMap.get(key) ?? constants.Zero;
   }
 
   // Helper to manually clear retry count if needed

@@ -708,11 +708,6 @@ describe('DexRouter', () => {
           feeAmount
         );
 
-        console.log('Result (approve insufficient):', result);
-        if (!result.success) {
-          console.log('Error details (approve insufficient):', result.error);
-        }
-
         expect(result.success).to.be.true;
         expect(getDecimalsStub.calledOnce).to.be.true;
         expect(getAllowanceStub.calledOnce).to.be.true;
@@ -762,11 +757,6 @@ describe('DexRouter', () => {
           feeAmount
         );
 
-        console.log('Result (skip approval):', result);
-        if (!result.success) {
-          console.log('Error details (skip approval):', result.error);
-        }
-
         expect(result.success).to.be.true;
         expect(getDecimalsStub.calledOnce).to.be.true;
         expect(approveStub.notCalled).to.be.true;
@@ -808,7 +798,7 @@ describe('DexRouter', () => {
         expect(getDecimalsStub.calledOnce).to.be.true;
       });
 
-      it('should call swapWithOneInch and execute transaction', async () => {
+      it('should call 1inch and execute transaction', async () => {
         const erc20ContractStub = new CustomContract(tokenIn, [], mockProvider);
         erc20ContractStub.balanceOf
           .withArgs(fromAddress)
@@ -849,11 +839,6 @@ describe('DexRouter', () => {
           slippage,
           feeAmount
         );
-
-        console.log('Result (execute transaction):', result);
-        if (!result.success) {
-          console.log('Error details (execute transaction):', result.error);
-        }
 
         expect(result.success).to.be.true;
         expect(axiosGetStub.calledTwice).to.be.true;

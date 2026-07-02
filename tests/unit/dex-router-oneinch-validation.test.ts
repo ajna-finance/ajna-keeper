@@ -2,6 +2,7 @@ import { expect } from 'chai';
 import { BigNumber, ethers, providers, Signer } from 'ethers';
 import sinon from 'sinon';
 import { DexRouter } from '../../src/dex/router';
+import { executeOneInchSwap } from '../../src/dex/oneinch';
 import {
   DEX_ROUTER_FIXTURE,
   installDexRouterFixture,
@@ -30,6 +31,25 @@ describe('DexRouter 1inch quote and swap-data validation', () => {
     sinon.restore();
   });
 
+  function executeSwap(amountIn: BigNumber = BigNumber.from('100000000')) {
+    return executeOneInchSwap(
+      {
+        signer,
+        getQuote: dexRouter.getQuoteFromOneInch.bind(dexRouter),
+        getSwapData: dexRouter.getSwapDataFromOneInch.bind(dexRouter),
+        queueTransaction: async (_signer, txFunc) => await txFunc(10),
+        delayMs: async () => undefined,
+      },
+      {
+        chainId,
+        amount: amountIn,
+        tokenIn,
+        tokenOut,
+        slippage,
+      }
+    );
+  }
+
   it('should execute swap with 1inch successfully', async () => {
     axiosGetStub.onCall(0).resolves({
       data: {
@@ -49,18 +69,7 @@ describe('DexRouter 1inch quote and swap-data validation', () => {
       },
     });
 
-    const result = await dexRouter['swapWithOneInch'](
-      chainId,
-      BigNumber.from('100000000'),
-      tokenIn,
-      tokenOut,
-      slippage
-    );
-
-    console.log('Result (1inch swap):', result);
-    if (!result.success) {
-      console.log('Error details (1inch swap):', result.error);
-    }
+    const result = await executeSwap();
 
     expect(result.success).to.be.true;
     expect(axiosGetStub.calledTwice).to.be.true;
@@ -122,13 +131,7 @@ describe('DexRouter 1inch quote and swap-data validation', () => {
       },
     });
 
-    const result = await dexRouter['swapWithOneInch'](
-      chainId,
-      BigNumber.from('100000000'),
-      tokenIn,
-      tokenOut,
-      slippage
-    );
+    const result = await executeSwap();
 
     expect(result.success).to.be.true;
     const sentTx = (signer.sendTransaction as sinon.SinonStub).firstCall
@@ -139,13 +142,7 @@ describe('DexRouter 1inch quote and swap-data validation', () => {
   it('should log error if axios fails', async () => {
     axiosGetStub.rejects(new Error('API error'));
 
-    const result = await dexRouter['swapWithOneInch'](
-      chainId,
-      amount,
-      tokenIn,
-      tokenOut,
-      slippage
-    );
+    const result = await executeSwap(amount);
 
     expect(result).to.deep.equal({ success: false, error: 'API error' });
   });

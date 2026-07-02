@@ -6,7 +6,7 @@ import { NonceTracker } from '../nonce';
 import { weiToDecimaled, withTimeout } from '../utils';
 import { getTokenFromAddress } from './uniswap';
 import { deriveSwapMinimumOut } from './swap-min-out';
-import { convertWadToTokenDecimals, getDecimalsErc20 } from '../erc20';
+import { getDecimalsErc20 } from '../erc20';
 import { defaultDexContractServices, DexContractServices } from './contracts';
 
 // ABIs
@@ -38,13 +38,29 @@ const QUOTER_V2_ABI = [
 // Command constants
 const V3_SWAP_EXACT_IN = '0x00';
 
-export type UniversalRouterContractServices = Pick<
-  DexContractServices,
-  'makeContract'
->;
+type TokenDetails = Awaited<ReturnType<typeof getTokenFromAddress>>;
+
+export interface UniversalRouterDeps
+  extends Pick<DexContractServices, 'makeContract' | 'getDecimals'> {
+  getToken(
+    chainId: number,
+    provider: providers.Provider,
+    tokenAddress: string
+  ): Promise<TokenDetails>;
+  queueTransaction<T>(
+    signer: Signer,
+    txFunction: (nonce: number) => Promise<T>
+  ): Promise<T>;
+  nowMs(): number;
+}
 
 export type UniversalRouterSwapResult =
-  | { success: true; receipt?: providers.TransactionReceipt }
+  | {
+      success: true;
+      kind: 'executed';
+      receipt: providers.TransactionReceipt;
+    }
+  | { success: true; kind: 'noop'; reason: 'identical_tokens' }
   | { success: false; error: string };
 
 export type UniversalRouterSwapper = (
@@ -60,9 +76,22 @@ export type UniversalRouterSwapper = (
   quoterV2Address?: string
 ) => Promise<UniversalRouterSwapResult>;
 
+const defaultUniversalRouterDeps: UniversalRouterDeps = {
+  makeContract: defaultDexContractServices.makeContract,
+  getDecimals: getDecimalsErc20,
+  getToken: getTokenFromAddress,
+  queueTransaction: NonceTracker.queueTransaction,
+  nowMs: Date.now,
+};
+
 export function createUniversalRouterSwapper(
-  contracts: UniversalRouterContractServices = defaultDexContractServices
+  deps: Partial<UniversalRouterDeps> = {}
 ): UniversalRouterSwapper {
+  const resolvedDeps: UniversalRouterDeps = {
+    ...defaultUniversalRouterDeps,
+    ...deps,
+  };
+
   return async function swapWithUniversalRouter(
     signer,
     tokenAddress,
@@ -76,7 +105,7 @@ export function createUniversalRouterSwapper(
     quoterV2Address
   ) {
     return await swapWithUniversalRouterUsingContracts(
-      contracts,
+      resolvedDeps,
       signer,
       tokenAddress,
       amount,
@@ -96,7 +125,7 @@ export function createUniversalRouterSwapper(
  * Now mirrors the working SushiSwap patterns for conservative operation
  */
 async function swapWithUniversalRouterUsingContracts(
-  contracts: UniversalRouterContractServices,
+  deps: UniversalRouterDeps,
   signer: Signer,
   tokenAddress: string,
   amount: BigNumber,
@@ -143,12 +172,8 @@ async function swapWithUniversalRouterUsingContracts(
   logger.info(`Using Universal Router at: ${universalRouterAddress}`);
 
   // Get token details - FIXED: Proper decimal handling like SushiSwap
-  const tokenToSwap = await getTokenFromAddress(
-    chainId,
-    provider,
-    tokenAddress
-  );
-  const targetToken = await getTokenFromAddress(
+  const tokenToSwap = await deps.getToken(chainId, provider, tokenAddress);
+  const targetToken = await deps.getToken(
     chainId,
     provider,
     targetTokenAddress
@@ -156,30 +181,30 @@ async function swapWithUniversalRouterUsingContracts(
 
   if (tokenToSwap.address.toLowerCase() === targetToken.address.toLowerCase()) {
     logger.info('Tokens are identical, no swap necessary');
-    return { success: true };
+    return { success: true, kind: 'noop', reason: 'identical_tokens' };
   }
 
   // FIXED: Get actual decimals from contracts (like SushiSwap)
-  const inputDecimals = await getDecimalsErc20(signer, tokenAddress);
-  const outputDecimals = await getDecimalsErc20(signer, targetTokenAddress);
+  const inputDecimals = await deps.getDecimals(signer, tokenAddress);
+  const outputDecimals = await deps.getDecimals(signer, targetTokenAddress);
 
   logger.debug(
     `Token decimals: ${tokenToSwap.symbol}=${inputDecimals}, ${targetToken.symbol}=${outputDecimals}`
   );
 
   // Get contract instances
-  const tokenContract = contracts.makeContract(tokenAddress, ERC20_ABI, signer);
-  const permit2Contract = contracts.makeContract(
+  const tokenContract = deps.makeContract(tokenAddress, ERC20_ABI, signer);
+  const permit2Contract = deps.makeContract(
     permit2Address,
     PERMIT2_ABI,
     signer
   );
-  const universalRouter = contracts.makeContract(
+  const universalRouter = deps.makeContract(
     universalRouterAddress,
     UNIVERSAL_ROUTER_ABI,
     signer
   );
-  const factoryContract = contracts.makeContract(
+  const factoryContract = deps.makeContract(
     poolFactoryAddress,
     POOL_FACTORY_ABI,
     provider
@@ -214,11 +239,7 @@ async function swapWithUniversalRouterUsingContracts(
         'Universal Router reward swap requires uniswap.quoterV2Address to derive a safe minimum-out from a real output quote; refusing to swap without one (fail closed).'
       );
     }
-    const quoter = contracts.makeContract(
-      quoterV2Address,
-      QUOTER_V2_ABI,
-      provider
-    );
+    const quoter = deps.makeContract(quoterV2Address, QUOTER_V2_ABI, provider);
     const quoteResult = await quoter.callStatic.quoteExactInputSingle({
       tokenIn: tokenAddress,
       tokenOut: targetTokenAddress,
@@ -249,7 +270,7 @@ async function swapWithUniversalRouterUsingContracts(
 
     if (permit2Allowance.lt(amount)) {
       logger.info(`Approving Permit2 to spend ${tokenToSwap.symbol}`);
-      await NonceTracker.queueTransaction(signer, async (nonce) => {
+      await deps.queueTransaction(signer, async (nonce) => {
         const approveTx = await tokenContract.approve(
           permit2Address,
           ethers.constants.MaxUint256,
@@ -279,16 +300,14 @@ async function swapWithUniversalRouterUsingContracts(
       `Current Universal Router allowance via Permit2: ${weiToDecimaled(routerAllowance, inputDecimals)} ${tokenToSwap.symbol} (expires: ${new Date(expiration * 1000).toLocaleString()})`
     );
 
-    if (
-      routerAllowance.lt(amount) ||
-      expiration <= Math.floor(Date.now() / 1000)
-    ) {
+    const nowSeconds = Math.floor(deps.nowMs() / 1000);
+    if (routerAllowance.lt(amount) || expiration <= nowSeconds) {
       logger.info(
         `Approving Universal Router via Permit2 for ${tokenToSwap.symbol}`
       );
       // Set expiration to 24 hours from now
-      const newExpiration = Math.floor(Date.now() / 1000) + 86400;
-      await NonceTracker.queueTransaction(signer, async (nonce) => {
+      const newExpiration = nowSeconds + 86400;
+      await deps.queueTransaction(signer, async (nonce) => {
         const permit2Tx = await permit2Contract.approve(
           tokenAddress,
           universalRouterAddress,
@@ -333,7 +352,7 @@ async function swapWithUniversalRouterUsingContracts(
     ];
 
     // STEP 6: Execute the swap (same gas strategy as SushiSwap)
-    const deadline = Math.floor(Date.now() / 1000) + 1800; // 30 minutes
+    const deadline = Math.floor(deps.nowMs() / 1000) + 1800; // 30 minutes
 
     // Get gas price and estimate gas (mirrors SushiSwap pattern)
     const gasPrice = await provider.getGasPrice();
@@ -343,31 +362,30 @@ async function swapWithUniversalRouterUsingContracts(
     );
 
     // Execute the swap using our queued transaction system (same as SushiSwap)
-    const receipt =
-      await NonceTracker.queueTransaction<providers.TransactionReceipt>(
-        signer,
-        async (nonce) => {
-          const swapTx = await universalRouter.execute(
-            commands,
-            inputs,
-            deadline,
-            {
-              nonce,
-              gasLimit: 1000000, // Generous gas limit for Universal Router
-              gasPrice: highGasPrice,
-            }
-          );
+    const receipt = await deps.queueTransaction<providers.TransactionReceipt>(
+      signer,
+      async (nonce) => {
+        const swapTx = await universalRouter.execute(
+          commands,
+          inputs,
+          deadline,
+          {
+            nonce,
+            gasLimit: 1000000, // Generous gas limit for Universal Router
+            gasPrice: highGasPrice,
+          }
+        );
 
-          logger.info(`Uniswap swap transaction sent: ${swapTx.hash}`);
+        logger.info(`Uniswap swap transaction sent: ${swapTx.hash}`);
 
-          logger.info(`Waiting for transaction confirmation...`);
-          return await withTimeout<providers.TransactionReceipt>(
-            swapTx.wait(),
-            120000,
-            'Transaction confirmation'
-          );
-        }
-      );
+        logger.info(`Waiting for transaction confirmation...`);
+        return await withTimeout<providers.TransactionReceipt>(
+          swapTx.wait(),
+          120000,
+          'Transaction confirmation'
+        );
+      }
+    );
 
     logger.info(`Transaction confirmed: ${receipt.transactionHash}`);
     logger.info(`Gas used: ${receipt.gasUsed.toString()}`);
@@ -375,7 +393,7 @@ async function swapWithUniversalRouterUsingContracts(
       `Uniswap swap successful for token: ${tokenToSwap.symbol}, amount: ${weiToDecimaled(amount, inputDecimals)} to ${targetToken.symbol}`
     );
 
-    return { success: true, receipt };
+    return { success: true, kind: 'executed', receipt };
   } catch (error: any) {
     logger.error(`Uniswap swap failed for token: ${tokenAddress}: ${error}`);
     return { success: false, error: error.toString() };
